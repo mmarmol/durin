@@ -990,6 +990,11 @@
           "sampling": {
             "$ref": "#/components/schemas/MCPSamplingConfig"
           },
+          "source_ref": {
+            "default": "",
+            "title": "Source Ref",
+            "type": "string"
+          },
           "spawn_egress_policy": {
             "default": "warn",
             "enum": [
@@ -1032,6 +1037,11 @@
           "url": {
             "default": "",
             "title": "Url",
+            "type": "string"
+          },
+          "version": {
+            "default": "",
+            "title": "Version",
             "type": "string"
           }
         },
@@ -1090,6 +1100,298 @@
           "ok"
         ],
         "title": "McpOkResult",
+        "type": "object"
+      },
+      "McpRegistryDescribeQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "title": "McpRegistryDescribeQuery",
+        "type": "object"
+      },
+      "McpRegistryEnvVar": {
+        "properties": {
+          "default": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "is_required": {
+            "title": "Is Required",
+            "type": "boolean"
+          },
+          "is_secret": {
+            "title": "Is Secret",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "is_required",
+          "is_secret",
+          "default"
+        ],
+        "title": "McpRegistryEnvVar",
+        "type": "object"
+      },
+      "McpRegistryHit": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          },
+          "registry": {
+            "title": "Registry",
+            "type": "string"
+          },
+          "signals": {
+            "additionalProperties": true,
+            "title": "Signals",
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "ref",
+          "registry",
+          "kind",
+          "description",
+          "signals"
+        ],
+        "title": "McpRegistryHit",
+        "type": "object"
+      },
+      "McpRegistryInstallCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "env_values": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Env Values"
+          },
+          "prefer": {
+            "default": "remote",
+            "title": "Prefer",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "title": "McpRegistryInstallCommand",
+        "type": "object"
+      },
+      "McpRegistryPackage": {
+        "properties": {
+          "env": {
+            "items": {
+              "$ref": "#/components/schemas/McpRegistryEnvVar"
+            },
+            "title": "Env",
+            "type": "array"
+          },
+          "identifier": {
+            "title": "Identifier",
+            "type": "string"
+          },
+          "package_arguments": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Package Arguments",
+            "type": "array"
+          },
+          "registry_type": {
+            "title": "Registry Type",
+            "type": "string"
+          },
+          "runtime_arguments": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Runtime Arguments",
+            "type": "array"
+          },
+          "runtime_hint": {
+            "title": "Runtime Hint",
+            "type": "string"
+          },
+          "transport_type": {
+            "title": "Transport Type",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "registry_type",
+          "identifier",
+          "version",
+          "runtime_hint",
+          "transport_type",
+          "runtime_arguments",
+          "package_arguments",
+          "env"
+        ],
+        "title": "McpRegistryPackage",
+        "type": "object"
+      },
+      "McpRegistryRemote": {
+        "properties": {
+          "headers": {
+            "items": {
+              "$ref": "#/components/schemas/McpRegistryEnvVar"
+            },
+            "title": "Headers",
+            "type": "array"
+          },
+          "transport_type": {
+            "title": "Transport Type",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transport_type",
+          "url",
+          "headers"
+        ],
+        "title": "McpRegistryRemote",
+        "type": "object"
+      },
+      "McpRegistrySearchQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 10,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "q": {
+            "default": "",
+            "title": "Q",
+            "type": "string"
+          }
+        },
+        "title": "McpRegistrySearchQuery",
+        "type": "object"
+      },
+      "McpRegistrySearchResult": {
+        "properties": {
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/McpRegistryHit"
+            },
+            "title": "Hits",
+            "type": "array"
+          }
+        },
+        "required": [
+          "hits"
+        ],
+        "title": "McpRegistrySearchResult",
+        "type": "object"
+      },
+      "McpRegistryServerDetail": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "packages": {
+            "items": {
+              "$ref": "#/components/schemas/McpRegistryPackage"
+            },
+            "title": "Packages",
+            "type": "array"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          },
+          "remotes": {
+            "items": {
+              "$ref": "#/components/schemas/McpRegistryRemote"
+            },
+            "title": "Remotes",
+            "type": "array"
+          },
+          "repository": {
+            "title": "Repository",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "ref",
+          "description",
+          "version",
+          "repository",
+          "packages",
+          "remotes"
+        ],
+        "title": "McpRegistryServerDetail",
         "type": "object"
       },
       "McpServerDetail": {
@@ -1282,6 +1584,52 @@
           "description"
         ],
         "title": "McpToolInfo",
+        "type": "object"
+      },
+      "McpUpdateInfo": {
+        "properties": {
+          "current": {
+            "title": "Current",
+            "type": "string"
+          },
+          "latest": {
+            "title": "Latest",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "current",
+          "latest"
+        ],
+        "title": "McpUpdateInfo",
+        "type": "object"
+      },
+      "McpUpdatesQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 checks every configured server against the registry.",
+        "properties": {},
+        "title": "McpUpdatesQuery",
+        "type": "object"
+      },
+      "McpUpdatesResult": {
+        "properties": {
+          "updates": {
+            "items": {
+              "$ref": "#/components/schemas/McpUpdateInfo"
+            },
+            "title": "Updates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "updates"
+        ],
+        "title": "McpUpdatesResult",
         "type": "object"
       },
       "MemoryBacklinksQuery": {
@@ -3424,6 +3772,122 @@
         "x-required-scope": "system:read"
       }
     },
+    "/api/v1/mcp/registry/describe": {
+      "get": {
+        "operationId": "mcp_registry_describe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpRegistryDescribeQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpRegistryServerDetail"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Full install metadata for one registry server",
+        "x-required-scope": "mcp:read"
+      }
+    },
+    "/api/v1/mcp/registry/install": {
+      "post": {
+        "operationId": "mcp_registry_install",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpRegistryInstallCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerDetail"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Install (add) an MCP server from the registry by ref",
+        "x-required-scope": "mcp:write"
+      }
+    },
+    "/api/v1/mcp/registry/search": {
+      "get": {
+        "operationId": "mcp_registry_search",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpRegistrySearchQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpRegistrySearchResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Search the MCP registry for installable servers",
+        "x-required-scope": "mcp:read"
+      }
+    },
+    "/api/v1/mcp/registry/updates": {
+      "get": {
+        "operationId": "mcp_registry_updates",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpUpdatesQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpUpdatesResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List configured servers with a newer version in the registry",
+        "x-required-scope": "mcp:read"
+      }
+    },
     "/api/v1/mcp/servers": {
       "get": {
         "operationId": "mcp_list",
@@ -3705,6 +4169,35 @@
           }
         },
         "summary": "Reconnect a server to apply config changes or retry a failure",
+        "x-required-scope": "mcp:write"
+      }
+    },
+    "/api/v1/mcp/servers/{name}/registry-update": {
+      "post": {
+        "operationId": "mcp_registry_update",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerNameCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerDetail"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Re-pin a server to the registry's latest version and reconnect",
         "x-required-scope": "mcp:write"
       }
     },

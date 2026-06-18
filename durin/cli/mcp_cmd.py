@@ -125,3 +125,89 @@ def status() -> None:
     for name, present in rows:
         mark = "[green]✓ signed in[/green]" if present else "[yellow]— not signed in[/yellow]"
         console.print(f"  {name}: {mark}")
+
+
+@mcp_app.command("search")
+def search(
+    query: str = typer.Argument(..., help="What to search for (e.g. jira, postgres)."),
+    limit: int = typer.Option(10, help="Max results."),
+) -> None:
+    """Search the MCP registry for installable servers."""
+    from durin.agent.mcp_catalog_cache import McpCatalogCache
+    from durin.agent.mcp_registry import build_mcp_adapters, search_mcp_registries
+    from durin.config.loader import get_config_path
+
+    disc = load_config().tools.mcp_discovery
+    cache = McpCatalogCache(get_config_path().parent / "mcp_catalog.json")
+    hits = asyncio.run(
+        search_mcp_registries(
+            query, cache=cache,
+            adapters=build_mcp_adapters(disc.registries), limit=limit,
+        )
+    )
+    if not hits:
+        console.print("[dim]No servers found.[/dim]")
+        return
+    tags = {"remote": "no install", "both": "hosted/local", "local": "local"}
+    for h in hits:
+        console.print(f"  [bold]{h.ref}[/bold] [dim]({tags.get(h.kind, h.kind)})[/dim]")
+        if h.description:
+            console.print(f"    [dim]{h.description}[/dim]")
+    console.print("\n[dim]Install with:[/dim] durin mcp install <ref>")
+
+
+@mcp_app.command("install")
+def install(
+    ref: str = typer.Argument(..., help="Registry ref (from `durin mcp search`)."),
+    prefer: str = typer.Option("remote", help="'remote' (hosted) or 'local' (installed)."),
+) -> None:
+    """Add an MCP server from the registry, prompting for any required config."""
+    from durin.agent.mcp_registry import build_mcp_adapters
+    from durin.service.mcp import McpRegistryInstallCommand, McpService
+    from durin.service.principal import Principal
+
+    disc = load_config().tools.mcp_discovery
+
+    async def _describe():
+        for adapter in build_mcp_adapters(disc.registries):
+            detail = await adapter.describe(ref)
+            if detail is not None:
+                return detail
+        return None
+
+    detail = asyncio.run(_describe())
+    if detail is None:
+        console.print(f"[red]✗[/red] not found in registry: {ref}")
+        raise typer.Exit(1)
+
+    use_local = (prefer == "local" and detail.packages) or (
+        not detail.remotes and detail.packages
+    )
+    src_env = (
+        detail.packages[0].env if (use_local and detail.packages)
+        else (detail.remotes[0].headers if detail.remotes else [])
+    )
+    env_values: dict[str, str] = {}
+    for e in src_env:
+        if e.is_required or e.is_secret:
+            label = e.name + (f" ({e.description})" if e.description else "")
+            env_values[e.name] = typer.prompt(label, hide_input=e.is_secret, default="")
+
+    try:
+        result = asyncio.run(
+            McpService().registry_install(
+                McpRegistryInstallCommand(
+                    ref=ref, prefer=prefer, env_values=env_values or None
+                ),
+                Principal.local(),
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(1) from None
+    console.print(
+        f"[green]✓[/green] Added [bold]{result.name}[/bold] "
+        f"({result.transport}) — status: {result.status}"
+    )
+    if result.status == "needs_auth":
+        console.print(f"[dim]Sign in with:[/dim] durin mcp login {result.name}")

@@ -447,3 +447,53 @@ export interface McpOauthLoginResult {
   authorization_url: string;
   state: string;
 }
+
+export interface McpRegistryHit {
+  name: string;
+  ref: string;
+  registry: string;
+  kind: string; // remote | local | both
+  description: string;
+  signals: Record<string, unknown>;
+}
+
+export interface McpRegistryEnvVar {
+  name: string;
+  description: string;
+  is_required: boolean;
+  is_secret: boolean;
+  default: string | null;
+}
+
+export interface McpRegistryPackage {
+  registry_type: string;
+  identifier: string;
+  version: string;
+  runtime_hint: string;
+  transport_type: string;
+  runtime_arguments: string[];
+  package_arguments: string[];
+  env: McpRegistryEnvVar[];
+}
+
+export interface McpRegistryRemote {
+  transport_type: string;
+  url: string;
+  headers: McpRegistryEnvVar[];
+}
+
+export interface McpRegistryServerDetail {
+  name: string;
+  ref: string;
+  description: string;
+  version: string;
+  repository: string;
+  packages: McpRegistryPackage[];
+  remotes: McpRegistryRemote[];
+}
+
+export interface McpUpdateInfo {
+  name: string;
+  current: string;
+  latest: string;
+}

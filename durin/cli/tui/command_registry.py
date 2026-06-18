@@ -40,6 +40,12 @@ _TUI_ACTIONS: list[CommandEntry] = [
         shortcut="Ctrl+L",
     ),
     CommandEntry(
+        id="act:open_mcp_discover",
+        label="Discover MCP servers",
+        kind="action",
+        description="Search the registry and add an MCP server",
+    ),
+    CommandEntry(
         id="act:open_theme_picker",
         label="Switch theme",
         kind="action",
