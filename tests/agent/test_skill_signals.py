@@ -52,6 +52,15 @@ def test_build_prompt_includes_turn_indexed_loads_header():
     assert "the turns" in p
 
 
+def test_prompt_keeps_most_recent_turns_when_truncating():
+    # Corrections land at the END of an interaction, so truncation must keep the
+    # tail, not the head (unlike entity discovery, which head-truncates).
+    turns = "EARLY_MARKER " + ("x" * 13000) + " LATE_MARKER"
+    p = build_skill_signal_prompt(turns, [])
+    assert "LATE_MARKER" in p
+    assert "EARLY_MARKER" not in p
+
+
 # --- discover_skill_signals -------------------------------------------------
 
 def test_discover_skill_signals_logs_observations(tmp_path):

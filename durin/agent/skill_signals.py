@@ -65,7 +65,10 @@ def build_skill_signal_prompt(turns: str, skill_loads: list[dict]) -> str:
         for c in skill_loads
         if c.get("op") == "read" and c.get("skill")
     ) or "(none recorded)"
-    return _SKILL_SIGNAL_PROMPT.format(loads=loads, turns=turns[:12000])
+    # Tail-truncate: a correction lands AT THE END of an interaction (the user
+    # reacts to what the agent just did), so keep the most recent turns — unlike
+    # entity discovery, which head-truncates because identity facts come early.
+    return _SKILL_SIGNAL_PROMPT.format(loads=loads, turns=turns[-12000:])
 
 
 def parse_skill_signals(raw: str) -> list[dict]:

@@ -273,7 +273,10 @@ log nothing.
 mid-task (judging whether a correction *generalizes* is hard in the moment), the queue is
 also fed in hindsight: stage 3 of the extract dream (`skill_signals_enabled`, default ON)
 runs `discover_skill_signals` (`durin/agent/skill_signals.py`) over each session's
-post-cursor turns — the same turns the entity `discover_entities` stage uses. A focused
+post-cursor turns — the same turns the entity `discover_entities` stage uses, but
+**tail-windowed** (`turns[-12000:]`, not head): a correction lands at the END of an
+interaction, so the most recent turns matter (live-verified — head-truncation missed
+corrections in a long session). A focused
 LLM call detects `correction`/`gap` signals (attributed via the turn-indexed
 `skill_calls`, `skill_usage.py`) and logs them as observations. This is the skill
 analogue of memory's `discover_entities`: the agent creates by initiative, the dream
