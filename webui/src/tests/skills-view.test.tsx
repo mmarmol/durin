@@ -69,6 +69,27 @@ describe("SkillsView security surface", () => {
     expect(screen.getByText("Dangerous")).toBeInTheDocument();
   });
 
+  it("shows a Reviewed chip when an active skill has a review override", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      {
+        name: "skill-creator",
+        source: "builtin",
+        mode: "auto",
+        status: "active",
+        verdict: "caution",
+        findings: [
+          { category: "dangerous_code", severity: "caution", where: "scripts/quick_validate.py", detail: "dangerous call compile" },
+        ],
+        review: { by: "user", verdict: "safe", original: "caution", note: "", at: "2026-06-18" },
+      },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+
+    render(wrap(<SkillsView />));
+
+    expect(await screen.findByText("Reviewed · you")).toBeInTheDocument();
+  });
+
   it("lists pending imports with their reason, and shows findings on triage", async () => {
     vi.mocked(api.listSkills).mockResolvedValue([
       { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
