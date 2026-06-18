@@ -54,6 +54,16 @@ def skills_inventory(workspace) -> list[dict]:
         else:
             entry.update({"verdict": "safe", "findings": []})
 
+        # A user/LLM "Revisada" override (workspace-level, hash + findings
+        # pinned). Surfaced as a separate block — verdict/findings are preserved
+        # so the report still shows the underlying deterministic findings.
+        if d is not None and d.is_dir():
+            from durin.security.skill_reviews import get_review
+            review = get_review(workspace, info["name"], d, entry.get("findings") or [])
+            if review:
+                entry["review"] = {k: review.get(k)
+                                   for k in ("by", "verdict", "original", "note", "at")}
+
         req_manifest = None
         md = d / "SKILL.md" if d else None
         if md and md.is_file():
