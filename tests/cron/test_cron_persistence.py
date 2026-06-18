@@ -235,6 +235,30 @@ def test_register_system_job_preserves_state_on_restart(tmp_path: Path) -> None:
     assert j2.state.next_run_at_ms == future, "future next_run reset on re-register"
 
 
+def test_stale_del_action_is_noop_and_clears_log(tmp_path: Path) -> None:
+    """A ``del`` action for an already-absent job must be an idempotent no-op,
+    not a KeyError. Pre-fix, ``jobs_map.pop(job_id)`` raised; the broad except
+    left ``changed`` False, so ``action.jsonl`` was never cleared and the stale
+    del replayed (error-logging) on every single load forever."""
+    store_path = tmp_path / "cron" / "jobs.json"
+    store_path.parent.mkdir(parents=True)
+    store_path.write_text(json.dumps({"version": 1, "jobs": []}), encoding="utf-8")
+    action_path = store_path.parent / "action.jsonl"
+    action_path.write_text(
+        json.dumps({"action": "del", "params": {"job_id": "ghost"}}) + "\n",
+        encoding="utf-8",
+    )
+
+    service = CronService(store_path)
+    service._running = True
+    service._load_store()  # must not blow up on the stale del
+
+    # The action log must be cleared (the desired end-state — job absent — holds).
+    assert action_path.read_text(encoding="utf-8").strip() == "", (
+        "stale del was not cleared from action.jsonl — it will replay forever"
+    )
+
+
 def test_full_round_trip_survives_repeated_save_load(tmp_path: Path) -> None:
     """Sanity check: jobs survive add → save → reload across fresh
     ``CronService`` instances pointing at the same store."""
