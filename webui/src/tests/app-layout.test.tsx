@@ -244,19 +244,14 @@ describe("App layout", () => {
     expect(screen.getByText("AI")).toBeInTheDocument();
     expect(screen.getByDisplayValue("openai/gpt-4o")).toBeInTheDocument();
 
-    // Model providers is its own section now (no LLM/Web-Search tabs).
+    // Model providers section now unifies connection + models per provider.
     fireEvent.click(within(settingsNav).getByRole("button", { name: "Model providers" }));
+    expect(screen.getByText("OpenAI")).toBeInTheDocument();
     expect(screen.getByText("OpenRouter")).toBeInTheDocument();
-    expect(screen.getAllByText("Not configured").length).toBeGreaterThan(0);
-    fireEvent.click(screen.getAllByText("OpenAI")[0]);
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    fireEvent.change(screen.getByPlaceholderText("Leave blank to keep the current key"), {
-      target: { value: "unsaved-openai-key" },
-    });
-    fireEvent.click(screen.getByText("OpenRouter"));
-    fireEvent.click(screen.getAllByText("OpenAI")[0]);
-    expect(screen.getByText("open••••-key")).toBeInTheDocument();
-    expect(screen.queryByDisplayValue("unsaved-openai-key")).not.toBeInTheDocument();
+    expect(screen.getByText("Connect")).toBeInTheDocument();
+    // expanding a configured provider reveals its connection (masked key) inline
+    fireEvent.click(screen.getByText("OpenAI"));
+    expect(await screen.findByText("open••••-key")).toBeInTheDocument();
 
     // Web search is its own section.
     fireEvent.click(within(settingsNav).getByRole("button", { name: "Web search" }));

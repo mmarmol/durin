@@ -82,7 +82,7 @@ import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { useClient } from "@/providers/ClientProvider";
 import type { SecretEntry, SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
 import { McpSettings } from "./McpSettings";
-import { ProviderModelsSettings } from "./ProviderModelsSettings";
+import { ProvidersSettings } from "./ProvidersSettings";
 
 type SettingsSectionKey =
   | "general"
@@ -431,10 +431,17 @@ export function SettingsView({
                 <ConfigSettings token={token} />
               ) : activeSection === "logs" ? (
                 <LogsSettings token={token} />
+              ) : activeSection === "providers" ? (
+                <ProvidersSettings
+                  token={token}
+                  settings={settings}
+                  onRefresh={() => {
+                    fetchSettings(token).then(applyPayload).catch(() => {});
+                  }}
+                />
               ) : (
-                <div className="space-y-4">
                 <ByokSettings
-                  forcePane={activeSection === "web-search" ? "web-search" : "llm"}
+                  forcePane="web-search"
                   settings={settings}
                   expandedProvider={expandedProvider}
                   providerForms={providerForms}
@@ -474,19 +481,6 @@ export function SettingsView({
                   onResetWebSearchDraft={resetWebSearchDraft}
                   onSaveWebSearch={saveWebSearch}
                 />
-                {activeSection === "providers"
-                  ? settings.providers
-                      .filter((p) => p.configured)
-                      .map((p) => (
-                        <ProviderModelsSettings
-                          key={p.name}
-                          token={token}
-                          provider={p.name}
-                          label={p.label}
-                        />
-                      ))
-                  : null}
-                </div>
               )}
             </div>
           ) : null}
