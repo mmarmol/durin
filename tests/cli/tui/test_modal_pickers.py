@@ -103,9 +103,9 @@ async def test_model_picker_renders_presets() -> None:
     from durin.providers.capabilities import ModelCapabilities
 
     entries = [
-        ModelEntry("default", "auto", True, False, ModelCapabilities(model="default")),
-        ModelEntry("fast", "auto", True, False, ModelCapabilities(model="fast")),
-        ModelEntry("opus", "auto", True, False, ModelCapabilities(model="opus")),
+        ModelEntry("default", "auto", True, False, ModelCapabilities(model="default"), ref="default"),
+        ModelEntry("fast", "auto", True, False, ModelCapabilities(model="fast"), ref="fast"),
+        ModelEntry("opus", "auto", True, False, ModelCapabilities(model="opus"), ref="opus"),
     ]
     app = DurinApp(agent_loop=None)
     async with app.run_test() as pilot:

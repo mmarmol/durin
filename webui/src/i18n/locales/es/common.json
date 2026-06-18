@@ -385,6 +385,27 @@
         }
       }
     },
+    "providerModels": {
+      "title": "modelos",
+      "loading": "Cargando modelos…",
+      "empty": "Sin modelos para este proveedor",
+      "addPlaceholder": "Agregar un id de modelo (ej. mi-modelo)",
+      "add": "Agregar",
+      "edit": "Editar",
+      "save": "Guardar",
+      "cancel": "Cancelar",
+      "remove": "Quitar",
+      "confirmRemove": "¿Quitar este modelo?",
+      "configured": "Configurado",
+      "contextWindow": "Ventana de contexto",
+      "maxTokens": "Salida máx.",
+      "temperature": "Temperatura",
+      "reasoningEffort": "Esfuerzo de razonamiento",
+      "catalogDefault": "valor del catálogo",
+      "capVision": "visión",
+      "capAudio": "audio",
+      "capReasoning": "razonamiento"
+    },
     "mcp": {
       "description": "Conecta servidores Model Context Protocol (MCP) para darle herramientas extra al agente. El estado se lee en vivo del gateway en ejecución.",
       "servers": "Servidores",
@@ -706,7 +727,10 @@
         "suggested": "Sugeridos",
         "all": "Todos",
         "noMatch": "Sin coincidencias",
-        "empty": "Sin modelos disponibles"
+        "empty": "Sin modelos disponibles",
+        "capVision": "visión",
+        "capAudio": "audio",
+        "capReasoning": "razonamiento"
       },
       "effort": {
         "title": "Esfuerzo de razonamiento",

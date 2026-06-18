@@ -6,7 +6,7 @@ import { ModelPickerPopover } from "@/components/thread/ModelPickerPopover";
 vi.mock("@/lib/api", () => ({
   fetchModelPicker: vi.fn().mockResolvedValue([
     { name: "base-model", provider: "openai_codex", group: "Easy pick", role: "default", ref: "default" },
-    { name: "gemini-2.5-pro", provider: "gemini", group: "gemini", role: "catalog", ref: "gemini gemini-2.5-pro" },
+    { name: "gemini-2.5-pro", provider: "gemini", group: "gemini", role: "catalog", ref: "gemini gemini-2.5-pro", max_input_tokens: 1_000_000, supports_vision: true, supports_reasoning: true },
   ]),
 }));
 
@@ -38,5 +38,14 @@ describe("ModelPickerPopover", () => {
     expect(JSON.parse(localStorage.getItem("durin.recentModels") || "[]")).toContain(
       "gemini-2.5-pro",
     );
+  });
+
+  it("renders capability info from the entry caps fields", async () => {
+    render(
+      <ModelPickerPopover open onClose={() => {}} onSelect={() => {}} activeModel={null} />,
+    );
+    await waitFor(() => screen.getByText("gemini-2.5-pro"));
+    // gemini-2.5-pro carries max_input_tokens=1_000_000 → caps line shows "1M".
+    expect(screen.getByText(/1M/)).toBeInTheDocument();
   });
 });

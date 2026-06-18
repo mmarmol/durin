@@ -436,7 +436,9 @@ class AgentLoop:
         # work is skipped.
         self._memory_file_watcher: Any | None = None
         self._memory_health_scheduler: Any | None = None
+        self._catalog_refresh_scheduler: Any | None = None
         self._start_memory_background_services()
+        self._start_catalog_refresh()
 
     # ------------------------------------------------------------------
     # A11 — memory background services lifecycle
@@ -552,6 +554,39 @@ class AgentLoop:
                     "memory health scheduler stop raised: {}", exc,
                 )
             self._memory_health_scheduler = None
+
+    def _start_catalog_refresh(self) -> None:
+        """Start the daily models.dev catalog refresh if enabled. Independent of
+        the memory services; any failure here never affects the loop. The
+        scheduler waits one interval before its first fetch, so loop (and test)
+        startup stays network-free."""
+        cfg = getattr(self.app_config, "catalog_refresh", None)
+        if cfg is None or not getattr(cfg, "enabled", False):
+            return
+        try:
+            from durin.config.paths import get_data_dir
+            from durin.providers.catalog_refresh import CatalogRefreshScheduler
+
+            sched = CatalogRefreshScheduler(
+                get_data_dir(), interval_hours=int(getattr(cfg, "interval_hours", 24))
+            )
+            sched.start()
+            self._catalog_refresh_scheduler = sched
+            logger.info(
+                "catalog refresh scheduler started (every {}h)",
+                getattr(cfg, "interval_hours", 24),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("catalog refresh failed to start (continuing): {}", exc)
+
+    def _stop_catalog_refresh(self) -> None:
+        sched = self._catalog_refresh_scheduler
+        if sched is not None:
+            try:
+                sched.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("catalog refresh stop raised: {}", exc)
+            self._catalog_refresh_scheduler = None
 
     @classmethod
     def from_config(
@@ -1647,6 +1682,7 @@ class AgentLoop:
         # A11: drain memory background services so the watchdog
         # Observer and health-check thread terminate cleanly.
         self._stop_memory_background_services()
+        self._stop_catalog_refresh()
         logger.info("Agent loop stopping")
 
     async def _process_system_message(

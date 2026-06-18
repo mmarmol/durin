@@ -143,6 +143,28 @@ async def test_models_list_empty_provider_no_config_stays_empty(config_path):
     assert result.suggested == []
 
 
+async def test_models_list_provider_uses_catalog_with_capability(config_path, monkeypatch):
+    """A provider filter returns the per-provider catalog, capability-filtered."""
+    import durin.providers.provider_catalog as pc
+    from durin.providers.provider_catalog import ModelInfo
+
+    monkeypatch.setattr(
+        pc, "_load_index",
+        lambda: {"zai_coding_plan": [
+            ModelInfo(id="glm-5.2", supports_vision=False),
+            ModelInfo(id="glm-5v-turbo", supports_vision=True),
+        ]},
+    )
+    vision = await ConfigService().models_list(
+        ModelsListQuery(provider="zai_coding_plan", capability="vision"), LOCAL
+    )
+    assert vision.models == ["glm-5v-turbo"]
+    all_models = await ConfigService().models_list(
+        ModelsListQuery(provider="zai_coding_plan"), LOCAL
+    )
+    assert all_models.models == ["glm-5.2", "glm-5v-turbo"]
+
+
 async def test_model_picker_returns_easy_pick_and_catalog(tmp_path, monkeypatch):
     from durin.config.loader import save_config
     from durin.config.schema import Config
@@ -154,13 +176,24 @@ async def test_model_picker_returns_easy_pick_and_catalog(tmp_path, monkeypatch)
     path = tmp_path / "config.json"
     save_config(config, path)
     monkeypatch.setattr("durin.config.loader._current_config_path", path)
+    import durin.providers.codex_device_auth as _cda
+
     monkeypatch.setattr("durin.utils.oauth.any_token_present", lambda _n: False)
+    # Keep codex undetected so the picker build stays network-free in tests
+    # (codex detection consults the secret store, then would list models live).
+    monkeypatch.setattr(_cda, "codex_token_present", lambda: False)
 
     result = await ConfigService().model_picker(ModelPickerQuery(recent=""), LOCAL)
     groups = {e.group for e in result.entries}
     assert "Easy pick" in groups
     assert "gemini" in groups
     assert all(e.provider for e in result.entries)
+    # Catalog entries carry capabilities from provider_models.json.
+    gemini_catalog = [
+        e for e in result.entries if e.provider == "gemini" and e.role == "catalog"
+    ]
+    assert gemini_catalog, "expected gemini catalog entries"
+    assert any(e.max_input_tokens for e in gemini_catalog), "expected caps from the catalog"
 
 
 async def test_model_picker_requires_read_scope():
@@ -175,6 +208,61 @@ async def test_models_list_requires_read_scope():
     principal = Principal.remote("t", frozenset())
     with pytest.raises(ForbiddenError):
         await ConfigService().models_list(ModelsListQuery(), principal)
+
+
+async def test_provider_models_route_lists_caps_and_overrides(config_path, monkeypatch):
+    import durin.providers.provider_catalog as pc
+    from durin.providers.provider_catalog import ModelInfo
+    from durin.service.config import ProviderModelsQuery
+
+    monkeypatch.setattr(
+        pc, "_load_index",
+        lambda: {"zai_coding_plan": [
+            ModelInfo(id="glm-5.2", max_input_tokens=1_000_000, supports_reasoning=True),
+            ModelInfo(id="glm-5v-turbo", supports_vision=True),
+        ]},
+    )
+    res = await ConfigService().provider_models_route(
+        ProviderModelsQuery(provider="zai_coding_plan"), LOCAL
+    )
+    assert {m.id for m in res.models} == {"glm-5.2", "glm-5v-turbo"}
+    glm = next(m for m in res.models if m.id == "glm-5.2")
+    assert glm.supports_reasoning is True
+    assert glm.max_input_tokens == 1_000_000
+    assert glm.configured is False
+
+
+async def test_provider_model_upsert_and_remove(config_path):
+    from durin.config.loader import load_config
+    from durin.service.config import (
+        ProviderModelDeleteCommand,
+        ProviderModelUpsertCommand,
+    )
+
+    await ConfigService().provider_model_upsert(
+        ProviderModelUpsertCommand(
+            provider="zai_coding_plan", model="glm-5.2", context_window_tokens=1_000_000
+        ),
+        LOCAL,
+    )
+    cfg = load_config(config_path)
+    assert cfg.providers.zai_coding_plan.models["glm-5.2"].context_window_tokens == 1_000_000
+
+    await ConfigService().provider_model_remove(
+        ProviderModelDeleteCommand(provider="zai_coding_plan", model="glm-5.2"), LOCAL
+    )
+    cfg2 = load_config(config_path)
+    assert "glm-5.2" not in (cfg2.providers.zai_coding_plan.models or {})
+
+
+async def test_provider_model_upsert_requires_write_scope():
+    from durin.service.config import ProviderModelUpsertCommand
+
+    principal = Principal.remote("t", frozenset({Scope.CONFIG_READ.value}))
+    with pytest.raises(ForbiddenError):
+        await ConfigService().provider_model_upsert(
+            ProviderModelUpsertCommand(provider="zai_coding_plan", model="x"), principal
+        )
 
 
 # ---------------------------------------------------------------------------

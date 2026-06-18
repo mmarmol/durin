@@ -108,10 +108,51 @@ class PickerEntryModel(Result):
     group: str
     role: str
     ref: str
+    max_input_tokens: int | None = None
+    supports_vision: bool = False
+    supports_audio_input: bool = False
+    supports_reasoning: bool = False
 
 
 class ModelPickerResult(Result):
     entries: list[PickerEntryModel]
+
+
+class ProviderModelsQuery(Query):
+    provider: str
+
+
+class ProviderModelEntry(Result):
+    id: str
+    configured: bool = False
+    max_input_tokens: int | None = None
+    supports_vision: bool = False
+    supports_audio_input: bool = False
+    supports_reasoning: bool = False
+    # User param overrides (None = inherit catalog / default).
+    max_tokens: int | None = None
+    context_window_tokens: int | None = None
+    temperature: float | None = None
+    reasoning_effort: str | None = None
+
+
+class ProviderModelsResult(Result):
+    provider: str
+    models: list[ProviderModelEntry]
+
+
+class ProviderModelUpsertCommand(Command):
+    provider: str
+    model: str
+    max_tokens: int | None = None
+    context_window_tokens: int | None = None
+    temperature: float | None = None
+    reasoning_effort: str | None = None
+
+
+class ProviderModelDeleteCommand(Command):
+    provider: str
+    model: str
 
 
 # ---------------------------------------------------------------------------
@@ -188,14 +229,6 @@ _CRED_FIELDS: tuple[str, ...] = (
     "api_key", "claw_token", "access_token",
 )
 
-#: Plan-variant → base provider for keyword lookup.
-_PLAN_BASE: dict[str, str] = {
-    "zai_coding_plan": "zhipu",
-    "volcengine_coding_plan": "volcengine",
-    "byteplus_coding_plan": "byteplus",
-}
-
-
 class ConfigService:
     """Read/write the effective config, list models/channels, probe model health."""
 
@@ -265,6 +298,116 @@ class ConfigService:
 
     @route(
         "GET",
+        "/api/v1/providers/models",
+        scope=Scope.CONFIG_READ.value,
+        request_model=ProviderModelsQuery,
+        response_model=ProviderModelsResult,
+        summary="Per-provider catalog models with caps and configured params",
+    )
+    async def provider_models_route(
+        self, query: ProviderModelsQuery, principal: Principal
+    ) -> ProviderModelsResult:
+        principal.require(Scope.CONFIG_READ)
+        from durin.config.loader import load_config
+        from durin.providers.provider_catalog import provider_models
+
+        provider = query.provider.strip()
+        cfg = load_config()
+        pc = getattr(cfg.providers, provider, None)
+        configured = dict(getattr(pc, "models", {}) or {})
+        out: list[ProviderModelEntry] = []
+        seen: set[str] = set()
+        for mi in provider_models(provider):
+            seen.add(mi.id)
+            ov = configured.get(mi.id)
+            out.append(
+                ProviderModelEntry(
+                    id=mi.id,
+                    configured=mi.id in configured,
+                    max_input_tokens=mi.max_input_tokens,
+                    supports_vision=mi.supports_vision,
+                    supports_audio_input=mi.supports_audio_input,
+                    supports_reasoning=mi.supports_reasoning,
+                    max_tokens=getattr(ov, "max_tokens", None),
+                    context_window_tokens=getattr(ov, "context_window_tokens", None),
+                    temperature=getattr(ov, "temperature", None),
+                    reasoning_effort=getattr(ov, "reasoning_effort", None),
+                )
+            )
+        for mid, ov in configured.items():  # user customs not in the catalog
+            if mid in seen:
+                continue
+            out.append(
+                ProviderModelEntry(
+                    id=mid, configured=True,
+                    max_tokens=ov.max_tokens,
+                    context_window_tokens=ov.context_window_tokens,
+                    temperature=ov.temperature,
+                    reasoning_effort=ov.reasoning_effort,
+                )
+            )
+        out.sort(key=lambda e: e.id)
+        return ProviderModelsResult(provider=provider, models=out)
+
+    @route(
+        "POST",
+        "/api/v1/providers/model",
+        scope=Scope.CONFIG_WRITE.value,
+        request_model=ProviderModelUpsertCommand,
+        response_model=ConfigSetResult,
+        summary="Add or update a configured model's params under a provider",
+    )
+    async def provider_model_upsert(
+        self, cmd: ProviderModelUpsertCommand, principal: Principal
+    ) -> ConfigSetResult:
+        principal.require(Scope.CONFIG_WRITE)
+        from durin.cli.config_cmd import mask_secrets
+        from durin.config.loader import get_config_path, load_config, save_config
+        from durin.config.schema import ModelEntry
+
+        path = get_config_path()
+        cfg = load_config(path)
+        pc = getattr(cfg.providers, cmd.provider, None)
+        if pc is None:
+            raise ValidationFailedError(f"unknown provider {cmd.provider!r}")
+        pc.models[cmd.model] = ModelEntry(
+            max_tokens=cmd.max_tokens,
+            context_window_tokens=cmd.context_window_tokens,
+            temperature=cmd.temperature,
+            reasoning_effort=cmd.reasoning_effort,
+        )
+        save_config(cfg, path)
+        return ConfigSetResult(
+            ok=True, config=mask_secrets(cfg.model_dump(mode="json", by_alias=True))
+        )
+
+    @route(
+        "POST",
+        "/api/v1/providers/model/remove",
+        scope=Scope.CONFIG_WRITE.value,
+        request_model=ProviderModelDeleteCommand,
+        response_model=ConfigSetResult,
+        summary="Remove a configured model from a provider",
+    )
+    async def provider_model_remove(
+        self, cmd: ProviderModelDeleteCommand, principal: Principal
+    ) -> ConfigSetResult:
+        principal.require(Scope.CONFIG_WRITE)
+        from durin.cli.config_cmd import mask_secrets
+        from durin.config.loader import get_config_path, load_config, save_config
+
+        path = get_config_path()
+        cfg = load_config(path)
+        pc = getattr(cfg.providers, cmd.provider, None)
+        if pc is not None and getattr(pc, "models", None):
+            pc.models.pop(cmd.model, None)
+            save_config(cfg, path)
+        return ConfigSetResult(
+            ok=True, config=mask_secrets(cfg.model_dump(mode="json", by_alias=True))
+        )
+
+    @route(
+        "GET",
         "/api/v1/models",
         scope=Scope.CONFIG_READ.value,
         request_model=ModelsListQuery,
@@ -275,8 +418,6 @@ class ConfigService:
         self, query: ModelsListQuery, principal: Principal
     ) -> ModelsListResult:
         principal.require(Scope.CONFIG_READ)
-        from durin.cli.onboard_wizard import DEFAULT_MODELS
-        from durin.providers.registry import find_by_name
 
         provider = query.provider.strip()
         capability = query.capability.strip().lower()
@@ -298,90 +439,35 @@ class ConfigService:
             models = list_codex_models(access)
             return ModelsListResult(suggested=models, models=models)
 
-        suggested = list(DEFAULT_MODELS.get(provider, ()))
-        if not provider:
-            # The composer's model popover opens with no provider filter. Seed
-            # `suggested` from the default models of every *configured* provider
-            # so the picker isn't blank until the user types — and so it leans
-            # toward models that can actually be sent. Full-catalog browsing
-            # still works via the `models` list below.
-            from durin.cli.onboard_wizard import _all_provider_rows
-            from durin.config.loader import load_config
+        from durin.config.loader import load_config
+        from durin.providers.provider_catalog import provider_models
+        from durin.providers.selection import configured_provider_names
 
-            try:
-                rows = _all_provider_rows(load_config())
-            except Exception:  # noqa: BLE001
-                rows = []
-            seen: set[str] = set()
-            for name, _label, configured, _is_default in rows:
-                if not configured:
-                    continue
-                for mid in DEFAULT_MODELS.get(name, ()):
-                    if mid not in seen:
-                        seen.add(mid)
-                        suggested.append(mid)
-
-        provider_keywords: tuple[str, ...] = ()
-        if provider:
-            lookup_name = _PLAN_BASE.get(provider, provider)
-            spec = find_by_name(lookup_name)
-            if spec is not None:
-                provider_keywords = spec.keywords
-
-        def _capability_ok(info: object) -> bool:
+        def _cap_ok(mi) -> bool:
             if capability in ("", "text"):
                 return True
-            if not isinstance(info, dict):
-                return False
             if capability == "vision":
-                return bool(info.get("supports_vision"))
+                return mi.supports_vision
             if capability == "audio":
-                return bool(info.get("supports_audio_input"))
+                return mi.supports_audio_input
             return True
 
-        def _provider_ok(mid: str) -> bool:
-            if not provider_keywords:
-                return True
-            mid_lower = mid.lower()
-            mid_normalized = mid_lower.replace("-", "_")
-            for kw in provider_keywords:
-                kw_lower = kw.lower()
-                if kw_lower in mid_lower or kw_lower.replace("-", "_") in mid_normalized:
-                    return True
-            return False
+        if provider:
+            models = sorted(mi.id for mi in provider_models(provider) if _cap_ok(mi))
+            return ModelsListResult(suggested=models, models=models)
 
-        catalog: list[str] = []
-        try:
-            from durin.providers.capabilities import _load_capabilities_snapshot
-
-            models_data = _load_capabilities_snapshot() or {}
-            catalog = sorted(
-                mid
-                for mid, info in models_data.items()
-                if isinstance(mid, str)
-                and (
-                    not isinstance(info, dict)
-                    or info.get("mode") != "image_generation"
-                )
-                and _capability_ok(info)
-                and _provider_ok(mid)
-            )
-        except Exception:  # noqa: BLE001
-            catalog = []
-
-        if capability in ("vision", "audio", "image"):
-            try:
-                from durin.providers.capabilities import _load_capabilities_snapshot
-
-                snapshot = _load_capabilities_snapshot() or {}
-            except Exception:  # noqa: BLE001
-                snapshot = {}
-            suggested = [
-                m for m in suggested
-                if m not in snapshot or _capability_ok(snapshot.get(m))
-            ]
-
-        return ModelsListResult(suggested=suggested, models=catalog)
+        # No provider filter: union of every configured provider's catalog.
+        cfg = load_config()
+        suggested: list[str] = []
+        seen: set[str] = set()
+        for pname in sorted(configured_provider_names(cfg)):
+            if pname == "custom":
+                continue
+            for mi in provider_models(pname):
+                if mi.id not in seen and _cap_ok(mi):
+                    seen.add(mi.id)
+                    suggested.append(mi.id)
+        return ModelsListResult(suggested=suggested, models=suggested)
 
     @route(
         "GET",
@@ -409,7 +495,11 @@ class ConfigService:
         return ModelPickerResult(
             entries=[
                 PickerEntryModel(
-                    name=e.name, provider=e.provider, group=e.group, role=e.role, ref=e.ref
+                    name=e.name, provider=e.provider, group=e.group, role=e.role,
+                    ref=e.ref, max_input_tokens=e.max_input_tokens,
+                    supports_vision=e.supports_vision,
+                    supports_audio_input=e.supports_audio_input,
+                    supports_reasoning=e.supports_reasoning,
                 )
                 for e in entries
             ]

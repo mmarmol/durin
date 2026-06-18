@@ -90,6 +90,7 @@ from _vendor_sources import iter_vendor_streams  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_PATH = REPO_ROOT / "durin" / "providers" / "data" / "model_capabilities.json"
+PROVIDER_MODELS_PATH = REPO_ROOT / "durin" / "providers" / "data" / "provider_models.json"
 
 LITELLM_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/models"
@@ -627,6 +628,30 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"\nWrote {args.output} ({args.output.stat().st_size // 1024} KB).", file=sys.stderr)
+
+    # Also emit the per-provider catalog index (provider_models.json) straight
+    # from the raw models.dev structure — the picker/settings source. Keeps the
+    # per-provider grouping the capability flattener discards.
+    md_raw = sources.get("models.dev") or {}
+    if md_raw:
+        from durin.config.schema import ProvidersConfig
+        from durin.providers.models_dev import build_provider_models
+
+        index = build_provider_models(md_raw, set(ProvidersConfig.model_fields))
+        payload2 = {
+            "schema_version": 1,
+            "generated_at": payload["generated_at"],
+            "providers": index,
+        }
+        PROVIDER_MODELS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        PROVIDER_MODELS_PATH.write_text(
+            json.dumps(payload2, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        print(
+            f"Wrote {PROVIDER_MODELS_PATH} ({len(index)} providers, "
+            f"{sum(len(v) for v in index.values())} models).",
+            file=sys.stderr,
+        )
     return 0
 
 

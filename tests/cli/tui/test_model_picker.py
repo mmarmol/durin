@@ -10,7 +10,7 @@ from durin.cli.tui.model_catalog import ModelEntry
 from durin.providers.capabilities import ModelCapabilities
 
 
-def _make_entry(name, *, group="Easy pick", is_preset=False, is_recent=False):
+def _make_entry(name, *, group="Easy pick", is_preset=False, is_recent=False, ref=None):
     return ModelEntry(
         name=name,
         provider="auto",
@@ -18,6 +18,7 @@ def _make_entry(name, *, group="Easy pick", is_preset=False, is_recent=False):
         is_recent=is_recent,
         capabilities=ModelCapabilities(model=name),
         group=group,
+        ref=ref or name,
     )
 
 
@@ -98,3 +99,22 @@ async def test_screen_dismisses_with_free_form_text(entries):
         await pilot.press("enter")
         await pilot.pause()
     assert screen._dismiss_result == "my-custom-model"
+
+
+async def test_same_model_under_two_providers_keeps_distinct_refs():
+    """The same model id under two providers must yield two options keyed by
+    their provider-qualified ref — not collapse to one bare-name row."""
+    from durin.cli.tui.screens.model_picker import ModelPickerScreen
+
+    entries = [
+        _make_entry("glm-5.2", group="zhipu", ref="zhipu glm-5.2"),
+        _make_entry("glm-5.2", group="zai_coding_plan", ref="zai_coding_plan glm-5.2"),
+    ]
+    screen = ModelPickerScreen(entries, active="default")
+    async with _HostApp().run_test() as pilot:
+        await pilot.app.push_screen(screen)
+        await pilot.pause()
+        ol = screen.query_one("#model-picker-list", OptionList)
+        ids = [ol.get_option_at_index(i).id for i in range(ol.option_count)]
+        assert "zhipu glm-5.2" in ids
+        assert "zai_coding_plan glm-5.2" in ids

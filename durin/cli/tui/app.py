@@ -753,16 +753,19 @@ class DurinApp(App[None]):
         selected = await self.push_screen_wait(
             ModelPickerScreen(entries, active=active)
         )
-        if not selected or selected == active:
+        if not selected:
             return
 
-        # Each row carries the exact `/model` argument (preset/default by name,
-        # else `provider model`); the command builds the temp preset with the
-        # explicit provider — no inference here.
-        entry = next((e for e in entries if e.name == selected), None)
-        ref = entry.ref if entry and entry.ref else selected
-        add_recent_model(selected)
-        await self._publish_inbound(f"/model {ref}", [])
+        # `selected` is the exact `/model` argument (a preset/`default` name, or
+        # a `provider model` pair) — committed verbatim, no inference here. Map
+        # it back to its entry to record the recent by model name and to skip a
+        # no-op switch to the already-active model.
+        entry = next((e for e in entries if e.ref == selected), None)
+        recent_name = entry.name if entry is not None else selected
+        if recent_name == active:
+            return
+        add_recent_model(recent_name)
+        await self._publish_inbound(f"/model {selected}", [])
 
     @work
     async def _open_theme_picker(self) -> None:
