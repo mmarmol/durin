@@ -457,25 +457,34 @@ class McpService:
         self, query: McpUpdatesQuery, principal: Principal
     ) -> McpUpdatesResult:
         principal.require(Scope.MCP_READ)
+        import asyncio
+
         from durin.agent.mcp_install import has_update
         from durin.agent.mcp_registry import build_mcp_adapters
         from durin.config.loader import load_config
 
         cfg = load_config()
         adapters = build_mcp_adapters(cfg.tools.mcp_discovery.registries)
-        out: list[McpUpdateInfo] = []
-        for name, sc in sorted(cfg.tools.mcp_servers.items()):
-            if not sc.source_ref or not sc.version:
-                continue
-            detail = None
+        candidates = [
+            (name, sc)
+            for name, sc in sorted(cfg.tools.mcp_servers.items())
+            if sc.source_ref and sc.version
+        ]
+
+        async def _latest(ref: str):
             for adapter in adapters:
-                detail = await adapter.describe(sc.source_ref)
+                detail = await adapter.describe(ref)
                 if detail is not None:
-                    break
-            if detail is not None and has_update(sc.version, detail.version):
-                out.append(
-                    McpUpdateInfo(name=name, current=sc.version, latest=detail.version)
-                )
+                    return detail
+            return None
+
+        # Describe every configured server concurrently rather than one-at-a-time.
+        details = await asyncio.gather(*[_latest(sc.source_ref) for _, sc in candidates])
+        out = [
+            McpUpdateInfo(name=name, current=sc.version, latest=detail.version)
+            for (name, sc), detail in zip(candidates, details)
+            if detail is not None and has_update(sc.version, detail.version)
+        ]
         return McpUpdatesResult(updates=out)
 
     @route(

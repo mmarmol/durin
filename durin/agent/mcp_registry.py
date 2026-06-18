@@ -228,8 +228,16 @@ def build_mcp_adapters(registries) -> list:
     return out
 
 
+# Strong references to in-flight background syncs. asyncio only keeps a WEAK
+# reference to a task, so a fire-and-forget `create_task(...)` whose return value
+# is discarded can be garbage-collected mid-run (documented footgun) — which would
+# silently abort the catalog sync and leave the fuzzy cache empty forever. Holding
+# the task here until it completes prevents that.
+_BACKGROUND_TASKS: set = set()
+
+
 def _spawn_catalog_sync(cache, adapter) -> None:
-    """Fire-and-forget catalog sync to build the fuzzy cache for later searches.
+    """Background catalog sync to build the fuzzy cache for later searches.
 
     The official registry has hundreds of servers (many pages), so a blocking full
     sync would make the FIRST search slow. Instead the first search returns the
@@ -241,9 +249,11 @@ def _spawn_catalog_sync(cache, adapter) -> None:
     import asyncio
 
     try:
-        asyncio.get_running_loop().create_task(cache.sync(adapter))
+        task = asyncio.get_running_loop().create_task(cache.sync(adapter))
     except RuntimeError:
-        pass
+        return
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 async def search_mcp_registries(query, *, cache, adapters, limit):
