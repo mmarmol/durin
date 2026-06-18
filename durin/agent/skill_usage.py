@@ -4,6 +4,9 @@ A skill "call" is the agent touching a skill during a turn:
 - ``read``  — ``read_file`` on ``skills/<name>/SKILL.md`` (progressive load).
 - ``edit``  — ``skill_edit`` on a skill (E1 editor).
 
+Each record carries the 1-based ``turn`` index, so a hindsight pass can attribute
+"skill X loaded at turn N → user corrected at turn N+1" (skill-signal extraction).
+
 Pure and dependency-free so it's trivially unit-testable and safe to run in the
 hot loop. The result is appended to ``session.metadata["skill_calls"]``.
 """
@@ -31,17 +34,18 @@ def _tool_name_and_args(tc: Any) -> tuple[str, dict]:
 
 def extract_skill_calls(messages: list[dict]) -> list[dict]:
     calls: list[dict] = []
-    for message in messages:
+    for i, message in enumerate(messages):
+        turn = i + 1                       # messages[i] is turn i+1 (load_session)
         for tc in (message.get("tool_calls") or []):
             name, args = _tool_name_and_args(tc)
             if name == "read_file":
                 m = _SKILL_PATH_RE.search(str(args.get("path", "")))
                 if m:
-                    calls.append({"skill": m.group(1), "op": "read"})
+                    calls.append({"skill": m.group(1), "op": "read", "turn": turn})
             elif name == "skill_edit":
                 skill = args.get("name")
                 if skill:
-                    calls.append({"skill": skill, "op": "edit"})
+                    calls.append({"skill": skill, "op": "edit", "turn": turn})
     return calls
 
 
