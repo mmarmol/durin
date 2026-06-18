@@ -132,6 +132,12 @@ durin config set providers.zhipu.api_key sk-...
 durin keeps a single canonical config at `~/.durin/config.json`, validated by
 the Pydantic `Config` schema in [durin/config/schema.py](../durin/config/schema.py).
 
+> **`DURIN_HOME`** — set this env var to relocate the entire home data root
+> (`config.json`, `secrets.json`, sessions, workspace, history, …) somewhere
+> other than `~/.durin`. Unset, behavior is unchanged. Use it to keep a dev
+> (editable) install from sharing state with a daily (pipx) install, e.g.
+> `DURIN_HOME=~/.durin-dev durin status`.
+
 ### Inspect
 
 ```bash

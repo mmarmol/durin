@@ -19,7 +19,9 @@ _state_dir: Path | None = None
 def _resolve_state_dir() -> Path:
     if _state_dir is not None:
         return _state_dir
-    return Path.home() / ".durin"
+    from durin.config.home import durin_home
+
+    return durin_home()
 
 
 def _state_file() -> Path:

@@ -26,6 +26,9 @@ def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setattr("durin.cli.uninstall._home", lambda: home)
+    # The durin data root resolves via DURIN_HOME; point it at the fake tree
+    # (the kit cache still derives from _home()).
+    monkeypatch.setenv("DURIN_HOME", str(home / ".durin"))
 
     # Build a realistic state tree under the fake home.
     (home / ".durin").mkdir()

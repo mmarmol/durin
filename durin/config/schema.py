@@ -8,6 +8,8 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
+from durin.config.home import durin_home
+
 if TYPE_CHECKING:
     from durin.agent.tools.code_execution import CodeExecutionConfig
     from durin.agent.tools.post_edit_check import PostEditCheckConfig
@@ -621,7 +623,9 @@ class ModelCapabilityOverride(Base):
 class AgentDefaults(Base):
     """Default agent configuration."""
 
-    workspace: str = "~/.durin/workspace"
+    # Resolved at instance time so a fresh config under DURIN_HOME points at its
+    # own workspace; an existing config keeps the value persisted on disk.
+    workspace: str = Field(default_factory=lambda: str(durin_home() / "workspace"))
     model_preset: str | None = None  # Active preset name — takes precedence over fields below
     model: str = "anthropic/claude-opus-4-5"
     provider: str = (

@@ -42,8 +42,10 @@ def default_target_groups(workspace: Path | None = None) -> list[TargetGroup]:
     project code and are never removed unless the user names a workspace
     explicitly.
     """
+    from durin.config.home import durin_home as _durin_home_root
+
     home = _home()
-    durin_home = home / ".durin"
+    durin_home = _durin_home_root()
     cache = home / ".cache" / "durin"
 
     config_paths = (

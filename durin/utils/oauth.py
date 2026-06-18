@@ -24,9 +24,10 @@ def _legacy_paths(provider_name: str) -> Iterable[Path]:
     exist on long-lived installs. Checking them avoids false negatives
     if the user logged in before the storage migration.
     """
-    home = Path.home()
-    yield home / ".durin" / "oauth" / f"{provider_name}.json"
-    yield home / f".{provider_name}" / "auth.json"
+    from durin.config.home import durin_home
+
+    yield durin_home() / "oauth" / f"{provider_name}.json"
+    yield Path.home() / f".{provider_name}" / "auth.json"
 
 
 def _kit_paths(provider_name: str) -> Iterable[Path]:

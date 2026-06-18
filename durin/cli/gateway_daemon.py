@@ -53,7 +53,9 @@ GATEWAY_LOG_FILE_ENV = "DURIN_GATEWAY_LOG_FILE"
 
 def _state_root() -> Path:
     """Where we keep the PID + log files. Stable across the agent's lifetime."""
-    root = Path.home() / ".durin"
+    from durin.config.home import durin_home
+
+    root = durin_home()
     root.mkdir(parents=True, exist_ok=True)
     return root
 
