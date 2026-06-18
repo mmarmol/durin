@@ -697,6 +697,14 @@ export function ThreadComposer({
   const submit = useCallback(() => {
     if (!canSend) return;
     const trimmed = value.trim();
+    // Bare `/model` opens the picker (parity with the TUI and the model chip),
+    // instead of sending it as a message that just prints the model status.
+    if (trimmed === "/model" && onModelPick) {
+      setModelPickerOpen(true);
+      setValue("");
+      resizeTextarea();
+      return;
+    }
     const payload: SendImage[] | undefined =
       readyImages.length > 0
         ? readyImages.map((img) => ({
@@ -719,7 +727,7 @@ export function ThreadComposer({
       setQueuedFlash(true);
       window.setTimeout(() => setQueuedFlash(false), 2500);
     }
-  }, [canSend, clear, isStreaming, onSend, promptHistory, readyImages, resizeTextarea, value]);
+  }, [canSend, clear, isStreaming, onModelPick, onSend, promptHistory, readyImages, resizeTextarea, value]);
 
   const steer = useCallback(() => {
     const trimmed = value.trim();
