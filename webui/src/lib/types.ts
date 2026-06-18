@@ -491,3 +491,9 @@ export interface McpRegistryServerDetail {
   packages: McpRegistryPackage[];
   remotes: McpRegistryRemote[];
 }
+
+export interface McpUpdateInfo {
+  name: string;
+  current: string;
+  latest: string;
+}
