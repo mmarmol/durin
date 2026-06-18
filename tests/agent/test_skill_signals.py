@@ -1,5 +1,7 @@
 """Hindsight skill-signal extraction — the dream detects skill corrections/gaps
 from a session's turns and feeds the observation queue (no agent initiative)."""
+import json
+
 from durin.agent.skill_observations import open_observations
 from durin.agent.skill_signals import (
     build_skill_signal_prompt,
@@ -77,3 +79,54 @@ def test_discover_skill_signals_empty_turns_makes_no_call(tmp_path):
         raise AssertionError("LLM must not be called for empty turns")
 
     assert discover_skill_signals(ws, "   ", llm_invoke=boom) == []
+
+
+# --- wiring: stage 3 of the extract dream -----------------------------------
+
+def test_run_extract_for_session_logs_skill_signals(tmp_path):
+    from durin.memory.extract_runner import run_extract_for_session
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    sdir = ws / "sessions"
+    sdir.mkdir()
+    p = sdir / "s1.jsonl"
+    rows = [
+        {"_type": "metadata", "key": "s1"},
+        {"role": "user", "content": "do a git flow"},
+        {"role": "assistant", "tool_calls": [
+            {"function": {"name": "read_file",
+                          "arguments": '{"path": "skills/git-helper/SKILL.md"}'}}]},
+        {"role": "user", "content": "no, rebase not merge"},
+    ]
+    p.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    signal = ('[{"skill":"git-helper","kind":"correction",'
+              '"issue":"used merge not rebase","improvement":"prefer rebase in step 2"}]')
+    res = run_extract_for_session(
+        ws, p, llm_invoke=_stub(signal), discover=False, skill_signals=True)
+    assert res["skill_signals"]
+    assert any(o["skill"] == "git-helper" for o in open_observations(ws))
+
+
+def test_run_extract_for_session_skill_signals_off_logs_nothing(tmp_path):
+    from durin.memory.extract_runner import run_extract_for_session
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    sdir = ws / "sessions"
+    sdir.mkdir()
+    p = sdir / "s2.jsonl"
+    rows = [
+        {"_type": "metadata", "key": "s2"},
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "ok"},
+    ]
+    p.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+
+    def boom(prompt, **kw):
+        raise AssertionError("no LLM call when both stages are off")
+
+    res = run_extract_for_session(
+        ws, p, llm_invoke=boom, discover=False, skill_signals=False)
+    assert res["skill_signals"] == []
+    assert open_observations(ws) == []

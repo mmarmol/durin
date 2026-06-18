@@ -145,6 +145,17 @@ class MemoryDreamConfig(Base):
         validation_alias=AliasChoices("discoverEnabled", "discover_enabled"),
     )
 
+    # Hindsight skill-signal extraction (extract dream stage 3). When ON, the
+    # extract pass detects skill corrections/gaps from a session's turns and logs
+    # them as observations for the daily curation pass — so the observation queue
+    # is fed without depending on the agent calling skill_observe at runtime. ON
+    # by default: detection only (curation decides); precision lives in the prompt
+    # and `memory.dream.skill_signals` telemetry measures it.
+    skill_signals_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("skillSignalsEnabled", "skill_signals_enabled"),
+    )
+
     # Override the dream model (None → falls through to
     # agents.defaults.model used by ``durin memory dream``).
     model_override: str | None = Field(
