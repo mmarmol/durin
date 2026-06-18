@@ -2695,13 +2695,18 @@ def _logout_openai_codex() -> None:
 def _logout_github_copilot() -> None:
     """Clear local OAuth credentials for GitHub Copilot."""
     try:
-        from durin.providers.github_copilot_provider import get_storage
+        from durin.providers.github_copilot_provider import disconnect
     except ImportError:
         console.print("[red]GitHub Copilot provider unavailable. Ensure oauth-cli-kit is installed.[/red]")
         raise typer.Exit(1) from None
 
-    storage = get_storage()
-    _delete_oauth_files(storage.get_token_path(), _PROVIDER_DISPLAY["github_copilot"])
+    # The token now lives in the secret store; disconnect() removes it (and any
+    # legacy kit file), so a file-only deletion would no longer log the user out.
+    label = _PROVIDER_DISPLAY["github_copilot"]
+    if disconnect():
+        console.print(f"[green]✓ Logged out from {label}[/green]")
+    else:
+        console.print(f"[yellow]! No local OAuth credentials found for {label}[/yellow]")
 
 
 def _delete_oauth_files(token_path: Path, provider_label: str) -> None:

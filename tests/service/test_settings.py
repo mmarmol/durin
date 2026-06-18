@@ -218,6 +218,48 @@ async def test_web_search_update_duckduckgo_clears_creds(config_env):
     assert result.web_search["api_key_hint"] is None
 
 
+async def test_web_search_update_stores_secret_ref(config_env):
+    _, config_path = config_env
+    result = await SettingsService().web_search_update(
+        SettingsWebSearchUpdateCommand(provider="brave", api_key="brave-secret"),
+        Principal.local(),
+    )
+    assert result.web_search["provider"] == "brave"
+    # Plaintext MUST NOT appear in the payload
+    assert "brave-secret" not in str(result.model_dump())
+    # Config on disk must hold a secret ref, not the plaintext
+    from durin.config.loader import load_config
+    from durin.security.secrets import SecretStore, is_secret_ref
+
+    saved = load_config(config_path)
+    assert is_secret_ref(saved.tools.web.search.api_key)
+    store = SecretStore(path=config_path.parent / "secrets.json").load()
+    entry = store.get("BRAVE_API_KEY")
+    assert entry is not None
+    assert entry.value == "brave-secret"
+
+
+async def test_web_search_update_preserves_existing_secret_ref(config_env):
+    """Re-saving the same provider without a new key keeps the stored ref
+    intact and does not double-wrap it into a nested secret."""
+    _, config_path = config_env
+    svc = SettingsService()
+    await svc.web_search_update(
+        SettingsWebSearchUpdateCommand(provider="brave", api_key="brave-secret"),
+        Principal.local(),
+    )
+    from durin.config.loader import load_config
+
+    ref = load_config(config_path).tools.web.search.api_key
+    # Update only base_url-irrelevant field by re-submitting brave w/o api_key
+    await svc.web_search_update(
+        SettingsWebSearchUpdateCommand(provider="brave"),
+        Principal.local(),
+    )
+    saved = load_config(config_path)
+    assert saved.tools.web.search.api_key == ref
+
+
 async def test_web_search_update_unknown_provider_raises(config_env):
     with pytest.raises(ValidationFailedError, match="unknown web search provider"):
         await SettingsService().web_search_update(

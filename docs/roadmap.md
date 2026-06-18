@@ -115,27 +115,6 @@ Tested, or strong reasons against. (Detailed experiment analysis in `git log`.)
 
 ### Worth doing
 
-**Secrets — credential consistency (4 of 5 still bypass the store).** The store
-(`store_secret`/`resolve_secret`, `${secret:}` refs, `~/.durin/secrets.json` mode
-0600) already covers provider keys, channel tokens, and Codex + MCP OAuth. Still
-outside it (plaintext in `config.json` or an external file store — 0600, not
-network-exposed, but inconsistent):
-
-- Web-search api_key written raw to `config.json` — `durin/service/settings.py`
-  `web_search_update` (its sibling `provider_update` already calls `store_secret`;
-  mirror it).
-- GitHub Copilot OAuth on the kit's `FileTokenStorage`
-  (`durin/providers/github_copilot_provider.py`) — migrate to the reusable
-  `SecretsTokenStorage` that already exists for MCP OAuth.
-- Provider `extra_headers` / `extra_body` passed raw (`durin/providers/factory.py`)
-  — `api_key` is resolved, these dicts aren't.
-- **Bug** (resolution, not storage): transcription key returns the literal
-  `${secret:}` ref unresolved (`durin/channels/manager.py`
-  `_resolve_transcription_key`) → voice auth fails when the key is a secret.
-  ~1-line `resolve_secret` fix.
-
-(MCP `headers`/`env` resolution — previously listed here — shipped with the MCP work.)
-
 **`DURIN_HOME` — dev/daily data-root separation.** `~/.durin` is hardcoded in 16+
 places (`config/loader.py`, `config/paths.py`, `cli/gateway_daemon.py`, channels),
 so a dev (editable) install and a daily (pipx) install share the same state.

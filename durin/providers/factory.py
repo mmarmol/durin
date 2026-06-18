@@ -4,11 +4,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from durin.config.schema import Config, InlineFallbackConfig, ModelPresetConfig
 from durin.providers.base import LLMProvider
 from durin.providers.fallback_provider import FallbackProvider
 from durin.providers.registry import find_by_name
+
+
+def _resolve_secret_refs(obj: Any) -> Any:
+    """Recursively resolve ``${secret:}`` references in a config value.
+
+    Provider ``extra_headers`` / ``extra_body`` may carry a credential in a
+    custom header or body field; resolve those refs the same way ``api_key`` is
+    resolved, so the plaintext (not the literal ref) reaches the wire. Literals,
+    ``None`` and non-string scalars pass through untouched.
+    """
+    from durin.security.secrets import resolve_secret
+
+    if isinstance(obj, dict):
+        return {k: _resolve_secret_refs(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_resolve_secret_refs(v) for v in obj]
+    return resolve_secret(obj)
 
 
 @dataclass(frozen=True)
@@ -54,6 +72,8 @@ def _make_provider_core(
     from durin.security.secrets import resolve_secret
 
     api_key = resolve_secret(p.api_key) if p else None
+    extra_headers = _resolve_secret_refs(p.extra_headers) if p else None
+    extra_body = _resolve_secret_refs(p.extra_body) if p else None
 
     if backend == "azure_openai":
         if not api_key or not (p and p.api_base):
@@ -87,7 +107,7 @@ def _make_provider_core(
             api_key=api_key,
             api_base=config.get_api_base(model, preset=resolved),
             default_model=model,
-            extra_headers=p.extra_headers if p else None,
+            extra_headers=extra_headers,
         )
     elif backend == "bedrock":
         from durin.providers.bedrock_provider import BedrockProvider
@@ -98,7 +118,7 @@ def _make_provider_core(
             default_model=model,
             region=getattr(p, "region", None) if p else None,
             profile=getattr(p, "profile", None) if p else None,
-            extra_body=p.extra_body if p else None,
+            extra_body=extra_body,
         )
     else:
         from durin.providers.openai_compat_provider import OpenAICompatProvider
@@ -107,9 +127,9 @@ def _make_provider_core(
             api_key=api_key,
             api_base=config.get_api_base(model, preset=resolved),
             default_model=model,
-            extra_headers=p.extra_headers if p else None,
+            extra_headers=extra_headers,
             spec=spec,
-            extra_body=p.extra_body if p else None,
+            extra_body=extra_body,
             parallel_tool_calls_overrides=dict(config.agents.defaults.parallel_tool_calls),
         )
 
