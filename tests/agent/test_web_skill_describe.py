@@ -57,9 +57,35 @@ def test_describe_empty_string_returns_none(monkeypatch):
     assert payload["requires"] is None
 
 
-def test_describe_clawhub_returns_none_platforms_requires():
-    status, payload = ss.web_skill_describe("clawhub:some/slug")
+def test_describe_clawhub_fetches_skill_md(monkeypatch):
+    # clawhub previews must show the real SKILL.md body, fetched from the
+    # registry's raw-file endpoint — not degrade to an empty inline summary.
+    raw_md = (
+        "---\n"
+        "name: Git\n"
+        "description: Version control discipline\n"
+        "---\n"
+        "## When to Use\n\nGit work.\n"
+    )
+    seen = {}
+    def _fake_get(url):
+        seen["url"] = url
+        return raw_md.encode()
+    monkeypatch.setattr(si, "_http_get_bytes", _fake_get)
+    status, payload = ss.web_skill_describe("clawhub:git")
     assert status == 200
+    assert seen["url"].endswith("/api/v1/skills/git/file?path=SKILL.md")
+    assert payload["description"] == "Version control discipline"
+    assert "## When to Use" in payload["body"]
+
+
+def test_describe_clawhub_degrades_on_fetch_error(monkeypatch):
+    def _boom(url):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(si, "_http_get_bytes", _boom)
+    status, payload = ss.web_skill_describe("clawhub:git")
+    assert status == 200
+    assert payload["body"] == ""
     assert payload["platforms"] is None
     assert payload["requires"] is None
 

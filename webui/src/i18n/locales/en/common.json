@@ -326,7 +326,8 @@
         "judge": "LLM security judge",
         "trust": "Trust patterns",
         "token": "GitHub token",
-        "caps": "Size caps"
+        "caps": "Size caps",
+        "discovery": "Discovery sources"
       },
       "rows": {
         "judgeTrigger": "When to run the judge",
@@ -362,7 +363,10 @@
       "testToken": "Test",
       "tokenOk": "Token OK — {{remaining}} API requests remaining.",
       "tokenTestError": "Token test failed.",
-      "modelPlaceholder": "default model"
+      "modelPlaceholder": "default model",
+      "discoveryDescription": "Which registries skill search queries.",
+      "toggleRegistry": "Toggle {{name}}",
+      "noRegistries": "No registries configured."
     },
     "cron": {
       "title": "Scheduled jobs",

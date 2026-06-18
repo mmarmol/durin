@@ -833,6 +833,9 @@ def web_skill_describe(ref: str) -> tuple[int, dict]:
             owner, repo, branch, skill_dir = si._parse_github_ref(cand.ref)
             path = f"{skill_dir}/SKILL.md" if skill_dir else "SKILL.md"
             url = f"{si._GITHUB_RAW}/{owner}/{repo}/{branch}/{path}"
+        elif cand.kind == "clawhub":
+            slug = cand.ref[len("clawhub:"):] if cand.ref.startswith("clawhub:") else cand.name
+            url = f"{si._CLAWHUB_API}/skills/{slug}/file?path=SKILL.md"
         else:
             return 200, {"ref": ref, "description": "", "body": "",
                           "platforms": None, "requires": None}
