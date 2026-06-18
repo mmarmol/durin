@@ -120,29 +120,47 @@ are already linked, or that ingested no references, is skipped with no LLM call
 
 ### 2.1 Extract pass — sessions → entity attributes
 
-`run_extract_pass(workspace, *, llm_invoke=None, model=None, max_seconds=0)`
-iterates every `memory/sessions/*.jsonl`. For each session it calls
-`run_extract_for_session` (`durin/memory/extract_runner.py`):
+`run_extract_pass(workspace, *, llm_invoke=None, model=None, max_seconds=0,
+discover=True)` iterates every `memory/sessions/*.jsonl`. For each session it
+calls `run_extract_for_session` (`durin/memory/extract_runner.py`):
 
 ```
 1. Load the session jsonl → (metadata, messages). messages[i] is turn i+1.
 2. Read the per-session extract_cursor (§3.2). If total turns <= cursor, skip
    (no new turns).
 3. Take the new turns (messages[cursor:]) and render them as text.
-4. Discover the entities the agent AUTHORED in those turns:
+4. STAGE 1 (extract) — the entities the agent AUTHORED in those turns:
    entity_refs_in_messages() scans the tool_calls for memory_upsert_entity and
    collects each call's `ref` argument.
-5. For each discovered ref, call extract_entity(...) (§2.2).
-6. Advance the extract_cursor to `total` (per-batch).
+5. For each such ref, call extract_entity(...) (§2.2).
+6. STAGE 2 (discover, when discover=True) — discover_entities(...) scans the
+   SAME turns for durable facts about entities the agent did NOT upsert and
+   creates/updates them as dream-authored pages, skipping refs handled in
+   stage 1 and tombstoned refs.
+7. Advance the extract_cursor to `total` (per-batch).
 ```
 
-Discovery is **precise**: the extract pass only enriches entities the agent
-explicitly upserted via `memory_upsert_entity` in the new turns. It never
-creates an entity from scratch, so it cannot introduce a duplicate that an
-`existing_uris` block would have prevented — which is why the extract prompt
-omits one (audit A5; dedup is handled author-time by `memory_search` and
-write-time by the refine pass). Mention-based discovery for entities the agent
-did not upsert is a documented future refinement, not current behaviour.
+**Stage 1 is precise**: it only enriches entities the agent explicitly upserted
+via `memory_upsert_entity` in the new turns; it never creates an entity from
+scratch (which is why the extract prompt omits an `existing_uris` block — audit
+A5).
+
+**Stage 2 (mention-based discovery)** closes the gap stage 1 leaves: durable
+facts the agent *mentioned* but never upserted used to never become entities, so
+the graph grew only by agent initiative (a knowledge refinery, not a builder).
+`discover_entities()` (`durin/memory/extract_dream.py`) makes one LLM call over
+the new turns and writes proposals as `author="dream"` (so user/agent values
+keep precedence). The discovered `name` is set via `write_entity(name=...)`,
+which is **last-writer-wins, not precedence-arbitrated** — a later explicit
+agent/user correction simply overwrites a discovered guess. Precision lives in
+the discovery prompt (durable identity-class facts only — identity, roles,
+relationships, commitments, life events; exclude ephemeral chatter), and
+`memory.dream.discover` telemetry measures it. It is **ON by default**
+(`memory.dream.discover_enabled`): the failure mode is additive (a low-signal
+page, overridable + `git revert`), milder than a destructive merge. Residual
+duplicate risk (a discovered slug colliding with the agent's later canonical
+ref) is dedup's job — handled author-time by `memory_search` and write-time by
+the refine pass — not stage 2's.
 
 Per-session cursors make the pass **idempotent**: a session with no new turns
 is skipped; a re-run re-processes nothing already seen. One bad session never

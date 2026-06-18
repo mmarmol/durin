@@ -54,6 +54,7 @@ interface MemoryConfigShape {
     cron?: string;
     postCompaction?: boolean;
     onSessionClose?: boolean;
+    discoverEnabled?: boolean;
     minSecondsBetweenRuns?: number;
     maxSecondsPerRun?: number;
     alwaysOnTokenBudget?: number;
@@ -66,6 +67,7 @@ interface DreamState {
   cron: string;
   postCompaction: boolean;
   onSessionClose: boolean;
+  discover: boolean;
   minSecondsBetweenRuns: number;
   maxSecondsPerRun: number;
   alwaysOnTokenBudget: number;
@@ -91,6 +93,7 @@ function readDream(config: Record<string, unknown> | null): DreamState {
     cron: typeof d.cron === "string" && d.cron ? d.cron : "0 3 * * *",
     postCompaction: typeof d.postCompaction === "boolean" ? d.postCompaction : true,
     onSessionClose: typeof d.onSessionClose === "boolean" ? d.onSessionClose : true,
+    discover: typeof d.discoverEnabled === "boolean" ? d.discoverEnabled : true,
     minSecondsBetweenRuns:
       typeof d.minSecondsBetweenRuns === "number" ? d.minSecondsBetweenRuns : 300,
     maxSecondsPerRun:
@@ -279,6 +282,15 @@ export function MemorySettings({ token }: { token: string }) {
             saving={savingPath === "memory.dream.on_session_close"}
             onToggle={() =>
               void onSave("memory.dream.on_session_close", !dream.onSessionClose)
+            }
+          />
+          <ToggleRow
+            title={t("settings.memory.rows.dreamDiscover")}
+            description={t("settings.memory.help.dreamDiscover")}
+            value={dream.discover}
+            saving={savingPath === "memory.dream.discover_enabled"}
+            onToggle={() =>
+              void onSave("memory.dream.discover_enabled", !dream.discover)
             }
           />
           <ToggleRow

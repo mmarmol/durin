@@ -133,6 +133,18 @@ class MemoryDreamConfig(Base):
     # Hook into session-close events.
     on_session_close: bool = True
 
+    # Mention-based entity discovery (extract dream stage 2). When ON, the
+    # extract pass also creates/updates entities from durable facts the agent
+    # mentioned but did NOT upsert — so the entity graph grows from conversation,
+    # not only from explicit memory_upsert_entity calls. ON by default: the
+    # failure mode is additive (a low-signal page, overridable + git-revertable),
+    # far milder than a destructive merge. Precision lives in the discovery
+    # prompt; `memory.dream.discover` telemetry measures it.
+    discover_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("discoverEnabled", "discover_enabled"),
+    )
+
     # Override the dream model (None → falls through to
     # agents.defaults.model used by ``durin memory dream``).
     model_override: str | None = Field(

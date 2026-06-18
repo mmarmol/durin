@@ -786,6 +786,22 @@ class MemoryDreamPatchAppliedEvent(TypedDict):
     source_ref: str
 
 
+class MemoryDreamDiscoverEvent(TypedDict):
+    """The extract dream's mention-discovery stage processed one session.
+
+    Stage 2 of the extract pass (doc 05 §2.1): it found durable facts about
+    entities the agent did NOT upsert and wrote them as dream-authored pages.
+    ``proposed`` is what the LLM returned; ``written`` is what was committed
+    (new/updated entities); ``skipped`` were dropped as already-handled (stage 1)
+    or tombstoned. Lets dashboards measure discovery precision over time.
+    """
+
+    proposed: int
+    written: int
+    skipped: int
+    refs: list[str]  # the entity refs written
+
+
 class MemoryEntityRelationCapWarnedEvent(TypedDict):
     """An entity write took its relation count across the soft cap (50). The
     write proceeded (alert-only, A3 2026-06-06, `memory_writer._emit_relation_
@@ -1217,6 +1233,7 @@ EVENTS: dict[str, type] = {
     "memory.dream.start": MemoryDreamStartEvent,
     "memory.dream.end": MemoryDreamEndEvent,
     "memory.dream.patch_applied": MemoryDreamPatchAppliedEvent,
+    "memory.dream.discover": MemoryDreamDiscoverEvent,
     "memory.dream.skill_extract": MemoryDreamSkillExtractEvent,
     "memory.dream.max_seconds_reached": MemoryDreamMaxSecondsReachedEvent,
     "memory.dream.throttled": MemoryDreamThrottledEvent,
@@ -1302,6 +1319,7 @@ __all__ = [
     "MemoryEmbeddingEmbedEvent",
     "MemoryRecallVectorEvent",
     "MemoryDreamPatchAppliedEvent",
+    "MemoryDreamDiscoverEvent",
     "MemoryEntityRelationCapWarnedEvent",
     "MemoryEntityRelationCapRejectedEvent",
     "MemoryHealthCheckEvent",

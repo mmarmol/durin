@@ -16,7 +16,7 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from json_repair import repair_json
 
@@ -25,7 +25,10 @@ from durin.memory.field_patch import FieldPatch
 from durin.memory.llm_invoke import LLMResponse, default_llm_invoke
 from durin.memory.memory_writer import WriteResult, write_entity
 
-__all__ = ["build_extract_prompt", "parse_attributes", "extract_entity"]
+__all__ = [
+    "build_extract_prompt", "parse_attributes", "extract_entity",
+    "build_discover_prompt", "parse_discoveries", "discover_entities",
+]
 
 LLMInvoke = Callable[..., Any]
 
@@ -138,3 +141,120 @@ def extract_entity(
     except Exception:  # pragma: no cover
         pass
     return result
+
+
+_DISCOVER_PROMPT = """You are durin's memory discovery pass. From the conversation \
+turns below, identify entities (people, organizations, places, projects, topics) that \
+carry a DURABLE fact worth remembering long-term, and output them as structured proposals.
+
+Rules:
+- Include ONLY durable, identity-defining facts: who/what an entity is, stable roles or
+  relationships, lasting preferences, commitments and deadlines, life events.
+- EXCLUDE ephemeral task details, transient state, speculation, and small talk.
+- Only facts explicitly stated in the turns. Do not invent or infer.
+- Each entity is an object with:
+  - "ref": "<type>:<slug>" — lowercase ascii slug; type one of
+    person/place/project/topic/organization/event/artifact/stance/practice
+  - "name": the display name
+  - "attributes": a JSON object of scalar or short-list values — NO prose, NO nested objects
+- Output ONLY a JSON array of these objects. If nothing durable is stated, output [].
+
+CONVERSATION TURNS:
+{turns}
+
+JSON:"""
+
+
+def build_discover_prompt(turns: str) -> str:
+    return _DISCOVER_PROMPT.format(turns=turns[:12000])
+
+
+def parse_discoveries(raw: str) -> list[dict[str, Any]]:
+    """Tolerant parse of the discovery LLM's JSON array of entity proposals.
+
+    Each item needs a well-formed ``ref`` (``<type>:<slug>``) and a non-empty
+    ``name``; ``attributes`` are filtered through :func:`parse_attributes`
+    (scalars / lists of scalars only). Malformed items are dropped, not raised.
+    """
+    s = raw.strip()
+    m = re.search(r"```(?:json)?\s*(.*?)```", s, re.DOTALL)
+    if m:
+        s = m.group(1).strip()
+    try:
+        obj = json.loads(repair_json(s))
+    except Exception:
+        return []
+    if not isinstance(obj, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in obj:
+        if not isinstance(item, dict):
+            continue
+        ref = str(item.get("ref") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if not ref or ":" not in ref or not name:
+            continue
+        attrs_raw = item.get("attributes")
+        attrs = (
+            parse_attributes(json.dumps(attrs_raw))
+            if isinstance(attrs_raw, dict) else {}
+        )
+        out.append({"ref": ref, "name": name, "attributes": attrs})
+    return out
+
+
+def discover_entities(
+    workspace: Path,
+    turns: str,
+    *,
+    existing_refs: Iterable[str] = (),
+    llm_invoke: LLMInvoke | None = None,
+    model: str | None = None,
+    source_ref: str | None = None,
+) -> list[dict[str, Any]]:
+    """Discover entities mentioned in ``turns`` that the agent did NOT upsert and
+    write them as dream-authored pages (design §5).
+
+    Skips refs already handled by the precise extract stage (``existing_refs``)
+    and refs under a delete tombstone (a user-deleted entity is never re-created).
+    Discovered ``name`` is set via ``write_entity(name=...)`` (last-writer-wins,
+    so a later agent/user correction simply overwrites it); attributes are
+    ``author="dream"`` so user/agent values keep precedence.
+    """
+    from durin.memory.deletion import is_deleted
+    llm_invoke = llm_invoke or default_llm_invoke
+    if not turns.strip():
+        return []
+    skip = set(existing_refs)
+    prompt = build_discover_prompt(turns)
+    resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
+    raw = resp.text if isinstance(resp, LLMResponse) else str(resp)
+    proposals = parse_discoveries(raw)
+
+    now = datetime.now(timezone.utc)
+    src = source_ref or "discover_dream"
+    out: list[dict[str, Any]] = []
+    for prop in proposals:
+        ref = prop["ref"]
+        if ref in skip or is_deleted(workspace, ref):
+            continue
+        patches = [
+            FieldPatch(kind="attribute", key=k, value=v, author="dream",
+                       source_ref=src, at=now)
+            for k, v in prop["attributes"].items()
+        ]
+        result = write_entity(
+            workspace, ref, patches, create=True, name=prop["name"])
+        out.append({"ref": ref, "committed": result.committed})
+
+    try:
+        from durin.agent.tools._telemetry import emit_tool_event
+        emit_tool_event("memory.dream.discover", {
+            "proposed": len(proposals),
+            "written": sum(1 for r in out if r["committed"]),
+            "skipped": len(proposals) - len(out),
+            "refs": [r["ref"] for r in out],
+        })
+    except Exception:  # pragma: no cover
+        pass
+    return out

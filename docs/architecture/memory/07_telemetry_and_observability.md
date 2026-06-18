@@ -305,6 +305,17 @@ Use to detect a session backlog that consistently outruns the per-pass budget (a
 
 (The internal `changed` counter — how many flags flipped — is logged but not emitted on this event.)
 
+### 6.8 `memory.dream.discover`
+
+`MemoryDreamDiscoverEvent`. Emitted by `durin/memory/extract_dream.py::discover_entities` once **per session** the extract pass's mention-discovery stage processes (doc 05 §2.1, stage 2). Lets dashboards measure discovery **precision** over time (the ratio of `written` to `proposed`, audited against junk).
+
+| Field | Type | Description |
+|---|---|---|
+| `proposed` | int | Entities the discovery LLM returned for the session |
+| `written` | int | Proposals committed as new/updated dream-authored pages |
+| `skipped` | int | Proposals dropped (already handled in stage 1, or tombstoned) |
+| `refs` | list[string] | The entity refs written |
+
 ---
 
 ## 7. Absorb-judge events

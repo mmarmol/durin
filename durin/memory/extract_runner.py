@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from durin.memory.extract_dream import extract_entity
+from durin.memory.extract_dream import discover_entities, extract_entity
 from durin.utils.atomic_write import atomic_write_text
 
 __all__ = [
@@ -102,8 +102,15 @@ def run_extract_for_session(
     *,
     llm_invoke: LLMInvoke | None = None,
     model: str | None = None,
+    discover: bool = True,
 ) -> dict:
-    """Extract attributes for entities authored in this session's new turns."""
+    """Distil this session's new turns into entities.
+
+    Stage 1 (extract): for entities the agent upserted, pull structured
+    attributes. Stage 2 (discover, when ``discover``): find durable facts about
+    entities the agent did NOT upsert and create/update them as dream-authored
+    pages — the experience→knowledge bridge for non-declared entities.
+    """
     jsonl_path = Path(jsonl_path)
     _meta, msgs = load_session(jsonl_path)
     cursor = get_extract_cursor(jsonl_path)
@@ -125,10 +132,17 @@ def run_extract_for_session(
             llm_invoke=llm_invoke, model=model, source_ref=src,
         )
         extracted.append({"ref": ref, "committed": r.committed})
+    discovered: list[dict] = []
+    if discover:
+        discovered = discover_entities(
+            workspace, text, existing_refs=refs,
+            llm_invoke=llm_invoke, model=model, source_ref=src,
+        )
     set_extract_cursor(jsonl_path, total)          # advance per-batch
     return {
         "session": jsonl_path.stem,
         "extracted": extracted,
+        "discovered": discovered,
         "cursor": total,
         "new_turns": len(new_msgs),
     }
