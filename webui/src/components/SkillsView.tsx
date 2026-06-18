@@ -36,9 +36,11 @@ import {
   listSkills,
   rejectSkill,
   removeSkill,
+  reviewSkill,
   saveSkillFile,
   searchSkills,
   setSkillMode,
+  unreviewSkill,
   type QuarantineRow,
   type SkillCandidate,
   type SkillDescribeResult,
@@ -110,6 +112,20 @@ function VerdictBadge({ verdict }: { verdict?: SkillVerdict }) {
       )}
     >
       {label}
+    </span>
+  );
+}
+
+/** A user/LLM "Revisada" override badge — shown instead of the verdict badge
+ * once a flagged active skill has been cleared (the underlying findings remain
+ * visible in the report below). */
+function ReviewedChip({ by }: { by: "user" | "llm" }) {
+  const { t } = useTranslation();
+  const who = by === "llm" ? t("skills.review.byLlm") : t("skills.review.byUser");
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium leading-none text-primary">
+      <ShieldCheck className="h-3 w-3" aria-hidden />
+      {t("skills.review.reviewedBy", { by: who })}
     </span>
   );
 }
@@ -349,6 +365,8 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
   const [importByRefOpen, setImportByRefOpen] = useState(false);
   const [acting, setActing] = useState<string | null>(null);
   const [removeConfirm, setRemoveConfirm] = useState(false);
+  const [reviewConfirm, setReviewConfirm] = useState(false);
+  const [reviewNote, setReviewNote] = useState("");
   const [gate, setGate] = useState<{
     name: string;
     confirm: boolean;
@@ -561,6 +579,38 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
       setRemoveConfirm(false);
       setDetail(null);
       setPane({ kind: "empty" });
+      await refresh();
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [pane, token, refresh]);
+
+  const doReview = useCallback(async () => {
+    if (pane.kind !== "skill") return;
+    const name = pane.name;
+    setBusy(true);
+    setError(null);
+    try {
+      await reviewSkill(token, name, reviewNote);
+      setReviewConfirm(false);
+      setReviewNote("");
+      await refresh();
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [pane, token, reviewNote, refresh]);
+
+  const doReopen = useCallback(async () => {
+    if (pane.kind !== "skill") return;
+    const name = pane.name;
+    setBusy(true);
+    setError(null);
+    try {
+      await unreviewSkill(token, name);
       await refresh();
     } catch (e) {
       setError(errMsg(e));
@@ -881,7 +931,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                         {row.name}
                       </span>
                       <span className="flex shrink-0 items-center gap-1.5">
-                        <VerdictBadge verdict={row.verdict} />
+                        {row.review ? <ReviewedChip by={row.review.by} /> : <VerdictBadge verdict={row.verdict} />}
                         <ModeBadge mode={row.mode} />
                       </span>
                     </span>
@@ -1339,7 +1389,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                     <span className="font-mono text-[12px] text-muted-foreground">{selFile}</span>
                   ) : null}
                   <ModeBadge mode={detail.mode} />
-                  <VerdictBadge verdict={skillRow?.verdict} />
+                  {skillRow?.review ? <ReviewedChip by={skillRow.review.by} /> : <VerdictBadge verdict={skillRow?.verdict} />}
                   {skillRow?.provenance?.source ? (
                     <span className="truncate text-[12px] text-muted-foreground">
                       from {skillRow.provenance.source}
@@ -1450,6 +1500,66 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                       {t("skills.security")}
                     </p>
                     <FindingsList findings={skillRow.findings} />
+
+                    {skillRow.review ? (
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <span className="text-[12px] text-muted-foreground">
+                          {t("skills.review.reviewedAt", {
+                            by:
+                              skillRow.review.by === "llm"
+                                ? t("skills.review.byLlm")
+                                : t("skills.review.byUser"),
+                            at: skillRow.review.at,
+                          })}
+                          {skillRow.review.note ? ` — ${skillRow.review.note}` : ""}
+                        </span>
+                        <Button variant="outline" size="sm" disabled={busy} onClick={() => void doReopen()}>
+                          {t("skills.review.reopen")}
+                        </Button>
+                      </div>
+                    ) : reviewConfirm ? (
+                      <div className="mt-3 flex flex-col gap-2 rounded-[8px] border border-border/60 bg-muted/40 p-3">
+                        <p className="text-[12px] text-foreground">
+                          {skillRow.verdict === "dangerous"
+                            ? t("skills.review.confirmDangerous")
+                            : t("skills.review.confirmSafe")}
+                        </p>
+                        <input
+                          type="text"
+                          value={reviewNote}
+                          onChange={(e) => setReviewNote(e.target.value)}
+                          placeholder={t("skills.review.notePlaceholder")}
+                          className="rounded-[6px] border border-border/60 bg-background px-2 py-1 text-[12px]"
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            variant={skillRow.verdict === "dangerous" ? "destructive" : "default"}
+                            size="sm"
+                            disabled={busy}
+                            onClick={() => void doReview()}
+                          >
+                            {t("skills.review.confirmAction")}
+                          </Button>
+                          <Button variant="outline" size="sm" disabled={busy} onClick={() => setReviewConfirm(false)}>
+                            {t("skills.cancel")}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={busy || acting === detail.name}
+                          onClick={() => judgeOne(detail.name)}
+                        >
+                          {t("skills.review.auditLlm")}
+                        </Button>
+                        <Button variant="outline" size="sm" disabled={busy} onClick={() => setReviewConfirm(true)}>
+                          {t("skills.review.markReviewed")}
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 ) : null}
 

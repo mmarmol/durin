@@ -165,6 +165,15 @@ class SkillRemoveCommand(Command):
     name: str
 
 
+class SkillReviewCommand(Command):
+    name: str
+    note: str = ""
+
+
+class SkillUnreviewCommand(Command):
+    name: str
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -495,4 +504,38 @@ class SkillsService:
         from durin.agent import skills_store as ss
 
         status, payload = ss.web_skill_remove(self._workspace, cmd.name)
+        return _skills_result(status, payload)
+
+    @route(
+        "POST",
+        "/api/v1/skills/{name}/review",
+        scope=Scope.SKILLS_WRITE.value,
+        request_model=SkillReviewCommand,
+        response_model=SkillsResult,
+        summary="Mark an active skill reviewed (user override to safe)",
+    )
+    async def review(self, cmd: SkillReviewCommand, principal: Principal) -> SkillsResult:
+        principal.require(Scope.SKILLS_WRITE)
+        from durin.agent import skills_store as ss
+
+        status, payload = await asyncio.to_thread(
+            ss.web_skill_review_user, self._workspace, cmd.name, cmd.note or ""
+        )
+        return _skills_result(status, payload)
+
+    @route(
+        "DELETE",
+        "/api/v1/skills/{name}/review",
+        scope=Scope.SKILLS_WRITE.value,
+        request_model=SkillUnreviewCommand,
+        response_model=SkillsResult,
+        summary="Reopen an active skill review",
+    )
+    async def unreview(self, cmd: SkillUnreviewCommand, principal: Principal) -> SkillsResult:
+        principal.require(Scope.SKILLS_WRITE)
+        from durin.agent import skills_store as ss
+
+        status, payload = await asyncio.to_thread(
+            ss.web_skill_unreview, self._workspace, cmd.name
+        )
         return _skills_result(status, payload)

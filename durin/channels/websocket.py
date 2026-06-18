@@ -636,12 +636,14 @@ class WebSocketChannel(BaseChannel):
         }
 
     async def _run_skill_audit(self, connection: Any, name: str) -> None:
-        """Stream an on-demand LLM audit of a quarantined skill: reasoning deltas
-        on ``audit:<name>`` (reusing the chat reasoning stream), then a terminal
-        ``skill_audit_done`` with the structured outcome. Persists .scan.json."""
+        """Stream an on-demand LLM audit of a skill (quarantined OR active):
+        reasoning deltas on ``audit:<name>``, then a terminal ``skill_audit_done``
+        with the outcome. Quarantine persists .scan.json; an active skill persists
+        a review (Revisada) when the judge does not confirm dangerous."""
         import json as _json
 
         from durin.agent import skills_store as ss
+        from durin.agent.skills_surface import _skill_dirs
         from durin.memory.llm_invoke import default_llm_invoke_astream
         from durin.providers.base import LLMProvider
         from durin.security.skill_judge import JudgeError, judge_skill_astream
@@ -650,19 +652,24 @@ class WebSocketChannel(BaseChannel):
         chat_id = f"audit:{name}"
         workspace = self._endpoint_workspace()
         qdir = Path(workspace) / ".durin" / "import-quarantine" / name
-        if not (qdir / "SKILL.md").is_file():
-            await self._send_event(connection, "skill_audit_done", chat_id=chat_id,
-                                   name=name, judged=False, error_code="not_found")
-            return
+        is_quarantine = (qdir / "SKILL.md").is_file()
+        if is_quarantine:
+            target = qdir
+        else:
+            target = _skill_dirs(Path(workspace)).get(name)
+            if target is None or not (target / "SKILL.md").is_file():
+                await self._send_event(connection, "skill_audit_done", chat_id=chat_id,
+                                       name=name, judged=False, error_code="not_found")
+                return
         _, model, max_sev = ss._import_judge()
-        det = scan_skill(qdir)
+        det = scan_skill(target)
 
         async def on_reasoning(text: str) -> None:
             await self.send_reasoning_delta(chat_id, text)
 
         try:
             outcome = await judge_skill_astream(
-                qdir, ainvoke_stream=default_llm_invoke_astream,
+                target, ainvoke_stream=default_llm_invoke_astream,
                 model=model or "glm-5.1", max_severity=max_sev, on_reasoning=on_reasoning,
             )
         except JudgeError as exc:
@@ -684,14 +691,19 @@ class WebSocketChannel(BaseChannel):
         merged.judge_verdict = outcome.verdict
         findings = [{"category": f.category, "severity": f.severity, "where": f.where,
                      "detail": f.detail} for f in merged.findings]
-        source = name
-        sj = qdir / ".scan.json"
-        if sj.is_file():
-            try:
-                source = _json.loads(sj.read_text()).get("source", name)
-            except Exception:  # noqa: BLE001
-                pass
-        ss._persist_judge_result(qdir, source, merged.verdict, findings, outcome.summary)
+        if is_quarantine:
+            source = name
+            sj = qdir / ".scan.json"
+            if sj.is_file():
+                try:
+                    source = _json.loads(sj.read_text()).get("source", name)
+                except Exception:  # noqa: BLE001
+                    pass
+            ss._persist_judge_result(qdir, source, merged.verdict, findings, outcome.summary)
+        else:
+            ss.record_review_from_judge(
+                Path(workspace), name, target, judge_verdict=outcome.verdict,
+                merged_findings=findings, summary=outcome.summary, original=det.verdict)
         await self._send_event(connection, "skill_audit_done", chat_id=chat_id, name=name,
                                judged=True, verdict=merged.verdict, findings=findings,
                                summary=outcome.summary)

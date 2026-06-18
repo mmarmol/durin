@@ -21,7 +21,9 @@ from durin.service.skills import (
     SkillModeCommand,
     SkillRejectCommand,
     SkillRemoveCommand,
+    SkillReviewCommand,
     SkillSaveCommand,
+    SkillUnreviewCommand,
     SkillsImportCommand,
     SkillsListQuery,
     SkillsQuarantineQuery,
@@ -178,6 +180,29 @@ async def test_remove_installed_skill(tmp_path: Path) -> None:
     result = await svc.remove(SkillRemoveCommand(name="hello"), Principal.local())
     assert result.data.get("ok") is True
     assert not (ws / "skills" / "hello").exists()
+
+
+async def test_review_marks_active_skill(tmp_path: Path) -> None:
+    ws = _make_workspace(tmp_path)
+    svc = _svc(ws)
+    result = await svc.review(SkillReviewCommand(name="hello", note="ok"), Principal.local())
+    assert result.data.get("reviewed") is True
+
+
+async def test_review_requires_write_scope(tmp_path: Path) -> None:
+    ws = _make_workspace(tmp_path)
+    svc = _svc(ws)
+    read_only = Principal.remote("t", frozenset({Scope.SKILLS_READ.value}))
+    with pytest.raises(ForbiddenError):
+        await svc.review(SkillReviewCommand(name="hello"), read_only)
+
+
+async def test_unreview_clears_review(tmp_path: Path) -> None:
+    ws = _make_workspace(tmp_path)
+    svc = _svc(ws)
+    await svc.review(SkillReviewCommand(name="hello"), Principal.local())
+    result = await svc.unreview(SkillUnreviewCommand(name="hello"), Principal.local())
+    assert result.data.get("reviewed") is False
 
 
 # ---------------------------------------------------------------------------

@@ -1206,6 +1206,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/skills/{name}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark an active skill reviewed (user override to safe) */
+        post: operations["skills_review"];
+        /** Reopen an active skill review */
+        delete: operations["skills_unreview"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/skills/{name}/save": {
         parameters: {
             query?: never;
@@ -2671,6 +2689,16 @@ export interface components {
             /** Name */
             name: string;
         };
+        /** SkillReviewCommand */
+        SkillReviewCommand: {
+            /** Name */
+            name: string;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
         /** SkillSaveCommand */
         SkillSaveCommand: {
             /** Content */
@@ -2687,6 +2715,11 @@ export interface components {
             limit: number;
             /** Q */
             q: string;
+        };
+        /** SkillUnreviewCommand */
+        SkillUnreviewCommand: {
+            /** Name */
+            name: string;
         };
         /** SkillsImportCommand */
         SkillsImportCommand: {
@@ -4714,6 +4747,54 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SkillRejectCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillsResult"];
+                };
+            };
+        };
+    };
+    skills_review: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillReviewCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillsResult"];
+                };
+            };
+        };
+    };
+    skills_unreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillUnreviewCommand"];
             };
         };
         responses: {
