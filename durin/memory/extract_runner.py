@@ -103,13 +103,16 @@ def run_extract_for_session(
     llm_invoke: LLMInvoke | None = None,
     model: str | None = None,
     discover: bool = True,
+    skill_signals: bool = True,
 ) -> dict:
-    """Distil this session's new turns into entities.
+    """Distil this session's new turns into entities (and skill signals).
 
     Stage 1 (extract): for entities the agent upserted, pull structured
     attributes. Stage 2 (discover, when ``discover``): find durable facts about
     entities the agent did NOT upsert and create/update them as dream-authored
     pages — the experience→knowledge bridge for non-declared entities.
+    Stage 3 (skill_signals, when ``skill_signals``): detect skill corrections/gaps
+    from the same turns and log them as observations for the curation pass.
     """
     jsonl_path = Path(jsonl_path)
     _meta, msgs = load_session(jsonl_path)
@@ -138,11 +141,20 @@ def run_extract_for_session(
             workspace, text, existing_refs=refs,
             llm_invoke=llm_invoke, model=model, source_ref=src,
         )
+    signals: list[dict] = []
+    if skill_signals:
+        from durin.agent.skill_signals import discover_skill_signals
+        from durin.agent.skill_usage import extract_skill_calls
+        signals = discover_skill_signals(
+            workspace, text, skill_loads=extract_skill_calls(new_msgs),
+            llm_invoke=llm_invoke, model=model, session=jsonl_path.stem,
+        )
     set_extract_cursor(jsonl_path, total)          # advance per-batch
     return {
         "session": jsonl_path.stem,
         "extracted": extracted,
         "discovered": discovered,
+        "skill_signals": signals,
         "cursor": total,
         "new_turns": len(new_msgs),
     }

@@ -24,9 +24,13 @@ def test_only_new_turn_messages_are_recorded_no_reaccumulation():
     t2 = t1 + [{"role": "user", "content": "do Y"}, _assistant_read("deploy-flow")]
     # save_skip excludes everything from turn 1 (its 2 msgs) + the 1 base offset = 3
     _record(md, t2, save_skip=3)
+    # `turn` is relative to each save-slice (the loop records only new turns),
+    # so both read at slice-local turn 1. Persisted `turn` is unused by the
+    # usage consumers (they count by skill/op); the hindsight skill-signal pass
+    # recomputes extract_skill_calls over the full post-cursor window instead.
     assert md["skill_calls"] == [
-        {"skill": "git-helper", "op": "read"},
-        {"skill": "deploy-flow", "op": "read"},
+        {"skill": "git-helper", "op": "read", "turn": 1},
+        {"skill": "deploy-flow", "op": "read", "turn": 1},
     ]
     # git-helper recorded exactly once, NOT re-counted on turn 2.
 

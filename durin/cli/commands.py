@@ -1359,10 +1359,12 @@ def _run_gateway(
             _cron_max_s = config.memory.dream.max_seconds_per_run
             _absorb = config.memory.dream.auto_absorb
             _discover = config.memory.dream.discover_enabled
+            _skill_signals = config.memory.dream.skill_signals_enabled
             try:
                 ex = await _asyncio.to_thread(
                     run_extract_pass, workspace, model=model,
-                    max_seconds=_cron_max_s, discover=_discover)
+                    max_seconds=_cron_max_s, discover=_discover,
+                    skill_signals=_skill_signals)
                 df = await _asyncio.to_thread(
                     run_derived_from_pass, workspace, model=model, max_seconds=_cron_max_s)
                 sk = await _asyncio.to_thread(run_skill_extract_pass, workspace, model=model)
@@ -1733,6 +1735,7 @@ def _run_gateway(
                         ws, model=resolve_memory_model(config),
                         max_seconds=_dream_max_s,
                         discover=config.memory.dream.discover_enabled,
+                        skill_signals=config.memory.dream.skill_signals_enabled,
                     )
                     logger.info(
                         "reactive dream done ({}): {} session(s), {} attribute "

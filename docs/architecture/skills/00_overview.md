@@ -269,6 +269,17 @@ Curation edits (`apply_skill_edit` with `actor="curation"`) do not go through th
 they are not re-logged; manual-mode edits only return a proposed diff (not applied) and so
 log nothing.
 
+**Capture (hindsight, at dream time).** Because the agent rarely calls `skill_observe`
+mid-task (judging whether a correction *generalizes* is hard in the moment), the queue is
+also fed in hindsight: stage 3 of the extract dream (`skill_signals_enabled`, default ON)
+runs `discover_skill_signals` (`durin/agent/skill_signals.py`) over each session's
+post-cursor turns — the same turns the entity `discover_entities` stage uses. A focused
+LLM call detects `correction`/`gap` signals (attributed via the turn-indexed
+`skill_calls`, `skill_usage.py`) and logs them as observations. This is the skill
+analogue of memory's `discover_entities`: the agent creates by initiative, the dream
+discovers in hindsight. Detection only — `count`/recurrence still gates what curation
+acts on; `memory.dream.skill_signals` telemetry measures precision.
+
 **Store.** `<workspace>/skills/.observations.jsonl` in the skills GitStore (every change
 committed). Write-time dedup: a near-same issue for the same skill bumps `count` /
 `last_seen` instead of appending — `count >= 2` is the recurrence signal. States:
