@@ -47,6 +47,22 @@ function readSI(config: Record<string, unknown> | null) {
   };
 }
 
+interface RegistryShape {
+  name?: string;
+  kind?: string;
+  enabled?: boolean;
+}
+
+/** The discovery registries (`skills.discovery.registries`) that `skill_search`
+ *  queries — surfaced here so the operator can enable/disable each source. */
+function readRegistries(config: Record<string, unknown> | null): RegistryShape[] {
+  const skills = config?.skills as { discovery?: { registries?: unknown } } | undefined;
+  const regs = skills?.discovery?.registries;
+  return Array.isArray(regs)
+    ? (regs.filter((r) => !!r && typeof r === "object") as RegistryShape[])
+    : [];
+}
+
 /** Skills security — the import policy surface (spec 2026-06-03): LLM judge,
  *  trust patterns (allowlist), size caps, and the GitHub token secret. */
 export function SkillsSecuritySettings({ token }: { token: string }) {
@@ -94,6 +110,17 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
   );
 
   const v = useMemo(() => readSI(config), [config]);
+  const registries = useMemo(() => readRegistries(config), [config]);
+
+  const toggleRegistry = useCallback(
+    (idx: number) => {
+      const next = registries.map((r, i) =>
+        i === idx ? { ...r, enabled: !(r.enabled ?? true) } : r,
+      );
+      void onSave("skills.discovery.registries", next);
+    },
+    [registries, onSave],
+  );
 
   const addPattern = useCallback(() => {
     const p = newPattern.trim();
@@ -138,6 +165,40 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
         </div>
       ) : null}
 
+      {/* Discovery sources — which registries skill_search queries */}
+      <section>
+        <SettingsSectionTitle>{t("settings.skillsSecurity.sections.discovery")}</SettingsSectionTitle>
+        <p className="px-1 pb-2 text-[12px] text-muted-foreground">
+          {t("settings.skillsSecurity.discoveryDescription")}
+        </p>
+        <SettingsGroup>
+          {registries.length === 0 ? (
+            <p className="px-4 py-3 text-[12px] text-muted-foreground">
+              {t("settings.skillsSecurity.noRegistries")}
+            </p>
+          ) : (
+            registries.map((r, i) => {
+              const label = r.name || r.kind || "";
+              const on = r.enabled !== false;
+              return (
+                <SettingsRow key={r.kind || String(i)} title={label}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={savingPath === "skills.discovery.registries"}
+                    aria-label={t("settings.skillsSecurity.toggleRegistry", { name: label })}
+                    onClick={() => toggleRegistry(i)}
+                    className="w-[68px] rounded-full"
+                  >
+                    {on ? t("settings.config.on") : t("settings.config.off")}
+                  </Button>
+                </SettingsRow>
+              );
+            })
+          )}
+        </SettingsGroup>
+      </section>
+
       {/* LLM judge */}
       <section>
         <SettingsSectionTitle>{t("settings.skillsSecurity.sections.judge")}</SettingsSectionTitle>
@@ -158,8 +219,8 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
             </select>
           </SettingsRow>
           <SettingsRow
-            title={t("settings.skillSecurity.rows.judgeMaxSeverity")}
-            description={t("settings.skillSecurity.help.judgeMaxSeverity")}
+            title={t("settings.skillsSecurity.rows.judgeMaxSeverity")}
+            description={t("settings.skillsSecurity.help.judgeMaxSeverity")}
           >
             <select
               value={v.judgeMaxSeverity}
@@ -167,8 +228,8 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
               onChange={(e) => void onSave("skills.security.llm_judge.max_severity", e.target.value)}
               className="rounded-[8px] border border-border/60 bg-background px-2 py-1 text-[13px] disabled:opacity-50"
             >
-              <option value="caution">{t("settings.skillSecurity.severity.caution")}</option>
-              <option value="dangerous">{t("settings.skillSecurity.severity.dangerous")}</option>
+              <option value="caution">{t("settings.skillsSecurity.severity.caution")}</option>
+              <option value="dangerous">{t("settings.skillsSecurity.severity.dangerous")}</option>
             </select>
           </SettingsRow>
         </SettingsGroup>

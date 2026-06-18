@@ -293,7 +293,8 @@
         "judge": "Juez LLM de seguridad",
         "trust": "Patrones de confianza",
         "token": "Token de GitHub",
-        "caps": "Límites de tamaño"
+        "caps": "Límites de tamaño",
+        "discovery": "Fuentes de descubrimiento"
       },
       "rows": {
         "judgeTrigger": "Cuándo correr el juez",
@@ -329,7 +330,10 @@
       "testToken": "Probar",
       "tokenOk": "Token OK — quedan {{remaining}} requests de API.",
       "tokenTestError": "Falló la prueba del token.",
-      "modelPlaceholder": "modelo por default"
+      "modelPlaceholder": "modelo por default",
+      "discoveryDescription": "Qué registros consulta la búsqueda de skills.",
+      "toggleRegistry": "Activar/desactivar {{name}}",
+      "noRegistries": "Sin registros configurados."
     },
     "secrets": {
       "addTitle": "Agregar un secreto",
