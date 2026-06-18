@@ -114,6 +114,20 @@ function VerdictBadge({ verdict }: { verdict?: SkillVerdict }) {
   );
 }
 
+/** A user/LLM "Revisada" override badge — shown instead of the verdict badge
+ * once a flagged active skill has been cleared (the underlying findings remain
+ * visible in the report below). */
+function ReviewedChip({ by }: { by: "user" | "llm" }) {
+  const { t } = useTranslation();
+  const who = by === "llm" ? t("skills.review.byLlm") : t("skills.review.byUser");
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium leading-none text-primary">
+      <ShieldCheck className="h-3 w-3" aria-hidden />
+      {t("skills.review.reviewedBy", { by: who })}
+    </span>
+  );
+}
+
 /** Source registry tag shown on every search result + its detail view. durin
  * keeps a one-accent palette, so the two registries are distinguished by icon +
  * name (neutral), never by a per-source accent colour. */
@@ -881,7 +895,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                         {row.name}
                       </span>
                       <span className="flex shrink-0 items-center gap-1.5">
-                        <VerdictBadge verdict={row.verdict} />
+                        {row.review ? <ReviewedChip by={row.review.by} /> : <VerdictBadge verdict={row.verdict} />}
                         <ModeBadge mode={row.mode} />
                       </span>
                     </span>
@@ -1339,7 +1353,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                     <span className="font-mono text-[12px] text-muted-foreground">{selFile}</span>
                   ) : null}
                   <ModeBadge mode={detail.mode} />
-                  <VerdictBadge verdict={skillRow?.verdict} />
+                  {skillRow?.review ? <ReviewedChip by={skillRow.review.by} /> : <VerdictBadge verdict={skillRow?.verdict} />}
                   {skillRow?.provenance?.source ? (
                     <span className="truncate text-[12px] text-muted-foreground">
                       from {skillRow.provenance.source}
