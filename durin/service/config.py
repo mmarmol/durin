@@ -441,7 +441,7 @@ class ConfigService:
 
         from durin.config.loader import load_config
         from durin.providers.provider_catalog import provider_models
-        from durin.providers.selection import configured_provider_names
+        from durin.providers.selection import configured_model_ids, configured_provider_names
 
         def _cap_ok(mi) -> bool:
             if capability in ("", "text"):
@@ -453,7 +453,10 @@ class ConfigService:
             return True
 
         if provider:
-            models = sorted(mi.id for mi in provider_models(provider) if _cap_ok(mi))
+            ids = {mi.id for mi in provider_models(provider) if _cap_ok(mi)}
+            if capability in ("", "text"):
+                ids.update(configured_model_ids(load_config(), provider))  # user customs
+            models = sorted(ids)
             return ModelsListResult(suggested=models, models=models)
 
         # No provider filter: union of every configured provider's catalog.
@@ -467,6 +470,11 @@ class ConfigService:
                 if mi.id not in seen and _cap_ok(mi):
                     seen.add(mi.id)
                     suggested.append(mi.id)
+            if capability in ("", "text"):
+                for cid in configured_model_ids(cfg, pname):
+                    if cid not in seen:
+                        seen.add(cid)
+                        suggested.append(cid)
         return ModelsListResult(suggested=suggested, models=suggested)
 
     @route(

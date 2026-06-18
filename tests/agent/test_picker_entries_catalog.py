@@ -54,3 +54,24 @@ def test_recent_only_surfaced_when_resolvable(monkeypatch):
     # glm-5.2 resolves via the catalog; ghost-model does not → not guessed, dropped
     assert [e.name for e in recents] == ["glm-5.2"]
     assert recents[0].provider == "zai_coding_plan"
+
+
+def test_picker_includes_config_custom_models(monkeypatch):
+    # A model the user configured under a provider (providers.<p>.models) that
+    # is NOT in the models.dev catalog must still appear in the picker.
+    from durin.config.schema import ModelEntry
+
+    monkeypatch.setattr(
+        pc, "_load_index", lambda: {"zai_coding_plan": [ModelInfo(id="glm-5.2")]}
+    )
+    monkeypatch.setattr(
+        "durin.agent.model_picker.configured_provider_names",
+        lambda _c: {"zai_coding_plan"},
+    )
+    cfg = Config()
+    cfg.providers.zai_coding_plan.models = {"glm-custom": ModelEntry()}
+
+    entries = picker_entries(cfg, presets={}, recent=[], active=None)
+    refs = {e.ref for e in entries}
+    assert "zai_coding_plan glm-5.2" in refs  # from the catalog
+    assert "zai_coding_plan glm-custom" in refs  # the user's custom
