@@ -66,7 +66,9 @@ def get_config_path() -> Path:
     """Get the configuration file path."""
     if _current_config_path:
         return _current_config_path
-    return Path.home() / ".durin" / "config.json"
+    from durin.config.home import durin_home
+
+    return durin_home() / "config.json"
 
 
 def _split_dir(config_path: Path | None = None) -> Path:

@@ -115,13 +115,6 @@ Tested, or strong reasons against. (Detailed experiment analysis in `git log`.)
 
 ### Worth doing
 
-**`DURIN_HOME` — dev/daily data-root separation.** `~/.durin` is hardcoded in 16+
-places (`config/loader.py`, `config/paths.py`, `cli/gateway_daemon.py`, channels),
-so a dev (editable) install and a daily (pipx) install share the same state.
-Introduce a `DURIN_HOME` env var (default `~/.durin`) resolved in a single helper
-that all paths derive from; unset → behavior identical to today. Needs a test that
-no path falls back to `~/.durin` when it's set.
-
 **Skill execution hardening (P6 #2 / #3).** The import gate is install-time, and
 install-deps already runs through the exec gate (#1, shipped). Open: (#2) run a
 skill's *bundled* scripts through Durin's exec gate; (#3) a real per-skill

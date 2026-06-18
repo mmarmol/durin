@@ -157,9 +157,10 @@ def check_workspace() -> CheckResult:
 
 
 def check_state_dirs_writable() -> CheckResult:
-    """Verify ~/.durin and ~/.cache/durin are writable (or at least their parents)."""
-    home = Path.home()
-    targets = [home / ".durin", home / ".cache" / "durin"]
+    """Verify the durin home and ~/.cache/durin are writable (or their parents)."""
+    from durin.config.home import durin_home
+
+    targets = [durin_home(), Path.home() / ".cache" / "durin"]
     problems: list[str] = []
     for t in targets:
         # Walk up to the first existing ancestor and require it to be writable.

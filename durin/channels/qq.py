@@ -216,15 +216,17 @@ class QQChannel(BaseChannel):
 
     def _init_media_root(self) -> Path:
         """Choose a directory for saving inbound attachments."""
+        from durin.config.home import durin_home
+
         if self.config.media_dir:
             root = Path(self.config.media_dir).expanduser()
         elif get_media_dir:
             try:
                 root = Path(get_media_dir("qq"))
             except Exception:
-                root = Path.home() / ".durin" / "media" / "qq"
+                root = durin_home() / "media" / "qq"
         else:
-            root = Path.home() / ".durin" / "media" / "qq"
+            root = durin_home() / "media" / "qq"
 
         root.mkdir(parents=True, exist_ok=True)
         self.logger.info("media directory: {}", str(root))
