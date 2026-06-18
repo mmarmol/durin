@@ -2,8 +2,8 @@
 on-disk layout for human viewers (Obsidian users, future webui /
 desktop app users, anyone browsing the markdown files directly).
 
-P9 (2026-05-30) ships this as part of the vault-friendly read-only
-viewer plan (see ``docs/backlog.md::P9``). The README is
+Ships this as part of the vault-friendly read-only viewer work
+(2026-05-30). The README is
 idempotent: written once at workspace boot if missing, never
 overwritten (so a user who hand-edits it doesn't lose changes on
 next start).
