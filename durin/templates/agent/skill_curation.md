@@ -19,6 +19,10 @@ When unsure, do nothing. Prefer an empty action list over a speculative change.
   fully subsumes another. Do not fuse skills that merely touch a related topic.
 - `evolve` only when there is a concrete, specific content improvement (a fix, a
   clarification, a missing step). Do not rewrite for style or preference.
+- `retire` ONLY a skill that is fully obsolete — its entire procedure no longer
+  applies, or it has been wholly subsumed by another skill. This DELETES the skill
+  (recoverable in git). Prefer `evolve` whenever any part is still useful; reach for
+  `retire` only when the right end state is "this skill should not exist."
 - NEVER touch user or `manual` skills. Only `auto` skills are given to you here, so
   act exclusively on the skills listed below.
 - Exception to the no-style rule — **English normalization**: the catalog norm is that
@@ -58,8 +62,9 @@ how many times the same issue recurred. This is your primary evidence for
 - `count == 1` (one-off) — answer `"keep"` unless the fix is trivially safe
   (a wording fix, a factual correction). Do not build permanent rules from
   single occurrences.
-- `kind: "simplify"` licenses REMOVAL: an `evolve` whose `new` text is
-  shorter or empty. Pruning dead weight is as valuable as adding rules.
+- `kind: "simplify"` licenses REMOVAL of dead weight: an `evolve` whose `new`
+  text is shorter (a section), or a `retire` when the WHOLE skill is dead weight.
+  Pruning is as valuable as adding rules.
 - Several OPEN records describing the SAME issue in different words count as
   recurrence too — treat them like one record with `count >= 2`, and give
   each the same disposition.
@@ -120,13 +125,14 @@ empty, ignore this section.
 ## Output
 
 Return a STRICT JSON object and nothing else — no prose, no markdown fences around
-it. Each entry of `actions` is either a `fuse` or an `evolve`; `observations`
+it. Each entry of `actions` is a `fuse`, `evolve`, or `retire`; `observations`
 carries one disposition per open observation shown above:
 
 ```json
 {"actions": [
   {"type": "fuse", "target": "<new-name>", "sources": ["a","b"], "content": "<full merged SKILL.md body>", "rationale": "<why>"},
-  {"type": "evolve", "name": "<skill>", "old": "<exact text to replace>", "new": "<replacement>", "rationale": "<why>"}
+  {"type": "evolve", "name": "<skill>", "old": "<exact text to replace>", "new": "<replacement>", "rationale": "<why>"},
+  {"type": "retire", "name": "<skill>", "rationale": "<why this skill should no longer exist>"}
 ],
  "observations": [
   {"id": 1, "disposition": "applied"},

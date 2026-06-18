@@ -133,6 +133,15 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             r = ss.apply_skill_edit(workspace, a["name"], old=a["old"], new=a["new"],
                                     rationale=a.get("rationale", "evolve"))
             applied += 1 if r.get("ok") else 0
+        elif t == "retire":
+            # Remove a fully-obsolete skill outright (git-recoverable via
+            # remove_skill, which refuses builtins). The body-change/empty-body
+            # path can only `evolve` toward an empty SKILL.md, leaving clutter.
+            if a.get("name") not in selected:
+                logger.warning("curation: skipping retire of out-of-scope skill %s", a.get("name"))
+                continue
+            r = ss.remove_skill(workspace, a["name"])
+            applied += 1 if r.get("ok") else 0
         elif t == "principle":
             r = so.add_principle(workspace, str(a.get("text", "")),
                                  rationale=str(a.get("rationale", "")))

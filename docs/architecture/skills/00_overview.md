@@ -229,7 +229,7 @@ always-on pin) → `curate_catalog` (skill evolution). Two of those passes touch
 | Pass | What it does for skills | Code |
 |---|---|---|
 | **skill-extract** | **CREATES** skills: mines the most recent sessions; a sub-agent calls `skill_write` when a recurring multi-step procedure appears (provenance `source=dream`, `mode=auto`, committed). See §3. | `dream_passes.py::run_skill_extract_pass` → `dream_create_skill` |
-| **curate_catalog** | **EVOLVES** skills: reviews the change-gated delta, applies `evolve`/`fuse`. Appended as the dream's last step. | `cli/commands.py` (memory_dream branch) → `skill_curation.py::curate_catalog` |
+| **curate_catalog** | **EVOLVES** skills: reviews the change-gated delta, applies `evolve`/`fuse`/`retire`. Appended as the dream's last step. | `cli/commands.py` (memory_dream branch) → `skill_curation.py::curate_catalog` |
 
 (The `extract` / `refine` / `always_on` passes are entity-memory consolidation, documented
 in the memory architecture docs; they don't touch skills.)
@@ -239,7 +239,9 @@ in the memory architecture docs; they don't touch skills.)
 builtins) that `needs_curation` (body changed since last pass) — **plus** any auto
 workspace skill with an OPEN observation (§6a), even if its body is unchanged. An LLM
 judge proposes `evolve` (surgical old/new on the local body), `fuse` (merge
-near-duplicates), `principle`, or `retire_principle` actions; applied via
+near-duplicates), `retire` (delete a fully-obsolete skill via `remove_skill`,
+git-recoverable — the only path to drop a skill from the catalog vs. evolving its
+body toward empty), `principle`, or `retire_principle` actions; applied via
 `skills_store.py` / `skill_observations.py` (committed). Budget-capped per day with
 carry-over — it **never "reviews everything,"** only the delta. Imported skills are
 `mode=manual` and are **not** auto-curated.
@@ -258,6 +260,14 @@ skill covers a recurring procedure; `skill="new:<working-name>"`), `improvement`
 `simplify` (a rule/section is dead weight). The structural trigger is a per-turn block in
 `templates/agent/identity.md` ("Skill observations") — the tool description alone is a
 weak signal. **Log, don't act:** nothing mutates a skill in-session.
+
+In addition to the agent's voluntary calls, an `improvement` observation is logged
+**automatically** whenever the `skill_edit` *tool* applies an edit to an `auto` skill in
+the loop (`tools/skill_edit.py`): a direct edit is itself an improvement signal, so it
+feeds the queue without depending on the agent also remembering to call `skill_observe`.
+Curation edits (`apply_skill_edit` with `actor="curation"`) do not go through the tool, so
+they are not re-logged; manual-mode edits only return a proposed diff (not applied) and so
+log nothing.
 
 **Store.** `<workspace>/skills/.observations.jsonl` in the skills GitStore (every change
 committed). Write-time dedup: a near-same issue for the same skill bumps `count` /
