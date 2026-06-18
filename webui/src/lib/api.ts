@@ -6,6 +6,7 @@ import type {
   McpRegistryHit,
   McpRegistryServerDetail,
   McpServerConfig,
+  McpUpdateInfo,
   McpServerDetail,
   McpServerSummary,
   SecretEntry,
@@ -1476,6 +1477,29 @@ export async function installMcpFromRegistry(
     prefer,
     env_values: envValues,
   });
+}
+
+export async function listMcpUpdates(
+  token: string,
+  base: string = "",
+): Promise<McpUpdateInfo[]> {
+  const res = await request<{ updates: McpUpdateInfo[] }>(
+    `${base}/api/v1/mcp/registry/updates`,
+    token,
+  );
+  return res.updates;
+}
+
+export async function updateMcpFromRegistry(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<McpServerDetail> {
+  return post<McpServerDetail>(
+    `${base}/api/v1/mcp/servers/${encodeURIComponent(name)}/registry-update`,
+    token,
+    {},
+  );
 }
 
 export async function listMcpServers(
