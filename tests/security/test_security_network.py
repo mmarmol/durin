@@ -66,6 +66,29 @@ def test_blocks_ipv6_loopback():
         assert not ok
 
 
+@pytest.mark.parametrize("mapped,private", [
+    ("::ffff:169.254.169.254", True),   # cloud metadata via IPv4-mapped IPv6
+    ("::ffff:127.0.0.1", True),         # loopback
+    ("::ffff:10.0.0.1", True),          # rfc1918
+    ("::ffff:8.8.8.8", False),          # public stays allowed
+])
+def test_ipv4_mapped_ipv6_is_classified(mapped: str, private: bool):
+    """IPv4-mapped IPv6 (::ffff:x.x.x.x) must inherit the embedded IPv4's class."""
+    import ipaddress
+
+    from durin.security.network import _is_private
+    assert _is_private(ipaddress.ip_address(mapped)) is private
+
+
+def test_blocks_ipv4_mapped_ipv6_metadata_via_validate():
+    """End-to-end: a host resolving to ::ffff:169.254.169.254 must be blocked (no SSRF)."""
+    def _resolver(hostname, port, family=0, type_=0):
+        return [(socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("::ffff:169.254.169.254", 0, 0, 0))]
+    with patch("durin.security.network.socket.getaddrinfo", _resolver):
+        ok, err = validate_url_target("http://evil.com/latest/meta-data/")
+        assert not ok
+
+
 # ---------------------------------------------------------------------------
 # validate_url_target — allows public IPs
 # ---------------------------------------------------------------------------
