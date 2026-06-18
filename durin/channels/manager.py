@@ -174,11 +174,14 @@ class ChannelManager:
         self._validate_allow_from()
 
     def _resolve_transcription_key(self, provider: str) -> str:
-        """Pick the API key for the configured transcription provider."""
+        """Pick the API key for the configured transcription provider, resolving
+        any ``${secret:}`` reference — base.py hands this straight to the Whisper
+        provider, so an unresolved ref would fail voice transcription auth."""
+        from durin.security.secrets import resolve_secret
         try:
             if provider == "openai":
-                return self.config.providers.openai.api_key
-            return self.config.providers.groq.api_key
+                return resolve_secret(self.config.providers.openai.api_key)
+            return resolve_secret(self.config.providers.groq.api_key)
         except AttributeError:
             return ""
 
