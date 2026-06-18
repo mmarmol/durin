@@ -265,6 +265,26 @@ async def test_provider_model_upsert_requires_write_scope():
         )
 
 
+async def test_models_list_includes_config_customs(tmp_path, monkeypatch):
+    """models_list for a provider lists the catalog plus the user's custom models
+    (providers.<p>.models entries not in the catalog), when not capability-filtered."""
+    import durin.providers.provider_catalog as pc
+    from durin.config.loader import save_config
+    from durin.config.schema import Config, ModelEntry
+    from durin.providers.provider_catalog import ModelInfo
+
+    monkeypatch.setattr(pc, "_load_index", lambda: {"zai_coding_plan": [ModelInfo(id="glm-5.2")]})
+    cfg = Config()
+    cfg.providers.zai_coding_plan.models = {"glm-custom": ModelEntry()}
+    path = tmp_path / "config.json"
+    save_config(cfg, path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", path)
+
+    res = await ConfigService().models_list(ModelsListQuery(provider="zai_coding_plan"), LOCAL)
+    assert "glm-5.2" in res.models  # catalog
+    assert "glm-custom" in res.models  # user custom
+
+
 # ---------------------------------------------------------------------------
 # model capabilities
 # ---------------------------------------------------------------------------

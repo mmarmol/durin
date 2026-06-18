@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from durin.config.schema import ModelPresetConfig
-from durin.providers.selection import configured_provider_names
+from durin.providers.selection import configured_model_ids, configured_provider_names
 
 _EASY = "Easy pick"
 
@@ -56,14 +56,19 @@ def picker_entries(
     # provider WITHOUT keyword-guessing (glm-* would keyword-match zhipu, but the
     # user may run zai_coding_plan).
     catalog: dict[str, list] = {}
+    customs: dict[str, list[str]] = {}
     served_by: dict[str, str] = {}
     for pname in configured:
         if pname == "custom":
             continue
         infos = provider_models(pname)
         catalog[pname] = infos
+        cat_ids = {mi.id for mi in infos}
+        customs[pname] = [c for c in configured_model_ids(config, pname) if c not in cat_ids]
         for mi in infos:
             served_by.setdefault(mi.id, pname)
+        for cid in customs[pname]:
+            served_by.setdefault(cid, pname)
 
     def add(name: str, provider: str, group: str, role: str, ref: str) -> None:
         # Easy-pick rows (default/active/preset) commit by name, so an unresolved
@@ -112,9 +117,11 @@ def picker_entries(
         if prov:  # only surface a recent we can resolve — no guessing
             add(m, prov, _EASY, "recent", f"{prov} {m}")
 
-    # Catalog — every model of every configured provider.
+    # Catalog — every model of every configured provider, plus user customs.
     for pname in sorted(catalog):
         for mi in catalog[pname]:
             add(mi.id, pname, pname, "catalog", f"{pname} {mi.id}")
+        for cid in customs[pname]:
+            add(cid, pname, pname, "catalog", f"{pname} {cid}")
 
     return out

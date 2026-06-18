@@ -320,3 +320,47 @@ def test_goal_command_in_help_and_palette() -> None:
     palette = builtin_command_palette()
     assert any(item["command"] == "/goal" and item["arg_hint"] == "<goal>" for item in palette)
     assert "/goal <goal>" in build_help_text()
+
+
+@pytest.mark.asyncio
+async def test_model_command_bare_custom_resolves_from_config(tmp_path, monkeypatch) -> None:
+    """A bare model the user configured under a provider (providers.<p>.models)
+    but NOT in the catalog still resolves — and uses its configured params."""
+    import durin.providers.codex_device_auth as _cda
+    import durin.providers.provider_catalog as pc
+    import durin.providers.selection as _sel
+    from durin.config.schema import Config, ModelEntry
+
+    monkeypatch.setattr(pc, "_load_index", lambda: {"zai_coding_plan": []})
+    monkeypatch.setattr(_cda, "codex_token_present", lambda: False)
+    monkeypatch.setattr(_sel, "configured_provider_names", lambda _c: {"zai_coding_plan"})
+    captured: dict = {}
+
+    def loader(name, preset=None):
+        captured["preset"] = preset
+        target = preset or ModelPresetConfig(model=name)
+        return ProviderSnapshot(
+            provider=_provider(target.model),
+            model=target.model,
+            context_window_tokens=target.context_window_tokens,
+            signature=("model_preset", name, target.model),
+        )
+
+    app_config = Config()
+    app_config.providers.zai_coding_plan.models = {
+        "glm-custom": ModelEntry(context_window_tokens=123456)
+    }
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider("base-model"),
+        workspace=tmp_path,
+        model="base-model",
+        context_window_tokens=1000,
+        model_presets={"default": ModelPresetConfig(model="base-model")},
+        preset_snapshot_loader=loader,
+        app_config=app_config,
+    )
+    out = await cmd_model(_ctx(loop, "/model glm-custom", args="glm-custom"))
+    assert "Unknown model" not in out.content
+    assert captured["preset"].provider == "zai_coding_plan"
+    assert captured["preset"].context_window_tokens == 123456
