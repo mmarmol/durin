@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +14,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
     listSkills: vi.fn(),
     listQuarantine: vi.fn(),
     getSkill: vi.fn(),
+    listSkillFiles: vi.fn(),
+    reviewSkill: vi.fn(),
+    unreviewSkill: vi.fn(),
     importSource: vi.fn(),
     approveSkill: vi.fn(),
     rejectSkill: vi.fn(),
@@ -43,6 +46,9 @@ beforeEach(() => {
   vi.mocked(api.searchSkills).mockReset();
   vi.mocked(api.judgeSkill).mockReset();
   vi.mocked(api.describeSkill).mockReset();
+  vi.mocked(api.listSkillFiles).mockReset();
+  vi.mocked(api.reviewSkill).mockReset();
+  vi.mocked(api.unreviewSkill).mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -88,6 +94,57 @@ describe("SkillsView security surface", () => {
     render(wrap(<SkillsView />));
 
     expect(await screen.findByText("Reviewed · you")).toBeInTheDocument();
+  });
+
+  it("dangerous mark-reviewed shows inline confirm then calls reviewSkill", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      {
+        name: "evilskill",
+        source: "workspace",
+        mode: "manual",
+        status: "active",
+        verdict: "dangerous",
+        findings: [{ category: "dangerous_code", severity: "dangerous", where: "scripts/x.sh", detail: "reverse shell" }],
+      },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.getSkill).mockResolvedValue({ name: "evilskill", mode: "manual", content: "body" });
+    vi.mocked(api.listSkillFiles).mockResolvedValue([{ path: "SKILL.md", text: true, size: 4 }]);
+    vi.mocked(api.reviewSkill).mockResolvedValue({ name: "evilskill", reviewed: true });
+
+    render(wrap(<SkillsView />));
+    fireEvent.click(await screen.findByText("evilskill"));
+
+    fireEvent.click(await screen.findByText("Mark reviewed"));
+    expect(await screen.findByText(/DANGEROUS/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Mark reviewed and safe"));
+    await waitFor(() =>
+      expect(api.reviewSkill).toHaveBeenCalledWith(expect.anything(), "evilskill", expect.any(String)),
+    );
+  });
+
+  it("reopen calls unreviewSkill on a reviewed skill", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      {
+        name: "revskill",
+        source: "workspace",
+        mode: "manual",
+        status: "active",
+        verdict: "caution",
+        findings: [{ category: "dangerous_code", severity: "caution", where: "s", detail: "d" }],
+        review: { by: "user", verdict: "safe", original: "caution", note: "", at: "2026-06-18" },
+      },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.getSkill).mockResolvedValue({ name: "revskill", mode: "manual", content: "body" });
+    vi.mocked(api.listSkillFiles).mockResolvedValue([{ path: "SKILL.md", text: true, size: 4 }]);
+    vi.mocked(api.unreviewSkill).mockResolvedValue({ name: "revskill", reviewed: false });
+
+    render(wrap(<SkillsView />));
+    fireEvent.click(await screen.findByText("revskill"));
+
+    fireEvent.click(await screen.findByText("Reopen review"));
+    await waitFor(() => expect(api.unreviewSkill).toHaveBeenCalledWith(expect.anything(), "revskill"));
   });
 
   it("lists pending imports with their reason, and shows findings on triage", async () => {
