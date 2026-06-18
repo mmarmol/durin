@@ -12,7 +12,7 @@ depends_on: 09_implementation_roadmap.md (spec); 99_phase_progress_review.md (de
 > **⚠️ Superseded (2026-06).** This pre-migration tracker is kept for history. The
 > Phase-1.9 work shipped with the entity-centric migration; the **current** state,
 > remediation record, and remaining items live in
-> [`docs/backlog.md`](../../backlog.md). For how the system works **now**, read
+> [`docs/roadmap.md`](../../roadmap.md). For how the system works **now**, read
 > `00`-`08` (memory) + `docs/architecture/skills/` (skills) — not this list.
 
 This document is the **granular list of what remains** after the current state (commit `c820447`). The original plan (`09_implementation_roadmap.md`) is still the **specs** reference, but uses a "deliverables" granularity that hid scope and latent bugs in the autonomous session. This doc applies the format discussed in D5+D6:

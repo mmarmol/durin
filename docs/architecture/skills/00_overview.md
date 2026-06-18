@@ -343,7 +343,7 @@ adds an **approved executor**:
   durin's single exec gate `ExecTool`** (allow/deny patterns + sandbox + logging) — not a
   side-channel subprocess — mirroring hermes's one-gate model. Sudo is never injected;
   privileged commands are surfaced for the user. (P6 #2 = run a skill's bundled *scripts*
-  through the tool gate; #3 = per-skill FS/net sandbox — both pending, `docs/backlog.md`.)
+  through the tool gate; #3 = per-skill FS/net sandbox — both pending, see `docs/roadmap.md`.)
 
 ---
 
@@ -397,7 +397,7 @@ pattern, 2026-06-10) · removal: remove / revert-to-builtin (§3a; web + CLI + c
 agent tool, 2026-06-11).
 
 **Pending (active):** P6 #2 (run bundled skill *scripts* through the tool gate) · P6 #3 (per-skill FS/net sandbox) ·
-extra discovery adapters (github-taps / well-known / lobehub). See `docs/backlog.md`.
+extra discovery adapters (github-taps / well-known / lobehub). See `docs/roadmap.md`.
 
 **Discarded (decided against, with rationale in `skills_evolutivas.md`):** §6.D
 adapt-to-native-tools / §8.F GEPA-SkillOpt optimizer (no value over `curate_catalog` +

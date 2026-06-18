@@ -3,7 +3,7 @@
 > Reference for Durin's internals: what each system does and how it fits together.
 > **Keep updated** when modifying core modules.
 >
-> For the *direction* and *discarded approaches*, see [roadmap.md](../roadmap.md) and [bitacora.md](../bitacora.md).
+> For the *direction*, *discarded approaches*, and *pending work*, see [roadmap.md](../roadmap.md).
 
 This is the top-level index. Component-level architecture lives alongside this
 file (plus the `memory/` and `skills/` subfolders) to keep each surface scannable:
@@ -31,7 +31,7 @@ Durin is a fork of Nanobot (lightweight agent framework). After the May 2026 pru
 | `memory/` | Entity-centric memory: typed entries, dream consolidator, alias + vector indexes, absorption — see [memory/00_overview.md](memory/00_overview.md) |
 | `cli/memory_cmd.py` | `durin memory <subcommand>` for consolidation + drill-down |
 
-What Durin no longer carries: a previous "smart layer" (posture vector, plan tier system, deliberation V3, phase-aware temperatures, hook factory) was empirically refuted across V3–V8 experiments and removed. See `bitacora.md` for full rationale.
+What Durin no longer carries: a previous "smart layer" (posture vector, plan tier system, deliberation V3, phase-aware temperatures, hook factory) was empirically refuted across V3–V8 experiments and removed. See `roadmap.md` ("What we are explicitly NOT doing") and `git log` for the rationale.
 
 The fork model is retained because the memory work needs tighter integration than a plugin API allows.
 
@@ -195,4 +195,4 @@ Current: **~5660 tests** (Python, `def test_` count) + **~140** (webui).
 > module map and origin story; details moved.
 >
 > For the *why* behind each subsystem (what was tried, what was discarded),
-> see `bitacora.md`. This document only describes the current state.
+> see `roadmap.md` and `git log`. This document only describes the current state.
