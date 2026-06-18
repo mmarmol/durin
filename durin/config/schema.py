@@ -422,7 +422,10 @@ class SkillsDiscoveryConfig(Base):
     """Skill discovery: which registries to search + how many results."""
 
     registries: list[SkillRegistryConfig] = Field(
-        default_factory=lambda: [SkillRegistryConfig(name="skills.sh", kind="skills.sh")])
+        default_factory=lambda: [
+            SkillRegistryConfig(name="skills.sh", kind="skills.sh"),
+            SkillRegistryConfig(name="clawhub", kind="clawhub"),
+        ])
     search_limit: int = 10
 
 
