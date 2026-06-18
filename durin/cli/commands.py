@@ -2680,15 +2680,15 @@ def _login_openai_codex() -> None:
 @_register_logout("openai_codex")
 def _logout_openai_codex() -> None:
     """Clear local OAuth credentials for OpenAI Codex."""
-    try:
-        from oauth_cli_kit.providers import OPENAI_CODEX_PROVIDER
-        from oauth_cli_kit.storage import FileTokenStorage
-    except ImportError:
-        console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
-        raise typer.Exit(1) from None
+    from durin.providers.codex_device_auth import disconnect
 
-    storage = FileTokenStorage(token_filename=OPENAI_CODEX_PROVIDER.token_filename)
-    _delete_oauth_files(storage.get_token_path(), _PROVIDER_DISPLAY["openai_codex"])
+    # The token now lives in the secret store; disconnect() removes it (and any
+    # legacy kit file), so a file-only deletion would no longer log the user out.
+    label = _PROVIDER_DISPLAY["openai_codex"]
+    if disconnect():
+        console.print(f"[green]✓ Logged out from {label}[/green]")
+    else:
+        console.print(f"[yellow]! No local OAuth credentials found for {label}[/yellow]")
 
 
 @_register_logout("github_copilot")
@@ -2707,32 +2707,6 @@ def _logout_github_copilot() -> None:
         console.print(f"[green]✓ Logged out from {label}[/green]")
     else:
         console.print(f"[yellow]! No local OAuth credentials found for {label}[/yellow]")
-
-
-def _delete_oauth_files(token_path: Path, provider_label: str) -> None:
-    """Delete OAuth token and lock files, reporting the result."""
-    removed_paths: list[Path] = []
-    skipped: list[tuple[Path, OSError]] = []
-    for path in (token_path, token_path.with_suffix(".lock")):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            continue
-        except OSError as exc:
-            skipped.append((path, exc))
-            continue
-        removed_paths.append(path)
-
-    if not removed_paths and not skipped:
-        console.print(f"[yellow]! No local OAuth credentials found for {provider_label}[/yellow]")
-        return
-
-    if removed_paths:
-        console.print(f"[green]✓ Logged out from {provider_label}[/green]")
-        for path in removed_paths:
-            console.print(f"[dim]Removed: {path}[/dim]")
-    for path, exc in skipped:
-        console.print(f"[yellow]! Could not remove {path}: {exc}[/yellow]")
 
 
 @_register_login("github_copilot")
