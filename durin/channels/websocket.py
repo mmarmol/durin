@@ -168,37 +168,6 @@ def _query_first(query: dict[str, list[str]], key: str) -> str | None:
     return values[0] if values else None
 
 
-def _logs_query_from_params(query: dict[str, list[str]]):
-    """Build a :class:`durin.logs.reader.LogQuery` from URL query params."""
-    from durin.logs.reader import LogQuery
-
-    def first(name: str) -> str | None:
-        vals = query.get(name)
-        return vals[0] if vals else None
-
-    source = (first("source") or "gateway").strip()
-    filters: dict[str, set[str]] = {}
-    for key in ("level", "channel", "session", "type"):
-        vals = query.get(key)
-        if vals:
-            collected: set[str] = set()
-            for v in vals:  # repeated params OR comma-joined both supported
-                collected.update(part for part in v.split(",") if part)
-            if collected:
-                filters[key] = collected
-    before_ts = first("before_ts")
-    window = first("window_hours")
-    limit = first("limit")
-    return LogQuery(
-        source="telemetry" if source == "telemetry" else "gateway",
-        q=(first("q") or None),
-        before_ts=float(before_ts) if before_ts else None,
-        window_hours=(None if window == "all" else float(window) if window else 24.0),
-        limit=max(1, min(int(limit), 1000)) if limit else 200,
-        filters=filters,
-    )
-
-
 def _parse_inbound_payload(raw: str) -> str | None:
     """Parse a client frame into text; return None for empty or unrecognized content."""
     text = raw.strip()
