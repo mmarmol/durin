@@ -120,7 +120,18 @@ def collect_secret_env(
 
 
 def _version_key(v: str) -> tuple:
-    return tuple(int(n) for n in re.findall(r"\d+", v or ""))
+    """Ordering key for a semver-ish version string. Splits off pre-release/build
+    metadata so a pre-release sorts BELOW its release (1.0.0-rc.1 < 1.0.0) and the
+    release core never inherits the rc/beta digits. Returns () for an unparseable
+    version so ``has_update``'s guard treats it as "no nag"."""
+    core = re.split(r"[-+]", v or "", maxsplit=1)[0]
+    release = tuple(int(n) for n in re.findall(r"\d+", core))
+    if not release:
+        return ()
+    remainder = (v or "")[len(core):]
+    if remainder.startswith("-"):  # pre-release ranks below the final release
+        return (release, 0, tuple(int(n) for n in re.findall(r"\d+", remainder)))
+    return (release, 1)  # final release (build metadata, if any, is ignored)
 
 
 def has_update(current: str, latest: str) -> bool:
