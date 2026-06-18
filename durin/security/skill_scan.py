@@ -95,6 +95,8 @@ DANGEROUS_CODE_RULES = [
     (r"\brm\s+-rf?\s+[~/]|\bmkfs\b|\bdd\s+if=", "dangerous_code", "dangerous", "destructive command"),
     (r"\beval\s*\(|\bexec\s*\(|\bos\.system\s*\(|subprocess\.[A-Za-z_]+\([^)]*shell\s*=\s*True", "dangerous_code", "dangerous", "dynamic/shell exec"),
     (r"/dev/tcp/|\bnc\s+-[a-z]*e|\bncat\s+-[a-z]*e", "dangerous_code", "dangerous", "reverse shell"),
+    (r"(?is)os\.dup2\s*\([^\n]*\.fileno\s*\(", "dangerous_code", "dangerous", "fd dup to socket (reverse shell)"),
+    (r"(?i)\bpty\.spawn\s*\(", "dangerous_code", "dangerous", "pty.spawn (reverse shell primitive)"),
     (r"\bos\.environ\b|\bprocess\.env\b", "dangerous_code", "caution", "environment access (exfil-adjacent)"),
     (r"\batob\s*\(|\bbase64\.b64decode\s*\(|(?:\\x[0-9a-fA-F]{2}){8,}", "dangerous_code", "caution", "obfuscation (base64/hex)"),
 ]
@@ -106,6 +108,9 @@ DATA_EXFILTRATION_RULES = [
     (r"(?is)\b(?:cat|tar|zip)\b[^\n|]*?(?:~/\.ssh|~/\.aws|\.env|id_rsa)[^\n|]*\|\s*(?:curl|wget|nc|ncat)\b", "data_exfiltration", "dangerous", "sensitive read piped to network"),
     # DNS / webhook beacon of host data
     (r"(?i)\b(?:dig|nslookup)\b[^\n]*\$\(", "data_exfiltration", "caution", "DNS exfil shape"),
+    # python stdlib http exfil (requests/httpx/aiohttp/urllib) carrying a secret/env read —
+    # the curl/wget rules above miss the entire Python networking stack.
+    (r"(?is)\b(?:requests|httpx|aiohttp|urllib)\b[^\n]*?\.(?:post|put|patch|get|urlopen|urlretrieve|request)\s*\([^\n]*?(?:\.ssh|\.aws|\.env|id_rsa|/etc/passwd|environ|getenv)", "data_exfiltration", "dangerous", "python http exfil of secrets/env"),
 ]
 
 PRIVILEGE_ESCALATION_RULES = [
