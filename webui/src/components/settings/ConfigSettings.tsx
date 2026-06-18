@@ -329,11 +329,18 @@ function LeafRow({
     );
   }
 
-  // Array or null — shown read-only; edit those with `durin config`.
+  // Array or null — shown read-only; edit those with `durin config`. The value
+  // MUST be inline-block: `truncate` (overflow-hidden + max-width) is inert on an
+  // inline <span>, which let long arrays (e.g. the allowlist) sprawl across and
+  // overlap the row title. The full value stays reachable via the tooltip.
+  const preview = value === null ? "—" : JSON.stringify(value);
   return (
     <SettingsRow title={leaf.display}>
-      <span className="max-w-[280px] truncate text-right text-[12px] text-muted-foreground">
-        {value === null ? "—" : JSON.stringify(value)}
+      <span
+        title={value === null ? undefined : preview}
+        className="inline-block max-w-[280px] truncate align-middle text-right text-[12px] text-muted-foreground"
+      >
+        {preview}
       </span>
     </SettingsRow>
   );

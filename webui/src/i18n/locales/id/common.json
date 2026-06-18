@@ -287,7 +287,8 @@
         "judge": "Juri keamanan LLM",
         "trust": "Pola tepercaya",
         "token": "Token GitHub",
-        "caps": "Batas ukuran"
+        "caps": "Batas ukuran",
+        "discovery": "Sumber penemuan"
       },
       "rows": {
         "judgeTrigger": "Kapan menjalankan juri",
@@ -323,7 +324,10 @@
       "testToken": "Tes",
       "tokenOk": "Token OK — {{remaining}} permintaan API tersisa.",
       "tokenTestError": "Tes token gagal.",
-      "modelPlaceholder": "model default"
+      "modelPlaceholder": "model default",
+      "discoveryDescription": "Registry mana yang dicari oleh pencarian skill.",
+      "toggleRegistry": "Alihkan {{name}}",
+      "noRegistries": "Tidak ada registry yang dikonfigurasi."
     },
     "secrets": {
       "addTitle": "Tambah secret",
