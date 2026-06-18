@@ -4,6 +4,8 @@ import pytest
 from durin.agent.mcp_install import (
     build_server_config_from_detail,
     collect_secret_env,
+    has_update,
+    rebuild_for_update,
     runtime_install_spec,
     runtime_present,
 )
@@ -39,7 +41,7 @@ def test_build_local_config_pins_version_and_secret_ref():
         d, prefer="local", secret_env_refs={"JIRA_TOKEN": "${secret:MCP_JIRA_TOKEN}"})
     assert sc.type == "stdio"
     assert sc.command == "npx"
-    assert "@x/jira" in sc.args
+    assert "@x/jira@1.4.0" in sc.args  # version pinned into the launch arg
     assert sc.version == "1.4.0"
     assert sc.source_ref == "io.x/jira"
     assert sc.env["JIRA_TOKEN"] == "${secret:MCP_JIRA_TOKEN}"
@@ -92,3 +94,37 @@ def test_collect_secret_env_stores_only_secrets(secret_store_tmp):
     from durin.security.secrets import get_secret_store
     name = refs["JIRA_TOKEN"][len("${secret:"):-1]
     assert get_secret_store(reload=True).get(name).value == "abc-secret-1234"
+
+
+def test_has_update():
+    assert has_update("1.4.0", "1.5.0") is True
+    assert has_update("1.4.0", "1.4.0") is False
+    assert has_update("2.0.0", "1.9.9") is False  # never downgrade
+    assert has_update("", "1.0.0") is False
+    assert has_update("1.0.0", "") is False
+    assert has_update("weird", "alsoweird") is False  # unparseable → no nag
+
+
+def test_rebuild_for_update_repins_and_preserves_env():
+    from durin.config.schema import MCPServerConfig
+
+    old = MCPServerConfig(
+        type="stdio", command="npx", args=["-y", "@x/jira@1.0.0"],
+        env={"JIRA_TOKEN": "${secret:MCP_JIRA}"}, version="1.0.0",
+        source_ref="io.x/jira", enabled_tools=["create_issue"])
+    d = _detail(ref="io.x/jira", version="2.0.0", packages=[PackageSpec(
+        registry_type="npm", identifier="@x/jira", version="2.0.0", runtime_hint="npx",
+        transport_type="stdio", runtime_arguments=[], package_arguments=[], env=[])])
+    new = rebuild_for_update(old, d)
+    assert new.version == "2.0.0"
+    assert "@x/jira@2.0.0" in new.args  # re-pinned to latest
+    assert new.env == {"JIRA_TOKEN": "${secret:MCP_JIRA}"}  # secrets preserved
+    assert new.enabled_tools == ["create_issue"]  # user customisation preserved
+
+
+def test_rebuild_for_update_remote_is_noop():
+    from durin.config.schema import MCPServerConfig
+
+    old = MCPServerConfig(type="streamableHttp", url="https://m/x", source_ref="io.x/r")
+    d = _detail(ref="io.x/r", version="9.9.9", remotes=[])
+    assert rebuild_for_update(old, d) is old
