@@ -76,6 +76,20 @@ _SESSION_EXPIRED_MARKERS = (
 )
 
 
+def _resolve_secret_map(values: dict[str, str] | None) -> dict[str, str] | None:
+    """Resolve any ``${secret:NAME}`` references to plaintext at the point of use.
+
+    MCP ``env`` / ``headers`` may hold secret-store references written by the
+    discovery install flow; the plaintext is materialised only here, right before
+    the transport spawns, and never persists in config or logs.
+    """
+    if not values:
+        return values
+    from durin.security.secrets import resolve_secret
+
+    return {k: resolve_secret(v) for k, v in values.items()}
+
+
 def _is_session_expired_error(exc: BaseException) -> bool:
     if isinstance(exc, InterruptedError):
         return False
@@ -238,7 +252,7 @@ class MCPServerConnection:
         def factory(headers=None, timeout=None, auth=None):
             merged = {
                 "Accept": "application/json, text/event-stream",
-                **(cfg.headers or {}),
+                **(_resolve_secret_map(cfg.headers) or {}),
                 **(headers or {}),
             }
             return self._build_http_client(
@@ -347,7 +361,7 @@ class MCPServerConnection:
                     f"MCP server '{self.name}': {finding}"
                 )
         command, args, env = _normalize_windows_stdio_command(
-            cfg.command, cfg.args, cfg.env or None
+            cfg.command, cfg.args, _resolve_secret_map(cfg.env) or None
         )
         params = StdioServerParameters(command=command, args=args, env=env)
         errlog = _mcp_stderr_log()
@@ -367,7 +381,7 @@ class MCPServerConnection:
             raise ConnectionError(f"{cfg.url} unreachable")
         self._http_client = self._build_http_client(
             dict(
-                headers=cfg.headers or None,
+                headers=_resolve_secret_map(cfg.headers) or None,
                 follow_redirects=True,
                 max_redirects=_MCP_MAX_REDIRECTS,
                 timeout=None,

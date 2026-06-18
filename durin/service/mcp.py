@@ -97,6 +97,120 @@ class McpOauthLoginResult(Result):
     state: str
 
 
+# --- Registry discovery DTOs (Phase 2) ---------------------------------------
+
+
+class McpRegistrySearchQuery(Query):
+    q: str = ""
+    limit: int = 10
+
+
+class McpRegistryDescribeQuery(Query):
+    ref: str
+
+
+class McpRegistryInstallCommand(Command):
+    ref: str
+    prefer: str = "remote"  # "remote" | "local"
+    env_values: dict[str, str] | None = None  # required/secret env collected from the user
+
+
+class McpUpdatesQuery(Query):
+    """No inputs — checks every configured server against the registry."""
+
+
+class McpUpdateInfo(Result):
+    name: str
+    current: str
+    latest: str
+
+
+class McpUpdatesResult(Result):
+    updates: list[McpUpdateInfo]
+
+
+class McpRegistryHit(Result):
+    name: str
+    ref: str
+    registry: str
+    kind: str  # remote | local | both
+    description: str
+    signals: dict
+
+
+class McpRegistrySearchResult(Result):
+    hits: list[McpRegistryHit]
+
+
+class McpRegistryEnvVar(Result):
+    name: str
+    description: str
+    is_required: bool
+    is_secret: bool
+    default: str | None
+
+
+class McpRegistryPackage(Result):
+    registry_type: str
+    identifier: str
+    version: str
+    runtime_hint: str
+    transport_type: str
+    runtime_arguments: list[str]
+    package_arguments: list[str]
+    env: list[McpRegistryEnvVar]
+
+
+class McpRegistryRemote(Result):
+    transport_type: str
+    url: str
+    headers: list[McpRegistryEnvVar]
+
+
+class McpRegistryServerDetail(Result):
+    name: str
+    ref: str
+    description: str
+    version: str
+    repository: str
+    packages: list[McpRegistryPackage]
+    remotes: list[McpRegistryRemote]
+
+
+def _reg_envvar(e: Any) -> McpRegistryEnvVar:
+    return McpRegistryEnvVar(
+        name=e.name, description=e.description, is_required=e.is_required,
+        is_secret=e.is_secret, default=e.default)
+
+
+def _reg_hit(h: Any) -> McpRegistryHit:
+    return McpRegistryHit(
+        name=h.name, ref=h.ref, registry=h.registry, kind=h.kind,
+        description=h.description, signals=h.signals)
+
+
+def _reg_detail(d: Any) -> McpRegistryServerDetail:
+    return McpRegistryServerDetail(
+        name=d.name, ref=d.ref, description=d.description, version=d.version,
+        repository=d.repository,
+        packages=[
+            McpRegistryPackage(
+                registry_type=p.registry_type, identifier=p.identifier,
+                version=p.version, runtime_hint=p.runtime_hint,
+                transport_type=p.transport_type,
+                runtime_arguments=p.runtime_arguments,
+                package_arguments=p.package_arguments,
+                env=[_reg_envvar(e) for e in p.env])
+            for p in d.packages
+        ],
+        remotes=[
+            McpRegistryRemote(
+                transport_type=r.transport_type, url=r.url,
+                headers=[_reg_envvar(e) for e in r.headers])
+            for r in d.remotes
+        ])
+
+
 # ---------------------------------------------------------------------------
 # Status derivation (pure)
 # ---------------------------------------------------------------------------
@@ -245,6 +359,173 @@ class McpService:
             for name, sc in sorted(cfg.tools.mcp_servers.items())
         ]
         return McpListResult(servers=servers)
+
+    @route(
+        "GET",
+        "/api/v1/mcp/registry/search",
+        scope=Scope.MCP_READ.value,
+        request_model=McpRegistrySearchQuery,
+        response_model=McpRegistrySearchResult,
+        summary="Search the MCP registry for installable servers",
+    )
+    async def registry_search(
+        self, query: McpRegistrySearchQuery, principal: Principal
+    ) -> McpRegistrySearchResult:
+        principal.require(Scope.MCP_READ)
+        from durin.agent.mcp_catalog_cache import McpCatalogCache
+        from durin.agent.mcp_registry import build_mcp_adapters, search_mcp_registries
+        from durin.config.loader import get_config_path, load_config
+
+        disc = load_config().tools.mcp_discovery
+        cache = McpCatalogCache(get_config_path().parent / "mcp_catalog.json")
+        hits = await search_mcp_registries(
+            query.q,
+            cache=cache,
+            adapters=build_mcp_adapters(disc.registries),
+            limit=query.limit or disc.search_limit,
+        )
+        return McpRegistrySearchResult(hits=[_reg_hit(h) for h in hits])
+
+    @route(
+        "GET",
+        "/api/v1/mcp/registry/describe",
+        scope=Scope.MCP_READ.value,
+        request_model=McpRegistryDescribeQuery,
+        response_model=McpRegistryServerDetail,
+        summary="Full install metadata for one registry server",
+    )
+    async def registry_describe(
+        self, query: McpRegistryDescribeQuery, principal: Principal
+    ) -> McpRegistryServerDetail:
+        principal.require(Scope.MCP_READ)
+        from durin.agent.mcp_registry import build_mcp_adapters
+        from durin.config.loader import load_config
+
+        for adapter in build_mcp_adapters(load_config().tools.mcp_discovery.registries):
+            detail = await adapter.describe(query.ref)
+            if detail is not None:
+                return _reg_detail(detail)
+        raise NotFoundError("server not found in registry", details={"ref": query.ref})
+
+    @route(
+        "POST",
+        "/api/v1/mcp/registry/install",
+        scope=Scope.MCP_WRITE.value,
+        request_model=McpRegistryInstallCommand,
+        response_model=McpServerDetail,
+        summary="Install (add) an MCP server from the registry by ref",
+    )
+    async def registry_install(
+        self, cmd: McpRegistryInstallCommand, principal: Principal
+    ) -> McpServerDetail:
+        principal.require(Scope.MCP_WRITE)
+        from durin.agent.mcp_install import (
+            build_server_config_from_detail,
+            collect_secret_env,
+        )
+        from durin.agent.mcp_registry import build_mcp_adapters
+        from durin.config.loader import load_config
+
+        disc = load_config().tools.mcp_discovery
+        detail = None
+        for adapter in build_mcp_adapters(disc.registries):
+            detail = await adapter.describe(cmd.ref)
+            if detail is not None:
+                break
+        if detail is None:
+            raise NotFoundError("server not found in registry", details={"ref": cmd.ref})
+        server_name = cmd.ref.rsplit("/", 1)[-1] or cmd.ref
+        secret_refs = collect_secret_env(
+            detail, cmd.env_values or {}, server_name=server_name
+        )
+        sc = build_server_config_from_detail(
+            detail, prefer=cmd.prefer, secret_env_refs=secret_refs
+        )
+        return await self.add(
+            McpServerUpsertCommand(name=server_name, config=sc), principal
+        )
+
+    @route(
+        "GET",
+        "/api/v1/mcp/registry/updates",
+        scope=Scope.MCP_READ.value,
+        request_model=McpUpdatesQuery,
+        response_model=McpUpdatesResult,
+        summary="List configured servers with a newer version in the registry",
+    )
+    async def registry_updates(
+        self, query: McpUpdatesQuery, principal: Principal
+    ) -> McpUpdatesResult:
+        principal.require(Scope.MCP_READ)
+        import asyncio
+
+        from durin.agent.mcp_install import has_update
+        from durin.agent.mcp_registry import build_mcp_adapters
+        from durin.config.loader import load_config
+
+        cfg = load_config()
+        adapters = build_mcp_adapters(cfg.tools.mcp_discovery.registries)
+        candidates = [
+            (name, sc)
+            for name, sc in sorted(cfg.tools.mcp_servers.items())
+            if sc.source_ref and sc.version
+        ]
+
+        async def _latest(ref: str):
+            for adapter in adapters:
+                detail = await adapter.describe(ref)
+                if detail is not None:
+                    return detail
+            return None
+
+        # Describe every configured server concurrently rather than one-at-a-time.
+        details = await asyncio.gather(*[_latest(sc.source_ref) for _, sc in candidates])
+        out = [
+            McpUpdateInfo(name=name, current=sc.version, latest=detail.version)
+            for (name, sc), detail in zip(candidates, details)
+            if detail is not None and has_update(sc.version, detail.version)
+        ]
+        return McpUpdatesResult(updates=out)
+
+    @route(
+        "POST",
+        "/api/v1/mcp/servers/{name}/registry-update",
+        scope=Scope.MCP_WRITE.value,
+        request_model=McpServerNameCommand,
+        response_model=McpServerDetail,
+        summary="Re-pin a server to the registry's latest version and reconnect",
+    )
+    async def registry_update(
+        self, cmd: McpServerNameCommand, principal: Principal
+    ) -> McpServerDetail:
+        principal.require(Scope.MCP_WRITE)
+        from durin.agent.mcp_install import rebuild_for_update
+        from durin.agent.mcp_registry import build_mcp_adapters
+        from durin.config.loader import load_config
+
+        cfg = load_config()
+        sc = cfg.tools.mcp_servers.get(cmd.name)
+        if sc is None:
+            raise NotFoundError("no such MCP server", details={"name": cmd.name})
+        if not sc.source_ref:
+            raise ValidationFailedError(
+                "server was not installed from the registry",
+                details={"name": cmd.name},
+            )
+        detail = None
+        for adapter in build_mcp_adapters(cfg.tools.mcp_discovery.registries):
+            detail = await adapter.describe(sc.source_ref)
+            if detail is not None:
+                break
+        if detail is None:
+            raise NotFoundError(
+                "server not found in registry", details={"ref": sc.source_ref}
+            )
+        await self.update(
+            McpServerUpsertCommand(name=cmd.name, config=rebuild_for_update(sc, detail)),
+            principal,
+        )
+        return await self.reconnect(McpServerNameCommand(name=cmd.name), principal)
 
     @route(
         "GET",

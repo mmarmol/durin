@@ -484,7 +484,33 @@
       "fieldOauthClientId": "OAuth Client ID",
       "hintOauthClientId": "Optional. For servers without dynamic registration (e.g. GitHub): from a registered OAuth app.",
       "fieldOauthClientSecret": "OAuth Client Secret",
-      "hintOauthClientSecret": "Optional. Paired with the Client ID for static OAuth registration."
+      "hintOauthClientSecret": "Optional. Paired with the Client ID for static OAuth registration.",
+      "discover": {
+        "button": "Discover",
+        "searchPlaceholder": "Search MCP servers (e.g. jira, postgres, github)…",
+        "search": "Search",
+        "close": "Close",
+        "cancel": "Cancel",
+        "back": "← Back to results",
+        "noDescription": "No description.",
+        "configuration": "Configuration",
+        "connect": "Connect",
+        "install": "Install",
+        "adding": "Adding…",
+        "noResults": "No servers found.",
+        "searchFailed": "Search failed.",
+        "detailFailed": "Could not load server details.",
+        "installFailed": "Install failed.",
+        "preferRemote": "Hosted (no install)",
+        "preferLocal": "Local (runs on your machine)",
+        "hostedOnly": "Hosted — no install",
+        "localOnly": "Local — runs on your machine",
+        "badgeRemote": "no install",
+        "badgeBoth": "hosted / local",
+        "badgeLocal": "local",
+        "update": "update → {{version}}",
+        "updateButton": "Update to {{version}}"
+      }
     }
   },
   "skills": {

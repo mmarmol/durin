@@ -7,6 +7,7 @@ import {
   Pencil,
   Plus,
   RotateCw,
+  Search,
   Trash2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -19,6 +20,7 @@ import {
   SettingsRow,
   SettingsSectionTitle,
 } from "@/components/settings/primitives";
+import { McpDiscoverPane } from "@/components/settings/McpDiscoverPane";
 import {
   ApiError,
   addMcpServer,
@@ -26,10 +28,12 @@ import {
   enableMcpServer,
   getMcpServer,
   listMcpServers,
+  listMcpUpdates,
   mcpOauthLogin,
   mcpOauthLogout,
   reconnectMcpServer,
   removeMcpServer,
+  updateMcpFromRegistry,
   updateMcpServer,
 } from "@/lib/api";
 import type {
@@ -146,6 +150,8 @@ export function McpSettings({ token }: { token: string }) {
   const [form, setForm] = useState<McpFormState>(EMPTY_MCP_FORM);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
+  const [updates, setUpdates] = useState<Record<string, string>>({});
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // Carries the existing static-OAuth client object so a checkbox toggle does
   // not lose it; null means "no object configured".
@@ -172,6 +178,11 @@ export function McpSettings({ token }: { token: string }) {
     setError(null);
     try {
       setServers(await listMcpServers(token));
+      void listMcpUpdates(token)
+        .then((ups) =>
+          setUpdates(Object.fromEntries(ups.map((u) => [u.name, u.latest]))),
+        )
+        .catch(() => {});
     } catch (e) {
       setError(describeError(e));
     } finally {
@@ -182,6 +193,22 @@ export function McpSettings({ token }: { token: string }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const onUpdate = useCallback(
+    async (name: string) => {
+      setBusy(true);
+      setError(null);
+      try {
+        await updateMcpFromRegistry(token, name);
+        await load();
+      } catch (e) {
+        setError(describeError(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [token, load, describeError],
+  );
 
   // Re-fetch the detail for the currently-open server (used after a mutation
   // that should leave the detail pane open, e.g. enable/disable or OAuth).
@@ -424,6 +451,18 @@ export function McpSettings({ token }: { token: string }) {
     form.type === "sse" || form.type === "streamableHttp" || isAutoForm;
   const isStdioForm = form.type === "stdio" || isAutoForm;
 
+  if (discovering) {
+    return (
+      <McpDiscoverPane
+        token={token}
+        onClose={(installed) => {
+          setDiscovering(false);
+          if (installed) void load();
+        }}
+      />
+    );
+  }
+
   return (
     <div className="space-y-5">
       <p className="px-1 text-[13px] leading-5 text-muted-foreground">
@@ -441,16 +480,28 @@ export function McpSettings({ token }: { token: string }) {
           <SettingsSectionTitle>
             {t("settings.mcp.servers")}
           </SettingsSectionTitle>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            onClick={onAdd}
-            className="rounded-full"
-          >
-            <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-            {t("settings.mcp.add")}
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() => setDiscovering(true)}
+              className="rounded-full"
+            >
+              <Search className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              {t("settings.mcp.discover.button")}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={onAdd}
+              className="rounded-full"
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              {t("settings.mcp.add")}
+            </Button>
+          </div>
         </div>
         <SettingsGroup>
           {loading ? (
@@ -502,6 +553,13 @@ export function McpSettings({ token }: { token: string }) {
                           aria-label={t(`settings.mcp.status.${server.status}`)}
                         />
                         <span>{server.name}</span>
+                        {updates[server.name] ? (
+                          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-600">
+                            {t("settings.mcp.discover.update", {
+                              version: updates[server.name],
+                            })}
+                          </span>
+                        ) : null}
                       </button>
                     }
                     description={[
@@ -515,6 +573,19 @@ export function McpSettings({ token }: { token: string }) {
                       .join(" ")}
                   >
                     <div className="flex items-center gap-2">
+                      {updates[server.name] ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() => void onUpdate(server.name)}
+                          className="rounded-full"
+                        >
+                          {t("settings.mcp.discover.updateButton", {
+                            version: updates[server.name],
+                          })}
+                        </Button>
+                      ) : null}
                       <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-muted-foreground">
                         <input
                           type="checkbox"

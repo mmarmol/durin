@@ -429,6 +429,30 @@ class SkillsDiscoveryConfig(Base):
     search_limit: int = 10
 
 
+class McpRegistryConfig(Base):
+    """One MCP registry. ``kind`` selects the adapter; ``api_key_secret`` names a
+    durin secret (unused for the no-auth official registry; reserved for future)."""
+
+    name: str
+    kind: Literal["official", "mpak"]
+    enabled: bool = True
+    api_key_secret: str = ""
+
+
+class McpDiscoveryConfig(Base):
+    """MCP server discovery: which registries to search, result cap, install gate.
+
+    ``install_policy`` is MCP-owned (separate from ``SkillsConfig.install_policy``)
+    because adding/running an MCP server is a distinct trust surface; same literal,
+    independent value. mpak ships disabled by default — fast-follow (its trust score
+    lives in a native endpoint, not the spec-compatible ``/v0.1/servers``)."""
+
+    registries: list[McpRegistryConfig] = Field(
+        default_factory=lambda: [McpRegistryConfig(name="official", kind="official")])
+    search_limit: int = 10
+    install_policy: Literal["never", "approve", "auto"] = "approve"
+
+
 class SkillsConfig(Base):
     """Global skill-subsystem governance (spec 2026-06-03 §9). Per-agent
     skill-context tuning (``skills_hot_tier``, ``disabled_skills``) lives on
@@ -828,6 +852,8 @@ class MCPServerConfig(Base):
     spawn_egress_policy: Literal["warn", "refuse", "off"] = "warn"  # stdio: action on a shell-interpreter+egress-tool spawn shape
     malware_check: bool = True  # stdio: query OSV API for MAL-* advisories before spawning; fail-open on network error
     sampling: MCPSamplingConfig = Field(default_factory=MCPSamplingConfig)
+    version: str = ""  # pinned package version from the registry server.json ("" = unpinned)
+    source_ref: str = ""  # registry ref this server was installed from (drives the update check)
 
     def oauth_config(self) -> "MCPOAuthConfig | None":
         """Normalize the oauth field to MCPOAuthConfig | None."""
@@ -876,6 +902,7 @@ class ToolsConfig(Base):
     process: ProcessToolConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.process_registry", "ProcessToolConfig"))
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+    mcp_discovery: McpDiscoveryConfig = Field(default_factory=McpDiscoveryConfig)
     mcp_deferral: MCPDeferralConfig = Field(default_factory=MCPDeferralConfig)
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
 
