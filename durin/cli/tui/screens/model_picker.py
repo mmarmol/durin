@@ -137,16 +137,19 @@ class ModelPickerScreen(ModalScreen[str | None]):
         if current_list:
             sections.append((current_header, current_list))
 
-        seen_ids: set[str] = set()
+        # Key options by ref (the exact `/model` arg), not by bare name: the
+        # same model id can appear under two providers, and the caller commits
+        # whatever id we return — so it must be the provider-qualified ref.
+        seen_refs: set[str] = set()
         for header, entries in sections:
             ol.add_option(Option(header, id=f"__header__{header}", disabled=True))
             for entry in entries:
-                if entry.name in seen_ids:
+                if entry.ref in seen_refs:
                     continue
-                seen_ids.add(entry.name)
+                seen_refs.add(entry.ref)
                 marker = " ← active" if entry.name == self._active else ""
                 label = format_entry(entry) + marker
-                ol.add_option(Option(label, id=entry.name))
+                ol.add_option(Option(label, id=entry.ref))
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option.id and not event.option.id.startswith("__header__"):

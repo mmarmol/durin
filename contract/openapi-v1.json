@@ -1863,6 +1863,18 @@
             "title": "Group",
             "type": "string"
           },
+          "max_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Input Tokens"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -1878,6 +1890,21 @@
           "role": {
             "title": "Role",
             "type": "string"
+          },
+          "supports_audio_input": {
+            "default": false,
+            "title": "Supports Audio Input",
+            "type": "boolean"
+          },
+          "supports_reasoning": {
+            "default": false,
+            "title": "Supports Reasoning",
+            "type": "boolean"
+          },
+          "supports_vision": {
+            "default": false,
+            "title": "Supports Vision",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1888,6 +1915,220 @@
           "ref"
         ],
         "title": "PickerEntryModel",
+        "type": "object"
+      },
+      "ProviderModelDeleteCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "model"
+        ],
+        "title": "ProviderModelDeleteCommand",
+        "type": "object"
+      },
+      "ProviderModelEntry": {
+        "properties": {
+          "configured": {
+            "default": false,
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "context_window_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Context Window Tokens"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "max_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Input Tokens"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Tokens"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reasoning Effort"
+          },
+          "supports_audio_input": {
+            "default": false,
+            "title": "Supports Audio Input",
+            "type": "boolean"
+          },
+          "supports_reasoning": {
+            "default": false,
+            "title": "Supports Reasoning",
+            "type": "boolean"
+          },
+          "supports_vision": {
+            "default": false,
+            "title": "Supports Vision",
+            "type": "boolean"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Temperature"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ProviderModelEntry",
+        "type": "object"
+      },
+      "ProviderModelUpsertCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "context_window_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Context Window Tokens"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Tokens"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reasoning Effort"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Temperature"
+          }
+        },
+        "required": [
+          "provider",
+          "model"
+        ],
+        "title": "ProviderModelUpsertCommand",
+        "type": "object"
+      },
+      "ProviderModelsQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider"
+        ],
+        "title": "ProviderModelsQuery",
+        "type": "object"
+      },
+      "ProviderModelsResult": {
+        "properties": {
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ProviderModelEntry"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "models"
+        ],
+        "title": "ProviderModelsResult",
         "type": "object"
       },
       "RevokeTokenCommand": {
@@ -4014,6 +4255,93 @@
         },
         "summary": "Return Codex OAuth connection status",
         "x-required-scope": "settings:read"
+      }
+    },
+    "/api/v1/providers/model": {
+      "post": {
+        "operationId": "config_provider_model_upsert",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderModelUpsertCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigSetResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Add or update a configured model's params under a provider",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/providers/model/remove": {
+      "post": {
+        "operationId": "config_provider_model_remove",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderModelDeleteCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigSetResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Remove a configured model from a provider",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/providers/models": {
+      "get": {
+        "operationId": "config_provider_models_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderModelsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderModelsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Per-provider catalog models with caps and configured params",
+        "x-required-scope": "config:read"
       }
     },
     "/api/v1/secrets": {

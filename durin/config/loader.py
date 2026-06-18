@@ -451,6 +451,69 @@ def _env_replace(match: re.Match[str]) -> str:
     return value
 
 
+def _seed_model_entry(providers: dict, provider_value: str, model: str, src: dict) -> None:
+    """Seed ``providers[<camelKey>].models[model]`` from a legacy param source (a
+    preset or ``agents.defaults``). Additive: never clobbers an existing entry.
+
+    ``provider_value`` is the snake_case registry name (a config *value*), but
+    the persisted providers dict is keyed by the camelCase field alias — so the
+    value is camelCased to find/merge the right block.
+    """
+    from pydantic.alias_generators import to_camel
+
+    def g(*keys):
+        for k in keys:
+            if k in src and src[k] is not None:
+                return src[k]
+        return None
+
+    entry: dict = {}
+    if (v := g("contextWindowTokens", "context_window_tokens")) is not None:
+        entry["contextWindowTokens"] = v
+    if (v := g("maxTokens", "max_tokens")) is not None:
+        entry["maxTokens"] = v
+    if (v := g("temperature")) is not None:
+        entry["temperature"] = v
+    if (v := g("reasoningEffort", "reasoning_effort")) is not None:
+        entry["reasoningEffort"] = v
+    if not entry:
+        return
+    key = to_camel(provider_value)
+    block = providers.get(key)
+    if block is None:
+        block = providers[key] = {}
+    elif not isinstance(block, dict):
+        return
+    models = block.setdefault("models", {})
+    if not isinstance(models, dict):
+        return
+    models.setdefault(model, entry)
+
+
+def _migrate_model_config(data: dict) -> dict:
+    """Seed ``providers.<p>.models`` from legacy ``model_presets`` and
+    ``agents.defaults`` inline params so the new resolution path has data.
+    Additive + idempotent — legacy fields are left in place for back-compat."""
+    if not isinstance(data, dict):
+        return data
+    providers = data.get("providers")
+    if not isinstance(providers, dict):
+        providers = data["providers"] = {}
+    defaults = (data.get("agents") or {}).get("defaults") or {}
+    model, provider = defaults.get("model"), defaults.get("provider")
+    if model and provider and provider != "auto":
+        _seed_model_entry(providers, provider, model, defaults)
+    presets = data.get("modelPresets") or data.get("model_presets") or {}
+    if isinstance(presets, dict):
+        for preset in presets.values():
+            if not isinstance(preset, dict):
+                continue
+            pm, pp = preset.get("model"), preset.get("provider")
+            if pm and pp and pp != "auto":
+                _seed_model_entry(providers, pp, pm, preset)
+    return data
+
+
 def _migrate_config(data: dict) -> dict:
     """Migrate old config formats to current."""
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
@@ -489,4 +552,5 @@ def _migrate_config(data: dict) -> dict:
             defaults.setdefault("skillsHotTier", memory.pop(legacy))
             break
 
+    data = _migrate_model_config(data)
     return data

@@ -37,9 +37,21 @@ if TYPE_CHECKING:
 
 
 def __getattr__(name: str):
-    """Lazily expose provider implementations without importing all backends up front."""
+    """Lazily expose provider implementations without importing all backends up front.
+
+    Also falls back to importing *name* as a real submodule, so plain attribute
+    access (``durin.providers.factory``) resolves even before an explicit import.
+    pytest's ``monkeypatch.setattr("durin.providers.<submodule>.<attr>", …)``
+    walks the package this way; without the fallback it hit the AttributeError
+    below whenever the submodule was not yet bound.
+    """
     module_name = _LAZY_IMPORTS.get(name)
-    if module_name is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    module = import_module(module_name, __name__)
-    return getattr(module, name)
+    if module_name is not None:
+        module = import_module(module_name, __name__)
+        return getattr(module, name)
+    if not name.startswith("_"):
+        try:
+            return import_module(f".{name}", __name__)
+        except ImportError:
+            pass
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
