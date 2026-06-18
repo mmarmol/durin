@@ -426,6 +426,9 @@ class DurinApp(App[None]):
         if value == "/model":
             self._open_model_picker()
             return
+        if value == "/mcp":
+            self._open_mcp_discover()
+            return
         if value == "/theme":
             self._open_theme_picker()
             return
@@ -768,6 +771,47 @@ class DurinApp(App[None]):
         await self._publish_inbound(f"/model {selected}", [])
 
     @work
+    async def _open_mcp_discover(self) -> None:
+        """`/mcp` — search the registry and add a server (discovery in the TUI)."""
+        from durin.agent.mcp_catalog_cache import McpCatalogCache
+        from durin.agent.mcp_registry import build_mcp_adapters, search_mcp_registries
+        from durin.cli.tui.screens import McpDiscoverScreen
+        from durin.config.loader import get_config_path, load_config
+
+        disc = load_config().tools.mcp_discovery
+
+        async def _search(query: str):
+            cache = McpCatalogCache(get_config_path().parent / "mcp_catalog.json")
+            return await search_mcp_registries(
+                query,
+                cache=cache,
+                adapters=build_mcp_adapters(disc.registries),
+                limit=disc.search_limit,
+            )
+
+        ref = await self.push_screen_wait(McpDiscoverScreen(_search))
+        if not ref:
+            return
+
+        chat = self.query_one("#chat", ChatView)
+        chat.add_message("system", f"Adding MCP server {ref}…")
+        try:
+            from durin.service.mcp import McpRegistryInstallCommand, McpService
+            from durin.service.principal import Principal
+
+            detail = await McpService().registry_install(
+                McpRegistryInstallCommand(ref=ref, prefer="remote"),
+                Principal.local(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            chat.add_message("system", f"Could not add {ref}: {exc}")
+            return
+        msg = f"Added MCP server '{detail.name}' ({detail.transport})."
+        if detail.status == "needs_auth":
+            msg += f" Sign in with `durin mcp login {detail.name}`."
+        chat.add_message("system", msg)
+
+    @work
     async def _open_theme_picker(self) -> None:
         """`/theme` — pick the colour palette; Ctrl+T still toggles mode."""
         from durin.cli.tui.screens import ThemePickerScreen
@@ -794,6 +838,8 @@ class DurinApp(App[None]):
             action = selected[4:]
             if action == "open_model_picker":
                 self._open_model_picker()
+            elif action == "open_mcp_discover":
+                self._open_mcp_discover()
             elif action == "open_theme_picker":
                 await self._open_theme_picker()
             elif action == "open_session_picker":
