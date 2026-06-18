@@ -125,18 +125,25 @@ an inline confirmation), the CLI (`durin skill remove <name> [--yes]`), and the 
 **Registries / search.** `durin/agent/skill_registry.py` defines `SkillSearchHit`, the
 `SkillRegistry` protocol, and two adapters: `SkillsShRegistry` (skills.sh → github-backed
 refs `github:owner/repo/skill`) and `ClawHubRegistry` (clawhub → `clawhub:slug`, its own
-versioned zip store). `search_registries` queries adapters in parallel (SSRF-safe),
-dedupes by ref, round-robin interleaves, floats allowlisted refs first. `build_adapters`
-wires only skills.sh + clawhub today (github-taps/well-known/lobehub are roadmap). Exposed
-as the `skill_search` core tool, plus CLI (`durin skill search`) and web. skills.sh hits
-carry **no** synthetic description in search results (the search API returns none) — the
-real one is fetched on preview.
+versioned zip store). ClawHub search hits the **ranked** `GET /api/v1/search?q=` endpoint —
+*not* `GET /api/v1/skills`, which is a recency LIST that silently ignores its query (calling
+it returns the same recently-updated skills for every search). `search_registries` queries
+adapters in parallel (SSRF-safe), dedupes by ref, round-robin interleaves (rank-fair across
+sources — the lead source rotates per query via a stable `crc32`, so no registry permanently
+owns the top slot), floats allowlisted refs first. The web UI surfaces this merged order as
+its default **relevance** sort, so a registry that reports no install count (clawhub) is not
+buried under install-ranked skills.sh hits; each result line carries a source tag (icon +
+registry name). `build_adapters` wires skills.sh + clawhub, **both enabled by default**
+(github-taps/well-known/lobehub are roadmap). Exposed as the `skill_search` core tool, plus
+CLI (`durin skill search`) and web. skills.sh hits carry **no** synthetic description in
+search results (the search API returns none) — the real one is fetched on preview.
 
 **Preview / detail (`describe`).** `skills_store.py::web_skill_describe`
 (`GET /api/v1/skills/describe?ref=`) is a read-only peek used by the web UI before import:
-it resolves the ref like import does, reads just that one SKILL.md, and returns its full
-`description` (≤1024 chars), `body` (the markdown after the frontmatter), `platforms`, and
-declared `requires` (bins/env). It never executes or writes anything and degrades to empty
+it resolves the ref like import does, reads just that one SKILL.md (github/https via raw
+URL; clawhub via the registry's `GET /api/v1/skills/{slug}/file?path=SKILL.md` raw-file
+endpoint), and returns its full `description` (≤1024 chars), `body` (the markdown after the
+frontmatter), `platforms`, and declared `requires` (bins/env). It never executes or writes anything and degrades to empty
 fields on any failure. The webui renders this as a per-result detail view (description +
 rendered body + requirements) so the user can decide before importing into quarantine; the
 §8.C verdict still appears in the triage pane after import.

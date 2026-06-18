@@ -184,7 +184,7 @@ describe("SkillsView security surface", () => {
     expect(api.importSource).toHaveBeenCalledWith("tok", "github:acme/pdf-tools");
   });
 
-  it("search shows count and sorts by installs", async () => {
+  it("defaults to relevance (server order) and re-sorts by installs on demand", async () => {
     vi.mocked(api.listSkills).mockResolvedValue([
       { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
     ]);
@@ -206,9 +206,78 @@ describe("SkillsView security surface", () => {
     // result count appears
     expect(await screen.findByText(/2 results/i)).toBeInTheDocument();
 
-    // default sort = installs desc → zeta (90) before alpha (5)
-    const names = screen.getAllByTestId("hit-name").map((n) => n.textContent);
+    // default sort = relevance → the server's order is preserved (alpha, zeta)
+    let names = screen.getAllByTestId("hit-name").map((n) => n.textContent);
+    expect(names).toEqual(["alpha", "zeta"]);
+
+    // switching to installs re-sorts desc → zeta (90) before alpha (5)
+    await user.selectOptions(screen.getByRole("combobox"), "installs");
+    names = screen.getAllByTestId("hit-name").map((n) => n.textContent);
     expect(names).toEqual(["zeta", "alpha"]);
+  });
+
+  it("keeps clawhub hits in relevance order instead of burying them below skills.sh", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    // The server ranks the clawhub match first; the skills.sh hit has a big
+    // install count. Under the old installs-default the install-heavy hit would
+    // jump above the (install-less) clawhub match — burying the better result.
+    vi.mocked(api.searchSkills).mockResolvedValue({
+      hits: [
+        { name: "git", ref: "clawhub:git", registry: "clawhub", description: "version control", signals: {} },
+        { name: "popular", ref: "github:o/popular", registry: "skills.sh", description: "", signals: { installs: 999 } },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(wrap(<SkillsView />));
+    await screen.findByText("clean");
+    await user.click(screen.getByRole("button", { name: /add skill/i }));
+    await user.type(await screen.findByPlaceholderText(/Search the registry/i), "git");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    expect(await screen.findByText(/2 results/i)).toBeInTheDocument();
+    const names = screen.getAllByTestId("hit-name").map((n) => n.textContent);
+    expect(names).toEqual(["git", "popular"]);
+
+    // every line carries its source registry as a tag
+    expect(document.querySelector('[data-registry="clawhub"]')).not.toBeNull();
+    expect(document.querySelector('[data-registry="skills.sh"]')).not.toBeNull();
+  });
+
+  it("opens a clawhub result's SKILL.md preview (body fetched, not inline-only)", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.searchSkills).mockResolvedValue({
+      hits: [
+        { name: "git", ref: "clawhub:git", registry: "clawhub", description: "inline summary", signals: {} },
+      ],
+    });
+    vi.mocked(api.describeSkill).mockResolvedValue({
+      ref: "clawhub:git",
+      description: "Git version-control discipline.",
+      body: "## When to Use\n\nGit work.",
+      platforms: null,
+      requires: null,
+    });
+
+    const user = userEvent.setup();
+    render(wrap(<SkillsView />));
+    await screen.findByText("clean");
+    await user.click(screen.getByRole("button", { name: /add skill/i }));
+    await user.type(await screen.findByPlaceholderText(/Search the registry/i), "git");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    await user.click(await screen.findByRole("button", { name: "git" }));
+
+    // clawhub previews now fetch the real SKILL.md instead of early-returning
+    expect(api.describeSkill).toHaveBeenCalledWith("tok", "clawhub:git");
+    expect(await screen.findByText("Git version-control discipline.")).toBeInTheDocument();
+    expect(screen.getByText(/When to Use/i)).toBeInTheDocument();
   });
 
   it("clicking a result opens a detail preview with body + full requirements; Import and Back work", async () => {

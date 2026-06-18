@@ -4,8 +4,8 @@ NO install here. Network is SSRF-safe."""
 from __future__ import annotations
 
 import asyncio
+import zlib
 from dataclasses import dataclass, field
-from itertools import zip_longest
 from typing import Protocol
 
 from durin.security.network import ssrf_safe_async_client
@@ -62,10 +62,12 @@ class SkillsShRegistry:
 
 
 class ClawHubRegistry:
-    """ClawHub — GET /api/v1/skills?search=&limit= → hits with a clawhub:<slug>
-    ref (fetched via the zip endpoint, not github). A third-party registry whose
-    vetting durin does not control → treated as community-trust, so every install
-    still passes the §8.C gate. Degrades to [] on any error."""
+    """ClawHub — GET /api/v1/search?q=&limit= → ranked hits with a clawhub:<slug>
+    ref (fetched via the zip endpoint, not github). NOTE: `/api/v1/skills` is a
+    recency LIST that silently ignores its query — only `/api/v1/search` performs
+    the real (vector) ranking. A third-party registry whose vetting durin does not
+    control → treated as community-trust, so every install still passes the §8.C
+    gate. Degrades to [] on any error."""
 
     name = "clawhub"
     BASE_URL = "https://clawhub.ai/api/v1"
@@ -73,13 +75,13 @@ class ClawHubRegistry:
     async def search(self, query: str, *, limit: int) -> list[SkillSearchHit]:
         try:
             async with ssrf_safe_async_client() as client:
-                resp = await client.get(f"{self.BASE_URL}/skills",
-                                        params={"search": query, "limit": limit}, timeout=15.0)
+                resp = await client.get(f"{self.BASE_URL}/search",
+                                        params={"q": query, "limit": limit}, timeout=15.0)
                 resp.raise_for_status()
                 data = resp.json()
         except Exception:  # noqa: BLE001
             return []
-        items = data.get("items", data) if isinstance(data, dict) else data
+        items = data.get("results", []) if isinstance(data, dict) else data
         if not isinstance(items, list):
             return []
         hits: list[SkillSearchHit] = []
@@ -91,15 +93,22 @@ class ClawHubRegistry:
                 continue
             name = it.get("displayName") or it.get("name") or slug
             desc = it.get("summary") or it.get("description") or ""
+            # clawhub's `downloads` is its acquisition-count signal; surface it as
+            # `installs` (display + tiebreak only) so the search UI ranks/shows it
+            # alongside skills.sh hits instead of always sinking it to the bottom.
+            downloads = it.get("downloads")
+            signals = {"installs": downloads} if isinstance(downloads, int) else {}
             hits.append(SkillSearchHit(name=str(name), ref=f"clawhub:{slug}",
-                                       registry="clawhub", description=str(desc)))
+                                       registry="clawhub", description=str(desc),
+                                       signals=signals))
         return hits
 
 
 async def search_registries(query, *, adapters, allowlist, limit) -> list[SkillSearchHit]:
     """Query every adapter in parallel; dedupe by ref (first adapter wins),
-    round-robin interleave, float allowlisted refs to the front, truncate.
-    A slow/failing adapter contributes [] — never sinks the rest."""
+    round-robin interleave (lead source rotates per query), float allowlisted
+    refs to the front, truncate. A slow/failing adapter contributes [] — never
+    sinks the rest."""
     async def _safe(a) -> list[SkillSearchHit]:
         try:
             return await asyncio.wait_for(a.search(query, limit=limit), timeout=15.0)
@@ -116,7 +125,17 @@ async def search_registries(query, *, adapters, allowlist, limit) -> list[SkillS
             seen.add(h.ref)
             deduped.append(h)
         lists.append(deduped)
-    merged = [h for group in zip_longest(*lists) for h in group if h is not None]
+    # Round-robin interleave, rank-fair across sources. The lead source rotates
+    # per query (stable crc32) and per rank tier, so when several registries are
+    # enabled no single one permanently owns the top slot.
+    n = len(lists)
+    base = zlib.crc32(query.encode("utf-8")) % n if n else 0
+    merged: list[SkillSearchHit] = []
+    for tier in range(max((len(lst) for lst in lists), default=0)):
+        for off in range(n):
+            lst = lists[(base + tier + off) % n]
+            if tier < len(lst):
+                merged.append(lst[tier])
     pref = [p for p in (allowlist or []) if p]
     allow_refs = {h.ref for h in merged if any(h.ref.startswith(p) for p in pref)}
     ordered = [h for h in merged if h.ref in allow_refs] + \

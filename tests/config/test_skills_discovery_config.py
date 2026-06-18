@@ -4,8 +4,10 @@ from durin.config.schema import Config
 def test_discovery_defaults():
     d = Config().skills.discovery
     assert d.search_limit == 10
-    assert [r.kind for r in d.registries] == ["skills.sh"]
-    assert d.registries[0].enabled is True
+    # Both registries on by default (order sets the round-robin cycle; the lead
+    # source itself rotates per query).
+    assert [r.kind for r in d.registries] == ["skills.sh", "clawhub"]
+    assert all(r.enabled for r in d.registries)
 
 
 def test_registry_camel_roundtrip():
