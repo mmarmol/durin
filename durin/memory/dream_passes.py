@@ -76,6 +76,7 @@ def run_extract_pass(
     llm_invoke: LLMInvoke | None = None,
     model: str | None = None,
     max_seconds: int = 0,
+    discover: bool = True,
 ) -> dict:
     """Run the extract dream over every session that has new turns.
 
@@ -90,7 +91,8 @@ def run_extract_pass(
     t0 = time.perf_counter()
     _emit("memory.dream.start", kind="extract")
     sessions_dir = Path(workspace) / "sessions"
-    out: dict[str, Any] = {"sessions": 0, "entities": 0, "errors": [], "yielded": False}
+    out: dict[str, Any] = {"sessions": 0, "entities": 0, "discovered": 0,
+                           "errors": [], "yielded": False}
     if sessions_dir.is_dir():
         for jsonl_path in sorted(sessions_dir.glob("*.jsonl")):
             if max_seconds and (time.perf_counter() - t0) >= max_seconds:
@@ -106,16 +108,20 @@ def run_extract_pass(
                 break
             try:
                 r = run_extract_for_session(
-                    workspace, jsonl_path, llm_invoke=llm_invoke, model=model)
+                    workspace, jsonl_path, llm_invoke=llm_invoke, model=model,
+                    discover=discover)
                 extracted = r.get("extracted") or []
-                if extracted:
+                discovered = r.get("discovered") or []
+                if extracted or discovered:
                     out["sessions"] += 1
                     out["entities"] += len(extracted)
+                    out["discovered"] += len(discovered)
             except Exception as exc:  # noqa: BLE001 — never abort the whole pass
                 out["errors"].append({"session": jsonl_path.stem, "error": str(exc)})
     out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.end", kind="extract",
-          entities_consolidated=out["entities"], entities_failed=len(out["errors"]),
+          entities_consolidated=out["entities"], entities_discovered=out["discovered"],
+          entities_failed=len(out["errors"]),
           sessions=out["sessions"], yielded=out["yielded"],
           duration_ms=out["duration_ms"])
     return out

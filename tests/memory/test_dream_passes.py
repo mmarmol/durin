@@ -41,6 +41,23 @@ def test_extract_pass_over_sessions(tmp_path):
     assert out2["entities"] == 0
 
 
+def test_extract_pass_discovers_and_can_be_disabled(tmp_path):
+    # a durable fact stated WITHOUT any upsert → discovered as a dream entity
+    _session(tmp_path, "s1", [{"role": "user", "content": "My co-founder is Ana."}])
+    out = run_extract_pass(tmp_path, llm_invoke=_stub(
+        '[{"ref":"person:ana","name":"Ana","attributes":{"role":"co-founder"}}]'))
+    assert out["discovered"] == 1
+    page = EntityPage.from_file(tmp_path / "memory/entities/person/ana.md")
+    assert page.attributes["role"] == "co-founder"
+
+    # discover=False → stage 2 skipped entirely
+    _session(tmp_path, "s2", [{"role": "user", "content": "My advisor is Bob."}])
+    out2 = run_extract_pass(tmp_path, discover=False, llm_invoke=_stub(
+        '[{"ref":"person:bob","name":"Bob","attributes":{"role":"advisor"}}]'))
+    assert out2.get("discovered", 0) == 0
+    assert not (tmp_path / "memory/entities/person/bob.md").exists()
+
+
 def test_refine_pass(tmp_path):
     write_entity(tmp_path, "company:x", [FieldPatch(kind="alias", value="X",
                  author="agent", source_ref="s", at=NOW)], create=True, name="X Inc")

@@ -212,7 +212,8 @@ def cmd_dream(
     cfg = load_config()
     model = resolve_memory_model(cfg)
     console.print("[dim]Extract pass (sessions → entity attributes)…[/dim]")
-    ex = run_extract_pass(workspace, model=model)
+    ex = run_extract_pass(workspace, model=model,
+                          discover=cfg.memory.dream.discover_enabled)
     console.print("[dim]Derived-from pass (link entities → source documents)…[/dim]")
     df = run_derived_from_pass(workspace, model=model)
     console.print("[dim]Skill-extract pass (sessions → reusable procedures)…[/dim]")
