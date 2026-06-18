@@ -408,7 +408,21 @@
       "catalogDefault": "valor del catálogo",
       "capVision": "visión",
       "capAudio": "audio",
-      "capReasoning": "razonamiento"
+      "capReasoning": "razonamiento",
+      "emptyTeach": "Este proveedor aún no tiene modelos del catálogo. Agregá uno abajo.",
+      "loadError": "No se pudieron cargar los modelos."
+    },
+    "providers": {
+      "summary": "{{configured}} conectados · {{available}} disponibles",
+      "notConfigured": "Sin configurar",
+      "connected": "Conectado",
+      "connect": "Conectar",
+      "connection": "Conexión",
+      "default": "por defecto",
+      "defaultModel": "por defecto: {{model}}",
+      "modelsCount": "{{count}} modelos",
+      "showMore": "Mostrar {{n}} más",
+      "showLess": "Mostrar menos"
     },
     "mcp": {
       "description": "Conecta servidores Model Context Protocol (MCP) para darle herramientas extra al agente. El estado se lee en vivo del gateway en ejecución.",
