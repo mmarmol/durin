@@ -91,3 +91,25 @@ def test_curate_skips_evolve_of_out_of_scope_skill(tmp_path):
                 '"old": "x", "new": "y", "rationale": "r"}]}')
     res = curate_catalog(ws, judge=judge)
     assert res["applied"] == 0
+
+
+def test_curate_retires_obsolete_skill(tmp_path):
+    ws = tmp_path / "ws"
+    _mk(ws, "obsolete", "dead weight, fully superseded")
+    def judge(prompt):
+        return ('{"actions": [{"type": "retire", "name": "obsolete", '
+                '"rationale": "fully superseded; no remaining purpose"}]}')
+    res = curate_catalog(ws, judge=judge)
+    assert res["applied"] == 1
+    assert not (ws / "skills" / "obsolete").exists()
+
+
+def test_curate_skips_retire_of_out_of_scope_skill(tmp_path):
+    ws = tmp_path / "ws"
+    _mk(ws, "git-a", "body a")
+    def judge(prompt):
+        return ('{"actions": [{"type": "retire", "name": "ghost", '
+                '"rationale": "r"}]}')
+    res = curate_catalog(ws, judge=judge)
+    assert res["applied"] == 0
+    assert (ws / "skills" / "git-a").exists()

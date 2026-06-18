@@ -73,14 +73,37 @@ class SkillEditTool(Tool, ContextAware):
         name = str(kwargs.get("name", "")).strip()
         if not name:
             return {"error": "name is required"}
+        rationale = str(kwargs.get("rationale", ""))
         attribution = Attribution(actor="agent", session=self._session.get(), agent=self._model.get())
-        return apply_skill_edit(
+        result = apply_skill_edit(
             self._workspace,
             name,
             old=str(kwargs.get("old", "")),
             new=str(kwargs.get("new", "")),
-            rationale=str(kwargs.get("rationale", "")),
+            rationale=rationale,
             file=str(kwargs.get("file") or "SKILL.md"),
             confirm=bool(kwargs.get("confirm", False)),
             attribution=attribution,
         )
+        # A direct in-loop edit of an `auto` skill is itself a structural
+        # improvement signal — feed the curation queue so the daily pass can
+        # validate/generalize it, without relying on the agent also calling
+        # skill_observe. Manual skills only return a proposed diff (not applied)
+        # and curation never reviews them, so we log only applied auto edits.
+        if isinstance(result, dict) and result.get("ok") and result.get("mode") == "auto":
+            self._log_edit_observation(name, rationale)
+        return result
+
+    def _log_edit_observation(self, name: str, rationale: str) -> None:
+        from durin.agent.skill_observations import log_observation
+        try:
+            log_observation(
+                self._workspace,
+                skill=name,
+                kind="improvement",
+                issue=f"Skill '{name}' was edited in-loop during a task.",
+                improvement=rationale.strip() or "(edited in-loop; no rationale given)",
+                session=self._session.get(),
+            )
+        except Exception:  # noqa: BLE001 — observation logging must never break the edit
+            logger.exception("skill_edit: failed to log improvement observation for %s", name)
