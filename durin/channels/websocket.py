@@ -243,6 +243,8 @@ _MAX_IMAGES_PER_MESSAGE = 4
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 _MAX_VIDEOS_PER_MESSAGE = 1
 _MAX_VIDEO_BYTES = 20 * 1024 * 1024
+_MAX_AUDIO_BYTES = 25 * 1024 * 1024
+_MAX_AUDIO_PER_MESSAGE = 1
 
 # Image MIME whitelist — matches the Composer's ``accept`` list. SVG is
 # explicitly excluded to avoid the XSS surface inside embedded scripts.
@@ -259,7 +261,20 @@ _VIDEO_MIME_ALLOWED: frozenset[str] = frozenset({
     "video/quicktime",
 })
 
-_UPLOAD_MIME_ALLOWED: frozenset[str] = _IMAGE_MIME_ALLOWED | _VIDEO_MIME_ALLOWED
+# Audio MIME whitelist — accepted as attachments and transcribed server-side.
+# Matches the webui composer ``useAttachedAudio`` whitelist (spec §5.1).
+_AUDIO_MIME_ALLOWED: frozenset[str] = frozenset({
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/opus",
+    "audio/wav",
+    "audio/webm",
+    "audio/x-m4a",
+    "audio/aac",
+    "audio/flac",
+})
+
+_UPLOAD_MIME_ALLOWED: frozenset[str] = _IMAGE_MIME_ALLOWED | _VIDEO_MIME_ALLOWED | _AUDIO_MIME_ALLOWED
 
 _DATA_URL_MIME_RE = re.compile(r"^data:([^;]+);base64,", re.DOTALL)
 
@@ -325,6 +340,14 @@ _MEDIA_ALLOWED_MIMES: frozenset[str] = frozenset({
     "video/mp4",
     "video/webm",
     "video/quicktime",
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/opus",
+    "audio/wav",
+    "audio/webm",
+    "audio/x-m4a",
+    "audio/aac",
+    "audio/flac",
 })
 
 
@@ -996,16 +1019,21 @@ class WebSocketChannel(BaseChannel):
         """
         image_count = 0
         video_count = 0
+        audio_count = 0
         for item in media:
             mime = _extract_data_url_mime(item.get("data_url", "")) if isinstance(item, dict) else None
             if mime in _VIDEO_MIME_ALLOWED:
                 video_count += 1
+            elif mime in _AUDIO_MIME_ALLOWED:
+                audio_count += 1
             elif mime in _IMAGE_MIME_ALLOWED:
                 image_count += 1
         if image_count > _MAX_IMAGES_PER_MESSAGE:
             return [], "too_many_images"
         if video_count > _MAX_VIDEOS_PER_MESSAGE:
             return [], "too_many_videos"
+        if audio_count > _MAX_AUDIO_PER_MESSAGE:
+            return [], "too_many_audios"
 
         media_dir = get_media_dir("websocket")
         paths: list[str] = []
@@ -1032,7 +1060,13 @@ class WebSocketChannel(BaseChannel):
             if mime not in _UPLOAD_MIME_ALLOWED:
                 return _abort("mime")
             is_video = mime in _VIDEO_MIME_ALLOWED
-            max_bytes = _MAX_VIDEO_BYTES if is_video else _MAX_IMAGE_BYTES
+            is_audio = mime in _AUDIO_MIME_ALLOWED
+            if is_video:
+                max_bytes = _MAX_VIDEO_BYTES
+            elif is_audio:
+                max_bytes = _MAX_AUDIO_BYTES
+            else:
+                max_bytes = _MAX_IMAGE_BYTES
             try:
                 saved = save_base64_data_url(
                     data_url, media_dir, max_bytes=max_bytes,
