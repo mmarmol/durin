@@ -292,12 +292,112 @@ class OfficialMcpRegistry:
         return servers, (data.get("metadata") or {}).get("nextCursor")
 
 
+def _normalize_github_server(obj: dict) -> dict:
+    """Map a GitHub MCP Registry server object to the official ``server.json`` shape.
+
+    The GitHub registry (``api.mcp.github.com``) uses snake_case package fields and a
+    lighter schema; normalising lets ``parse_server_json`` / ``_hit_from_server`` consume
+    it unchanged.
+    """
+    s = obj.get("server", obj)
+    pkgs = []
+    for p in s.get("packages") or []:
+        pkgs.append({
+            "registryType": p.get("registry_name") or p.get("registryType", ""),
+            "identifier": p.get("name") or p.get("identifier", ""),
+            "version": p.get("version", ""),
+            "runtimeHint": p.get("runtime_hint") or p.get("runtimeHint", ""),
+            "transport": p.get("transport") or {"type": "stdio"},
+            "runtimeArguments": p.get("runtime_arguments") or p.get("runtimeArguments") or [],
+            "packageArguments": p.get("package_arguments") or p.get("packageArguments") or [],
+            "environmentVariables": (
+                p.get("environment_variables") or p.get("environmentVariables") or []
+            ),
+        })
+    remotes = []
+    for r in s.get("remotes") or []:
+        remotes.append({
+            "type": r.get("type") or r.get("transport_type", ""),
+            "url": r.get("url", ""),
+            "headers": r.get("headers") or [],
+        })
+    vd = s.get("version_detail") or {}
+    return {
+        "name": s.get("name", ""),
+        "description": s.get("description", ""),
+        "repository": s.get("repository") or {},
+        "version": s.get("version") or vd.get("version", ""),
+        "packages": pkgs,
+        "remotes": remotes,
+    }
+
+
+class GithubMcpRegistry:
+    """Adapter for GitHub's curated MCP registry (``api.mcp.github.com``).
+
+    GitHub vets this set (its servers carry a ``verified`` signal in the catalog). The
+    list is small (~hundreds) and its ``search`` param is non-functional, so ``describe``
+    fetches the full list once, indexes it by name, and serves install metadata from
+    there (normalised to the official ``server.json`` shape).
+    """
+
+    name = "github"
+    BASE = "https://api.mcp.github.com"
+
+    def __init__(self, http=None) -> None:
+        self._http = http or _DefaultHTTP()
+        self._by_name: dict[str, dict] | None = None
+
+    async def _index(self) -> dict[str, dict]:
+        if self._by_name is None:
+            self._by_name = {}
+            async for server in self._iter_servers():
+                norm = _normalize_github_server(server)
+                if norm["name"]:
+                    self._by_name[norm["name"]] = norm
+        return self._by_name
+
+    async def _iter_servers(self):
+        cursor = None
+        for _ in range(100):  # hard page cap — backstop, not a real bound
+            params: dict = {"limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            url = f"{self.BASE}/v0/servers?{urllib.parse.urlencode(params)}"
+            try:
+                data = await self._http.get_json(url)
+            except Exception:  # noqa: BLE001
+                return
+            for e in data.get("servers") or []:
+                yield e.get("server") or e
+            cursor = (data.get("metadata") or {}).get("next_cursor")
+            if not cursor:
+                return
+
+    async def search(self, query: str, *, limit: int) -> list[McpServerHit]:
+        index = await self._index()
+        return [_hit_from_server(s, registry=self.name) for s in list(index.values())[:limit]]
+
+    async def describe(self, ref: str) -> McpServerDetail | None:
+        index = await self._index()
+        obj = index.get(ref)
+        return parse_server_json(obj) if obj else None
+
+    async def fetch_page(self, *, cursor: str | None = None, updated_since: str | None = None):
+        params: dict = {"limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        data = await self._http.get_json(f"{self.BASE}/v0/servers?{urllib.parse.urlencode(params)}")
+        servers = [_normalize_github_server(e.get("server") or e) for e in (data.get("servers") or [])]
+        return servers, (data.get("metadata") or {}).get("next_cursor")
+
+
 def build_mcp_adapters(registries) -> list:
     """Instantiate enabled registry adapters (mirror of ``skill_registry.build_adapters``).
 
-    v1: only ``official``. mpak is a fast-follow — its trust score lives in a native
-    endpoint, not the spec-compatible ``/v0.1/servers`` — so it is intentionally not
-    built here even if configured.
+    ``official`` is the broad install-grade source; ``github`` is GitHub's curated set
+    (used as the ``verified`` tier + an install fallback for servers only GitHub lists).
+    ``official`` is built first so its richer metadata wins on ``describe``.
     """
     out: list = []
     for r in registries:
@@ -306,6 +406,7 @@ def build_mcp_adapters(registries) -> list:
         if r.kind == "official":
             out.append(OfficialMcpRegistry())
         # elif r.kind == "mpak": out.append(MpakRegistry())  # fast-follow
+    out.append(GithubMcpRegistry())  # curated fallback — always on (no token, public API)
     return out
 
 

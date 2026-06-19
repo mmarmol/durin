@@ -86,7 +86,9 @@ _GH_META = {
 }
 
 
-def _fake_fetch_repo_meta(repo_keys, *, token, post=None, batch=80):
+def _fake_fetch_repo_meta(repo_keys):
+    # The real seam closes over its own token/HTTP client; build_catalog calls it with
+    # ONLY the keys (it must NOT pass a token — doing so once disabled all enrichment).
     return {k: _GH_META.get(k, GithubMeta(stars=None)) for k in repo_keys}
 
 
@@ -206,9 +208,9 @@ def test_fetch_repo_meta_called_once_with_unique_repos():
     """fetch_repo_meta is called once (not per-page) with deduplicated repo keys."""
     calls = []
 
-    def tracking_fetch(repo_keys, *, token, post=None, batch=80):
+    def tracking_fetch(repo_keys):
         calls.append(list(repo_keys))
-        return _fake_fetch_repo_meta(repo_keys, token=token, post=post, batch=batch)
+        return _fake_fetch_repo_meta(repo_keys)
 
     build_catalog(
         fetch_page=_fake_fetch_page,
@@ -244,7 +246,7 @@ def test_mixed_case_repo_url_enriched():
         return ([_SERVER_MIXED_CASE], None)
 
     # fetch_repo_meta returns lowercased keys — mirrors real implementation
-    def fetch_meta_lowercased(repo_keys, *, token, post=None, batch=80):
+    def fetch_meta_lowercased(repo_keys):
         return {
             ("chromedevtools", "chrome-devtools-mcp"): GithubMeta(
                 stars=43982,
@@ -326,7 +328,7 @@ def test_pagination_gives_up_after_attempts():
 def test_min_resolved_fraction_guard():
     """build_catalog raises ValueError when stars resolution is below the threshold."""
     # fetch_repo_meta returns stars=None for all repos — simulates a failed GraphQL batch
-    def no_stars_meta(repo_keys, *, token, post=None, batch=80):
+    def no_stars_meta(repo_keys):
         return {k: GithubMeta(stars=None) for k in repo_keys}
 
     # Two servers that both have repos → 0% resolved → should raise
@@ -352,3 +354,64 @@ def test_min_resolved_fraction_guard():
         sleep=lambda _: None,
     )
     assert len(result["servers"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Verified tier merge (GitHub-curated set)
+# ---------------------------------------------------------------------------
+
+def test_verified_flag_and_github_only_servers_merged():
+    """fetch_verified flags matching official rows AND adds servers only GitHub lists."""
+    def _verified():
+        return [
+            # already in the official fake page (github-mcp-server) → should be flagged
+            {"name": "io.github.github/github-mcp-server", "description": "GitHub MCP Server",
+             "packages": [{"registryType": "oci", "identifier": "ghcr.io/x:1"}], "remotes": [],
+             "repository": {"url": "https://github.com/github/github-mcp-server"}},
+            # NOT in the official page → should be appended as a new verified row
+            {"name": "com.figma.mcp/mcp", "description": "Figma MCP", "packages": [],
+             "remotes": [{"type": "streamable-http", "url": "https://figma.example/mcp"}],
+             "repository": {"url": "https://github.com/figma/mcp"}},
+        ]
+
+    result = build_catalog(
+        fetch_page=_fake_fetch_page,
+        fetch_repo_meta=_fake_fetch_repo_meta,
+        now=_NOW,
+        fetch_verified=_verified,
+    )
+    by_name = {s["name"]: s for s in result["servers"]}
+    assert by_name["io.github.github/github-mcp-server"]["verified"] is True
+    assert "com.figma.mcp/mcp" in by_name           # github-only server added
+    assert by_name["com.figma.mcp/mcp"]["verified"] is True
+    # a server NOT in the verified set stays unverified
+    assert by_name["com.stripe/agent-toolkit"]["verified"] is False
+
+
+def test_no_fetch_verified_leaves_all_unverified():
+    result = build_catalog(
+        fetch_page=_fake_fetch_page, fetch_repo_meta=_fake_fetch_repo_meta, now=_NOW)
+    assert all(s["verified"] is False for s in result["servers"])
+
+
+def test_build_catalog_calls_fetch_repo_meta_with_keys_only():
+    """Regression: build_catalog must call fetch_repo_meta(keys) and NOT inject a token —
+    passing token="" once silently disabled all star enrichment (rows came back stars=None).
+    A token-respecting seam (like main()'s real closure) proves stars actually land."""
+    calls = {}
+
+    def token_respecting_fetch(repo_keys):
+        # Mimics main()'s closure: it has a (captured) token, so it returns real stars.
+        # If build_catalog ever passes extra args, this 1-arg signature raises TypeError.
+        calls["keys"] = list(repo_keys)
+        return {k: GithubMeta(stars=4242) for k in repo_keys}
+
+    result = build_catalog(
+        fetch_page=_fake_fetch_page,
+        fetch_repo_meta=token_respecting_fetch,
+        now=_NOW,
+    )
+    enriched = [s for s in result["servers"] if s["repo_url"]]
+    assert enriched, "fixture must include servers with a github repo"
+    assert all(s["stars"] == 4242 for s in enriched)  # enrichment actually applied
+    assert calls["keys"]  # fetch_repo_meta was invoked with the repo keys

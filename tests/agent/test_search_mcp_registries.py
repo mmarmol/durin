@@ -17,12 +17,14 @@ def _seed(monkeypatch, servers):
     monkeypatch.setattr(mcp_catalog_store, "load_servers", lambda: servers)
 
 
-def test_build_adapters_only_enabled_official():
+def test_build_adapters_enabled_official_plus_github():
     ads = build_mcp_adapters([
         McpRegistryConfig(name="official", kind="official"),
         McpRegistryConfig(name="mpak", kind="mpak", enabled=False),
     ])
-    assert [a.name for a in ads] == ["official"]
+    # official is built (mpak disabled → skipped); github's curated registry is always
+    # appended as the verified tier + install fallback (public API, no token).
+    assert [a.name for a in ads] == ["official", "github"]
 
 
 @pytest.mark.asyncio

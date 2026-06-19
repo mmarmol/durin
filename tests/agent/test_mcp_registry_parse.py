@@ -79,3 +79,54 @@ def test_parse_oci_passes_through_non_env_runtime_args():
     })
     assert d.packages[0].runtime_arguments == ["--network", "host", "--verbose"]
     assert d.packages[0].env == []
+
+
+def test_normalize_github_server_snake_to_camel():
+    from durin.agent.mcp_registry import _normalize_github_server, parse_server_json
+    norm = _normalize_github_server({
+        "name": "microsoft/markitdown", "description": "Markdown tools",
+        "repository": {"url": "https://github.com/microsoft/markitdown"},
+        "packages": [{"name": "markitdown-mcp", "registry_name": "pypi",
+                      "runtime_hint": "uvx", "version": "0.0.1"}],
+    })
+    d = parse_server_json(norm)
+    assert d.name == "microsoft/markitdown"
+    assert d.repository == "https://github.com/microsoft/markitdown"
+    pkg = d.packages[0]
+    assert pkg.registry_type == "pypi"
+    assert pkg.identifier == "markitdown-mcp"
+    assert pkg.runtime_hint == "uvx"
+
+
+class _FakeHttp:
+    def __init__(self, payload):
+        self._payload = payload
+    async def get_json(self, url):
+        return self._payload
+
+
+def test_github_registry_describe_finds_by_name():
+    import asyncio
+
+    from durin.agent.mcp_registry import GithubMcpRegistry
+    payload = {"servers": [
+        {"server": {"name": "com.figma.mcp/mcp", "description": "Figma",
+                    "repository": {"url": "https://github.com/figma/mcp"},
+                    "packages": [{"name": "figma-mcp", "registry_name": "npm",
+                                  "runtime_hint": "npx", "version": "1.0.0"}]}},
+    ], "metadata": {"next_cursor": None}}
+    reg = GithubMcpRegistry(http=_FakeHttp(payload))
+    detail = asyncio.run(reg.describe("com.figma.mcp/mcp"))
+    assert detail is not None
+    assert detail.packages[0].runtime_hint == "npx"
+    assert asyncio.run(reg.describe("does/not-exist")) is None
+
+
+def test_build_mcp_adapters_includes_github():
+    from durin.agent.mcp_registry import build_mcp_adapters
+
+    class _R:
+        kind = "official"
+        enabled = True
+    names = [type(a).__name__ for a in build_mcp_adapters([_R()])]
+    assert "GithubMcpRegistry" in names

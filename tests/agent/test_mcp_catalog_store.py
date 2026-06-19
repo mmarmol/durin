@@ -5,9 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
-
 FLOOR_SERVERS_COUNT = 5  # mcp_catalog.json currently has 5 entries
 
 
@@ -412,3 +409,66 @@ class TestSearchRelevance:
         refs = [r.ref for r in results]
 
         assert "com.microsoft/azure" in refs
+
+
+# ---------------------------------------------------------------------------
+# Verified (GitHub-curated) tier: ranking, gate, aliases
+# ---------------------------------------------------------------------------
+
+
+class TestVerifiedTierAndAliases:
+    def _servers(self):
+        return [
+            {"name": "verified-low", "ref": "x/verified-low", "description": "a tool",
+             "kind": "local", "stars": 3, "official": False, "verified": True},
+            {"name": "official-mid", "ref": "x/official-mid", "description": "a tool",
+             "kind": "local", "stars": 800, "official": True, "verified": False},
+            {"name": "community-high", "ref": "x/community-high", "description": "a tool",
+             "kind": "local", "stars": 5000, "official": False, "verified": False},
+        ]
+
+    def test_verified_ranks_before_official_and_high_stars(self, monkeypatch):
+        from durin.agent import mcp_catalog_store
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", self._servers)
+        names = [r.name for r in mcp_catalog_store.search("tool", limit=10)]
+        assert names[0] == "verified-low"          # verified first despite 3 stars
+        assert names.index("official-mid") < names.index("community-high")
+
+    def test_verified_passes_gate_with_zero_stars(self, monkeypatch):
+        from durin.agent import mcp_catalog_store
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", lambda: [
+            {"name": "v0", "ref": "x/v0", "description": "thing", "kind": "local",
+             "stars": 0, "official": False, "verified": True},
+        ])
+        names = [r.name for r in mcp_catalog_store.search("thing", limit=10)]
+        assert names == ["v0"]  # verified survives the default gate
+
+    def test_verified_signal_carried(self, monkeypatch):
+        from durin.agent import mcp_catalog_store
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", self._servers)
+        hit = mcp_catalog_store.search("verified-low", limit=1)[0]
+        assert hit.signals["verified"] is True
+
+    def test_low_star_only_category_is_gated_empty_then_shown_by_show_all(self, monkeypatch):
+        """A category with only low-star, non-official, non-verified matches is empty under
+        the default gate (no junk by default) but returned by quality='all' (Show all)."""
+        from durin.agent import mcp_catalog_store
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", lambda: [
+            {"name": "obscure-a", "ref": "x/obscure-a", "description": "obscure tool",
+             "kind": "local", "stars": 12, "official": False, "verified": False},
+        ])
+        assert mcp_catalog_store.search("obscure", limit=10) == []           # gated
+        widened = mcp_catalog_store.search("obscure", limit=10, quality="all")
+        assert [r.name for r in widened] == ["obscure-a"]                    # Show all
+
+    def test_alias_jira_matches_atlassian_by_brand(self, monkeypatch):
+        """Atlassian's official server never says 'jira' (desc is 'Atlassian Rovo MCP
+        Server') — the capability alias must still surface it."""
+        from durin.agent import mcp_catalog_store
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", lambda: [
+            {"name": "atlassian-mcp-server", "ref": "com.atlassian/atlassian-mcp-server",
+             "description": "Atlassian Rovo MCP Server", "kind": "remote",
+             "stars": 0, "official": False, "verified": True},
+        ])
+        names = [r.name for r in mcp_catalog_store.search("jira", limit=10)]
+        assert "atlassian-mcp-server" in names

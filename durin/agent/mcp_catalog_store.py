@@ -70,10 +70,21 @@ def _name_segment(ref_or_name: str) -> str:
     return ref_or_name.rsplit("/", 1)[-1].lower()
 
 
+# Capability synonyms: a query on the left also matches servers mentioning any term on
+# the right. Vendor/official servers describe themselves by brand, not capability — e.g.
+# Atlassian's server is literally "Atlassian Rovo MCP Server" and never says "jira" — so
+# a capability query would miss it without this. Kept tiny and brand-grounded on purpose.
+_ALIASES = {
+    "jira": ("atlassian",),
+    "confluence": ("atlassian",),
+    "bitbucket": ("atlassian",),
+}
+
+
 def _matches(query_lc: str, s: dict) -> bool:
     """Return True when query_lc is a meaningful match for server *s*.
 
-    A server matches when query_lc is a SUBSTRING of any of:
+    A server matches when query_lc (or one of its capability aliases) is a SUBSTRING of:
     - the name segment (part of ref/name after the last '/')
     - owner_login
     - description
@@ -89,15 +100,13 @@ def _matches(query_lc: str, s: dict) -> bool:
     owner = (s.get("owner_login") or "").lower()
     topics = [t.lower() for t in (s.get("topics") or [])]
 
-    if query_lc in name_seg:
-        return True
-    if query_lc in owner:
-        return True
-    if query_lc in desc:
-        return True
-    if any(query_lc in topic for topic in topics):
-        return True
-    # Typo fallback — only against the short name segment
+    terms = (query_lc, *_ALIASES.get(query_lc, ()))
+    for term in terms:
+        if term in name_seg or term in owner or term in desc:
+            return True
+        if any(term in topic for topic in topics):
+            return True
+    # Typo fallback — only against the short name segment, only for the raw query
     if SequenceMatcher(None, query_lc, name_seg).ratio() > 0.8:
         return True
     return False
@@ -105,7 +114,7 @@ def _matches(query_lc: str, s: dict) -> bool:
 
 _SIGNAL_KEYS = (
     "stars", "owner_login", "owner_url", "owner_avatar",
-    "topics", "language", "license", "official", "repo_url",
+    "topics", "language", "license", "official", "verified", "repo_url",
 )
 
 
@@ -126,24 +135,33 @@ def search(
     gated = quality != "all"
     query_lc = query.lower()
 
-    scored: list[tuple[float, int, dict]] = []
-    for s in servers:
-        if not _matches(query_lc, s):
-            continue
-        stars = s.get("stars") or 0
-        official = bool(s.get("official"))
-        if gated and not (stars > min_stars or official):
-            continue
-        scored.append((1.0, stars if stars else -1, s))
+    matched = [s for s in servers if _matches(query_lc, s)]
 
-    scored.sort(key=lambda t: (t[1], t[0]), reverse=True)
+    def _passes_gate(s: dict) -> bool:
+        return (
+            bool(s.get("verified"))
+            or bool(s.get("official"))
+            or (s.get("stars") or 0) > min_stars
+        )
+
+    pool = [s for s in matched if _passes_gate(s)] if gated else matched
+    # No "show junk when empty" fallback: the verified tier (GitHub-curated) + capability
+    # aliases keep the popular categories non-empty under the gate (jira→atlassian-verified,
+    # postgres→pgEdge), and genuinely thin/low-quality categories degrade to the explicit
+    # "Show all" toggle rather than surfacing junk by default.
+
+    # Rank: verified (GitHub-curated) first, then first-party official, then by stars.
+    pool.sort(
+        key=lambda s: (bool(s.get("verified")), bool(s.get("official")), s.get("stars") or 0),
+        reverse=True,
+    )
 
     hits = []
-    for _, _, s in scored[:limit]:
+    for s in pool[:limit]:
         hits.append(McpServerHit(
             name=s["name"],
             ref=s.get("ref") or s["name"],
-            registry="official",
+            registry="github" if s.get("verified") else "official",
             kind=s.get("kind", "local"),
             description=s.get("description", ""),
             signals={k: s[k] for k in _SIGNAL_KEYS if k in s},

@@ -58,14 +58,18 @@ def build_catalog(
     now: str,
     min_resolved_fraction: float = 0.0,
     sleep=time.sleep,
+    fetch_verified=None,
 ) -> dict:
     """Paginate the registry, enrich with GitHub metadata, and return the catalog dict.
 
     Args:
         fetch_page: callable(*, cursor, updated_since) -> (list[server_dict], next_cursor|None).
                     Mirrors OfficialMcpRegistry.fetch_page (sync wrapper expected for CI script).
-        fetch_repo_meta: callable(repo_keys, *, token, post, batch) -> dict[tuple, GithubMeta].
-                         Called ONCE with all unique GitHub repo keys.
+        fetch_repo_meta: callable(repo_keys) -> dict[tuple, GithubMeta]. Called ONCE with
+                         all unique GitHub repo keys. The callable owns its own GitHub
+                         token/HTTP client (closed over by main()) — build_catalog does NOT
+                         pass a token (passing token="" here once silently disabled all star
+                         enrichment; a token-ignoring test fake hid it).
         now: ISO-8601 timestamp string injected by the caller (tests supply a fixed value).
         min_resolved_fraction: If > 0.0, raise ValueError when the fraction of servers
                                (that have a github repo) whose stars is not None is below
@@ -87,11 +91,21 @@ def build_catalog(
         if not cursor:
             break
 
-    # --- Collect unique GitHub repo keys ---
+    # --- GitHub-curated "verified" set: names + any servers only GitHub lists ---
+    verified_servers: list[dict] = list(fetch_verified()) if fetch_verified else []
+    verified_names = {s.get("name", "") for s in verified_servers if s.get("name")}
+    official_names = {s.get("name", "") for s in all_servers}
+    extra = [
+        s for s in verified_servers
+        if s.get("name") and s["name"] not in official_names
+    ]
+    combined = all_servers + extra
+
+    # --- Collect unique GitHub repo keys (over official + verified-only) ---
     server_repo_keys: list[tuple[str, str] | None] = []
     unique_keys: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
-    for s in all_servers:
+    for s in combined:
         raw = parse_repo_url(_repo_url(s))
         key = (raw[0].lower(), raw[1].lower()) if raw else None
         server_repo_keys.append(key)
@@ -102,11 +116,11 @@ def build_catalog(
     # --- Enrich: one call over all unique keys ---
     meta_by_key: dict[tuple[str, str], GithubMeta] = {}
     if unique_keys:
-        meta_by_key = fetch_repo_meta(unique_keys, token="")
+        meta_by_key = fetch_repo_meta(unique_keys)
 
     # --- Build output rows ---
     rows: list[dict] = []
-    for s, repo_key in zip(all_servers, server_repo_keys):
+    for s, repo_key in zip(combined, server_repo_keys):
         meta: GithubMeta = meta_by_key.get(repo_key) if repo_key else None
         if meta is None:
             meta = GithubMeta(stars=None)
@@ -130,6 +144,7 @@ def build_catalog(
             "language": meta.language,
             "license": meta.license,
             "official": official,
+            "verified": s.get("name", "") in verified_names,
             "repo_url": _repo_url(s),
         })
 
@@ -162,16 +177,28 @@ def main() -> None:
     import httpx
 
     from durin.agent.mcp_github import _GQL, resolve_token
-    from durin.agent.mcp_registry import OfficialMcpRegistry
+    from durin.agent.mcp_registry import GithubMcpRegistry, OfficialMcpRegistry
 
     token = resolve_token()
     if not token:
         print("No GitHub token found — enrichment will be empty.", file=sys.stderr)
 
     registry = OfficialMcpRegistry()
+    gh_registry = GithubMcpRegistry()
 
     def sync_fetch_page(*, cursor=None, updated_since=None):
         return asyncio.run(registry.fetch_page(cursor=cursor, updated_since=updated_since))
+
+    def sync_fetch_verified():
+        """Crawl GitHub's curated registry → normalized server dicts (the verified tier)."""
+        out: list = []
+        cursor = None
+        while True:
+            servers, cursor = asyncio.run(gh_registry.fetch_page(cursor=cursor))
+            out.extend(servers)
+            if not cursor:
+                break
+        return out
 
     from durin.agent.mcp_github import fetch_repo_meta as _fetch_repo_meta
 
@@ -198,9 +225,10 @@ def main() -> None:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         catalog = build_catalog(
             fetch_page=sync_fetch_page,
-            fetch_repo_meta=lambda keys, *, token=token, **kw: enriching_fetch(keys, token=token, **kw),
+            fetch_repo_meta=lambda keys: enriching_fetch(keys, token=token),
             now=now,
             min_resolved_fraction=0.8,
+            fetch_verified=sync_fetch_verified,
         )
 
     out_path = Path(__file__).parent / "data" / "mcp_catalog.json"

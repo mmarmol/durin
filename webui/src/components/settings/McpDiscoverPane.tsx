@@ -79,6 +79,31 @@ function OfficialBadge({ label }: { label: string }) {
   );
 }
 
+// GitHub-curated tier — a stronger signal than the heuristic "Official" flag, so it gets
+// a solid (vs tinted) chip to sit above Official in the visual hierarchy.
+function VerifiedBadge({ label }: { label: string }) {
+  return (
+    <span className="inline-flex items-center gap-0.5 rounded-full bg-primary px-2 py-0.5 text-[10px] font-medium text-primary-foreground">
+      <svg
+        className="size-2.5"
+        viewBox="0 0 10 10"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        aria-hidden
+      >
+        <path
+          d="M2 5l2 2 4-4"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      {label}
+    </span>
+  );
+}
+
 function KindChip({ kind, tx }: { kind: string; tx: (k: string) => string }) {
   const label =
     kind === "remote"
@@ -251,6 +276,7 @@ export function McpDiscoverPane({
     const language = selectedHit?.signals.language as string | undefined;
     const license = selectedHit?.signals.license as string | undefined;
     const isOfficial = selectedHit?.signals.official as boolean | undefined;
+    const isVerified = selectedHit?.signals.verified as boolean | undefined;
     const topics = (selectedHit?.signals.topics as string[] | undefined) ?? [];
     const repoUrl =
       detail.repository || (selectedHit?.signals.repo_url as string | undefined);
@@ -273,7 +299,11 @@ export function McpDiscoverPane({
           <div className="min-w-0 flex-1 space-y-0.5">
             <div className="flex flex-wrap items-center gap-1.5">
               <h3 className="text-[15px] font-medium text-foreground">{detail.name}</h3>
-              {isOfficial ? <OfficialBadge label={tx("official")} /> : null}
+              {isVerified ? (
+                <VerifiedBadge label={tx("verified")} />
+              ) : isOfficial ? (
+                <OfficialBadge label={tx("official")} />
+              ) : null}
               {detail.version ? (
                 <span className="text-[11px] text-muted-foreground">v{detail.version}</span>
               ) : null}
@@ -480,6 +510,7 @@ export function McpDiscoverPane({
           const ownerAvatar = h.signals.owner_avatar as string | undefined;
           const language = h.signals.language as string | undefined;
           const isOfficial = h.signals.official as boolean | undefined;
+          const isVerified = h.signals.verified as boolean | undefined;
           const topics = (h.signals.topics as string[] | undefined) ?? [];
 
           return (
@@ -499,7 +530,11 @@ export function McpDiscoverPane({
                 {/* Line 1: name + official badge */}
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="text-[13px] font-medium text-foreground">{h.name}</span>
-                  {isOfficial ? <OfficialBadge label={tx("official")} /> : null}
+                  {isVerified ? (
+                    <VerifiedBadge label={tx("verified")} />
+                  ) : isOfficial ? (
+                    <OfficialBadge label={tx("official")} />
+                  ) : null}
                 </div>
 
                 {/* Line 2: @owner · language · kind chip */}
