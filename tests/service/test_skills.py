@@ -214,7 +214,7 @@ async def test_judge_runs_on_quarantined_skill(tmp_path: Path, monkeypatch: pyte
     ws = _make_workspace(tmp_path)
     _make_quarantine(ws, "cand")
     monkeypatch.setattr(
-        "durin.memory.llm_invoke.default_llm_invoke",
+        "durin.memory.llm_invoke.judge_llm_invoke",
         lambda prompt, *, model=None: "===FINDINGS===\n===END===\n",
     )
     svc = _svc(ws)
