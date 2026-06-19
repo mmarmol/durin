@@ -246,6 +246,22 @@ async def test_approve_without_confirm_raises_conflict(tmp_path: Path) -> None:
     assert "refused" in exc.value.details
 
 
+async def test_approve_with_install_deps_does_not_500(tmp_path: Path) -> None:
+    """Regression: approve with install_deps=True (what the webui's approve button
+    sends) built the exec tool ctx from the top-level Config, but ExecTool.create
+    reads ctx.config.exec — a ToolsConfig field — so it raised AttributeError →
+    HTTP 500. _get_exec_run must hand ExecTool the tools sub-config."""
+    ws = _make_workspace(tmp_path)
+    _make_quarantine(ws, "cand")
+    svc = _svc(ws)
+    result = await svc.approve(
+        SkillApproveCommand(name="cand", confirm=True, install_deps=True),
+        Principal.local(),
+    )
+    assert result.data.get("ok") is True
+    assert result.data.get("deps_results") == []  # no specs → empty, never a 500
+
+
 async def test_resolve_lists_local_candidates(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     src = tmp_path / "src" / "myskill"
