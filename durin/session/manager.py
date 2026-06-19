@@ -338,7 +338,7 @@ class SessionManager:
         return self.sessions_dir / f"{self.safe_key(key)}.jsonl"
 
     def _get_legacy_session_path(self, key: str) -> Path:
-        """Legacy global session path (~/.durin/sessions/)."""
+        """Legacy session path under the instance home (``<DURIN_HOME>/sessions/``)."""
         return self.legacy_sessions_dir / f"{self.safe_key(key)}.jsonl"
 
     def exists(self, key: str) -> bool:
