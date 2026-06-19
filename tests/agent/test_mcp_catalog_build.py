@@ -267,3 +267,88 @@ def test_mixed_case_repo_url_enriched():
     s = result["servers"][0]
     assert s["stars"] == 43982, f"Expected stars=43982, got {s['stars']} (lookup missed due to case mismatch)"
     assert s["official"] is True  # Organization + >1000 stars
+
+
+# ---------------------------------------------------------------------------
+# Retry + fail-loud tests
+# ---------------------------------------------------------------------------
+
+def test_pagination_retries_transient():
+    """A single ReadTimeout on fetch_page is retried; build_catalog completes."""
+    import httpx
+
+    call_count = 0
+
+    def flaky_fetch_page(*, cursor=None, updated_since=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise httpx.ReadTimeout("transient timeout")
+        # Second call succeeds with a single-page result
+        return ([_SERVER_WITH_REPO], None)
+
+    result = build_catalog(
+        fetch_page=flaky_fetch_page,
+        fetch_repo_meta=_fake_fetch_repo_meta,
+        now=_NOW,
+        sleep=lambda _: None,
+    )
+    assert len(result["servers"]) == 1
+    assert result["servers"][0]["name"] == _SERVER_WITH_REPO["name"]
+    assert call_count == 2  # one failure + one success
+
+
+def test_pagination_gives_up_after_attempts():
+    """fetch_page always raising exhausts all retry attempts and re-raises."""
+    import httpx
+
+    call_count = 0
+
+    def always_fail(*, cursor=None, updated_since=None):
+        nonlocal call_count
+        call_count += 1
+        raise httpx.ReadTimeout("always fails")
+
+    try:
+        build_catalog(
+            fetch_page=always_fail,
+            fetch_repo_meta=_fake_fetch_repo_meta,
+            now=_NOW,
+            sleep=lambda _: None,
+        )
+        assert False, "Expected an exception"
+    except httpx.ReadTimeout:
+        pass
+
+    assert call_count == 4, f"Expected 4 attempts (default), got {call_count}"
+
+
+def test_min_resolved_fraction_guard():
+    """build_catalog raises ValueError when stars resolution is below the threshold."""
+    # fetch_repo_meta returns stars=None for all repos — simulates a failed GraphQL batch
+    def no_stars_meta(repo_keys, *, token, post=None, batch=80):
+        return {k: GithubMeta(stars=None) for k in repo_keys}
+
+    # Two servers that both have repos → 0% resolved → should raise
+    def two_repo_page(*, cursor=None, updated_since=None):
+        return ([_SERVER_WITH_REPO, _SERVER_BOTH], None)
+
+    import pytest
+    with pytest.raises(ValueError, match="resolution"):
+        build_catalog(
+            fetch_page=two_repo_page,
+            fetch_repo_meta=no_stars_meta,
+            now=_NOW,
+            min_resolved_fraction=0.8,
+            sleep=lambda _: None,
+        )
+
+    # With real stars it should NOT raise
+    result = build_catalog(
+        fetch_page=two_repo_page,
+        fetch_repo_meta=_fake_fetch_repo_meta,
+        now=_NOW,
+        min_resolved_fraction=0.8,
+        sleep=lambda _: None,
+    )
+    assert len(result["servers"]) == 2

@@ -10,9 +10,32 @@ so the store + search layers can consume it without transformation.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from durin.agent.mcp_github import GithubMeta, classify_official, parse_repo_url
+
+_RETRY_ATTEMPTS = 4
+
+
+def _with_retry(fn, *, attempts: int = _RETRY_ATTEMPTS, sleep=time.sleep):
+    """Call fn(); on transient error retry with exponential backoff.
+
+    Retries on httpx.TimeoutException, httpx.TransportError, and OSError.
+    Raises the last exception after exhausting all attempts.
+    """
+    import httpx  # local import — not a new dep
+
+    transient = (httpx.TimeoutException, httpx.TransportError, OSError)
+    last_exc: BaseException | None = None
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except transient as exc:
+            last_exc = exc
+            if attempt < attempts - 1:
+                sleep(2 ** attempt)
+    raise last_exc  # type: ignore[misc]
 
 
 def _kind(server: dict) -> str:
@@ -27,7 +50,14 @@ def _repo_url(server: dict) -> str:
     return (server.get("repository") or {}).get("url", "") or ""
 
 
-def build_catalog(*, fetch_page, fetch_repo_meta, now: str) -> dict:
+def build_catalog(
+    *,
+    fetch_page,
+    fetch_repo_meta,
+    now: str,
+    min_resolved_fraction: float = 0.0,
+    sleep=time.sleep,
+) -> dict:
     """Paginate the registry, enrich with GitHub metadata, and return the catalog dict.
 
     Args:
@@ -36,15 +66,22 @@ def build_catalog(*, fetch_page, fetch_repo_meta, now: str) -> dict:
         fetch_repo_meta: callable(repo_keys, *, token, post, batch) -> dict[tuple, GithubMeta].
                          Called ONCE with all unique GitHub repo keys.
         now: ISO-8601 timestamp string injected by the caller (tests supply a fixed value).
+        min_resolved_fraction: If > 0.0, raise ValueError when the fraction of servers
+                               (that have a github repo) whose stars is not None is below
+                               this threshold. main() passes 0.8.
+        sleep: injectable sleep callable for retry backoff (tests pass lambda _: None).
 
     Returns:
         {"schema_version": 1, "generated_at": now, "servers": [...]}
     """
-    # --- Paginate all servers ---
+    # --- Paginate all servers (with retry on transient errors) ---
     all_servers: list[dict] = []
     cursor = None
     while True:
-        servers, cursor = fetch_page(cursor=cursor, updated_since=None)
+        servers, cursor = _with_retry(
+            lambda c=cursor: fetch_page(cursor=c, updated_since=None),
+            sleep=sleep,
+        )
         all_servers.extend(servers)
         if not cursor:
             break
@@ -95,6 +132,19 @@ def build_catalog(*, fetch_page, fetch_repo_meta, now: str) -> dict:
             "repo_url": _repo_url(s),
         })
 
+    # --- Fail-loud guard: check resolution fraction for servers with a repo ---
+    if min_resolved_fraction > 0.0:
+        with_repo = [r for r, key in zip(rows, server_repo_keys) if key is not None]
+        if with_repo:
+            resolved = sum(1 for r in with_repo if r["stars"] is not None)
+            fraction = resolved / len(with_repo)
+            if fraction < min_resolved_fraction:
+                raise ValueError(
+                    f"Star resolution too low: {resolved}/{len(with_repo)} "
+                    f"({fraction:.1%}) < required {min_resolved_fraction:.1%}. "
+                    "Catalog not written — re-run after GitHub API recovers."
+                )
+
     return {
         "schema_version": 1,
         "generated_at": now,
@@ -127,7 +177,7 @@ def main() -> None:
     # Pooled httpx client: one connection reused across all GraphQL batches.
     with httpx.Client(timeout=40.0) as pooled_client:
 
-        def pooled_post(query: str, tok: str) -> dict:
+        def _raw_post(query: str, tok: str) -> dict:
             resp = pooled_client.post(
                 _GQL,
                 json={"query": query},
@@ -135,6 +185,9 @@ def main() -> None:
             )
             resp.raise_for_status()
             return resp.json()
+
+        def pooled_post(query: str, tok: str) -> dict:
+            return _with_retry(lambda: _raw_post(query, tok))
 
         def enriching_fetch(repo_keys, *, token, post=None, batch=80):
             if not token:
@@ -146,6 +199,7 @@ def main() -> None:
             fetch_page=sync_fetch_page,
             fetch_repo_meta=lambda keys, *, token=token, **kw: enriching_fetch(keys, token=token, **kw),
             now=now,
+            min_resolved_fraction=0.8,
         )
 
     out_path = Path(__file__).parent / "data" / "mcp_catalog.json"
