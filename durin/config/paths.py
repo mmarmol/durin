@@ -66,21 +66,21 @@ def is_default_workspace(workspace: str | Path | None) -> bool:
 
 
 def get_cli_history_path() -> Path:
-    """Return the shared CLI history file path."""
+    """CLI history file, under the active instance home (``DURIN_HOME``)."""
     from durin.config.home import durin_home
 
     return durin_home() / "history" / "cli_history"
 
 
 def get_bridge_install_dir() -> Path:
-    """Return the shared WhatsApp bridge installation directory."""
+    """WhatsApp bridge install dir, under the active instance home (``DURIN_HOME``)."""
     from durin.config.home import durin_home
 
     return durin_home() / "bridge"
 
 
 def get_legacy_sessions_dir() -> Path:
-    """Return the legacy global session directory used for migration fallback."""
+    """Legacy session dir (migration fallback), under the active instance home."""
     from durin.config.home import durin_home
 
     return durin_home() / "sessions"

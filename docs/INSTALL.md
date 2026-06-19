@@ -132,11 +132,23 @@ durin config set providers.zhipu.api_key sk-...
 durin keeps a single canonical config at `~/.durin/config.json`, validated by
 the Pydantic `Config` schema in [durin/config/schema.py](../durin/config/schema.py).
 
-> **`DURIN_HOME`** — set this env var to relocate the entire home data root
-> (`config.json`, `secrets.json`, sessions, workspace, history, …) somewhere
-> other than `~/.durin`. Unset, behavior is unchanged. Use it to keep a dev
-> (editable) install from sharing state with a daily (pipx) install, e.g.
-> `DURIN_HOME=~/.durin-dev durin status`.
+> **`DURIN_HOME` — durin is multi-instance.** A durin *instance* is a
+> self-contained data root selected by this env var; everything is relative to
+> it (`config.json` incl. ports, `secrets.json` incl. OAuth tokens, memory,
+> sessions, workspace, runtime). Unset → `~/.durin`. Each context is just an
+> instance:
+>
+> - **Daily / release:** unset → `~/.durin`.
+> - **Dev (editable):** `DURIN_HOME=~/.durin-dev durin …` — its own config,
+>   keys and memory, independent of your daily one. Two gateways run
+>   side-by-side: the second auto-picks a free port when the configured one is
+>   taken (it logs the chosen port; `durin gateway status` reports the live URL).
+> - **Tests:** each test runs in a throwaway `DURIN_HOME` (the suite never
+>   touches `~/.durin`).
+>
+> The only things shared across instances are immutable caches that are not
+> instance state — the embedding model-weights cache (`~/.cache/huggingface`)
+> and the package code.
 
 ### Inspect
 

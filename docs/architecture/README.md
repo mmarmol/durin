@@ -185,9 +185,34 @@ tests/
 
 Current: **~5660 tests** (Python, `def test_` count) + **~140** (webui).
 
+**Instance isolation:** an autouse `conftest` fixture runs every test in a
+throwaway `DURIN_HOME` (a per-test temp dir), so the suite never touches
+`~/.durin` — no collision with a running daily daemon, hermetic under any
+ambient `DURIN_HOME`.
+
 ---
 
-## Last updated: 2026-06-07 (doc/code sync: module map + cross-links; design rationale folded back from archive)
+## 5. Home & instances (`DURIN_HOME`)
+
+durin is **multi-instance**. An instance is a self-contained data root selected
+by the `DURIN_HOME` env var (unset → `~/.durin`); see
+[durin/config/home.py](../../durin/config/home.py). Everything that is instance
+state is relative to that root: config (incl. ports), `secrets.json` (incl.
+OAuth tokens via the secret store), the memory store + vector index, sessions,
+workspace, and runtime (telemetry/logs/cron/media/webui).
+
+- **Daily/release** = unset (`~/.durin`); **dev** = a second `DURIN_HOME`;
+  **tests** = throwaway temp homes.
+- Two gateways run side-by-side: the second auto-picks a free port when the
+  configured one is taken ([durin/utils/net.py](../../durin/utils/net.py)) and
+  records its live dashboard URL in `gateway-runtime.json`.
+- The only things outside an instance root are immutable shared caches that are
+  not instance state — the embedding model-weights cache (`~/.cache/huggingface`)
+  and the package code/bundled webui.
+
+---
+
+## Last updated: 2026-06-19 (DURIN_HOME multi-instance model: per-test isolation, port auto-pick, instance contract)
 
 > Doc history: this used to be a single 1000-line file. May 23, 2026 split it
 > into per-component docs (siblings of this index, plus the `memory/` and
