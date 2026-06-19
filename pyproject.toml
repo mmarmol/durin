@@ -78,6 +78,17 @@ local = [
     "llama-cpp-python>=0.3.0",
     "huggingface-hub>=0.20.0",
 ]
+stt = [
+    # In-process Whisper via CTranslate2. Prebuilt wheels for x64/arm64 on
+    # Linux, macOS, Windows (no compilation). Model weights download on first
+    # use (~1.5GB for large-v3) to the HuggingFace cache.
+    "faster-whisper>=1.1.0,<2.0.0",
+]
+voice = [
+    # Cross-platform microphone capture for the TUI /voice command.
+    # Bundles PortAudio on macOS/Windows; Linux needs libportaudio2.
+    "sounddevice>=0.5.0,<1.0.0",
+]
 memory = [
     # Pure-Python ONNX embedding runtime; auto-downloads model files on
     # first use. Required for vector retrieval (Phase 2). Default model
