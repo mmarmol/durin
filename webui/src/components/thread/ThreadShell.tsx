@@ -48,6 +48,18 @@ function toModelBadgeLabel(modelName: string | null): string | null {
   return leaf || trimmed;
 }
 
+const EFFORT_VALUES = new Set(["none", "low", "medium", "high", "max"]);
+
+// `/effort` encodes the reasoning level as a suffix on the active preset name
+// (e.g. "default:high"). Return the effort the composer's picker should reflect,
+// or null (Auto) when no effort suffix is set. Tracks the live runtime preset,
+// so it refreshes on every model/effort switch.
+function effortFromPreset(modelPreset: string | null): string | null {
+  if (!modelPreset) return null;
+  const tail = modelPreset.split(":").pop() ?? "";
+  return EFFORT_VALUES.has(tail) ? tail : null;
+}
+
 interface PendingFirstMessage {
   content: string;
   images?: SendImage[];
@@ -75,7 +87,8 @@ export function ThreadShell({
     refresh: refreshHistory,
     version: historyVersion,
   } = useSessionHistory(historyKey);
-  const { client, modelName, token } = useClient();
+  const { client, modelName, modelPreset, token } = useClient();
+  const activeEffort = effortFromPreset(modelPreset);
   const [booting, setBooting] = useState(false);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [scrollToBottomSignal, setScrollToBottomSignal] = useState(0);
@@ -362,6 +375,7 @@ export function ThreadShell({
           goalState={goalState}
           onModelPick={handleModelPick}
           onEffortPick={handleEffortPick}
+          activeEffort={activeEffort}
           canReason={canReason}
           pendingPrompt={pendingPrompt ?? localPendingPrompt}
           onPromptConsumed={() => { onPromptConsumed?.(); setLocalPendingPrompt(null); }}
@@ -383,6 +397,7 @@ export function ThreadShell({
           goalState={goalState}
           onModelPick={handleModelPick}
           onEffortPick={handleEffortPick}
+          activeEffort={activeEffort}
           canReason={canReason}
           pendingPrompt={pendingPrompt ?? localPendingPrompt}
           onPromptConsumed={() => { onPromptConsumed?.(); setLocalPendingPrompt(null); }}
