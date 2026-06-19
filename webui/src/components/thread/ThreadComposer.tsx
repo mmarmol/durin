@@ -51,9 +51,8 @@ import { cn } from "@/lib/utils";
 
 /** ``<input accept>``: aligned with the server's MIME whitelist. SVG is
  * deliberately excluded to avoid an embedded-script XSS surface. */
-const ACCEPT_ATTR = "image/png,image/jpeg,image/webp,image/gif";
-const AUDIO_ACCEPT_ATTR =
-  "audio/mpeg,audio/ogg,audio/opus,audio/wav,audio/webm,audio/x-m4a,audio/aac,audio/flac";
+const ACCEPT_ATTR =
+  "image/png,image/jpeg,image/webp,image/gif,audio/mpeg,audio/ogg,audio/opus,audio/wav,audio/webm,audio/x-m4a,audio/aac,audio/flac";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -69,8 +68,6 @@ interface ThreadComposerProps {
   /** Whether audio input (mic / attach) should be offered. False hides the
    *  affordances and shows a disabled hint instead (gating, Gap B). */
   audioInputAllowed?: boolean;
-  /** Tooltip shown when ``audioInputAllowed`` is false. */
-  audioInputHint?: string | null;
   disabled?: boolean;
   placeholder?: string;
   isStreaming?: boolean;
@@ -401,7 +398,6 @@ export function ThreadComposer({
   onSend,
   onTranscribeAudio,
   audioInputAllowed = true,
-  audioInputHint = null,
   disabled,
   placeholder,
   isStreaming = false,
@@ -427,7 +423,6 @@ export function ThreadComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const audioInputRef = useRef<HTMLInputElement>(null);
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
   const isHero = variant === "hero";
   const promptHistory = usePromptHistory();
@@ -504,14 +499,34 @@ export function ThreadComposer({
   const addFiles = useCallback(
     (files: File[]) => {
       if (files.length === 0) return;
-      const { rejected } = enqueue(files);
-      if (rejected.length > 0) {
-        setInlineError(formatRejection(rejected[0].reason));
+      // Route by MIME: images go through the image pipeline (chips +
+      // re-encode); audio goes through the transcription pipeline. The same
+      // Paperclip button and drag-drop now handle both — no separate audio
+      // button (Gap B: unified attachment affordance).
+      const images: File[] = [];
+      const audio: File[] = [];
+      for (const f of files) {
+        if (f.type.startsWith("audio/")) {
+          audio.push(f);
+        } else {
+          images.push(f);
+        }
+      }
+      let rejectedCount = 0;
+      if (images.length > 0) {
+        const { rejected } = enqueue(images);
+        rejectedCount += rejected.length;
+      }
+      for (const f of audio) {
+        handleAudioFile(f); // handleAudioFile enqueues + transcribes
+      }
+      if (rejectedCount > 0) {
+        setInlineError(formatRejection("unsupported_type"));
       } else {
         setInlineError(null);
       }
     },
-    [enqueue, formatRejection],
+    [enqueue, formatRejection, handleAudioFile],
   );
 
   const {
@@ -941,47 +956,12 @@ export function ThreadComposer({
               <Paperclip className={cn(isHero ? "h-5 w-5" : "h-4 w-4")} />
             </Button>
             {audioInputAllowed ? (
-              <>
-                <input
-                  ref={audioInputRef}
-                  type="file"
-                  accept={AUDIO_ACCEPT_ATTR}
-                  hidden
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) handleAudioFile(f);
-                    e.target.value = "";
-                  }}
-                />
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  disabled={disabled || audioAttachments.length > 0}
-                  aria-label={t("thread.composer.attachAudio")}
-                  onClick={() => audioInputRef.current?.click()}
-                  className={cn(
-                    "rounded-full text-muted-foreground hover:text-foreground",
-                    isHero
-                      ? "h-9 w-9 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card"
-                      : "h-7.5 w-7.5 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card",
-                  )}
-                >
-                  <span className={cn(isHero ? "text-lg" : "text-base")}>🎵</span>
-                </Button>
-                <MicButton onRecorded={handleAudioFile} disabled={disabled || audioAttachments.length > 0} />
-              </>
-            ) : (
-              <span
-                title={audioInputHint ?? "Audio transcription is not configured."}
-                className={cn(
-                  "inline-flex items-center justify-center rounded-full text-muted-foreground/40",
-                  isHero ? "h-9 w-9" : "h-7.5 w-7.5",
-                )}
-              >
-                <span className={cn(isHero ? "text-lg" : "text-base")}>🎵</span>
-              </span>
-            )}
+              <MicButton
+                onRecorded={handleAudioFile}
+                disabled={disabled || audioAttachments.length > 0}
+                variant={isHero ? "hero" : "thread"}
+              />
+            ) : null}
             {modelLabel ? (
               <div className="relative">
                 <button

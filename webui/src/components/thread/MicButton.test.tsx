@@ -66,7 +66,7 @@ describe("MicButton", () => {
     const btn = screen.getByRole("button", { name: /mic/i });
 
     await user.click(btn); // start
-    expect(btn.textContent).toMatch(/⏹|stop/);
+    expect(btn.getAttribute("title")).toBe("Stop recording");
     await user.click(btn); // stop
     expect(onRecorded).toHaveBeenCalledTimes(1);
     const file = onRecorded.mock.calls[0][0] as File;

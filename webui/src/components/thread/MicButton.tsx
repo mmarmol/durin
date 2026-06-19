@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { Mic, Square } from "lucide-react";
 
 import { pickAudioMime } from "@/lib/audioMime";
+import { cn } from "@/lib/utils";
 
 /** Microphone recorder button (spec §5.2).
  *
@@ -14,9 +16,12 @@ import { pickAudioMime } from "@/lib/audioMime";
 interface MicButtonProps {
   onRecorded: (file: File) => void;
   disabled?: boolean;
+  /** "hero" (large, with border/shadow) or "thread" (compact). Mirrors the
+   *  composer's Paperclip sizing so the two buttons line up. */
+  variant?: "hero" | "thread";
 }
 
-export function MicButton({ onRecorded, disabled }: MicButtonProps) {
+export function MicButton({ onRecorded, disabled, variant = "thread" }: MicButtonProps) {
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -66,6 +71,8 @@ export function MicButton({ onRecorded, disabled }: MicButtonProps) {
     };
   }, []);
 
+  const isHero = variant === "hero";
+
   return (
     <span className="relative inline-flex items-center">
       <button
@@ -73,15 +80,20 @@ export function MicButton({ onRecorded, disabled }: MicButtonProps) {
         aria-label="mic"
         disabled={!supported || disabled}
         onClick={recording ? stop : start}
-        className={
-          "inline-flex h-8 w-8 items-center justify-center rounded-md border text-sm " +
-          (recording
-            ? "animate-pulse border-red-500 bg-red-600 text-white"
-            : "border-border bg-background hover:bg-accent")
-        }
+        className={cn(
+          "inline-flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground",
+          isHero
+            ? "h-9 w-9 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card"
+            : "h-7.5 w-7.5 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card",
+          recording && "border-red-500 text-red-500 hover:text-red-600",
+        )}
         title={recording ? "Stop recording" : "Record audio"}
       >
-        {recording ? "⏹" : "🎙"}
+        {recording ? (
+          <Square className={cn(isHero ? "h-4 w-4" : "h-3.5 w-3.5")} fill="currentColor" />
+        ) : (
+          <Mic className={cn(isHero ? "h-5 w-5" : "h-4 w-4")} />
+        )}
       </button>
       {error && (
         <span role="alert" className="ml-2 text-xs text-red-500">

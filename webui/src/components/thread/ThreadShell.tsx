@@ -366,7 +366,6 @@ export function ThreadShell({
           onSend={handleThreadSend}
           onTranscribeAudio={transcribeAudio}
           audioInputAllowed={transcriptionStatus.available}
-          audioInputHint={transcriptionStatus.reason}
           disabled={!chatId}
           isStreaming={isStreaming}
           placeholder={
@@ -392,7 +391,6 @@ export function ThreadShell({
           onSend={handleWelcomeSend}
           onTranscribeAudio={transcribeAudio}
           audioInputAllowed={transcriptionStatus.available}
-          audioInputHint={transcriptionStatus.reason}
           disabled={booting}
           isStreaming={isStreaming}
           placeholder={
