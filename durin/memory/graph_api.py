@@ -438,7 +438,7 @@ def get_session_detail(
                 "title": "...",
                 "message_count": 39,
                 "channel": "cli",
-                "model": "glm-5.1",
+                "model": "<model-id>",
                 "created_at": "...",
                 "updated_at": "...",
             },

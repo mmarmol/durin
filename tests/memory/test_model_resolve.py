@@ -90,3 +90,52 @@ def test_partial_config_without_aux_models_section():
 def test_partial_config_without_memory_dream_section():
     cfg = SimpleNamespace(agents=SimpleNamespace())
     assert resolve_memory_model(cfg) is None
+
+
+# -- resolve_aux_preset: specific-or-default, never a hardcoded model -----------
+
+from durin.config.schema import AuxModelConfig, Config  # noqa: E402
+from durin.memory.model_resolve import resolve_aux_preset  # noqa: E402
+
+
+def _real_cfg(model="glm-5.2", provider="zai_coding_plan") -> Config:
+    c = Config()
+    c.agents.defaults.provider = provider
+    c.agents.defaults.model = model
+    return c
+
+
+def test_memory_falls_back_to_default_preset_when_unset() -> None:
+    p = resolve_aux_preset(_real_cfg(), purpose="memory")
+    assert p.model == "glm-5.2"
+    assert p.provider == "zai_coding_plan"
+
+
+def test_judge_falls_back_to_default_preset_when_unset() -> None:
+    assert resolve_aux_preset(_real_cfg(), purpose="judge").model == "glm-5.2"
+
+
+def test_memory_aux_model_takes_precedence() -> None:
+    c = _real_cfg()
+    c.agents.aux_models.memory = AuxModelConfig(model="glm-4.6", provider="zai_coding_plan")
+    assert resolve_aux_preset(c, purpose="memory").model == "glm-4.6"
+
+
+def test_memory_override_runs_on_default_provider() -> None:
+    c = _real_cfg()
+    c.memory.dream.model_override = "glm-4.6"
+    p = resolve_aux_preset(c, purpose="memory")
+    assert p.model == "glm-4.6"
+    assert p.provider == "zai_coding_plan"
+
+
+def test_judge_specific_model_takes_precedence() -> None:
+    c = _real_cfg()
+    c.skills.security.llm_judge.model = "glm-4.6"
+    assert resolve_aux_preset(c, purpose="judge").model == "glm-4.6"
+
+
+def test_never_returns_glm_5_1_for_non_zai_default() -> None:
+    p = resolve_aux_preset(_real_cfg(model="claude-x", provider="anthropic"), purpose="memory")
+    assert p.model == "claude-x"
+    assert p.provider == "anthropic"
