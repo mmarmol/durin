@@ -200,3 +200,81 @@ class GroqTranscriptionProvider:
             provider_label="Groq",
             language=self.language,
         )
+
+
+class TranscriptionProvider:
+    """Structural interface for transcription backends (Protocol-style).
+
+    Existing providers (OpenAI/Groq) and :class:`LocalWhisperProvider` already
+    conform via duck typing — this base exists for ``isinstance`` checks and
+    documentation. Subclasses implement ``async def transcribe(file_path) -> str``.
+    """
+
+    async def transcribe(self, file_path: str | Path) -> str:  # pragma: no cover
+        raise NotImplementedError
+
+
+class LocalWhisperProvider(TranscriptionProvider):
+    """In-process Whisper via faster-whisper (CTranslate2).
+
+    Construction does NOT import faster-whisper — that happens lazily on the
+    first :meth:`transcribe` so a missing ``[stt]`` extra does not break module
+    import. The synchronous model runs in a worker thread via
+    :func:`asyncio.to_thread` to avoid blocking the event loop.
+    """
+
+    def __init__(
+        self,
+        model: str = "large-v3",
+        device: str = "auto",
+        compute_type: str = "auto",
+        language: str | None = None,
+        download_root: str | None = None,
+    ):
+        self.model = model
+        self.device = device
+        self.compute_type = compute_type
+        self.language = language or None
+        self.download_root = download_root or None
+        self._model_obj = None  # lazily loaded singleton
+
+    def _load(self):
+        if self._model_obj is not None:
+            return self._model_obj
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError as e:
+            raise RuntimeError(
+                "faster-whisper is not installed. Install the [stt] extra: "
+                "pip install durin-agent[stt]"
+            ) from e
+        self._model_obj = WhisperModel(
+            self.model,
+            device=self.device,
+            compute_type=self.compute_type,
+            download_root=self.download_root,
+        )
+        return self._model_obj
+
+    @staticmethod
+    def _transcribe_sync(model, path, language):
+        segments, _info = model.transcribe(str(path), language=language)
+        return " ".join(seg.text for seg in segments).strip()
+
+    async def transcribe(self, file_path: str | Path) -> str:
+        path = Path(file_path)
+        if not path.exists():
+            logger.error("Audio file not found: {}", file_path)
+            return ""
+        try:
+            model = self._load()
+        except Exception as e:
+            logger.exception("LocalWhisperProvider load error: {}", e)
+            return ""
+        try:
+            return await asyncio.to_thread(
+                self._transcribe_sync, model, path, self.language
+            )
+        except Exception as e:
+            logger.exception("LocalWhisperProvider transcribe error: {}", e)
+            return ""
