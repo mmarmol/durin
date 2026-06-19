@@ -97,7 +97,42 @@ pip install -e ".[memory,mcp,web]"
 | `discord` | `discord.py` | Discord channel. |
 | `oauth` | `oauth-cli-kit` | OAuth login (`durin oauth login …`). |
 | `local` | `llama-cpp-python`, `huggingface-hub` | Local GGUF model serving. |
+| `stt` | `faster-whisper` (CTranslate2) | Local audio transcription (Whisper Large V3). Needed for the default `local` transcription provider. Model weights (~1.5 GB for `large-v3`) download once on first use. Cross-platform CPU; no GPU required. |
+| `voice` | `sounddevice` (PortAudio) | TUI microphone recording (`/voice`). macOS/Windows bundle PortAudio; Linux needs `apt install libportaudio2` (or your distro's equivalent). |
 | `dev` | `pytest`, `ruff`, … | Run the test suite + lint. |
+
+#### Audio transcription
+
+When you attach or record audio, durin transcribes it to text **before** it
+reaches the agent — the model never sees raw audio, so token usage stays
+minimal and the transcript is editable before you send.
+
+The default provider is **local Whisper** (`[stt]` extra, no API key, works
+offline). You can switch to a cloud provider (Groq/OpenAI) or any
+OpenAI-compatible HTTP server (whisper.cpp, mlx-qwen3-asr, vLLM) via the
+`transcription` config section:
+
+```jsonc
+{
+  "transcription": {
+    "enabled": true,
+    "mode": "auto",                 // "auto" | "preview" | "off"
+    "provider": "local",            // "local" | "openai" | "groq" | "http"
+    "language": null,               // ISO-639-1 hint; null = auto-detect
+    "local": { "model": "large-v3" } // tiny|base|small|medium|large-v3|large-v3-turbo
+  }
+}
+```
+
+`mode`:
+- `auto` (default) — transcribe and insert the text into the input; you can
+  edit it before sending.
+- `preview` — show the transcript with Accept/Re-try/Discard.
+- `off` — attach the audio raw (no transcription); use this if you want the
+  agent's `interpret_audio` tool to send it natively to a multimodal aux model.
+
+Run `durin doctor` to verify your STT setup (`stt.installed`,
+`stt.cloud_keys` checks).
 
 Memory subsystem note: with `[memory]` installed, durin's workspace at
 `~/.durin/workspace/` becomes a navigable knowledge vault — a
