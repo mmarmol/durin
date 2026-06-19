@@ -137,3 +137,143 @@ class TestLoadServers:
 
         servers_after = mcp_catalog_store.load_servers()
         assert servers_after[0]["name"] == "fresh-server"
+
+
+# ---------------------------------------------------------------------------
+# Tests for search()
+# ---------------------------------------------------------------------------
+
+def _fake_servers() -> list[dict]:
+    return [
+        {
+            "name": "github-mcp",
+            "ref": "github/github-mcp-server",
+            "description": "GitHub integration for MCP",
+            "kind": "local",
+            "stars": 5000,
+            "official": True,
+            "owner_login": "github",
+            "owner_url": "https://github.com/github",
+            "owner_avatar": "",
+            "topics": ["github"],
+            "language": "Go",
+            "license": "MIT",
+            "repo_url": "https://github.com/github/github-mcp-server",
+        },
+        {
+            "name": "postgres-mcp",
+            "ref": "acme/postgres-mcp",
+            "description": "PostgreSQL database access",
+            "kind": "local",
+            "stars": 500,
+            "official": False,
+            "owner_login": "acme",
+            "owner_url": "https://github.com/acme",
+            "owner_avatar": "",
+            "topics": ["postgres"],
+            "language": "Python",
+            "license": "Apache-2.0",
+            "repo_url": "https://github.com/acme/postgres-mcp",
+        },
+        {
+            "name": "lowstar-mcp",
+            "ref": "nobody/lowstar-mcp",
+            "description": "Low star non-official server",
+            "kind": "local",
+            "stars": 5,
+            "official": False,
+            "owner_login": "nobody",
+            "owner_url": "https://github.com/nobody",
+            "owner_avatar": "",
+            "topics": [],
+            "language": "JavaScript",
+            "license": "MIT",
+            "repo_url": "https://github.com/nobody/lowstar-mcp",
+        },
+        {
+            "name": "official-lowstar-mcp",
+            "ref": "official/lowstar-mcp",
+            "description": "Official but low star server",
+            "kind": "remote",
+            "stars": 10,
+            "official": True,
+            "owner_login": "official",
+            "owner_url": "https://github.com/official",
+            "owner_avatar": "",
+            "topics": [],
+            "language": "TypeScript",
+            "license": "MIT",
+            "repo_url": "https://github.com/official/lowstar-mcp",
+        },
+    ]
+
+
+class TestSearch:
+    def test_gate_excludes_low_star_non_official(self, monkeypatch):
+        """Default quality gate excludes stars<=100 and official=False servers."""
+        from durin.agent import mcp_catalog_store
+
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", _fake_servers)
+
+        results = mcp_catalog_store.search("mcp", limit=10)
+        names = [r.name for r in results]
+
+        assert "lowstar-mcp" not in names
+
+    def test_gate_includes_high_star_server(self, monkeypatch):
+        """Default quality gate includes servers with stars > min_stars."""
+        from durin.agent import mcp_catalog_store
+
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", _fake_servers)
+
+        results = mcp_catalog_store.search("mcp", limit=10)
+        names = [r.name for r in results]
+
+        assert "postgres-mcp" in names
+
+    def test_gate_includes_official_low_star(self, monkeypatch):
+        """Default quality gate includes official=True servers regardless of stars."""
+        from durin.agent import mcp_catalog_store
+
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", _fake_servers)
+
+        results = mcp_catalog_store.search("mcp", limit=10)
+        names = [r.name for r in results]
+
+        assert "official-lowstar-mcp" in names
+
+    def test_star_sort_higher_stars_first(self, monkeypatch):
+        """Results sorted by stars descending; github-mcp (5000) before postgres-mcp (500)."""
+        from durin.agent import mcp_catalog_store
+
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", _fake_servers)
+
+        results = mcp_catalog_store.search("mcp", limit=10)
+        names = [r.name for r in results]
+
+        assert names.index("github-mcp") < names.index("postgres-mcp")
+
+    def test_signals_carried(self, monkeypatch):
+        """Top hit's signals dict contains stars and official; kind matches source dict."""
+        from durin.agent import mcp_catalog_store
+
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", _fake_servers)
+
+        results = mcp_catalog_store.search("github", limit=1)
+
+        assert len(results) == 1
+        hit = results[0]
+        assert hit.signals["stars"] == 5000
+        assert hit.signals["official"] is True
+        assert hit.kind == "local"
+
+    def test_quality_all_includes_low_star_non_official(self, monkeypatch):
+        """quality='all' skips the gate and returns low-star non-official servers."""
+        from durin.agent import mcp_catalog_store
+
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", _fake_servers)
+
+        results = mcp_catalog_store.search("lowstar", limit=10, quality="all")
+        names = [r.name for r in results]
+
+        assert "lowstar-mcp" in names

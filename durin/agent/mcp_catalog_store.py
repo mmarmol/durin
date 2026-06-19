@@ -11,6 +11,7 @@ Corrupt/missing overlay or floor degrades gracefully — never raises.
 from __future__ import annotations
 
 import json
+from difflib import SequenceMatcher
 from functools import lru_cache
 from pathlib import Path
 
@@ -62,3 +63,62 @@ def load_servers() -> list[dict]:
 def cache_clear() -> None:
     """Invalidate the in-process cache so the next call re-reads from disk."""
     _cached_load.cache_clear()
+
+
+def _score(query: str, text: str) -> float:
+    """Substring match beats fuzzy; fuzzy uses difflib ratio."""
+    if not text:
+        return 0.0
+    q, t = query.lower(), text.lower()
+    if q in t:
+        return 1.0 + (len(q) / max(len(t), 1))
+    return SequenceMatcher(None, q, t).ratio()
+
+
+_SIGNAL_KEYS = (
+    "stars", "owner_login", "owner_url", "owner_avatar",
+    "topics", "language", "license", "official", "repo_url",
+)
+
+
+def search(
+    query: str,
+    *,
+    limit: int,
+    quality: str = "official",
+    min_stars: int = 100,
+) -> list:
+    """Search the local catalog store.
+
+    Returns a list of McpServerHit sorted by (stars desc, score desc).
+    """
+    from durin.agent.mcp_registry import McpServerHit
+
+    servers = load_servers()
+    gated = quality != "all"
+
+    scored: list[tuple[float, int, dict]] = []
+    for s in servers:
+        sc = max(_score(query, s.get("name", "")),
+                 _score(query, s.get("description", "")))
+        if sc <= 0.2:
+            continue
+        stars = s.get("stars") or 0
+        official = bool(s.get("official"))
+        if gated and not (stars > min_stars or official):
+            continue
+        scored.append((sc, stars if stars else -1, s))
+
+    scored.sort(key=lambda t: (t[1], t[0]), reverse=True)
+
+    hits = []
+    for _, _, s in scored[:limit]:
+        hits.append(McpServerHit(
+            name=s["name"],
+            ref=s.get("ref") or s["name"],
+            registry="official",
+            kind=s.get("kind", "local"),
+            description=s.get("description", ""),
+            signals={k: s[k] for k in _SIGNAL_KEYS if k in s},
+        ))
+    return hits
