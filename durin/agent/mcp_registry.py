@@ -11,9 +11,12 @@ build script — not by search.
 """
 from __future__ import annotations
 
+import re
 import urllib.parse
 from dataclasses import dataclass, field
 from typing import Protocol
+
+_TEMPLATE_RE = re.compile(r"\{([^}]+)\}")
 
 
 @dataclass
@@ -108,12 +111,77 @@ def _arg_values(items: list[dict] | None) -> list[str]:
     return [str(it.get("value", it.get("name", ""))) for it in (items or []) if it]
 
 
+def _render_arg(it: dict) -> list[str]:
+    """Render one registry argument object to argv tokens, substituting ``{var}``
+    templates with their declared default. Named → ``[name, value]``; positional →
+    ``[value]``."""
+    name = str(it.get("name", ""))
+    value = str(it.get("value", ""))
+    variables = it.get("variables") or {}
+    rendered = _TEMPLATE_RE.sub(
+        lambda m: str((variables.get(m.group(1)) or {}).get("default", m.group(0))),
+        value,
+    )
+    out: list[str] = []
+    if name and name != value:
+        out.append(name)
+    if rendered:
+        out.append(rendered)
+    return out
+
+
+def _parse_oci_runtime_args(
+    items: list[dict] | None,
+) -> tuple[list[EnvVarSpec], list[str]]:
+    """Split an OCI package's ``runtimeArguments`` into (env inputs, passthrough argv).
+
+    Docker servers declare env injection as a ``-e NAME={var}`` named arg whose
+    ``{var}`` is typed in ``variables`` (e.g. github's secret token). These are lifted
+    into :class:`EnvVarSpec` so the install form prompts for them and the secret store
+    collects them; at launch they become a passthrough ``-e NAME`` flag (the value
+    lives in env, resolved at spawn). Every other arg passes through verbatim.
+    """
+    env_specs: list[EnvVarSpec] = []
+    passthrough: list[str] = []
+    for it in items or []:
+        if not it:
+            continue
+        if it.get("name") == "-e" and it.get("value"):
+            env_name, _, rhs = str(it["value"]).partition("=")
+            env_name = env_name.strip()
+            if not env_name:
+                continue
+            variables = it.get("variables") or {}
+            tmpl = _TEMPLATE_RE.search(rhs)
+            var = variables.get(tmpl.group(1), {}) if tmpl else {}
+            env_specs.append(
+                EnvVarSpec(
+                    name=env_name,
+                    description=it.get("description", ""),
+                    is_required=bool(var.get("isRequired", it.get("isRequired"))),
+                    is_secret=bool(var.get("isSecret")),
+                    default=var.get("default") if tmpl else (rhs or None),
+                )
+            )
+        else:
+            passthrough.extend(_render_arg(it))
+    return env_specs, passthrough
+
+
 def parse_server_json(obj: dict) -> McpServerDetail:
     """Parse one registry ``server.json`` object into an ``McpServerDetail``."""
     repo = obj.get("repository") or {}
     packages: list[PackageSpec] = []
     for p in obj.get("packages") or []:
         tr = p.get("transport") or {}
+        env = _env_specs(p.get("environmentVariables"))
+        if p.get("registryType") == "oci":
+            # OCI/docker declares env (and secrets) inside `-e NAME={var}` runtime args
+            # rather than environmentVariables — lift those into env inputs.
+            oci_env, runtime_arguments = _parse_oci_runtime_args(p.get("runtimeArguments"))
+            env = env + oci_env
+        else:
+            runtime_arguments = _arg_values(p.get("runtimeArguments"))
         packages.append(
             PackageSpec(
                 registry_type=p.get("registryType", ""),
@@ -121,9 +189,9 @@ def parse_server_json(obj: dict) -> McpServerDetail:
                 version=p.get("version", ""),
                 runtime_hint=p.get("runtimeHint", ""),
                 transport_type=tr.get("type", "stdio"),
-                runtime_arguments=_arg_values(p.get("runtimeArguments")),
+                runtime_arguments=runtime_arguments,
                 package_arguments=_arg_values(p.get("packageArguments")),
-                env=_env_specs(p.get("environmentVariables")),
+                env=env,
             )
         )
     remotes: list[RemoteSpec] = []

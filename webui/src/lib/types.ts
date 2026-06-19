@@ -495,6 +495,14 @@ export interface McpRegistryServerDetail {
   remotes: McpRegistryRemote[];
 }
 
+export interface McpRuntimeStatus {
+  kind: string; // "local" | "remote"
+  runtime: string; // "docker" | "npx" | "uvx" | ""
+  present: boolean;
+  auto_installable: boolean;
+  install_command: string;
+}
+
 export interface McpUpdateInfo {
   name: string;
   current: string;

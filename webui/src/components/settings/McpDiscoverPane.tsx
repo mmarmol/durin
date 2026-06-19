@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -6,12 +6,14 @@ import { Input } from "@/components/ui/input";
 import {
   describeMcpRegistryServer,
   installMcpFromRegistry,
+  mcpRegistryRuntime,
   searchMcpRegistry,
 } from "@/lib/api";
 import type {
   McpRegistryEnvVar,
   McpRegistryHit,
   McpRegistryServerDetail,
+  McpRuntimeStatus,
 } from "@/lib/types";
 
 function requiredEnv(
@@ -157,6 +159,28 @@ export function McpDiscoverPane({
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [runtime, setRuntime] = useState<McpRuntimeStatus | null>(null);
+
+  // When a server is selected (or the local/remote choice changes), check whether
+  // the host has the runtime needed to launch it — so we can warn before install.
+  useEffect(() => {
+    if (!detail) {
+      setRuntime(null);
+      return;
+    }
+    let cancelled = false;
+    setRuntime(null);
+    mcpRegistryRuntime(token, detail.ref, prefer)
+      .then((r) => {
+        if (!cancelled) setRuntime(r);
+      })
+      .catch(() => {
+        if (!cancelled) setRuntime(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detail, prefer, token]);
 
   async function runSearch(all = includeAll) {
     if (!query.trim()) return;
@@ -329,6 +353,35 @@ export function McpDiscoverPane({
             {hasRemote ? tx("hostedOnly") : tx("localOnly")}
           </span>
         )}
+
+        {/* Missing-runtime warning (local model only) */}
+        {runtime && runtime.kind === "local" && !runtime.present ? (
+          <div className="space-y-1 rounded-[10px] border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px] text-foreground">
+            {runtime.runtime === "docker" ? (
+              <>
+                <p>{tx("runtimeMissingDocker")}</p>
+                <a
+                  href="https://docs.docker.com/get-docker/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-primary underline"
+                >
+                  {tx("getDocker")}
+                  <ExternalLinkIcon />
+                </a>
+              </>
+            ) : (
+              <>
+                <p>{tx("runtimeMissing", { runtime: runtime.runtime })}</p>
+                {runtime.install_command ? (
+                  <code className="block select-all rounded bg-muted px-2 py-1 text-[11px] text-foreground">
+                    {runtime.install_command}
+                  </code>
+                ) : null}
+              </>
+            )}
+          </div>
+        ) : null}
 
         {/* Env inputs */}
         {envs.length > 0 ? (

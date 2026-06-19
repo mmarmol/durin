@@ -8,11 +8,13 @@ import type { McpRegistryHit, McpRegistryServerDetail } from "@/lib/types";
 const searchMcpRegistry = vi.fn();
 const describeMcpRegistryServer = vi.fn();
 const installMcpFromRegistry = vi.fn();
+const mcpRegistryRuntime = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   searchMcpRegistry: (...a: unknown[]) => searchMcpRegistry(...a),
   describeMcpRegistryServer: (...a: unknown[]) => describeMcpRegistryServer(...a),
   installMcpFromRegistry: (...a: unknown[]) => installMcpFromRegistry(...a),
+  mcpRegistryRuntime: (...a: unknown[]) => mcpRegistryRuntime(...a),
 }));
 
 const OFFICIAL_HIT: McpRegistryHit = {
@@ -62,10 +64,48 @@ const DETAIL: McpRegistryServerDetail = {
   remotes: [{ transport_type: "sse", url: "https://mcp.github.com/sse", headers: [] }],
 };
 
+const LOCAL_OCI_DETAIL: McpRegistryServerDetail = {
+  name: "github-mcp-server",
+  ref: "io.github.github/github-mcp-server",
+  description: "GitHub MCP server",
+  version: "1.4.0",
+  repository: "https://github.com/github/github-mcp-server",
+  packages: [
+    {
+      registry_type: "oci",
+      identifier: "ghcr.io/github/github-mcp-server:1.4.0",
+      version: "",
+      runtime_hint: "",
+      transport_type: "stdio",
+      runtime_arguments: [],
+      package_arguments: [],
+      env: [
+        {
+          name: "GITHUB_PERSONAL_ACCESS_TOKEN",
+          description: "",
+          is_required: true,
+          is_secret: true,
+          default: null,
+        },
+      ],
+    },
+  ],
+  remotes: [],
+};
+
 beforeEach(() => {
   searchMcpRegistry.mockReset();
   describeMcpRegistryServer.mockReset();
   installMcpFromRegistry.mockReset();
+  mcpRegistryRuntime.mockReset();
+  // Default: remote model needs no local runtime (keeps existing detail tests green).
+  mcpRegistryRuntime.mockResolvedValue({
+    kind: "remote",
+    runtime: "",
+    present: true,
+    auto_installable: false,
+    install_command: "",
+  });
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -229,6 +269,75 @@ it("show-all toggle re-searches with includeAll=true and flips back", async () =
   // Toggle now shows "Showing all" + "Official only" button
   expect(screen.getByText(/showing all/i)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /official only/i })).toBeInTheDocument();
+});
+
+it("local detail with missing Docker surfaces an install-Docker banner", async () => {
+  const user = userEvent.setup();
+  searchMcpRegistry.mockResolvedValue([OFFICIAL_HIT]);
+  describeMcpRegistryServer.mockResolvedValue(LOCAL_OCI_DETAIL);
+  mcpRegistryRuntime.mockResolvedValue({
+    kind: "local",
+    runtime: "docker",
+    present: false,
+    auto_installable: false,
+    install_command: "",
+  });
+
+  render(<McpDiscoverPane token="tok" onClose={vi.fn()} />);
+
+  await user.type(screen.getByRole("textbox"), "github");
+  await user.click(screen.getByRole("button", { name: /search/i }));
+
+  const row = await screen.findByText("github-mcp");
+  await user.click(row.closest("button")!);
+
+  await screen.findByText(/v1\.4\.0/);
+
+  // Runtime status was queried for the local model
+  await waitFor(() =>
+    expect(mcpRegistryRuntime).toHaveBeenCalledWith(
+      "tok",
+      "io.github.github/github-mcp-server",
+      "local",
+    ),
+  );
+
+  // A "Get Docker Desktop" link to docker.com opens in a new tab
+  const dockerLink = await screen.findByRole("link", { name: /docker/i });
+  expect(dockerLink).toHaveAttribute(
+    "href",
+    expect.stringContaining("docker.com"),
+  );
+  expect(dockerLink).toHaveAttribute("target", "_blank");
+  expect(dockerLink).toHaveAttribute("rel", expect.stringContaining("noopener"));
+});
+
+it("local detail with missing npx shows a copy-paste install command", async () => {
+  const user = userEvent.setup();
+  searchMcpRegistry.mockResolvedValue([OFFICIAL_HIT]);
+  describeMcpRegistryServer.mockResolvedValue({
+    ...LOCAL_OCI_DETAIL,
+    packages: [
+      { ...LOCAL_OCI_DETAIL.packages[0], registry_type: "npm", runtime_hint: "npx" },
+    ],
+  });
+  mcpRegistryRuntime.mockResolvedValue({
+    kind: "local",
+    runtime: "npx",
+    present: false,
+    auto_installable: true,
+    install_command: "brew install node",
+  });
+
+  render(<McpDiscoverPane token="tok" onClose={vi.fn()} />);
+
+  await user.type(screen.getByRole("textbox"), "github");
+  await user.click(screen.getByRole("button", { name: /search/i }));
+  const row = await screen.findByText("github-mcp");
+  await user.click(row.closest("button")!);
+  await screen.findByText(/v1\.4\.0/);
+
+  expect(await screen.findByText("brew install node")).toBeInTheDocument();
 });
 
 it("detail view keeps install button functional", async () => {

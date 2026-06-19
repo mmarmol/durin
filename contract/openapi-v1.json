@@ -1399,6 +1399,59 @@
         "title": "McpRegistryServerDetail",
         "type": "object"
       },
+      "McpRuntimeStatusQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "prefer": {
+            "default": "local",
+            "title": "Prefer",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "title": "McpRuntimeStatusQuery",
+        "type": "object"
+      },
+      "McpRuntimeStatusResult": {
+        "description": "Whether the host can launch a registry server's local package right now.",
+        "properties": {
+          "auto_installable": {
+            "title": "Auto Installable",
+            "type": "boolean"
+          },
+          "install_command": {
+            "title": "Install Command",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "present": {
+            "title": "Present",
+            "type": "boolean"
+          },
+          "runtime": {
+            "title": "Runtime",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "runtime",
+          "present",
+          "auto_installable",
+          "install_command"
+        ],
+        "title": "McpRuntimeStatusResult",
+        "type": "object"
+      },
       "McpServerDetail": {
         "properties": {
           "config": {
@@ -3866,6 +3919,35 @@
         },
         "summary": "Install (add) an MCP server from the registry by ref",
         "x-required-scope": "mcp:write"
+      }
+    },
+    "/api/v1/mcp/registry/runtime": {
+      "get": {
+        "operationId": "mcp_registry_runtime",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpRuntimeStatusQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpRuntimeStatusResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Report whether the host has the runtime to launch a registry server",
+        "x-required-scope": "mcp:read"
       }
     },
     "/api/v1/mcp/registry/search": {

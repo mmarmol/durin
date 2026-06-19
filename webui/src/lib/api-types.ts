@@ -229,6 +229,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mcp/registry/runtime": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report whether the host has the runtime to launch a registry server */
+        get: operations["mcp_registry_runtime"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mcp/registry/search": {
         parameters: {
             query?: never;
@@ -1892,6 +1909,32 @@ export interface components {
             /** Version */
             version: string;
         };
+        /** McpRuntimeStatusQuery */
+        McpRuntimeStatusQuery: {
+            /**
+             * Prefer
+             * @default local
+             */
+            prefer: string;
+            /** Ref */
+            ref: string;
+        };
+        /**
+         * McpRuntimeStatusResult
+         * @description Whether the host can launch a registry server's local package right now.
+         */
+        McpRuntimeStatusResult: {
+            /** Auto Installable */
+            auto_installable: boolean;
+            /** Install Command */
+            install_command: string;
+            /** Kind */
+            kind: string;
+            /** Present */
+            present: boolean;
+            /** Runtime */
+            runtime: string;
+        };
         /** McpServerDetail */
         McpServerDetail: {
             config: components["schemas"]["MCPServerConfig"];
@@ -3202,6 +3245,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["McpServerDetail"];
+                };
+            };
+        };
+    };
+    mcp_registry_runtime: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpRuntimeStatusQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpRuntimeStatusResult"];
                 };
             };
         };
