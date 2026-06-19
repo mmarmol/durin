@@ -16,15 +16,18 @@ describe("MicButton", () => {
         state = "inactive";
         onstop: (() => void) | null = null;
         ondataavailable:
-          | ((e: { data: { size: number } }) => void)
+          | ((e: { data: Blob }) => void)
           | null = null;
+        onerror: (() => void) | null = null;
         mimeType = "audio/webm";
-        chunks: unknown[] = [];
-        start() {
+        start(_timeslice?: number) {
           this.state = "recording";
         }
         stop() {
           this.state = "inactive";
+          // Simulate the final chunk being delivered before onstop, like a
+          // real MediaRecorder does on stop().
+          this.ondataavailable?.({ data: new Blob([new Uint8Array(64)]) });
           this.onstop?.();
         }
       } as unknown as typeof MediaRecorder;

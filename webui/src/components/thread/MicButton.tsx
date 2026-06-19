@@ -41,17 +41,29 @@ export function MicButton({ onRecorded, disabled, variant = "thread" }: MicButto
         : new MediaRecorder(stream);
       chunksRef.current = [];
       rec.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
       };
       rec.onstop = () => {
         const type = rec.mimeType || "audio/webm";
-        const blob = new Blob(chunksRef.current, { type });
+        const chunks = chunksRef.current;
+        const blob = new Blob(chunks, { type });
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        if (blob.size === 0) {
+          setError("No audio captured — try speaking louder or closer to the mic.");
+          return;
+        }
         const ext = type.includes("mp4") ? "m4a" : "webm";
         const file = new File([blob], `recording.${ext}`, { type: blob.type });
         onRecorded(file);
-        streamRef.current?.getTracks().forEach((t) => t.stop());
       };
-      rec.start();
+      rec.onerror = () => {
+        setError("Recording error.");
+        setRecording(false);
+      };
+      // timeslice=250ms so ondataavailable fires periodically (not just once
+      // at stop) — this makes onstop reliable across browsers and ensures
+      // chunksRef is populated before the Blob is assembled.
+      rec.start(250);
       recorderRef.current = rec;
       setRecording(true);
     } catch {
@@ -60,7 +72,10 @@ export function MicButton({ onRecorded, disabled, variant = "thread" }: MicButto
   }
 
   function stop() {
-    recorderRef.current?.stop();
+    const rec = recorderRef.current;
+    if (rec && rec.state !== "inactive") {
+      rec.stop();
+    }
     setRecording(false);
   }
 
