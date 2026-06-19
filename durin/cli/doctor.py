@@ -426,6 +426,75 @@ def check_cross_encoder_dep() -> CheckResult:
         )
 
 
+def check_stt_installed() -> CheckResult:
+    """Verify the [stt] extra (faster-whisper) is importable for local
+    transcription (spec §8.1). Always returns ok/warn, never fails."""
+    return check_optional_extra(
+        "faster_whisper",
+        extra="stt",
+        purpose="local audio transcription (Whisper)",
+    )
+
+
+def check_voice_extra() -> CheckResult:
+    """Verify the [voice] extra (sounddevice) is importable for TUI mic
+    recording (spec §8.1). Always returns ok/warn, never fails."""
+    return check_optional_extra(
+        "sounddevice",
+        extra="voice",
+        purpose="TUI microphone recording (/voice)",
+    )
+
+
+def check_stt_cloud_keys(cfg: "Config | None" = None) -> CheckResult:
+    """When transcription.provider is a cloud backend, verify an API key is set.
+
+    The local provider (default) needs no key, so this is ok-by-default and
+    only warns when the user picked groq/openai/http without a key.
+    """
+    try:
+        from durin.config.loader import load_config
+
+        config = cfg or load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult(
+            "stt.cloud_keys", "ok",
+            "transcription config unreadable; skipping cloud-key check",
+            category="stt",
+        )
+
+    provider = config.transcription.provider
+    if provider == "local":
+        return CheckResult(
+            "stt.cloud_keys", "ok",
+            "local transcription (no API key needed)",
+            category="stt",
+        )
+
+    # Cloud providers: resolve the relevant key.
+    if provider == "groq":
+        key = config.transcription.groq.api_key
+    elif provider == "openai":
+        key = config.transcription.openai.api_key
+    else:  # http
+        key = config.transcription.http.api_key
+
+    if key:
+        return CheckResult(
+            "stt.cloud_keys", "ok",
+            f"{provider} transcription API key configured",
+            category="stt",
+        )
+    return CheckResult(
+        "stt.cloud_keys", "warn",
+        f"transcription.provider={provider!r} but no API key set — "
+        "transcription will return empty text",
+        fix="Set the key under transcription.<provider>.api_key in config, "
+        "or switch transcription.provider to 'local' (needs the [stt] extra).",
+        category="stt",
+    )
+
+
 def check_cache_size() -> CheckResult:
     cache = Path.home() / ".cache" / "durin"
     if not cache.exists():
@@ -1078,6 +1147,11 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     report.add(check_optional_extra("mcp", extra="mcp", purpose="MCP server mode"))
     report.add(check_optional_extra("ddgs", extra="web", purpose="DuckDuckGo web_search"))
     report.add(check_optional_extra("readability", extra="web", purpose="web_fetch article extraction"))
+    # Audio transcription (spec §8.1): local Whisper extra, TUI mic extra,
+    # and cloud API key sanity when a cloud backend is selected.
+    report.add(check_stt_installed())
+    report.add(check_voice_extra())
+    report.add(check_stt_cloud_keys())
     # Service-level checks: when the user opted into daemon mode or the
     # webui dashboard, verify they're actually up.
     report.add(check_gateway_daemon())
