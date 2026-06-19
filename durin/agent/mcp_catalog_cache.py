@@ -82,6 +82,8 @@ class McpCatalogCache:
 
     def rank(self, query: str, *, limit: int, quality: str = "official",
              min_stars: int = 100) -> list[McpServerHit]:
+        enriched = any((s.get("_github") or {}).get("stars") is not None for s in self._servers)
+        gated = quality != "all" and enriched
         scored: list[tuple[float, int, dict]] = []
         for s in self._servers:
             sc = max(_score(query, s.get("name", "")),
@@ -93,7 +95,7 @@ class McpCatalogCache:
             official = classify_official(
                 s.get("name", ""), owner_type=gh.get("owner_type", ""), stars=stars
             )
-            if quality != "all":
+            if gated:
                 if not ((stars or 0) > min_stars or official):
                     continue
             s = {**s, "official": official}

@@ -91,3 +91,18 @@ async def test_rank_all_disables_gate(tmp_path):
     cache._servers = [_srv("io.github.a/playwright-mini", "playwright clone", 5)]
     hits = cache.rank("playwright", limit=10, quality="all", min_stars=100)
     assert len(hits) == 1
+
+
+@pytest.mark.asyncio
+async def test_rank_unenriched_disables_gate(tmp_path):
+    """When no server has _github stars (unenriched catalog), quality gate must be
+    disabled so tokenless users still get results instead of near-empty results."""
+    cache = McpCatalogCache(tmp_path / "c.json")
+    # Unenriched: _github is absent or empty — no stars data at all
+    cache._servers = [
+        {"name": "io.github.foo/bar", "description": "playwright tool"},
+    ]
+    hits = cache.rank("playwright", limit=10, quality="official", min_stars=100)
+    # Gate must be disabled because catalog is unenriched; server must be returned
+    assert len(hits) == 1
+    assert hits[0].ref == "io.github.foo/bar"
