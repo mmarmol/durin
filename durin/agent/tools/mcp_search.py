@@ -14,7 +14,12 @@ from typing import Any
 from durin.agent.mcp_catalog_cache import McpCatalogCache
 from durin.agent.mcp_registry import build_mcp_adapters, search_mcp_registries
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.schema import BooleanSchema, IntegerSchema, StringSchema, tool_parameters_schema
+from durin.agent.tools.schema import (
+    BooleanSchema,
+    IntegerSchema,
+    StringSchema,
+    tool_parameters_schema,
+)
 
 logger = logging.getLogger(__name__)
 
