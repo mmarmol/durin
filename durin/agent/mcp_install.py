@@ -23,17 +23,23 @@ _RUNTIME_INSTALL = {
 }
 
 
-def _is_docker(pkg) -> bool:
-    """True when the package launches via docker — an OCI image, or an explicit
-    ``runtime_hint=="docker"``. OCI packages carry no runtime_hint in the registry."""
-    return pkg.registry_type == "oci" or pkg.runtime_hint == "docker"
+# Registry package type -> the runtime that launches it, used when the server omits
+# runtimeHint (common: microsoft/playwright-mcp is npm with an empty hint; github is
+# oci with an empty hint). An explicit runtime_hint always wins over this.
+_REGISTRY_RUNTIME = {"npm": "npx", "pypi": "uvx", "oci": "docker"}
 
 
 def package_runtime(pkg) -> str:
-    """The effective runtime binary needed to launch this package (``docker`` for OCI)."""
-    if _is_docker(pkg):
-        return "docker"
-    return pkg.runtime_hint or ""
+    """The effective runtime binary to launch this package. An explicit ``runtime_hint``
+    wins; otherwise infer from the registry type (npm→npx, pypi→uvx, oci→docker), since
+    the registry frequently omits the hint (which would otherwise yield an empty command
+    → a 422 on install)."""
+    return pkg.runtime_hint or _REGISTRY_RUNTIME.get(pkg.registry_type, "")
+
+
+def _is_docker(pkg) -> bool:
+    """True when the package launches via docker (an OCI image or ``runtime_hint=="docker"``)."""
+    return package_runtime(pkg) == "docker"
 
 
 def runtime_present(runtime_hint: str) -> bool:
@@ -89,7 +95,7 @@ def _stdio_args(pkg) -> list[str]:
         return ["run", "-i", "--rm", *e_flags, *pkg.runtime_arguments, ident,
                 *pkg.package_arguments]
     args = list(pkg.runtime_arguments)
-    if pkg.runtime_hint == "npx" and "-y" not in args:
+    if package_runtime(pkg) == "npx" and "-y" not in args:
         args.insert(0, "-y")
     return [*args, ident, *pkg.package_arguments]
 

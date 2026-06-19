@@ -47,6 +47,28 @@ def test_build_local_config_pins_version_and_secret_ref():
     assert sc.env["JIRA_TOKEN"] == "${secret:MCP_JIRA_TOKEN}"
 
 
+def test_build_npm_config_infers_npx_when_runtime_hint_empty():
+    """The registry often omits runtimeHint (e.g. microsoft/playwright-mcp is npm with an
+    empty hint) — infer the runtime from registry_type so the command isn't empty (422)."""
+    d = _detail(packages=[PackageSpec(
+        registry_type="npm", identifier="@playwright/mcp", version="0.0.76",
+        runtime_hint="", transport_type="stdio",
+        runtime_arguments=[], package_arguments=[], env=[])])
+    sc = build_server_config_from_detail(d, prefer="local", secret_env_refs={})
+    assert sc.command == "npx"
+    assert sc.args == ["-y", "@playwright/mcp@0.0.76"]
+
+
+def test_build_pypi_config_infers_uvx_when_runtime_hint_empty():
+    d = _detail(packages=[PackageSpec(
+        registry_type="pypi", identifier="some-mcp", version="1.2.3",
+        runtime_hint="", transport_type="stdio",
+        runtime_arguments=[], package_arguments=[], env=[])])
+    sc = build_server_config_from_detail(d, prefer="local", secret_env_refs={})
+    assert sc.command == "uvx"
+    assert sc.args == ["some-mcp==1.2.3"]
+
+
 def test_build_oci_docker_config_forwards_secret_via_e_flag():
     """An OCI package (empty runtime_hint) launches via `docker run`, forwarding each
     env var with a passthrough `-e NAME` flag — the secret lives in env (resolved at
