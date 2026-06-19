@@ -12,7 +12,7 @@ from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["DreamError", "LLMResponse", "LLMInvoke", "default_llm_invoke"]
+__all__ = ["DreamError", "LLMResponse", "LLMInvoke", "default_llm_invoke", "aux_llm_invoke"]
 
 
 def _retry_llm_call(call, *, mode: str = "standard"):
@@ -120,6 +120,44 @@ def default_llm_invoke(
         text=content or "",
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
+    )
+
+
+def aux_llm_invoke(prompt, *, preset, config, temperature: float = 0.1) -> LLMResponse:
+    """Provider-aware single-prompt completion for out-of-loop callers (memory
+    dream, skill judge). Builds the provider from ``preset`` — the user's resolved
+    provider / model / endpoint / key — and runs one user turn through the
+    provider's own retry policy. No hardcoded model or endpoint."""
+    import asyncio
+
+    from durin.providers.factory import make_provider
+
+    provider = make_provider(config, preset=preset)
+    try:
+        mode = config.defaults.provider_retry_mode
+    except Exception:  # noqa: BLE001 — config optional
+        mode = "standard"
+
+    resp = asyncio.run(
+        provider.chat_with_retry(
+            messages=[{"role": "user", "content": prompt}],
+            tools=None,
+            model=preset.model,
+            temperature=temperature,
+            retry_mode=mode,
+        )
+    )
+    usage = getattr(resp, "usage", None) or {}
+    content = getattr(resp, "content", None)
+    if content is None:
+        logger.warning(
+            "aux LLM (%s) returned no content (refusal or empty); treating as empty",
+            preset.model,
+        )
+    return LLMResponse(
+        text=content or "",
+        prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
+        completion_tokens=int(usage.get("completion_tokens", 0) or 0),
     )
 
 
