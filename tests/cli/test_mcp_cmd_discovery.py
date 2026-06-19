@@ -15,24 +15,18 @@ def _config(tmp_path, monkeypatch):
     monkeypatch.setattr("durin.config.loader._current_config_path", path)
 
 
-class _Reg:
-    name = "official"
+def _seed(monkeypatch, servers):
+    from durin.agent import mcp_catalog_store
 
-    async def fetch_page(self, *, cursor=None, updated_since=None):
-        return [{"name": "io.x/jira", "description": "Jira issues"}], None
-
-    async def search(self, query, *, limit):
-        from durin.agent.mcp_registry import _hit_from_server
-
-        servers, _ = await self.fetch_page()
-        return [_hit_from_server(s, registry="official") for s in servers][:limit]
+    monkeypatch.setattr(mcp_catalog_store, "load_servers", lambda: servers)
 
 
 def test_mcp_search_cli(tmp_path, monkeypatch):
     _config(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_Reg()]
-    )
+    _seed(monkeypatch, [
+        {"name": "io.x/jira", "ref": "io.x/jira",
+         "description": "Jira issues", "official": True},
+    ])
     res = runner.invoke(mcp_app, ["search", "jira"])
     assert res.exit_code == 0
     assert "io.x/jira" in res.stdout
@@ -40,7 +34,7 @@ def test_mcp_search_cli(tmp_path, monkeypatch):
 
 def test_mcp_search_cli_empty(tmp_path, monkeypatch):
     _config(tmp_path, monkeypatch)
-    monkeypatch.setattr("durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [])
+    _seed(monkeypatch, [])
     res = runner.invoke(mcp_app, ["search", "zzz"])
     assert res.exit_code == 0
     assert "No servers found" in res.stdout

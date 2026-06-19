@@ -103,6 +103,7 @@ class McpOauthLoginResult(Result):
 class McpRegistrySearchQuery(Query):
     q: str = ""
     limit: int = 10
+    include_all: bool = False
 
 
 class McpRegistryDescribeQuery(Query):
@@ -113,6 +114,21 @@ class McpRegistryInstallCommand(Command):
     ref: str
     prefer: str = "remote"  # "remote" | "local"
     env_values: dict[str, str] | None = None  # required/secret env collected from the user
+
+
+class McpRuntimeStatusQuery(Query):
+    ref: str
+    prefer: str = "local"  # "remote" | "local" — which model the user intends to install
+
+
+class McpRuntimeStatusResult(Result):
+    """Whether the host can launch a registry server's local package right now."""
+
+    kind: str  # "local" | "remote" (remote needs no local runtime)
+    runtime: str  # "docker" | "npx" | "uvx" | "" (remote)
+    present: bool  # the runtime binary is on PATH
+    auto_installable: bool  # durin/the user can install it with a package manager
+    install_command: str  # copy-paste command when missing+auto-installable, else ""
 
 
 class McpUpdatesQuery(Query):
@@ -372,17 +388,16 @@ class McpService:
         self, query: McpRegistrySearchQuery, principal: Principal
     ) -> McpRegistrySearchResult:
         principal.require(Scope.MCP_READ)
-        from durin.agent.mcp_catalog_cache import McpCatalogCache
-        from durin.agent.mcp_registry import build_mcp_adapters, search_mcp_registries
-        from durin.config.loader import get_config_path, load_config
+        from durin.agent.mcp_registry import search_mcp_registries
+        from durin.config.loader import load_config
 
         disc = load_config().tools.mcp_discovery
-        cache = McpCatalogCache(get_config_path().parent / "mcp_catalog.json")
+        quality = "all" if query.include_all else disc.quality
         hits = await search_mcp_registries(
             query.q,
-            cache=cache,
-            adapters=build_mcp_adapters(disc.registries),
             limit=query.limit or disc.search_limit,
+            quality=quality,
+            min_stars=disc.min_stars,
         )
         return McpRegistrySearchResult(hits=[_reg_hit(h) for h in hits])
 
@@ -444,6 +459,51 @@ class McpService:
         return await self.add(
             McpServerUpsertCommand(name=server_name, config=sc), principal
         )
+
+    @route(
+        "GET",
+        "/api/v1/mcp/registry/runtime",
+        scope=Scope.MCP_READ.value,
+        request_model=McpRuntimeStatusQuery,
+        response_model=McpRuntimeStatusResult,
+        summary="Report whether the host has the runtime to launch a registry server",
+    )
+    async def registry_runtime(
+        self, query: McpRuntimeStatusQuery, principal: Principal
+    ) -> McpRuntimeStatusResult:
+        principal.require(Scope.MCP_READ)
+        from durin.agent.mcp_install import (
+            package_runtime,
+            runtime_install_command,
+            runtime_present,
+        )
+        from durin.agent.mcp_registry import build_mcp_adapters
+        from durin.config.loader import load_config
+
+        disc = load_config().tools.mcp_discovery
+        detail = None
+        for adapter in build_mcp_adapters(disc.registries):
+            detail = await adapter.describe(query.ref)
+            if detail is not None:
+                break
+        if detail is None:
+            raise NotFoundError("server not found in registry", details={"ref": query.ref})
+
+        use_local = (query.prefer == "local" and detail.packages) or (
+            not detail.remotes and detail.packages
+        )
+        if not use_local:
+            # A hosted server runs on the provider — nothing to install locally.
+            return McpRuntimeStatusResult(
+                kind="remote", runtime="", present=True,
+                auto_installable=False, install_command="")
+        rt = package_runtime(detail.packages[0])
+        present = runtime_present(rt) if rt else True
+        cmd = runtime_install_command(rt)
+        return McpRuntimeStatusResult(
+            kind="local", runtime=rt, present=present,
+            auto_installable=cmd is not None,
+            install_command="" if present else (cmd or ""))
 
     @route(
         "GET",

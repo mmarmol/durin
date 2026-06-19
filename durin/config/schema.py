@@ -476,6 +476,11 @@ class McpDiscoveryConfig(Base):
         default_factory=lambda: [McpRegistryConfig(name="official", kind="official")])
     search_limit: int = 10
     install_policy: Literal["never", "approve", "auto"] = "approve"
+    quality: Literal["official", "all"] = "official"
+    """Default discovery view. 'official' applies the star/first-party gate
+    (§3.3 of the design); 'all' returns the full registry (legacy firehose)."""
+    min_stars: int = 100
+    """Star floor for the 'official' gate; user-configurable."""
 
 
 class SkillsConfig(Base):
@@ -1043,6 +1048,24 @@ class CatalogRefreshConfig(Base):
     )
 
 
+class McpCatalogRefreshConfig(Base):
+    """Periodic refresh of the durin-owned MCP catalog from a raw GitHub URL.
+
+    A top-level section (not under ``tools``) — mirrors the shape of
+    ``CatalogRefreshConfig`` for the skills model catalog.
+    """
+
+    enabled: bool = True
+    # Published weekly as a release asset (see .github/workflows/mcp-catalog.yml) —
+    # a release asset, not a committed file, so the weekly rebuild never bloats git history.
+    url: str = "https://github.com/mmarmol/durin/releases/download/catalog/mcp_catalog.json"
+    interval_hours: int = Field(
+        default=168, ge=1,
+        validation_alias=AliasChoices("intervalHours", "interval_hours"),
+        serialization_alias="intervalHours",
+    )
+
+
 class Config(BaseSettings):
     """Root configuration for durin."""
 
@@ -1056,6 +1079,11 @@ class Config(BaseSettings):
         default_factory=CatalogRefreshConfig,
         validation_alias=AliasChoices("catalogRefresh", "catalog_refresh"),
         serialization_alias="catalogRefresh",
+    )
+    mcp_catalog_refresh: McpCatalogRefreshConfig = Field(
+        default_factory=McpCatalogRefreshConfig,
+        validation_alias=AliasChoices("mcpCatalogRefresh", "mcp_catalog_refresh"),
+        serialization_alias="mcpCatalogRefresh",
     )
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

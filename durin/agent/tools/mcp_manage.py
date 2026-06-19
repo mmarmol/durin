@@ -15,7 +15,6 @@ for a local server whose runtime is missing) runs through the ExecTool gate.
 """
 from __future__ import annotations
 
-import sys
 from typing import Any
 
 from durin.agent.mcp_registry import build_mcp_adapters
@@ -45,16 +44,6 @@ _PARAMETERS = tool_parameters_schema(
 
 def _name_from_ref(ref: str) -> str:
     return (ref.rsplit("/", 1)[-1] or ref).strip()
-
-
-def _runtime_command(spec: dict) -> str | None:
-    if sys.platform == "darwin" and "brew" in spec:
-        return f"brew install {spec['brew']}"
-    if "apt" in spec:
-        return f"apt-get install -y {spec['apt']}"
-    if "brew" in spec:
-        return f"brew install {spec['brew']}"
-    return None
 
 
 @tool_parameters(_PARAMETERS)
@@ -165,7 +154,8 @@ class McpManageTool(Tool):
         from durin.agent.mcp_install import (
             build_server_config_from_detail,
             collect_secret_env,
-            runtime_install_spec,
+            package_runtime,
+            runtime_install_command,
             runtime_present,
         )
         from durin.service.mcp import McpServerUpsertCommand
@@ -192,10 +182,9 @@ class McpManageTool(Tool):
 
         runtime_plan: dict | None = None
         if use_local:
-            rt = detail.packages[0].runtime_hint
+            rt = package_runtime(detail.packages[0])
             if not runtime_present(rt):
-                spec = runtime_install_spec(rt)
-                cmd = _runtime_command(spec) if spec else None
+                cmd = runtime_install_command(rt)
                 runtime_plan = {"runtime": rt, "command": cmd,
                                 "auto_installable": cmd is not None}
 
