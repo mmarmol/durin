@@ -39,6 +39,8 @@ REGISTRY: dict[str, FeatureExtra] = {
     "memory_vector": FeatureExtra("memory_vector", "memory", "fastembed", True, "~400 MB", "Vector memory"),
     "local_models": FeatureExtra("local_models", "local", "llama_cpp", True, "~200 MB", "Local models"),
     "oauth": FeatureExtra("oauth", "oauth", "oauth_cli_kit", False, "~5 MB", "OAuth providers"),
+    "stt": FeatureExtra("stt", "stt", "faster_whisper", True, "~1.5 GB", "Audio transcription (Whisper)"),
+    "voice": FeatureExtra("voice", "voice", "sounddevice", False, "~5 MB", "Microphone recording"),
 }
 
 _LOCKS: dict[str, threading.Lock] = {}
