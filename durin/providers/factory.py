@@ -275,3 +275,15 @@ def load_provider_snapshot(
         preset_name=preset_name,
         preset=preset,
     )
+
+
+def load_default_preset(config_path: Path | None = None) -> ModelPresetConfig:
+    """Resolve the implicit ``default`` preset from the live on-disk config.
+
+    The runtime captures ``model_presets["default"]`` once at construction; the
+    daemon refresh uses this to re-read it so a default-model change in Settings
+    is reflected without a restart.
+    """
+    from durin.config.loader import load_config, resolve_config_env_vars
+
+    return resolve_config_env_vars(load_config(config_path)).resolve_default_preset()

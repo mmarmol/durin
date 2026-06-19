@@ -292,6 +292,12 @@ Two top-level blocks:
 
 `durin/providers/` ships adapters for Anthropic, OpenAI-compat (Z.ai, OpenRouter, Azure, Ollama, LM Studio, Gemini, and 25+ others), Bedrock, GitHub Copilot, local llama-cpp, OpenAI Codex, and a fallback wrapper. `factory.make_provider(config)` resolves the active provider/model from config + presets.
 
+### Runtime model switching (presets)
+
+The active model is a **preset**, resolved through `loop.set_model_preset(name)`. Named presets (`config.model_presets`) and the reserved `default` (resolved from `agents.defaults.{provider,model}` via `config.resolve_default_preset()`) live in `loop.model_presets`. `/model` switches presets, `/effort` clones the active preset with a different `reasoning_effort`; the picker (`agent/model_picker.py`) commits a `default` ref or an explicit `provider model` pair.
+
+The daemon re-reads the on-disk config at the start of every message (`_refresh_provider_snapshot`, via `factory.load_provider_snapshot`), so a model change in Settings takes effect without a restart. **`model_presets["default"]` is captured once at construction**, so that same refresh re-resolves it through `factory.load_default_preset` (the loop's `default_preset_loader`, wired only on the gateway). Without this, name-based resolution of `default` — which prefers the in-memory preset object over re-reading config (`factory._resolve_model_preset`) — would keep serving the model that was default at startup, silently reverting `/model default` and `/effort` to the previous model.
+
 ### OAuth providers (Codex / Copilot)
 
 `is_oauth` providers carry no API key. The token lives in `oauth-cli-kit`'s

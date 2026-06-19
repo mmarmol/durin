@@ -1244,7 +1244,11 @@ def _run_gateway(
     from durin.cron.service import CronService
     from durin.cron.types import CronJob
     from durin.heartbeat.service import HeartbeatService
-    from durin.providers.factory import build_provider_snapshot, load_provider_snapshot
+    from durin.providers.factory import (
+        build_provider_snapshot,
+        load_default_preset,
+        load_provider_snapshot,
+    )
     from durin.session.manager import SessionManager
 
     port = port if port is not None else config.gateway.port
@@ -1276,6 +1280,7 @@ def _run_gateway(
         cron_service=cron,
         session_manager=session_manager,
         provider_snapshot_loader=load_provider_snapshot,
+        default_preset_loader=load_default_preset,
         runtime_model_publisher=lambda model, preset: publish_runtime_model_update(
             bus,
             model,
