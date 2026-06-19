@@ -214,7 +214,7 @@ async def test_judge_runs_on_quarantined_skill(tmp_path: Path, monkeypatch: pyte
     ws = _make_workspace(tmp_path)
     _make_quarantine(ws, "cand")
     monkeypatch.setattr(
-        "durin.memory.llm_invoke.default_llm_invoke",
+        "durin.memory.llm_invoke.judge_llm_invoke",
         lambda prompt, *, model=None: "===FINDINGS===\n===END===\n",
     )
     svc = _svc(ws)
@@ -244,6 +244,22 @@ async def test_approve_without_confirm_raises_conflict(tmp_path: Path) -> None:
             SkillApproveCommand(name="newskill", confirm=False), Principal.local()
         )
     assert "refused" in exc.value.details
+
+
+async def test_approve_with_install_deps_does_not_500(tmp_path: Path) -> None:
+    """Regression: approve with install_deps=True (what the webui's approve button
+    sends) built the exec tool ctx from the top-level Config, but ExecTool.create
+    reads ctx.config.exec — a ToolsConfig field — so it raised AttributeError →
+    HTTP 500. _get_exec_run must hand ExecTool the tools sub-config."""
+    ws = _make_workspace(tmp_path)
+    _make_quarantine(ws, "cand")
+    svc = _svc(ws)
+    result = await svc.approve(
+        SkillApproveCommand(name="cand", confirm=True, install_deps=True),
+        Principal.local(),
+    )
+    assert result.data.get("ok") is True
+    assert result.data.get("deps_results") == []  # no specs → empty, never a 500
 
 
 async def test_resolve_lists_local_candidates(tmp_path: Path) -> None:

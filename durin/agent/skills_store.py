@@ -889,18 +889,23 @@ async def web_skill_install_deps(workspace: Path, name: str, *,
 
 
 def _get_exec_run(workspace: Path):
-    """Create an async exec_run callable using the app config + ExecTool."""
+    """Create an async exec_run callable using the app config + ExecTool.
+
+    ``ExecTool.create`` reads ``ctx.config.exec`` / ``.restrict_to_workspace`` /
+    ``.process`` — all fields of ``ToolsConfig`` — so the ctx must carry the tools
+    sub-config, NOT the top-level ``Config`` (which has no ``exec`` and raised
+    AttributeError → HTTP 500 on any install_deps approve)."""
     from durin.agent.tools.shell import ExecTool
     from durin.config.loader import load_config
 
-    cfg = load_config()
+    tools_cfg = load_config().tools
 
     class _Ctx:
         def __init__(self, ws, config):
             self.workspace = ws
             self.config = config
 
-    return ExecTool.create(_Ctx(workspace, cfg)).execute
+    return ExecTool.create(_Ctx(workspace, tools_cfg)).execute
 
 
 def _spec_for_bin(skill_dir: Path, bin_name: str) -> list[dict]:
@@ -1018,8 +1023,8 @@ def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
     _, model, max_sev = _import_judge()
     det = scan_skill(qdir)
     try:
-        from durin.memory.llm_invoke import default_llm_invoke
-        outcome = judge_skill(qdir, llm_invoke=default_llm_invoke, model=model or "glm-5.1",
+        from durin.memory.llm_invoke import judge_llm_invoke
+        outcome = judge_skill(qdir, llm_invoke=judge_llm_invoke, model=model or "",
                               max_severity=max_sev)
     except JudgeError as exc:
         code = "parse" if "parse" in str(exc).lower() else "unreachable"

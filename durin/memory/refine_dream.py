@@ -106,7 +106,7 @@ def run_refine(
     workspace: Path,
     *,
     llm_invoke: LLMInvoke | None = None,
-    model: str = "glm-5.1",
+    model: str | None = None,
     confidence_threshold: int = 95,
     min_age_hours: int = 0,
 ) -> dict:

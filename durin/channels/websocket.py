@@ -655,7 +655,7 @@ class WebSocketChannel(BaseChannel):
 
         from durin.agent import skills_store as ss
         from durin.agent.skills_surface import _skill_dirs
-        from durin.memory.llm_invoke import default_llm_invoke_astream
+        from durin.memory.llm_invoke import judge_llm_invoke_astream
         from durin.providers.base import LLMProvider
         from durin.security.skill_judge import JudgeError, judge_skill_astream
         from durin.security.skill_scan import ScanReport, scan_skill
@@ -680,8 +680,8 @@ class WebSocketChannel(BaseChannel):
 
         try:
             outcome = await judge_skill_astream(
-                target, ainvoke_stream=default_llm_invoke_astream,
-                model=model or "glm-5.1", max_severity=max_sev, on_reasoning=on_reasoning,
+                target, ainvoke_stream=judge_llm_invoke_astream,
+                model=model or "", max_severity=max_sev, on_reasoning=on_reasoning,
             )
         except JudgeError as exc:
             await self.send_reasoning_end(chat_id)
