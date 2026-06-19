@@ -48,6 +48,13 @@ const ACCEPTED_MIMES: ReadonlySet<string> = new Set([
   "audio/flac",
 ]);
 
+/** Normalize a MIME type by stripping the ``;codecs=...`` suffix so that
+ * ``audio/webm;codecs=opus`` matches the whitelist entry ``audio/webm``.
+ * MediaRecorder produces the codec-qualified form; the whitelist uses bare. */
+function normalizeMime(mime: string): string {
+  return mime.split(";")[0].trim().toLowerCase();
+}
+
 function uuid(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -74,7 +81,7 @@ export function useAttachedAudio(): UseAttachedAudioApi {
     let slot = MAX_AUDIO_PER_MESSAGE - audioRef.current.length;
 
     for (const file of files) {
-      if (!ACCEPTED_MIMES.has(file.type)) {
+      if (!ACCEPTED_MIMES.has(normalizeMime(file.type))) {
         rejected.push({ file, reason: "unsupported_type" });
         continue;
       }

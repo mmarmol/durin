@@ -470,8 +470,9 @@ export function ThreadComposer({
           setValue((prev) => (prev ? `${prev}\n[transcripción]: "${clean}"` : `[transcripción]: "${clean}"`));
           resizeTextareaRef.current();
         }
-      } catch {
-        setInlineError("Audio transcription failed — check your [stt] setup.");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setInlineError(`Audio transcription failed: ${msg}`);
       }
     },
     [onTranscribeAudio],
