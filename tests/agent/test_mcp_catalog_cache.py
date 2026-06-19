@@ -2,6 +2,7 @@
 import pytest
 
 from durin.agent.mcp_catalog_cache import McpCatalogCache
+from durin.agent.mcp_github import GithubMeta
 
 
 class _Reg:
@@ -34,3 +35,27 @@ async def test_cache_persists_across_instances(tmp_path):
     await McpCatalogCache(p).sync(_Reg([{"name": "io.x/a", "description": "alpha tool"}]))
     # a fresh instance loads the cached catalog from disk, no sync needed
     assert McpCatalogCache(p).rank("alpha", limit=5)[0].ref == "io.x/a"
+
+
+class _FakeRegistry:
+    async def fetch_page(self, *, cursor=None, updated_since=None):
+        return [
+            {"name": "com.stripe/mcp", "description": "pay",
+             "repository": {"url": "https://github.com/stripe/agent-toolkit"}},
+        ], None
+
+
+@pytest.mark.asyncio
+async def test_sync_attaches_github_meta(tmp_path):
+    cache = McpCatalogCache(tmp_path / "cat.json")
+
+    def enrich(repo_keys):
+        assert ("stripe", "agent-toolkit") in repo_keys
+        return {("stripe", "agent-toolkit"): GithubMeta(stars=900, owner_login="stripe",
+                owner_type="Organization", owner_url="https://github.com/stripe")}
+
+    n = await cache.sync(_FakeRegistry(), enrich=enrich)
+    assert n == 1
+    srv = cache._servers[0]
+    assert srv["_github"]["stars"] == 900
+    assert srv["_github"]["owner_login"] == "stripe"

@@ -9,9 +9,11 @@ with the stdlib ``difflib`` (no new dependency).
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from durin.agent.mcp_github import parse_repo_url
 from durin.agent.mcp_registry import McpServerHit, _hit_from_server
 from durin.utils.atomic_write import atomic_write_text
 
@@ -42,7 +44,7 @@ class McpCatalogCache:
             except (OSError, json.JSONDecodeError):
                 self._servers, self._meta = [], {}
 
-    async def sync(self, registry) -> int:
+    async def sync(self, registry, *, enrich=None) -> int:
         """Pull every page from ``registry`` (cursor pagination) into the cache."""
         by_name = {s.get("name"): s for s in self._servers if s.get("name")}
         cursor = None
@@ -57,12 +59,26 @@ class McpCatalogCache:
             if not cursor:
                 break
         self._servers = list(by_name.values())
+        if enrich is not None:
+            self._attach_github(enrich)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(
             self._path,
             json.dumps({"servers": self._servers, "meta": self._meta}, ensure_ascii=False),
         )
         return len(self._servers)
+
+    def _attach_github(self, enrich) -> None:
+        repo_of: dict[str, tuple[str, str]] = {}
+        for s in self._servers:
+            rk = parse_repo_url((s.get("repository") or {}).get("url", ""))
+            if rk:
+                repo_of[s["name"]] = rk
+        meta = enrich(list({rk for rk in repo_of.values()}))
+        for s in self._servers:
+            rk = repo_of.get(s["name"])
+            g = meta.get((rk[0].lower(), rk[1].lower())) if rk else None
+            s["_github"] = asdict(g) if g is not None else {}
 
     def rank(self, query: str, *, limit: int) -> list[McpServerHit]:
         scored: list[tuple[float, dict]] = []
