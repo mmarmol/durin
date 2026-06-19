@@ -1,24 +1,22 @@
 import socket
 
-from durin.utils.net import pick_free_port
+from durin.utils.net import port_is_available
 
 
-def test_returns_preferred_when_free() -> None:
+def test_available_when_free() -> None:
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
     free = s.getsockname()[1]
     s.close()
-    assert pick_free_port("127.0.0.1", free) == free
+    assert port_is_available("127.0.0.1", free) is True
 
 
-def test_falls_back_when_taken() -> None:
+def test_taken_when_active_listener() -> None:
     held = socket.socket()
     held.bind(("127.0.0.1", 0))
-    held.listen(1)  # an ACTIVE listener — the condition a real daemon creates
+    held.listen(1)  # an ACTIVE listener — the real collision condition
     taken = held.getsockname()[1]
     try:
-        got = pick_free_port("127.0.0.1", taken)
-        assert got != taken
-        assert got > 0
+        assert port_is_available("127.0.0.1", taken) is False
     finally:
         held.close()

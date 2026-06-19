@@ -37,10 +37,6 @@ __all__ = [
     "daemon_pid_path",
     "daemon_logs_path",
     "daemon_boot_logs_path",
-    "daemon_runtime_path",
-    "write_daemon_runtime",
-    "read_daemon_runtime_url",
-    "clear_daemon_runtime",
     "GATEWAY_LOG_FILE_ENV",
 ]
 
@@ -84,43 +80,6 @@ def daemon_boot_logs_path() -> Path:
     logs = _state_root() / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     return logs / "gateway.boot.log"
-
-
-def daemon_runtime_path() -> Path:
-    """Per-instance file recording the daemon's actually-bound dashboard URL."""
-    return _state_root() / "gateway-runtime.json"
-
-
-def write_daemon_runtime(*, webui_url: str | None) -> None:
-    """Record the live dashboard URL so ``status`` and the launcher report the
-    real port — which may differ from config when a port was auto-picked."""
-    import json
-
-    try:
-        daemon_runtime_path().write_text(
-            json.dumps({"webui_url": webui_url}), encoding="utf-8"
-        )
-    except OSError:
-        pass
-
-
-def read_daemon_runtime_url() -> str | None:
-    """The live dashboard URL recorded by a running daemon, or ``None``."""
-    import json
-
-    try:
-        data = json.loads(daemon_runtime_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    url = data.get("webui_url") if isinstance(data, dict) else None
-    return url if isinstance(url, str) and url else None
-
-
-def clear_daemon_runtime() -> None:
-    try:
-        daemon_runtime_path().unlink()
-    except OSError:
-        pass
 
 
 # ---------------------------------------------------------------------------

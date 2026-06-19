@@ -1043,16 +1043,7 @@ def gateway_root(
 
 
 def _resolved_webui_url() -> str | None:
-    """Return the URL where the webui dashboard would be served, if enabled.
-
-    Prefers the live URL a running daemon recorded (its actually-bound port may
-    differ from config when auto-picked); falls back to the config-derived URL.
-    """
-    from durin.cli.gateway_daemon import read_daemon_runtime_url
-
-    live = read_daemon_runtime_url()
-    if live:
-        return live
+    """Return the URL where the webui dashboard would be served, if enabled."""
     try:
         from durin.config.loader import load_config
 
@@ -1812,6 +1803,39 @@ def _run_gateway(
         except Exception as e:
             console.print(f"[yellow]Could not open browser ({e}); visit {open_browser_url}[/yellow]")
 
+    def _check_ports_free() -> bool:
+        """Configured ports are authoritative — we never silently move them
+        (that breaks a user's URL/scripts and is unpredictable in dev/test). If
+        one is genuinely taken (another instance listening), report it with clear
+        guidance. A socket merely in TIME_WAIT from a just-stopped daemon reads
+        as available, so a restart re-binds the same port."""
+        from durin.config.home import durin_home
+        from durin.utils.net import port_is_available
+
+        ws = getattr(config.channels, "websocket", None)
+        if isinstance(ws, dict):
+            ws_host, ws_port = ws.get("host", "127.0.0.1"), ws.get("port", 8765)
+        elif ws is not None:
+            ws_host = getattr(ws, "host", "127.0.0.1") or "127.0.0.1"
+            ws_port = getattr(ws, "port", 8765) or 8765
+        else:
+            ws_host, ws_port = "127.0.0.1", 8765
+        for label, host_, port_ in (
+            ("gateway", config.gateway.host, port),
+            ("websocket dashboard", ws_host, ws_port),
+        ):
+            if not port_is_available(host_, port_):
+                console.print(
+                    f"[red]Port {port_} ({label}) on {host_} is already in use — "
+                    f"another durin instance?[/red]"
+                )
+                console.print(
+                    f"  Set this instance's port in its config "
+                    f"(DURIN_HOME={durin_home()}), then retry."
+                )
+                return False
+        return True
+
     async def run():
         # Without an explicit SIGTERM handler, Python's default action
         # terminates the process instantly — the `finally` block below
@@ -1820,6 +1844,8 @@ def _run_gateway(
         # would die with nothing in the log. Install async signal
         # handlers so SIGTERM/SIGINT/SIGHUP all trigger a logged,
         # graceful shutdown.
+        if not _check_ports_free():
+            return
         loop = asyncio.get_running_loop()
         gathered: asyncio.Future | None = None
         api_server = None      # SP4: optional 2nd-port uvicorn front door
@@ -1882,12 +1908,8 @@ def _run_gateway(
                     static_token=_static_token_u,
                     static_dist_path=_ws_channel._static_dist_path,
                 )
-                from durin.utils.net import pick_free_port
-
+                _ws_port = _ws_channel.config.port  # type: ignore[attr-defined]
                 _ws_host = _ws_channel.config.host  # type: ignore[attr-defined]
-                _ws_port = pick_free_port(
-                    _ws_host, _ws_channel.config.port  # type: ignore[attr-defined]
-                )
                 _ws_ssl_cert = getattr(_ws_channel.config, "ssl_certfile", "") or ""
                 _ws_ssl_key = getattr(_ws_channel.config, "ssl_keyfile", "") or ""
                 _uvicorn_kwargs: dict = dict(
@@ -1912,21 +1934,11 @@ def _run_gateway(
                     f"{_scheme}://{_ws_host}:{_ws_port} "
                     f"(WS + /api/v1 + SPA)"
                 )
-                if getattr(config.gateway, "webui_enabled", False):
-                    _dash_scheme = "https" if (_ws_ssl_cert and _ws_ssl_key) else "http"
-                    from durin.cli.gateway_daemon import write_daemon_runtime
 
-                    write_daemon_runtime(
-                        webui_url=f"{_dash_scheme}://{_ws_host}:{_ws_port}/"
-                    )
-
-            from durin.utils.net import pick_free_port as _pick_free_port
-
-            _health_port = _pick_free_port(config.gateway.host, port)
             tasks = [
                 agent.run(),
                 channels.start_all(),
-                _health_server(config.gateway.host, _health_port),
+                _health_server(config.gateway.host, port),
             ]
             if unified_server is not None:
                 tasks.append(unified_server.serve())
@@ -1944,9 +1956,6 @@ def _run_gateway(
             console.print(traceback.format_exc())
             logger.error("Gateway crashed unexpectedly:\n{}", traceback.format_exc())
         finally:
-            from durin.cli.gateway_daemon import clear_daemon_runtime
-
-            clear_daemon_runtime()
             await agent.close_mcp()
             heartbeat.stop()
             cron.stop()
