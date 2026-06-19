@@ -1150,6 +1150,10 @@ def _patch_cli_command_runtime(
     )
     monkeypatch.setattr("durin.config.loader.load_config", lambda _path=None: config)
     monkeypatch.setattr("durin.config.loader.resolve_config_env_vars", lambda c: c)
+    # The gateway start path probes its configured ports for real; these tests
+    # don't exercise port-collision behaviour and must not depend on whatever is
+    # listening on the host (e.g. a developer's daily daemon on 8765).
+    monkeypatch.setattr("durin.utils.net.port_is_available", lambda *_a, **_k: True)
     monkeypatch.setattr(
         "durin.cli.commands.sync_workspace_templates",
         sync_templates or (lambda _path: None),
