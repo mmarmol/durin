@@ -184,7 +184,7 @@ class OfficialMcpRegistry:
         self._http = http or _DefaultHTTP()
 
     async def search(self, query: str, *, limit: int) -> list[McpServerHit]:
-        q = urllib.parse.urlencode({"search": query, "limit": min(limit, 100)})
+        q = urllib.parse.urlencode({"search": query, "limit": min(limit, 100), "version": "latest"})
         data = await self._http.get_json(f"{self.BASE}/v0/servers?{q}")
         hits = [
             _hit_from_server(e.get("server") or {}, registry=self.name)
@@ -201,7 +201,7 @@ class OfficialMcpRegistry:
         return parse_server_json(data.get("server") or data)
 
     async def fetch_page(self, *, cursor: str | None = None, updated_since: str | None = None):
-        params: dict = {"limit": 100}
+        params: dict = {"limit": 100, "version": "latest"}
         if cursor:
             params["cursor"] = cursor
         if updated_since:
