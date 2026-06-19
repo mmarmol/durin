@@ -14,7 +14,7 @@ from typing import Any
 from durin.agent.mcp_catalog_cache import McpCatalogCache
 from durin.agent.mcp_registry import build_mcp_adapters, search_mcp_registries
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
+from durin.agent.tools.schema import BooleanSchema, IntegerSchema, StringSchema, tool_parameters_schema
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,9 @@ _PARAMETERS = tool_parameters_schema(
     ),
     limit=IntegerSchema(
         description="Max results to return (default from config).", minimum=1
+    ),
+    include_all=BooleanSchema(
+        description="Include community/unverified servers (bypass the stars filter). Default false."
     ),
     description=(
         "Search the MCP registry for an installable server. Returns ranked hits, "
@@ -37,10 +40,12 @@ _PARAMETERS = tool_parameters_schema(
 class McpSearchTool(Tool):
     """mcp_search tool — unified search over MCP registries."""
 
-    def __init__(self, cache_path, registries=None, limit: int = 10) -> None:
+    def __init__(self, cache_path, registries=None, limit: int = 10, quality="official", min_stars=100) -> None:
         self._cache_path = Path(cache_path)
         self._registries = list(registries or [])
         self._limit = int(limit or 10)
+        self._quality = quality
+        self._min_stars = min_stars
 
     @property
     def name(self) -> str:
@@ -68,6 +73,8 @@ class McpSearchTool(Tool):
             cache_path=get_config_path().parent / "mcp_catalog.json",
             registries=list(disc.registries),
             limit=int(disc.search_limit),
+            quality=disc.quality,
+            min_stars=disc.min_stars,
         )
 
     async def execute(self, **kwargs: Any) -> Any:
@@ -75,11 +82,15 @@ class McpSearchTool(Tool):
         if not query:
             return {"error": "query is required"}
         limit = int(kwargs.get("limit") or self._limit)
+        include_all = bool(kwargs.get("include_all"))
+        quality = "all" if include_all else self._quality
         hits = await search_mcp_registries(
             query,
             cache=McpCatalogCache(self._cache_path),
             adapters=build_mcp_adapters(self._registries),
             limit=limit,
+            quality=quality,
+            min_stars=self._min_stars,
         )
         return {
             "hits": [asdict(h) for h in hits],
