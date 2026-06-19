@@ -46,7 +46,6 @@ def test_quality_filter_defaults():
     c = McpDiscoveryConfig()
     assert c.quality == "official"
     assert c.min_stars == 100
-    assert c.github_token_secret == ""
 
 
 def test_quality_accepts_all():

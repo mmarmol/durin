@@ -481,10 +481,6 @@ class McpDiscoveryConfig(Base):
     (§3.3 of the design); 'all' returns the full registry (legacy firehose)."""
     min_stars: int = 100
     """Star floor for the 'official' gate; user-configurable."""
-    github_token_secret: str = ""
-    """durin secret NAME holding a GitHub token (raises rate limits, enables
-    GraphQL enrichment). Mirrors skills.security.github_token_secret; empty →
-    fall back to gh/env, else anonymous (gate disabled). See Task 3 / Task 10."""
 
 
 class SkillsConfig(Base):
@@ -1052,6 +1048,22 @@ class CatalogRefreshConfig(Base):
     )
 
 
+class McpCatalogRefreshConfig(Base):
+    """Periodic refresh of the durin-owned MCP catalog from a raw GitHub URL.
+
+    A top-level section (not under ``tools``) — mirrors the shape of
+    ``CatalogRefreshConfig`` for the skills model catalog.
+    """
+
+    enabled: bool = True
+    url: str = "https://raw.githubusercontent.com/mmarmol/durin/main/durin/agent/data/mcp_catalog.json"
+    interval_hours: int = Field(
+        default=168, ge=1,
+        validation_alias=AliasChoices("intervalHours", "interval_hours"),
+        serialization_alias="intervalHours",
+    )
+
+
 class Config(BaseSettings):
     """Root configuration for durin."""
 
@@ -1065,6 +1077,11 @@ class Config(BaseSettings):
         default_factory=CatalogRefreshConfig,
         validation_alias=AliasChoices("catalogRefresh", "catalog_refresh"),
         serialization_alias="catalogRefresh",
+    )
+    mcp_catalog_refresh: McpCatalogRefreshConfig = Field(
+        default_factory=McpCatalogRefreshConfig,
+        validation_alias=AliasChoices("mcpCatalogRefresh", "mcp_catalog_refresh"),
+        serialization_alias="mcpCatalogRefresh",
     )
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
