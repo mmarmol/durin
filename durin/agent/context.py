@@ -410,6 +410,8 @@ class ContextBuilder:
         session_key: str | None = None,
         tools: list[dict[str, Any]] | None = None,
         iteration: int | None = None,
+        audio_mode: str = "auto",
+        supports_audio_input: bool = False,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         # Concern B: the task-state anchor groups goal + decision log + todos
@@ -442,7 +444,11 @@ class ContextBuilder:
             sender_id=sender_id,
             supplemental_lines=extra or None,
         )
-        user_content = self._build_user_content(current_message, media)
+        user_content = self._build_user_content(
+            current_message, media,
+            audio_mode=audio_mode,
+            supports_audio_input=supports_audio_input,
+        )
 
         # Merge runtime context and user content into a single user message
         # to avoid consecutive same-role messages that some providers reject.
@@ -585,28 +591,79 @@ class ContextBuilder:
             # Telemetry failure must never break the turn build.
             return
 
-    def _build_user_content(self, text: str, media: list[str] | None) -> str | list[dict[str, Any]]:
-        """Build user message content with optional base64-encoded images."""
+    def _build_user_content(
+        self,
+        text: str,
+        media: list[str] | None,
+        *,
+        audio_mode: str = "auto",
+        supports_audio_input: bool = False,
+    ) -> str | list[dict[str, Any]]:
+        """Build user message content with optional base64-encoded media.
+
+        - **Images** are always inlined as ``image_url`` blocks.
+        - **Audio** is handled per ``audio_mode``:
+            * ``"auto"``/``"preview"`` (default): audio was already transcribed
+              upstream by :class:`~durin.service.transcription.TranscriptionService`,
+              so it never arrives here. Audio paths in ``media`` are skipped
+              (avoid silently inlining them).
+            * ``"off"``: the user opted out of transcription — audio reaches the
+              model natively as an ``input_audio`` block when
+              ``supports_audio_input`` is true. When the model lacks audio input,
+              the audio is dropped with a textual note (no silent loss).
+        """
         if not media:
             return text
 
-        images = []
+        blocks: list[dict[str, Any]] = []
+        dropped_audio: list[str] = []
         for path in media:
             p = Path(path)
             if not p.is_file():
                 continue
             raw = p.read_bytes()
             mime = detect_image_mime(raw) or mimetypes.guess_type(path)[0]
-            if not mime or not mime.startswith("image/"):
+            if mime and mime.startswith("image/"):
+                b64 = base64.b64encode(raw).decode()
+                blocks.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"},
+                    "_meta": {"path": str(p)},
+                })
                 continue
-            b64 = base64.b64encode(raw).decode()
-            images.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:{mime};base64,{b64}"},
-                "_meta": {"path": str(p)},
-            })
+            # Audio: only relevant in 'off' mode (otherwise it was transcribed
+            # upstream and the transcript already replaced the path in text).
+            if audio_mode != "off":
+                continue
+            from durin.agent.tools.interpret_audio import _detect_audio_format
+            fmt = _detect_audio_format(raw)
+            if fmt is None:
+                dropped_audio.append(p.name)
+                continue
+            if supports_audio_input:
+                b64 = base64.b64encode(raw).decode()
+                blocks.append({
+                    "type": "input_audio",
+                    "input_audio": {"data": b64, "format": fmt},
+                    "_meta": {"path": str(p)},
+                })
+            else:
+                dropped_audio.append(p.name)
 
-        if not images:
+        if not blocks:
+            # Text-only fallback; surface any dropped audio so it's not silent.
+            if dropped_audio:
+                note = (
+                    f"[attached audio not transcribed (mode=off) and the "
+                    f"model lacks audio input: {', '.join(dropped_audio)}]"
+                )
+                return f"{text}\n\n{note}" if text else note
             return text
-        return images + [{"type": "text", "text": text}]
+        if dropped_audio:
+            blocks.append({
+                "type": "text",
+                "text": f"[attached audio not transcribed (mode=off) and the "
+                        f"model lacks audio input: {', '.join(dropped_audio)}]",
+            })
+        return blocks + [{"type": "text", "text": text}]
 
