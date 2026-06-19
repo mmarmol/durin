@@ -1,10 +1,7 @@
 """C-Task 4 — McpCatalogRefreshConfig defaults and wiring on Config."""
 from durin.config.schema import Config, McpCatalogRefreshConfig
 
-_EXPECTED_URL = (
-    "https://raw.githubusercontent.com/mmarmol/durin/main"
-    "/durin/agent/data/mcp_catalog.json"
-)
+_EXPECTED_URL = "https://github.com/mmarmol/durin/releases/download/catalog/mcp_catalog.json"
 
 
 def test_defaults():

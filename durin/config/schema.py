@@ -1056,7 +1056,9 @@ class McpCatalogRefreshConfig(Base):
     """
 
     enabled: bool = True
-    url: str = "https://raw.githubusercontent.com/mmarmol/durin/main/durin/agent/data/mcp_catalog.json"
+    # Published weekly as a release asset (see .github/workflows/mcp-catalog.yml) —
+    # a release asset, not a committed file, so the weekly rebuild never bloats git history.
+    url: str = "https://github.com/mmarmol/durin/releases/download/catalog/mcp_catalog.json"
     interval_hours: int = Field(
         default=168, ge=1,
         validation_alias=AliasChoices("intervalHours", "interval_hours"),
