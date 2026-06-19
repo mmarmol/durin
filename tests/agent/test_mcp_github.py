@@ -1,5 +1,5 @@
 import pytest
-from durin.agent.mcp_github import parse_repo_url, resolve_token
+from durin.agent.mcp_github import parse_repo_url, resolve_token, GithubMeta, fetch_repo_meta
 
 
 @pytest.mark.parametrize("url,expected", [
@@ -35,3 +35,39 @@ def test_resolve_token_durin_env_then_secret():
 
 def test_resolve_token_none():
     assert resolve_token(env={}, gh_runner=lambda: None) is None
+
+
+def _fake_post(query, token):
+    # one repo present, one missing (null node)
+    return {"data": {
+        "r0": {"stargazerCount": 30810,
+               "owner": {"__typename": "Organization", "login": "github",
+                         "url": "https://github.com/github",
+                         "avatarUrl": "https://avatars/github"},
+               "repositoryTopics": {"nodes": [{"topic": {"name": "mcp"}},
+                                               {"topic": {"name": "git"}}]},
+               "primaryLanguage": {"name": "Go"},
+               "licenseInfo": {"spdxId": "MIT"},
+               "description": "GitHub MCP server."},
+        "r1": None,
+    }}
+
+
+def test_fetch_repo_meta_parses_and_handles_missing():
+    out = fetch_repo_meta([("github", "github-mcp-server"), ("ghost", "gone")],
+                          token="t", post=_fake_post)
+    g = out[("github", "github-mcp-server")]
+    assert isinstance(g, GithubMeta)
+    assert g.stars == 30810
+    assert g.owner_type == "Organization"
+    assert g.owner_login == "github"
+    assert g.owner_url == "https://github.com/github"
+    assert g.topics == ["mcp", "git"]
+    assert g.language == "Go"
+    assert g.license == "MIT"
+    missing = out[("ghost", "gone")]
+    assert missing.stars is None
+
+
+def test_fetch_repo_meta_empty():
+    assert fetch_repo_meta([], token="t", post=_fake_post) == {}

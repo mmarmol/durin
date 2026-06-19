@@ -5,6 +5,7 @@ no-op and the quality gate is disabled (see mcp_catalog_cache / search).
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -63,3 +64,84 @@ def resolve_token(
         if tok := secret_getter(secret_name):
             return tok
     return None
+
+
+_GQL = "https://api.github.com/graphql"
+
+
+@dataclass
+class GithubMeta:
+    stars: int | None = None
+    owner_login: str = ""
+    owner_type: str = ""
+    owner_url: str = ""
+    owner_avatar: str = ""
+    topics: list[str] = field(default_factory=list)
+    language: str = ""
+    license: str = ""
+    about: str = ""
+
+
+def _default_post(query: str, token: str) -> dict:
+    import httpx
+
+    with httpx.Client(timeout=40.0) as client:
+        resp = client.post(
+            _GQL,
+            json={"query": query},
+            headers={"Authorization": f"bearer {token}", "User-Agent": "durin-mcp"},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _repo_field(alias: str, owner: str, name: str) -> str:
+    o = json.dumps(owner)
+    n = json.dumps(name)
+    return (
+        f'{alias}: repository(owner: {o}, name: {n}) {{ stargazerCount '
+        f'owner {{ __typename login url avatarUrl }} '
+        f'repositoryTopics(first: 6) {{ nodes {{ topic {{ name }} }} }} '
+        f'primaryLanguage {{ name }} licenseInfo {{ spdxId }} description }}'
+    )
+
+
+def _parse_node(node: dict) -> GithubMeta:
+    owner = node.get("owner") or {}
+    topics = [
+        (t.get("topic") or {}).get("name", "")
+        for t in ((node.get("repositoryTopics") or {}).get("nodes") or [])
+    ]
+    return GithubMeta(
+        stars=node.get("stargazerCount", 0),
+        owner_login=owner.get("login", ""),
+        owner_type=owner.get("__typename", ""),
+        owner_url=owner.get("url", ""),
+        owner_avatar=owner.get("avatarUrl", ""),
+        topics=[t for t in topics if t],
+        language=(node.get("primaryLanguage") or {}).get("name", ""),
+        license=(node.get("licenseInfo") or {}).get("spdxId", "") or "",
+        about=node.get("description") or "",
+    )
+
+
+def fetch_repo_meta(
+    repo_keys: list[tuple[str, str]], *, token: str, post=None, batch: int = 80
+) -> dict[tuple[str, str], GithubMeta]:
+    """Resolve GitHub metadata for repos via batched GraphQL. Missing repos get
+    GithubMeta(stars=None). Keys in the returned dict are lowercased."""
+    post = _default_post if post is None else post
+    out: dict[tuple[str, str], GithubMeta] = {}
+    for i in range(0, len(repo_keys), batch):
+        chunk = repo_keys[i : i + batch]
+        query = "query {\n" + "\n".join(
+            _repo_field(f"r{j}", o, n) for j, (o, n) in enumerate(chunk)
+        ) + "\n}"
+        try:
+            data = (post(query, token) or {}).get("data") or {}
+        except Exception:  # noqa: BLE001 — degrade: leave this batch unresolved
+            data = {}
+        for j, (o, n) in enumerate(chunk):
+            node = data.get(f"r{j}")
+            out[(o.lower(), n.lower())] = _parse_node(node) if node else GithubMeta(stars=None)
+    return out
