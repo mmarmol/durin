@@ -266,13 +266,14 @@ def _spawn_catalog_sync(cache, adapter) -> None:
     task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
-async def search_mcp_registries(query, *, cache, adapters, limit):
+async def search_mcp_registries(query, *, cache, adapters, limit,
+                                quality="official", min_stars=100):
     """Rank from the local fuzzy cache when populated; otherwise return the registry's
     fast direct (substring) results and kick a background sync to build the cache."""
     if cache._servers:
-        return cache.rank(query, limit=limit)
+        return cache.rank(query, limit=limit, quality=quality, min_stars=min_stars)
     official = next((a for a in adapters if getattr(a, "name", "") == "official"), None)
     if official is None:
-        return cache.rank(query, limit=limit)
+        return cache.rank(query, limit=limit, quality=quality, min_stars=min_stars)
     _spawn_catalog_sync(cache, official)
     return await official.search(query, limit=limit)

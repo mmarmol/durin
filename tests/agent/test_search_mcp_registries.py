@@ -50,3 +50,18 @@ async def test_background_sync_survives_and_populates_cache(tmp_path):
         await asyncio.gather(*list(_BACKGROUND_TASKS))
     # a fresh cache loads the catalog the background task wrote to disk
     assert McpCatalogCache(tmp_path / "c.json")._servers
+
+
+@pytest.mark.asyncio
+async def test_search_forwards_quality(tmp_path):
+    cache = McpCatalogCache(tmp_path / "c.json")
+    cache._servers = [
+        {"name": "io.github.x/y", "description": "github thing",
+         "_github": {"stars": 3, "owner_type": "User"}},
+    ]
+    # default (official) gate hides the low-star server...
+    assert await search_mcp_registries("github", cache=cache, adapters=[], limit=5) == []
+    # ...quality="all" returns it
+    hits = await search_mcp_registries("github", cache=cache, adapters=[], limit=5,
+                                       quality="all")
+    assert len(hits) == 1
