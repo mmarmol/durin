@@ -142,7 +142,8 @@ GitHub to improve results" buttons in skills/MCP deep-link there. Design spec pe
 refuted per-client enrichment (paginate 12.8k + GraphQL-enrich ~9.7k repos took >8 min, ×every
 client — does not scale). Chosen architecture: a **weekly CI build job** produces the enriched
 catalog (registry + GitHub stars + classify), **vendored in the wheel** (day-1/offline floor) and
-**refreshed client-side ≤1/day** from the public repo's raw URL — clients never hit the registry/
+**refreshed client-side weekly** from a rolling GitHub **release asset** (rebuilt by CI weekly; a
+release asset, not a committed file, so no git-history bloat) — clients never hit the registry/
 GitHub, decoupled from the upstream provider. Mirrors `durin/providers/catalog_refresh.py` 1:1
 (vendored floor + overlay + daemon scheduler). Spec:
 `.workdocs/superpowers/specs/2026-06-19-mcp-discovery-quality-filter-design.md` (v2).
