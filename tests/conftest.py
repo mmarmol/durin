@@ -75,6 +75,26 @@ def _testclient_localhost_peer():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_durin_home(tmp_path_factory, monkeypatch):
+    """Run every test as a throwaway durin instance.
+
+    ``durin_home()`` reads ``$DURIN_HOME`` with priority over ``Path.home()``,
+    so an ambient DURIN_HOME (a dev shell) would leak into tests, and an unset
+    one would point them at the real ``~/.durin`` — colliding with a running
+    daemon (SQLite/lock contention) and polluting the live deploy. Pin a fresh
+    per-test home so the suite never touches ``~/.durin`` and passes under any
+    ambient environment. A test that needs the default/unset behaviour controls
+    DURIN_HOME itself (see ``tests/config/test_config_paths.py``).
+    """
+    import durin.config.loader as _loader
+
+    home = tmp_path_factory.mktemp("durin_home")
+    monkeypatch.setenv("DURIN_HOME", str(home))
+    monkeypatch.setattr(_loader, "_current_config_path", None, raising=False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _test_default_author_scope():
     with author_scope("agent_created"):
         yield

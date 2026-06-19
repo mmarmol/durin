@@ -27,6 +27,10 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(Path, "home", lambda: home)
+    # The autouse conftest fixture pins DURIN_HOME to an unrelated tmp; these
+    # tests plant tokens/config under ``home/.durin``, so point durin_home()
+    # there too (it reads $DURIN_HOME with priority over Path.home()).
+    monkeypatch.setenv("DURIN_HOME", str(home / ".durin"))
     return home
 
 
