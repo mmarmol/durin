@@ -107,6 +107,9 @@ export interface BootstrapResponse {
   ws_path: string;
   expires_in: number;
   model_name?: string | null;
+  /** Active preset name (carries the effort suffix, e.g. "default:high") so the
+   *  composer's reasoning-effort picker is correct on first load. */
+  model_preset?: string | null;
   /** True when this deploy gates bootstrap on a setup secret. When
    *  false, the gateway auto-mints tokens for localhost — there's
    *  nothing for the user to "log out from", so the webui hides the

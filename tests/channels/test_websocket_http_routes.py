@@ -20,6 +20,7 @@ def _ch(
     session_manager: SessionManager | None = None,
     static_dist_path: Path | None = None,
     runtime_model_name: Any | None = None,
+    runtime_model_preset: Any | None = None,
     **extra: Any,
 ) -> WebSocketChannel:
     cfg: dict[str, Any] = {
@@ -37,6 +38,8 @@ def _ch(
     }
     if runtime_model_name is not None:
         ws_kwargs["runtime_model_name"] = runtime_model_name
+    if runtime_model_preset is not None:
+        ws_kwargs["runtime_model_preset"] = runtime_model_preset
     return WebSocketChannel(
         cfg,
         bus,
@@ -110,6 +113,30 @@ def test_bootstrap_returns_token_for_localhost(
     assert body["ws_path"] == "/"
     assert body["expires_in"] > 0
     assert isinstance(body.get("model_name"), str)
+
+
+def test_bootstrap_includes_active_model_preset(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bootstrap carries the active preset (with its effort suffix) so the
+    dashboard reflects the real reasoning effort on first load, not just after a
+    live switch."""
+    monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
+    client = _make_client(
+        bus,
+        session_manager=_seed_session(tmp_path),
+        runtime_model_preset=lambda: "default:high",
+    )
+    body = client.get("/webui/bootstrap").json()
+    assert body["model_preset"] == "default:high"
+
+
+def test_bootstrap_model_preset_null_without_resolver(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
+    client = _make_client(bus, session_manager=_seed_session(tmp_path))
+    assert client.get("/webui/bootstrap").json()["model_preset"] is None
 
 
 def test_sessions_routes_require_bearer_token(

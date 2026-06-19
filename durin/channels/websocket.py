@@ -162,6 +162,22 @@ def _resolve_bootstrap_model_name(
     return _default_model_name_from_config()
 
 
+def _resolve_bootstrap_model_preset(
+    runtime_preset: Callable[[], str | None] | None,
+) -> str | None:
+    """Active preset name for bootstrap (carries the effort suffix, e.g.
+    ``default:high``) so the dashboard's effort picker is correct on first load,
+    not only after a live switch. Runtime-only, so no config fallback."""
+    if runtime_preset is None:
+        return None
+    try:
+        raw = runtime_preset()
+    except Exception as e:
+        logger.debug("bootstrap runtime preset resolver failed: {}", e)
+        return None
+    return raw.strip() or None if isinstance(raw, str) else None
+
+
 def _query_first(query: dict[str, list[str]], key: str) -> str | None:
     """Return the first value for *key*, or None."""
     values = query.get(key)
@@ -384,6 +400,7 @@ class WebSocketChannel(BaseChannel):
         session_manager: "SessionManager | None" = None,
         static_dist_path: Path | None = None,
         runtime_model_name: Callable[[], str | None] | None = None,
+        runtime_model_preset: Callable[[], str | None] | None = None,
         cron_service: "CronService | None" = None,
     ):
         if isinstance(config, dict):
@@ -403,6 +420,7 @@ class WebSocketChannel(BaseChannel):
             static_dist_path.resolve() if static_dist_path is not None else None
         )
         self._runtime_model_name = runtime_model_name
+        self._runtime_model_preset = runtime_model_preset
         # Running CronService (same process). Used only by the run-now
         # endpoint so a manual trigger reaches the live scheduler + its
         # in-process overlap guard. None outside the gateway (tests).
@@ -596,6 +614,7 @@ class WebSocketChannel(BaseChannel):
             "ws_path": self._expected_path(),
             "expires_in": self.config.token_ttl_s,
             "model_name": _resolve_bootstrap_model_name(self._runtime_model_name),
+            "model_preset": _resolve_bootstrap_model_preset(self._runtime_model_preset),
             # True when this deploy gates bootstrap on a setup secret
             # (token_issue_secret or static token). The webui uses this to decide
             # whether to expose a "Logout" affordance — without a secret in play,
