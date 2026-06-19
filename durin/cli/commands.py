@@ -1043,7 +1043,16 @@ def gateway_root(
 
 
 def _resolved_webui_url() -> str | None:
-    """Return the URL where the webui dashboard would be served, if enabled."""
+    """Return the URL where the webui dashboard would be served, if enabled.
+
+    Prefers the live URL a running daemon recorded (its actually-bound port may
+    differ from config when auto-picked); falls back to the config-derived URL.
+    """
+    from durin.cli.gateway_daemon import read_daemon_runtime_url
+
+    live = read_daemon_runtime_url()
+    if live:
+        return live
     try:
         from durin.config.loader import load_config
 
@@ -1873,8 +1882,12 @@ def _run_gateway(
                     static_token=_static_token_u,
                     static_dist_path=_ws_channel._static_dist_path,
                 )
-                _ws_port = _ws_channel.config.port  # type: ignore[attr-defined]
+                from durin.utils.net import pick_free_port
+
                 _ws_host = _ws_channel.config.host  # type: ignore[attr-defined]
+                _ws_port = pick_free_port(
+                    _ws_host, _ws_channel.config.port  # type: ignore[attr-defined]
+                )
                 _ws_ssl_cert = getattr(_ws_channel.config, "ssl_certfile", "") or ""
                 _ws_ssl_key = getattr(_ws_channel.config, "ssl_keyfile", "") or ""
                 _uvicorn_kwargs: dict = dict(
@@ -1899,11 +1912,21 @@ def _run_gateway(
                     f"{_scheme}://{_ws_host}:{_ws_port} "
                     f"(WS + /api/v1 + SPA)"
                 )
+                if getattr(config.gateway, "webui_enabled", False):
+                    _dash_scheme = "https" if (_ws_ssl_cert and _ws_ssl_key) else "http"
+                    from durin.cli.gateway_daemon import write_daemon_runtime
 
+                    write_daemon_runtime(
+                        webui_url=f"{_dash_scheme}://{_ws_host}:{_ws_port}/"
+                    )
+
+            from durin.utils.net import pick_free_port as _pick_free_port
+
+            _health_port = _pick_free_port(config.gateway.host, port)
             tasks = [
                 agent.run(),
                 channels.start_all(),
-                _health_server(config.gateway.host, port),
+                _health_server(config.gateway.host, _health_port),
             ]
             if unified_server is not None:
                 tasks.append(unified_server.serve())
@@ -1921,6 +1944,9 @@ def _run_gateway(
             console.print(traceback.format_exc())
             logger.error("Gateway crashed unexpectedly:\n{}", traceback.format_exc())
         finally:
+            from durin.cli.gateway_daemon import clear_daemon_runtime
+
+            clear_daemon_runtime()
             await agent.close_mcp()
             heartbeat.stop()
             cron.stop()
