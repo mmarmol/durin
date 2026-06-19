@@ -83,6 +83,7 @@ async def test_audio_transcribe_envelope_returns_transcript(tmp_path):
     envelope = {
         "type": "audio_transcribe",
         "chat_id": "c1",
+        "request_id": "req-123",
         "media": [{"data_url": data_url, "name": "a.wav"}],
     }
     await ch._dispatch_envelope(conn, "client1", envelope)
@@ -92,6 +93,7 @@ async def test_audio_transcribe_envelope_returns_transcript(tmp_path):
     assert len(transcripts) == 1
     assert transcripts[0]["transcript"] == "hello from audio"
     assert transcripts[0]["name"] == "a.wav"
+    assert transcripts[0]["request_id"] == "req-123"
 
 
 @pytest.mark.asyncio
@@ -113,6 +115,7 @@ async def test_audio_transcribe_envelope_no_service_replies_disabled(tmp_path):
     envelope = {
         "type": "audio_transcribe",
         "chat_id": "c1",
+        "request_id": "req-456",
         "media": [{"data_url": data_url, "name": "a.wav"}],
     }
     await ch._dispatch_envelope(conn, "client1", envelope)
@@ -122,3 +125,4 @@ async def test_audio_transcribe_envelope_no_service_replies_disabled(tmp_path):
     assert len(transcripts) == 1
     assert transcripts[0]["error"] == "disabled"
     assert transcripts[0]["transcript"] == ""
+    assert transcripts[0]["request_id"] == "req-456"

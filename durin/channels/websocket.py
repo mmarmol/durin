@@ -1156,6 +1156,7 @@ class WebSocketChannel(BaseChannel):
             # the transcript so the composer can insert editable text before
             # the message is sent. Keeps the existing WS pattern; no polling.
             cid = envelope.get("chat_id")
+            request_id = envelope.get("request_id")
             raw_media = envelope.get("media")
             if not isinstance(raw_media, list) or not raw_media:
                 await self._send_event(
@@ -1174,14 +1175,16 @@ class WebSocketChannel(BaseChannel):
                 if service is None:
                     await self._send_event(
                         connection, "audio_transcript",
-                        chat_id=cid, name=name, transcript="", error="disabled",
+                        chat_id=cid, request_id=request_id, name=name,
+                        transcript="", error="disabled",
                     )
                     continue
                 try:
                     result = await service.transcribe_and_cache(path)
                     await self._send_event(
                         connection, "audio_transcript",
-                        chat_id=cid, name=name, transcript=result.text,
+                        chat_id=cid, request_id=request_id, name=name,
+                        transcript=result.text,
                     )
                 except Exception:
                     self.logger.exception(
@@ -1189,7 +1192,8 @@ class WebSocketChannel(BaseChannel):
                     )
                     await self._send_event(
                         connection, "audio_transcript",
-                        chat_id=cid, name=name, transcript="", error="failed",
+                        chat_id=cid, request_id=request_id, name=name,
+                        transcript="", error="failed",
                     )
             return
         if t == "secret_store":
