@@ -476,6 +476,15 @@ class McpDiscoveryConfig(Base):
         default_factory=lambda: [McpRegistryConfig(name="official", kind="official")])
     search_limit: int = 10
     install_policy: Literal["never", "approve", "auto"] = "approve"
+    quality: Literal["official", "all"] = "official"
+    """Default discovery view. 'official' applies the star/first-party gate
+    (§3.3 of the design); 'all' returns the full registry (legacy firehose)."""
+    min_stars: int = 100
+    """Star floor for the 'official' gate; user-configurable."""
+    github_token_secret: str = ""
+    """durin secret NAME holding a GitHub token (raises rate limits, enables
+    GraphQL enrichment). Mirrors skills.security.github_token_secret; empty →
+    fall back to gh/env, else anonymous (gate disabled). See Task 3 / Task 10."""
 
 
 class SkillsConfig(Base):
