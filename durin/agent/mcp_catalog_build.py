@@ -54,7 +54,8 @@ def build_catalog(*, fetch_page, fetch_repo_meta, now: str) -> dict:
     unique_keys: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for s in all_servers:
-        key = parse_repo_url(_repo_url(s))
+        raw = parse_repo_url(_repo_url(s))
+        key = (raw[0].lower(), raw[1].lower()) if raw else None
         server_repo_keys.append(key)
         if key and key not in seen:
             seen.add(key)

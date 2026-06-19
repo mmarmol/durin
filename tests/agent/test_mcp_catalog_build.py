@@ -223,3 +223,47 @@ def test_fetch_repo_meta_called_once_with_unique_repos():
     # No-repo servers should not be in the list
     all_names = [name for (_, name) in called_repos]
     assert "norepo-mcp" not in all_names
+
+
+def test_mixed_case_repo_url_enriched():
+    """Repos with mixed-case owner/name in the URL must be enriched correctly.
+
+    fetch_repo_meta stores results under lowercased keys (matching GitHub's
+    case-insensitive repo identity). build_catalog must normalise to lowercase
+    before looking up, otherwise the lookup silently misses and stars==None.
+    """
+    _SERVER_MIXED_CASE = {
+        "name": "io.github.ChromeDevTools/chrome-devtools-mcp",
+        "description": "Chrome DevTools MCP",
+        "packages": [{"registryType": "npm", "identifier": "@chrome/mcp"}],
+        "remotes": [],
+        "repository": {"url": "https://github.com/ChromeDevTools/chrome-devtools-mcp"},
+    }
+
+    def fetch_page_single(*, cursor=None, updated_since=None):
+        return ([_SERVER_MIXED_CASE], None)
+
+    # fetch_repo_meta returns lowercased keys — mirrors real implementation
+    def fetch_meta_lowercased(repo_keys, *, token, post=None, batch=80):
+        return {
+            ("chromedevtools", "chrome-devtools-mcp"): GithubMeta(
+                stars=43982,
+                owner_login="ChromeDevTools",
+                owner_type="Organization",
+                owner_url="https://github.com/ChromeDevTools",
+                owner_avatar="https://avatars.githubusercontent.com/chromedevtools",
+                topics=["devtools"],
+                language="TypeScript",
+                license="Apache-2.0",
+                about="Chrome DevTools MCP server.",
+            )
+        }
+
+    result = build_catalog(
+        fetch_page=fetch_page_single,
+        fetch_repo_meta=fetch_meta_lowercased,
+        now=_NOW,
+    )
+    s = result["servers"][0]
+    assert s["stars"] == 43982, f"Expected stars=43982, got {s['stars']} (lookup missed due to case mismatch)"
+    assert s["official"] is True  # Organization + >1000 stars
