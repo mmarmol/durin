@@ -59,3 +59,35 @@ async def test_sync_attaches_github_meta(tmp_path):
     srv = cache._servers[0]
     assert srv["_github"]["stars"] == 900
     assert srv["_github"]["owner_login"] == "stripe"
+
+
+def _srv(name, desc, stars, owner_type="User"):
+    return {"name": name, "description": desc,
+            "_github": {"stars": stars, "owner_type": owner_type, "owner_login": "x"}}
+
+
+@pytest.mark.asyncio
+async def test_rank_gate_and_sort(tmp_path):
+    cache = McpCatalogCache(tmp_path / "c.json")
+    cache._servers = [
+        _srv("io.github.a/playwright-mini", "playwright clone", 5),       # excluded (<100, not official)
+        _srv("io.github.microsoft/playwright-mcp", "playwright", 34000, "Organization"),  # kept
+        _srv("com.acme/playwright", "playwright vendor", 3, "Organization"),  # kept (official vendor domain)
+    ]
+    hits = cache.rank("playwright", limit=10, quality="official", min_stars=100)
+    refs = [h.ref for h in hits]
+    assert "io.github.a/playwright-mini" not in refs
+    assert refs[0] == "io.github.microsoft/playwright-mcp"  # most stars first
+    assert "com.acme/playwright" in refs
+    # signals carried
+    top = hits[0]
+    assert top.signals.get("stars") == 34000
+    assert top.signals.get("official") is True
+
+
+@pytest.mark.asyncio
+async def test_rank_all_disables_gate(tmp_path):
+    cache = McpCatalogCache(tmp_path / "c.json")
+    cache._servers = [_srv("io.github.a/playwright-mini", "playwright clone", 5)]
+    hits = cache.rank("playwright", limit=10, quality="all", min_stars=100)
+    assert len(hits) == 1

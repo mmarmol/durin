@@ -148,12 +148,22 @@ def _hit_from_server(obj: dict, *, registry: str) -> McpServerHit:
     has_pkg = bool(obj.get("packages"))
     has_remote = bool(obj.get("remotes"))
     kind = "both" if (has_pkg and has_remote) else ("local" if has_pkg else "remote")
+    gh = obj.get("_github") or {}
+    signals = {k: gh[k] for k in (
+        "stars", "owner_login", "owner_type", "owner_url", "owner_avatar",
+        "topics", "language", "license",
+    ) if k in gh}
+    if "official" in obj:
+        signals["official"] = obj["official"]
+    if (obj.get("repository") or {}).get("url"):
+        signals["repo_url"] = obj["repository"]["url"]
     return McpServerHit(
         name=obj.get("name", ""),
         ref=obj.get("name", ""),
         registry=registry,
         kind=kind,
         description=obj.get("description", ""),
+        signals=signals,
     )
 
 

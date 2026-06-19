@@ -13,7 +13,7 @@ from dataclasses import asdict
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from durin.agent.mcp_github import parse_repo_url
+from durin.agent.mcp_github import classify_official, parse_repo_url
 from durin.agent.mcp_registry import McpServerHit, _hit_from_server
 from durin.utils.atomic_write import atomic_write_text
 
@@ -80,11 +80,23 @@ class McpCatalogCache:
             g = meta.get((rk[0].lower(), rk[1].lower())) if rk else None
             s["_github"] = asdict(g) if g is not None else {}
 
-    def rank(self, query: str, *, limit: int) -> list[McpServerHit]:
-        scored: list[tuple[float, dict]] = []
+    def rank(self, query: str, *, limit: int, quality: str = "official",
+             min_stars: int = 100) -> list[McpServerHit]:
+        scored: list[tuple[float, int, dict]] = []
         for s in self._servers:
-            sc = max(_score(query, s.get("name", "")), _score(query, s.get("description", "")))
-            if sc > 0.2:
-                scored.append((sc, s))
-        scored.sort(key=lambda pair: pair[0], reverse=True)
-        return [_hit_from_server(s, registry="official") for _, s in scored[:limit]]
+            sc = max(_score(query, s.get("name", "")),
+                     _score(query, s.get("description", "")))
+            if sc <= 0.2:
+                continue
+            gh = s.get("_github") or {}
+            stars = gh.get("stars")
+            official = classify_official(
+                s.get("name", ""), owner_type=gh.get("owner_type", ""), stars=stars
+            )
+            if quality != "all":
+                if not ((stars or 0) > min_stars or official):
+                    continue
+            s = {**s, "official": official}
+            scored.append((sc, stars or -1, s))
+        scored.sort(key=lambda t: (t[1], t[0]), reverse=True)
+        return [_hit_from_server(s, registry="official") for _, _, s in scored[:limit]]
