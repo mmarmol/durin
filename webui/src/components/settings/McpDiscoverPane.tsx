@@ -215,6 +215,9 @@ export function McpDiscoverPane({
     const envs = requiredEnv(detail, prefer);
     const hasLocal = detail.packages.length > 0;
     const hasRemote = detail.remotes.length > 0;
+    const missingRequired = envs.some(
+      (e) => (e.is_required || e.is_secret) && !(envValues[e.name] ?? "").trim(),
+    );
 
     // Enrich from the hit that triggered the detail view
     const stars = selectedHit?.signals.stars as number | undefined;
@@ -354,8 +357,16 @@ export function McpDiscoverPane({
 
         {error ? <p className="text-[12px] text-destructive">{error}</p> : null}
 
+        {missingRequired ? (
+          <p className="text-[12px] text-muted-foreground">{tx("fillRequired")}</p>
+        ) : null}
+
         <div className="flex gap-2">
-          <Button size="sm" onClick={() => void doInstall()} disabled={installing}>
+          <Button
+            size="sm"
+            onClick={() => void doInstall()}
+            disabled={installing || missingRequired}
+          >
             {installing
               ? tx("adding")
               : prefer === "remote"

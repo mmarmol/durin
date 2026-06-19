@@ -536,7 +536,8 @@
         "showingOfficial": "Mostrando solo oficiales",
         "showAll": "Mostrar todos",
         "showingAll": "Mostrando todos",
-        "officialOnly": "Solo oficiales"
+        "officialOnly": "Solo oficiales",
+        "fillRequired": "Completá todos los campos requeridos para continuar."
       }
     }
   },
