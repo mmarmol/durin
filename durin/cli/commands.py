@@ -1493,6 +1493,13 @@ def _run_gateway(
             return stripped or None
         return None
 
+    def _webui_runtime_model_preset() -> str | None:
+        preset = getattr(agent, "model_preset", None)
+        if isinstance(preset, str):
+            stripped = preset.strip()
+            return stripped or None
+        return None
+
     # Create channel manager (forwards SessionManager so the WebSocket channel
     # can serve the embedded webui's REST surface).
     channels = ChannelManager(
@@ -1500,6 +1507,7 @@ def _run_gateway(
         bus,
         session_manager=session_manager,
         webui_runtime_model_name=_webui_runtime_model_name,
+        webui_runtime_model_preset=_webui_runtime_model_preset,
         cron_service=cron,
     )
 

@@ -143,7 +143,7 @@ export default function App() {
             client,
             token: boot.token,
             modelName: boot.model_name ?? null,
-            modelPreset: null,
+            modelPreset: boot.model_preset ?? null,
             requiresSecret: Boolean(boot.requires_secret),
           });
         } catch (e) {
