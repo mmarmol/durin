@@ -417,6 +417,7 @@ export function ThreadComposer({
   const { t } = useTranslation();
   const [value, setValue] = useState("");
   const [inlineError, setInlineError] = useState<string | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
@@ -455,6 +456,8 @@ export function ThreadComposer({
   const transcribeAndAppend = useCallback(
     async (file: File) => {
       if (!onTranscribeAudio) return;
+      setTranscribing(true);
+      setInlineError(null);
       try {
         const dataUrl = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
@@ -473,6 +476,8 @@ export function ThreadComposer({
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         setInlineError(`Audio transcription failed: ${msg}`);
+      } finally {
+        setTranscribing(false);
       }
     },
     [onTranscribeAudio],
@@ -914,6 +919,14 @@ export function ThreadComposer({
             "disabled:cursor-not-allowed",
           )}
         />
+        {transcribing ? (
+          <div
+            className="mx-3 mb-1 flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/40 px-2.5 py-1 text-[11.5px] font-medium text-muted-foreground"
+          >
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Transcribiendo audio…
+          </div>
+        ) : null}
         {inlineError ? (
           <div
             role="alert"

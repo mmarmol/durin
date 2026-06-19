@@ -74,7 +74,7 @@ class AuxModelConfig(Base):
 class TranscriptionLocalConfig(Base):
     """Local faster-whisper settings (spec §4.3)."""
 
-    model: Literal["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"] = "large-v3"
+    model: Literal["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"] = "base"
     device: Literal["auto", "cpu", "cuda"] = "auto"
     compute_type: Literal["auto", "int8", "int8_float16", "float16", "float32"] = "auto"
     download_root: str | None = None
