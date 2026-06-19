@@ -292,6 +292,7 @@ class AgentLoop:
         model_presets: dict[str, ModelPresetConfig] | None = None,
         model_preset: str | None = None,
         preset_snapshot_loader: preset_helpers.PresetSnapshotLoader | None = None,
+        default_preset_loader: Callable[[], ModelPresetConfig] | None = None,
         runtime_model_publisher: Callable[[str, str | None], None] | None = None,
         app_config: Any | None = None,
     ):
@@ -310,6 +311,7 @@ class AgentLoop:
         self.provider = provider
         self._provider_snapshot_loader = provider_snapshot_loader
         self._preset_snapshot_loader = preset_snapshot_loader
+        self._default_preset_loader = default_preset_loader
         self._runtime_model_publisher = runtime_model_publisher
         self._provider_signature = provider_signature
         self._default_selection_signature = preset_helpers.default_selection_signature(provider_signature)
@@ -706,6 +708,16 @@ class AgentLoop:
         except Exception:
             logger.exception("Failed to refresh provider config")
             return
+        # Keep the reserved ``default`` preset in lockstep with the on-disk
+        # config. It is captured once at construction, so a default-model change
+        # in Settings would otherwise leave a stale object that name-based
+        # resolution (``/model default``, ``/effort``) prefers over the fresh
+        # config — silently reverting the runtime model to the previous one.
+        if self._default_preset_loader is not None:
+            try:
+                self.model_presets["default"] = self._default_preset_loader()
+            except Exception:
+                logger.exception("Failed to refresh default model preset")
         default_selection = preset_helpers.default_selection_signature(snapshot.signature)
         if self._active_preset and self._default_selection_signature in (None, default_selection):
             self._default_selection_signature = default_selection

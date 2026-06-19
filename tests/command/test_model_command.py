@@ -4,17 +4,19 @@ from unittest.mock import MagicMock
 import pytest
 
 from durin.agent.loop import AgentLoop
+from durin.agent.model_presets import make_preset_snapshot_loader
 from durin.bus.events import InboundMessage
 from durin.bus.queue import MessageBus
 from durin.command.builtin import (
     build_help_text,
     builtin_command_palette,
+    cmd_effort,
     cmd_goal,
     cmd_model,
     register_builtin_commands,
 )
 from durin.command.router import CommandContext, CommandRouter
-from durin.config.schema import ModelPresetConfig
+from durin.config.schema import Config, ModelPresetConfig
 from durin.providers.factory import ProviderSnapshot
 
 
@@ -364,3 +366,72 @@ async def test_model_command_bare_custom_resolves_from_config(tmp_path, monkeypa
     assert "Unknown model" not in out.content
     assert captured["preset"].provider == "zai_coding_plan"
     assert captured["preset"].context_window_tokens == 123456
+
+
+def _gateway_loop(tmp_path, disk: dict) -> AgentLoop:
+    """A loop wired like the daemon: snapshot loaders that re-read the live
+    on-disk default each turn. ``disk['model']`` stands in for the config the
+    Settings page rewrites; mutate it to simulate a default-model change."""
+
+    def _snap(name: str, model: str) -> ProviderSnapshot:
+        return ProviderSnapshot(
+            provider=_provider(model), model=model,
+            context_window_tokens=1000, signature=(model, "prov"),
+        )
+
+    # Mirror of factory.load_provider_snapshot + _resolve_model_preset:
+    # a passed preset wins; otherwise the reserved "default" re-resolves fresh.
+    def provider_snapshot_loader(config_path=None, *, preset_name=None, preset=None):
+        if preset is not None:
+            return _snap(preset_name or "default", preset.model)
+        if preset_name in (None, "default"):
+            return _snap("default", disk["model"])
+        return _snap(preset_name, preset_name)
+
+    return AgentLoop(
+        bus=MessageBus(), provider=_provider(disk["model"]),
+        workspace=tmp_path, model=disk["model"], context_window_tokens=1000,
+        model_presets={"default": ModelPresetConfig(model=disk["model"])},
+        provider_snapshot_loader=provider_snapshot_loader,
+        preset_snapshot_loader=make_preset_snapshot_loader(
+            Config(), provider_snapshot_loader
+        ),
+        default_preset_loader=lambda: ModelPresetConfig(model=disk["model"]),
+        provider_signature=(disk["model"], "prov"),
+        app_config=Config(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_effort_tracks_default_changed_at_runtime(tmp_path) -> None:
+    """Regression: change the default model in Settings, then press the effort
+    picker. The effort variant must track the NEW default — not revert to the
+    stale default captured at loop init (the reported model-switch bug)."""
+    disk = {"model": "model-A"}
+    loop = _gateway_loop(tmp_path, disk)
+
+    disk["model"] = "model-B"  # user changes the default model in Settings
+    loop._refresh_provider_snapshot()  # start-of-message refresh (per _process_message)
+    assert loop.model == "model-B"  # refresh alone already tracks the new default
+
+    out = await cmd_effort(_ctx(loop, "/effort high", args="high"))
+
+    assert loop.model == "model-B"
+    assert "model-B" in out.content
+    assert "model-A" not in out.content
+
+
+@pytest.mark.asyncio
+async def test_model_default_tracks_default_changed_at_runtime(tmp_path) -> None:
+    """Regression: after the default model changes in Settings, picking the
+    `default` row in the model picker (`/model default`) must switch to the NEW
+    default, not the stale one captured at loop init."""
+    disk = {"model": "model-A"}
+    loop = _gateway_loop(tmp_path, disk)
+
+    disk["model"] = "model-B"
+    loop._refresh_provider_snapshot()
+    out = await cmd_model(_ctx(loop, "/model default", args="default"))
+
+    assert loop.model == "model-B"
+    assert "model-B" in out.content
