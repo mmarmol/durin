@@ -219,13 +219,14 @@ def audit_skill(skill_dir: Path, *, judge_enabled: bool = False, judge_model: st
     invoke = llm_invoke
     if invoke is None:
         try:
-            from durin.memory.llm_invoke import default_llm_invoke
-            invoke = default_llm_invoke
+            from durin.memory.llm_invoke import judge_llm_invoke
+            invoke = judge_llm_invoke
         except Exception:  # noqa: BLE001
             return rep
-    model = judge_model or "glm-5.1"
+    # judge_llm_invoke resolves the user's judge preset (specific-or-default,
+    # never hardcoded); an empty judge_model lets it fall back to that default.
     try:
-        outcome = judge_skill(skill_dir, llm_invoke=invoke, model=model,
+        outcome = judge_skill(skill_dir, llm_invoke=invoke, model=judge_model or "",
                               max_severity=judge_max_severity)
         rep.findings += outcome.findings
         rep.tools = outcome.tools

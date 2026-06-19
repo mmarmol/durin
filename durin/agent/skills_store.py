@@ -1018,8 +1018,8 @@ def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
     _, model, max_sev = _import_judge()
     det = scan_skill(qdir)
     try:
-        from durin.memory.llm_invoke import default_llm_invoke
-        outcome = judge_skill(qdir, llm_invoke=default_llm_invoke, model=model or "glm-5.1",
+        from durin.memory.llm_invoke import judge_llm_invoke
+        outcome = judge_skill(qdir, llm_invoke=judge_llm_invoke, model=model or "",
                               max_severity=max_sev)
     except JudgeError as exc:
         code = "parse" if "parse" in str(exc).lower() else "unreachable"
