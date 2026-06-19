@@ -529,7 +529,10 @@
         "badgeBoth": "hosted / local",
         "badgeLocal": "local",
         "update": "update → {{version}}",
-        "updateButton": "Update to {{version}}"
+        "updateButton": "Update to {{version}}",
+        "official": "Official",
+        "by": "by",
+        "viewOnGitHub": "View on GitHub"
       }
     }
   },
