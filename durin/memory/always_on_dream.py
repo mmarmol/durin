@@ -95,7 +95,7 @@ def run_always_on_pass(
     token_budget: int = 1500,
     types: tuple[str, ...] = FEEDBACK_TYPES,
     llm_invoke: LLMInvoke | None = None,
-    model: str | None = "glm-5.1",
+    model: str | None = None,
 ) -> dict:
     """Distill the always-on pin: rank feedback (drop contradictions), fit the
     token budget, mark the survivors ``always_on``. Returns counts + telemetry.

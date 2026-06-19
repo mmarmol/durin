@@ -176,7 +176,7 @@ def run_refine_pass(
     workspace: Path,
     *,
     llm_invoke: LLMInvoke | None = None,
-    model: str = "glm-5.1",
+    model: str | None = None,
     enabled: bool = True,
     confidence_threshold: int = 95,
     min_age_hours: int = 0,
@@ -408,14 +408,19 @@ async def _skill_extract_async(
     fs = FileStates()
     tools = _build_skill_extract_tools(workspace, fs)
 
-    if provider is None:
+    if provider is None or not model:
         from durin.config.loader import load_config
-        from durin.providers.factory import make_provider
-        provider = make_provider(load_config())
+        config = load_config()
+        if not model:
+            from durin.memory.model_resolve import resolve_aux_preset
+            model = resolve_aux_preset(config, purpose="memory").model
+        if provider is None:
+            from durin.providers.factory import make_provider
+            provider = make_provider(config)
 
     try:
         result = await AgentRunner(provider).run(AgentRunSpec(
-            initial_messages=messages, tools=tools, model=model or "glm-5.1",
+            initial_messages=messages, tools=tools, model=model,
             max_iterations=8, max_tool_result_chars=8000,
             fail_on_tool_error=False, workspace=Path(workspace),
         ))
