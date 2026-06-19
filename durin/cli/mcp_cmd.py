@@ -13,6 +13,7 @@ import asyncio
 import typer
 from rich.console import Console
 
+from durin.agent.mcp_registry import search_mcp_registries
 from durin.config.loader import load_config
 
 console = Console()
@@ -131,18 +132,21 @@ def status() -> None:
 def search(
     query: str = typer.Argument(..., help="What to search for (e.g. jira, postgres)."),
     limit: int = typer.Option(10, help="Max results."),
+    all_: bool = typer.Option(False, "--all", help="Include community/unverified servers."),
 ) -> None:
     """Search the MCP registry for installable servers."""
     from durin.agent.mcp_catalog_cache import McpCatalogCache
-    from durin.agent.mcp_registry import build_mcp_adapters, search_mcp_registries
+    from durin.agent.mcp_registry import build_mcp_adapters
     from durin.config.loader import get_config_path
 
     disc = load_config().tools.mcp_discovery
+    quality = "all" if all_ else disc.quality
     cache = McpCatalogCache(get_config_path().parent / "mcp_catalog.json")
     hits = asyncio.run(
         search_mcp_registries(
             query, cache=cache,
             adapters=build_mcp_adapters(disc.registries), limit=limit,
+            quality=quality, min_stars=disc.min_stars,
         )
     )
     if not hits:
@@ -150,7 +154,11 @@ def search(
         return
     tags = {"remote": "no install", "both": "hosted/local", "local": "local"}
     for h in hits:
-        console.print(f"  [bold]{h.ref}[/bold] [dim]({tags.get(h.kind, h.kind)})[/dim]")
+        stars = h.signals.get("stars")
+        owner = h.signals.get("owner_login", "")
+        star_s = f"★{stars} " if stars is not None else ""
+        owner_s = f" @{owner}" if owner else ""
+        console.print(f"  [bold]{star_s}{h.ref}{owner_s}[/bold] [dim]({tags.get(h.kind, h.kind)})[/dim]")
         if h.description:
             console.print(f"    [dim]{h.description}[/dim]")
     console.print("\n[dim]Install with:[/dim] durin mcp install <ref>")
