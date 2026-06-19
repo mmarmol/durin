@@ -246,7 +246,20 @@ def build_mcp_adapters(registries) -> list:
 _BACKGROUND_TASKS: set = set()
 
 
-def _spawn_catalog_sync(cache, adapter) -> None:
+def _build_enricher(token):
+    """Return an enrich(repo_keys)->meta map, or None when no token is available."""
+    if not token:
+        return None
+
+    def enrich(repo_keys):
+        from durin.agent import mcp_github
+
+        return mcp_github.fetch_repo_meta(repo_keys, token=token)
+
+    return enrich
+
+
+def _spawn_catalog_sync(cache, adapter, *, token=None) -> None:
     """Background catalog sync to build the fuzzy cache for later searches.
 
     The official registry has hundreds of servers (many pages), so a blocking full
@@ -258,8 +271,20 @@ def _spawn_catalog_sync(cache, adapter) -> None:
     """
     import asyncio
 
+    from durin.agent.mcp_github import resolve_token
+
+    if token is None:
+        secret_name = ""
+        try:
+            from durin.config.loader import load_config
+
+            secret_name = load_config().tools.mcp_discovery.github_token_secret
+        except Exception:  # noqa: BLE001
+            secret_name = ""
+        token = resolve_token(secret_name=secret_name)
+    enrich = _build_enricher(token)
     try:
-        task = asyncio.get_running_loop().create_task(cache.sync(adapter))
+        task = asyncio.get_running_loop().create_task(cache.sync(adapter, enrich=enrich))
     except RuntimeError:
         return
     _BACKGROUND_TASKS.add(task)

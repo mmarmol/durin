@@ -65,3 +65,26 @@ async def test_search_forwards_quality(tmp_path):
     hits = await search_mcp_registries("github", cache=cache, adapters=[], limit=5,
                                        quality="all")
     assert len(hits) == 1
+
+
+def test_build_enricher_none_without_token():
+    from durin.agent.mcp_registry import _build_enricher
+
+    assert _build_enricher(None) is None
+
+
+def test_build_enricher_returns_callable(monkeypatch):
+    from durin.agent.mcp_registry import _build_enricher
+    import durin.agent.mcp_github as ghmod
+
+    captured = {}
+
+    def fake_fetch(repo_keys, *, token, **kw):
+        captured["token"] = token
+        return {("github", "x"): ghmod.GithubMeta(stars=5)}
+
+    monkeypatch.setattr(ghmod, "fetch_repo_meta", fake_fetch)
+    enrich = _build_enricher("tok")
+    out = enrich([("github", "x")])
+    assert captured["token"] == "tok"
+    assert out[("github", "x")].stars == 5
