@@ -1151,6 +1151,47 @@ class WebSocketChannel(BaseChannel):
                 is_dm=False,
             )
             return
+        if t == "audio_transcribe":
+            # Spec §5.4: store the audio, transcribe server-side, reply with
+            # the transcript so the composer can insert editable text before
+            # the message is sent. Keeps the existing WS pattern; no polling.
+            cid = envelope.get("chat_id")
+            raw_media = envelope.get("media")
+            if not isinstance(raw_media, list) or not raw_media:
+                await self._send_event(
+                    connection, "error", detail="missing media"
+                )
+                return
+            paths, reason = self._save_envelope_media(raw_media)
+            if reason is not None:
+                await self._send_event(
+                    connection, "error", detail="audio_rejected", reason=reason
+                )
+                return
+            service = getattr(self, "transcription", None)
+            for item, path in zip(raw_media, paths):
+                name = item.get("name") or Path(path).name if isinstance(item, dict) else Path(path).name
+                if service is None:
+                    await self._send_event(
+                        connection, "audio_transcript",
+                        chat_id=cid, name=name, transcript="", error="disabled",
+                    )
+                    continue
+                try:
+                    result = await service.transcribe_and_cache(path)
+                    await self._send_event(
+                        connection, "audio_transcript",
+                        chat_id=cid, name=name, transcript=result.text,
+                    )
+                except Exception:
+                    self.logger.exception(
+                        "audio_transcribe failed for {}", path
+                    )
+                    await self._send_event(
+                        connection, "audio_transcript",
+                        chat_id=cid, name=name, transcript="", error="failed",
+                    )
+            return
         if t == "secret_store":
             await self._handle_secret_store_envelope(connection, client_id, envelope)
             return

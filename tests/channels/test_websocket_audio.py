@@ -34,3 +34,91 @@ def test_audio_size_cap_is_25mb():
     from durin.channels.websocket import _MAX_AUDIO_BYTES
 
     assert _MAX_AUDIO_BYTES == 25 * 1024 * 1024
+
+
+import json
+from pathlib import Path
+
+import pytest
+
+
+class _FakeConn:
+    def __init__(self):
+        self.sent: list[str] = []
+
+    async def send_text(self, raw: str):
+        self.sent.append(raw)
+
+    @property
+    def remote(self):
+        return "test"
+
+
+@pytest.mark.asyncio
+async def test_audio_transcribe_envelope_returns_transcript(tmp_path):
+    """An audio_transcribe envelope stores the audio and replies with the transcript."""
+    from durin.channels.websocket import WebSocketChannel
+    from durin.service.transcription import TranscriptResult
+
+    audio_bytes = b"RIFF\x00\x00\x00\x00WAVE" + b"\x00" * 8
+    data_url = _data_url("audio/wav", audio_bytes)
+    saved_path = tmp_path / "a.wav"
+    saved_path.write_bytes(audio_bytes)
+
+    class FakeService:
+        async def transcribe_and_cache(self, path):
+            return TranscriptResult(
+                text="hello from audio",
+                cached=False,
+                meta_path=None,
+                audio_path=Path(path),
+            )
+
+    ch = WebSocketChannel.__new__(WebSocketChannel)
+    ch.transcription = FakeService()
+    ch.logger = __import__("loguru").logger
+    ch._save_envelope_media = lambda media: ([str(saved_path)], None)
+
+    conn = _FakeConn()
+    envelope = {
+        "type": "audio_transcribe",
+        "chat_id": "c1",
+        "media": [{"data_url": data_url, "name": "a.wav"}],
+    }
+    await ch._dispatch_envelope(conn, "client1", envelope)
+
+    events = [json.loads(raw) for raw in conn.sent]
+    transcripts = [e for e in events if e.get("event") == "audio_transcript"]
+    assert len(transcripts) == 1
+    assert transcripts[0]["transcript"] == "hello from audio"
+    assert transcripts[0]["name"] == "a.wav"
+
+
+@pytest.mark.asyncio
+async def test_audio_transcribe_envelope_no_service_replies_disabled(tmp_path):
+    """When no TranscriptionService is wired, the reply flags error=disabled."""
+    from durin.channels.websocket import WebSocketChannel
+
+    audio_bytes = b"RIFF\x00\x00\x00\x00WAVE" + b"\x00" * 8
+    data_url = _data_url("audio/wav", audio_bytes)
+    saved_path = tmp_path / "a.wav"
+    saved_path.write_bytes(audio_bytes)
+
+    ch = WebSocketChannel.__new__(WebSocketChannel)
+    # No transcription attribute -> getattr returns None.
+    ch.logger = __import__("loguru").logger
+    ch._save_envelope_media = lambda media: ([str(saved_path)], None)
+
+    conn = _FakeConn()
+    envelope = {
+        "type": "audio_transcribe",
+        "chat_id": "c1",
+        "media": [{"data_url": data_url, "name": "a.wav"}],
+    }
+    await ch._dispatch_envelope(conn, "client1", envelope)
+
+    events = [json.loads(raw) for raw in conn.sent]
+    transcripts = [e for e in events if e.get("event") == "audio_transcript"]
+    assert len(transcripts) == 1
+    assert transcripts[0]["error"] == "disabled"
+    assert transcripts[0]["transcript"] == ""
