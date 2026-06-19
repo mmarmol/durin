@@ -35,6 +35,7 @@ type BootState =
       client: DurinClient;
       token: string;
       modelName: string | null;
+      modelPreset: string | null;
       // True when this deploy gates bootstrap on a setup secret. The
       // shell uses this to decide whether to surface the Logout
       // affordance — see Shell + SettingsView.
@@ -142,6 +143,7 @@ export default function App() {
             client,
             token: boot.token,
             modelName: boot.model_name ?? null,
+            modelPreset: null,
             requiresSecret: Boolean(boot.requires_secret),
           });
         } catch (e) {
@@ -219,9 +221,14 @@ export default function App() {
     );
   }
 
-  const handleModelNameChange = (modelName: string | null) => {
+  const handleModelNameChange = (
+    modelName: string | null,
+    modelPreset: string | null = null,
+  ) => {
     setState((current) =>
-      current.status === "ready" ? { ...current, modelName } : current,
+      current.status === "ready"
+        ? { ...current, modelName, modelPreset }
+        : current,
     );
   };
 
@@ -238,6 +245,7 @@ export default function App() {
       client={state.client}
       token={state.token}
       modelName={state.modelName}
+      modelPreset={state.modelPreset}
     >
       <Shell
         onModelNameChange={handleModelNameChange}
@@ -255,7 +263,10 @@ function Shell({
   onModelNameChange,
   onLogout,
 }: {
-  onModelNameChange: (modelName: string | null) => void;
+  onModelNameChange: (
+    modelName: string | null,
+    modelPreset?: string | null,
+  ) => void;
   onLogout?: () => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -380,8 +391,8 @@ function Shell({
   }, [activeSession?.chatId, client]);
 
   useEffect(() => {
-    return client.onRuntimeModelUpdate((modelName) => {
-      onModelNameChange(modelName);
+    return client.onRuntimeModelUpdate((modelName, modelPreset) => {
+      onModelNameChange(modelName, modelPreset ?? null);
     });
   }, [client, onModelNameChange]);
 
