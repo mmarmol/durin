@@ -103,6 +103,7 @@ class McpOauthLoginResult(Result):
 class McpRegistrySearchQuery(Query):
     q: str = ""
     limit: int = 10
+    include_all: bool = False
 
 
 class McpRegistryDescribeQuery(Query):
@@ -376,10 +377,11 @@ class McpService:
         from durin.config.loader import load_config
 
         disc = load_config().tools.mcp_discovery
+        quality = "all" if query.include_all else disc.quality
         hits = await search_mcp_registries(
             query.q,
             limit=query.limit or disc.search_limit,
-            quality=disc.quality,
+            quality=quality,
             min_stars=disc.min_stars,
         )
         return McpRegistrySearchResult(hits=[_reg_hit(h) for h in hits])

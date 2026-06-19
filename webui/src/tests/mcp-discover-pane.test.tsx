@@ -199,6 +199,38 @@ it("owner with no owner_url renders plain text, not a broken anchor", async () =
   expect(broken).toHaveLength(0);
 });
 
+it("show-all toggle re-searches with includeAll=true and flips back", async () => {
+  const user = userEvent.setup();
+  // First search returns only official; second call (include_all) returns both
+  searchMcpRegistry
+    .mockResolvedValueOnce([OFFICIAL_HIT])
+    .mockResolvedValueOnce([OFFICIAL_HIT, PLAIN_HIT]);
+
+  render(<McpDiscoverPane token="tok" onClose={vi.fn()} />);
+
+  // Initial search
+  await user.type(screen.getByRole("textbox"), "jira");
+  await user.click(screen.getByRole("button", { name: /search/i }));
+  await screen.findByText("github-mcp");
+
+  // Toggle label should read "Showing official only"
+  expect(screen.getByText(/showing official only/i)).toBeInTheDocument();
+  const showAllBtn = screen.getByRole("button", { name: /show all/i });
+  expect(showAllBtn).toBeInTheDocument();
+
+  // Click "Show all" — should trigger a second search with includeAll=true
+  await user.click(showAllBtn);
+  await screen.findByText("postgres-mcp");
+
+  // Verify the second call passed include_all=true (5th arg)
+  expect(searchMcpRegistry).toHaveBeenCalledTimes(2);
+  expect(searchMcpRegistry.mock.calls[1][4]).toBe(true);
+
+  // Toggle now shows "Showing all" + "Official only" button
+  expect(screen.getByText(/showing all/i)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /official only/i })).toBeInTheDocument();
+});
+
 it("detail view keeps install button functional", async () => {
   const user = userEvent.setup();
   searchMcpRegistry.mockResolvedValue([OFFICIAL_HIT]);

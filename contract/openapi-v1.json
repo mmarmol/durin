@@ -1315,6 +1315,11 @@
       "McpRegistrySearchQuery": {
         "additionalProperties": false,
         "properties": {
+          "include_all": {
+            "default": false,
+            "title": "Include All",
+            "type": "boolean"
+          },
           "limit": {
             "default": 10,
             "title": "Limit",

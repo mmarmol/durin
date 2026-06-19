@@ -69,6 +69,36 @@ async def test_registry_search_route(config_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_registry_search_include_all_bypasses_gate(config_path, monkeypatch):
+    """include_all=True returns community servers that the quality gate excludes."""
+    from durin.agent import mcp_catalog_store
+
+    # One official server (always passes gate) + one community server (low stars, not official)
+    monkeypatch.setattr(mcp_catalog_store, "load_servers", lambda: [
+        {"name": "io.x/jira", "ref": "io.x/jira",
+         "description": "Jira issues", "official": True, "stars": 5000},
+        {"name": "community/jira-alt", "ref": "community/jira-alt",
+         "description": "Jira alt community", "official": False, "stars": 5},
+    ])
+
+    # Gated search (default): only official server should appear
+    gated = await McpService().registry_search(
+        McpRegistrySearchQuery(q="jira", limit=10, include_all=False), LOCAL
+    )
+    gated_refs = {h.ref for h in gated.hits}
+    assert "io.x/jira" in gated_refs
+    assert "community/jira-alt" not in gated_refs
+
+    # include_all=True: both servers should appear
+    unfiltered = await McpService().registry_search(
+        McpRegistrySearchQuery(q="jira", limit=10, include_all=True), LOCAL
+    )
+    unfiltered_refs = {h.ref for h in unfiltered.hits}
+    assert "io.x/jira" in unfiltered_refs
+    assert "community/jira-alt" in unfiltered_refs
+
+
+@pytest.mark.asyncio
 async def test_registry_describe_route(config_path, monkeypatch):
     monkeypatch.setattr(
         "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]

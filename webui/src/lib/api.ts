@@ -1557,9 +1557,12 @@ export async function searchMcpRegistry(
   q: string,
   limit = 10,
   base: string = "",
+  includeAll = false,
 ): Promise<McpRegistryHit[]> {
+  const params = new URLSearchParams({ q, limit: String(limit) });
+  if (includeAll) params.set("include_all", "true");
   const res = await request<{ hits: McpRegistryHit[] }>(
-    `${base}/api/v1/mcp/registry/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    `${base}/api/v1/mcp/registry/search?${params}`,
     token,
   );
   return res.hits;

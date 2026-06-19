@@ -150,6 +150,7 @@ export function McpDiscoverPane({
   const [hits, setHits] = useState<McpRegistryHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [includeAll, setIncludeAll] = useState(false);
   const [selectedHit, setSelectedHit] = useState<McpRegistryHit | null>(null);
   const [detail, setDetail] = useState<McpRegistryServerDetail | null>(null);
   const [prefer, setPrefer] = useState<"remote" | "local">("remote");
@@ -157,20 +158,26 @@ export function McpDiscoverPane({
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function runSearch() {
+  async function runSearch(all = includeAll) {
     if (!query.trim()) return;
     setSearching(true);
     setError(null);
     setDetail(null);
     setSelectedHit(null);
     try {
-      setHits(await searchMcpRegistry(token, query.trim()));
+      setHits(await searchMcpRegistry(token, query.trim(), 10, "", all));
       setSearched(true);
     } catch {
       setError(tx("searchFailed"));
     } finally {
       setSearching(false);
     }
+  }
+
+  async function toggleIncludeAll() {
+    const next = !includeAll;
+    setIncludeAll(next);
+    if (searched) await runSearch(next);
   }
 
   async function openDetail(hit: McpRegistryHit) {
@@ -384,6 +391,22 @@ export function McpDiscoverPane({
       </div>
 
       {error ? <p className="text-[12px] text-destructive">{error}</p> : null}
+
+      {searched ? (
+        <div className="flex items-center justify-between px-1">
+          <span className="text-[11px] text-muted-foreground">
+            {includeAll ? tx("showingAll") : tx("showingOfficial")}
+          </span>
+          <button
+            type="button"
+            className="text-[11px] text-primary underline"
+            onClick={() => void toggleIncludeAll()}
+            disabled={searching}
+          >
+            {includeAll ? tx("officialOnly") : tx("showAll")}
+          </button>
+        </div>
+      ) : null}
 
       <div className="space-y-1">
         {hits.map((h) => {

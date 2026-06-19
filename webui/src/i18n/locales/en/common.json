@@ -532,7 +532,11 @@
         "updateButton": "Update to {{version}}",
         "official": "Official",
         "by": "by",
-        "viewOnGitHub": "View on GitHub"
+        "viewOnGitHub": "View on GitHub",
+        "showingOfficial": "Showing official only",
+        "showAll": "Show all",
+        "showingAll": "Showing all",
+        "officialOnly": "Official only"
       }
     }
   },

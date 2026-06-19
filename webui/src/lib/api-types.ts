@@ -1855,6 +1855,11 @@ export interface components {
         /** McpRegistrySearchQuery */
         McpRegistrySearchQuery: {
             /**
+             * Include All
+             * @default false
+             */
+            include_all: boolean;
+            /**
              * Limit
              * @default 10
              */
