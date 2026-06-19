@@ -1,0 +1,52 @@
+name: MCP catalog
+
+# Weekly rebuild of the durin-owned MCP discovery catalog.
+# Builds the enriched catalog (registry + GitHub stars + first-party classification)
+# and publishes it as an ASSET on the rolling `catalog` release — NOT committed to
+# the repo, so the weekly rebuild never bloats git history and never touches the
+# protected `main` branch. Clients download it via mcp_catalog_refresh (weekly).
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # Mondays 06:00 UTC
+  workflow_dispatch:
+
+# The default GITHUB_TOKEN: read public data for the GraphQL star enrichment +
+# contents:write so softprops can create/update the `catalog` release + asset.
+permissions:
+  contents: write
+
+concurrency:
+  group: mcp-catalog
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install durin (mcp extra)
+        run: |
+          python -m pip install --upgrade pip
+          DURIN_SKIP_WEBUI_BUILD=1 pip install -e ".[mcp]"
+
+      - name: Build the enriched MCP catalog
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: PYTHONPATH=. python scripts/build_mcp_catalog.py
+
+      - name: Publish catalog as a release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: catalog
+          name: MCP catalog (rolling)
+          body: "Rolling durin-owned MCP discovery catalog. Rebuilt weekly; consumed by mcp_catalog_refresh."
+          prerelease: true
+          make_latest: false
+          files: durin/agent/data/mcp_catalog.json

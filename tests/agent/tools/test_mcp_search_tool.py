@@ -4,25 +4,15 @@ import pytest
 from durin.agent.tools.mcp_search import McpSearchTool
 
 
-class _Reg:
-    name = "official"
-
-    async def fetch_page(self, *, cursor=None, updated_since=None):
-        return [{"name": "io.x/jira", "description": "Jira"}], None
-
-    async def search(self, query, *, limit):
-        from durin.agent.mcp_registry import _hit_from_server
-
-        servers, _ = await self.fetch_page()
-        return [_hit_from_server(s, registry="official") for s in servers][:limit]
-
-
 @pytest.mark.asyncio
-async def test_mcp_search_returns_hits(tmp_path, monkeypatch):
-    import durin.agent.tools.mcp_search as m
+async def test_mcp_search_returns_hits(monkeypatch):
+    from durin.agent import mcp_catalog_store
 
-    monkeypatch.setattr(m, "build_mcp_adapters", lambda regs: [_Reg()])
-    tool = McpSearchTool(cache_path=tmp_path / "c.json", registries=[], limit=10)
+    monkeypatch.setattr(mcp_catalog_store, "load_servers", lambda: [
+        {"name": "io.x/jira", "ref": "io.x/jira", "description": "Jira",
+         "official": True},
+    ])
+    tool = McpSearchTool(limit=10)
     out = await tool.execute(query="jira")
     assert out["hits"][0]["ref"] == "io.x/jira"
     assert tool.read_only is True
@@ -30,8 +20,8 @@ async def test_mcp_search_returns_hits(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mcp_search_empty_query_errors(tmp_path):
-    tool = McpSearchTool(cache_path=tmp_path / "c.json", registries=[], limit=10)
+async def test_mcp_search_empty_query_errors():
+    tool = McpSearchTool(limit=10)
     out = await tool.execute(query="")
     assert "error" in out
 

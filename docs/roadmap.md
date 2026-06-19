@@ -127,6 +127,27 @@ FS/network sandbox. (#3 is a large v2 — measure need first.)
 trivial, zero risk; (2) per-language syntax lints that degrade gracefully when the
 interpreter is absent (mirror the `bash -n` best-effort pattern).
 
+**Unified GitHub credential section + connect UX.** GitHub recurs across skills
+(`skills.security.github_token_secret`), MCP discovery (`mcp_discovery.github_token_secret`), the
+GitHub MCP server, and the Copilot OAuth provider — each configures its token in its own place.
+Consolidate into one neutral `config.github` credential consumed by all, with a webui "Connect
+GitHub" section: OAuth **device flow** (reuse the working Copilot path in
+`durin/providers/github_copilot_provider.py` — public client_id, no secret; needs a durin-owned
+GitHub OAuth App with `repo`/`read:user` scope), a guided PAT (deep link to GitHub's
+scope-prefilled token page) as fallback, and `gh` CLI passthrough. Skills + MCP keep their
+per-feature key for now and migrate to read `config.github` once it lands; contextual "Connect
+GitHub to improve results" buttons in skills/MCP deep-link there. Design spec pending.
+
+**MCP discovery = durin-owned catalog (DECIDED 2026-06-19; in progress).** Live verification
+refuted per-client enrichment (paginate 12.8k + GraphQL-enrich ~9.7k repos took >8 min, ×every
+client — does not scale). Chosen architecture: a **weekly CI build job** produces the enriched
+catalog (registry + GitHub stars + classify), **vendored in the wheel** (day-1/offline floor) and
+**refreshed client-side weekly** from a rolling GitHub **release asset** (rebuilt by CI weekly; a
+release asset, not a committed file, so no git-history bloat) — clients never hit the registry/
+GitHub, decoupled from the upstream provider. Mirrors `durin/providers/catalog_refresh.py` 1:1
+(vendored floor + overlay + daemon scheduler). Spec:
+`.workdocs/superpowers/specs/2026-06-19-mcp-discovery-quality-filter-design.md` (v2).
+
 ### Deferred / no trigger
 
 - **`list_dir` recursive perf** — switch the pure-Python walk to `os.scandir` (no
@@ -143,4 +164,4 @@ interpreter is absent (mirror the `bash -n` best-effort pattern).
 
 ---
 
-## Last updated: 2026-06-18 (consolidated — backlog + bitácora + tui-webui-improvements merged here; shipped/stale items removed)
+## Last updated: 2026-06-19 (added: unified GitHub credential section + connect UX; MCP catalog seed + throttled refresh)

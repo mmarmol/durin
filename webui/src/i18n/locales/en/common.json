@@ -529,7 +529,19 @@
         "badgeBoth": "hosted / local",
         "badgeLocal": "local",
         "update": "update → {{version}}",
-        "updateButton": "Update to {{version}}"
+        "updateButton": "Update to {{version}}",
+        "official": "Official",
+        "by": "by",
+        "viewOnGitHub": "View on GitHub",
+        "showingOfficial": "Showing official only",
+        "showAll": "Show all",
+        "showingAll": "Showing all",
+        "officialOnly": "Official only",
+        "fillRequired": "Fill in all required fields to continue.",
+        "runtimeMissingDocker": "This server runs in a Docker container, but Docker isn't installed on this machine.",
+        "getDocker": "Get Docker Desktop",
+        "runtimeMissing": "This server needs {{runtime}}, which isn't installed on this machine.",
+        "verified": "Verified"
       }
     }
   },
