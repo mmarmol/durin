@@ -1,5 +1,5 @@
 import pytest
-from durin.agent.mcp_github import parse_repo_url, resolve_token, GithubMeta, fetch_repo_meta
+from durin.agent.mcp_github import parse_repo_url, resolve_token, GithubMeta, fetch_repo_meta, classify_official
 
 
 @pytest.mark.parametrize("url,expected", [
@@ -71,3 +71,28 @@ def test_fetch_repo_meta_parses_and_handles_missing():
 
 def test_fetch_repo_meta_empty():
     assert fetch_repo_meta([], token="t", post=_fake_post) == {}
+
+
+def test_official_vendor_domain():
+    assert classify_official("com.stripe/mcp", owner_type="Organization", stars=5) is True
+
+
+def test_official_reference_namespace():
+    assert classify_official("io.modelcontextprotocol/everything",
+                             owner_type="", stars=None) is True
+
+
+def test_official_org_with_many_stars():
+    assert classify_official("io.github.github/github-mcp-server",
+                             owner_type="Organization", stars=30810) is True
+
+
+def test_not_official_org_low_stars():
+    # pipeworx-io: org, but low stars and io.github namespace
+    assert classify_official("io.github.pipeworx-io/x",
+                             owner_type="Organization", stars=2) is False
+
+
+def test_not_official_rehoster_domain():
+    assert classify_official("ai.smithery/smithery-notion",
+                             owner_type="Organization", stars=5) is False

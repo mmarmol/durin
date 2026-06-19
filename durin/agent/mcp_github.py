@@ -145,3 +145,24 @@ def fetch_repo_meta(
             node = data.get(f"r{j}")
             out[(o.lower(), n.lower())] = _parse_node(node) if node else GithubMeta(stars=None)
     return out
+
+
+REFERENCE_NAMESPACE = "io.modelcontextprotocol"
+REHOSTER_NAMESPACES = {"ai.smithery", "com.mcparmory", "eu.ansvar", "io.github.mcp-dir"}
+
+
+def classify_official(
+    name: str, *, owner_type: str, stars: int | None, denylist: set[str] | None = None
+) -> bool:
+    """First-party heuristic for the 'Official' badge / gate (design §3.6)."""
+    denylist = REHOSTER_NAMESPACES if denylist is None else denylist
+    namespace = name.split("/", 1)[0]
+    if namespace in denylist:
+        return False
+    if namespace == REFERENCE_NAMESPACE:
+        return True
+    if not namespace.startswith("io.github.") and "." in namespace:
+        return True  # DNS-verified vendor domain (com.stripe, etc.)
+    if owner_type == "Organization" and (stars or 0) > 1000:
+        return True
+    return False
