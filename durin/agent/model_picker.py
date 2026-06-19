@@ -49,7 +49,13 @@ def picker_entries(
     from durin.providers.provider_catalog import catalog_model_caps, provider_models
 
     out: list[PickerEntry] = []
-    seen: set[str] = set()  # dedupe by ref (a model may appear under 2 providers)
+    # Dedupe by (provider, model): a model surfaces once total. The easy-pick
+    # lenses (active/default/recent/preset) are emitted first and claim the
+    # model, so the per-provider catalog lists only what is not already pinned
+    # above — the same model is never shown twice (e.g. the default row and its
+    # catalog twin). A model served by two providers still appears under each,
+    # since the provider differs.
+    seen: set[tuple[str, str]] = set()
     configured = configured_provider_names(config)
 
     # Pull each configured provider's catalog once; served_by resolves a recent's
@@ -74,10 +80,11 @@ def picker_entries(
         # Easy-pick rows (default/active/preset) commit by name, so an unresolved
         # "auto" provider is fine — the default must always be offered. Catalog
         # rows always pass a real provider; recents are pre-filtered to resolvable
-        # ones. So only guard against empties and duplicate refs.
-        if not name or not provider or ref in seen:
+        # ones. So only guard against empties and a model already surfaced above.
+        key = (provider, name)
+        if not name or not provider or key in seen:
             return
-        seen.add(ref)
+        seen.add(key)
         mi = catalog_model_caps(provider, name)
         out.append(
             PickerEntry(

@@ -25,7 +25,9 @@ def test_picker_groups_from_catalog_with_caps(monkeypatch):
 
     entries = picker_entries(cfg, presets={}, recent=[], active=None)
     cat = [e for e in entries if e.role == "catalog"]
-    assert {e.name for e in cat} == {"glm-5.2", "glm-5v-turbo"}
+    # glm-5.2 is the default → claimed by the easy-pick default row and NOT
+    # duplicated in the catalog (a model is listed once total).
+    assert {e.name for e in cat} == {"glm-5v-turbo"}
     turbo = next(e for e in cat if e.name == "glm-5v-turbo")
     assert turbo.provider == "zai_coding_plan"
     assert turbo.supports_vision is True
