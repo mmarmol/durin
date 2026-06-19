@@ -66,6 +66,11 @@ interface ThreadComposerProps {
   /** Transcribe an audio attachment server-side (spec §5.4). Receives a
    *  data-url + name and resolves with the transcript text. */
   onTranscribeAudio?: (media: { data_url: string; name: string }[]) => Promise<string>;
+  /** Whether audio input (mic / attach) should be offered. False hides the
+   *  affordances and shows a disabled hint instead (gating, Gap B). */
+  audioInputAllowed?: boolean;
+  /** Tooltip shown when ``audioInputAllowed`` is false. */
+  audioInputHint?: string | null;
   disabled?: boolean;
   placeholder?: string;
   isStreaming?: boolean;
@@ -395,6 +400,8 @@ function RunElapsedStrip({
 export function ThreadComposer({
   onSend,
   onTranscribeAudio,
+  audioInputAllowed = true,
+  audioInputHint = null,
   disabled,
   placeholder,
   isStreaming = false,
@@ -933,34 +940,48 @@ export function ThreadComposer({
             >
               <Paperclip className={cn(isHero ? "h-5 w-5" : "h-4 w-4")} />
             </Button>
-            <input
-              ref={audioInputRef}
-              type="file"
-              accept={AUDIO_ACCEPT_ATTR}
-              hidden
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) handleAudioFile(f);
-                e.target.value = "";
-              }}
-            />
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              disabled={disabled || audioAttachments.length > 0}
-              aria-label={t("thread.composer.attachAudio")}
-              onClick={() => audioInputRef.current?.click()}
-              className={cn(
-                "rounded-full text-muted-foreground hover:text-foreground",
-                isHero
-                  ? "h-9 w-9 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card"
-                  : "h-7.5 w-7.5 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card",
-              )}
-            >
-              <span className={cn(isHero ? "text-lg" : "text-base")}>🎵</span>
-            </Button>
-            <MicButton onRecorded={handleAudioFile} disabled={disabled || audioAttachments.length > 0} />
+            {audioInputAllowed ? (
+              <>
+                <input
+                  ref={audioInputRef}
+                  type="file"
+                  accept={AUDIO_ACCEPT_ATTR}
+                  hidden
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleAudioFile(f);
+                    e.target.value = "";
+                  }}
+                />
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  disabled={disabled || audioAttachments.length > 0}
+                  aria-label={t("thread.composer.attachAudio")}
+                  onClick={() => audioInputRef.current?.click()}
+                  className={cn(
+                    "rounded-full text-muted-foreground hover:text-foreground",
+                    isHero
+                      ? "h-9 w-9 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card"
+                      : "h-7.5 w-7.5 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card",
+                  )}
+                >
+                  <span className={cn(isHero ? "text-lg" : "text-base")}>🎵</span>
+                </Button>
+                <MicButton onRecorded={handleAudioFile} disabled={disabled || audioAttachments.length > 0} />
+              </>
+            ) : (
+              <span
+                title={audioInputHint ?? "Audio transcription is not configured."}
+                className={cn(
+                  "inline-flex items-center justify-center rounded-full text-muted-foreground/40",
+                  isHero ? "h-9 w-9" : "h-7.5 w-7.5",
+                )}
+              >
+                <span className={cn(isHero ? "text-lg" : "text-base")}>🎵</span>
+              </span>
+            )}
             {modelLabel ? (
               <div className="relative">
                 <button

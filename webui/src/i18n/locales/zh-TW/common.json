@@ -53,6 +53,7 @@
       "advanced": "All settings",
       "channels": "Channels",
       "memory": "Memory",
+      "transcription": "Audio transcription",
       "cron": "Cron",
       "logs": "日誌"
     },

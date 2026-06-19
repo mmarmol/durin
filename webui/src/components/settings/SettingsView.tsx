@@ -70,6 +70,7 @@ import { CronSettings } from "@/components/settings/CronSettings";
 import { LogsSettings } from "@/components/settings/LogsSettings";
 import { MemorySettings } from "@/components/settings/MemorySettings";
 import { SkillsSecuritySettings } from "@/components/settings/SkillsSecuritySettings";
+import { TranscriptionSettings } from "@/components/settings/TranscriptionSettings";
 import { ModelPicker } from "@/components/settings/ModelPicker";
 import {
   SettingsGroup,
@@ -90,6 +91,7 @@ type SettingsSectionKey =
   | "web-search"
   | "channels"
   | "memory"
+  | "transcription"
   | "skills-security"
   | "mcp"
   | "cron"
@@ -419,6 +421,8 @@ export function SettingsView({
                 <ChannelsSettings token={token} />
               ) : activeSection === "memory" ? (
                 <MemorySettings token={token} />
+              ) : activeSection === "transcription" ? (
+                <TranscriptionSettings token={token} />
               ) : activeSection === "skills-security" ? (
                 <SkillsSecuritySettings token={token} />
               ) : activeSection === "mcp" ? (
@@ -496,6 +500,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "web-search", icon: Globe },
   { key: "channels", icon: MessagesSquare },
   { key: "memory", icon: Brain },
+  { key: "transcription", icon: Waves },
   { key: "skills-security", icon: ShieldCheck },
   { key: "mcp", icon: Plug },
   { key: "cron", icon: Clock },

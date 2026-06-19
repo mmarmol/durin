@@ -8,6 +8,7 @@ import { ApiStatusBanner } from "@/components/thread/ApiStatusBanner";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { useDurinStream, type SendImage } from "@/hooks/useDurinStream";
+import { useTranscriptionStatus } from "@/hooks/useTranscriptionStatus";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { listSlashCommands, getModelCapabilities } from "@/lib/api";
 import type { ChatSummary, SlashCommand, UIMessage } from "@/lib/types";
@@ -126,6 +127,8 @@ export function ThreadShell({
     apiStatus,
     dismissApiStatus,
   } = useDurinStream(chatId, initial, hasPendingToolCalls, handleTurnEnd);
+
+  const transcriptionStatus = useTranscriptionStatus();
 
   useEffect(() => {
     if (chatId && historyKey) sessionKeyByChatIdRef.current.set(chatId, historyKey);
@@ -362,6 +365,8 @@ export function ThreadShell({
         <ThreadComposer
           onSend={handleThreadSend}
           onTranscribeAudio={transcribeAudio}
+          audioInputAllowed={transcriptionStatus.available}
+          audioInputHint={transcriptionStatus.reason}
           disabled={!chatId}
           isStreaming={isStreaming}
           placeholder={
@@ -386,6 +391,8 @@ export function ThreadShell({
         <ThreadComposer
           onSend={handleWelcomeSend}
           onTranscribeAudio={transcribeAudio}
+          audioInputAllowed={transcriptionStatus.available}
+          audioInputHint={transcriptionStatus.reason}
           disabled={booting}
           isStreaming={isStreaming}
           placeholder={

@@ -72,6 +72,7 @@
       "advanced": "All settings",
       "channels": "Channels",
       "memory": "Memori",
+      "transcription": "Audio transcription",
       "cron": "Cron",
       "logs": "Log"
     },
