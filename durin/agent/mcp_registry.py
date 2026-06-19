@@ -2,9 +2,12 @@
 
 Mirrors ``durin/agent/skill_registry.py``: a small dataclass model plus an
 ``McpRegistry`` Protocol that concrete adapters (``OfficialMcpRegistry``, and
-later ``MpakRegistry``) implement. Search is cache-backed (the official
-registry's own search is substring-on-name only — see
-``durin/agent/mcp_catalog_cache.py``).
+later ``MpakRegistry``) implement.
+
+Search reads the durin-owned catalog store (``durin/agent/mcp_catalog_store.py``),
+which ranks fuzzily over the vendored floor + downloaded overlay. The registry
+adapters here are used by INSTALL/describe (``mcp_manage``) and by the catalog
+build script — not by search.
 """
 from __future__ import annotations
 
@@ -182,9 +185,9 @@ class _DefaultHTTP:
 class OfficialMcpRegistry:
     """Adapter for the official MCP registry (registry.modelcontextprotocol.io).
 
-    No auth. Its ``search`` param is substring-on-name only, so breadth/quality
-    search is done by syncing the catalog (``fetch_page``) into a local cache and
-    ranking there — see ``durin/agent/mcp_catalog_cache.py``.
+    No auth. Its ``search`` param is substring-on-name only; breadth/quality
+    search lives in the catalog store. ``fetch_page`` here is the cursor-paginated
+    crawl the catalog build script uses to (re)generate that store's overlay.
     """
 
     name = "official"
@@ -238,67 +241,12 @@ def build_mcp_adapters(registries) -> list:
     return out
 
 
-# Strong references to in-flight background syncs. asyncio only keeps a WEAK
-# reference to a task, so a fire-and-forget `create_task(...)` whose return value
-# is discarded can be garbage-collected mid-run (documented footgun) — which would
-# silently abort the catalog sync and leave the fuzzy cache empty forever. Holding
-# the task here until it completes prevents that.
-_BACKGROUND_TASKS: set = set()
+async def search_mcp_registries(query, *, limit, quality="official", min_stars=100):
+    """Search the durin-owned catalog store (floor + overlay), ranked fuzzily.
 
-
-def _build_enricher(token):
-    """Return an enrich(repo_keys)->meta map, or None when no token is available."""
-    if not token:
-        return None
-
-    def enrich(repo_keys):
-        from durin.agent import mcp_github
-
-        return mcp_github.fetch_repo_meta(repo_keys, token=token)
-
-    return enrich
-
-
-def _spawn_catalog_sync(cache, adapter, *, token=None) -> None:
-    """Background catalog sync to build the fuzzy cache for later searches.
-
-    The official registry has hundreds of servers (many pages), so a blocking full
-    sync would make the FIRST search slow. Instead the first search returns the
-    registry's fast direct (substring) results and kicks this background sync. In the
-    long-running gateway the task completes and the cache persists to disk, so
-    subsequent searches (even after a restart) rank fuzzily; in a short-lived CLI run
-    the task is dropped when the loop ends and the CLI just uses direct search.
+    Kept ``async`` so the ``await`` call-sites stay unchanged; the store's
+    ``search`` is synchronous (a small in-memory rank over a vendored catalog).
     """
-    import asyncio
+    from durin.agent import mcp_catalog_store
 
-    from durin.agent.mcp_github import resolve_token
-
-    if token is None:
-        secret_name = ""
-        try:
-            from durin.config.loader import load_config
-
-            secret_name = load_config().tools.mcp_discovery.github_token_secret
-        except Exception:  # noqa: BLE001
-            secret_name = ""
-        token = resolve_token(secret_name=secret_name)
-    enrich = _build_enricher(token)
-    try:
-        task = asyncio.get_running_loop().create_task(cache.sync(adapter, enrich=enrich))
-    except RuntimeError:
-        return
-    _BACKGROUND_TASKS.add(task)
-    task.add_done_callback(_BACKGROUND_TASKS.discard)
-
-
-async def search_mcp_registries(query, *, cache, adapters, limit,
-                                quality="official", min_stars=100):
-    """Rank from the local fuzzy cache when populated; otherwise return the registry's
-    fast direct (substring) results and kick a background sync to build the cache."""
-    if cache._servers:
-        return cache.rank(query, limit=limit, quality=quality, min_stars=min_stars)
-    official = next((a for a in adapters if getattr(a, "name", "") == "official"), None)
-    if official is None:
-        return cache.rank(query, limit=limit, quality=quality, min_stars=min_stars)
-    _spawn_catalog_sync(cache, official)
-    return await official.search(query, limit=limit)
+    return mcp_catalog_store.search(query, limit=limit, quality=quality, min_stars=min_stars)

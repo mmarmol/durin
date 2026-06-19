@@ -6,7 +6,7 @@ import durin.cli.mcp_cmd as cmd
 def test_search_all_flag(monkeypatch):
     seen = {}
 
-    async def fake_search(query, *, cache, adapters, limit, quality, min_stars):
+    async def fake_search(query, *, limit, quality, min_stars):
         seen["quality"] = quality
         from durin.agent.mcp_registry import McpServerHit
         return [McpServerHit(name="com.acme/x", ref="com.acme/x", registry="official",
@@ -22,7 +22,7 @@ def test_search_all_flag(monkeypatch):
 
 
 def test_search_shows_owner(monkeypatch):
-    async def fake_search(query, *, cache, adapters, limit, quality, min_stars):
+    async def fake_search(query, *, limit, quality, min_stars):
         from durin.agent.mcp_registry import McpServerHit
         return [McpServerHit(name="com.acme/x", ref="com.acme/x", registry="official",
                              kind="local", description="d",
@@ -36,7 +36,7 @@ def test_search_shows_owner(monkeypatch):
 
 
 def test_search_no_stars_no_crash(monkeypatch):
-    async def fake_search(query, *, cache, adapters, limit, quality, min_stars):
+    async def fake_search(query, *, limit, quality, min_stars):
         from durin.agent.mcp_registry import McpServerHit
         return [McpServerHit(name="com.acme/y", ref="com.acme/y", registry="official",
                              kind="remote", description="",

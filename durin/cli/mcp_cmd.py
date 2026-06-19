@@ -135,18 +135,11 @@ def search(
     all_: bool = typer.Option(False, "--all", help="Include community/unverified servers."),
 ) -> None:
     """Search the MCP registry for installable servers."""
-    from durin.agent.mcp_catalog_cache import McpCatalogCache
-    from durin.agent.mcp_registry import build_mcp_adapters
-    from durin.config.loader import get_config_path
-
     disc = load_config().tools.mcp_discovery
     quality = "all" if all_ else disc.quality
-    cache = McpCatalogCache(get_config_path().parent / "mcp_catalog.json")
     hits = asyncio.run(
         search_mcp_registries(
-            query, cache=cache,
-            adapters=build_mcp_adapters(disc.registries), limit=limit,
-            quality=quality, min_stars=disc.min_stars,
+            query, limit=limit, quality=quality, min_stars=disc.min_stars,
         )
     )
     if not hits:

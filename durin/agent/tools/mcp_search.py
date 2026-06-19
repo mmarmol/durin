@@ -8,11 +8,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
-from pathlib import Path
 from typing import Any
 
-from durin.agent.mcp_catalog_cache import McpCatalogCache
-from durin.agent.mcp_registry import build_mcp_adapters, search_mcp_registries
+from durin.agent.mcp_registry import search_mcp_registries
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import (
     BooleanSchema,
@@ -45,9 +43,7 @@ _PARAMETERS = tool_parameters_schema(
 class McpSearchTool(Tool):
     """mcp_search tool — unified search over MCP registries."""
 
-    def __init__(self, cache_path, registries=None, limit: int = 10, quality="official", min_stars=100) -> None:
-        self._cache_path = Path(cache_path)
-        self._registries = list(registries or [])
+    def __init__(self, limit: int = 10, quality="official", min_stars=100) -> None:
         self._limit = int(limit or 10)
         self._quality = quality
         self._min_stars = min_stars
@@ -66,8 +62,6 @@ class McpSearchTool(Tool):
 
     @classmethod
     def create(cls, ctx: Any) -> "McpSearchTool":
-        from durin.config.loader import get_config_path
-
         try:
             disc = ctx.app_config.tools.mcp_discovery
         except Exception:  # noqa: BLE001
@@ -75,8 +69,6 @@ class McpSearchTool(Tool):
 
             disc = load_config().tools.mcp_discovery
         return cls(
-            cache_path=get_config_path().parent / "mcp_catalog.json",
-            registries=list(disc.registries),
             limit=int(disc.search_limit),
             quality=disc.quality,
             min_stars=disc.min_stars,
@@ -91,8 +83,6 @@ class McpSearchTool(Tool):
         quality = "all" if include_all else self._quality
         hits = await search_mcp_registries(
             query,
-            cache=McpCatalogCache(self._cache_path),
-            adapters=build_mcp_adapters(self._registries),
             limit=limit,
             quality=quality,
             min_stars=self._min_stars,

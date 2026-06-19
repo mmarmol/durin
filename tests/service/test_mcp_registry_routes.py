@@ -55,9 +55,12 @@ class _FakeReg:
 
 @pytest.mark.asyncio
 async def test_registry_search_route(config_path, monkeypatch):
-    monkeypatch.setattr(
-        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]
-    )
+    from durin.agent import mcp_catalog_store
+
+    monkeypatch.setattr(mcp_catalog_store, "load_servers", lambda: [
+        {"name": "io.x/jira", "ref": "io.x/jira",
+         "description": "Jira issues", "official": True},
+    ])
     res = await McpService().registry_search(
         McpRegistrySearchQuery(q="jira", limit=5), LOCAL
     )

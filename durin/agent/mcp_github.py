@@ -1,7 +1,7 @@
 """GitHub augmentation for MCP discovery: resolve repos to stars/owner/topics,
 classify first-party servers, and cache results. All network access is injectable
 so unit tests run offline. GraphQL requires a token; without one, enrichment is a
-no-op and the quality gate is disabled (see mcp_catalog_cache / search).
+no-op and the quality gate is disabled (see mcp_catalog_store / search).
 """
 from __future__ import annotations
 

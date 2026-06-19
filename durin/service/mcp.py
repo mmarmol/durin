@@ -372,17 +372,15 @@ class McpService:
         self, query: McpRegistrySearchQuery, principal: Principal
     ) -> McpRegistrySearchResult:
         principal.require(Scope.MCP_READ)
-        from durin.agent.mcp_catalog_cache import McpCatalogCache
-        from durin.agent.mcp_registry import build_mcp_adapters, search_mcp_registries
-        from durin.config.loader import get_config_path, load_config
+        from durin.agent.mcp_registry import search_mcp_registries
+        from durin.config.loader import load_config
 
         disc = load_config().tools.mcp_discovery
-        cache = McpCatalogCache(get_config_path().parent / "mcp_catalog.json")
         hits = await search_mcp_registries(
             query.q,
-            cache=cache,
-            adapters=build_mcp_adapters(disc.registries),
             limit=query.limit or disc.search_limit,
+            quality=disc.quality,
+            min_stars=disc.min_stars,
         )
         return McpRegistrySearchResult(hits=[_reg_hit(h) for h in hits])
 
