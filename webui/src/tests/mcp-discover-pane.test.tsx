@@ -168,6 +168,37 @@ it("detail view shows Official badge, owner link, stars, View on GitHub link", a
   expect(ghLink).toHaveAttribute("rel", expect.stringContaining("noopener"));
 });
 
+it("owner with no owner_url renders plain text, not a broken anchor", async () => {
+  const user = userEvent.setup();
+  const NO_URL_HIT: McpRegistryHit = {
+    name: "no-url-mcp",
+    ref: "registry/no-url-mcp",
+    registry: "public",
+    kind: "local",
+    description: "A server whose owner has no URL",
+    signals: {
+      owner_login: "orphan",
+      // owner_url intentionally absent
+    },
+  };
+  searchMcpRegistry.mockResolvedValue([NO_URL_HIT]);
+
+  render(<McpDiscoverPane token="tok" onClose={vi.fn()} />);
+
+  await user.type(screen.getByRole("textbox"), "orphan");
+  await user.click(screen.getByRole("button", { name: /search/i }));
+
+  await screen.findByText("no-url-mcp");
+
+  // @orphan text must appear
+  expect(screen.getByText("@orphan")).toBeInTheDocument();
+
+  // No anchor whose href is the string "undefined"
+  const links = screen.queryAllByRole("link");
+  const broken = links.filter((l) => l.getAttribute("href") === "undefined");
+  expect(broken).toHaveLength(0);
+});
+
 it("detail view keeps install button functional", async () => {
   const user = userEvent.setup();
   searchMcpRegistry.mockResolvedValue([OFFICIAL_HIT]);

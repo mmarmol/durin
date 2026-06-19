@@ -37,23 +37,19 @@ function defaultPrefer(detail: McpRegistryServerDetail): "remote" | "local" {
 
 function OwnerAvatar({ src, login }: { src?: string; login?: string }) {
   const initial = login ? login[0].toUpperCase() : "?";
-  if (src) {
-    return (
-      <img
-        src={src}
-        alt={login ?? "owner"}
-        className="size-9 shrink-0 rounded-full object-cover"
-        onError={(e) => {
-          (e.currentTarget as HTMLImageElement).style.display = "none";
-          const sib = e.currentTarget.nextElementSibling as HTMLElement | null;
-          if (sib) sib.style.display = "flex";
-        }}
-      />
-    );
-  }
   return (
-    <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-[13px] font-medium text-muted-foreground">
+    <span className="relative flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-[13px] font-medium text-muted-foreground">
       {initial}
+      {src ? (
+        <img
+          src={src}
+          alt={login ?? "owner"}
+          className="absolute inset-0 size-9 rounded-full object-cover"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).style.display = "none";
+          }}
+        />
+      ) : null}
     </span>
   );
 }
@@ -252,16 +248,22 @@ export function McpDiscoverPane({
             {/* Metadata line */}
             <p className="flex flex-wrap items-center gap-x-2 gap-y-0 text-[11px] text-muted-foreground">
               {ownerLogin ? (
-                <a
-                  href={ownerUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="hover:text-foreground"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {tx("by")} @{ownerLogin}
-                  <ExternalLinkIcon />
-                </a>
+                ownerUrl ? (
+                  <a
+                    href={ownerUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="hover:text-foreground"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {tx("by")} @{ownerLogin}
+                    <ExternalLinkIcon />
+                  </a>
+                ) : (
+                  <span>
+                    {tx("by")} @{ownerLogin}
+                  </span>
+                )
               ) : null}
               {stars !== undefined ? (
                 <span>★ {stars.toLocaleString()}</span>
@@ -416,16 +418,20 @@ export function McpDiscoverPane({
                 {/* Line 2: @owner · language · kind chip */}
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-0 text-[11px] text-muted-foreground">
                   {ownerLogin ? (
-                    <a
-                      href={ownerUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="hover:text-foreground"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      @{ownerLogin}
-                      <ExternalLinkIcon />
-                    </a>
+                    ownerUrl ? (
+                      <a
+                        href={ownerUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hover:text-foreground"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        @{ownerLogin}
+                        <ExternalLinkIcon />
+                      </a>
+                    ) : (
+                      <span>@{ownerLogin}</span>
+                    )
                   ) : null}
                   {language ? <span>{language}</span> : null}
                   <KindChip kind={h.kind} tx={tx} />
