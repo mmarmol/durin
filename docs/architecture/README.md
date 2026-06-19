@@ -203,9 +203,11 @@ workspace, and runtime (telemetry/logs/cron/media/webui).
 
 - **Daily/release** = unset (`~/.durin`); **dev** = a second `DURIN_HOME`;
   **tests** = throwaway temp homes.
-- Two gateways run side-by-side: the second auto-picks a free port when the
-  configured one is taken ([durin/utils/net.py](../../durin/utils/net.py)) and
-  records its live dashboard URL in `gateway-runtime.json`.
+- Two gateways run side-by-side by giving each instance distinct ports in its
+  config. Configured ports are authoritative — never moved automatically; a
+  genuinely-taken port (another active listener) makes the daemon exit with
+  clear guidance rather than crash or silently relocate
+  ([durin/utils/net.py](../../durin/utils/net.py) `port_is_available`).
 - The only things outside an instance root are immutable shared caches that are
   not instance state — the embedding model-weights cache (`~/.cache/huggingface`)
   and the package code/bundled webui.

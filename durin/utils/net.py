@@ -4,31 +4,20 @@ from __future__ import annotations
 
 import socket
 
-from loguru import logger
 
+def port_is_available(host: str, port: int) -> bool:
+    """True if ``host:port`` can be bound for a new server.
 
-def pick_free_port(host: str, preferred: int) -> int:
-    """Return ``preferred`` if it can be bound on ``host``; else an OS-picked free port.
-
-    Lets a second durin instance start without hand-editing ports: the configured
-    port stays the preference, and a free fallback is chosen and logged when the
-    preferred one is already taken (e.g. by the daily daemon).
+    Mirrors what uvicorn/asyncio actually do (``SO_REUSEADDR`` + ``bind`` +
+    ``listen``), so a socket merely in ``TIME_WAIT`` from a just-restarted server
+    is reported available (uvicorn would reuse it) while a genuinely active
+    listener — e.g. another durin instance on the same port — is reported taken.
     """
-    # Probe with bind + listen and NO SO_REUSEADDR so we mirror what uvicorn
-    # actually does: on macOS a bind-only probe with SO_REUSEADDR succeeds even
-    # against an actively-listening socket, but the subsequent listen() fails —
-    # which would let us return a taken port and crash the server.
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            probe.bind((host, preferred))
+            probe.bind((host, port))
             probe.listen(1)
-            return preferred
+            return True
         except OSError:
-            pass
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as alloc:
-        alloc.bind((host, 0))
-        chosen = alloc.getsockname()[1]
-    logger.warning(
-        "Port {} on {} is taken; using free port {} instead.", preferred, host, chosen
-    )
-    return chosen
+            return False

@@ -140,9 +140,11 @@ the Pydantic `Config` schema in [durin/config/schema.py](../durin/config/schema.
 >
 > - **Daily / release:** unset → `~/.durin`.
 > - **Dev (editable):** `DURIN_HOME=~/.durin-dev durin …` — its own config,
->   keys and memory, independent of your daily one. Two gateways run
->   side-by-side: the second auto-picks a free port when the configured one is
->   taken (it logs the chosen port; `durin gateway status` reports the live URL).
+>   keys and memory, independent of your daily one. To run its gateway alongside
+>   the daily one, set distinct ports in the dev instance's config
+>   (`channels.websocket.port` and `gateway.port`). Ports are authoritative and
+>   never moved automatically; if a configured port is already in use the daemon
+>   exits with clear guidance instead of crashing or silently relocating.
 > - **Tests:** each test runs in a throwaway `DURIN_HOME` (the suite never
 >   touches `~/.durin`).
 >
