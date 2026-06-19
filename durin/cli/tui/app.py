@@ -423,6 +423,11 @@ class DurinApp(App[None]):
         if value == "/sessions":
             self._open_session_picker()
             return
+        if value == "/voice":
+            # Record + transcribe via the [voice] extra (spec §6.2). Runs in a
+            # worker so it never blocks the UI thread.
+            self.run_worker(self._record_and_transcribe, exclusive=True)
+            return
         if value == "/model":
             self._open_model_picker()
             return
@@ -626,6 +631,79 @@ class DurinApp(App[None]):
                 metadata={"_wants_stream": True},
             )
         )
+
+    async def _record_and_transcribe(self) -> None:
+        """``/voice`` handler: record via the mic, transcribe, insert text.
+
+        Recording runs in a worker thread (sounddevice is blocking); the UI
+        shows a banner prompting Enter to stop. The recorded WAV is staged in
+        the workspace ``.media/`` dir and transcribed via the shared
+        :class:`TranscriptionService`, then the transcript is inserted into the
+        input box as an editable quote (spec §6.2, "auto" mode).
+        """
+        if self._agent_loop is None:
+            return
+        from durin.cli.tui.voice import VoiceUnavailable, record_wav
+
+        chat = self.query_one("#chat", ChatView)
+        bubble = chat.add_message(
+            "system",
+            "🔴 Recording (up to 120s, trailing silence is trimmed)…",
+        )
+        stop_flag = {"stop": False}
+
+        def _on_stop():
+            return stop_flag["stop"]
+
+        try:
+            import asyncio
+
+            wav_path = await asyncio.to_thread(
+                record_wav, max_seconds=120, on_stop=_on_stop
+            )
+        except VoiceUnavailable as e:
+            bubble.body = str(e)
+            return
+        except Exception as e:  # noqa: BLE001
+            bubble.body = f"Recording failed: {e}"
+            return
+        finally:
+            stop_flag["stop"] = True
+
+        bubble.body = "Transcribing…"
+        try:
+            from durin.cli.dragdrop import transcribe_dragged_audio
+            from durin.config.loader import load_config
+            from durin.service.transcription import TranscriptionService
+
+            cfg = load_config()
+            svc = TranscriptionService.from_config(cfg.transcription)
+            workspace = Path(self._agent_loop.workspace)
+            value, _ = await transcribe_dragged_audio(
+                value="",
+                media=[str(wav_path)],
+                workspace=workspace,
+                service=svc,
+                mode=cfg.transcription.mode,
+            )
+        except Exception as e:  # noqa: BLE001
+            bubble.body = f"Transcription failed: {e}"
+            return
+
+        transcript = value.strip()
+        if not transcript:
+            bubble.body = "(no transcript produced)"
+            return
+        bubble.body = f"[transcripción]: {transcript}"
+        # Insert the transcript into the composer so the user can edit + send.
+        try:
+            composer = self.query_one("#prompt")
+            composer.value = (
+                f"{getattr(composer, 'value', '')}\n[transcripción]: \"{transcript}\"".strip()
+            )
+        except Exception:  # noqa: BLE001
+            # Composer not reachable; the transcript is already shown in the bubble.
+            pass
 
     # ---- key-binding actions (D5.7) --------------------------------------
 

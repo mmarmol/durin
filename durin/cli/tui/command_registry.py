@@ -133,6 +133,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/dream-restore", "Restore a dream snapshot"),
     ("/stop", "Stop the current turn (same as Esc)"),
     ("/restart", "Restart the agent loop"),
+    ("/voice", "Record audio with the mic and transcribe it ([voice] extra)"),
 ]
 
 
