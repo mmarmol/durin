@@ -71,6 +71,49 @@ class AuxModelConfig(Base):
     provider: str = "auto"
 
 
+class TranscriptionLocalConfig(Base):
+    """Local faster-whisper settings (spec §4.3)."""
+
+    model: Literal["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"] = "large-v3"
+    device: Literal["auto", "cpu", "cuda"] = "auto"
+    compute_type: Literal["auto", "int8", "int8_float16", "float16", "float32"] = "auto"
+    download_root: str | None = None
+
+
+class TranscriptionHttpConfig(Base):
+    """OpenAI-compatible HTTP server endpoint (whisper.cpp, mlx-qwen3-asr, vLLM)."""
+
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+
+
+class TranscriptionProviderKeysConfig(Base):
+    """Cloud API credentials for a named provider."""
+
+    api_key: str | None = None
+    api_base: str | None = None
+
+
+class TranscriptionConfig(Base):
+    """Global transcription settings (spec §4.3).
+
+    Channel-level ``transcription_provider`` / ``transcription_api_key`` /
+    ``transcription_language`` override these per-channel.
+    """
+
+    enabled: bool = True
+    mode: Literal["auto", "preview", "off"] = "auto"
+    provider: Literal["local", "openai", "groq", "http"] = "local"
+    language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$")
+    local: TranscriptionLocalConfig = Field(default_factory=TranscriptionLocalConfig)
+    http: TranscriptionHttpConfig = Field(default_factory=TranscriptionHttpConfig)
+    openai: TranscriptionProviderKeysConfig = Field(default_factory=TranscriptionProviderKeysConfig)
+    groq: TranscriptionProviderKeysConfig = Field(default_factory=TranscriptionProviderKeysConfig)
+    max_duration_s: int = Field(default=600, ge=1, le=86400)
+    cache_transcripts: bool = True
+
+
 class MemoryEmbeddingConfig(Base):
     """Embedding model configuration for the memory subsystem (Phase 2).
 
@@ -1049,6 +1092,7 @@ class Config(BaseSettings):
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     appearance: AppearanceConfig = Field(default_factory=AppearanceConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
+    transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
