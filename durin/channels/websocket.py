@@ -1179,6 +1179,17 @@ class WebSocketChannel(BaseChannel):
                         transcript="", error="disabled",
                     )
                     continue
+                # Send a "transcribing" status immediately so the client knows
+                # work started. This also keeps the WS alive during the
+                # (potentially long) first-run model load.
+                try:
+                    await self._send_event(
+                        connection, "audio_transcript",
+                        chat_id=cid, request_id=request_id, name=name,
+                        transcript="", status="transcribing",
+                    )
+                except Exception:
+                    pass  # client may have disconnected; transcribe anyway
                 try:
                     result = await service.transcribe_and_cache(path)
                     await self._send_event(
@@ -1190,11 +1201,14 @@ class WebSocketChannel(BaseChannel):
                     self.logger.exception(
                         "audio_transcribe failed for {}", path
                     )
-                    await self._send_event(
-                        connection, "audio_transcript",
-                        chat_id=cid, request_id=request_id, name=name,
-                        transcript="", error="failed",
-                    )
+                    try:
+                        await self._send_event(
+                            connection, "audio_transcript",
+                            chat_id=cid, request_id=request_id, name=name,
+                            transcript="", error="failed",
+                        )
+                    except Exception:
+                        pass
             return
         if t == "secret_store":
             await self._handle_secret_store_envelope(connection, client_id, envelope)

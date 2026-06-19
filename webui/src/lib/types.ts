@@ -308,13 +308,16 @@ export type InboundEvent =
     }
   | {
       /** Reply to an ``audio_transcribe`` frame (spec §5.4). Carries the
-       * transcript text, or an error reason when transcription failed. */
+       * transcript text, or an error reason when transcription failed.
+       * An intermediate event with ``status="transcribing"`` is sent first
+       * to signal work-in-progress and keep the WS alive during model load. */
       event: "audio_transcript";
       request_id: string;
       chat_id?: string;
       name?: string;
       transcript?: string;
       error?: string;
+      status?: "transcribing";
     }
   | { event: "error"; chat_id?: string; detail?: string };
 

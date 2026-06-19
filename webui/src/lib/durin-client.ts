@@ -349,7 +349,7 @@ export class DurinClient {
       const timer = setTimeout(() => {
         this.pendingTranscriptions.delete(requestId);
         reject(new Error("audio transcription timed out"));
-      }, 60_000);
+      }, 300_000);
       this.pendingTranscriptions.set(requestId, { resolve, reject, timer });
       this.queueSend({
         type: "audio_transcribe",
@@ -476,6 +476,11 @@ export class DurinClient {
       return;
     }
     if (parsed.event === "audio_transcript") {
+      // Intermediate "transcribing" status keeps the promise pending (the
+      // final transcript arrives in a later event without status).
+      if ((parsed as { status?: string }).status === "transcribing") {
+        return;
+      }
       const pending = this.pendingTranscriptions.get(parsed.request_id);
       if (pending) {
         clearTimeout(pending.timer);
