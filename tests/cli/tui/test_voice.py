@@ -2,7 +2,7 @@
 
 import pytest
 
-from durin.cli.tui.voice import VoiceUnavailable, record_wav
+from durin.cli.tui.voice import VoiceUnavailableError, record_wav
 
 
 def test_voice_module_imports_without_sounddevice():
@@ -13,7 +13,7 @@ def test_voice_module_imports_without_sounddevice():
 
 
 def test_record_wav_raises_when_sounddevice_absent(monkeypatch):
-    """When sounddevice is unimportable, record_wav raises VoiceUnavailable."""
+    """When sounddevice is unimportable, record_wav raises VoiceUnavailableError."""
     import builtins
 
     real_import = builtins.__import__
@@ -24,12 +24,12 @@ def test_record_wav_raises_when_sounddevice_absent(monkeypatch):
         return real_import(name, *a, **k)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    with pytest.raises((VoiceUnavailable, ImportError)):
+    with pytest.raises((VoiceUnavailableError, ImportError)):
         record_wav(max_seconds=1)
 
 
 def test_voice_unavailable_message_mentions_voice_extra():
     """The error hint must tell the user how to install the [voice] extra."""
-    err = VoiceUnavailable("test")
+    err = VoiceUnavailableError("test")
     # The real message is built in _import_sd; just assert it's a usable error.
     assert isinstance(err, RuntimeError)

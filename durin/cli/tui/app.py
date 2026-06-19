@@ -643,7 +643,7 @@ class DurinApp(App[None]):
         """
         if self._agent_loop is None:
             return
-        from durin.cli.tui.voice import VoiceUnavailable, record_wav
+        from durin.cli.tui.voice import VoiceUnavailableError, record_wav
 
         chat = self.query_one("#chat", ChatView)
         bubble = chat.add_message(
@@ -661,7 +661,7 @@ class DurinApp(App[None]):
             wav_path = await asyncio.to_thread(
                 record_wav, max_seconds=120, on_stop=_on_stop
             )
-        except VoiceUnavailable as e:
+        except VoiceUnavailableError as e:
             bubble.body = str(e)
             return
         except Exception as e:  # noqa: BLE001

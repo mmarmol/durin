@@ -13,10 +13,10 @@ import tempfile
 import wave
 from pathlib import Path
 
-__all__ = ["record_wav", "VoiceUnavailable"]
+__all__ = ["record_wav", "VoiceUnavailableError"]
 
 
-class VoiceUnavailable(RuntimeError):
+class VoiceUnavailableError(RuntimeError):
     """Raised when the ``[voice]`` extra (sounddevice) is not installed."""
 
 
@@ -26,7 +26,7 @@ def _import_sd():
 
         return sd
     except ImportError as e:
-        raise VoiceUnavailable(
+        raise VoiceUnavailableError(
             "Recording needs the [voice] extra: pip install durin-agent[voice] "
             "(Linux also needs libportaudio2)"
         ) from e
