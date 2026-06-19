@@ -306,6 +306,16 @@ export type InboundEvent =
       name?: string;
       detail?: string;
     }
+  | {
+      /** Reply to an ``audio_transcribe`` frame (spec §5.4). Carries the
+       * transcript text, or an error reason when transcription failed. */
+      event: "audio_transcript";
+      request_id: string;
+      chat_id?: string;
+      name?: string;
+      transcript?: string;
+      error?: string;
+    }
   | { event: "error"; chat_id?: string; detail?: string };
 
 /** Base64-encoded image attached to an outbound ``message`` envelope.
@@ -359,11 +369,20 @@ export type Outbound =
     }
   | {
       /** Start a streaming on-demand audit of a quarantined skill. Reasoning
-       * arrives as ``reasoning_delta`` on ``audit:<name>``; the terminal
-       * ``skill_audit_done`` carries the structured result. */
+       arrives as ``reasoning_delta`` on ``audit:<name>``; the terminal
+       ``skill_audit_done`` carries the structured result. */
       type: "skill_judge";
       chat_id: string;
       name: string;
+    }
+  | {
+      /** Ask the server to transcribe one audio attachment (spec §5.4). The
+       * server stores the audio, transcribes it, and replies with an
+       * ``audio_transcript`` event keyed by ``request_id``. */
+      type: "audio_transcribe";
+      request_id: string;
+      chat_id: string;
+      media: OutboundMedia[];
     };
 
 // ---------------------------------------------------------------------------

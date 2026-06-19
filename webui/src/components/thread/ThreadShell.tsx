@@ -119,6 +119,7 @@ export function ThreadShell({
     goalState,
     send,
     stop,
+    transcribeAudio,
     setMessages,
     streamError,
     dismissStreamError,
@@ -360,6 +361,7 @@ export function ThreadShell({
       {session ? (
         <ThreadComposer
           onSend={handleThreadSend}
+          onTranscribeAudio={transcribeAudio}
           disabled={!chatId}
           isStreaming={isStreaming}
           placeholder={
@@ -383,6 +385,7 @@ export function ThreadShell({
       ) : (
         <ThreadComposer
           onSend={handleWelcomeSend}
+          onTranscribeAudio={transcribeAudio}
           disabled={booting}
           isStreaming={isStreaming}
           placeholder={

@@ -39,6 +39,8 @@ import {
   type AttachmentError,
   MAX_IMAGES_PER_MESSAGE,
 } from "@/hooks/useAttachedImages";
+import { useAttachedAudio } from "@/hooks/useAttachedAudio";
+import { MicButton } from "@/components/thread/MicButton";
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import { usePromptHistory } from "@/hooks/usePromptHistory";
 import { ModelPickerPopover } from "@/components/thread/ModelPickerPopover";
@@ -50,6 +52,8 @@ import { cn } from "@/lib/utils";
 /** ``<input accept>``: aligned with the server's MIME whitelist. SVG is
  * deliberately excluded to avoid an embedded-script XSS surface. */
 const ACCEPT_ATTR = "image/png,image/jpeg,image/webp,image/gif";
+const AUDIO_ACCEPT_ATTR =
+  "audio/mpeg,audio/ogg,audio/opus,audio/wav,audio/webm,audio/x-m4a,audio/aac,audio/flac";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -59,6 +63,9 @@ function formatBytes(n: number): string {
 
 interface ThreadComposerProps {
   onSend: (content: string, images?: SendImage[]) => void;
+  /** Transcribe an audio attachment server-side (spec §5.4). Receives a
+   *  data-url + name and resolves with the transcript text. */
+  onTranscribeAudio?: (media: { data_url: string; name: string }[]) => Promise<string>;
   disabled?: boolean;
   placeholder?: string;
   isStreaming?: boolean;
@@ -387,6 +394,7 @@ function RunElapsedStrip({
 
 export function ThreadComposer({
   onSend,
+  onTranscribeAudio,
   disabled,
   placeholder,
   isStreaming = false,
@@ -412,6 +420,7 @@ export function ThreadComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const audioInputRef = useRef<HTMLInputElement>(null);
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
   const isHero = variant === "hero";
   const promptHistory = usePromptHistory();
@@ -430,6 +439,52 @@ export function ThreadComposer({
 
   const { images, enqueue, remove, clear, encoding, full } =
     useAttachedImages();
+
+  const { audio: audioAttachments, enqueue: enqueueAudio, clear: clearAudio } =
+    useAttachedAudio();
+
+  // Resize is declared later in the component; keep a ref so the audio
+  // callbacks (declared earlier) can call it without a TDZ violation.
+  const resizeTextareaRef = useRef<() => void>(() => {});
+
+  // Transcribe an audio File server-side and append the transcript to the
+  // input value (spec §5.3, "auto" mode). Called when audio is attached or
+  // recorded. Errors surface as an inline chip error; the audio stays.
+  const transcribeAndAppend = useCallback(
+    async (file: File) => {
+      if (!onTranscribeAudio) return;
+      try {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(reader.error ?? new Error("read failed"));
+          reader.readAsDataURL(file);
+        });
+        const text = await onTranscribeAudio([
+          { data_url: dataUrl, name: file.name },
+        ]);
+        const clean = text.trim();
+        if (clean) {
+          setValue((prev) => (prev ? `${prev}\n[transcripción]: "${clean}"` : `[transcripción]: "${clean}"`));
+          resizeTextareaRef.current();
+        }
+      } catch {
+        setInlineError("Audio transcription failed — check your [stt] setup.");
+      }
+    },
+    [onTranscribeAudio],
+  );
+
+  // Enqueue an audio file (from attach or mic) and kick off transcription.
+  const handleAudioFile = useCallback(
+    (file: File) => {
+      const { rejected } = enqueueAudio([file]);
+      if (rejected.length === 0) {
+        void transcribeAndAppend(file);
+      }
+    },
+    [enqueueAudio, transcribeAndAppend],
+  );
 
   const formatRejection = useCallback(
     (reason: AttachmentError): string => {
@@ -591,6 +646,9 @@ export function ThreadComposer({
     });
   }, []);
 
+  // Keep the audio callbacks (declared earlier) able to trigger a resize.
+  resizeTextareaRef.current = resizeTextarea;
+
   const chooseSlashCommand = useCallback(
     (command: SlashCommand) => {
       setValue(command.argHint ? `${command.command} ` : command.command);
@@ -721,13 +779,14 @@ export function ThreadComposer({
     setValue("");
     setInlineError(null);
     clear();
+    clearAudio();
     setSlashMenuDismissed(false);
     resizeTextarea();
     if (isStreaming) {
       setQueuedFlash(true);
       window.setTimeout(() => setQueuedFlash(false), 2500);
     }
-  }, [canSend, clear, isStreaming, onModelPick, onSend, promptHistory, readyImages, resizeTextarea, value]);
+  }, [canSend, clear, clearAudio, isStreaming, onModelPick, onSend, promptHistory, readyImages, resizeTextarea, value]);
 
   const steer = useCallback(() => {
     const trimmed = value.trim();
@@ -874,6 +933,34 @@ export function ThreadComposer({
             >
               <Paperclip className={cn(isHero ? "h-5 w-5" : "h-4 w-4")} />
             </Button>
+            <input
+              ref={audioInputRef}
+              type="file"
+              accept={AUDIO_ACCEPT_ATTR}
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleAudioFile(f);
+                e.target.value = "";
+              }}
+            />
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              disabled={disabled || audioAttachments.length > 0}
+              aria-label={t("thread.composer.attachAudio")}
+              onClick={() => audioInputRef.current?.click()}
+              className={cn(
+                "rounded-full text-muted-foreground hover:text-foreground",
+                isHero
+                  ? "h-9 w-9 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card"
+                  : "h-7.5 w-7.5 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card",
+              )}
+            >
+              <span className={cn(isHero ? "text-lg" : "text-base")}>🎵</span>
+            </Button>
+            <MicButton onRecorded={handleAudioFile} disabled={disabled || audioAttachments.length > 0} />
             {modelLabel ? (
               <div className="relative">
                 <button
