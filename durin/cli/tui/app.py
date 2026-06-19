@@ -594,6 +594,28 @@ class DurinApp(App[None]):
     async def _publish_inbound(self, value: str, media: list[str]) -> None:
         from durin.bus.events import InboundMessage
 
+        # Transcribe dragged-in audio before the agent sees it (spec §6.1).
+        # The audio path is dropped from ``media`` (the loop's image-only
+        # content builder would silently discard it) and its transcript is
+        # appended to ``value``. Best-effort: never blocks the turn on error.
+        if media and self._agent_loop is not None:
+            try:
+                from durin.cli.dragdrop import transcribe_dragged_audio
+                from durin.config.loader import load_config
+                from durin.service.transcription import TranscriptionService
+
+                cfg = load_config()
+                svc = TranscriptionService.from_config(cfg.transcription)
+                value, media = await transcribe_dragged_audio(
+                    value=value,
+                    media=media,
+                    workspace=Path(self._agent_loop.workspace),
+                    service=svc,
+                    mode=cfg.transcription.mode,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
         await self._agent_loop.bus.publish_inbound(
             InboundMessage(
                 channel=self._cli_channel,
