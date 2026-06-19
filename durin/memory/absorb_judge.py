@@ -105,7 +105,7 @@ def judge_pair(
     shared_aliases: list[str],
     *,
     llm_invoke: LLMInvoke,
-    model: str = "glm-5.1",
+    model: str | None = None,
     max_retries: int = 2,
     canonical_ref: str | None = None,
     absorbed_ref: str | None = None,
