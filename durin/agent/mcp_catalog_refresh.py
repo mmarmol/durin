@@ -17,7 +17,11 @@ import threading
 import urllib.request
 from pathlib import Path
 
-_DEFAULT_URL = "https://raw.githubusercontent.com/modelcontextprotocol/registry/refs/heads/main/data/registry.json"
+# The durin-owned catalog, published weekly as a release asset (see
+# .github/workflows/mcp-catalog.yml). Mirrors McpCatalogRefreshConfig.url — callers
+# normally pass cfg.url; this default exists only so a bare call still targets the
+# right artifact (NOT the upstream registry, whose schema lacks stars/official).
+_DEFAULT_URL = "https://github.com/mmarmol/durin/releases/download/catalog/mcp_catalog.json"
 
 
 def _default_fetch(url: str) -> bytes:

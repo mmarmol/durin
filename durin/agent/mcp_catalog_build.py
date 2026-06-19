@@ -4,8 +4,9 @@
 run offline. ``main()`` wires in the real registry + a pooled httpx client and
 writes ``durin/agent/data/mcp_catalog.json``.
 
-The catalog schema mirrors the server rows used by mcp_catalog_store / _hit_from_server,
-so the store + search layers can consume it without transformation.
+The catalog schema is the flat server row consumed by ``mcp_catalog_store`` (its
+``_SIGNAL_KEYS`` select the enrichment into each ``McpServerHit.signals``), so the
+store + search layers can consume it without transformation.
 """
 from __future__ import annotations
 
