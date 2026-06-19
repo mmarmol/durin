@@ -277,3 +277,138 @@ class TestSearch:
         names = [r.name for r in results]
 
         assert "lowstar-mcp" in names
+
+
+# ---------------------------------------------------------------------------
+# Floor-catalog relevance: substring/typo matching, not loose namespace fuzzy
+# ---------------------------------------------------------------------------
+
+def _floor_like_servers() -> list[dict]:
+    """Mirrors the structure of mcp_catalog.json floor (io.github.* refs)."""
+    return [
+        {
+            "name": "io.github.github/github-mcp-server",
+            "ref": "io.github.github/github-mcp-server",
+            "description": "Manage GitHub repositories, issues, pull requests and Actions.",
+            "kind": "both",
+            "stars": 30000,
+            "official": True,
+            "owner_login": "github",
+            "topics": [],
+            "language": "Go",
+            "license": "",
+            "owner_url": "",
+            "owner_avatar": "",
+            "repo_url": "",
+        },
+        {
+            "name": "io.github.ChromeDevTools/chrome-devtools-mcp",
+            "ref": "io.github.ChromeDevTools/chrome-devtools-mcp",
+            "description": "Control and inspect Chrome via the DevTools Protocol for browser automation.",
+            "kind": "local",
+            "stars": 43000,
+            "official": True,
+            "owner_login": "ChromeDevTools",
+            "topics": [],
+            "language": "TypeScript",
+            "license": "",
+            "owner_url": "",
+            "owner_avatar": "",
+            "repo_url": "",
+        },
+        {
+            "name": "io.github.microsoft/playwright-mcp",
+            "ref": "io.github.microsoft/playwright-mcp",
+            "description": "Drive a real browser via Playwright.",
+            "kind": "local",
+            "stars": 34000,
+            "official": True,
+            "owner_login": "microsoft",
+            "topics": [],
+            "language": "TypeScript",
+            "license": "",
+            "owner_url": "",
+            "owner_avatar": "",
+            "repo_url": "",
+        },
+        {
+            "name": "com.microsoft/azure",
+            "ref": "com.microsoft/azure",
+            "description": "Manage and query Azure resources.",
+            "kind": "both",
+            "stars": 3000,
+            "official": True,
+            "owner_login": "microsoft",
+            "topics": [],
+            "language": "",
+            "license": "",
+            "owner_url": "",
+            "owner_avatar": "",
+            "repo_url": "",
+        },
+    ]
+
+
+class TestSearchRelevance:
+    def test_nada_returns_empty(self, monkeypatch):
+        """'nada' fuzzy-matches nothing — avoids loose whole-string ratio hits."""
+        from durin.agent import mcp_catalog_store
+
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", _floor_like_servers)
+
+        results = mcp_catalog_store.search("nada", limit=10, quality="all")
+
+        assert results == []
+
+    def test_github_matches_only_github_server(self, monkeypatch):
+        """'github' matches the github-mcp-server only, not chrome-devtools/playwright/azure."""
+        from durin.agent import mcp_catalog_store
+
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", _floor_like_servers)
+
+        results = mcp_catalog_store.search("github", limit=10, quality="all")
+        refs = [r.ref for r in results]
+
+        assert "io.github.github/github-mcp-server" in refs
+        assert not any(
+            r in refs
+            for r in [
+                "io.github.ChromeDevTools/chrome-devtools-mcp",
+                "io.github.microsoft/playwright-mcp",
+                "com.microsoft/azure",
+            ]
+        ), f"Unexpected refs matched 'github': {refs}"
+
+    def test_playwright_matches_playwright(self, monkeypatch):
+        """'playwright' substring of name segment → matches playwright-mcp only."""
+        from durin.agent import mcp_catalog_store
+
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", _floor_like_servers)
+
+        results = mcp_catalog_store.search("playwright", limit=10, quality="all")
+        refs = [r.ref for r in results]
+
+        assert "io.github.microsoft/playwright-mcp" in refs
+        assert "io.github.ChromeDevTools/chrome-devtools-mcp" not in refs
+
+    def test_browser_matches_via_description(self, monkeypatch):
+        """'browser' is in chrome-devtools description and playwright description → both match."""
+        from durin.agent import mcp_catalog_store
+
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", _floor_like_servers)
+
+        results = mcp_catalog_store.search("browser", limit=10, quality="all")
+        refs = [r.ref for r in results]
+
+        assert "io.github.ChromeDevTools/chrome-devtools-mcp" in refs
+
+    def test_azure_matches_via_description(self, monkeypatch):
+        """'azure' is in the Azure server description → matches it."""
+        from durin.agent import mcp_catalog_store
+
+        monkeypatch.setattr(mcp_catalog_store, "load_servers", _floor_like_servers)
+
+        results = mcp_catalog_store.search("azure", limit=10, quality="all")
+        refs = [r.ref for r in results]
+
+        assert "com.microsoft/azure" in refs

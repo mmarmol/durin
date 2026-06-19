@@ -65,14 +65,42 @@ def cache_clear() -> None:
     _cached_load.cache_clear()
 
 
-def _score(query: str, text: str) -> float:
-    """Substring match beats fuzzy; fuzzy uses difflib ratio."""
-    if not text:
-        return 0.0
-    q, t = query.lower(), text.lower()
-    if q in t:
-        return 1.0 + (len(q) / max(len(t), 1))
-    return SequenceMatcher(None, q, t).ratio()
+def _name_segment(ref_or_name: str) -> str:
+    """Return the part after the last '/' — the server-name segment."""
+    return ref_or_name.rsplit("/", 1)[-1].lower()
+
+
+def _matches(query_lc: str, s: dict) -> bool:
+    """Return True when query_lc is a meaningful match for server *s*.
+
+    A server matches when query_lc is a SUBSTRING of any of:
+    - the name segment (part of ref/name after the last '/')
+    - owner_login
+    - description
+    - any topics entry
+
+    Typo fallback: SequenceMatcher ratio > 0.8 vs the name segment only.
+    Loose whole-string / namespace fuzzy matching is intentionally excluded
+    to prevent "nada" matching long descriptions or "github" matching every
+    io.github.* namespace ref.
+    """
+    name_seg = _name_segment(s.get("ref") or s.get("name", ""))
+    desc = (s.get("description") or "").lower()
+    owner = (s.get("owner_login") or "").lower()
+    topics = [t.lower() for t in (s.get("topics") or [])]
+
+    if query_lc in name_seg:
+        return True
+    if query_lc in owner:
+        return True
+    if query_lc in desc:
+        return True
+    if any(query_lc in topic for topic in topics):
+        return True
+    # Typo fallback — only against the short name segment
+    if SequenceMatcher(None, query_lc, name_seg).ratio() > 0.8:
+        return True
+    return False
 
 
 _SIGNAL_KEYS = (
@@ -96,18 +124,17 @@ def search(
 
     servers = load_servers()
     gated = quality != "all"
+    query_lc = query.lower()
 
     scored: list[tuple[float, int, dict]] = []
     for s in servers:
-        sc = max(_score(query, s.get("name", "")),
-                 _score(query, s.get("description", "")))
-        if sc <= 0.2:
+        if not _matches(query_lc, s):
             continue
         stars = s.get("stars") or 0
         official = bool(s.get("official"))
         if gated and not (stars > min_stars or official):
             continue
-        scored.append((sc, stars if stars else -1, s))
+        scored.append((1.0, stars if stars else -1, s))
 
     scored.sort(key=lambda t: (t[1], t[0]), reverse=True)
 
