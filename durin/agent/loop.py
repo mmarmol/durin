@@ -600,8 +600,8 @@ class AgentLoop:
         if cfg is None or not getattr(cfg, "enabled", False):
             return
         try:
-            from durin.config.paths import get_data_dir
             from durin.agent.mcp_catalog_refresh import McpCatalogRefreshScheduler
+            from durin.config.paths import get_data_dir
 
             sched = McpCatalogRefreshScheduler(
                 get_data_dir(),
