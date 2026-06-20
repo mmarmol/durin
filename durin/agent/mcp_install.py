@@ -105,16 +105,25 @@ def build_server_config_from_detail(
 ) -> MCPServerConfig:
     """Build a persisted server config; fall back to whichever model the server offers.
 
-    Secret env values are supplied as ``${secret:NAME}`` references in ``secret_env_refs``.
+    Secret values (collected by ``collect_secret_env``) are supplied as ``${secret:NAME}``
+    references in ``secret_env_refs`` and applied to the local server's ``env`` or the remote
+    server's ``headers`` (matched by name) — resolved to plaintext at spawn/connect time.
     """
     use_remote = (prefer == "remote" and detail.remotes) or (
         not detail.packages and detail.remotes
     )
     if use_remote:
         remote = detail.remotes[0]
+        # Apply the remote's declared headers: non-secret defaults inline + the collected
+        # secret refs (e.g. a static ``Authorization`` token). Without this the user-supplied
+        # token is dropped and the remote 401s.
+        header_names = {h.name for h in remote.headers}
+        headers = {h.name: (h.default or "") for h in remote.headers if not h.is_secret}
+        headers.update({k: v for k, v in secret_env_refs.items() if k in header_names})
         return MCPServerConfig(
             type=_TRANSPORT.get(remote.transport_type, "streamableHttp"),
             url=remote.url,
+            headers=headers,
             source_ref=detail.ref,
         )
     if not detail.packages:
