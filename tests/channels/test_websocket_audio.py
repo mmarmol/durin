@@ -151,8 +151,8 @@ async def test_audio_transcribe_forwards_phase_events(tmp_path):
     class FakeService:
         async def transcribe_and_cache(self, path, on_status=None):
             if on_status:
-                on_status("loading", 0, 0)
-                on_status("transcribing", 0, 0)
+                await asyncio.to_thread(on_status, "loading", 0, 0)
+                await asyncio.to_thread(on_status, "transcribing", 0, 0)
             return TranscriptResult(
                 text="phase test",
                 cached=False,
@@ -173,13 +173,11 @@ async def test_audio_transcribe_forwards_phase_events(tmp_path):
         "media": [{"data_url": data_url, "name": "a.wav"}],
     }
     await ch._dispatch_envelope(conn, "client1", envelope)
-    # run_coroutine_threadsafe schedules via call_soon_threadsafe; when called
-    # from within the same event-loop thread the scheduled tasks need a brief
-    # real yield (sleep(0) is not enough on all platforms).
-    await asyncio.sleep(0.05)
+    for _ in range(200):  # up to ~2s, exits early as soon as present
+        statuses = {json.loads(r).get("status") for r in conn.sent}
+        if {"loading", "transcribing"} <= statuses:
+            break
+        await asyncio.sleep(0.01)
 
-    events = [json.loads(raw) for raw in conn.sent]
-    status_events = [e for e in events if e.get("status")]
-    statuses = {e["status"] for e in status_events}
     assert "loading" in statuses
     assert "transcribing" in statuses
