@@ -89,6 +89,7 @@ interface PendingTranscription {
   resolve: (text: string) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  onStatus?: (phase: "downloading" | "loading" | "transcribing", bytes?: number, total?: number) => void;
 }
 
 /** A credential to write into durin's secret store over the socket. */
@@ -341,6 +342,7 @@ export class DurinClient {
   transcribeAudio(
     chatId: string,
     media: OutboundMedia[],
+    onStatus?: (phase: "downloading" | "loading" | "transcribing", bytes?: number, total?: number) => void,
   ): Promise<string> {
     const requestId =
       globalThis.crypto?.randomUUID?.() ??
@@ -350,7 +352,7 @@ export class DurinClient {
         this.pendingTranscriptions.delete(requestId);
         reject(new Error("audio transcription timed out"));
       }, 300_000);
-      this.pendingTranscriptions.set(requestId, { resolve, reject, timer });
+      this.pendingTranscriptions.set(requestId, { resolve, reject, timer, onStatus });
       this.queueSend({
         type: "audio_transcribe",
         request_id: requestId,
@@ -476,9 +478,13 @@ export class DurinClient {
       return;
     }
     if (parsed.event === "audio_transcript") {
-      // Intermediate "transcribing" status keeps the promise pending (the
-      // final transcript arrives in a later event without status).
-      if ((parsed as { status?: string }).status === "transcribing") {
+      // Intermediate phase events (status present) notify the caller but keep
+      // the promise pending; the terminal event (no status) settles it.
+      if (parsed.status) {
+        const pending = this.pendingTranscriptions.get(parsed.request_id);
+        if (pending?.onStatus) {
+          pending.onStatus(parsed.status, parsed.bytes, parsed.total);
+        }
         return;
       }
       const pending = this.pendingTranscriptions.get(parsed.request_id);

@@ -309,15 +309,21 @@ export type InboundEvent =
   | {
       /** Reply to an ``audio_transcribe`` frame (spec §5.4). Carries the
        * transcript text, or an error reason when transcription failed.
-       * An intermediate event with ``status="transcribing"`` is sent first
-       * to signal work-in-progress and keep the WS alive during model load. */
+       * Intermediate events with ``status`` set signal progress phases
+       * (model download, load, transcribing) and keep the WS alive.
+       * Only the terminal event (no ``status``) carries ``transcript``. */
       event: "audio_transcript";
       request_id: string;
       chat_id?: string;
       name?: string;
       transcript?: string;
       error?: string;
-      status?: "transcribing";
+      status?: "downloading" | "loading" | "transcribing";
+      /** Bytes received so far during a ``downloading`` phase. */
+      bytes?: number;
+      /** Total expected bytes during a ``downloading`` phase (absent when
+       * Content-Length is unknown). */
+      total?: number;
     }
   | { event: "error"; chat_id?: string; detail?: string };
 

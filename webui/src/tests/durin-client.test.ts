@@ -406,6 +406,35 @@ describe("DurinClient", () => {
     expect(FakeSocket.instances.length).toBeGreaterThan(1);
   });
 
+  it("forwards STT phase events via onStatus and resolves on the terminal event", async () => {
+    const client = new DurinClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    const phases: Array<{ phase: string; bytes?: number; total?: number }> = [];
+    const transcriptPromise = client.transcribeAudio(
+      "chat-stt",
+      [{ data_url: "data:audio/webm;base64,AAAA" }],
+      (phase, bytes, total) => phases.push({ phase, bytes, total }),
+    );
+
+    // Extract the request_id from the outbound frame.
+    const outbound = lastSocket().sent.find((s) => s.includes("audio_transcribe"));
+    const { request_id } = JSON.parse(outbound as string) as { request_id: string };
+
+    // Intermediate phase: must NOT resolve the promise.
+    lastSocket().fakeMessage({ event: "audio_transcript", request_id, status: "loading" });
+    expect(phases).toEqual([{ phase: "loading", bytes: undefined, total: undefined }]);
+
+    // Terminal event: no status field → resolves with transcript.
+    lastSocket().fakeMessage({ event: "audio_transcript", request_id, transcript: "hola" });
+    await expect(transcriptPromise).resolves.toBe("hola");
+  });
+
   it("does not emit a stream error on a vanilla socket close", () => {
     const client = new DurinClient({
       url: "ws://test",
