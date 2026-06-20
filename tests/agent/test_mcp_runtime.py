@@ -111,10 +111,14 @@ async def test_disconnect_mcp_server_not_connected_is_noop(tmp_path):
     assert "x" not in loop._mcp_connections
 
 
-async def test_disconnect_mcp_server_unknown_raises(tmp_path):
+async def test_disconnect_mcp_server_unknown_is_noop(tmp_path):
+    # Idempotent: disconnecting a server with no live connection must NOT raise — a server
+    # installed straight to needs_auth (never connected) isn't in the runtime snapshot, and
+    # reconnect()/post-OAuth reconnect do disconnect-then-connect on it. Raising here left
+    # such servers stuck "connecting" (the connect never ran).
     loop = _loop(tmp_path, {})
-    with pytest.raises(KeyError):
-        await loop.disconnect_mcp_server("nope")
+    await loop.disconnect_mcp_server("nope")  # no raise
+    assert "nope" not in loop._mcp_connections
 
 
 # --- McpRuntime accessor --------------------------------------------------
