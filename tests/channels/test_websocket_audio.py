@@ -181,3 +181,80 @@ async def test_audio_transcribe_forwards_phase_events(tmp_path):
 
     assert "loading" in statuses
     assert "transcribing" in statuses
+
+
+def test_extract_data_url_mime_tolerates_codecs_param():
+    """MediaRecorder emits ``audio/webm;codecs=opus`` — the base MIME must parse
+    (regression: the regex used to reject any data URL with media-type params,
+    so recorded audio silently failed)."""
+    from durin.channels.websocket import _extract_data_url_mime, _UPLOAD_MIME_ALLOWED
+
+    assert _extract_data_url_mime("data:audio/webm;codecs=opus;base64,AAAA") == "audio/webm"
+    assert _extract_data_url_mime("data:audio/mp4;codecs=mp4a.40.2;base64,AAAA") == "audio/mp4"
+    assert _extract_data_url_mime("data:audio/wav;base64,AAAA") == "audio/wav"
+    assert _extract_data_url_mime("data:audio/webm;codecs=opus;base64,AAAA") in _UPLOAD_MIME_ALLOWED
+    assert _extract_data_url_mime("data:text/plain,hi") is None
+
+
+@pytest.mark.asyncio
+async def test_audio_transcribe_accepts_webm_codecs_opus(tmp_path, monkeypatch):
+    """A recorded ``audio/webm;codecs=opus`` upload must reach transcription
+    through the REAL _save_envelope_media (not a stub)."""
+    import base64 as _b64
+
+    from durin.channels.websocket import WebSocketChannel
+    from durin.service.transcription import TranscriptResult
+
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    monkeypatch.setattr("durin.channels.websocket.get_media_dir", lambda _ch: media_dir)
+
+    payload = _b64.b64encode(b"\x1aE\xdf\xa3 fake webm bytes").decode()
+    data_url = f"data:audio/webm;codecs=opus;base64,{payload}"
+
+    seen: dict[str, str] = {}
+
+    class FakeService:
+        async def transcribe_and_cache(self, path, on_status=None):
+            seen["path"] = str(path)
+            return TranscriptResult(text="hola", cached=False, meta_path=None, audio_path=Path(path))
+
+    ch = WebSocketChannel.__new__(WebSocketChannel)
+    ch.transcription = FakeService()
+    ch.logger = __import__("loguru").logger
+
+    conn = _FakeConn()
+    await ch._dispatch_envelope(conn, "client1", {
+        "type": "audio_transcribe", "chat_id": "c1", "request_id": "req-webm",
+        "media": [{"data_url": data_url, "name": "recording.webm"}],
+    })
+
+    assert "path" in seen, "webm;codecs=opus was rejected before reaching transcription"
+    events = [json.loads(r) for r in conn.sent]
+    terminal = [e for e in events if e.get("event") == "audio_transcript" and not e.get("status")]
+    assert terminal and terminal[0]["transcript"] == "hola"
+    assert all(e.get("event") != "error" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_audio_transcribe_rejection_replies_with_request_id():
+    """A rejected upload must return as ``audio_transcript`` keyed by request_id
+    (not a bare ``error`` event) so the composer chip surfaces the failure
+    instead of spinning forever."""
+    from durin.channels.websocket import WebSocketChannel
+
+    ch = WebSocketChannel.__new__(WebSocketChannel)
+    ch.transcription = object()  # rejection happens before transcription is used
+    ch.logger = __import__("loguru").logger
+
+    conn = _FakeConn()
+    await ch._dispatch_envelope(conn, "client1", {
+        "type": "audio_transcribe", "chat_id": "c1", "request_id": "req-bad",
+        "media": [{"data_url": "data:application/zip;base64,AAAA", "name": "x.zip"}],
+    })
+
+    events = [json.loads(r) for r in conn.sent]
+    rejects = [e for e in events if e.get("event") == "audio_transcript" and e.get("error")]
+    assert rejects, f"rejection not sent as audio_transcript: {events}"
+    assert rejects[0]["request_id"] == "req-bad"
+    assert all(e.get("event") != "error" for e in events)

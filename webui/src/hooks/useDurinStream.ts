@@ -602,8 +602,11 @@ export function useDurinStream(
       media: OutboundMedia[],
       onStatus?: (phase: "downloading" | "loading" | "transcribing", bytes?: number, total?: number) => void,
     ) => {
-      if (!chatId) return Promise.reject(new Error("no chat"));
-      return client.transcribeAudio(chatId, media, onStatus);
+      // chat_id is passthrough/echo for transcription (the round-trip is keyed
+      // by request_id), so transcription must work before a chat exists —
+      // recording on the welcome screen inserts text, then sending creates the
+      // chat. Pass "" when there is no active chat.
+      return client.transcribeAudio(chatId ?? "", media, onStatus);
     },
     [chatId, client],
   );

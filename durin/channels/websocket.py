@@ -276,7 +276,12 @@ _AUDIO_MIME_ALLOWED: frozenset[str] = frozenset({
 
 _UPLOAD_MIME_ALLOWED: frozenset[str] = _IMAGE_MIME_ALLOWED | _VIDEO_MIME_ALLOWED | _AUDIO_MIME_ALLOWED
 
-_DATA_URL_MIME_RE = re.compile(r"^data:([^;]+);base64,", re.DOTALL)
+# Tolerate media-type parameters between the MIME and the ``;base64`` marker —
+# browser ``MediaRecorder`` emits ``data:audio/webm;codecs=opus;base64,...``.
+# Capture only the base ``type/subtype`` (group 1); params like ``;codecs=opus``
+# are matched and discarded. Without this, recorded audio was rejected as
+# "decode" and the upload silently failed.
+_DATA_URL_MIME_RE = re.compile(r"^data:([^;,]+)(?:;[\w.+-]+=[^;,]*)*;base64,", re.DOTALL)
 
 
 def _extract_data_url_mime(url: str) -> str | None:
@@ -1158,15 +1163,25 @@ class WebSocketChannel(BaseChannel):
             cid = envelope.get("chat_id")
             request_id = envelope.get("request_id")
             raw_media = envelope.get("media")
+            # Rejections MUST be sent as ``audio_transcript`` keyed by
+            # ``request_id`` — the composer correlates transcriptions by
+            # request_id, so a bare ``error`` event leaves the chip spinning
+            # forever instead of surfacing the failure.
             if not isinstance(raw_media, list) or not raw_media:
                 await self._send_event(
-                    connection, "error", detail="missing media"
+                    connection, "audio_transcript",
+                    chat_id=cid, request_id=request_id, name=None,
+                    transcript="", error="missing_media",
                 )
                 return
             paths, reason = self._save_envelope_media(raw_media)
             if reason is not None:
+                first = raw_media[0] if isinstance(raw_media[0], dict) else {}
                 await self._send_event(
-                    connection, "error", detail="audio_rejected", reason=reason
+                    connection, "audio_transcript",
+                    chat_id=cid, request_id=request_id,
+                    name=first.get("name"),
+                    transcript="", error=reason,
                 )
                 return
             service = getattr(self, "transcription", None)
