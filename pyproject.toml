@@ -83,6 +83,8 @@ stt = [
     "sherpa-onnx>=1.13.0,<2.0.0",
     # Audio decoding (webm/opus/m4a/ogg/mp3 → PCM); bundles ffmpeg, no system dep.
     "av>=12.0.0,<16.0.0",
+    # Required by audio_decode.py (top-level import); sherpa-onnx/av don't pull it reliably.
+    "numpy>=1.24,<3.0.0",
 ]
 voice = [
     # Cross-platform microphone capture for the TUI /voice command.

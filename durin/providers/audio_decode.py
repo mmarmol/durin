@@ -31,4 +31,4 @@ def decode_to_mono_16k(path: str | Path) -> tuple[np.ndarray, int]:
 
     if not chunks:
         return np.zeros(0, dtype=np.float32), TARGET_RATE
-    return np.concatenate(chunks).astype(np.float32), TARGET_RATE
+    return np.concatenate(chunks).astype(np.float32, copy=False), TARGET_RATE

@@ -9,7 +9,7 @@ def test_stt_extra_registered():
     assert "stt" in REGISTRY
     fe = REGISTRY["stt"]
     assert fe.extra == "stt"
-    assert fe.module == "faster_whisper"
+    assert fe.module == "sherpa_onnx"
     assert fe.label  # non-empty human label
 
 
