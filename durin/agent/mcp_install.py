@@ -23,6 +23,25 @@ _RUNTIME_INSTALL = {
 }
 
 
+# Registry package type -> the runtime that launches it, used when the server omits
+# runtimeHint (common: microsoft/playwright-mcp is npm with an empty hint; github is
+# oci with an empty hint). An explicit runtime_hint always wins over this.
+_REGISTRY_RUNTIME = {"npm": "npx", "pypi": "uvx", "oci": "docker"}
+
+
+def package_runtime(pkg) -> str:
+    """The effective runtime binary to launch this package. An explicit ``runtime_hint``
+    wins; otherwise infer from the registry type (npm→npx, pypi→uvx, oci→docker), since
+    the registry frequently omits the hint (which would otherwise yield an empty command
+    → a 422 on install)."""
+    return pkg.runtime_hint or _REGISTRY_RUNTIME.get(pkg.registry_type, "")
+
+
+def _is_docker(pkg) -> bool:
+    """True when the package launches via docker (an OCI image or ``runtime_hint=="docker"``)."""
+    return package_runtime(pkg) == "docker"
+
+
 def runtime_present(runtime_hint: str) -> bool:
     return shutil.which(_RUNTIME_BIN.get(runtime_hint, runtime_hint)) is not None
 
@@ -30,6 +49,23 @@ def runtime_present(runtime_hint: str) -> bool:
 def runtime_install_spec(runtime_hint: str) -> dict | None:
     """Per-OS package names to install the runtime, or None when not auto-installable."""
     return _RUNTIME_INSTALL.get(runtime_hint)
+
+
+def runtime_install_command(runtime_hint: str) -> str | None:
+    """The shell command to install a runtime on this host, or None when it is not
+    auto-installable (e.g. ``docker`` — a heavy runtime the user installs themselves)."""
+    import sys
+
+    spec = runtime_install_spec(runtime_hint)
+    if not spec:
+        return None
+    if sys.platform == "darwin" and "brew" in spec:
+        return f"brew install {spec['brew']}"
+    if "apt" in spec:
+        return f"apt-get install -y {spec['apt']}"
+    if "brew" in spec:
+        return f"brew install {spec['brew']}"
+    return None
 
 
 def _pinned_identifier(pkg) -> str:
@@ -52,11 +88,14 @@ def _pinned_identifier(pkg) -> str:
 
 def _stdio_args(pkg) -> list[str]:
     ident = _pinned_identifier(pkg)
-    if pkg.runtime_hint == "docker":
-        return ["run", "-i", "--rm", *pkg.runtime_arguments, ident,
+    if _is_docker(pkg):
+        # Forward each env var into the container with a passthrough `-e NAME` flag —
+        # the value lives in config.env (resolved at spawn), never in argv.
+        e_flags = [tok for e in pkg.env for tok in ("-e", e.name)]
+        return ["run", "-i", "--rm", *e_flags, *pkg.runtime_arguments, ident,
                 *pkg.package_arguments]
     args = list(pkg.runtime_arguments)
-    if pkg.runtime_hint == "npx" and "-y" not in args:
+    if package_runtime(pkg) == "npx" and "-y" not in args:
         args.insert(0, "-y")
     return [*args, ident, *pkg.package_arguments]
 
@@ -66,26 +105,36 @@ def build_server_config_from_detail(
 ) -> MCPServerConfig:
     """Build a persisted server config; fall back to whichever model the server offers.
 
-    Secret env values are supplied as ``${secret:NAME}`` references in ``secret_env_refs``.
+    Secret values (collected by ``collect_secret_env``) are supplied as ``${secret:NAME}``
+    references in ``secret_env_refs`` and applied to the local server's ``env`` or the remote
+    server's ``headers`` (matched by name) — resolved to plaintext at spawn/connect time.
     """
     use_remote = (prefer == "remote" and detail.remotes) or (
         not detail.packages and detail.remotes
     )
     if use_remote:
         remote = detail.remotes[0]
+        # Apply the remote's declared headers: non-secret defaults inline + the collected
+        # secret refs (e.g. a static ``Authorization`` token). Without this the user-supplied
+        # token is dropped and the remote 401s.
+        header_names = {h.name for h in remote.headers}
+        headers = {h.name: (h.default or "") for h in remote.headers if not h.is_secret}
+        headers.update({k: v for k, v in secret_env_refs.items() if k in header_names})
         return MCPServerConfig(
             type=_TRANSPORT.get(remote.transport_type, "streamableHttp"),
             url=remote.url,
+            headers=headers,
             source_ref=detail.ref,
         )
     if not detail.packages:
         raise ValueError(f"server '{detail.ref}' has neither packages nor remotes")
     pkg = detail.packages[0]
+    rt = package_runtime(pkg)
     env = {e.name: (e.default or "") for e in pkg.env if not e.is_secret}
     env.update(secret_env_refs)
     return MCPServerConfig(
         type="stdio",
-        command=_RUNTIME_BIN.get(pkg.runtime_hint, pkg.runtime_hint),
+        command=_RUNTIME_BIN.get(rt, rt),
         args=_stdio_args(pkg),
         env=env,
         version=pkg.version,
@@ -155,8 +204,58 @@ def rebuild_for_update(old: MCPServerConfig, detail: McpServerDetail) -> MCPServ
         return old
     pkg = detail.packages[0]
     new = old.model_copy(deep=True)
-    new.command = _RUNTIME_BIN.get(pkg.runtime_hint, pkg.runtime_hint)
+    new.command = _RUNTIME_BIN.get(package_runtime(pkg), package_runtime(pkg))
     new.args = _stdio_args(pkg)
     new.version = pkg.version
     new.source_ref = detail.ref
     return new
+
+
+async def remote_needs_oauth(url: str, *, request=None) -> bool:
+    """True when the remote MCP endpoint answers an unauthenticated request with a 401
+    ``WWW-Authenticate: Bearer`` challenge — the standard MCP/RFC-9728 signal that it
+    requires OAuth. Bounded + best-effort: any error (unreachable, slow, non-401) → False,
+    so we never force OAuth onto a server that doesn't demand it.
+
+    ``request`` is an injectable ``async (url) -> (status, www_authenticate)`` seam for tests.
+    """
+    if not url:
+        return False
+    if request is None:
+        async def request(u: str):  # noqa: ANN001
+            import httpx
+
+            payload = {
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                           "clientInfo": {"name": "durin", "version": "0"}},
+            }
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
+                r = await c.post(u, json=payload, headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                })
+            return r.status_code, r.headers.get("www-authenticate", "")
+
+    try:
+        status, www = await request(url)
+    except Exception:  # noqa: BLE001 — unreachable/slow → don't force oauth
+        return False
+    return status == 401 and "bearer" in (www or "").lower()
+
+
+async def autodetect_oauth(
+    sc: MCPServerConfig, *, has_declared_headers: bool = False, request=None
+) -> None:
+    """Enable OAuth on a freshly-built REMOTE config when its endpoint demands it.
+
+    Skips: stdio servers, configs that already declare auth (a static header the user
+    supplies, e.g. github's PAT) or already set ``oauth``. When the endpoint returns the
+    401-Bearer challenge, set ``oauth=True`` so durin's existing sign-in flow + OAuth
+    provider (DCR) take over → the server shows ``needs_auth`` instead of failing/hanging.
+    Mutates ``sc`` in place.
+    """
+    if sc.command or not sc.url or sc.oauth or has_declared_headers:
+        return
+    if await remote_needs_oauth(sc.url, request=request):
+        sc.oauth = True

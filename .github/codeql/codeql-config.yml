@@ -1,0 +1,7 @@
+name: durin CodeQL config
+
+# Don't scan test code: CodeQL's taint/sanitization rules fire on test fixtures
+# and assertions (substring URL checks, permissive regex ranges in test data),
+# which are false positives — test code is never shipped.
+paths-ignore:
+  - tests/**

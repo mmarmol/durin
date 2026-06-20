@@ -1,0 +1,59 @@
+name: webui
+
+# Test + build the React webui. The backend CI (ci.yml) skips the webui bundle, so this
+# is the only thing that validates it. Path-filtered: it only runs when webui files (or
+# this workflow) change — non-webui PRs never spin up this job. (It is therefore NOT a
+# required status check: a path-filtered required check would sit "Expected" and block
+# every PR that doesn't touch the webui.)
+
+on:
+  pull_request:
+    paths:
+      - "webui/**"
+      - ".github/workflows/webui.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "webui/**"
+      - ".github/workflows/webui.yml"
+
+concurrency:
+  group: webui-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  webui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webui
+    steps:
+      - uses: actions/checkout@v7
+
+      # oven-sh/setup-bun isn't on the repo's actions allowlist, so install bun via its
+      # official script (no third-party action).
+      - name: Install bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+
+      - name: Cache bun packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('webui/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      # --frozen-lockfile also guards against package.json / bun.lock drift.
+      - name: Install deps
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        run: bun run test
+
+      - name: Build
+        run: bun run build

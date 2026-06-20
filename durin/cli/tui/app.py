@@ -873,20 +873,18 @@ class DurinApp(App[None]):
     @work
     async def _open_mcp_discover(self) -> None:
         """`/mcp` — search the registry and add a server (discovery in the TUI)."""
-        from durin.agent.mcp_catalog_cache import McpCatalogCache
-        from durin.agent.mcp_registry import build_mcp_adapters, search_mcp_registries
+        from durin.agent.mcp_registry import search_mcp_registries
         from durin.cli.tui.screens import McpDiscoverScreen
-        from durin.config.loader import get_config_path, load_config
+        from durin.config.loader import load_config
 
         disc = load_config().tools.mcp_discovery
 
         async def _search(query: str):
-            cache = McpCatalogCache(get_config_path().parent / "mcp_catalog.json")
             return await search_mcp_registries(
                 query,
-                cache=cache,
-                adapters=build_mcp_adapters(disc.registries),
                 limit=disc.search_limit,
+                quality=disc.quality,
+                min_stars=disc.min_stars,
             )
 
         ref = await self.push_screen_wait(McpDiscoverScreen(_search))

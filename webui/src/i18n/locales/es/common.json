@@ -530,7 +530,21 @@
         "badgeBoth": "hosteado / local",
         "badgeLocal": "local",
         "update": "update → {{version}}",
-        "updateButton": "Actualizar a {{version}}"
+        "updateButton": "Actualizar a {{version}}",
+        "official": "Oficial",
+        "by": "por",
+        "viewOnGitHub": "Ver en GitHub",
+        "showingOfficial": "Mostrando solo oficiales",
+        "showAll": "Mostrar todos",
+        "showingAll": "Mostrando todos",
+        "officialOnly": "Solo oficiales",
+        "fillRequired": "Completá todos los campos requeridos para continuar.",
+        "runtimeMissingDocker": "Este servidor corre en un contenedor Docker, pero Docker no está instalado en esta máquina.",
+        "getDocker": "Instalar Docker Desktop",
+        "runtimeMissing": "Este servidor necesita {{runtime}}, que no está instalado en esta máquina.",
+        "verified": "Verificado",
+        "seeMore": "Ver {{count}} resultados menos populares",
+        "lessPopular": "Menos populares"
       }
     }
   },
