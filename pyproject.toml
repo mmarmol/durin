@@ -79,10 +79,10 @@ local = [
     "huggingface-hub>=0.20.0",
 ]
 stt = [
-    # In-process Whisper via CTranslate2. Prebuilt wheels for x64/arm64 on
-    # Linux, macOS, Windows (no compilation). Model weights download on first
-    # use (~1.5GB for large-v3) to the HuggingFace cache.
-    "faster-whisper>=1.1.0,<2.0.0",
+    # Fast on-CPU ASR runtime (Parakeet TDT v3 / SenseVoice) — prebuilt wheels.
+    "sherpa-onnx>=1.13.0,<2.0.0",
+    # Audio decoding (webm/opus/m4a/ogg/mp3 → PCM); bundles ffmpeg, no system dep.
+    "av>=12.0.0,<16.0.0",
 ]
 voice = [
     # Cross-platform microphone capture for the TUI /voice command.
