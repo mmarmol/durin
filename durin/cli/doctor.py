@@ -440,8 +440,7 @@ def check_stt_model_cached(cfg: "Config | None" = None) -> CheckResult:
     """Warn (never fail) if the configured local engine's model isn't cached."""
     try:
         from durin.config.loader import load_config
-        from durin.providers.stt_models import ENGINES
-        from durin.providers.transcription import _default_stt_cache
+        from durin.providers.stt_models import ENGINES, _default_stt_cache
         config = cfg or load_config()
     except Exception:  # noqa: BLE001
         return CheckResult("stt.model_cached", "ok", "skipped", category="stt")
@@ -449,8 +448,15 @@ def check_stt_model_cached(cfg: "Config | None" = None) -> CheckResult:
         return CheckResult("stt.model_cached", "ok", "cloud provider", category="stt")
     engine = config.transcription.local.engine
     spec = ENGINES.get(engine)
-    eng_dir = _default_stt_cache() / spec.dir_name if spec else None
-    if eng_dir and (eng_dir / spec.files["tokens"]).exists():
+    if spec is None:
+        return CheckResult(
+            "stt.model_cached", "warn",
+            f"unknown engine {engine!r} in config (known: {', '.join(ENGINES)})",
+            fix="Set transcription.local.engine to one of: " + ", ".join(ENGINES),
+            category="stt",
+        )
+    eng_dir = _default_stt_cache() / spec.dir_name
+    if (eng_dir / spec.files["tokens"]).exists():
         return CheckResult("stt.model_cached", "ok", f"{engine} model cached", category="stt")
     return CheckResult(
         "stt.model_cached", "warn",

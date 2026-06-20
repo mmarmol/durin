@@ -1195,17 +1195,20 @@ def _configure_transcription(
             if choice is None or choice == _BACK_CHOICE:
                 continue
             if choice.startswith("Local"):
-                config.transcription.provider = "local"
-                extras.add("stt")
                 engine = q.select(
                     "Choose a local STT engine:",
                     choices=[
                         "Parakeet v3 — European langs incl. Spanish/English (default)",
                         "SenseVoice — Chinese / Japanese / Korean / Cantonese",
+                        _BACK_CHOICE,
                     ],
                 ).ask()
+                if engine is None or engine == _BACK_CHOICE:
+                    continue
+                config.transcription.provider = "local"
+                extras.add("stt")
                 config.transcription.local.engine = (
-                    "sensevoice" if engine and engine.startswith("SenseVoice") else "parakeet"
+                    "sensevoice" if engine.startswith("SenseVoice") else "parakeet"
                 )
             elif choice.startswith("Groq"):
                 config.transcription.provider = "groq"

@@ -8,7 +8,7 @@ import httpx
 from loguru import logger
 
 from durin.providers.audio_decode import decode_to_mono_16k
-from durin.providers.stt_models import ENGINES, ensure_model
+from durin.providers.stt_models import ENGINES, _default_stt_cache, ensure_model
 
 # Up to 3 retries (4 attempts total) with exponential backoff on transient
 # failures. Whisper endpoints occasionally return 502/503 under load, and
@@ -215,11 +215,6 @@ class TranscriptionProvider:
 
     async def transcribe(self, file_path: str | Path) -> str:  # pragma: no cover
         raise NotImplementedError
-
-
-def _default_stt_cache() -> Path:
-    from durin.config.home import durin_home  # existing helper for ~/.durin
-    return durin_home() / "models" / "stt"
 
 
 class LocalSttProvider(TranscriptionProvider):

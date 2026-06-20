@@ -87,6 +87,24 @@ def test_toggle_mic_adds_voice_extra():
     assert "voice" in extras
 
 
+def test_engine_back_does_not_commit_local_provider():
+    """Picking Back from the engine submenu must not commit local provider or stt extra."""
+    config = Config()
+    original_provider = config.transcription.provider
+    extras: set[str] = set()
+    summary: list[str] = []
+    # Sequence: open menu -> pick "Provider: local" -> choose local -> pick Back from engine -> Back to exit
+    fake = _SeqFakeQ([
+        "Provider: local",
+        "Local (offline, fast — [stt] extra)",
+        "← Back",  # back from engine select
+        "← Back",  # back from main menu
+    ])
+    _configure_transcription(config, extras, fake, summary)
+    assert config.transcription.provider == original_provider
+    assert "stt" not in extras
+
+
 def test_reconcile_adds_stt_when_local_provider_enabled():
     config = Config()
     config.transcription.provider = "local"

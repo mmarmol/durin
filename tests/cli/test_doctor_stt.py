@@ -61,7 +61,7 @@ def test_check_stt_model_cached_ok_when_model_present(tmp_path):
     model_dir.mkdir()
     (model_dir / spec.files["tokens"]).write_text("dummy")
 
-    with patch("durin.providers.transcription._default_stt_cache", return_value=tmp_path):
+    with patch("durin.providers.stt_models._default_stt_cache", return_value=tmp_path):
         result = check_stt_model_cached(cfg=config)
 
     assert result.status == "ok"
@@ -77,9 +77,27 @@ def test_check_stt_model_cached_warns_when_model_absent(tmp_path):
     config.transcription.local.engine = "parakeet"
 
     # tmp_path is empty — no model files present
-    with patch("durin.providers.transcription._default_stt_cache", return_value=tmp_path):
+    with patch("durin.providers.stt_models._default_stt_cache", return_value=tmp_path):
         result = check_stt_model_cached(cfg=config)
 
     assert result.status == "warn"
     assert "parakeet" in result.message
+    assert result.fix is not None
+
+
+def test_check_stt_model_cached_unknown_engine():
+    """When config.transcription.local.engine is not in ENGINES, return warn with 'unknown' message."""
+    from durin.config.schema import Config
+
+    config = Config()
+    config.transcription.provider = "local"
+    config.transcription.local.engine = "bogus-engine"
+
+    result = check_stt_model_cached(cfg=config)
+
+    assert result.status == "warn"
+    assert "bogus-engine" in result.message
+    assert "unknown" in result.message
+    # Must NOT claim a model is "not cached" — the engine doesn't exist
+    assert "not cached" not in result.message
     assert result.fix is not None

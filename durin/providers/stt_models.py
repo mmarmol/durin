@@ -19,6 +19,11 @@ StatusCb = Callable[[str, int, int], None]
 _RELEASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models"
 
 
+def _default_stt_cache() -> Path:
+    from durin.config.home import durin_home  # existing helper for ~/.durin
+    return durin_home() / "models" / "stt"
+
+
 @dataclass(frozen=True)
 class EngineSpec:
     dir_name: str          # extracted top-level directory inside the tarball
