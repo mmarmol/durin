@@ -83,6 +83,12 @@ def _download_and_extract(spec: EngineSpec, cache_dir: Path, on_status: StatusCb
                 done += len(chunk)
                 if on_status:
                     on_status("downloading", done, total)
-    with tarfile.open(tar_path, "r:bz2") as tf:
-        tf.extractall(cache_dir, filter="data")  # safe extract (py3.11.4+/3.12+), cross-platform
-    tar_path.unlink(missing_ok=True)
+    try:
+        with tarfile.open(tar_path, "r:bz2") as tf:
+            try:
+                tf.extractall(cache_dir, filter="data")  # safe extract (py3.11.4+/3.12+)
+            except TypeError:
+                # Python < 3.11.4 lacks the `filter=` kwarg; source is a trusted release asset.
+                tf.extractall(cache_dir)
+    finally:
+        tar_path.unlink(missing_ok=True)
