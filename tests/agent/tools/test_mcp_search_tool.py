@@ -10,7 +10,7 @@ async def test_mcp_search_returns_hits(monkeypatch):
 
     monkeypatch.setattr(mcp_catalog_store, "load_servers", lambda: [
         {"name": "io.x/jira", "ref": "io.x/jira", "description": "Jira",
-         "official": True},
+         "stars": 5000},
     ])
     tool = McpSearchTool(limit=10)
     out = await tool.execute(query="jira")

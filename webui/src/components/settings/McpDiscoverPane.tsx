@@ -56,29 +56,6 @@ function OwnerAvatar({ src, login }: { src?: string; login?: string }) {
   );
 }
 
-function OfficialBadge({ label }: { label: string }) {
-  return (
-    <span className="inline-flex items-center gap-0.5 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-      <svg
-        className="size-2.5"
-        viewBox="0 0 10 10"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-        aria-hidden
-      >
-        <path
-          d="M2 5l2 2 4-4"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-      {label}
-    </span>
-  );
-}
-
 // GitHub-curated tier — a stronger signal than the heuristic "Official" flag, so it gets
 // a solid (vs tinted) chip to sit above Official in the visual hierarchy.
 function VerifiedBadge({ label }: { label: string }) {
@@ -154,6 +131,81 @@ function ExternalLinkIcon() {
   );
 }
 
+/** One result row — shared by the curated/popular list and the "less popular" reveal
+ * (which renders dimmed). Single badge: "Verified" (GitHub-curated); the namespace
+ * "official" heuristic is no longer a badge. */
+function HitRow({
+  hit,
+  dim,
+  tx,
+  onOpen,
+}: {
+  hit: McpRegistryHit;
+  dim?: boolean;
+  tx: (k: string, opts?: Record<string, unknown>) => string;
+  onOpen: (h: McpRegistryHit) => void;
+}) {
+  const stars = hit.signals.stars as number | null | undefined;
+  const ownerLogin = hit.signals.owner_login as string | undefined;
+  const ownerUrl = hit.signals.owner_url as string | undefined;
+  const ownerAvatar = hit.signals.owner_avatar as string | undefined;
+  const language = hit.signals.language as string | undefined;
+  const isVerified = hit.signals.verified as boolean | undefined;
+  const topics = (hit.signals.topics as string[] | undefined) ?? [];
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(hit)}
+      className={
+        "flex w-full items-start gap-3 rounded-[14px] border border-border px-4 py-3 text-left hover:bg-muted/40" +
+        (dim ? " opacity-60 hover:opacity-100" : "")
+      }
+    >
+      <div className="mt-0.5">
+        <OwnerAvatar src={ownerAvatar} login={ownerLogin} />
+      </div>
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[13px] font-medium text-foreground">{hit.name}</span>
+          {isVerified ? <VerifiedBadge label={tx("verified")} /> : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0 text-[11px] text-muted-foreground">
+          {ownerLogin ? (
+            ownerUrl ? (
+              <a
+                href={ownerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-foreground"
+                onClick={(e) => e.stopPropagation()}
+              >
+                @{ownerLogin}
+                <ExternalLinkIcon />
+              </a>
+            ) : (
+              <span>@{ownerLogin}</span>
+            )
+          ) : null}
+          {language ? <span>{language}</span> : null}
+          <KindChip kind={hit.kind} tx={tx} />
+        </div>
+        {hit.description ? (
+          <p className="truncate text-[12px] leading-5 text-muted-foreground">
+            {hit.description}
+          </p>
+        ) : null}
+        <TopicChips topics={topics} />
+      </div>
+      {typeof stars === "number" ? (
+        <span className="mt-0.5 shrink-0 text-[11px] text-muted-foreground">
+          ★ {stars.toLocaleString()}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
@@ -175,9 +227,10 @@ export function McpDiscoverPane({
     t(`settings.mcp.discover.${k}`, opts);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<McpRegistryHit[]>([]);
+  const [more, setMore] = useState<McpRegistryHit[]>([]);
+  const [showMore, setShowMore] = useState(false);
   const [searching, setSearching] = useState(false);
   const [searched, setSearched] = useState(false);
-  const [includeAll, setIncludeAll] = useState(false);
   const [selectedHit, setSelectedHit] = useState<McpRegistryHit | null>(null);
   const [detail, setDetail] = useState<McpRegistryServerDetail | null>(null);
   const [prefer, setPrefer] = useState<"remote" | "local">("remote");
@@ -207,26 +260,23 @@ export function McpDiscoverPane({
     };
   }, [detail, prefer, token]);
 
-  async function runSearch(all = includeAll) {
+  async function runSearch() {
     if (!query.trim()) return;
     setSearching(true);
     setError(null);
     setDetail(null);
     setSelectedHit(null);
+    setShowMore(false);
     try {
-      setHits(await searchMcpRegistry(token, query.trim(), 10, "", all));
+      const res = await searchMcpRegistry(token, query.trim(), 10);
+      setHits(res.hits);
+      setMore(res.more);
       setSearched(true);
     } catch {
       setError(tx("searchFailed"));
     } finally {
       setSearching(false);
     }
-  }
-
-  async function toggleIncludeAll() {
-    const next = !includeAll;
-    setIncludeAll(next);
-    if (searched) await runSearch(next);
   }
 
   async function openDetail(hit: McpRegistryHit) {
@@ -269,13 +319,12 @@ export function McpDiscoverPane({
     );
 
     // Enrich from the hit that triggered the detail view
-    const stars = selectedHit?.signals.stars as number | undefined;
+    const stars = selectedHit?.signals.stars as number | null | undefined;
     const ownerLogin = selectedHit?.signals.owner_login as string | undefined;
     const ownerUrl = selectedHit?.signals.owner_url as string | undefined;
     const ownerAvatar = selectedHit?.signals.owner_avatar as string | undefined;
     const language = selectedHit?.signals.language as string | undefined;
     const license = selectedHit?.signals.license as string | undefined;
-    const isOfficial = selectedHit?.signals.official as boolean | undefined;
     const isVerified = selectedHit?.signals.verified as boolean | undefined;
     const topics = (selectedHit?.signals.topics as string[] | undefined) ?? [];
     const repoUrl =
@@ -299,11 +348,7 @@ export function McpDiscoverPane({
           <div className="min-w-0 flex-1 space-y-0.5">
             <div className="flex flex-wrap items-center gap-1.5">
               <h3 className="text-[15px] font-medium text-foreground">{detail.name}</h3>
-              {isVerified ? (
-                <VerifiedBadge label={tx("verified")} />
-              ) : isOfficial ? (
-                <OfficialBadge label={tx("official")} />
-              ) : null}
+              {isVerified ? <VerifiedBadge label={tx("verified")} /> : null}
               {detail.version ? (
                 <span className="text-[11px] text-muted-foreground">v{detail.version}</span>
               ) : null}
@@ -329,7 +374,7 @@ export function McpDiscoverPane({
                   </span>
                 )
               ) : null}
-              {stars !== undefined ? (
+              {typeof stars === "number" ? (
                 <span>★ {stars.toLocaleString()}</span>
               ) : null}
               {language ? <span>{language}</span> : null}
@@ -486,101 +531,39 @@ export function McpDiscoverPane({
 
       {error ? <p className="text-[12px] text-destructive">{error}</p> : null}
 
-      {searched ? (
-        <div className="flex items-center justify-between px-1">
-          <span className="text-[11px] text-muted-foreground">
-            {includeAll ? tx("showingAll") : tx("showingOfficial")}
-          </span>
-          <button
-            type="button"
-            className="text-[11px] text-primary underline"
-            onClick={() => void toggleIncludeAll()}
-            disabled={searching}
-          >
-            {includeAll ? tx("officialOnly") : tx("showAll")}
-          </button>
-        </div>
-      ) : null}
-
       <div className="space-y-1">
-        {hits.map((h) => {
-          const stars = h.signals.stars as number | undefined;
-          const ownerLogin = h.signals.owner_login as string | undefined;
-          const ownerUrl = h.signals.owner_url as string | undefined;
-          const ownerAvatar = h.signals.owner_avatar as string | undefined;
-          const language = h.signals.language as string | undefined;
-          const isOfficial = h.signals.official as boolean | undefined;
-          const isVerified = h.signals.verified as boolean | undefined;
-          const topics = (h.signals.topics as string[] | undefined) ?? [];
+        {hits.map((h) => (
+          <HitRow key={h.ref} hit={h} tx={tx} onOpen={(x) => void openDetail(x)} />
+        ))}
 
-          return (
-            <button
-              key={h.ref}
-              type="button"
-              onClick={() => void openDetail(h)}
-              className="flex w-full items-start gap-3 rounded-[14px] border border-border px-4 py-3 text-left hover:bg-muted/40"
-            >
-              {/* Owner avatar */}
-              <div className="mt-0.5">
-                <OwnerAvatar src={ownerAvatar} login={ownerLogin} />
-              </div>
-
-              {/* Main content */}
-              <div className="min-w-0 flex-1 space-y-1">
-                {/* Line 1: name + official badge */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[13px] font-medium text-foreground">{h.name}</span>
-                  {isVerified ? (
-                    <VerifiedBadge label={tx("verified")} />
-                  ) : isOfficial ? (
-                    <OfficialBadge label={tx("official")} />
-                  ) : null}
-                </div>
-
-                {/* Line 2: @owner · language · kind chip */}
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-0 text-[11px] text-muted-foreground">
-                  {ownerLogin ? (
-                    ownerUrl ? (
-                      <a
-                        href={ownerUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="hover:text-foreground"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        @{ownerLogin}
-                        <ExternalLinkIcon />
-                      </a>
-                    ) : (
-                      <span>@{ownerLogin}</span>
-                    )
-                  ) : null}
-                  {language ? <span>{language}</span> : null}
-                  <KindChip kind={h.kind} tx={tx} />
-                </div>
-
-                {/* Description */}
-                {h.description ? (
-                  <p className="truncate text-[12px] leading-5 text-muted-foreground">
-                    {h.description}
-                  </p>
-                ) : null}
-
-                {/* Topic chips */}
-                <TopicChips topics={topics} />
-              </div>
-
-              {/* Stars — right side */}
-              {stars !== undefined ? (
-                <span className="mt-0.5 shrink-0 text-[11px] text-muted-foreground">
-                  ★ {stars.toLocaleString()}
-                </span>
-              ) : null}
-            </button>
-          );
-        })}
-        {searched && !searching && hits.length === 0 ? (
+        {searched && !searching && hits.length === 0 && more.length === 0 ? (
           <p className="px-1 text-[12px] text-muted-foreground">{tx("noResults")}</p>
+        ) : null}
+
+        {/* Progressive disclosure: matches below the star floor ("less popular"). Revealed
+            on demand when there ARE curated/popular hits above; shown inline (dimmed) when
+            there are none to hide them behind. No "show everything" mode. */}
+        {more.length > 0 ? (
+          showMore || hits.length === 0 ? (
+            <>
+              <div className="flex items-center gap-2 px-1 pt-3 text-[10px] uppercase tracking-wide text-muted-foreground">
+                <span className="h-px flex-1 bg-border" />
+                {tx("lessPopular")}
+                <span className="h-px flex-1 bg-border" />
+              </div>
+              {more.map((h) => (
+                <HitRow key={h.ref} hit={h} dim tx={tx} onOpen={(x) => void openDetail(x)} />
+              ))}
+            </>
+          ) : (
+            <button
+              type="button"
+              className="w-full px-1 pt-2 text-left text-[12px] text-primary underline"
+              onClick={() => setShowMore(true)}
+            >
+              {tx("seeMore", { count: more.length })}
+            </button>
+          )
         ) : null}
       </div>
     </div>

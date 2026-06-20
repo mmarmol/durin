@@ -59,7 +59,7 @@ async def test_registry_search_route(config_path, monkeypatch):
 
     monkeypatch.setattr(mcp_catalog_store, "load_servers", lambda: [
         {"name": "io.x/jira", "ref": "io.x/jira",
-         "description": "Jira issues", "official": True},
+         "description": "Jira issues", "stars": 5000},
     ])
     res = await McpService().registry_search(
         McpRegistrySearchQuery(q="jira", limit=5), LOCAL
@@ -69,33 +69,26 @@ async def test_registry_search_route(config_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_registry_search_include_all_bypasses_gate(config_path, monkeypatch):
-    """include_all=True returns community servers that the quality gate excludes."""
+async def test_registry_search_tiers_hits_and_more(config_path, monkeypatch):
+    """Curated/popular land in ``hits``; below-the-floor matches land in ``more`` (the
+    progressive "less popular" reveal) — one call, no 'show all' mode."""
     from durin.agent import mcp_catalog_store
 
-    # One official server (always passes gate) + one community server (low stars, not official)
     monkeypatch.setattr(mcp_catalog_store, "load_servers", lambda: [
         {"name": "io.x/jira", "ref": "io.x/jira",
-         "description": "Jira issues", "official": True, "stars": 5000},
+         "description": "Jira issues", "stars": 5000},  # popular → hits
         {"name": "community/jira-alt", "ref": "community/jira-alt",
-         "description": "Jira alt community", "official": False, "stars": 5},
+         "description": "Jira alt community", "stars": 5},  # below floor → more
     ])
 
-    # Gated search (default): only official server should appear
-    gated = await McpService().registry_search(
-        McpRegistrySearchQuery(q="jira", limit=10, include_all=False), LOCAL
+    res = await McpService().registry_search(
+        McpRegistrySearchQuery(q="jira", limit=10), LOCAL
     )
-    gated_refs = {h.ref for h in gated.hits}
-    assert "io.x/jira" in gated_refs
-    assert "community/jira-alt" not in gated_refs
-
-    # include_all=True: both servers should appear
-    unfiltered = await McpService().registry_search(
-        McpRegistrySearchQuery(q="jira", limit=10, include_all=True), LOCAL
-    )
-    unfiltered_refs = {h.ref for h in unfiltered.hits}
-    assert "io.x/jira" in unfiltered_refs
-    assert "community/jira-alt" in unfiltered_refs
+    hits_refs = {h.ref for h in res.hits}
+    more_refs = {h.ref for h in res.more}
+    assert "io.x/jira" in hits_refs
+    assert "community/jira-alt" not in hits_refs
+    assert "community/jira-alt" in more_refs
 
 
 @pytest.mark.asyncio

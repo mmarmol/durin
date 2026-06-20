@@ -25,7 +25,7 @@ def test_mcp_search_cli(tmp_path, monkeypatch):
     _config(tmp_path, monkeypatch)
     _seed(monkeypatch, [
         {"name": "io.x/jira", "ref": "io.x/jira",
-         "description": "Jira issues", "official": True},
+         "description": "Jira issues", "stars": 5000},
     ])
     res = runner.invoke(mcp_app, ["search", "jira"])
     assert res.exit_code == 0
