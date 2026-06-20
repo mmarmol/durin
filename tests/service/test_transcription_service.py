@@ -1,5 +1,6 @@
 """Tests for TranscriptionService: caching, modes, error handling (spec §4)."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ class FakeProvider:
         self.fail = fail
         self.calls = 0
 
-    async def transcribe(self, file_path):
+    async def transcribe(self, file_path, on_status=None):
         self.calls += 1
         if self.fail:
             return ""
@@ -132,3 +133,59 @@ def test_local_factory_builds_sttprovider():
     from durin.providers.transcription import LocalSttProvider
     assert isinstance(prov, LocalSttProvider)
     assert prov.engine == "parakeet"
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: per-call on_status must not clobber the shared provider
+# ---------------------------------------------------------------------------
+
+
+class _RecordingProvider:
+    """Provider that records which on_status callback it received per call."""
+
+    def __init__(self):
+        self.received: list[object] = []
+
+    async def transcribe(self, file_path, on_status=None):
+        self.received.append(on_status)
+        if on_status:
+            on_status("transcribing", 0, 0)
+        return "ok"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_calls_route_phases_to_their_own_callback(tmp_path):
+    """Two concurrent transcribe_and_cache calls must each deliver phase events
+    only to their own on_status callback — no cross-contamination via shared provider."""
+    audio_a = tmp_path / "a.wav"
+    audio_b = tmp_path / "b.wav"
+    audio_a.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
+    audio_b.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
+
+    prov = _RecordingProvider()
+    svc = TranscriptionService(
+        provider_factory=lambda: prov,
+        cache_transcripts=False,
+    )
+
+    phases_a: list[str] = []
+    phases_b: list[str] = []
+
+    def cb_a(phase, done, total):
+        phases_a.append(phase)
+
+    def cb_b(phase, done, total):
+        phases_b.append(phase)
+
+    await asyncio.gather(
+        svc.transcribe_and_cache(audio_a, on_status=cb_a),
+        svc.transcribe_and_cache(audio_b, on_status=cb_b),
+    )
+
+    # Each callback must have received its own phase; no cross-routing.
+    assert phases_a == ["transcribing"]
+    assert phases_b == ["transcribing"]
+    # Provider received two distinct callbacks (not the same object repeated).
+    assert len(prov.received) == 2
+    assert prov.received[0] is cb_a
+    assert prov.received[1] is cb_b

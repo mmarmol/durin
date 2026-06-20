@@ -137,7 +137,7 @@ class OpenAITranscriptionProvider:
         )
         self.language = language or None
 
-    async def transcribe(self, file_path: str | Path) -> str:
+    async def transcribe(self, file_path: str | Path, on_status=None) -> str:
         if not self.api_key:
             logger.warning("OpenAI API key not configured for transcription")
             return ""
@@ -176,7 +176,7 @@ class GroqTranscriptionProvider:
         )
         self.language = language or None
 
-    async def transcribe(self, file_path: str | Path) -> str:
+    async def transcribe(self, file_path: str | Path, on_status=None) -> str:
         """
         Transcribe an audio file using Groq.
 
@@ -213,7 +213,7 @@ class TranscriptionProvider:
     implement ``async def transcribe(file_path) -> str``.
     """
 
-    async def transcribe(self, file_path: str | Path) -> str:  # pragma: no cover
+    async def transcribe(self, file_path: str | Path, on_status=None) -> str:  # pragma: no cover
         raise NotImplementedError
 
 
@@ -241,14 +241,15 @@ class LocalSttProvider(TranscriptionProvider):
         self._rec = None
         self._lock = asyncio.Lock()
 
-    def _emit(self, phase, done=0, total=0):
-        if self.on_status:
+    @staticmethod
+    def _emit(cb, phase, done=0, total=0):
+        if cb:
             try:
-                self.on_status(phase, done, total)
+                cb(phase, done, total)
             except Exception:
                 logger.debug("on_status callback raised; ignoring")
 
-    def _load(self):
+    def _load(self, cb):
         if self._rec is not None:
             return self._rec
         try:
@@ -264,9 +265,9 @@ class LocalSttProvider(TranscriptionProvider):
         else:
             files = ensure_model(
                 self.engine, self.cache_dir,
-                on_status=lambda _phase, d, t: self._emit("downloading", d, t),
+                on_status=lambda _phase, d, t: self._emit(cb, "downloading", d, t),
             )
-        self._emit("loading")
+        self._emit(cb, "loading")
         if self.engine == "parakeet":
             self._rec = sherpa_onnx.OfflineRecognizer.from_transducer(
                 encoder=str(files["encoder"]),
@@ -293,21 +294,22 @@ class LocalSttProvider(TranscriptionProvider):
         rec.decode_stream(stream)
         return (stream.result.text or "").strip()
 
-    async def _ensure_loaded(self):
+    async def _ensure_loaded(self, cb):
         if self._rec is not None:
             return self._rec
         async with self._lock:
             if self._rec is None:
-                await asyncio.to_thread(self._load)
+                await asyncio.to_thread(self._load, cb)
         return self._rec
 
-    async def transcribe(self, file_path) -> str:
+    async def transcribe(self, file_path, on_status=None) -> str:
+        cb = on_status if on_status is not None else self.on_status
         path = Path(file_path)
         if not path.exists():
             logger.error("Audio file not found: {}", file_path)
             return ""
         try:
-            rec = await self._ensure_loaded()
+            rec = await self._ensure_loaded(cb)
         except Exception as e:
             logger.exception("LocalSttProvider load error: {}", e)
             return ""
@@ -315,7 +317,7 @@ class LocalSttProvider(TranscriptionProvider):
             samples, sr = decode_to_mono_16k(path)
             if samples.size == 0:
                 return ""
-            self._emit("transcribing")
+            self._emit(cb, "transcribing")
             return await asyncio.to_thread(self._decode_sync, rec, samples, sr)
         except Exception as e:
             logger.exception("LocalSttProvider transcribe error: {}", e)

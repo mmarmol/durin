@@ -141,10 +141,8 @@ class TranscriptionService:
                 pass  # fall through to retranscribe
 
         provider = self._get_provider()
-        if on_status is not None and hasattr(provider, "on_status"):
-            provider.on_status = on_status
         try:
-            text = await provider.transcribe(path)
+            text = await provider.transcribe(path, on_status=on_status)
         except Exception:
             logger.exception("Transcription failed for {}", path)
             text = ""
