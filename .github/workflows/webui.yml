@@ -1,0 +1,85 @@
+name: webui
+
+# Test + build the React webui. The backend CI (ci.yml) deliberately skips the
+# webui bundle, so this workflow is the only thing that validates it on a PR.
+# Mirrors ci.yml's in-job path filter so the `webui` check always reports (and
+# can be a required check) while only doing real work on webui changes.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: webui-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  webui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webui
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Only the webui can affect this job. Skip the install/test/build for PRs
+      # that don't touch webui/ — the job still runs and reports success so it can
+      # stay a required check (a path-filtered `on:` would leave the check
+      # unreported and block the PR). `git` reads the whole repo regardless of the
+      # working-directory, and paths are repo-root-relative. Defaults to running
+      # whenever the diff can't be computed, so a "skip" never happens by accident.
+      - name: Detect webui changes
+        id: filter
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base="${{ github.event.pull_request.base.sha }}"
+          files=$(git diff --name-only "${base}...HEAD" 2>/dev/null) || files=""
+          if [ -z "$files" ]; then
+            echo "Diff unavailable/empty — running the webui suite to be safe."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif echo "$files" | grep -qE '(^webui/|^\.github/workflows/webui\.yml$)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No webui changes — skipping the webui suite:"
+            echo "$files" | sed 's/^/  /'
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # oven-sh/setup-bun isn't on the repo's actions allowlist, so install bun
+      # via its official script (no third-party action).
+      - name: Install bun
+        if: steps.filter.outputs.run == 'true'
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+
+      - name: Cache bun packages
+        if: steps.filter.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('webui/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      # --frozen-lockfile also guards against package.json / bun.lock drift.
+      - name: Install deps
+        if: steps.filter.outputs.run == 'true'
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        if: steps.filter.outputs.run == 'true'
+        run: bun run test
+
+      - name: Build
+        if: steps.filter.outputs.run == 'true'
+        run: bun run build
