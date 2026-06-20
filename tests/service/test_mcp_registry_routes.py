@@ -287,3 +287,61 @@ async def test_registry_update_repins(config_path, monkeypatch):
     updated = load_config().tools.mcp_servers["jira"]
     assert updated.version == "1.0.0"
     assert "@x/jira@1.0.0" in updated.args
+
+
+class _FakeOauthRemoteReg:
+    """A hosted, OAuth-protected remote: remotes only, NO static headers (like atlassian)."""
+
+    name = "official"
+
+    async def describe(self, ref):
+        from durin.agent.mcp_registry import parse_server_json
+
+        return parse_server_json({
+            "name": ref, "version": "1.1.1",
+            "remotes": [{"type": "streamable-http", "url": "https://mcp.atlassian.com/v1/mcp"}],
+        })
+
+
+@pytest.mark.asyncio
+async def test_registry_install_autodetects_oauth_remote(config_path, monkeypatch):
+    """A header-less remote whose endpoint demands Bearer auth → install enables oauth →
+    the server lands as needs_auth (sign-in), not a hang."""
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeOauthRemoteReg()]
+    )
+    import durin.agent.mcp_install as mi
+
+    async def _needs_oauth(_url, *, request=None):
+        return True  # the probe says: 401-Bearer
+
+    monkeypatch.setattr(mi, "remote_needs_oauth", _needs_oauth)
+    from durin.service.mcp import McpRegistryInstallCommand
+
+    res = await McpService().registry_install(
+        McpRegistryInstallCommand(ref="com.atlassian/atlassian-mcp-server", prefer="remote"),
+        LOCAL,
+    )
+    assert res.config.type == "streamableHttp"
+    assert res.config.oauth is True          # oauth auto-enabled
+    assert res.status == "needs_auth"        # → UI shows "sign in", no hang
+
+
+@pytest.mark.asyncio
+async def test_registry_install_remote_no_oauth_when_endpoint_public(config_path, monkeypatch):
+    """A header-less remote that does NOT 401 (public) is left untouched — no forced oauth."""
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeOauthRemoteReg()]
+    )
+    import durin.agent.mcp_install as mi
+
+    async def _no_oauth(_url, *, request=None):
+        return False
+
+    monkeypatch.setattr(mi, "remote_needs_oauth", _no_oauth)
+    from durin.service.mcp import McpRegistryInstallCommand
+
+    res = await McpService().registry_install(
+        McpRegistryInstallCommand(ref="com.public/remote", prefer="remote"), LOCAL
+    )
+    assert not res.config.oauth
