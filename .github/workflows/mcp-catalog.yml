@@ -24,7 +24,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
         with:
@@ -42,7 +42,7 @@ jobs:
         run: PYTHONPATH=. python scripts/build_mcp_catalog.py
 
       - name: Publish catalog as a release asset
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: catalog
           name: MCP catalog (rolling)
