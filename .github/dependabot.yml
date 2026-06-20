@@ -1,17 +1,24 @@
 version: 2
 updates:
+  # Group each ecosystem's weekly updates into a single PR (instead of one-PR-per-dep)
+  # so a routine refresh doesn't open a flood of individual PRs.
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      python:
+        patterns: ["*"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
-  - package-ecosystem: "npm"
-    directory: "/webui"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]
+  # No npm entry for /webui: the webui builds with bun (bun.lock), which Dependabot's
+  # npm ecosystem doesn't maintain — it only edited package-lock.json (ignored by the
+  # bun build), producing false-green PRs and drifting bun.lock. Webui deps are bumped
+  # via `bun update` instead. Dependabot security ALERTS still cover the webui.
