@@ -103,7 +103,6 @@ class McpOauthLoginResult(Result):
 class McpRegistrySearchQuery(Query):
     q: str = ""
     limit: int = 10
-    include_all: bool = False
 
 
 class McpRegistryDescribeQuery(Query):
@@ -155,7 +154,8 @@ class McpRegistryHit(Result):
 
 
 class McpRegistrySearchResult(Result):
-    hits: list[McpRegistryHit]
+    hits: list[McpRegistryHit]  # curated (verified) + popular (over the star floor)
+    more: list[McpRegistryHit] = []  # below the floor — the "+N less popular" reveal
 
 
 class McpRegistryEnvVar(Result):
@@ -388,18 +388,19 @@ class McpService:
         self, query: McpRegistrySearchQuery, principal: Principal
     ) -> McpRegistrySearchResult:
         principal.require(Scope.MCP_READ)
-        from durin.agent.mcp_registry import search_mcp_registries
+        from durin.agent.mcp_registry import search_mcp_registries_tiered
         from durin.config.loader import load_config
 
         disc = load_config().tools.mcp_discovery
-        quality = "all" if query.include_all else disc.quality
-        hits = await search_mcp_registries(
+        hits, more = await search_mcp_registries_tiered(
             query.q,
             limit=query.limit or disc.search_limit,
-            quality=quality,
             min_stars=disc.min_stars,
         )
-        return McpRegistrySearchResult(hits=[_reg_hit(h) for h in hits])
+        return McpRegistrySearchResult(
+            hits=[_reg_hit(h) for h in hits],
+            more=[_reg_hit(h) for h in more],
+        )
 
     @route(
         "GET",

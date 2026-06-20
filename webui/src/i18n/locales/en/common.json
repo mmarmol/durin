@@ -541,7 +541,9 @@
         "runtimeMissingDocker": "This server runs in a Docker container, but Docker isn't installed on this machine.",
         "getDocker": "Get Docker Desktop",
         "runtimeMissing": "This server needs {{runtime}}, which isn't installed on this machine.",
-        "verified": "Verified"
+        "verified": "Verified",
+        "seeMore": "Show {{count}} less-popular results",
+        "lessPopular": "Less popular"
       }
     }
   },

@@ -541,7 +541,9 @@
         "runtimeMissingDocker": "Este servidor corre en un contenedor Docker, pero Docker no está instalado en esta máquina.",
         "getDocker": "Instalar Docker Desktop",
         "runtimeMissing": "Este servidor necesita {{runtime}}, que no está instalado en esta máquina.",
-        "verified": "Verificado"
+        "verified": "Verificado",
+        "seeMore": "Ver {{count}} resultados menos populares",
+        "lessPopular": "Menos populares"
       }
     }
   },
