@@ -6,7 +6,7 @@ import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { resources } from "@/i18n";
 
-const AUDIO_KEYS = ["downloadingModel", "loadingModel", "transcribing", "transcriptPrefix"];
+const AUDIO_KEYS = ["downloadingModel", "loadingModel", "transcribing", "transcriptPrefix", "processing"];
 const QUICK_ACTION_KEYS = ["plan", "analyze", "brainstorm", "code", "summarize", "more"];
 const IMAGE_QUICK_ACTION_KEYS = ["icon", "sticker", "poster", "product", "portrait", "edit"];
 const SETTINGS_NAV_KEYS = ["general", "providers", "web-search", "secrets", "advanced"];

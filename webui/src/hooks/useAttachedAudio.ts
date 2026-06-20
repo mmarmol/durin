@@ -2,10 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 /** Lifecycle of one audio attachment. Audio is not re-encoded (unlike images),
  * so there is no "encoding" stage — it goes straight to ``ready``.
- * Intermediate transcription phases mirror the server's progress events. */
+ * Intermediate transcription phases mirror the server's progress events.
+ * ``pending`` is a neutral spinner state used optimistically before the first
+ * server phase event arrives (avoids a misleading "Transcribing…" flash when
+ * the first real phase is "downloading" on a cold start). */
 export type AudioAttachmentStatus =
   | "ready"
   | "error"
+  | "pending"
   | "downloading"
   | "loading"
   | "transcribing";

@@ -80,13 +80,21 @@ describe("useAttachedAudio", () => {
     expect(result.current.audio).toHaveLength(0);
   });
 
-  it("setStatus transitions: enqueue → transcribing → ready", () => {
+  it("setStatus transitions: enqueue → pending → downloading → transcribing → ready", () => {
     const { result } = renderHook(() => useAttachedAudio());
     act(() => {
       result.current.enqueue([wavFile("a.wav")]);
     });
     expect(result.current.audio[0].status).toBe("ready");
     const id = result.current.audio[0].id;
+    act(() => {
+      result.current.setStatus(id, "pending");
+    });
+    expect(result.current.audio[0].status).toBe("pending");
+    act(() => {
+      result.current.setStatus(id, "downloading");
+    });
+    expect(result.current.audio[0].status).toBe("downloading");
     act(() => {
       result.current.setStatus(id, "transcribing");
     });

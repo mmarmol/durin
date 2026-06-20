@@ -1111,6 +1111,7 @@
     "downloadingModel": "Downloading model (one-time)…",
     "loadingModel": "Loading model…",
     "transcribing": "Transcribing…",
-    "transcriptPrefix": "transcript"
+    "transcriptPrefix": "transcript",
+    "processing": "Processing…"
   }
 }

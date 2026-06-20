@@ -466,7 +466,7 @@ export function ThreadComposer({
     async (id: string, file: File) => {
       if (!onTranscribeAudio) return;
       setInlineError(null);
-      setAudioStatus(id, "transcribing");
+      setAudioStatus(id, "pending");
       try {
         const dataUrl = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
@@ -909,6 +909,7 @@ export function ThreadComposer({
                 labelDownloading={t("audio.downloadingModel")}
                 labelLoading={t("audio.loadingModel")}
                 labelTranscribing={t("audio.transcribing")}
+                labelPending={t("audio.processing")}
                 labelRemove={t("thread.composer.remove")}
                 onRemove={() => removeAudio(a.id)}
               />
@@ -1315,6 +1316,7 @@ interface AudioAttachmentChipProps {
   labelDownloading: string;
   labelLoading: string;
   labelTranscribing: string;
+  labelPending: string;
   labelRemove: string;
   onRemove: () => void;
 }
@@ -1324,18 +1326,23 @@ function AudioAttachmentChip({
   labelDownloading,
   labelLoading,
   labelTranscribing,
+  labelPending,
   labelRemove,
   onRemove,
 }: AudioAttachmentChipProps) {
   const isProcessing =
-    a.status === "downloading" || a.status === "loading" || a.status === "transcribing";
+    a.status === "pending" ||
+    a.status === "downloading" ||
+    a.status === "loading" ||
+    a.status === "transcribing";
   const tone =
     a.status === "error"
       ? "border-destructive/40 bg-destructive/5 text-destructive"
       : "border-border/70 bg-muted/60";
 
   let phaseLabel: string | null = null;
-  if (a.status === "downloading") phaseLabel = labelDownloading;
+  if (a.status === "pending") phaseLabel = labelPending;
+  else if (a.status === "downloading") phaseLabel = labelDownloading;
   else if (a.status === "loading") phaseLabel = labelLoading;
   else if (a.status === "transcribing") phaseLabel = labelTranscribing;
 

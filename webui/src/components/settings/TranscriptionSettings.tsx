@@ -14,20 +14,14 @@ import {
 
 type Provider = "local" | "openai" | "groq" | "http";
 type Mode = "auto" | "preview" | "off";
-type LocalModel =
-  | "tiny"
-  | "base"
-  | "small"
-  | "medium"
-  | "large-v3"
-  | "large-v3-turbo";
+type LocalEngine = "parakeet" | "sensevoice";
 
 interface TranscriptionConfigShape {
   enabled?: boolean;
   mode?: Mode;
   provider?: Provider;
   language?: string | null;
-  local?: { model?: LocalModel; device?: string; computeType?: string };
+  local?: { engine?: LocalEngine };
   http?: { baseUrl?: string | null; apiKey?: string | null; model?: string | null };
   openai?: { apiKey?: string | null; apiBase?: string | null };
   groq?: { apiKey?: string | null; apiBase?: string | null };
@@ -38,7 +32,7 @@ interface TranscriptionState {
   mode: Mode;
   provider: Provider;
   language: string;
-  localModel: LocalModel;
+  localEngine: LocalEngine;
   httpBaseUrl: string;
   httpApiKey: string;
   httpModel: string;
@@ -53,7 +47,7 @@ function readState(config: Record<string, unknown> | null): TranscriptionState {
     mode: t.mode ?? "auto",
     provider: t.provider ?? "local",
     language: typeof t.language === "string" ? t.language : "",
-    localModel: t.local?.model ?? "large-v3",
+    localEngine: t.local?.engine ?? "parakeet",
     httpBaseUrl: t.http?.baseUrl ?? "",
     httpApiKey: t.http?.apiKey ?? "",
     httpModel: t.http?.model ?? "",
@@ -63,7 +57,7 @@ function readState(config: Record<string, unknown> | null): TranscriptionState {
 }
 
 const PROVIDERS: ReadonlyArray<{ value: Provider; label: string; hint: string }> = [
-  { value: "local", label: "Local Whisper", hint: "faster-whisper, offline, needs [stt] extra" },
+  { value: "local", label: "Local STT (sherpa-onnx)", hint: "fast local engines, offline, needs [stt] extra" },
   { value: "groq", label: "Groq", hint: "whisper-large-v3 via Groq API (fast, free tier)" },
   { value: "openai", label: "OpenAI", hint: "whisper-1 via OpenAI API" },
   { value: "http", label: "HTTP server", hint: "any OpenAI-compatible /v1/audio/transcriptions" },
@@ -75,13 +69,17 @@ const MODES: ReadonlyArray<{ value: Mode; label: string; hint: string }> = [
   { value: "off", label: "Off", hint: "attach raw audio; no transcription" },
 ];
 
-const LOCAL_MODELS: ReadonlyArray<LocalModel> = [
-  "tiny",
-  "base",
-  "small",
-  "medium",
-  "large-v3",
-  "large-v3-turbo",
+const LOCAL_ENGINES: ReadonlyArray<{ value: LocalEngine; label: string; hint: string }> = [
+  {
+    value: "parakeet",
+    label: "Parakeet TDT v3",
+    hint: "25 European languages incl. Spanish / English — fastest; no Japanese / Chinese",
+  },
+  {
+    value: "sensevoice",
+    label: "SenseVoice",
+    hint: "Chinese / Japanese / Korean / Cantonese / English",
+  },
 ];
 
 export function TranscriptionSettings({ token }: { token: string }) {
@@ -165,8 +163,8 @@ export function TranscriptionSettings({ token }: { token: string }) {
     <div className="space-y-6">
       <p className="px-1 text-[13px] leading-5 text-muted-foreground">
         When you attach or record audio, durin transcribes it to text before it
-        reaches the agent. The default is local Whisper (offline). Switch to a
-        cloud provider or any OpenAI-compatible HTTP server as needed.
+        reaches the agent. The default is local STT via sherpa-onnx (offline).
+        Switch to a cloud provider or any OpenAI-compatible HTTP server as needed.
       </p>
 
       {error ? (
@@ -180,7 +178,7 @@ export function TranscriptionSettings({ token }: { token: string }) {
         <SettingsGroup>
           <SettingsRow
             title="Transcription provider"
-            description="Local Whisper needs the [stt] extra; cloud providers need an API key."
+            description="Local STT needs the [stt] extra; cloud providers need an API key."
           >
             <select
               value={state.provider}
@@ -199,29 +197,33 @@ export function TranscriptionSettings({ token }: { token: string }) {
           {state.provider === "local" ? (
             <>
               <SettingsRow
-                title="Whisper model"
-                description="Larger = better quality + more RAM (~3 GB for large-v3). Smaller fits modest hardware."
+                title="Engine"
+                description={
+                  state.localEngine === "parakeet"
+                    ? "Parakeet TDT v3 — 25 European languages incl. Spanish / English, fastest. For Japanese / Chinese, use SenseVoice or a cloud provider."
+                    : "SenseVoice — optimized for Chinese, Japanese, Korean, Cantonese, and English."
+                }
               >
                 <select
-                  value={state.localModel}
+                  value={state.localEngine}
                   onChange={(e) =>
-                    void onSave("transcription.local.model", e.target.value)
+                    void onSave("transcription.local.engine", e.target.value)
                   }
-                  disabled={savingPath === "transcription.local.model"}
+                  disabled={savingPath === "transcription.local.engine"}
                   className="h-8 rounded-full border bg-background px-3 text-[13px]"
                 >
-                  {LOCAL_MODELS.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
+                  {LOCAL_ENGINES.map((eng) => (
+                    <option key={eng.value} value={eng.value}>
+                      {eng.label}
                     </option>
                   ))}
                 </select>
               </SettingsRow>
               <SettingsRow
-                title="Local Whisper extra"
+                title="Local STT (sherpa-onnx)"
                 description={
                   sttStatus?.present
-                    ? "✓ faster-whisper is installed."
+                    ? "✓ sherpa-onnx is installed. Fast local transcription ready."
                     : "Not installed — local transcription won't work until you add [stt]."
                 }
               >
@@ -269,7 +271,7 @@ export function TranscriptionSettings({ token }: { token: string }) {
             <>
               <SettingsRow
                 title="Server base URL"
-                description="e.g. http://localhost:8080/v1 (whisper.cpp, mlx-qwen3-asr, vLLM)"
+                description="e.g. http://localhost:8080/v1 (whisper.cpp, mlx-asr, vLLM)"
               >
                 <TextRow
                   value={state.httpBaseUrl}
@@ -336,7 +338,7 @@ export function TranscriptionSettings({ token }: { token: string }) {
           </SettingsRow>
           <SettingsRow
             title="Language hint"
-            description="ISO-639-1 code (es, en, ja, zh…). Empty = Whisper auto-detect."
+            description="ISO-639-1 code (es, en, ja, zh…). Empty = auto-detect."
           >
             <TextRow
               value={state.language}
