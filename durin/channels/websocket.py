@@ -1179,19 +1179,27 @@ class WebSocketChannel(BaseChannel):
                         transcript="", error="disabled",
                     )
                     continue
-                # Send a "transcribing" status immediately so the client knows
-                # work started. This also keeps the WS alive during the
-                # (potentially long) first-run model load.
-                try:
-                    await self._send_event(
-                        connection, "audio_transcript",
-                        chat_id=cid, request_id=request_id, name=name,
-                        transcript="", status="transcribing",
+                async def _emit_status(phase, done=0, total=0, *, _name=name):
+                    try:
+                        await self._send_event(
+                            connection, "audio_transcript",
+                            chat_id=cid, request_id=request_id, name=_name,
+                            transcript="", status=phase,
+                            **({"bytes": done, "total": total} if total else {}),
+                        )
+                    except Exception:
+                        pass
+
+                loop = asyncio.get_running_loop()
+
+                def on_status(phase, done=0, total=0):
+                    # provider may call from a worker thread; hop back to the loop
+                    asyncio.run_coroutine_threadsafe(
+                        _emit_status(phase, done, total), loop
                     )
-                except Exception:
-                    pass  # client may have disconnected; transcribe anyway
+
                 try:
-                    result = await service.transcribe_and_cache(path)
+                    result = await service.transcribe_and_cache(path, on_status=on_status)
                     await self._send_event(
                         connection, "audio_transcript",
                         chat_id=cid, request_id=request_id, name=name,

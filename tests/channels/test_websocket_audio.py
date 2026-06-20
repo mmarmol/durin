@@ -66,7 +66,7 @@ async def test_audio_transcribe_envelope_returns_transcript(tmp_path):
     saved_path.write_bytes(audio_bytes)
 
     class FakeService:
-        async def transcribe_and_cache(self, path):
+        async def transcribe_and_cache(self, path, on_status=None):
             return TranscriptResult(
                 text="hello from audio",
                 cached=False,
@@ -132,3 +132,54 @@ async def test_audio_transcribe_envelope_no_service_replies_disabled(tmp_path):
     assert transcripts[0]["error"] == "disabled"
     assert transcripts[0]["transcript"] == ""
     assert transcripts[0]["request_id"] == "req-456"
+
+
+@pytest.mark.asyncio
+async def test_audio_transcribe_forwards_phase_events(tmp_path):
+    """Phase callbacks from the provider are forwarded as audio_transcript status events."""
+    import asyncio
+    from pathlib import Path
+
+    from durin.channels.websocket import WebSocketChannel
+    from durin.service.transcription import TranscriptResult
+
+    audio_bytes = b"RIFF\x00\x00\x00\x00WAVE" + b"\x00" * 8
+    data_url = _data_url("audio/wav", audio_bytes)
+    saved_path = tmp_path / "a.wav"
+    saved_path.write_bytes(audio_bytes)
+
+    class FakeService:
+        async def transcribe_and_cache(self, path, on_status=None):
+            if on_status:
+                on_status("loading", 0, 0)
+                on_status("transcribing", 0, 0)
+            return TranscriptResult(
+                text="phase test",
+                cached=False,
+                meta_path=None,
+                audio_path=Path(path),
+            )
+
+    ch = WebSocketChannel.__new__(WebSocketChannel)
+    ch.transcription = FakeService()
+    ch.logger = __import__("loguru").logger
+    ch._save_envelope_media = lambda media: ([str(saved_path)], None)
+
+    conn = _FakeConn()
+    envelope = {
+        "type": "audio_transcribe",
+        "chat_id": "c1",
+        "request_id": "req-phases",
+        "media": [{"data_url": data_url, "name": "a.wav"}],
+    }
+    await ch._dispatch_envelope(conn, "client1", envelope)
+    # run_coroutine_threadsafe schedules via call_soon_threadsafe; when called
+    # from within the same event-loop thread the scheduled tasks need a brief
+    # real yield (sleep(0) is not enough on all platforms).
+    await asyncio.sleep(0.05)
+
+    events = [json.loads(raw) for raw in conn.sent]
+    status_events = [e for e in events if e.get("status")]
+    statuses = {e["status"] for e in status_events}
+    assert "loading" in statuses
+    assert "transcribing" in statuses
