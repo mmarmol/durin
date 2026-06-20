@@ -435,6 +435,53 @@ describe("DurinClient", () => {
     await expect(transcriptPromise).resolves.toBe("hola");
   });
 
+  it("rejects a pending transcribeAudio when the socket closes before a terminal event", async () => {
+    const client = new DurinClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    const transcriptPromise = client.transcribeAudio("chat-stt", [
+      { data_url: "data:audio/webm;base64,AAAA" },
+    ]);
+
+    // Simulate socket drop before the server sends a terminal audio_transcript.
+    lastSocket().close();
+
+    await expect(transcriptPromise).rejects.toThrow("socket closed");
+  });
+
+  it("does not let a throwing onStatus propagate: promise still resolves with the terminal transcript", async () => {
+    const client = new DurinClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    const transcriptPromise = client.transcribeAudio(
+      "chat-stt",
+      [{ data_url: "data:audio/webm;base64,AAAA" }],
+      () => {
+        throw new Error("onStatus blew up");
+      },
+    );
+
+    const outbound = lastSocket().sent.find((s) => s.includes("audio_transcribe"));
+    const { request_id } = JSON.parse(outbound as string) as { request_id: string };
+
+    // This intermediate event would throw via onStatus — must not escape handleMessage.
+    lastSocket().fakeMessage({ event: "audio_transcript", request_id, status: "loading" });
+
+    // Terminal event: promise must still resolve.
+    lastSocket().fakeMessage({ event: "audio_transcript", request_id, transcript: "recovered" });
+    await expect(transcriptPromise).resolves.toBe("recovered");
+  });
+
   it("does not emit a stream error on a vanilla socket close", () => {
     const client = new DurinClient({
       url: "ws://test",

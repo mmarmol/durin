@@ -483,7 +483,11 @@ export class DurinClient {
       if (parsed.status) {
         const pending = this.pendingTranscriptions.get(parsed.request_id);
         if (pending?.onStatus) {
-          pending.onStatus(parsed.status, parsed.bytes, parsed.total);
+          try {
+            pending.onStatus(parsed.status, parsed.bytes, parsed.total);
+          } catch {
+            // a subscriber fault must not stall message dispatch
+          }
         }
         return;
       }
@@ -546,6 +550,13 @@ export class DurinClient {
       clearTimeout(this.pendingNewChat.timer);
       this.pendingNewChat.reject(new Error("socket closed"));
       this.pendingNewChat = null;
+    }
+    if (this.pendingTranscriptions.size > 0) {
+      for (const pending of this.pendingTranscriptions.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error("socket closed"));
+      }
+      this.pendingTranscriptions.clear();
     }
     // Surface structured reasons *before* reconnect logic so the UI can
     // display the error even while the client transparently reconnects.
