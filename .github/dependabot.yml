@@ -10,8 +10,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
-  - package-ecosystem: "npm"
-    directory: "/webui"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+  # No npm entry for /webui: the webui builds with bun (bun.lock), which Dependabot's
+  # npm ecosystem doesn't maintain — it only edited package-lock.json (ignored by the
+  # bun build), producing false-green PRs and drifting bun.lock. Webui deps are bumped
+  # via `bun update` instead. Dependabot security ALERTS still cover the webui.
