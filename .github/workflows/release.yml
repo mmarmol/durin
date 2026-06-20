@@ -85,7 +85,7 @@ jobs:
         run: DURIN_SKIP_WEBUI_BUILD=1 python -m build --sdist --wheel
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/*
