@@ -427,12 +427,36 @@ def check_cross_encoder_dep() -> CheckResult:
 
 
 def check_stt_installed() -> CheckResult:
-    """Verify the [stt] extra (faster-whisper) is importable for local
+    """Verify the [stt] extra (sherpa-onnx) is importable for local
     transcription (spec §8.1). Always returns ok/warn, never fails."""
     return check_optional_extra(
-        "faster_whisper",
+        "sherpa_onnx",
         extra="stt",
-        purpose="local audio transcription (Whisper)",
+        purpose="fast local ASR (Parakeet/SenseVoice)",
+    )
+
+
+def check_stt_model_cached(cfg: "Config | None" = None) -> CheckResult:
+    """Warn (never fail) if the configured local engine's model isn't cached."""
+    try:
+        from durin.config.loader import load_config
+        from durin.providers.stt_models import ENGINES
+        from durin.providers.transcription import _default_stt_cache
+        config = cfg or load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult("stt.model_cached", "ok", "skipped", category="stt")
+    if config.transcription.provider != "local":
+        return CheckResult("stt.model_cached", "ok", "cloud provider", category="stt")
+    engine = config.transcription.local.engine
+    spec = ENGINES.get(engine)
+    eng_dir = _default_stt_cache() / spec.dir_name if spec else None
+    if eng_dir and (eng_dir / spec.files["tokens"]).exists():
+        return CheckResult("stt.model_cached", "ok", f"{engine} model cached", category="stt")
+    return CheckResult(
+        "stt.model_cached", "warn",
+        f"{engine} model not cached — first transcription downloads it",
+        fix="Run a transcription once, or `durin doctor --ping-model`.",
+        category="stt",
     )
 
 
@@ -1150,6 +1174,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     # Audio transcription (spec §8.1): local Whisper extra, TUI mic extra,
     # and cloud API key sanity when a cloud backend is selected.
     report.add(check_stt_installed())
+    report.add(check_stt_model_cached())
     report.add(check_voice_extra())
     report.add(check_stt_cloud_keys())
     # Service-level checks: when the user opted into daemon mode or the

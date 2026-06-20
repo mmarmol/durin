@@ -34,11 +34,35 @@ def test_pick_local_provider_adds_stt_extra():
     config = Config()
     extras: set[str] = set()
     summary: list[str] = []
-    # Sequence: "Provider: local" -> choose "Local Whisper..." -> "Back"
-    fake = _SeqFakeQ(["Provider: local", "Local Whisper (offline, [stt] extra)", "← Back"])
+    # Sequence: open menu -> pick "Provider: local" -> choose local provider
+    # label -> pick parakeet engine -> then "Back" to exit
+    fake = _SeqFakeQ([
+        "Provider: local",
+        "Local (offline, fast — [stt] extra)",
+        "Parakeet v3 — European langs incl. Spanish/English (default)",
+        "← Back",
+    ])
     _configure_transcription(config, extras, fake, summary)
     assert config.transcription.provider == "local"
     assert "stt" in extras
+    assert config.transcription.local.engine == "parakeet"
+
+
+def test_pick_local_provider_sensevoice_sets_engine():
+    """Choosing SenseVoice in the engine submenu sets engine='sensevoice'."""
+    config = Config()
+    extras: set[str] = set()
+    summary: list[str] = []
+    fake = _SeqFakeQ([
+        "Provider: local",
+        "Local (offline, fast — [stt] extra)",
+        "SenseVoice — Chinese / Japanese / Korean / Cantonese",
+        "← Back",
+    ])
+    _configure_transcription(config, extras, fake, summary)
+    assert config.transcription.provider == "local"
+    assert "stt" in extras
+    assert config.transcription.local.engine == "sensevoice"
 
 
 def test_pick_groq_removes_stt_and_sets_provider():

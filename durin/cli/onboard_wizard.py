@@ -1185,7 +1185,7 @@ def _configure_transcription(
             choice = q.select(
                 "Choose a transcription provider:",
                 choices=[
-                    "Local Whisper (offline, [stt] extra)",
+                    "Local (offline, fast — [stt] extra)",
                     "Groq (cloud, fast, free tier)",
                     "OpenAI (cloud, whisper-1)",
                     "HTTP server (whisper.cpp / mlx-qwen3-asr / vLLM)",
@@ -1197,6 +1197,16 @@ def _configure_transcription(
             if choice.startswith("Local"):
                 config.transcription.provider = "local"
                 extras.add("stt")
+                engine = q.select(
+                    "Choose a local STT engine:",
+                    choices=[
+                        "Parakeet v3 — European langs incl. Spanish/English (default)",
+                        "SenseVoice — Chinese / Japanese / Korean / Cantonese",
+                    ],
+                ).ask()
+                config.transcription.local.engine = (
+                    "sensevoice" if engine and engine.startswith("SenseVoice") else "parakeet"
+                )
             elif choice.startswith("Groq"):
                 config.transcription.provider = "groq"
                 extras.discard("stt")
