@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 /** Lifecycle of one audio attachment. Audio is not re-encoded (unlike images),
- * so there is no "encoding" stage — it goes straight to ``ready``. */
-export type AudioAttachmentStatus = "ready" | "error";
+ * so there is no "encoding" stage — it goes straight to ``ready``.
+ * Intermediate transcription phases mirror the server's progress events. */
+export type AudioAttachmentStatus =
+  | "ready"
+  | "error"
+  | "downloading"
+  | "loading"
+  | "transcribing";
 
 export interface AttachedAudio {
   id: string;
@@ -18,12 +24,17 @@ export interface AttachedAudio {
 
 export interface UseAttachedAudioApi {
   audio: AttachedAudio[];
-  /** Enqueue new files. Returns the list of rejected files so the caller can
-   * surface inline errors. Files rejected client-side (wrong MIME, limit) are
-   * *not* added to ``audio``. */
+  /** Enqueue new files. Returns the list of accepted and rejected files so the
+   * caller can surface inline errors and obtain attachment ids immediately.
+   * Files rejected client-side (wrong MIME, limit) are *not* added to
+   * ``audio``. */
   enqueue: (files: Iterable<File>) => {
+    accepted: AttachedAudio[];
     rejected: Array<{ file: File; reason: string }>;
   };
+  /** Update the status of a specific attachment by id. Used to reflect
+   * server-side transcription progress phases. */
+  setStatus: (id: string, status: AudioAttachmentStatus) => void;
   remove: (id: string) => void;
   /** Revoke every staged blob URL and drop all attachments. Called after a
    * successful submit. */
@@ -106,7 +117,7 @@ export function useAttachedAudio(): UseAttachedAudioApi {
       audioRef.current = next;
       setAudio(next);
     }
-    return { rejected };
+    return { accepted: toAdd, rejected };
   }, []);
 
   const remove = useCallback((id: string) => {
@@ -154,6 +165,17 @@ export function useAttachedAudio(): UseAttachedAudioApi {
     };
   }, []);
 
+  const setStatus = useCallback((id: string, status: AudioAttachmentStatus) => {
+    setAudio((prev) => {
+      const idx = prev.findIndex((a) => a.id === id);
+      if (idx === -1) return prev;
+      const next = [...prev];
+      next[idx] = { ...next[idx], status };
+      audioRef.current = next;
+      return next;
+    });
+  }, []);
+
   const full = audio.length >= MAX_AUDIO_PER_MESSAGE;
-  return { audio, enqueue, remove, clear, full };
+  return { audio, enqueue, setStatus, remove, clear, full };
 }

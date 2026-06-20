@@ -747,5 +747,10 @@
   },
   "list": {
     "scrollToBottom": "Gulir ke bawah"
+  },
+  "audio": {
+    "downloadingModel": "Downloading model (one-time)…",
+    "loadingModel": "Loading model…",
+    "transcribing": "Transcribing…"
   }
 }

@@ -1106,5 +1106,10 @@
   },
   "list": {
     "scrollToBottom": "Scroll to bottom"
+  },
+  "audio": {
+    "downloadingModel": "Downloading model (one-time)…",
+    "loadingModel": "Loading model…",
+    "transcribing": "Transcribing…"
   }
 }

@@ -392,5 +392,10 @@
   },
   "memoryGraph": {
     "title": "Memory"
+  },
+  "audio": {
+    "downloadingModel": "Downloading model (one-time)…",
+    "loadingModel": "Loading model…",
+    "transcribing": "Transcribing…"
   }
 }

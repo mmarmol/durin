@@ -79,4 +79,45 @@ describe("useAttachedAudio", () => {
     });
     expect(result.current.audio).toHaveLength(0);
   });
+
+  it("setStatus transitions: enqueue → transcribing → ready", () => {
+    const { result } = renderHook(() => useAttachedAudio());
+    act(() => {
+      result.current.enqueue([wavFile("a.wav")]);
+    });
+    expect(result.current.audio[0].status).toBe("ready");
+    const id = result.current.audio[0].id;
+    act(() => {
+      result.current.setStatus(id, "transcribing");
+    });
+    expect(result.current.audio[0].status).toBe("transcribing");
+    act(() => {
+      result.current.setStatus(id, "ready");
+    });
+    expect(result.current.audio[0].status).toBe("ready");
+  });
+
+  it("setStatus is a no-op for unknown ids", () => {
+    const { result } = renderHook(() => useAttachedAudio());
+    act(() => {
+      result.current.enqueue([wavFile("a.wav")]);
+    });
+    act(() => {
+      result.current.setStatus("nonexistent-id", "transcribing");
+    });
+    // Original attachment is untouched
+    expect(result.current.audio[0].status).toBe("ready");
+  });
+
+  it("enqueue returns accepted items with ids", () => {
+    const { result } = renderHook(() => useAttachedAudio());
+    let accepted: typeof result.current.audio = [];
+    act(() => {
+      const res = result.current.enqueue([wavFile("a.wav")]);
+      accepted = res.accepted;
+    });
+    expect(accepted).toHaveLength(1);
+    expect(accepted[0].id).toBeTruthy();
+    expect(accepted[0].status).toBe("ready");
+  });
 });

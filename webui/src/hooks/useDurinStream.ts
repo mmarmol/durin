@@ -215,7 +215,10 @@ export function useDurinStream(
   stop: () => void;
   /** Transcribe an audio attachment server-side (spec §5.4). Resolves with
    *  the transcript text, or rejects on timeout/error. */
-  transcribeAudio: (media: OutboundMedia[]) => Promise<string>;
+  transcribeAudio: (
+    media: OutboundMedia[],
+    onStatus?: (phase: "downloading" | "loading" | "transcribing", bytes?: number, total?: number) => void,
+  ) => Promise<string>;
   setMessages: React.Dispatch<React.SetStateAction<UIMessage[]>>;
   /** Latest transport-level fault raised since the last ``dismissStreamError``.
    * ``null`` when there is nothing to show. */
@@ -595,9 +598,12 @@ export function useDurinStream(
   }, [chatId, client]);
 
   const transcribeAudio = useCallback(
-    (media: OutboundMedia[]) => {
+    (
+      media: OutboundMedia[],
+      onStatus?: (phase: "downloading" | "loading" | "transcribing", bytes?: number, total?: number) => void,
+    ) => {
       if (!chatId) return Promise.reject(new Error("no chat"));
-      return client.transcribeAudio(chatId, media);
+      return client.transcribeAudio(chatId, media, onStatus);
     },
     [chatId, client],
   );

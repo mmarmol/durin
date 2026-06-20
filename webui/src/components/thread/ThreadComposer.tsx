@@ -13,12 +13,14 @@ import {
   Activity,
   ArrowUp,
   BookOpen,
+  Check,
   ChevronDown,
   ChevronUp,
   CircleHelp,
   History,
   ImageIcon,
   Loader2,
+  Mic,
   Paperclip,
   RotateCw,
   Sparkles,
@@ -39,7 +41,7 @@ import {
   type AttachmentError,
   MAX_IMAGES_PER_MESSAGE,
 } from "@/hooks/useAttachedImages";
-import { useAttachedAudio } from "@/hooks/useAttachedAudio";
+import { useAttachedAudio, type AttachedAudio } from "@/hooks/useAttachedAudio";
 import { MicButton } from "@/components/thread/MicButton";
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import { usePromptHistory } from "@/hooks/usePromptHistory";
@@ -64,7 +66,10 @@ interface ThreadComposerProps {
   onSend: (content: string, images?: SendImage[]) => void;
   /** Transcribe an audio attachment server-side (spec §5.4). Receives a
    *  data-url + name and resolves with the transcript text. */
-  onTranscribeAudio?: (media: { data_url: string; name: string }[]) => Promise<string>;
+  onTranscribeAudio?: (
+    media: { data_url: string; name: string }[],
+    onStatus?: (phase: "downloading" | "loading" | "transcribing", bytes?: number, total?: number) => void,
+  ) => Promise<string>;
   /** Whether audio input (mic / attach) should be offered. False hides the
    *  affordances and shows a disabled hint instead (gating, Gap B). */
   audioInputAllowed?: boolean;
@@ -417,7 +422,6 @@ export function ThreadComposer({
   const { t } = useTranslation();
   const [value, setValue] = useState("");
   const [inlineError, setInlineError] = useState<string | null>(null);
-  const [transcribing, setTranscribing] = useState(false);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
@@ -443,21 +447,26 @@ export function ThreadComposer({
   const { images, enqueue, remove, clear, encoding, full } =
     useAttachedImages();
 
-  const { audio: audioAttachments, enqueue: enqueueAudio, clear: clearAudio } =
-    useAttachedAudio();
+  const {
+    audio: audioAttachments,
+    enqueue: enqueueAudio,
+    setStatus: setAudioStatus,
+    remove: removeAudio,
+    clear: clearAudio,
+  } = useAttachedAudio();
 
   // Resize is declared later in the component; keep a ref so the audio
   // callbacks (declared earlier) can call it without a TDZ violation.
   const resizeTextareaRef = useRef<() => void>(() => {});
 
   // Transcribe an audio File server-side and append the transcript to the
-  // input value (spec §5.3, "auto" mode). Called when audio is attached or
-  // recorded. Errors surface as an inline chip error; the audio stays.
+  // input value (spec §5.3, "auto" mode). Called after enqueue so we have
+  // the attachment id for per-chip status updates. Errors surface on the chip.
   const transcribeAndAppend = useCallback(
-    async (file: File) => {
+    async (id: string, file: File) => {
       if (!onTranscribeAudio) return;
-      setTranscribing(true);
       setInlineError(null);
+      setAudioStatus(id, "transcribing");
       try {
         const dataUrl = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
@@ -465,30 +474,31 @@ export function ThreadComposer({
           reader.onerror = () => reject(reader.error ?? new Error("read failed"));
           reader.readAsDataURL(file);
         });
-        const text = await onTranscribeAudio([
-          { data_url: dataUrl, name: file.name },
-        ]);
+        const text = await onTranscribeAudio(
+          [{ data_url: dataUrl, name: file.name }],
+          (phase) => setAudioStatus(id, phase),
+        );
         const clean = text.trim();
         if (clean) {
           setValue((prev) => (prev ? `${prev}\n[transcripción]: "${clean}"` : `[transcripción]: "${clean}"`));
           resizeTextareaRef.current();
         }
+        setAudioStatus(id, "ready");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         setInlineError(`Audio transcription failed: ${msg}`);
-      } finally {
-        setTranscribing(false);
+        setAudioStatus(id, "error");
       }
     },
-    [onTranscribeAudio],
+    [onTranscribeAudio, setAudioStatus],
   );
 
   // Enqueue an audio file (from attach or mic) and kick off transcription.
   const handleAudioFile = useCallback(
     (file: File) => {
-      const { rejected } = enqueueAudio([file]);
-      if (rejected.length === 0) {
-        void transcribeAndAppend(file);
+      const { accepted, rejected } = enqueueAudio([file]);
+      if (rejected.length === 0 && accepted.length > 0) {
+        void transcribeAndAppend(accepted[0].id, file);
       }
     },
     [enqueueAudio, transcribeAndAppend],
@@ -889,6 +899,21 @@ export function ThreadComposer({
             ))}
           </div>
         ) : null}
+        {audioAttachments.length > 0 ? (
+          <div className="flex flex-wrap gap-2 px-3 pt-3">
+            {audioAttachments.map((a) => (
+              <AudioAttachmentChip
+                key={a.id}
+                attachment={a}
+                labelDownloading={t("audio.downloadingModel")}
+                labelLoading={t("audio.loadingModel")}
+                labelTranscribing={t("audio.transcribing")}
+                labelRemove={t("thread.composer.remove")}
+                onRemove={() => removeAudio(a.id)}
+              />
+            ))}
+          </div>
+        ) : null}
         {runStartedAt != null
         || goalState?.active
         || goalState?.mode
@@ -919,14 +944,6 @@ export function ThreadComposer({
             "disabled:cursor-not-allowed",
           )}
         />
-        {transcribing ? (
-          <div
-            className="mx-3 mb-1 flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/40 px-2.5 py-1 text-[11.5px] font-medium text-muted-foreground"
-          >
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Transcribiendo audio…
-          </div>
-        ) : null}
         {inlineError ? (
           <div
             role="alert"
@@ -1279,6 +1296,80 @@ function AttachmentChip({
         ref={registerRef}
         onClick={onRemove}
         onKeyDown={onKeyDown}
+        aria-label={labelRemove}
+        className={cn(
+          "ml-1 grid h-5 w-5 flex-none place-items-center rounded-full",
+          "text-muted-foreground/80 hover:bg-foreground/8 hover:text-foreground",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30",
+        )}
+      >
+        <X className="h-3.5 w-3.5" aria-hidden />
+      </button>
+    </div>
+  );
+}
+
+interface AudioAttachmentChipProps {
+  attachment: AttachedAudio;
+  labelDownloading: string;
+  labelLoading: string;
+  labelTranscribing: string;
+  labelRemove: string;
+  onRemove: () => void;
+}
+
+function AudioAttachmentChip({
+  attachment: a,
+  labelDownloading,
+  labelLoading,
+  labelTranscribing,
+  labelRemove,
+  onRemove,
+}: AudioAttachmentChipProps) {
+  const isProcessing =
+    a.status === "downloading" || a.status === "loading" || a.status === "transcribing";
+  const tone =
+    a.status === "error"
+      ? "border-destructive/40 bg-destructive/5 text-destructive"
+      : "border-border/70 bg-muted/60";
+
+  let phaseLabel: string | null = null;
+  if (a.status === "downloading") phaseLabel = labelDownloading;
+  else if (a.status === "loading") phaseLabel = labelLoading;
+  else if (a.status === "transcribing") phaseLabel = labelTranscribing;
+
+  return (
+    <div
+      className={cn(
+        "group relative flex items-center gap-2 rounded-[12px] border px-2 py-1.5",
+        "transition-colors motion-reduce:transition-none",
+        tone,
+      )}
+      data-testid="audio-chip"
+    >
+      <div className="relative flex h-10 w-10 flex-none items-center justify-center overflow-hidden rounded-md bg-background">
+        <Mic className="h-4 w-4 text-muted-foreground" aria-hidden />
+        {isProcessing ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-background/60">
+            <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden />
+          </div>
+        ) : null}
+      </div>
+      <div className="flex min-w-0 flex-col text-[11.5px] leading-4">
+        <span className="truncate max-w-[14rem] font-medium" title={a.file.name}>
+          {a.file.name}
+        </span>
+        <span className="truncate text-muted-foreground">
+          {phaseLabel ? (
+            phaseLabel
+          ) : a.status === "ready" ? (
+            <Check className="h-3.5 w-3.5" aria-hidden />
+          ) : null}
+        </span>
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
         aria-label={labelRemove}
         className={cn(
           "ml-1 grid h-5 w-5 flex-none place-items-center rounded-full",

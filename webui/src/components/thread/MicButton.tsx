@@ -23,15 +23,18 @@ interface MicButtonProps {
 
 export function MicButton({ onRecorded, disabled, variant = "thread" }: MicButtonProps) {
   const [recording, setRecording] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const supported = typeof MediaRecorder !== "undefined";
 
   async function start() {
     setError(null);
+    setElapsed(0);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -59,6 +62,10 @@ export function MicButton({ onRecorded, disabled, variant = "thread" }: MicButto
       rec.onerror = () => {
         setError("Recording error.");
         setRecording(false);
+        if (timerRef.current !== null) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
       };
       // timeslice=250ms so ondataavailable fires periodically (not just once
       // at stop) — this makes onstop reliable across browsers and ensures
@@ -66,6 +73,9 @@ export function MicButton({ onRecorded, disabled, variant = "thread" }: MicButto
       rec.start(250);
       recorderRef.current = rec;
       setRecording(true);
+      timerRef.current = setInterval(() => {
+        setElapsed((e) => e + 1);
+      }, 1000);
     } catch {
       setError("Allow microphone access to record.");
     }
@@ -76,13 +86,21 @@ export function MicButton({ onRecorded, disabled, variant = "thread" }: MicButto
     if (rec && rec.state !== "inactive") {
       rec.stop();
     }
+    if (timerRef.current !== null) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    setElapsed(0);
     setRecording(false);
   }
 
-  // Release the mic if the component unmounts mid-recording.
+  // Release the mic and elapsed timer if the component unmounts mid-recording.
   useEffect(() => {
     return () => {
       streamRef.current?.getTracks().forEach((t) => t.stop());
+      if (timerRef.current !== null) {
+        clearInterval(timerRef.current);
+      }
     };
   }, []);
 
@@ -110,6 +128,14 @@ export function MicButton({ onRecorded, disabled, variant = "thread" }: MicButto
           <Mic className={cn(isHero ? "h-5 w-5" : "h-4 w-4")} />
         )}
       </button>
+      {recording ? (
+        <span
+          aria-live="off"
+          className="ml-1.5 font-mono text-xs tabular-nums text-red-500"
+        >
+          {`${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`}
+        </span>
+      ) : null}
       {error && (
         <span role="alert" className="ml-2 text-xs text-red-500">
           {error}

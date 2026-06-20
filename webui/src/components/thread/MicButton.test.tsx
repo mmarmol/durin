@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MicButton } from "./MicButton";
@@ -83,5 +83,29 @@ describe("MicButton", () => {
     render(<MicButton onRecorded={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /mic/i }));
     expect(await screen.findByRole("alert")).toBeTruthy();
+  });
+
+  it("shows an elapsed m:ss timer while recording and resets on stop", async () => {
+    // Fake only timers (not promises) so getUserMedia resolves normally.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(<MicButton onRecorded={vi.fn()} />);
+    const btn = screen.getByRole("button", { name: /mic/i });
+
+    await user.click(btn); // start recording
+
+    // Initially 0:00
+    expect(screen.getByText("0:00")).toBeTruthy();
+
+    // Advance 2 seconds
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(screen.getByText("0:02")).toBeTruthy();
+
+    // Stop — timer disappears and elapsed resets
+    await user.click(btn);
+    expect(screen.queryByText("0:02")).toBeNull();
+    expect(screen.queryByText("0:00")).toBeNull();
+
+    vi.useRealTimers();
   });
 });
