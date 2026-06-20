@@ -1107,6 +1107,7 @@
   "audio": {
     "downloadingModel": "Descargando modelo (una sola vez)…",
     "loadingModel": "Cargando modelo…",
-    "transcribing": "Transcribiendo…"
+    "transcribing": "Transcribiendo…",
+    "transcriptPrefix": "transcripción"
   }
 }

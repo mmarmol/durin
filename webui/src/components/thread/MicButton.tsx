@@ -47,6 +47,10 @@ export function MicButton({ onRecorded, disabled, variant = "thread" }: MicButto
         if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
       };
       rec.onstop = () => {
+        if (timerRef.current !== null) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
         const type = rec.mimeType || "audio/webm";
         const chunks = chunksRef.current;
         const blob = new Blob(chunks, { type });

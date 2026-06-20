@@ -480,7 +480,8 @@ export function ThreadComposer({
         );
         const clean = text.trim();
         if (clean) {
-          setValue((prev) => (prev ? `${prev}\n[transcripción]: "${clean}"` : `[transcripción]: "${clean}"`));
+          const prefix = t("audio.transcriptPrefix");
+          setValue((prev) => (prev ? `${prev}\n[${prefix}]: "${clean}"` : `[${prefix}]: "${clean}"`));
           resizeTextareaRef.current();
         }
         setAudioStatus(id, "ready");

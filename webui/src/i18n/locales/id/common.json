@@ -751,6 +751,7 @@
   "audio": {
     "downloadingModel": "Downloading model (one-time)…",
     "loadingModel": "Loading model…",
-    "transcribing": "Transcribing…"
+    "transcribing": "Transcribing…",
+    "transcriptPrefix": "transcript"
   }
 }
