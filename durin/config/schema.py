@@ -72,12 +72,11 @@ class AuxModelConfig(Base):
 
 
 class TranscriptionLocalConfig(Base):
-    """Local faster-whisper settings (spec §4.3)."""
+    """Local on-CPU ASR via sherpa-onnx (spec 2026-06-20)."""
 
-    model: Literal["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"] = "base"
-    device: Literal["auto", "cpu", "cuda"] = "auto"
-    compute_type: Literal["auto", "int8", "int8_float16", "float16", "float32"] = "auto"
-    download_root: str | None = None
+    engine: Literal["parakeet", "sensevoice"] = "parakeet"
+    model_dir: str | None = None   # None = auto-download to <durin_home>/models/stt/<engine>
+    num_threads: int | None = None  # None = provider default (2)
 
 
 class TranscriptionHttpConfig(Base):

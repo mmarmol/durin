@@ -2,7 +2,7 @@
 
 import pytest
 
-from durin.config.schema import Config, TranscriptionConfig
+from durin.config.schema import Config, TranscriptionConfig, TranscriptionLocalConfig
 
 
 def test_transcription_defaults():
@@ -11,11 +11,24 @@ def test_transcription_defaults():
     assert cfg.mode == "auto"
     assert cfg.provider == "local"
     assert cfg.language is None
-    assert cfg.local.model == "base"
-    assert cfg.local.device == "auto"
-    assert cfg.local.compute_type == "auto"
+    assert cfg.local.engine == "parakeet"
     assert cfg.max_duration_s == 600
     assert cfg.cache_transcripts is True
+
+
+def test_local_engine_default_is_parakeet():
+    assert TranscriptionLocalConfig().engine == "parakeet"
+
+
+def test_local_accepts_sensevoice():
+    c = TranscriptionLocalConfig(engine="sensevoice", num_threads=4)
+    assert c.engine == "sensevoice"
+    assert c.num_threads == 4
+
+
+def test_legacy_whisper_keys_are_ignored_not_errors():
+    c = TranscriptionLocalConfig(model="large-v3", device="cpu", compute_type="int8")
+    assert c.engine == "parakeet"  # default; legacy keys dropped
 
 
 def test_transcription_mode_invalid():

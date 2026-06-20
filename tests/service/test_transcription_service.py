@@ -7,7 +7,9 @@ import pytest
 from durin.service.transcription import (
     TranscriptResult,
     TranscriptionService,
+    _resolve_model_name,
 )
+from durin.config.schema import TranscriptionConfig
 
 
 class FakeProvider:
@@ -86,3 +88,19 @@ async def test_transcribe_disabled_returns_empty(tmp_path):
     result = await svc.transcribe_and_cache(audio)
     assert result.text == ""
     assert fake.calls == 0
+
+
+def test_resolve_model_name_local_is_engine():
+    cfg = TranscriptionConfig(provider="local")
+    cfg.local.engine = "sensevoice"
+    assert _resolve_model_name(cfg) == "sensevoice"
+
+
+def test_local_factory_builds_sttprovider():
+    cfg = TranscriptionConfig(provider="local")
+    cfg.local.engine = "parakeet"
+    svc = TranscriptionService.from_config(cfg)
+    prov = svc._get_provider()
+    from durin.providers.transcription import LocalSttProvider
+    assert isinstance(prov, LocalSttProvider)
+    assert prov.engine == "parakeet"

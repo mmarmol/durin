@@ -60,14 +60,13 @@ class TranscriptionService:
 
         def factory() -> Any:
             if config.provider == "local":
-                from durin.providers.transcription import LocalWhisperProvider
+                from durin.providers.transcription import LocalSttProvider
 
-                return LocalWhisperProvider(
-                    model=config.local.model,
-                    device=config.local.device,
-                    compute_type=config.local.compute_type,
+                return LocalSttProvider(
+                    engine=config.local.engine,
+                    model_dir=config.local.model_dir,
+                    num_threads=config.local.num_threads,
                     language=config.language,
-                    download_root=config.local.download_root,
                 )
             if config.provider == "groq":
                 from durin.providers.transcription import GroqTranscriptionProvider
@@ -111,7 +110,7 @@ class TranscriptionService:
         return self._provider
 
     async def transcribe_and_cache(
-        self, file_path: str | Path
+        self, file_path: str | Path, on_status: Callable | None = None
     ) -> TranscriptResult:
         path = Path(file_path)
         if not self.enabled or self.mode == "off":
@@ -142,6 +141,8 @@ class TranscriptionService:
                 pass  # fall through to retranscribe
 
         provider = self._get_provider()
+        if on_status is not None and hasattr(provider, "on_status"):
+            provider.on_status = on_status
         try:
             text = await provider.transcribe(path)
         except Exception:
@@ -171,7 +172,7 @@ class TranscriptionService:
 
 def _resolve_model_name(config: Any) -> str:
     if config.provider == "local":
-        return config.local.model
+        return config.local.engine
     if config.provider == "http":
         return config.http.model or "http"
     return config.provider
