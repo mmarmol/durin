@@ -72,10 +72,12 @@ Inside the TUI:
 - `/remember <fact>` / `/forget <id>` — author memory directly
 - `/compact [hint]` / `/copy` / `/name <name>` — session ergonomics
 - Drag-and-drop a file path into the input to attach it
-- Attach or record audio — it's transcribed to text before reaching the
+- Attach or record audio — transcribed to text locally before reaching the
   agent (`[stt]`/`[voice]` extras; see [docs/INSTALL.md](docs/INSTALL.md)).
-  In the TUI: drag an audio file or `/voice` to record. In the webui:
-  attach a clip or use the 🎙 mic button.
+  Default engine: Parakeet TDT v3 (~30× real-time on CPU, 25 European
+  languages). Use `sensevoice` for Chinese/Japanese/Korean, or configure a
+  cloud provider (Groq/OpenAI). In the TUI: drag an audio file or `/voice`
+  to record. In the webui: attach a clip or use the 🎙 mic button.
 - `@<prefix>` — fuzzy-complete a workspace file
 - `!cmd` / `!!cmd` — shell shortcut (publishes / silent)
 - `Alt+Enter` — newline; `Enter` — submit; `Esc` — cancel turn

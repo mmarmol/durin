@@ -97,7 +97,7 @@ pip install -e ".[memory,mcp,web]"
 | `discord` | `discord.py` | Discord channel. |
 | `oauth` | `oauth-cli-kit` | OAuth login (`durin oauth login …`). |
 | `local` | `llama-cpp-python`, `huggingface-hub` | Local GGUF model serving. |
-| `stt` | `faster-whisper` (CTranslate2) | Local audio transcription (Whisper Large V3). Needed for the default `local` transcription provider. Model weights (~1.5 GB for `large-v3`) download once on first use. Cross-platform CPU; no GPU required. |
+| `stt` | `sherpa-onnx`, `av` (PyAV), `numpy` | Local audio transcription. PyAV bundles ffmpeg — no system ffmpeg required. Two engines selectable via config (see below). Models download on first use and are cached under `<durin_home>/models/stt/`. Prebuilt wheels for macOS arm64, Linux x86_64/aarch64, Windows x86_64. |
 | `voice` | `sounddevice` (PortAudio) | TUI microphone recording (`/voice`). macOS/Windows bundle PortAudio; Linux needs `apt install libportaudio2` (or your distro's equivalent). |
 | `dev` | `pytest`, `ruff`, … | Run the test suite + lint. |
 
@@ -107,19 +107,37 @@ When you attach or record audio, durin transcribes it to text **before** it
 reaches the agent — the model never sees raw audio, so token usage stays
 minimal and the transcript is editable before you send.
 
-The default provider is **local Whisper** (`[stt]` extra, no API key, works
-offline). You can switch to a cloud provider (Groq/OpenAI) or any
-OpenAI-compatible HTTP server (whisper.cpp, mlx-qwen3-asr, vLLM) via the
-`transcription` config section:
+The default provider is **local** (`[stt]` extra, no API key, works offline).
+Two local engines are available:
+
+| Engine | Model | Languages | Speed |
+|---|---|---|---|
+| `parakeet` (default) | Parakeet TDT 0.6B v3 | 25 European languages incl. English and Spanish | ~30× real-time on CPU |
+| `sensevoice` | SenseVoice-Small | Chinese, Japanese, Korean, Cantonese, English | Very fast |
+
+> **Note:** `parakeet` does not support Japanese or Chinese. Use `sensevoice`
+> or a cloud provider for those languages.
+
+Models download on first use (a "downloading model (one-time)" phase is shown
+in the webui) and are cached under `<durin_home>/models/stt/<engine>/`.
+No system ffmpeg is required — the `[stt]` extra pulls in PyAV, which bundles
+its own ffmpeg.
+
+You can switch to a cloud provider (Groq/OpenAI) or any OpenAI-compatible
+HTTP server via the `transcription` config section:
 
 ```jsonc
 {
   "transcription": {
     "enabled": true,
-    "mode": "auto",                 // "auto" | "preview" | "off"
-    "provider": "local",            // "local" | "openai" | "groq" | "http"
-    "language": null,               // ISO-639-1 hint; null = auto-detect
-    "local": { "model": "large-v3" } // tiny|base|small|medium|large-v3|large-v3-turbo
+    "mode": "auto",       // "auto" | "preview" | "off"
+    "provider": "local",  // "local" | "openai" | "groq" | "http"
+    "language": null,     // ISO-639-1 hint; null = auto-detect
+    "local": {
+      "engine": "parakeet",  // "parakeet" | "sensevoice"
+      "model_dir": null,     // null = auto-download to <durin_home>/models/stt/
+      "num_threads": null    // null = engine default
+    }
   }
 }
 ```

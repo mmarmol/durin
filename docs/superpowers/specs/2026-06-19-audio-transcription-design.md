@@ -1,3 +1,5 @@
+> **Superseded (2026-06-20):** the local STT engine was changed from Whisper (faster-whisper) to sherpa-onnx (Parakeet TDT v3 default + SenseVoice for CJK).
+
 # Audio Transcription — Design Spec
 
 - **Date:** 2026-06-19
