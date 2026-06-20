@@ -345,3 +345,50 @@ async def test_registry_install_remote_no_oauth_when_endpoint_public(config_path
         McpRegistryInstallCommand(ref="com.public/remote", prefer="remote"), LOCAL
     )
     assert not res.config.oauth
+
+
+@pytest.mark.asyncio
+async def test_registry_install_does_not_block_on_connect(config_path, monkeypatch):
+    """The install must return immediately and settle the connection in the BACKGROUND — a
+    connect that hangs (or swallows cancellation) must never freeze the install request."""
+    import asyncio
+
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeOauthRemoteReg()]
+    )
+    import durin.agent.mcp_install as mi
+
+    async def _no_oauth(_url, *, request=None):
+        return False  # plain remote → background connect (not needs_auth)
+
+    monkeypatch.setattr(mi, "remote_needs_oauth", _no_oauth)
+
+    connected = asyncio.Event()
+
+    class _HangRuntime:
+        def live_status(self):
+            return {}
+
+        def connect_errors(self):
+            return {}
+
+        async def connect(self, name, cfg):
+            connected.set()
+            await asyncio.Event().wait()  # never returns
+
+        async def disconnect(self, name):
+            pass
+
+    from durin.service.mcp import McpRegistryInstallCommand
+
+    svc = McpService(mcp_runtime=_HangRuntime())
+    # Must complete well under the timeout despite the connect hanging forever.
+    res = await asyncio.wait_for(
+        svc.registry_install(
+            McpRegistryInstallCommand(ref="com.public/remote", prefer="remote"), LOCAL
+        ),
+        timeout=5,
+    )
+    assert res.name == "remote"          # returned without blocking on the hung connect
+    await asyncio.sleep(0.05)
+    assert connected.is_set()            # the connect WAS scheduled (in the background)
