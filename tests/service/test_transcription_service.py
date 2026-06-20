@@ -69,6 +69,34 @@ async def test_transcribe_cache_invalidation_on_model_change(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_cache_invalidated_on_engine_switch(tmp_path):
+    """Switching local engine (parakeet→sensevoice) must invalidate the cache."""
+    audio = tmp_path / "a.wav"
+    _make_wav(audio)
+
+    fake_parakeet = FakeProvider("parakeet-text")
+    svc_parakeet = TranscriptionService(
+        provider_factory=lambda: fake_parakeet,
+        model_name="parakeet",
+        cache_transcripts=True,
+    )
+    first = await svc_parakeet.transcribe_and_cache(audio)
+    assert first.text == "parakeet-text"
+    assert first.cached is False
+
+    fake_sensevoice = FakeProvider("sensevoice-text")
+    svc_sensevoice = TranscriptionService(
+        provider_factory=lambda: fake_sensevoice,
+        model_name="sensevoice",
+        cache_transcripts=True,
+    )
+    second = await svc_sensevoice.transcribe_and_cache(audio)
+    assert second.text == "sensevoice-text"
+    assert second.cached is False
+    assert fake_sensevoice.calls == 1  # re-transcribed, not served from cache
+
+
+@pytest.mark.asyncio
 async def test_transcribe_off_mode_returns_empty(tmp_path):
     audio = tmp_path / "a.wav"
     _make_wav(audio)
