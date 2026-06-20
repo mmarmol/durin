@@ -208,6 +208,10 @@ class McpManageTool(Tool):
         secret_refs = collect_secret_env(detail, env_values, server_name=server_name)
         sc = build_server_config_from_detail(detail, prefer=prefer,
                                              secret_env_refs=secret_refs)
+        from durin.agent.mcp_install import autodetect_oauth
+
+        has_headers = bool(detail.remotes and detail.remotes[0].headers)
+        await autodetect_oauth(sc, has_declared_headers=has_headers)
         result = await self._service.add(
             McpServerUpsertCommand(name=server_name, config=sc), principal)
         info = _as_dict(result)

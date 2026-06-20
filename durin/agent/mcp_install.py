@@ -200,3 +200,53 @@ def rebuild_for_update(old: MCPServerConfig, detail: McpServerDetail) -> MCPServ
     new.version = pkg.version
     new.source_ref = detail.ref
     return new
+
+
+async def remote_needs_oauth(url: str, *, request=None) -> bool:
+    """True when the remote MCP endpoint answers an unauthenticated request with a 401
+    ``WWW-Authenticate: Bearer`` challenge — the standard MCP/RFC-9728 signal that it
+    requires OAuth. Bounded + best-effort: any error (unreachable, slow, non-401) → False,
+    so we never force OAuth onto a server that doesn't demand it.
+
+    ``request`` is an injectable ``async (url) -> (status, www_authenticate)`` seam for tests.
+    """
+    if not url:
+        return False
+    if request is None:
+        async def request(u: str):  # noqa: ANN001
+            import httpx
+
+            payload = {
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                           "clientInfo": {"name": "durin", "version": "0"}},
+            }
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
+                r = await c.post(u, json=payload, headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                })
+            return r.status_code, r.headers.get("www-authenticate", "")
+
+    try:
+        status, www = await request(url)
+    except Exception:  # noqa: BLE001 — unreachable/slow → don't force oauth
+        return False
+    return status == 401 and "bearer" in (www or "").lower()
+
+
+async def autodetect_oauth(
+    sc: MCPServerConfig, *, has_declared_headers: bool = False, request=None
+) -> None:
+    """Enable OAuth on a freshly-built REMOTE config when its endpoint demands it.
+
+    Skips: stdio servers, configs that already declare auth (a static header the user
+    supplies, e.g. github's PAT) or already set ``oauth``. When the endpoint returns the
+    401-Bearer challenge, set ``oauth=True`` so durin's existing sign-in flow + OAuth
+    provider (DCR) take over → the server shows ``needs_auth`` instead of failing/hanging.
+    Mutates ``sc`` in place.
+    """
+    if sc.command or not sc.url or sc.oauth or has_declared_headers:
+        return
+    if await remote_needs_oauth(sc.url, request=request):
+        sc.oauth = True

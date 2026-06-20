@@ -2,10 +2,12 @@
 import pytest
 
 from durin.agent.mcp_install import (
+    autodetect_oauth,
     build_server_config_from_detail,
     collect_secret_env,
     has_update,
     rebuild_for_update,
+    remote_needs_oauth,
     runtime_install_spec,
     runtime_present,
 )
@@ -195,3 +197,64 @@ def test_rebuild_for_update_remote_is_noop():
     old = MCPServerConfig(type="streamableHttp", url="https://m/x", source_ref="io.x/r")
     d = _detail(ref="io.x/r", version="9.9.9", remotes=[])
     assert rebuild_for_update(old, d) is old
+
+
+# ---------------------------------------------------------------------------
+# C2 — OAuth auto-detection for hosted remotes (MCP / RFC 9728 401-Bearer)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_remote_needs_oauth_detects_bearer_401():
+    async def r401(_u):
+        return 401, 'Bearer realm="OAuth", error="invalid_token"'
+
+    async def r200(_u):
+        return 200, ""
+
+    async def r401_basic(_u):
+        return 401, 'Basic realm="x"'  # not a Bearer challenge
+
+    assert await remote_needs_oauth("https://m/mcp", request=r401) is True
+    assert await remote_needs_oauth("https://m/mcp", request=r200) is False
+    assert await remote_needs_oauth("https://m/mcp", request=r401_basic) is False
+    assert await remote_needs_oauth("", request=r401) is False  # no url
+
+
+@pytest.mark.asyncio
+async def test_remote_needs_oauth_swallows_errors():
+    async def boom(_u):
+        raise RuntimeError("unreachable")
+
+    assert await remote_needs_oauth("https://m/mcp", request=boom) is False
+
+
+@pytest.mark.asyncio
+async def test_autodetect_oauth_enables_for_bearer_remote():
+    from durin.config.schema import MCPServerConfig
+
+    async def r401(_u):
+        return 401, "Bearer"
+
+    sc = MCPServerConfig(type="streamableHttp", url="https://m/mcp", source_ref="io.x/a")
+    await autodetect_oauth(sc, has_declared_headers=False, request=r401)
+    assert sc.oauth is True
+
+
+@pytest.mark.asyncio
+async def test_autodetect_oauth_skips_stdio_headers_and_preset():
+    from durin.config.schema import MCPServerConfig
+
+    async def r401(_u):
+        return 401, "Bearer"
+
+    stdio = MCPServerConfig(type="stdio", command="npx", args=["x"])
+    await autodetect_oauth(stdio, request=r401)
+    assert not stdio.oauth  # not a remote → no probe
+
+    static_hdr = MCPServerConfig(type="streamableHttp", url="https://m", source_ref="r")
+    await autodetect_oauth(static_hdr, has_declared_headers=True, request=r401)
+    assert not static_hdr.oauth  # server uses a static token header → don't force oauth
+
+    preset = MCPServerConfig(type="streamableHttp", url="https://m", oauth=True)
+    await autodetect_oauth(preset, request=r401)
+    assert preset.oauth is True  # already configured → unchanged
