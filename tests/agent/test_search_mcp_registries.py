@@ -31,7 +31,7 @@ def test_build_adapters_enabled_official_plus_github():
 async def test_search_ranks_from_store(monkeypatch):
     _seed(monkeypatch, [
         {"name": "io.x/jira", "ref": "io.x/jira", "description": "Jira",
-         "official": True},
+         "verified": True},
     ])
     hits = await search_mcp_registries("jira", limit=5)
     assert hits[0].ref == "io.x/jira"

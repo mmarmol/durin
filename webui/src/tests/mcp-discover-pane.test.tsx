@@ -17,10 +17,13 @@ vi.mock("@/lib/api", () => ({
   mcpRegistryRuntime: (...a: unknown[]) => mcpRegistryRuntime(...a),
 }));
 
-const OFFICIAL_HIT: McpRegistryHit = {
+// searchMcpRegistry now resolves to { hits, more } (curated+popular, then the less-popular reveal).
+const result = (hits: McpRegistryHit[], more: McpRegistryHit[] = []) => ({ hits, more });
+
+const VERIFIED_HIT: McpRegistryHit = {
   name: "github-mcp",
   ref: "registry/github-mcp",
-  registry: "official",
+  registry: "github",
   kind: "remote",
   description: "The official GitHub MCP server",
   signals: {
@@ -31,7 +34,7 @@ const OFFICIAL_HIT: McpRegistryHit = {
     topics: ["github", "api"],
     language: "TypeScript",
     license: "MIT",
-    official: true,
+    verified: true,
     repo_url: "https://github.com/github/github-mcp",
   },
 };
@@ -39,19 +42,28 @@ const OFFICIAL_HIT: McpRegistryHit = {
 const PLAIN_HIT: McpRegistryHit = {
   name: "postgres-mcp",
   ref: "registry/postgres-mcp",
-  registry: "public",
+  registry: "official",
   kind: "local",
   description: "PostgreSQL MCP server",
   signals: {
-    stars: 150,
+    stars: 150, // popular (over the floor), not verified → no badge
     owner_login: "acme",
     owner_url: "https://github.com/acme",
     owner_avatar: "",
     topics: [],
     language: "Python",
-    official: false,
+    verified: false,
     repo_url: "https://github.com/acme/postgres-mcp",
   },
+};
+
+const LOW_STAR_HIT: McpRegistryHit = {
+  name: "low-star-mcp",
+  ref: "registry/low-star-mcp",
+  registry: "official",
+  kind: "local",
+  description: "A niche, low-star server (below the floor)",
+  signals: { stars: 5, owner_login: "nobody", verified: false },
 };
 
 const DETAIL: McpRegistryServerDetail = {
@@ -98,7 +110,7 @@ beforeEach(() => {
   describeMcpRegistryServer.mockReset();
   installMcpFromRegistry.mockReset();
   mcpRegistryRuntime.mockReset();
-  // Default: remote model needs no local runtime (keeps existing detail tests green).
+  // Default: remote model needs no local runtime (keeps detail tests green).
   mcpRegistryRuntime.mockResolvedValue({
     kind: "remote",
     runtime: "",
@@ -109,35 +121,27 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("renders the Official badge for a hit with signals.official=true", async () => {
+it("shows the Verified badge for a verified hit, none for a non-verified popular one", async () => {
   const user = userEvent.setup();
-  searchMcpRegistry.mockResolvedValue([OFFICIAL_HIT, PLAIN_HIT]);
+  searchMcpRegistry.mockResolvedValue(result([VERIFIED_HIT, PLAIN_HIT]));
 
   render(<McpDiscoverPane token="tok" onClose={vi.fn()} />);
-
   await user.type(screen.getByRole("textbox"), "github");
   await user.click(screen.getByRole("button", { name: /search/i }));
 
-  // Official badge must appear for the official hit
   expect(await screen.findByText("github-mcp")).toBeInTheDocument();
-  const badges = screen.getAllByText("Official");
-  expect(badges.length).toBeGreaterThanOrEqual(1);
-
-  // The non-official hit must NOT get a badge
   expect(screen.getByText("postgres-mcp")).toBeInTheDocument();
-  // Only one Official badge — the plain hit has none
-  expect(screen.getAllByText("Official")).toHaveLength(1);
+  // Exactly one "Verified" badge (the verified hit); the popular non-verified one has none.
+  expect(screen.getAllByText("Verified")).toHaveLength(1);
 });
 
 it("owner link has target=_blank and rel=noopener on listing rows", async () => {
   const user = userEvent.setup();
-  searchMcpRegistry.mockResolvedValue([OFFICIAL_HIT]);
+  searchMcpRegistry.mockResolvedValue(result([VERIFIED_HIT]));
 
   render(<McpDiscoverPane token="tok" onClose={vi.fn()} />);
-
   await user.type(screen.getByRole("textbox"), "github");
   await user.click(screen.getByRole("button", { name: /search/i }));
-
   await screen.findByText("github-mcp");
 
   const ownerLink = screen.getByRole("link", { name: /@github/ });
@@ -148,60 +152,51 @@ it("owner link has target=_blank and rel=noopener on listing rows", async () => 
 
 it("renders star count and language on listing rows", async () => {
   const user = userEvent.setup();
-  searchMcpRegistry.mockResolvedValue([OFFICIAL_HIT]);
+  searchMcpRegistry.mockResolvedValue(result([VERIFIED_HIT]));
 
   render(<McpDiscoverPane token="tok" onClose={vi.fn()} />);
-
   await user.type(screen.getByRole("textbox"), "github");
   await user.click(screen.getByRole("button", { name: /search/i }));
-
   await screen.findByText("github-mcp");
+
   expect(screen.getByText(/★.*4[,.]?200/)).toBeInTheDocument();
   expect(screen.getByText("TypeScript")).toBeInTheDocument();
 });
 
 it("renders topic chips when topics are present", async () => {
   const user = userEvent.setup();
-  searchMcpRegistry.mockResolvedValue([OFFICIAL_HIT]);
+  searchMcpRegistry.mockResolvedValue(result([VERIFIED_HIT]));
 
   render(<McpDiscoverPane token="tok" onClose={vi.fn()} />);
-
   await user.type(screen.getByRole("textbox"), "github");
   await user.click(screen.getByRole("button", { name: /search/i }));
-
   await screen.findByText("github-mcp");
+
   expect(screen.getByText("github")).toBeInTheDocument();
   expect(screen.getByText("api")).toBeInTheDocument();
 });
 
-it("detail view shows Official badge, owner link, stars, View on GitHub link", async () => {
+it("detail view shows Verified badge, owner link, stars, View on GitHub link", async () => {
   const user = userEvent.setup();
-  searchMcpRegistry.mockResolvedValue([OFFICIAL_HIT]);
+  searchMcpRegistry.mockResolvedValue(result([VERIFIED_HIT]));
   describeMcpRegistryServer.mockResolvedValue(DETAIL);
 
   render(<McpDiscoverPane token="tok" onClose={vi.fn()} />);
-
   await user.type(screen.getByRole("textbox"), "github");
   await user.click(screen.getByRole("button", { name: /search/i }));
 
   const row = await screen.findByText("github-mcp");
   await user.click(row.closest("button")!);
 
-  // Version shown
   await screen.findByText(/v1\.2\.3/);
+  expect(screen.getAllByText("Verified").length).toBeGreaterThanOrEqual(1);
 
-  // Official badge
-  expect(screen.getAllByText("Official").length).toBeGreaterThanOrEqual(1);
-
-  // Owner link with target=_blank
   const ownerLink = screen.getByRole("link", { name: /by.*@github/i });
   expect(ownerLink).toHaveAttribute("target", "_blank");
   expect(ownerLink).toHaveAttribute("rel", expect.stringContaining("noopener"));
 
-  // Stars
   expect(screen.getByText(/★.*4[,.]?200/)).toBeInTheDocument();
 
-  // View on GitHub link
   const ghLink = screen.getByRole("link", { name: /view on github/i });
   expect(ghLink).toHaveAttribute("href", "https://github.com/github/github-mcp");
   expect(ghLink).toHaveAttribute("target", "_blank");
@@ -216,64 +211,53 @@ it("owner with no owner_url renders plain text, not a broken anchor", async () =
     registry: "public",
     kind: "local",
     description: "A server whose owner has no URL",
-    signals: {
-      owner_login: "orphan",
-      // owner_url intentionally absent
-    },
+    signals: { owner_login: "orphan", stars: 200 },
   };
-  searchMcpRegistry.mockResolvedValue([NO_URL_HIT]);
+  searchMcpRegistry.mockResolvedValue(result([NO_URL_HIT]));
 
   render(<McpDiscoverPane token="tok" onClose={vi.fn()} />);
-
   await user.type(screen.getByRole("textbox"), "orphan");
   await user.click(screen.getByRole("button", { name: /search/i }));
-
   await screen.findByText("no-url-mcp");
 
-  // @orphan text must appear
   expect(screen.getByText("@orphan")).toBeInTheDocument();
-
-  // No anchor whose href is the string "undefined"
   const links = screen.queryAllByRole("link");
-  const broken = links.filter((l) => l.getAttribute("href") === "undefined");
-  expect(broken).toHaveLength(0);
+  expect(links.filter((l) => l.getAttribute("href") === "undefined")).toHaveLength(0);
 });
 
-it("show-all toggle re-searches with includeAll=true and flips back", async () => {
+it("reveals less-popular results progressively in one call (no 'show all' mode)", async () => {
   const user = userEvent.setup();
-  // First search returns only official; second call (include_all) returns both
-  searchMcpRegistry
-    .mockResolvedValueOnce([OFFICIAL_HIT])
-    .mockResolvedValueOnce([OFFICIAL_HIT, PLAIN_HIT]);
+  searchMcpRegistry.mockResolvedValue(result([VERIFIED_HIT], [LOW_STAR_HIT]));
 
   render(<McpDiscoverPane token="tok" onClose={vi.fn()} />);
-
-  // Initial search
   await user.type(screen.getByRole("textbox"), "jira");
   await user.click(screen.getByRole("button", { name: /search/i }));
   await screen.findByText("github-mcp");
 
-  // Toggle label should read "Showing official only"
-  expect(screen.getByText(/showing official only/i)).toBeInTheDocument();
-  const showAllBtn = screen.getByRole("button", { name: /show all/i });
-  expect(showAllBtn).toBeInTheDocument();
+  // The less-popular hit is hidden until requested
+  expect(screen.queryByText("low-star-mcp")).not.toBeInTheDocument();
 
-  // Click "Show all" — should trigger a second search with includeAll=true
-  await user.click(showAllBtn);
-  await screen.findByText("postgres-mcp");
+  // A single "show N less-popular" affordance reveals them inline — no second search call
+  await user.click(screen.getByRole("button", { name: /less-popular/i }));
+  expect(await screen.findByText("low-star-mcp")).toBeInTheDocument();
+  expect(searchMcpRegistry).toHaveBeenCalledTimes(1);
+});
 
-  // Verify the second call passed include_all=true (5th arg)
-  expect(searchMcpRegistry).toHaveBeenCalledTimes(2);
-  expect(searchMcpRegistry.mock.calls[1][4]).toBe(true);
+it("shows the less-popular results inline when there are no curated/popular hits", async () => {
+  const user = userEvent.setup();
+  searchMcpRegistry.mockResolvedValue(result([], [LOW_STAR_HIT]));
 
-  // Toggle now shows "Showing all" + "Official only" button
-  expect(screen.getByText(/showing all/i)).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /official only/i })).toBeInTheDocument();
+  render(<McpDiscoverPane token="tok" onClose={vi.fn()} />);
+  await user.type(screen.getByRole("textbox"), "obscure");
+  await user.click(screen.getByRole("button", { name: /search/i }));
+
+  // No "hits" to hide them behind → shown directly (not behind a click)
+  expect(await screen.findByText("low-star-mcp")).toBeInTheDocument();
 });
 
 it("local detail with missing Docker surfaces an install-Docker banner", async () => {
   const user = userEvent.setup();
-  searchMcpRegistry.mockResolvedValue([OFFICIAL_HIT]);
+  searchMcpRegistry.mockResolvedValue(result([VERIFIED_HIT]));
   describeMcpRegistryServer.mockResolvedValue(LOCAL_OCI_DETAIL);
   mcpRegistryRuntime.mockResolvedValue({
     kind: "local",
@@ -284,16 +268,12 @@ it("local detail with missing Docker surfaces an install-Docker banner", async (
   });
 
   render(<McpDiscoverPane token="tok" onClose={vi.fn()} />);
-
   await user.type(screen.getByRole("textbox"), "github");
   await user.click(screen.getByRole("button", { name: /search/i }));
-
   const row = await screen.findByText("github-mcp");
   await user.click(row.closest("button")!);
-
   await screen.findByText(/v1\.4\.0/);
 
-  // Runtime status was queried for the local model
   await waitFor(() =>
     expect(mcpRegistryRuntime).toHaveBeenCalledWith(
       "tok",
@@ -302,19 +282,15 @@ it("local detail with missing Docker surfaces an install-Docker banner", async (
     ),
   );
 
-  // A "Get Docker Desktop" link to docker.com opens in a new tab
   const dockerLink = await screen.findByRole("link", { name: /docker/i });
-  expect(dockerLink).toHaveAttribute(
-    "href",
-    expect.stringContaining("docker.com"),
-  );
+  expect(dockerLink).toHaveAttribute("href", expect.stringContaining("docker.com"));
   expect(dockerLink).toHaveAttribute("target", "_blank");
   expect(dockerLink).toHaveAttribute("rel", expect.stringContaining("noopener"));
 });
 
 it("local detail with missing npx shows a copy-paste install command", async () => {
   const user = userEvent.setup();
-  searchMcpRegistry.mockResolvedValue([OFFICIAL_HIT]);
+  searchMcpRegistry.mockResolvedValue(result([VERIFIED_HIT]));
   describeMcpRegistryServer.mockResolvedValue({
     ...LOCAL_OCI_DETAIL,
     packages: [
@@ -330,7 +306,6 @@ it("local detail with missing npx shows a copy-paste install command", async () 
   });
 
   render(<McpDiscoverPane token="tok" onClose={vi.fn()} />);
-
   await user.type(screen.getByRole("textbox"), "github");
   await user.click(screen.getByRole("button", { name: /search/i }));
   const row = await screen.findByText("github-mcp");
@@ -342,30 +317,42 @@ it("local detail with missing npx shows a copy-paste install command", async () 
 
 it("detail view keeps install button functional", async () => {
   const user = userEvent.setup();
-  searchMcpRegistry.mockResolvedValue([OFFICIAL_HIT]);
+  searchMcpRegistry.mockResolvedValue(result([VERIFIED_HIT]));
   describeMcpRegistryServer.mockResolvedValue(DETAIL);
   installMcpFromRegistry.mockResolvedValue({});
   const onClose = vi.fn();
 
   render(<McpDiscoverPane token="tok" onClose={onClose} />);
-
   await user.type(screen.getByRole("textbox"), "github");
   await user.click(screen.getByRole("button", { name: /search/i }));
-
   const row = await screen.findByText("github-mcp");
   await user.click(row.closest("button")!);
-
   await screen.findByText(/v1\.2\.3/);
 
   await user.click(screen.getByRole("button", { name: /connect/i }));
-
   await waitFor(() => {
-    expect(installMcpFromRegistry).toHaveBeenCalledWith(
-      "tok",
-      "registry/github-mcp",
-      "remote",
-      {},
-    );
+    expect(installMcpFromRegistry).toHaveBeenCalledWith("tok", "registry/github-mcp", "remote", {});
     expect(onClose).toHaveBeenCalledWith(true);
   });
+});
+
+it("renders hits whose stars are null without crashing (unenriched catalog rows)", async () => {
+  const user = userEvent.setup();
+  const NULL_STARS_HIT: McpRegistryHit = {
+    name: "unenriched-mcp",
+    ref: "io.x/unenriched-mcp",
+    registry: "github",
+    kind: "local",
+    description: "A server with no resolved star count",
+    signals: { stars: null, owner_login: "x", verified: true }, // stars=null, not undefined
+  };
+  searchMcpRegistry.mockResolvedValue(result([NULL_STARS_HIT]));
+
+  render(<McpDiscoverPane token="tok" onClose={vi.fn()} />);
+  await user.type(screen.getByRole("textbox"), "unenriched");
+  await user.click(screen.getByRole("button", { name: /search/i }));
+
+  // Renders the row (no TypeError on null.toLocaleString) and shows no ★ for it
+  expect(await screen.findByText("unenriched-mcp")).toBeInTheDocument();
+  expect(screen.queryByText(/★/)).not.toBeInTheDocument();
 });

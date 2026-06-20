@@ -118,6 +118,42 @@ _SIGNAL_KEYS = (
 )
 
 
+def _matched_ranked(query_lc: str) -> list[dict]:
+    """Servers matching the query, ranked: curated (verified) first — each tier by stars.
+
+    Two tiers only (the model is "curated + popular"): ``verified`` (GitHub-curated) sorts
+    above everything, and WITHIN each tier the order is stars-desc. ``official`` (the
+    namespace heuristic) is deliberately NOT a ranking signal — it stays only as a display
+    flag in signals.
+    """
+    matched = [s for s in load_servers() if _matches(query_lc, s)]
+    matched.sort(
+        key=lambda s: (bool(s.get("verified")), s.get("stars") or 0),
+        reverse=True,
+    )
+    return matched
+
+
+def _curated_or_popular(s: dict, min_stars: int) -> bool:
+    """The default gate: a server is shown when it is curated (verified) OR popular
+    (stars over the floor). The star floor is the toggleable part — quality='all' /
+    ``search_tiered``'s ``more`` list bypass it."""
+    return bool(s.get("verified")) or (s.get("stars") or 0) > min_stars
+
+
+def _to_hit(s: dict):
+    from durin.agent.mcp_registry import McpServerHit
+
+    return McpServerHit(
+        name=s["name"],
+        ref=s.get("ref") or s["name"],
+        registry="github" if s.get("verified") else "official",
+        kind=s.get("kind", "local"),
+        description=s.get("description", ""),
+        signals={k: s[k] for k in _SIGNAL_KEYS if k in s},
+    )
+
+
 def search(
     query: str,
     *,
@@ -125,45 +161,30 @@ def search(
     quality: str = "official",
     min_stars: int = 100,
 ) -> list:
-    """Search the local catalog store.
+    """Search the local catalog store → McpServerHit list, ranked verified-then-stars.
 
-    Returns a list of McpServerHit sorted by (stars desc, score desc).
+    Default (``quality != "all"``) gates to curated-or-popular; ``quality="all"`` returns
+    every match (the explicit "show everything" path).
     """
-    from durin.agent.mcp_registry import McpServerHit
+    ranked = _matched_ranked(query.lower())
+    if quality != "all":
+        ranked = [s for s in ranked if _curated_or_popular(s, min_stars)]
+    return [_to_hit(s) for s in ranked[:limit]]
 
-    servers = load_servers()
-    gated = quality != "all"
-    query_lc = query.lower()
 
-    matched = [s for s in servers if _matches(query_lc, s)]
+def search_tiered(
+    query: str,
+    *,
+    limit: int,
+    min_stars: int = 100,
+) -> tuple[list, list]:
+    """Return ``(hits, more)`` for progressive disclosure.
 
-    def _passes_gate(s: dict) -> bool:
-        return (
-            bool(s.get("verified"))
-            or bool(s.get("official"))
-            or (s.get("stars") or 0) > min_stars
-        )
-
-    pool = [s for s in matched if _passes_gate(s)] if gated else matched
-    # No "show junk when empty" fallback: the verified tier (GitHub-curated) + capability
-    # aliases keep the popular categories non-empty under the gate (jira→atlassian-verified,
-    # postgres→pgEdge), and genuinely thin/low-quality categories degrade to the explicit
-    # "Show all" toggle rather than surfacing junk by default.
-
-    # Rank: verified (GitHub-curated) first, then first-party official, then by stars.
-    pool.sort(
-        key=lambda s: (bool(s.get("verified")), bool(s.get("official")), s.get("stars") or 0),
-        reverse=True,
-    )
-
-    hits = []
-    for s in pool[:limit]:
-        hits.append(McpServerHit(
-            name=s["name"],
-            ref=s.get("ref") or s["name"],
-            registry="github" if s.get("verified") else "official",
-            kind=s.get("kind", "local"),
-            description=s.get("description", ""),
-            signals={k: s[k] for k in _SIGNAL_KEYS if k in s},
-        ))
-    return hits
+    ``hits`` = curated + popular (the default view); ``more`` = the matches below the star
+    floor (the "+N less popular" reveal). Both are ranked verified-then-stars and capped at
+    ``limit``. This is the webui's single-call source — no "show all" mode, no second fetch.
+    """
+    ranked = _matched_ranked(query.lower())
+    gated = [s for s in ranked if _curated_or_popular(s, min_stars)]
+    more = [s for s in ranked if not _curated_or_popular(s, min_stars)]
+    return [_to_hit(s) for s in gated[:limit]], [_to_hit(s) for s in more[:limit]]

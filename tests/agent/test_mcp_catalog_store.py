@@ -228,16 +228,19 @@ class TestSearch:
 
         assert "postgres-mcp" in names
 
-    def test_gate_includes_official_low_star(self, monkeypatch):
-        """Default quality gate includes official=True servers regardless of stars."""
+    def test_official_low_star_no_longer_gated_in(self, monkeypatch):
+        """The namespace 'official' heuristic is NO LONGER a gate criterion (the model is
+        curated + popular). A low-star official-but-not-verified server is excluded by
+        default and only appears under quality='all'."""
         from durin.agent import mcp_catalog_store
 
         monkeypatch.setattr(mcp_catalog_store, "load_servers", _fake_servers)
 
-        results = mcp_catalog_store.search("mcp", limit=10)
-        names = [r.name for r in results]
+        gated = [r.name for r in mcp_catalog_store.search("mcp", limit=10)]
+        assert "official-lowstar-mcp" not in gated
 
-        assert "official-lowstar-mcp" in names
+        all_res = [r.name for r in mcp_catalog_store.search("mcp", limit=10, quality="all")]
+        assert "official-lowstar-mcp" in all_res
 
     def test_star_sort_higher_stars_first(self, monkeypatch):
         """Results sorted by stars descending; github-mcp (5000) before postgres-mcp (500)."""
@@ -427,12 +430,13 @@ class TestVerifiedTierAndAliases:
              "kind": "local", "stars": 5000, "official": False, "verified": False},
         ]
 
-    def test_verified_ranks_before_official_and_high_stars(self, monkeypatch):
+    def test_verified_ranks_first_then_by_stars(self, monkeypatch):
         from durin.agent import mcp_catalog_store
         monkeypatch.setattr(mcp_catalog_store, "load_servers", self._servers)
         names = [r.name for r in mcp_catalog_store.search("tool", limit=10)]
-        assert names[0] == "verified-low"          # verified first despite 3 stars
-        assert names.index("official-mid") < names.index("community-high")
+        assert names[0] == "verified-low"  # curated first despite only 3 stars
+        # then the rest purely by stars (official is no longer a ranking signal)
+        assert names.index("community-high") < names.index("official-mid")
 
     def test_verified_passes_gate_with_zero_stars(self, monkeypatch):
         from durin.agent import mcp_catalog_store

@@ -419,3 +419,14 @@ async def search_mcp_registries(query, *, limit, quality="official", min_stars=1
     from durin.agent import mcp_catalog_store
 
     return mcp_catalog_store.search(query, limit=limit, quality=quality, min_stars=min_stars)
+
+
+async def search_mcp_registries_tiered(query, *, limit, min_stars=100):
+    """Tiered store search → ``(hits, more)`` for the webui's progressive disclosure.
+
+    ``hits`` = curated + popular; ``more`` = matches below the star floor. One call, no
+    "show all" mode. Kept ``async`` to match the other call-sites.
+    """
+    from durin.agent import mcp_catalog_store
+
+    return mcp_catalog_store.search_tiered(query, limit=limit, min_stars=min_stars)

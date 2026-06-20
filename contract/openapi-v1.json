@@ -1315,11 +1315,6 @@
       "McpRegistrySearchQuery": {
         "additionalProperties": false,
         "properties": {
-          "include_all": {
-            "default": false,
-            "title": "Include All",
-            "type": "boolean"
-          },
           "limit": {
             "default": 10,
             "title": "Limit",
@@ -1341,6 +1336,14 @@
               "$ref": "#/components/schemas/McpRegistryHit"
             },
             "title": "Hits",
+            "type": "array"
+          },
+          "more": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/McpRegistryHit"
+            },
+            "title": "More",
             "type": "array"
           }
         },
