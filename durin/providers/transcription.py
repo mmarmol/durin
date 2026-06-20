@@ -1,4 +1,4 @@
-"""Voice transcription providers (Groq and OpenAI Whisper)."""
+"""Voice transcription providers (Groq, OpenAI Whisper, and local sherpa-onnx)."""
 
 import asyncio
 import os
@@ -6,6 +6,9 @@ from pathlib import Path
 
 import httpx
 from loguru import logger
+
+from durin.providers.audio_decode import decode_to_mono_16k
+from durin.providers.stt_models import ENGINES, ensure_model
 
 # Up to 3 retries (4 attempts total) with exponential backoff on transient
 # failures. Whisper endpoints occasionally return 502/503 under load, and
@@ -205,76 +208,108 @@ class GroqTranscriptionProvider:
 class TranscriptionProvider:
     """Structural interface for transcription backends (Protocol-style).
 
-    Existing providers (OpenAI/Groq) and :class:`LocalWhisperProvider` already
-    conform via duck typing — this base exists for ``isinstance`` checks and
-    documentation. Subclasses implement ``async def transcribe(file_path) -> str``.
+    Existing providers (OpenAI/Groq/LocalSttProvider) conform via duck typing —
+    this base exists for ``isinstance`` checks and documentation. Subclasses
+    implement ``async def transcribe(file_path) -> str``.
     """
 
     async def transcribe(self, file_path: str | Path) -> str:  # pragma: no cover
         raise NotImplementedError
 
 
-class LocalWhisperProvider(TranscriptionProvider):
-    """In-process Whisper via faster-whisper (CTranslate2).
+def _default_stt_cache() -> Path:
+    from durin.config.home import durin_home  # existing helper for ~/.durin
+    return durin_home() / "models" / "stt"
 
-    Construction does NOT import faster-whisper — that happens lazily on the
-    first :meth:`transcribe` so a missing ``[stt]`` extra does not break module
-    import. The synchronous model runs in a worker thread via
-    :func:`asyncio.to_thread` to avoid blocking the event loop.
+
+class LocalSttProvider(TranscriptionProvider):
+    """In-process ASR via sherpa-onnx. Engine must be one of {parakeet, sensevoice}.
+
+    Lazy: importing this module never imports sherpa_onnx. The model is
+    downloaded on first use and the recognizer built once (singleton). The
+    synchronous decode runs in a worker thread.
     """
 
-    def __init__(
-        self,
-        model: str = "large-v3",
-        device: str = "auto",
-        compute_type: str = "auto",
-        language: str | None = None,
-        download_root: str | None = None,
-    ):
-        self.model = model
-        self.device = device
-        self.compute_type = compute_type
-        self.language = language or None
-        self.download_root = download_root or None
-        self._model_obj = None  # lazily loaded singleton
+    def __init__(self, engine="parakeet", model_dir=None, num_threads=None,
+                 language=None, cache_dir=None, on_status=None):
+        if engine not in ENGINES:
+            raise ValueError(f"Unknown STT engine: {engine!r}")
+        self.engine = engine
+        self.model_dir = Path(model_dir) if model_dir else None
+        self.num_threads = num_threads or 2
+        self.language = language or ""
+        self.cache_dir = Path(cache_dir) if cache_dir else _default_stt_cache()
+        self.on_status = on_status
+        self._rec = None
+
+    def _emit(self, phase, done=0, total=0):
+        if self.on_status:
+            try:
+                self.on_status(phase, done, total)
+            except Exception:
+                logger.debug("on_status callback raised; ignoring")
 
     def _load(self):
-        if self._model_obj is not None:
-            return self._model_obj
+        if self._rec is not None:
+            return self._rec
         try:
-            from faster_whisper import WhisperModel
+            import sherpa_onnx
         except ImportError as e:
             raise RuntimeError(
-                "faster-whisper is not installed. Install the [stt] extra: "
+                "sherpa-onnx is not installed. Install the [stt] extra: "
                 "pip install durin-agent[stt]"
             ) from e
-        self._model_obj = WhisperModel(
-            self.model,
-            device=self.device,
-            compute_type=self.compute_type,
-            download_root=self.download_root,
-        )
-        return self._model_obj
+        if self.model_dir is not None:
+            files = {k: self.model_dir / fname
+                     for k, fname in ENGINES[self.engine].files.items()}
+        else:
+            files = ensure_model(
+                self.engine, self.cache_dir,
+                on_status=lambda _phase, d, t: self._emit("downloading", d, t),
+            )
+        self._emit("loading")
+        if self.engine == "parakeet":
+            self._rec = sherpa_onnx.OfflineRecognizer.from_transducer(
+                encoder=str(files["encoder"]),
+                decoder=str(files["decoder"]),
+                joiner=str(files["joiner"]),
+                tokens=str(files["tokens"]),
+                num_threads=self.num_threads,
+                model_type="nemo_transducer",
+            )
+        else:  # sensevoice
+            self._rec = sherpa_onnx.OfflineRecognizer.from_sense_voice(
+                model=str(files["model"]),
+                tokens=str(files["tokens"]),
+                num_threads=self.num_threads,
+                language=self.language,
+                use_itn=True,
+            )
+        return self._rec
 
     @staticmethod
-    def _transcribe_sync(model, path, language):
-        segments, _info = model.transcribe(str(path), language=language)
-        return " ".join(seg.text for seg in segments).strip()
+    def _decode_sync(rec, samples, sample_rate):
+        stream = rec.create_stream()
+        stream.accept_waveform(sample_rate, samples)
+        rec.decode_stream(stream)
+        return (stream.result.text or "").strip()
 
-    async def transcribe(self, file_path: str | Path) -> str:
+    async def transcribe(self, file_path) -> str:
         path = Path(file_path)
         if not path.exists():
             logger.error("Audio file not found: {}", file_path)
             return ""
         try:
-            model = self._load()
+            rec = self._load()
         except Exception as e:
-            logger.exception("LocalWhisperProvider load error: {}", e)
+            logger.exception("LocalSttProvider load error: {}", e)
             return ""
         try:
-            return await asyncio.to_thread(
-                self._transcribe_sync, model, path, self.language
-            )
+            samples, sr = decode_to_mono_16k(path)
+            if samples.size == 0:
+                return ""
+            self._emit("transcribing")
+            return await asyncio.to_thread(self._decode_sync, rec, samples, sr)
         except Exception as e:
-            logger.exception("LocalWhisperProvider transcribe error: {}", e)
+            logger.exception("LocalSttProvider transcribe error: {}", e)
             return ""
