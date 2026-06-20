@@ -356,6 +356,7 @@ async def test_parakeet_uses_transducer(tmp_path, fake_sherpa, monkeypatch):
     text = await prov.transcribe(audio)
     assert text == "hola mundo"
     assert "from_transducer" in fake_sherpa
+    assert fake_sherpa["from_transducer"]["model_type"] == "nemo_transducer"
 
 
 @pytest.mark.asyncio
@@ -373,3 +374,4 @@ async def test_sensevoice_uses_sense_voice(tmp_path, fake_sherpa, monkeypatch):
     text = await prov.transcribe(audio)
     assert text == "hola mundo"
     assert "from_sense_voice" in fake_sherpa
+    assert fake_sherpa["from_sense_voice"]["use_itn"] is True

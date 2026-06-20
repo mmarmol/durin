@@ -235,12 +235,16 @@ class LocalSttProvider(TranscriptionProvider):
         if engine not in ENGINES:
             raise ValueError(f"Unknown STT engine: {engine!r}")
         self.engine = engine
+        # model_dir, when set, must point directly to the directory containing
+        # the engine's model files (e.g. encoder.int8.onnx, tokens.txt) — the
+        # extracted tarball's inner directory, not its parent.
         self.model_dir = Path(model_dir) if model_dir else None
         self.num_threads = num_threads or 2
         self.language = language or ""
         self.cache_dir = Path(cache_dir) if cache_dir else _default_stt_cache()
         self.on_status = on_status
         self._rec = None
+        self._lock = asyncio.Lock()
 
     def _emit(self, phase, done=0, total=0):
         if self.on_status:
@@ -294,13 +298,21 @@ class LocalSttProvider(TranscriptionProvider):
         rec.decode_stream(stream)
         return (stream.result.text or "").strip()
 
+    async def _ensure_loaded(self):
+        if self._rec is not None:
+            return self._rec
+        async with self._lock:
+            if self._rec is None:
+                await asyncio.to_thread(self._load)
+        return self._rec
+
     async def transcribe(self, file_path) -> str:
         path = Path(file_path)
         if not path.exists():
             logger.error("Audio file not found: {}", file_path)
             return ""
         try:
-            rec = self._load()
+            rec = await self._ensure_loaded()
         except Exception as e:
             logger.exception("LocalSttProvider load error: {}", e)
             return ""
