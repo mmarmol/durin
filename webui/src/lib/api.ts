@@ -5,6 +5,7 @@ import type {
   McpOauthLoginResult,
   McpRegistryHit,
   McpRegistryServerDetail,
+  McpRuntimeStatus,
   McpServerConfig,
   McpUpdateInfo,
   McpServerDetail,
@@ -1557,12 +1558,13 @@ export async function searchMcpRegistry(
   q: string,
   limit = 10,
   base: string = "",
-): Promise<McpRegistryHit[]> {
-  const res = await request<{ hits: McpRegistryHit[] }>(
-    `${base}/api/v1/mcp/registry/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+): Promise<{ hits: McpRegistryHit[]; more: McpRegistryHit[] }> {
+  const params = new URLSearchParams({ q, limit: String(limit) });
+  const res = await request<{ hits: McpRegistryHit[]; more?: McpRegistryHit[] }>(
+    `${base}/api/v1/mcp/registry/search?${params}`,
     token,
   );
-  return res.hits;
+  return { hits: res.hits, more: res.more ?? [] };
 }
 
 export async function describeMcpRegistryServer(
@@ -1588,6 +1590,19 @@ export async function installMcpFromRegistry(
     prefer,
     env_values: envValues,
   });
+}
+
+export async function mcpRegistryRuntime(
+  token: string,
+  ref: string,
+  prefer: "remote" | "local",
+  base: string = "",
+): Promise<McpRuntimeStatus> {
+  const params = new URLSearchParams({ ref, prefer });
+  return request<McpRuntimeStatus>(
+    `${base}/api/v1/mcp/registry/runtime?${params}`,
+    token,
+  );
 }
 
 export async function listMcpUpdates(

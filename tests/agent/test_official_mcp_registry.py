@@ -52,3 +52,17 @@ async def test_fetch_page_returns_servers_and_cursor():
     servers, cursor = await reg.fetch_page()
     assert servers[0]["name"] == "io.x/a"
     assert cursor == "c2"
+
+
+@pytest.mark.asyncio
+async def test_search_requests_latest_only():
+    http = _FakeHTTP(_PAGE)
+    await OfficialMcpRegistry(http=http).search("github", limit=5)
+    assert "version=latest" in http.calls[0]
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_requests_latest_only():
+    http = _FakeHTTP({"servers": [], "metadata": {}})
+    await OfficialMcpRegistry(http=http).fetch_page()
+    assert "version=latest" in http.calls[0]

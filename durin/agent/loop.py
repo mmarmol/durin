@@ -439,8 +439,10 @@ class AgentLoop:
         self._memory_file_watcher: Any | None = None
         self._memory_health_scheduler: Any | None = None
         self._catalog_refresh_scheduler: Any | None = None
+        self._mcp_catalog_refresh_scheduler: Any | None = None
         self._start_memory_background_services()
         self._start_catalog_refresh()
+        self._start_mcp_catalog_refresh()
 
     # ------------------------------------------------------------------
     # A11 — memory background services lifecycle
@@ -589,6 +591,40 @@ class AgentLoop:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("catalog refresh stop raised: {}", exc)
             self._catalog_refresh_scheduler = None
+
+    def _start_mcp_catalog_refresh(self) -> None:
+        """Start the weekly MCP catalog refresh if enabled. Any failure here never
+        affects the loop. The scheduler waits one interval before its first fetch,
+        so loop (and test) startup stays network-free."""
+        cfg = getattr(self.app_config, "mcp_catalog_refresh", None)
+        if cfg is None or not getattr(cfg, "enabled", False):
+            return
+        try:
+            from durin.agent.mcp_catalog_refresh import McpCatalogRefreshScheduler
+            from durin.config.paths import get_data_dir
+
+            sched = McpCatalogRefreshScheduler(
+                get_data_dir(),
+                url=cfg.url,
+                interval_hours=int(getattr(cfg, "interval_hours", 168)),
+            )
+            sched.start()
+            self._mcp_catalog_refresh_scheduler = sched
+            logger.info(
+                "mcp catalog refresh scheduler started (every {}h)",
+                getattr(cfg, "interval_hours", 168),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("mcp catalog refresh failed to start (continuing): {}", exc)
+
+    def _stop_mcp_catalog_refresh(self) -> None:
+        sched = self._mcp_catalog_refresh_scheduler
+        if sched is not None:
+            try:
+                sched.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("mcp catalog refresh stop raised: {}", exc)
+            self._mcp_catalog_refresh_scheduler = None
 
     @classmethod
     def from_config(
@@ -878,11 +914,12 @@ class AgentLoop:
     async def disconnect_mcp_server(self, name: str) -> None:
         """Disconnect a single MCP server at runtime (idempotent).
 
-        Closes the supervised connection and unregisters its tools. Raises
-        ``KeyError`` if ``name`` is not a configured server.
+        Closes the supervised connection and unregisters its tools. A no-op when there is
+        no live connection — e.g. a server installed straight to ``needs_auth`` that was
+        never connected. (Previously raised ``KeyError`` here, which broke the
+        disconnect-then-connect in ``reconnect`` / the post-OAuth reconnect for such a
+        server: the disconnect threw, the connect never ran, and it stuck on "connecting".)
         """
-        if name not in self._mcp_servers:
-            raise KeyError(name)
         self._mcp_connect_errors.pop(name, None)  # intentional: not a failure
         conn = self._mcp_connections.pop(name, None)
         if conn is None:
@@ -1695,6 +1732,7 @@ class AgentLoop:
         # Observer and health-check thread terminate cleanly.
         self._stop_memory_background_services()
         self._stop_catalog_refresh()
+        self._stop_mcp_catalog_refresh()
         logger.info("Agent loop stopping")
 
     async def _process_system_message(

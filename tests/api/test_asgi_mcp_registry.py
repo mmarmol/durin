@@ -50,9 +50,17 @@ def client(tmp_path, monkeypatch):
     cfg_path = tmp_path / "config.json"
     save_config(Config(), cfg_path)
     monkeypatch.setattr("durin.config.loader._current_config_path", cfg_path)
+    # describe/install go through the registry adapter...
     monkeypatch.setattr(
         "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]
     )
+    # ...search reads the durin-owned catalog store.
+    from durin.agent import mcp_catalog_store
+
+    monkeypatch.setattr(mcp_catalog_store, "load_servers", lambda: [
+        {"name": "io.x/jira", "ref": "io.x/jira",
+         "description": "Jira", "stars": 5000},
+    ])
 
     auth = AuthService(store=ApiTokenStore(path=tmp_path / "tokens.json"))
     registry = ServiceRegistry()

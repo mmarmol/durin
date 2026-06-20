@@ -38,3 +38,19 @@ def test_mcp_discovery_parses_from_dict():
     assert d.search_limit == 25
     assert d.install_policy == "auto"
     assert [r.enabled for r in d.registries] == [True, False]
+
+
+def test_quality_filter_defaults():
+    from durin.config.schema import McpDiscoveryConfig
+
+    c = McpDiscoveryConfig()
+    assert c.quality == "official"
+    assert c.min_stars == 100
+
+
+def test_quality_accepts_all():
+    from durin.config.schema import McpDiscoveryConfig
+
+    c = McpDiscoveryConfig(quality="all", min_stars=50)
+    assert c.quality == "all"
+    assert c.min_stars == 50

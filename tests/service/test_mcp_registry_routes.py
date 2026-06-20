@@ -55,14 +55,40 @@ class _FakeReg:
 
 @pytest.mark.asyncio
 async def test_registry_search_route(config_path, monkeypatch):
-    monkeypatch.setattr(
-        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]
-    )
+    from durin.agent import mcp_catalog_store
+
+    monkeypatch.setattr(mcp_catalog_store, "load_servers", lambda: [
+        {"name": "io.x/jira", "ref": "io.x/jira",
+         "description": "Jira issues", "stars": 5000},
+    ])
     res = await McpService().registry_search(
         McpRegistrySearchQuery(q="jira", limit=5), LOCAL
     )
     assert res.hits[0].ref == "io.x/jira"
     assert res.hits[0].registry == "official"
+
+
+@pytest.mark.asyncio
+async def test_registry_search_tiers_hits_and_more(config_path, monkeypatch):
+    """Curated/popular land in ``hits``; below-the-floor matches land in ``more`` (the
+    progressive "less popular" reveal) — one call, no 'show all' mode."""
+    from durin.agent import mcp_catalog_store
+
+    monkeypatch.setattr(mcp_catalog_store, "load_servers", lambda: [
+        {"name": "io.x/jira", "ref": "io.x/jira",
+         "description": "Jira issues", "stars": 5000},  # popular → hits
+        {"name": "community/jira-alt", "ref": "community/jira-alt",
+         "description": "Jira alt community", "stars": 5},  # below floor → more
+    ])
+
+    res = await McpService().registry_search(
+        McpRegistrySearchQuery(q="jira", limit=10), LOCAL
+    )
+    hits_refs = {h.ref for h in res.hits}
+    more_refs = {h.ref for h in res.more}
+    assert "io.x/jira" in hits_refs
+    assert "community/jira-alt" not in hits_refs
+    assert "community/jira-alt" in more_refs
 
 
 @pytest.mark.asyncio
@@ -115,6 +141,113 @@ async def test_registry_install_local_stores_secret(config_path, monkeypatch):
     assert res.config.env["JIRA_TOKEN"].startswith("${secret:")
 
 
+class _FakeOciReg:
+    """github-shaped OCI server: secret declared in a `-e NAME={token}` runtime arg."""
+
+    name = "official"
+
+    async def describe(self, ref):
+        from durin.agent.mcp_registry import parse_server_json
+
+        return parse_server_json({
+            "name": ref, "version": "1.4.0",
+            "packages": [{
+                "registryType": "oci",
+                "identifier": "ghcr.io/github/github-mcp-server:1.4.0",
+                "transport": {"type": "stdio"},
+                "runtimeArguments": [{
+                    "type": "named", "name": "-e",
+                    "value": "GITHUB_PERSONAL_ACCESS_TOKEN={token}",
+                    "isRequired": True,
+                    "variables": {"token": {"isRequired": True, "isSecret": True}},
+                }],
+            }],
+            "remotes": [{"type": "streamable-http", "url": "https://api.githubcopilot.com/mcp/"}],
+        })
+
+
+@pytest.mark.asyncio
+async def test_registry_install_oci_docker_no_422(config_path, monkeypatch):
+    """Regression: installing github's local (OCI) package used to 422 (empty command).
+    Now it builds a valid `docker run … -e NAME` config with the secret stored as a ref."""
+    import durin.security.secrets as s
+
+    monkeypatch.setattr(s, "_STORE", None)
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeOciReg()]
+    )
+    from durin.service.mcp import McpRegistryInstallCommand
+
+    res = await McpService().registry_install(
+        McpRegistryInstallCommand(
+            ref="io.github.github/github-mcp-server", prefer="local",
+            env_values={"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_secret_123"},
+        ),
+        LOCAL,
+    )
+    assert res.config.type == "stdio"
+    assert res.config.command == "docker"
+    assert res.config.env["GITHUB_PERSONAL_ACCESS_TOKEN"].startswith("${secret:")
+    assert "ghcr.io/github/github-mcp-server:1.4.0" in res.config.args
+    assert "-e" in res.config.args  # token forwarded into the container
+
+
+@pytest.mark.asyncio
+async def test_registry_runtime_docker_missing(config_path, monkeypatch):
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeOciReg()]
+    )
+    import durin.agent.mcp_install as mi
+
+    monkeypatch.setattr(mi.shutil, "which", lambda _b: None)  # docker absent
+    from durin.service.mcp import McpRuntimeStatusQuery
+
+    res = await McpService().registry_runtime(
+        McpRuntimeStatusQuery(ref="io.github.github/github-mcp-server", prefer="local"),
+        LOCAL,
+    )
+    assert res.kind == "local"
+    assert res.runtime == "docker"
+    assert res.present is False
+    assert res.auto_installable is False  # heavy runtime — user installs Docker themselves
+    assert res.install_command == ""
+
+
+@pytest.mark.asyncio
+async def test_registry_runtime_remote_needs_nothing(config_path, monkeypatch):
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeOciReg()]
+    )
+    from durin.service.mcp import McpRuntimeStatusQuery
+
+    res = await McpService().registry_runtime(
+        McpRuntimeStatusQuery(ref="io.github.github/github-mcp-server", prefer="remote"),
+        LOCAL,
+    )
+    assert res.kind == "remote"
+    assert res.present is True
+    assert res.runtime == ""
+
+
+@pytest.mark.asyncio
+async def test_registry_runtime_npx_auto_installable(config_path, monkeypatch):
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]
+    )
+    import durin.agent.mcp_install as mi
+
+    monkeypatch.setattr(mi.shutil, "which", lambda _b: None)  # npx absent
+    from durin.service.mcp import McpRuntimeStatusQuery
+
+    res = await McpService().registry_runtime(
+        McpRuntimeStatusQuery(ref="io.x/jira", prefer="local"), LOCAL
+    )
+    assert res.runtime == "npx"
+    assert res.present is False
+    assert res.auto_installable is True
+    assert "install" in res.install_command  # a copy-paste hint (brew/apt)
+
+
 def _seed_jira(version: str) -> None:
     from durin.config.loader import get_config_path, load_config, save_config
     from durin.config.schema import MCPServerConfig
@@ -154,3 +287,108 @@ async def test_registry_update_repins(config_path, monkeypatch):
     updated = load_config().tools.mcp_servers["jira"]
     assert updated.version == "1.0.0"
     assert "@x/jira@1.0.0" in updated.args
+
+
+class _FakeOauthRemoteReg:
+    """A hosted, OAuth-protected remote: remotes only, NO static headers (like atlassian)."""
+
+    name = "official"
+
+    async def describe(self, ref):
+        from durin.agent.mcp_registry import parse_server_json
+
+        return parse_server_json({
+            "name": ref, "version": "1.1.1",
+            "remotes": [{"type": "streamable-http", "url": "https://mcp.atlassian.com/v1/mcp"}],
+        })
+
+
+@pytest.mark.asyncio
+async def test_registry_install_autodetects_oauth_remote(config_path, monkeypatch):
+    """A header-less remote whose endpoint demands Bearer auth → install enables oauth →
+    the server lands as needs_auth (sign-in), not a hang."""
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeOauthRemoteReg()]
+    )
+    import durin.agent.mcp_install as mi
+
+    async def _needs_oauth(_url, *, request=None):
+        return True  # the probe says: 401-Bearer
+
+    monkeypatch.setattr(mi, "remote_needs_oauth", _needs_oauth)
+    from durin.service.mcp import McpRegistryInstallCommand
+
+    res = await McpService().registry_install(
+        McpRegistryInstallCommand(ref="com.atlassian/atlassian-mcp-server", prefer="remote"),
+        LOCAL,
+    )
+    assert res.config.type == "streamableHttp"
+    assert res.config.oauth is True          # oauth auto-enabled
+    assert res.status == "needs_auth"        # → UI shows "sign in", no hang
+
+
+@pytest.mark.asyncio
+async def test_registry_install_remote_no_oauth_when_endpoint_public(config_path, monkeypatch):
+    """A header-less remote that does NOT 401 (public) is left untouched — no forced oauth."""
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeOauthRemoteReg()]
+    )
+    import durin.agent.mcp_install as mi
+
+    async def _no_oauth(_url, *, request=None):
+        return False
+
+    monkeypatch.setattr(mi, "remote_needs_oauth", _no_oauth)
+    from durin.service.mcp import McpRegistryInstallCommand
+
+    res = await McpService().registry_install(
+        McpRegistryInstallCommand(ref="com.public/remote", prefer="remote"), LOCAL
+    )
+    assert not res.config.oauth
+
+
+@pytest.mark.asyncio
+async def test_registry_install_does_not_block_on_connect(config_path, monkeypatch):
+    """The install must return immediately and settle the connection in the BACKGROUND — a
+    connect that hangs (or swallows cancellation) must never freeze the install request."""
+    import asyncio
+
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeOauthRemoteReg()]
+    )
+    import durin.agent.mcp_install as mi
+
+    async def _no_oauth(_url, *, request=None):
+        return False  # plain remote → background connect (not needs_auth)
+
+    monkeypatch.setattr(mi, "remote_needs_oauth", _no_oauth)
+
+    connected = asyncio.Event()
+
+    class _HangRuntime:
+        def live_status(self):
+            return {}
+
+        def connect_errors(self):
+            return {}
+
+        async def connect(self, name, cfg):
+            connected.set()
+            await asyncio.Event().wait()  # never returns
+
+        async def disconnect(self, name):
+            pass
+
+    from durin.service.mcp import McpRegistryInstallCommand
+
+    svc = McpService(mcp_runtime=_HangRuntime())
+    # Must complete well under the timeout despite the connect hanging forever.
+    res = await asyncio.wait_for(
+        svc.registry_install(
+            McpRegistryInstallCommand(ref="com.public/remote", prefer="remote"), LOCAL
+        ),
+        timeout=5,
+    )
+    assert res.name == "remote"          # returned without blocking on the hung connect
+    await asyncio.sleep(0.05)
+    assert connected.is_set()            # the connect WAS scheduled (in the background)
