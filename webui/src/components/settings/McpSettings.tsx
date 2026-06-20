@@ -475,7 +475,10 @@ export function McpSettings({ token }: { token: string }) {
         </div>
       ) : null}
 
-      <section>
+      {/* While editing a server, focus on the form alone — hiding the list avoids the
+          disorienting "list on top, edit form buried way below" split. */}
+      {editingName ? null : (
+        <section>
         <div className="mb-2 flex items-center justify-between px-1">
           <SettingsSectionTitle>
             {t("settings.mcp.servers")}
@@ -635,7 +638,8 @@ export function McpSettings({ token }: { token: string }) {
             })
           )}
         </SettingsGroup>
-      </section>
+        </section>
+      )}
 
       {adding || editingName ? (
         <section ref={formAnchorRef}>

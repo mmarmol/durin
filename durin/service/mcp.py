@@ -457,9 +457,23 @@ class McpService:
         sc = build_server_config_from_detail(
             detail, prefer=cmd.prefer, secret_env_refs=secret_refs
         )
-        return await self.add(
-            McpServerUpsertCommand(name=server_name, config=sc), principal
-        )
+        # C2: a remote with no static auth header may be OAuth-protected — probe it and
+        # enable oauth so durin's sign-in flow takes over (→ needs_auth, not a hang).
+        from durin.agent.mcp_install import autodetect_oauth
+
+        has_headers = bool(detail.remotes and detail.remotes[0].headers)
+        await autodetect_oauth(sc, has_declared_headers=has_headers)
+
+        # B: never let a stalled connect hang the install POST. add() persists the config
+        # BEFORE connecting, so on timeout we return the saved server (it settles / can be
+        # reconnected) instead of blocking the UI on "Adding…".
+        import asyncio
+
+        upsert = McpServerUpsertCommand(name=server_name, config=sc)
+        try:
+            return await asyncio.wait_for(self.add(upsert, principal), timeout=20)
+        except asyncio.TimeoutError:
+            return await self.get(McpServerGetQuery(name=server_name), principal)
 
     @route(
         "GET",
