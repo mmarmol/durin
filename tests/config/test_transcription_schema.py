@@ -11,7 +11,7 @@ def test_transcription_defaults():
     assert cfg.mode == "auto"
     assert cfg.provider == "local"
     assert cfg.language is None
-    assert cfg.local.model == "large-v3"
+    assert cfg.local.model == "base"
     assert cfg.local.device == "auto"
     assert cfg.local.compute_type == "auto"
     assert cfg.max_duration_s == 600

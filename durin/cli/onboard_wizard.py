@@ -286,8 +286,9 @@ def _reconcile_extras_from_config(config: Config, extras: set[str]) -> None:
         extras.add("oauth")
     # Transcription: local provider needs [stt]; [voice] is opt-in via the
     # wizard submenu (record via mic), so it's only added on explicit request.
-    if getattr(config.transcription, "enabled", True) and \
-            getattr(config.transcription, "provider", "local") == "local":
+    transcription = getattr(config, "transcription", None)
+    if transcription is not None and getattr(transcription, "enabled", True) and \
+            getattr(transcription, "provider", "local") == "local":
         extras.add("stt")
 
 

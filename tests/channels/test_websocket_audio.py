@@ -89,7 +89,10 @@ async def test_audio_transcribe_envelope_returns_transcript(tmp_path):
     await ch._dispatch_envelope(conn, "client1", envelope)
 
     events = [json.loads(raw) for raw in conn.sent]
-    transcripts = [e for e in events if e.get("event") == "audio_transcript"]
+    transcripts = [
+        e for e in events
+        if e.get("event") == "audio_transcript" and not e.get("status")
+    ]
     assert len(transcripts) == 1
     assert transcripts[0]["transcript"] == "hello from audio"
     assert transcripts[0]["name"] == "a.wav"
@@ -121,7 +124,10 @@ async def test_audio_transcribe_envelope_no_service_replies_disabled(tmp_path):
     await ch._dispatch_envelope(conn, "client1", envelope)
 
     events = [json.loads(raw) for raw in conn.sent]
-    transcripts = [e for e in events if e.get("event") == "audio_transcript"]
+    transcripts = [
+        e for e in events
+        if e.get("event") == "audio_transcript" and not e.get("status")
+    ]
     assert len(transcripts) == 1
     assert transcripts[0]["error"] == "disabled"
     assert transcripts[0]["transcript"] == ""
