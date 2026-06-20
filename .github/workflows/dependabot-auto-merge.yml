@@ -1,0 +1,47 @@
+name: dependabot-auto-merge
+
+# Auto-merge Dependabot patch/minor bumps once their required checks pass, so
+# routine low-risk updates don't need manual handling. Major bumps are always
+# left for human review (CI still runs on them). Pairs with the dependabot
+# `groups:` config: a grouped PR auto-merges only if *every* member is patch/minor.
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Dependabot embeds an `updated-dependencies:` block in its commit message,
+      # one `update-type: version-update:semver-<level>` line per dependency.
+      # Read it directly (no third-party action — the actions allowlist only
+      # permits actions/*). Enable auto-merge only when every entry is patch or
+      # minor; a single major, or missing metadata, falls through to manual review.
+      - name: Enable auto-merge for patch/minor bumps
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          types=$(git log -1 --format=%B "$HEAD_SHA" \
+                  | grep -oE 'update-type: version-update:semver-[a-z]+' \
+                  | sed 's/.*semver-//' | sort -u)
+          echo "Update types in this PR: ${types:-<none found>}"
+          if [ -z "$types" ]; then
+            echo "No update-type metadata — leaving for manual review."
+            exit 0
+          fi
+          if echo "$types" | grep -qx 'major'; then
+            echo "Contains a major bump — leaving for manual review."
+            exit 0
+          fi
+          echo "All patch/minor — enabling auto-merge (squash)."
+          gh pr merge --auto --squash "$PR_URL"
