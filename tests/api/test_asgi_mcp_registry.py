@@ -59,7 +59,7 @@ def client(tmp_path, monkeypatch):
 
     monkeypatch.setattr(mcp_catalog_store, "load_servers", lambda: [
         {"name": "io.x/jira", "ref": "io.x/jira",
-         "description": "Jira", "official": True},
+         "description": "Jira", "stars": 5000},
     ])
 
     auth = AuthService(store=ApiTokenStore(path=tmp_path / "tokens.json"))

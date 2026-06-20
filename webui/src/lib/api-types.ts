@@ -1872,11 +1872,6 @@ export interface components {
         /** McpRegistrySearchQuery */
         McpRegistrySearchQuery: {
             /**
-             * Include All
-             * @default false
-             */
-            include_all: boolean;
-            /**
              * Limit
              * @default 10
              */
@@ -1891,6 +1886,11 @@ export interface components {
         McpRegistrySearchResult: {
             /** Hits */
             hits: components["schemas"]["McpRegistryHit"][];
+            /**
+             * More
+             * @default []
+             */
+            more: components["schemas"]["McpRegistryHit"][];
         };
         /** McpRegistryServerDetail */
         McpRegistryServerDetail: {

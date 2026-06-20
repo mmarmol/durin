@@ -914,11 +914,12 @@ class AgentLoop:
     async def disconnect_mcp_server(self, name: str) -> None:
         """Disconnect a single MCP server at runtime (idempotent).
 
-        Closes the supervised connection and unregisters its tools. Raises
-        ``KeyError`` if ``name`` is not a configured server.
+        Closes the supervised connection and unregisters its tools. A no-op when there is
+        no live connection — e.g. a server installed straight to ``needs_auth`` that was
+        never connected. (Previously raised ``KeyError`` here, which broke the
+        disconnect-then-connect in ``reconnect`` / the post-OAuth reconnect for such a
+        server: the disconnect threw, the connect never ran, and it stuck on "connecting".)
         """
-        if name not in self._mcp_servers:
-            raise KeyError(name)
         self._mcp_connect_errors.pop(name, None)  # intentional: not a failure
         conn = self._mcp_connections.pop(name, None)
         if conn is None:

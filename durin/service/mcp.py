@@ -103,7 +103,6 @@ class McpOauthLoginResult(Result):
 class McpRegistrySearchQuery(Query):
     q: str = ""
     limit: int = 10
-    include_all: bool = False
 
 
 class McpRegistryDescribeQuery(Query):
@@ -155,7 +154,8 @@ class McpRegistryHit(Result):
 
 
 class McpRegistrySearchResult(Result):
-    hits: list[McpRegistryHit]
+    hits: list[McpRegistryHit]  # curated (verified) + popular (over the star floor)
+    more: list[McpRegistryHit] = []  # below the floor — the "+N less popular" reveal
 
 
 class McpRegistryEnvVar(Result):
@@ -290,6 +290,27 @@ def _validate_upsert(name: str, sc: MCPServerConfig) -> None:
         )
 
 
+# Keep references to fire-and-forget connect tasks so they aren't garbage-collected
+# mid-run; each removes itself on completion.
+_BG_CONNECT_TASKS: set = set()
+
+
+def _schedule_background_connect(runtime: Any, name: str, config: MCPServerConfig) -> None:
+    """Connect a just-installed server WITHOUT blocking the caller. Failures are swallowed —
+    the gateway's live status surfaces the real connection state to the UI."""
+    import asyncio
+
+    async def _run() -> None:
+        try:
+            await runtime.connect(name, config)
+        except Exception:  # noqa: BLE001 — background; live status reflects the outcome
+            pass
+
+    task = asyncio.create_task(_run())
+    _BG_CONNECT_TASKS.add(task)
+    task.add_done_callback(_BG_CONNECT_TASKS.discard)
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -388,18 +409,19 @@ class McpService:
         self, query: McpRegistrySearchQuery, principal: Principal
     ) -> McpRegistrySearchResult:
         principal.require(Scope.MCP_READ)
-        from durin.agent.mcp_registry import search_mcp_registries
+        from durin.agent.mcp_registry import search_mcp_registries_tiered
         from durin.config.loader import load_config
 
         disc = load_config().tools.mcp_discovery
-        quality = "all" if query.include_all else disc.quality
-        hits = await search_mcp_registries(
+        hits, more = await search_mcp_registries_tiered(
             query.q,
             limit=query.limit or disc.search_limit,
-            quality=quality,
             min_stars=disc.min_stars,
         )
-        return McpRegistrySearchResult(hits=[_reg_hit(h) for h in hits])
+        return McpRegistrySearchResult(
+            hits=[_reg_hit(h) for h in hits],
+            more=[_reg_hit(h) for h in more],
+        )
 
     @route(
         "GET",
@@ -456,9 +478,24 @@ class McpService:
         sc = build_server_config_from_detail(
             detail, prefer=cmd.prefer, secret_env_refs=secret_refs
         )
-        return await self.add(
-            McpServerUpsertCommand(name=server_name, config=sc), principal
-        )
+        # C2: a remote with no static auth header may be OAuth-protected — probe it and
+        # enable oauth so durin's sign-in flow takes over (→ needs_auth, not a hang).
+        from durin.agent.mcp_install import autodetect_oauth
+
+        has_headers = bool(detail.remotes and detail.remotes[0].headers)
+        await autodetect_oauth(sc, has_declared_headers=has_headers)
+
+        # B: never block the install POST on the connect. Persist + return immediately;
+        # settle the connection in the BACKGROUND. A synchronous connect could hang the UI
+        # indefinitely — an OAuth remote's discovery/DCR can stall, and a hung connect may
+        # even swallow cancellation, so a wait_for timeout isn't a reliable guard.
+        upsert = McpServerUpsertCommand(name=server_name, config=sc)
+        result = await self.add(upsert, principal, connect=False)
+        # OAuth servers are needs_auth until the user signs in (no connect needed); anything
+        # else connects in the background — the webui's live status reflects the outcome.
+        if sc.enabled and sc.oauth_config() is None and self._runtime is not None:
+            _schedule_background_connect(self._runtime, server_name, sc)
+        return result
 
     @route(
         "GET",
@@ -642,7 +679,7 @@ class McpService:
         summary="Add an MCP server",
     )
     async def add(
-        self, cmd: McpServerUpsertCommand, principal: Principal
+        self, cmd: McpServerUpsertCommand, principal: Principal, *, connect: bool = True
     ) -> McpServerDetail:
         principal.require(Scope.MCP_WRITE)
         _validate_upsert(cmd.name, cmd.config)
@@ -653,7 +690,10 @@ class McpService:
             raise ConflictError("MCP server already exists", details={"name": cmd.name})
         cfg.tools.mcp_servers[cmd.name] = cmd.config
         save_config(cfg, get_config_path())
-        if cmd.config.enabled and self._runtime is not None:
+        # ``connect=False`` lets a caller persist now and settle the connection itself
+        # (e.g. registry_install backgrounds it so a slow/auth-walled connect can't hang
+        # the request). Status is derived from config either way (oauth → needs_auth).
+        if connect and cmd.config.enabled and self._runtime is not None:
             await self._runtime.connect(cmd.name, cmd.config)
         return await self._build_detail(cmd.name, cmd.config)
 
