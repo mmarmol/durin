@@ -86,14 +86,14 @@ re-acquires (lock count increments).  `_append_action` and `_merge_action`
 already use `with self._lock:`; a mutator that calls them while holding the
 lock does not deadlock.
 
-**Cross-instance caveat:** two *different* `FileLock` objects at the same
-path in the same thread will deadlock (filelock raises `RuntimeError`).
-`_on_timer` avoids this by releasing the lock before calling `_execute_job`:
-an `on_job` callback that creates a second `CronService` and calls a mutator
-on it would otherwise deadlock.  The execution window (after load, before
-save) is therefore not fully serialised at the file level, but the
-before-execution load and the after-execution save each acquire the lock
-independently, so the net `jobs.json` state remains consistent.
+**Cross-instance caveat:** a second `FileLock` *instance* on the same path
+acquired on the same thread does NOT reentrantly succeed — a blocking acquire
+deadlocks (hangs); this is why `_on_timer` releases `self._lock` before
+executing jobs (a job callback may build a second `CronService` instance).
+The execution window (after load, before save) is therefore not fully
+serialised at the file level, but the before-execution load and the
+after-execution save each acquire the lock independently, so the net
+`jobs.json` state remains consistent.
 
 **Read-only path:** `list_jobs`, `get_job`, and `status` call `_load_store`
 without the lock.  They are last-reader-wins, which is acceptable for
@@ -149,12 +149,19 @@ background/direct-saver serialization phase:
    Closing these requires background/direct-saver serialization work not
    yet scheduled.
 
-3. **`SecretStore.set_scope()` is an unlocked in-memory mutator.**
+3. **CronService execution-window external writes.** `CronService` `_on_timer`
+   releases `self._lock` before executing jobs, then saves run-state afterward
+   WITHOUT reloading — an external write to `jobs.json` during the execution
+   window is overwritten by the post-execution save (a bounded, pre-existing
+   last-writer-wins residual; close by reload-merging run-state under the
+   final lock).
+
+4. **`SecretStore.set_scope()` is an unlocked in-memory mutator.**
    (`durin/security/secrets.py`) It does not write to disk itself; a caller
    doing `load → set_scope → save()` is an unlocked read-modify-write.
    Migrate to a locked path opportunistically.
 
-4. **`oauth/<provider>.json` token writes are not durin-locked.**
+5. **`oauth/<provider>.json` token writes are not durin-locked.**
    These files are owned by the external `oauth-cli-kit` library
    (`FileTokenStorage`) and are intentionally outside durin's locking
    domain — out of durin's control.
