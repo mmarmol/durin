@@ -32,6 +32,31 @@ from durin.memory.git_plumbing import (
 )
 from durin.memory.provenance import current_author
 
+# Imported lazily inside _refresh_alias_index to avoid a circular import:
+# aliases_cache → AliasIndex → entity_page → (no memory_writer dep), so the
+# direct import is safe; the lazy form is used for symmetry with other
+# best-effort helpers in this module.
+
+
+def _refresh_alias_index(memory_root: Path, page: EntityPage, slug: str) -> None:
+    """Incrementally refresh the shared AliasIndex after a successful write.
+
+    Guards: only refreshes if the index has already been built this process
+    (don't force-build on every write — the search pipeline builds lazily on
+    first use). Best-effort: a refresh failure must never fail the write.
+
+    See docs/architecture/concurrency.md §AliasIndex staleness (hazard #17).
+    """
+    try:
+        from durin.memory.aliases_cache import _cache, get_shared_alias_index
+
+        # Guard: skip if the shared index has not been built yet in this process.
+        if _cache.get(memory_root) is None:
+            return
+        get_shared_alias_index(memory_root).refresh_for(page, slug)
+    except Exception:  # noqa: BLE001 — best-effort; never block the write
+        pass
+
 __all__ = ["WriteResult", "write_entity", "write_files_cas"]
 
 _MAX_RETRIES = 30
@@ -292,6 +317,7 @@ def write_entity(
         if ok:
             _fast_forward_working_tree(root)
             _emit_relation_cap(ref, rel_before, rel_after)
+            _refresh_alias_index(root, page, slug)
             return WriteResult(ref, committed=True, retries=attempt)
         # CAS failed (mismatch or lock): HEAD may have moved → backoff + retry.
         time.sleep(random.uniform(0.0, 0.005) * (attempt + 1))

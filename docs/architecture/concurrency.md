@@ -165,3 +165,28 @@ background/direct-saver serialization phase:
    These files are owned by the external `oauth-cli-kit` library
    (`FileTokenStorage`) and are intentionally outside durin's locking
    domain — out of durin's control.
+
+## AliasIndex in-process staleness (hazard #17)
+
+`AliasIndex` is built lazily once per process via
+`aliases_cache.get_shared_alias_index(memory_root)` and then mutated
+incrementally.  All three runtime consumers (memory search, refine pass,
+entity absorption) share the same in-memory instance.
+
+**Hazard:** `write_entity` commits a new or updated entity page to git
+but previously did NOT call `AliasIndex.refresh_for` on the shared
+instance — a freshly written entity was invisible to entity-aware ranking
+until the process restarted.
+
+**Fix (in-process):** `memory_writer._refresh_alias_index` is called
+after every successful `write_entity` CAS commit.  It calls
+`AliasIndex.refresh_for(page, slug)` (incremental — not a full rebuild)
+on the already-cached index.  The guard `_cache.get(memory_root) is None`
+skips the call when the index has not been built yet in this process, so
+entity writes before the first search query impose no build cost.
+
+**Cross-process divergence** (a second process' AliasIndex missing the
+write) is a known accepted residual: cross-process consumers rebuild the
+index on process start from the git-committed pages, so the divergence
+self-heals on restart.  No cross-process lock or invalidation is needed
+for this path.
