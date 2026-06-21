@@ -36,6 +36,7 @@ When ``save_config`` runs, only **non-default** fields are persisted
 import json
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,7 @@ from pydantic import BaseModel
 
 from durin.config.schema import Config
 from durin.utils.atomic_write import atomic_write_text
+from durin.utils.file_lock import cross_process_lock
 
 # Global variable to store current config path (for multi-instance support)
 _current_config_path: Path | None = None
@@ -258,28 +260,73 @@ def _apply_ssrf_whitelist(config: Config) -> None:
 
 
 def save_config(config: Config, config_path: Path | None = None) -> None:
-    """
-    Save configuration to file.
+    """Save configuration to file.
 
     Persists only **non-default** fields (``exclude_defaults=True``)
     so the on-disk files stay short and readable. Layout is
     auto-detected:
 
-    - If ``<root>/config/`` exists → write the split layout (per-topic
+    - If ``<root>/config.json.d/`` exists → write the split layout (per-topic
       files under that directory + a marker in ``config.json``).
     - Else → write the monolith and migrate to split on the next load.
+
+    The entire write — including the multi-file split-layout set and the
+    stale-file unlink — is wrapped in ``cross_process_lock(path)`` so
+    concurrent writers are serialized and a concurrent reader under the
+    same lock never sees a torn cross-section state.
+
+    .. note::
+        A direct ``load_config() → edit → save_config()`` sequence that is
+        **not** routed through :func:`mutate_config` remains
+        last-writer-wins across processes.  This is an accepted residual
+        (matches hermes).  See ``docs/architecture/concurrency.md``.
     """
     path = config_path or get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    data = config.model_dump(mode="json", by_alias=True, exclude_defaults=True)
-    data = _prune_noise_sections(data)
+    with cross_process_lock(path):
+        data = config.model_dump(mode="json", by_alias=True, exclude_defaults=True)
+        data = _prune_noise_sections(data)
 
-    if _is_split_layout(path):
-        _write_split_layout(data, path)
-        return
+        if _is_split_layout(path):
+            _write_split_layout(data, path)
+            return
 
-    atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False))
+        atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def mutate_config(
+    mutator: Callable[[Config], None],
+    config_path: Path | None = None,
+) -> Config:
+    """Atomic read-modify-write for config, safe across processes.
+
+    Acquires ``cross_process_lock(config_path)``, reloads the config from
+    disk under the lock, applies *mutator* in place, saves, and returns the
+    updated :class:`~durin.config.schema.Config`.
+
+    Because ``cross_process_lock`` is reentrant (thread-local guard), the
+    inner ``save_config`` call re-taking the lock is safe.
+
+    Use this entry point for any write that must not lose a concurrent
+    process's edit to a disjoint section.  A direct
+    ``load_config() → edit → save_config()`` outside this helper remains
+    last-writer-wins — an accepted residual.  See
+    ``docs/architecture/concurrency.md``.
+
+    Example::
+
+        def _set_key(cfg: Config) -> None:
+            cfg.providers.zhipu.api_key = "sk-new"
+
+        updated = mutate_config(_set_key)
+    """
+    path = config_path or get_config_path()
+    with cross_process_lock(path):
+        cfg = load_config(path)
+        mutator(cfg)
+        save_config(cfg, path)
+    return cfg
 
 
 def backup_config(config_path: Path | None = None) -> Path | None:

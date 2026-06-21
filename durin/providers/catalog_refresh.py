@@ -14,6 +14,8 @@ import urllib.request
 from pathlib import Path
 
 from durin.providers.models_dev import MODELS_DEV_URL, build_provider_models
+from durin.utils.atomic_write import atomic_write_text
+from durin.utils.file_lock import cross_process_lock
 
 
 def refresh_provider_models_cache(data_dir: Path) -> bool:
@@ -30,11 +32,13 @@ def refresh_provider_models_cache(data_dir: Path) -> bool:
     index = build_provider_models(data, set(ProvidersConfig.model_fields))
     if not index:
         return False
+    cache_path = data_dir / "provider_models_cache.json"
     data_dir.mkdir(parents=True, exist_ok=True)
-    (data_dir / "provider_models_cache.json").write_text(
-        json.dumps({"schema_version": 1, "providers": index}, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    with cross_process_lock(cache_path):
+        atomic_write_text(
+            cache_path,
+            json.dumps({"schema_version": 1, "providers": index}, ensure_ascii=False),
+        )
     from durin.providers import provider_catalog
 
     provider_catalog._load_index.cache_clear()
