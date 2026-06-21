@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -220,6 +221,7 @@ async def test_run_returns_started_true_when_ready(workspace: Path) -> None:
     mock_scheduler = MagicMock()
     mock_scheduler.get_job.return_value = MagicMock()
     mock_scheduler.is_executing.return_value = False
+    mock_scheduler.run_job = AsyncMock()
 
     result = await CronService(cron_scheduler=mock_scheduler).run(
         CronRunCommand(id="abc12345"), Principal.local()
@@ -235,3 +237,44 @@ async def test_run_requires_write_scope(workspace: Path) -> None:
         await CronService(cron_scheduler=mock_scheduler).run(
             CronRunCommand(id="abc12345"), principal
         )
+
+
+async def test_run_now_spawns_run_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, bool]] = []
+
+    class FakeScheduler:
+        def get_job(self, jid: str) -> SimpleNamespace:
+            return SimpleNamespace(id=jid)
+
+        def is_executing(self, jid: str) -> bool:
+            return False
+
+        async def run_job(self, jid: str, force: bool = False) -> None:
+            calls.append((jid, force))
+
+    svc = CronService(cron_scheduler=FakeScheduler())
+    res = await svc.run(CronRunCommand(id="abc"), Principal.local())
+    await asyncio.sleep(0.01)
+    assert res.started is True
+    assert calls == [("abc", True)]
+
+
+async def test_run_now_skips_spawn_when_already_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, bool]] = []
+
+    class FakeScheduler:
+        def get_job(self, jid: str) -> SimpleNamespace:
+            return SimpleNamespace(id=jid)
+
+        def is_executing(self, jid: str) -> bool:
+            return True
+
+        async def run_job(self, jid: str, force: bool = False) -> None:
+            calls.append((jid, force))
+
+    svc = CronService(cron_scheduler=FakeScheduler())
+    res = await svc.run(CronRunCommand(id="abc"), Principal.local())
+    await asyncio.sleep(0.01)
+    assert res.started is False
+    assert res.reason == "already_running"
+    assert calls == []

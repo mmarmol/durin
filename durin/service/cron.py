@@ -237,15 +237,18 @@ class CronService:
         summary="Manually trigger a cron job now (non-blocking)",
     )
     async def run(self, cmd: CronRunCommand, principal: Principal) -> CronRunResult:
-        """Validate whether the job can run; background spawn stays in the shim.
+        """Validate the job and spawn it immediately as a background task.
 
         Raises ``UnavailableError`` when the live scheduler is absent,
         ``ValidationFailedError`` when ``id`` is empty,
         ``NotFoundError`` when the job does not exist.
         Returns ``CronRunResult(started=False, reason="already_running")`` when
-        the job is already in flight.  On success, returns
-        ``CronRunResult(started=True)``; the shim does the actual task spawn.
+        the job is already in flight.  On success, spawns
+        ``run_job(force=True)`` as a background task (overlap-guarded by
+        ``_executing``) and returns ``CronRunResult(started=True)``.
         """
+        import asyncio
+
         principal.require(Scope.CRON_WRITE)
         if self._cron_scheduler is None:
             raise UnavailableError("scheduler not available")
@@ -255,6 +258,7 @@ class CronService:
             raise NotFoundError("no such job", details={"id": cmd.id})
         if self._cron_scheduler.is_executing(cmd.id):
             return CronRunResult(started=False, reason="already_running")
+        asyncio.create_task(self._cron_scheduler.run_job(cmd.id, force=True))
         return CronRunResult(started=True)
 
     @route(
