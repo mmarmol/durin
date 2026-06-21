@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Literal
 
+import filelock
 from filelock import FileLock
 from loguru import logger
 
@@ -109,6 +110,11 @@ class CronService:
         self.store_path = store_path
         self._action_path = store_path.parent / "action.jsonl"
         self._lock = FileLock(str(self._action_path.parent) + ".lock")
+        # Separate lock for timer ticks — distinct path and distinct instance
+        # from self._lock.  Acquired NON-BLOCKING in _on_timer; if a second
+        # scheduler is already ticking, the contender skips the tick rather
+        # than queuing.  See docs/architecture/concurrency.md.
+        self._tick_lock = FileLock(str(store_path.parent / ".tick.lock"))
         self.on_job = on_job
         self._store: CronStore | None = None
         self._timer_task: asyncio.Task | None = None
@@ -444,41 +450,76 @@ class CronService:
     async def _on_timer(self) -> None:
         """Handle timer tick - run due jobs.
 
-        The lock covers the load and the final save, but is released during
-        job execution.  Holding it across ``_execute_job`` (which calls
-        ``on_job``) would deadlock if ``on_job`` creates a second
-        ``CronService`` instance and calls a mutator on it — both would try
-        to acquire the same lock file from different ``FileLock`` objects in
-        the same thread (see docs/architecture/concurrency.md).
+        Lock ordering (outermost → innermost, never reversed):
+          1. _tick_lock  — non-blocking; skips the tick if another scheduler
+             process is already ticking (cross-process at-most-once guard).
+          2. self._lock  — serialises the load/save RMW within the tick.
+
+        _tick_lock is held for the FULL tick (load → advance next_run →
+        execute → save) so that a concurrent scheduler can never pick up the
+        same due job during our execution window.
+
+        self._lock is released before _execute_job to avoid a cross-instance
+        FileLock deadlock: if on_job creates a second CronService and calls a
+        mutator, that mutator also tries to acquire self._lock — both objects
+        point to the same path and FileLock is NOT reentrant across instances
+        (see docs/architecture/concurrency.md).
         """
-        with self._lock:
-            self._load_store()
-            # If a hot reload found a corrupt store on disk, ``self._store`` may
-            # still hold the previous, known-good in-memory snapshot.  Keep using
-            # it rather than crashing the timer or wiping live jobs.
-            if not self._store:
-                self._arm_timer()
-                return
-
-            self._timer_active = True
-            now = _now_ms()
-            due_jobs = [
-                j for j in self._store.jobs
-                if j.enabled and j.state.next_run_at_ms and now >= j.state.next_run_at_ms
-            ]
-
-        # Execute jobs outside the lock so on_job callbacks can call other
-        # CronService mutators (e.g. add_job from a second service instance)
-        # without hitting a cross-instance FileLock deadlock.
         try:
-            for job in due_jobs:
-                await self._execute_job(job)
-        finally:
-            self._timer_active = False
+            self._tick_lock.acquire(timeout=0)
+        except filelock.Timeout:
+            logger.debug("cron: tick skipped — another scheduler is ticking")
+            return
 
-        with self._lock:
-            self._save_store()
-        self._arm_timer()
+        try:
+            with self._lock:
+                self._load_store()
+                # If a hot reload found a corrupt store on disk, ``self._store`` may
+                # still hold the previous, known-good in-memory snapshot.  Keep using
+                # it rather than crashing the timer or wiping live jobs.
+                if not self._store:
+                    self._arm_timer()
+                    return
+
+                self._timer_active = True
+                now = _now_ms()
+                due_jobs = [
+                    j for j in self._store.jobs
+                    if j.enabled and j.state.next_run_at_ms and now >= j.state.next_run_at_ms
+                ]
+                # Advance next_run_at_ms for all due jobs NOW, before releasing
+                # the lock and executing.  This is the at-most-once guard: even
+                # if two scheduler processes race through the tick lock check at
+                # the same instant, the first one to reach here under self._lock
+                # will push next_run into the future, so the second process
+                # loads an already-advanced value and finds no due jobs.
+                for job in due_jobs:
+                    if job.schedule.kind == "at":
+                        # One-shot jobs: disable immediately so a concurrent
+                        # scheduler cannot also fire them.
+                        if job.delete_after_run:
+                            self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
+                        else:
+                            job.enabled = False
+                            job.state.next_run_at_ms = None
+                    else:
+                        job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
+                self._save_store()
+
+            # Execute jobs outside the lock so on_job callbacks can call other
+            # CronService mutators (e.g. add_job from a second service instance)
+            # without hitting a cross-instance FileLock deadlock.
+            try:
+                for job in due_jobs:
+                    await self._execute_job(job)
+            finally:
+                self._timer_active = False
+
+            with self._lock:
+                self._save_store()
+            self._arm_timer()
+        finally:
+            self._tick_lock.release()
 
     async def _execute_job(self, job: CronJob) -> None:
         """Execute a single job.
