@@ -323,6 +323,19 @@ class SessionManager:
     # here flow through line 0 unchanged.
     _DERIVED_METADATA_KEYS = frozenset({"_last_summary", "_last_tags", "skill_calls"})
 
+    # Keys in ``Session.metadata`` that hold volatile per-turn state —
+    # mid-turn recovery payloads that must survive a process restart but
+    # must NOT bloat or rewrite the ``.jsonl`` transcript on every
+    # checkpoint write. They are persisted exclusively to the
+    # ``.meta.json`` ``derived`` block (alongside the LLM-derived keys)
+    # and merged back into ``Session.metadata`` on load, so existing
+    # readers (``session.metadata["runtime_checkpoint"]``) are unchanged.
+    #
+    # These correspond to ``AgentLoop._RUNTIME_CHECKPOINT_KEY`` and
+    # ``AgentLoop._PENDING_USER_TURN_KEY`` in ``durin/agent/loop.py``.
+    # See docs/architecture/concurrency.md for the sidecar split design.
+    _VOLATILE_METADATA_KEYS = frozenset({"runtime_checkpoint", "pending_user_turn"})
+
     def __init__(self, workspace: Path):
         self.workspace = workspace
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
@@ -457,9 +470,10 @@ class SessionManager:
                 "Failed to read derived sidecar for {}; using line-0 only", key,
             )
             return
-        for derived_key, value in sidecar.items():
-            if derived_key in self._DERIVED_METADATA_KEYS:
-                metadata[derived_key] = value
+        _sidecar_keys = self._DERIVED_METADATA_KEYS | self._VOLATILE_METADATA_KEYS
+        for sidecar_key, value in sidecar.items():
+            if sidecar_key in _sidecar_keys:
+                metadata[sidecar_key] = value
 
     def _repair(self, key: str) -> Session | None:
         """Attempt to recover a session from a corrupt JSONL file."""
@@ -555,13 +569,16 @@ class SessionManager:
         tmp_path = path.with_suffix(".jsonl.tmp")
 
         # Split metadata for persistence; in-memory dict stays whole.
+        # Both derived (LLM-projected) and volatile (per-turn recovery)
+        # keys are excluded from line-0 and written to the sidecar only.
+        _sidecar_keys = self._DERIVED_METADATA_KEYS | self._VOLATILE_METADATA_KEYS
         identity_meta = {
             k: v for k, v in session.metadata.items()
-            if k not in self._DERIVED_METADATA_KEYS
+            if k not in _sidecar_keys
         }
         derived_meta = {
             k: v for k, v in session.metadata.items()
-            if k in self._DERIVED_METADATA_KEYS
+            if k in _sidecar_keys
         }
 
         with cross_process_lock(path):
@@ -661,6 +678,41 @@ class SessionManager:
             except Exception:
                 logger.warning("Failed to flush session {}", key, exc_info=True)
         return flushed
+
+    def save_runtime_state(self, session: Session) -> None:
+        """Write the sidecar volatile (+derived) block without touching the ``.jsonl``.
+
+        Use this instead of ``save()`` for mid-turn checkpoint writes
+        (``runtime_checkpoint``, ``pending_user_turn``) — it avoids the
+        full-file rewrite of the ``.jsonl``, the ``.md`` regeneration, and
+        the FTS reindex that ``save()`` performs.  The volatile keys in
+        ``session.metadata`` are still merged back on load so existing readers
+        are unchanged.
+
+        See docs/architecture/concurrency.md for the sidecar split design.
+        """
+        if getattr(session, "_deleted", False):
+            logger.debug("Skipping save_runtime_state of deleted session {}", session.key)
+            return
+
+        path = self._get_session_path(session.key)
+        _sidecar_keys = self._DERIVED_METADATA_KEYS | self._VOLATILE_METADATA_KEYS
+        sidecar_meta = {
+            k: v for k, v in session.metadata.items()
+            if k in _sidecar_keys
+        }
+
+        with cross_process_lock(path):
+            try:
+                write_derived(
+                    meta_path_for(session.key, self.sessions_dir),
+                    session.key,
+                    sidecar_meta,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to write runtime state sidecar for {}", session.key,
+                )
 
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""

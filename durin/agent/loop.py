@@ -2356,9 +2356,17 @@ class AgentLoop:
         return True
 
     def _set_runtime_checkpoint(self, session: Session, payload: dict[str, Any]) -> None:
-        """Persist the latest in-flight turn state into session metadata."""
+        """Persist the latest in-flight turn state into the sidecar (no .jsonl rewrite).
+
+        Uses ``save_runtime_state`` instead of a full ``save`` so that each
+        mid-turn checkpoint does not trigger a ``.jsonl`` rewrite, ``.md``
+        regeneration, or FTS re-index.  The volatile key is merged back into
+        ``session.metadata`` on load, so recovery readers are unchanged.
+
+        See docs/architecture/concurrency.md for the sidecar split design.
+        """
         session.metadata[self._RUNTIME_CHECKPOINT_KEY] = payload
-        self.sessions.save(session)
+        self.sessions.save_runtime_state(session)
 
     def _mark_pending_user_turn(self, session: Session) -> None:
         session.metadata[self._PENDING_USER_TURN_KEY] = True
