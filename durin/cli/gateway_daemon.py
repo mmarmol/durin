@@ -20,6 +20,7 @@ Lifecycle:
 
 from __future__ import annotations
 
+import io
 import os
 import signal
 import subprocess
@@ -27,10 +28,21 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import IO, Literal
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - POSIX
+    msvcrt = None  # type: ignore[assignment]
 
 __all__ = [
+    "AlreadyRunningError",
     "DaemonStatus",
+    "acquire_gateway_singleton",
     "start_daemon",
     "stop_daemon",
     "daemon_status",
@@ -141,11 +153,50 @@ def daemon_status() -> DaemonStatus:
 
 
 class AlreadyRunningError(RuntimeError):
-    """Raised when start_daemon is called and a live gateway exists."""
+    """Raised when a gateway singleton cannot be acquired because another instance holds it."""
 
-    def __init__(self, pid: int) -> None:
-        super().__init__(f"gateway is already running (pid {pid})")
+    def __init__(self, pid: int | None = None) -> None:
+        if pid is not None:
+            super().__init__(f"gateway is already running (pid {pid})")
+        else:
+            super().__init__("Another gateway instance is already running")
         self.pid = pid
+
+
+# Module-global keeps the file descriptor (and thus the flock) alive for the
+# entire process lifetime.  The OS releases the lock automatically on crash or
+# clean exit — no explicit cleanup needed.
+_singleton_handle: IO[str] | None = None
+
+
+def acquire_gateway_singleton() -> IO[str]:
+    """Acquire an exclusive flock on DURIN_HOME/gateway.lock and hold it.
+
+    The lock is stored in a module-global so it stays alive for the process
+    lifetime.  A second call in the same process (e.g. from tests) re-raises
+    AlreadyRunningError if the global is already set to a different handle.
+
+    Returns the open file handle (held for process lifetime).
+    Raises AlreadyRunningError if another process already holds the lock.
+    """
+    global _singleton_handle
+    from durin.config.home import durin_home
+
+    lock_path = durin_home() / "gateway.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fp = lock_path.open("a+", encoding="utf-8")
+    try:
+        if fcntl is not None:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        elif msvcrt is not None:  # pragma: no cover - Windows
+            msvcrt.locking(fp.fileno(), msvcrt.LK_NBLCK, 1)
+        else:  # pragma: no cover - no OS locking available
+            pass
+    except OSError as exc:
+        fp.close()
+        raise AlreadyRunningError() from exc
+    _singleton_handle = fp
+    return fp
 
 
 def start_daemon(
