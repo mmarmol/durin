@@ -54,8 +54,11 @@ def _tool_responses(n: int) -> list[LLMResponse]:
     return responses
 
 
+@pytest.mark.parametrize("n_iterations", [3, 10])
 @pytest.mark.asyncio
-async def test_jsonl_rewrites_do_not_grow_with_tool_iterations(tmp_path: Path) -> None:
+async def test_jsonl_rewrites_do_not_grow_with_tool_iterations(
+    tmp_path: Path, n_iterations: int
+) -> None:
     """The number of ``.jsonl`` full rewrites during a turn must be constant
     (early-persist + end-of-turn) and must NOT grow with N tool iterations.
 
@@ -63,7 +66,7 @@ async def test_jsonl_rewrites_do_not_grow_with_tool_iterations(tmp_path: Path) -
     checkpoint is written, once cleared).
     AFTER the fix: count stays constant because checkpoints go to the sidecar.
     """
-    N = 5
+    N = n_iterations
 
     loop = _make_loop(tmp_path)
     loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=False)
@@ -89,12 +92,11 @@ async def test_jsonl_rewrites_do_not_grow_with_tool_iterations(tmp_path: Path) -
     assert result is not None, "Turn must complete"
     assert result.content == "done"
 
-    # Expected rewrites: early-persist (user message) + end-of-turn (assistant).
-    # With N=5 tool iterations the count must NOT be 2*N+something — it must
-    # be constant.  Allow up to N+3 to leave room for edge-case saves without
-    # letting the amplification pattern slip through.
-    assert jsonl_replace_count <= N, (
-        f"jsonl rewrites ({jsonl_replace_count}) grew with N={N} — "
+    # Expected rewrites: early-persist (user message) + final (assistant) + end-of-turn = 3.
+    # Constant across all N values — checkpoints no longer hit the full save path.
+    # Would be ~2*N+something without the fix; assert tight bound proves the fix holds.
+    assert jsonl_replace_count <= 3, (
+        f"jsonl rewrites ({jsonl_replace_count}) with N={N} exceeds constant bound — "
         "checkpoint writes are still hitting the full save path"
     )
 
