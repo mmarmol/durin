@@ -71,6 +71,34 @@ through `mutate_config` remains last-writer-wins across processes.  This
 matches hermes and is an accepted trade-off; callers are migrated
 opportunistically.
 
+### `durin/cron/service.py` — `CronService` mutators
+
+`CronService` keeps `jobs.json` consistent across processes (gateway
+scheduler + `durin cron` CLI) via `self._lock = FileLock(<cron_dir>.lock)`.
+
+Every mutator that performs a `_load_store → mutate → _save_store`
+read-modify-write now wraps that sequence in `with self._lock:`.  Without
+the lock, two concurrent adders both load the old snapshot, each append one
+job, and the second writer clobbers the first — producing a lost-update.
+
+`filelock.FileLock` is reentrant *within a process* when the same instance
+re-acquires (lock count increments).  `_append_action` and `_merge_action`
+already use `with self._lock:`; a mutator that calls them while holding the
+lock does not deadlock.
+
+**Cross-instance caveat:** two *different* `FileLock` objects at the same
+path in the same thread will deadlock (filelock raises `RuntimeError`).
+`_on_timer` avoids this by releasing the lock before calling `_execute_job`:
+an `on_job` callback that creates a second `CronService` and calls a mutator
+on it would otherwise deadlock.  The execution window (after load, before
+save) is therefore not fully serialised at the file level, but the
+before-execution load and the after-execution save each acquire the lock
+independently, so the net `jobs.json` state remains consistent.
+
+**Read-only path:** `list_jobs`, `get_job`, and `status` call `_load_store`
+without the lock.  They are last-reader-wins, which is acceptable for
+display/scheduling reads.
+
 ### `durin/cli/gateway_daemon.py` — `acquire_gateway_singleton()`
 
 Holds `flock(LOCK_EX|LOCK_NB)` on `DURIN_HOME/gateway.lock`. The OS
