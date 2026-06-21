@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Literal
 
+import filelock
 from filelock import FileLock
 from loguru import logger
 
@@ -109,6 +110,11 @@ class CronService:
         self.store_path = store_path
         self._action_path = store_path.parent / "action.jsonl"
         self._lock = FileLock(str(self._action_path.parent) + ".lock")
+        # Separate lock for timer ticks — distinct path and distinct instance
+        # from self._lock.  Acquired NON-BLOCKING in _on_timer; if a second
+        # scheduler is already ticking, the contender skips the tick rather
+        # than queuing.  See docs/architecture/concurrency.md.
+        self._tick_lock = FileLock(str(store_path.parent / ".tick.lock"))
         self.on_job = on_job
         self._store: CronStore | None = None
         self._timer_task: asyncio.Task | None = None
@@ -365,20 +371,21 @@ class CronService:
     async def start(self) -> None:
         """Start the cron service."""
         self._running = True
-        loaded = self._load_store()
-        if loaded is None:
-            # Store file existed but was corrupt and has been preserved with
-            # a ``.corrupt-<ts>`` suffix.  Bail out instead of starting with
-            # an empty store; that would call ``_save_store`` and overwrite
-            # the now-renamed (but still recoverable) data with [].
-            self._running = False
-            raise RuntimeError(
-                f"cron store at {self.store_path} is corrupt and was preserved; "
-                "refusing to start with an empty job list. "
-                "Inspect the .corrupt-<ts> backup and restore manually."
-            )
-        self._recompute_next_runs()
-        self._save_store()
+        with self._lock:
+            loaded = self._load_store()
+            if loaded is None:
+                # Store file existed but was corrupt and has been preserved with
+                # a ``.corrupt-<ts>`` suffix.  Bail out instead of starting with
+                # an empty store; that would call ``_save_store`` and overwrite
+                # the now-renamed (but still recoverable) data with [].
+                self._running = False
+                raise RuntimeError(
+                    f"cron store at {self.store_path} is corrupt and was preserved; "
+                    "refusing to start with an empty job list. "
+                    "Inspect the .corrupt-<ts> backup and restore manually."
+                )
+            self._recompute_next_runs()
+            self._save_store()
         self._arm_timer()
         logger.info("Cron service started with {} jobs", len(self._store.jobs if self._store else []))
 
@@ -441,30 +448,78 @@ class CronService:
         self._timer_task = asyncio.create_task(tick())
 
     async def _on_timer(self) -> None:
-        """Handle timer tick - run due jobs."""
-        self._load_store()
-        # If a hot reload found a corrupt store on disk, ``self._store`` may
-        # still hold the previous, known-good in-memory snapshot.  Keep using
-        # it rather than crashing the timer or wiping live jobs.
-        if not self._store:
-            self._arm_timer()
+        """Handle timer tick - run due jobs.
+
+        Lock ordering (outermost → innermost, never reversed):
+          1. _tick_lock  — non-blocking; skips the tick if another scheduler
+             process is already ticking (cross-process at-most-once guard).
+          2. self._lock  — serialises the load/save RMW within the tick.
+
+        _tick_lock is held for the FULL tick (load → advance next_run →
+        execute → save) so that a concurrent scheduler can never pick up the
+        same due job during our execution window.
+
+        self._lock is released before _execute_job to avoid a cross-instance
+        FileLock deadlock: if on_job creates a second CronService and calls a
+        mutator, that mutator also tries to acquire self._lock — both objects
+        point to the same path and FileLock is NOT reentrant across instances
+        (see docs/architecture/concurrency.md).
+        """
+        try:
+            self._tick_lock.acquire(timeout=0)
+        except filelock.Timeout:
+            logger.debug("cron: tick skipped — another scheduler is ticking")
             return
 
-        self._timer_active = True
         try:
-            now = _now_ms()
-            due_jobs = [
-                j for j in self._store.jobs
-                if j.enabled and j.state.next_run_at_ms and now >= j.state.next_run_at_ms
-            ]
+            with self._lock:
+                self._load_store()
+                # If a hot reload found a corrupt store on disk, ``self._store`` may
+                # still hold the previous, known-good in-memory snapshot.  Keep using
+                # it rather than crashing the timer or wiping live jobs.
+                if not self._store:
+                    self._arm_timer()
+                    return
 
-            for job in due_jobs:
-                await self._execute_job(job)
+                self._timer_active = True
+                now = _now_ms()
+                due_jobs = [
+                    j for j in self._store.jobs
+                    if j.enabled and j.state.next_run_at_ms and now >= j.state.next_run_at_ms
+                ]
+                # Advance next_run_at_ms for all due jobs NOW, before releasing
+                # the lock and executing.  This is the at-most-once guard: even
+                # if two scheduler processes race through the tick lock check at
+                # the same instant, the first one to reach here under self._lock
+                # will push next_run into the future, so the second process
+                # loads an already-advanced value and finds no due jobs.
+                for job in due_jobs:
+                    if job.schedule.kind == "at":
+                        # One-shot jobs: disable immediately so a concurrent
+                        # scheduler cannot also fire them.
+                        if job.delete_after_run:
+                            self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
+                        else:
+                            job.enabled = False
+                            job.state.next_run_at_ms = None
+                    else:
+                        job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
+                self._save_store()
 
-            self._save_store()
+            # Execute jobs outside the lock so on_job callbacks can call other
+            # CronService mutators (e.g. add_job from a second service instance)
+            # without hitting a cross-instance FileLock deadlock.
+            try:
+                for job in due_jobs:
+                    await self._execute_job(job)
+            finally:
+                self._timer_active = False
+
+            with self._lock:
+                self._save_store()
+            self._arm_timer()
         finally:
-            self._timer_active = False
-        self._arm_timer()
+            self._tick_lock.release()
 
     async def _execute_job(self, job: CronJob) -> None:
         """Execute a single job.
@@ -573,9 +628,10 @@ class CronService:
             delete_after_run=delete_after_run,
         )
         if self._running:
-            store = self._load_store()
-            store.jobs.append(job)
-            self._save_store()
+            with self._lock:
+                store = self._load_store()
+                store.jobs.append(job)
+                self._save_store()
             self._arm_timer()
         else:
             self._append_action("add", asdict(job))
@@ -594,21 +650,22 @@ class CronService:
         the schedule/payload definition is refreshed (the code may have
         changed it). A brand-new system job gets a fresh next-run.
         """
-        store = self._load_store()
-        now = _now_ms()
-        existing = next((j for j in store.jobs if j.id == job.id), None)
-        if existing is not None:
-            job.state = existing.state
-            if job.state.next_run_at_ms is None or job.state.next_run_at_ms <= now:
-                job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
-            job.created_at_ms = existing.created_at_ms
-        else:
-            job.state = CronJobState(next_run_at_ms=_compute_next_run(job.schedule, now))
-            job.created_at_ms = now
-        job.updated_at_ms = now
-        store.jobs = [j for j in store.jobs if j.id != job.id]
-        store.jobs.append(job)
-        self._save_store()
+        with self._lock:
+            store = self._load_store()
+            now = _now_ms()
+            existing = next((j for j in store.jobs if j.id == job.id), None)
+            if existing is not None:
+                job.state = existing.state
+                if job.state.next_run_at_ms is None or job.state.next_run_at_ms <= now:
+                    job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
+                job.created_at_ms = existing.created_at_ms
+            else:
+                job.state = CronJobState(next_run_at_ms=_compute_next_run(job.schedule, now))
+                job.created_at_ms = now
+            job.updated_at_ms = now
+            store.jobs = [j for j in store.jobs if j.id != job.id]
+            store.jobs.append(job)
+            self._save_store()
         self._arm_timer()
         logger.info("Cron: registered system job '{}' ({})", job.name, job.id)
         return job
@@ -626,14 +683,16 @@ class CronService:
         current system jobs are untouched. Call once at startup, after
         registering the system jobs.
         """
-        store = self._load_store()
-        orphans = [
-            j.id for j in store.jobs
-            if j.payload.kind == "system_event" and j.id not in known_system_ids
-        ]
+        with self._lock:
+            store = self._load_store()
+            orphans = [
+                j.id for j in store.jobs
+                if j.payload.kind == "system_event" and j.id not in known_system_ids
+            ]
+            if orphans:
+                store.jobs = [j for j in store.jobs if j.id not in orphans]
+                self._save_store()
         if orphans:
-            store.jobs = [j for j in store.jobs if j.id not in orphans]
-            self._save_store()
             self._arm_timer()
             for jid in orphans:
                 logger.info(
@@ -643,24 +702,28 @@ class CronService:
 
     def remove_job(self, job_id: str) -> Literal["removed", "protected", "not_found"]:
         """Remove a job by ID, unless it is a protected system job."""
-        store = self._load_store()
-        job = next((j for j in store.jobs if j.id == job_id), None)
-        if job is None:
-            return "not_found"
-        if job.payload.kind == "system_event":
-            logger.info("Cron: refused to remove protected system job {}", job_id)
-            return "protected"
+        with self._lock:
+            store = self._load_store()
+            job = next((j for j in store.jobs if j.id == job_id), None)
+            if job is None:
+                return "not_found"
+            if job.payload.kind == "system_event":
+                logger.info("Cron: refused to remove protected system job {}", job_id)
+                return "protected"
 
-        before = len(store.jobs)
-        store.jobs = [j for j in store.jobs if j.id != job_id]
-        removed = len(store.jobs) < before
+            before = len(store.jobs)
+            store.jobs = [j for j in store.jobs if j.id != job_id]
+            removed = len(store.jobs) < before
+
+            if removed:
+                if self._running:
+                    self._save_store()
+                else:
+                    self._append_action("del", {"job_id": job_id})
 
         if removed:
             if self._running:
-                self._save_store()
                 self._arm_timer()
-            else:
-                self._append_action("del", {"job_id": job_id})
             logger.info("Cron: removed job {}", job_id)
             return "removed"
 
@@ -668,22 +731,26 @@ class CronService:
 
     def enable_job(self, job_id: str, enabled: bool = True) -> CronJob | None:
         """Enable or disable a job."""
-        store = self._load_store()
-        for job in store.jobs:
-            if job.id == job_id:
-                job.enabled = enabled
-                job.updated_at_ms = _now_ms()
-                if enabled:
-                    job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
-                else:
-                    job.state.next_run_at_ms = None
-                if self._running:
-                    self._save_store()
-                    self._arm_timer()
-                else:
-                    self._append_action("update", asdict(job))
-                return job
-        return None
+        found_job = None
+        with self._lock:
+            store = self._load_store()
+            for job in store.jobs:
+                if job.id == job_id:
+                    job.enabled = enabled
+                    job.updated_at_ms = _now_ms()
+                    if enabled:
+                        job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
+                    else:
+                        job.state.next_run_at_ms = None
+                    if self._running:
+                        self._save_store()
+                    else:
+                        self._append_action("update", asdict(job))
+                    found_job = job
+                    break
+        if found_job is not None and self._running:
+            self._arm_timer()
+        return found_job
 
     def update_job(
         self,
@@ -702,39 +769,41 @@ class CronService:
         For ``channel`` and ``to``, pass an explicit value (including ``None``)
         to update; omit (sentinel ``...``) to leave unchanged.
         """
-        store = self._load_store()
-        job = next((j for j in store.jobs if j.id == job_id), None)
-        if job is None:
-            return "not_found"
-        if job.payload.kind == "system_event":
-            return "protected"
+        with self._lock:
+            store = self._load_store()
+            job = next((j for j in store.jobs if j.id == job_id), None)
+            if job is None:
+                return "not_found"
+            if job.payload.kind == "system_event":
+                return "protected"
 
-        if schedule is not None:
-            _validate_schedule_for_add(schedule)
-            job.schedule = schedule
-        if name is not None:
-            job.name = name
-        if message is not None:
-            job.payload.message = message
-        if deliver is not None:
-            job.payload.deliver = deliver
-        if channel is not ...:
-            job.payload.channel = channel
-        if to is not ...:
-            job.payload.to = to
-        if delete_after_run is not None:
-            job.delete_after_run = delete_after_run
+            if schedule is not None:
+                _validate_schedule_for_add(schedule)
+                job.schedule = schedule
+            if name is not None:
+                job.name = name
+            if message is not None:
+                job.payload.message = message
+            if deliver is not None:
+                job.payload.deliver = deliver
+            if channel is not ...:
+                job.payload.channel = channel
+            if to is not ...:
+                job.payload.to = to
+            if delete_after_run is not None:
+                job.delete_after_run = delete_after_run
 
-        job.updated_at_ms = _now_ms()
-        if job.enabled:
-            job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
+            job.updated_at_ms = _now_ms()
+            if job.enabled:
+                job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
+
+            if self._running:
+                self._save_store()
+            else:
+                self._append_action("update", asdict(job))
 
         if self._running:
-            self._save_store()
             self._arm_timer()
-        else:
-            self._append_action("update", asdict(job))
-
         logger.info("Cron: updated job '{}' ({})", job.name, job.id)
         return job
 
@@ -743,17 +812,18 @@ class CronService:
         was_running = self._running
         self._running = True
         try:
-            store = self._load_store()
-            for job in store.jobs:
-                if job.id == job_id:
-                    if not force and not job.enabled:
-                        return False
-                    if job.id in self._executing:
-                        # Already running — refuse rather than overlap.
-                        return False
-                    await self._execute_job(job)
-                    self._save_store()
-                    return True
+            with self._lock:
+                store = self._load_store()
+                for job in store.jobs:
+                    if job.id == job_id:
+                        if not force and not job.enabled:
+                            return False
+                        if job.id in self._executing:
+                            # Already running — refuse rather than overlap.
+                            return False
+                        await self._execute_job(job)
+                        self._save_store()
+                        return True
             return False
         finally:
             self._running = was_running
