@@ -399,3 +399,21 @@ def test_apply_auth_help_noop_for_unknown_ref():
     )
     apply_auth_help(detail)
     assert detail.packages[0].env[0].help_url is None
+
+
+def test_apply_auth_help_noop_for_known_ref_unknown_input():
+    from durin.agent.mcp_install import apply_auth_help
+    from durin.agent.mcp_registry import EnvVarSpec, PackageSpec, McpServerDetail
+
+    detail = McpServerDetail(
+        name="github", ref="io.github.github/github-mcp-server",
+        description="", version="1", repository="",
+        packages=[PackageSpec(
+            registry_type="oci", identifier="x", version="1", runtime_hint="",
+            transport_type="stdio", runtime_arguments=[], package_arguments=[],
+            env=[EnvVarSpec(name="UNRELATED_KEY", is_secret=True)],
+        )],
+        remotes=[],
+    )
+    apply_auth_help(detail)
+    assert detail.packages[0].env[0].help_url is None
