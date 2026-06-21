@@ -297,6 +297,10 @@ The active model is a **preset**, resolved through `loop.set_model_preset(name)`
 
 The daemon re-reads the on-disk config at the start of every message (`_refresh_provider_snapshot`, via `factory.load_provider_snapshot`), so a model change in Settings takes effect without a restart. **`model_presets["default"]` is captured once at construction**, so that same refresh re-resolves it through `factory.load_default_preset` (the loop's `default_preset_loader`, wired only on the gateway). Without this, name-based resolution of `default` — which prefers the in-memory preset object over re-reading config (`factory._resolve_model_preset`) — would keep serving the model that was default at startup, silently reverting `/model default` and `/effort` to the previous model.
 
+#### Per-turn model_preset override
+
+`process_direct` and `_process_message` accept an optional `model_preset: str | None` parameter. When set, `_run_agent_loop` resolves it to a model string via `_build_model_preset_snapshot` and passes that to `AgentRunSpec(model=...)` for that turn only — `self.model_preset` (the global) is never mutated. This is used by cron jobs to run with a job-specific preset without racing a concurrent interactive session's model.
+
 ### OAuth providers (Codex / Copilot)
 
 `is_oauth` providers carry no API key. The token lives in `oauth-cli-kit`'s

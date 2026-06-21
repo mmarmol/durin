@@ -198,6 +198,8 @@ class TurnContext:
     pending_queue: asyncio.Queue | None = None
     pending_summary: str | None = None
 
+    model_preset_override: str | None = None
+
     turn_wall_started_at: float = field(default_factory=time.time)
     turn_latency_ms: int | None = None
 
@@ -1274,6 +1276,7 @@ class AgentLoop:
         metadata: dict[str, Any] | None = None,
         session_key: str | None = None,
         pending_queue: asyncio.Queue | None = None,
+        model_preset: str | None = None,
     ) -> tuple[str | None, list[str], list[dict], str, bool, list[dict[str, Any]]]:
         """Run the agent iteration loop.
 
@@ -1411,11 +1414,21 @@ class AgentLoop:
             lock = self.consolidator.get_lock(_session_key_for_compact)
             return lock.locked()
 
+        effective_preset = model_preset or self.model_preset
+        if effective_preset and effective_preset != self.model_preset:
+            try:
+                effective_model = self._build_model_preset_snapshot(effective_preset).model
+            except Exception:
+                logger.warning("Could not resolve model_preset override {!r}; falling back to default", effective_preset)
+                effective_model = self.model
+        else:
+            effective_model = self.model
+
         try:
             result = await self.runner.run(AgentRunSpec(
                 initial_messages=initial_messages,
                 tools=self.tools,
-                model=self.model,
+                model=effective_model,
                 provider=self.provider,
                 max_iterations=self.max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
@@ -1885,6 +1898,7 @@ class AgentLoop:
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
         pending_queue: asyncio.Queue | None = None,
+        model_preset: str | None = None,
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
         self._refresh_provider_snapshot()
@@ -1910,6 +1924,7 @@ class AgentLoop:
             on_stream=on_stream,
             on_stream_end=on_stream_end,
             pending_queue=pending_queue,
+            model_preset_override=model_preset,
         )
 
         while ctx.state is not TurnState.DONE:
@@ -2105,6 +2120,7 @@ class AgentLoop:
             metadata=ctx.msg.metadata,
             session_key=ctx.session_key,
             pending_queue=ctx.pending_queue,
+            model_preset=ctx.model_preset_override,
         )
         final_content, tools_used, all_msgs, stop_reason, had_injections, tool_events = result
         ctx.final_content = final_content
@@ -2519,6 +2535,7 @@ class AgentLoop:
         on_progress: Callable[..., Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
+        model_preset: str | None = None,
     ) -> OutboundMessage | None:
         """Process a message directly and return the outbound payload."""
         await self._connect_mcp()
@@ -2532,4 +2549,5 @@ class AgentLoop:
             on_progress=on_progress,
             on_stream=on_stream,
             on_stream_end=on_stream_end,
+            model_preset=model_preset,
         )
