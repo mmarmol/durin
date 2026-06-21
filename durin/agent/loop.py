@@ -95,6 +95,7 @@ if TYPE_CHECKING:
 
 
 UNIFIED_SESSION_KEY = "unified:default"
+_SESSION_BUSY_NOTICE = "This session is busy in another window. Please try again in a moment."
 
 
 class TurnState(Enum):
@@ -1594,7 +1595,7 @@ class AgentLoop:
                 except TimeoutError:
                     await self.bus.publish_outbound(OutboundMessage(
                         channel=msg.channel, chat_id=msg.chat_id,
-                        content="This session is busy in another window. Please try again in a moment.",
+                        content=_SESSION_BUSY_NOTICE,
                     ))
                     return
                 try:
@@ -2545,7 +2546,10 @@ class AgentLoop:
                     "process_direct: session {} is busy, skipping direct turn",
                     session_key,
                 )
-                return None
+                return OutboundMessage(
+                    channel=channel, chat_id=chat_id,
+                    content=_SESSION_BUSY_NOTICE,
+                )
             try:
                 self.sessions.reload(session_key)  # load-per-turn under the lease
                 return await self._process_message(

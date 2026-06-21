@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from durin.agent.loop import AgentLoop
+from durin.agent.loop import AgentLoop, _SESSION_BUSY_NOTICE
 from durin.bus.queue import MessageBus
 from durin.session.manager import SessionManager
 from durin.session.turn_lease import session_turn_lease
@@ -72,7 +72,10 @@ async def test_process_direct_skips_on_lease_timeout(tmp_path: Path) -> None:
     with patch("durin.agent.loop.session_turn_lease", _busy_lease):
         result = await loop.process_direct("hello", session_key="cron:test")
 
-    assert result is None, "process_direct must return None on timeout"
+    assert result is not None, "process_direct must return a response (not None) on timeout"
+    assert result.content == _SESSION_BUSY_NOTICE, (
+        f"process_direct must return the busy notice on timeout; got {result!r}"
+    )
     assert process_message_calls == [], "_process_message must NOT be called on lease timeout"
 
 
