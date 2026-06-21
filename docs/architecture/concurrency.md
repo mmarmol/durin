@@ -90,10 +90,15 @@ lock does not deadlock.
 acquired on the same thread does NOT reentrantly succeed — a blocking acquire
 deadlocks (hangs); this is why `_on_timer` releases `self._lock` before
 executing jobs (a job callback may build a second `CronService` instance).
-The execution window (after load, before save) is therefore not fully
-serialised at the file level, but the before-execution load and the
-after-execution save each acquire the lock independently, so the net
-`jobs.json` state remains consistent.
+The execution window (after load, before execute) is therefore not serialised
+at the file level. To stop the post-execution save from clobbering external
+edits made during that window, `_on_timer` now **reloads `jobs.json` under the
+final lock and re-applies only the run-state deltas** (`last_status`,
+`last_error`, `last_run_at_ms`, `run_history`, `next_run_at_ms`, `updated_at_ms`,
+plus one-shot disable/removal) onto the freshly-loaded store, matched by job id;
+an executed job removed externally during the window is not resurrected. So a
+concurrent `add_job`/`remove_job`/`enable_job`/`update_job` on *other* jobs
+survives. (See "Residual ledger" for the bounded same-job-schedule-edit case.)
 
 **Read-only path:** `list_jobs`, `get_job`, and `status` call `_load_store`
 without the lock.  They are last-reader-wins, which is acceptable for
@@ -168,8 +173,10 @@ acquire the same `.git-worktree` lock before committing to a prune:
   deleted.
 
 **Lock ordering:** `.git-worktree` is the **outermost** memory lock.  The
-prune paths take `.git-worktree` THEN FTS/LanceDB delete locks (inner).  No
-path takes an FTS/Lance lock and then `.git-worktree`, so there is no
+prune paths take `.git-worktree` THEN perform the FTS/LanceDB row deletes —
+which take no cross-process lock of their own (SQLite WAL + `busy_timeout` for
+FTS; plain row ops for LanceDB), so they cannot create an opposite-order edge.
+No path takes an FTS/Lance lock and then `.git-worktree`, so there is no
 opposite-order acquisition and no deadlock risk.  The mutation path takes
 `.git-worktree` then dulwich only (no FTS/Lance held during the reset).
 
@@ -177,44 +184,106 @@ The canonical lock-path helper is `git_worktree_lock_path(memory_git_root)`
 in `memory_writer.py`; all three sites (two mutation, two prune) use this
 function so the path cannot drift.
 
-## Phase-A residual ledger
+## Out-of-turn / direct savers (resolved)
 
-The following known limitations are deferred to the
-background/direct-saver serialization phase:
+The three savers that previously wrote a session file without holding the turn
+lease — and could therefore clobber a concurrent turn's whole-file write — now
+acquire `session_turn_lease(<session_path>)` and **reload under the lease before
+saving** (so they write fresh disk state, never a stale in-memory copy):
 
-1. **No TTL on the held turn lease.** A hung (alive-but-stuck) process
-   holds `<key>.turn.lock` until it exits. The OS releases on crash. A
-   TTL advisory-lock table is a later-phase addition.
+- **HTTP rename** (`durin/service/sessions.py`) — acquires the lease with a
+  short `timeout=30.0`; on `TimeoutError` it raises `ConflictError` ("session
+  is busy, rename not applied") with no partial write, rather than clobbering.
+- **`process_direct`** (`durin/agent/loop.py`) — the cron / heartbeat / HTTP-API
+  / SDK / CLI direct-message entrypoint. Wrapped in the lease (default 600s).
+  On `TimeoutError` it returns the same `_SESSION_BUSY_NOTICE` that `_dispatch`
+  publishes (so API/SDK/CLI callers get a meaningful busy message, not an empty
+  response) and processes nothing — a cron/heartbeat fire simply retries next
+  schedule; no user turn is half-written or duplicated.
+- **Webui background title generation** (`durin/utils/webui_titles.py`, scheduled
+  from `_schedule_background`) — the LLM title call runs **outside** any lease;
+  only the subsequent reload + set-title + `save()` is taken under the lease, so
+  the next turn is never blocked behind a multi-second model call.
 
-2. **Out-of-turn / background savers bypass the turn lease.** They
-   acquire only `save()`'s `<key>.jsonl.lock`, not `<key>.turn.lock`,
-   so they can still clobber a concurrent turn's whole-file write.
-   Affected paths:
-   - HTTP rename in `durin/service/sessions.py`
-   - Cron / heartbeat `process_direct` saves
-   - Webui background title-generation save
-     (`durin/agent/loop.py` `_schedule_background` →
-     `durin/utils/webui_titles.py`)
+The lock-ordering invariant is preserved: each saver takes `<key>.turn.lock`
+(worker thread) then `save()`'s `<key>.jsonl.lock` (event loop) — the same order
+as a normal turn.
 
-   Closing these requires background/direct-saver serialization work not
-   yet scheduled.
+## Other resolved residuals
 
-3. **CronService execution-window external writes.** `CronService` `_on_timer`
-   releases `self._lock` before executing jobs, then saves run-state afterward
-   WITHOUT reloading — an external write to `jobs.json` during the execution
-   window is overwritten by the post-execution save (a bounded, pre-existing
-   last-writer-wins residual; close by reload-merging run-state under the
-   final lock).
+- **`SecretStore` scope edits** (`durin/security/secrets.py`) — `grant`/`revoke`
+  previously did an unlocked `load → set_scope → save`. The whole
+  read-compute-write now runs inside `cross_process_lock(self._path)` via
+  `grant_consumer_locked`/`revoke_consumer_locked` (and `set_scope_locked` for a
+  pre-computed full scope), mirroring `put`/`remove`. The in-memory `set_scope`
+  remains for non-persisting callers (documented as such).
+- **`edit_file`** (`durin/agent/tools/filesystem.py`) — the read→edit→write
+  sequence was a silent lost-update window. It now captures the read content
+  hash and **re-hashes immediately before `atomic_write_bytes`**, aborting with a
+  clear "file changed on disk — re-read and retry" error if the on-disk content
+  changed in the window (optimistic CAS; no `.lock` siblings in the user
+  workspace). `write_file` is an unconditional overwrite (documented
+  last-writer-wins) and is intentionally unchanged.
+- **Stream-delta coalescing** (`durin/channels/manager.py`) — consecutive
+  same-`(channel, chat_id)` outbound deltas are now coalesced **only when their
+  `_stream_id` matches**, so two concurrent streams sharing a chat (Telegram
+  forum topics) no longer bleed text across edit bubbles.
 
-4. **`SecretStore.set_scope()` is an unlocked in-memory mutator.**
-   (`durin/security/secrets.py`) It does not write to disk itself; a caller
-   doing `load → set_scope → save()` is an unlocked read-modify-write.
-   Migrate to a locked path opportunistically.
+## Residual ledger (accepted)
 
-5. **`oauth/<provider>.json` token writes are not durin-locked.**
-   These files are owned by the external `oauth-cli-kit` library
-   (`FileTokenStorage`) and are intentionally outside durin's locking
-   domain — out of durin's control.
+These are deliberately not fixed; each carries a written failure mode.
+
+1. **No TTL on the held turn lease — not built.** *Failure mode:* an
+   alive-but-stuck process holds `<key>.turn.lock` until it exits or crashes
+   (the OS releases the flock on crash); meanwhile a new turn on that session
+   gets a retriable "session busy in another window" message after the 600s
+   acquire timeout — **not data loss**. *Why not a TTL/steal:* a steal-after-TTL
+   table (hermes `compression_locks` style) would let a waiter seize the lease
+   from a slow-but-alive holder and re-introduce the very clobber the lease
+   prevents — a turn is not idempotent the way compression is. Revisit only if
+   alive-but-stuck holds (not crashes) become common.
+
+2. **`oauth/<provider>.json` token writes — external boundary.** Owned by the
+   `oauth-cli-kit` `FileTokenStorage`; durin performs no read-modify-write of
+   these files, so there is nothing durin-side to lock. *Failure mode:* two
+   processes refreshing the same provider token concurrently → last-writer-wins,
+   but both write the same refreshed token, so it is non-destructive and rare
+   (refresh fires ~once per token lifetime). Not a durin residual.
+
+3. **Sessions Phase-B append-only — measured defer.** After Phase B (mid-turn
+   checkpoints → sidecar), a turn-end `save()` still does one whole-file `.jsonl`
+   rewrite + one `.md` regen. *Failure mode:* none for correctness — purely
+   write amplification of ~one bounded rewrite per turn (≤~2.5 MB ceiling).
+   Finishing append-only would save ~2× on that single write (marginal) while
+   touching core session truth (consolidation boundary + partial-append crash
+   recovery). Risk > gain at current scale; revisit only if profiling shows the
+   `.jsonl` rewrite is a measured turn-latency cost.
+
+4. **Cron same-job schedule edit during the execution window.** If an external
+   writer changes the *schedule* of the *same* job that is currently executing,
+   the post-execution reload-merge re-applies that job's run-state delta —
+   including a `next_run_at_ms` computed from the *old* schedule. *Failure mode:*
+   the job fires once on the old cadence, then self-heals on the next execution
+   (which recomputes `next_run` from the current schedule). Bounded,
+   single-cycle, self-healing; edits to *other* jobs are unaffected.
+
+5. **Benign / dormant audit items (verified non-issues).**
+   - **#13 tool-results bucket** — stale-content reuse only on the `tool_{idx}`
+     positional fallback (real providers emit unique ids); cleanup only removes
+     already-stale peer buckets. Recoverable, low-probability.
+   - **#14 `_subs` snapshot / #19 `ToolRegistry`** — the mutators have no `await`
+     between read and mutate, so they are atomic under single-thread asyncio;
+     only a transient snapshot-staleness across an `await` remains (a missed
+     in-flight streaming frame / a one-turn incomplete MCP tool set), self-healing
+     on the next frame / registry rebuild.
+   - **#16 deletion tombstone** — the lockless `.deleted.json` RMW is real, but no
+     live delete-issuing path exists (CLI `forget` and agent `memory_forget`
+     refuse entity pages; the only tombstone writer is single-writer). *Latent
+     trigger:* the instant a concurrent delete-issuing path is wired, serialize
+     the RMW under flock and re-check `is_deleted` inside `write_entity`'s CAS.
+
+(Audit items **#10**, **#12**, and **#18** are now fixed — see "Stream-delta
+coalescing", "`edit_file`", and "Memory git-worktree lock" above.)
 
 ## SQLite helpers (FTS5 / derived indexes)
 

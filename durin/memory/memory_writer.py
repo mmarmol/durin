@@ -113,8 +113,8 @@ def _commit_dirty_as_user(root: Path) -> None:
     an in-progress hand edit (e.g. the user editing a page in Obsidian). No-op on
     a clean tree. Best-effort — a failure here must never block the system write.
 
-    Serialized under the git-worktree cross-process lock (§lock-ordering in
-    docs/architecture/concurrency.md): this lock is the sole guard for
+    Serialized under the git-worktree cross-process lock (§lock-ordering-invariant
+    in docs/architecture/concurrency.md): this lock is the sole guard for
     working-tree / .git/index mutations and is always acquired AFTER any
     dulwich-internal ref CAS lock.  It is never held while a session or
     config lock is acquired, so there is no opposite-order acquisition.
