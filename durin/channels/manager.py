@@ -481,6 +481,9 @@ class ChannelManager:
             tuple of (merged_message, list_of_non_matching_messages)
         """
         target_key = (first_msg.channel, first_msg.chat_id)
+        # Guard against cross-stream bleed for concurrent same-(channel, chat_id) streams
+        # (e.g. Telegram forum topics).  See docs/architecture/concurrency.md.
+        target_stream_id = (first_msg.metadata or {}).get("_stream_id")
         combined_content = first_msg.content
         final_metadata = dict(first_msg.metadata or {})
         non_matching: list[OutboundMessage] = []
@@ -497,8 +500,10 @@ class ChannelManager:
             same_target = (next_msg.channel, next_msg.chat_id) == target_key
             is_delta = next_msg.metadata and next_msg.metadata.get("_stream_delta")
             is_end = next_msg.metadata and next_msg.metadata.get("_stream_end")
+            next_stream_id = (next_msg.metadata or {}).get("_stream_id")
+            same_stream_id = next_stream_id == target_stream_id
 
-            if same_target and is_delta and not final_metadata.get("_stream_end"):
+            if same_target and is_delta and same_stream_id and not final_metadata.get("_stream_end"):
                 # Accumulate content
                 combined_content += next_msg.content
                 # If we see _stream_end, remember it and stop coalescing this stream
