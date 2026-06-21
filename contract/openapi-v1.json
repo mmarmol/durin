@@ -1071,34 +1071,6 @@
         "title": "McpListResult",
         "type": "object"
       },
-      "McpOauthCapabilityQuery": {
-        "additionalProperties": false,
-        "properties": {
-          "ref": {
-            "title": "Ref",
-            "type": "string"
-          }
-        },
-        "required": [
-          "ref"
-        ],
-        "title": "McpOauthCapabilityQuery",
-        "type": "object"
-      },
-      "McpOauthCapabilityResult": {
-        "description": "Whether durin can complete zero-secret OAuth (DCR) for a server's remote endpoint.",
-        "properties": {
-          "oauth_capable": {
-            "title": "Oauth Capable",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "oauth_capable"
-        ],
-        "title": "McpOauthCapabilityResult",
-        "type": "object"
-      },
       "McpOauthLoginResult": {
         "properties": {
           "authorization_url": {
@@ -3950,35 +3922,6 @@
         },
         "summary": "Install (add) an MCP server from the registry by ref",
         "x-required-scope": "mcp:write"
-      }
-    },
-    "/api/v1/mcp/registry/oauth-capability": {
-      "get": {
-        "operationId": "mcp_registry_oauth_capability",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/McpOauthCapabilityQuery"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/McpOauthCapabilityResult"
-                }
-              }
-            },
-            "description": "Success"
-          }
-        },
-        "summary": "Whether durin can complete zero-secret OAuth for a server's remote",
-        "x-required-scope": "mcp:read"
       }
     },
     "/api/v1/mcp/registry/runtime": {

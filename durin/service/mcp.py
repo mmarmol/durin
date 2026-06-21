@@ -113,6 +113,7 @@ class McpRegistryInstallCommand(Command):
     ref: str
     prefer: str = "remote"  # "remote" | "local"
     env_values: dict[str, str] | None = None  # required/secret env collected from the user
+    auth_method: str = ""  # remote only: "" autodetect | "oauth" force | "token" declared header
 
 
 class McpRuntimeStatusQuery(Query):
@@ -482,18 +483,28 @@ class McpService:
         if detail is None:
             raise NotFoundError("server not found in registry", details={"ref": cmd.ref})
         server_name = cmd.ref.rsplit("/", 1)[-1] or cmd.ref
-        secret_refs = collect_secret_env(
-            detail, cmd.env_values or {}, server_name=server_name
-        )
-        sc = build_server_config_from_detail(
-            detail, prefer=cmd.prefer, secret_env_refs=secret_refs
-        )
-        # C2: a remote with no static auth header may be OAuth-protected — probe it and
-        # enable oauth so durin's sign-in flow takes over (→ needs_auth, not a hang).
-        from durin.agent.mcp_install import autodetect_oauth
+        if cmd.auth_method == "oauth":
+            # User chose browser sign-in: build the remote without the token header and
+            # force oauth — durin's sign-in flow (DCR) takes over. No token is stored.
+            sc = build_server_config_from_detail(detail, prefer=cmd.prefer, secret_env_refs={})
+            if sc.url:
+                sc.headers = {}
+                sc.oauth = True
+        else:
+            secret_refs = collect_secret_env(
+                detail, cmd.env_values or {}, server_name=server_name
+            )
+            sc = build_server_config_from_detail(
+                detail, prefer=cmd.prefer, secret_env_refs=secret_refs
+            )
+            # "" → probe and enable oauth only when zero-secret OAuth is completable (DCR);
+            # "token" → leave on the declared-header path. A declared header already skips
+            # autodetect via has_declared_headers.
+            if cmd.auth_method != "token":
+                from durin.agent.mcp_install import autodetect_oauth
 
-        has_headers = bool(detail.remotes and detail.remotes[0].headers)
-        await autodetect_oauth(sc, has_declared_headers=has_headers)
+                has_headers = bool(detail.remotes and detail.remotes[0].headers)
+                await autodetect_oauth(sc, has_declared_headers=has_headers)
 
         # B: never block the install POST on the connect. Persist + return immediately;
         # settle the connection in the BACKGROUND. A synchronous connect could hang the UI

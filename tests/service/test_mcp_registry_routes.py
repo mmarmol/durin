@@ -382,6 +382,76 @@ async def test_registry_oauth_capability_false_without_dcr(config_path, monkeypa
     assert res.oauth_capable is False
 
 
+class _FakeRegWithHeader:
+    """Like _FakeReg but the remote declares a secret Authorization header."""
+
+    name = "official"
+
+    async def fetch_page(self, *, cursor=None, updated_since=None):
+        return [{"name": "io.x/jira", "description": "Jira issues"}], None
+
+    async def search(self, query, *, limit):
+        from durin.agent.mcp_registry import _hit_from_server
+
+        servers, _ = await self.fetch_page()
+        return [_hit_from_server(s, registry="official") for s in servers][:limit]
+
+    async def describe(self, ref):
+        from durin.agent.mcp_registry import parse_server_json
+
+        return parse_server_json({
+            "name": ref, "version": "1.0.0",
+            "remotes": [{"type": "streamable-http", "url": "https://m/srv",
+                         "headers": [{"name": "Authorization", "isSecret": True,
+                                      "isRequired": True}]}],
+        })
+
+
+@pytest.mark.asyncio
+async def test_registry_install_auth_method_oauth_forces_oauth(config_path, monkeypatch):
+    import durin.security.secrets as s
+
+    monkeypatch.setattr(s, "_STORE", None)
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeRegWithHeader()]
+    )
+    from durin.service.mcp import McpRegistryInstallCommand
+
+    res = await McpService().registry_install(
+        McpRegistryInstallCommand(ref="io.x/jira", prefer="remote", auth_method="oauth"),
+        LOCAL,
+    )
+    from durin.config.loader import load_config
+
+    sc = load_config().tools.mcp_servers["jira"]
+    assert sc.oauth is True
+    assert sc.headers == {}  # declared Authorization header was dropped under OAuth
+    # no MCP_JIRA_AUTHORIZATION secret stored — no token collected under OAuth path
+    store = s.get_secret_store()
+    assert "MCP_JIRA_AUTHORIZATION" not in store._entries
+
+
+@pytest.mark.asyncio
+async def test_registry_install_auth_method_empty_is_dcr_aware(config_path, monkeypatch):
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]
+    )
+
+    async def no_dcr(url, **kw):
+        return {"oauth": True, "dcr": False}
+
+    monkeypatch.setattr("durin.agent.mcp_install.remote_oauth_capability", no_dcr)
+    from durin.service.mcp import McpRegistryInstallCommand
+
+    res = await McpService().registry_install(
+        McpRegistryInstallCommand(ref="io.x/jira", prefer="remote"), LOCAL
+    )
+    from durin.config.loader import load_config
+
+    sc = load_config().tools.mcp_servers["jira"]
+    assert not sc.oauth  # OAuth-capable but no DCR -> stays on the token/plain path
+
+
 @pytest.mark.asyncio
 async def test_registry_install_does_not_block_on_connect(config_path, monkeypatch):
     """The install must return immediately and settle the connection in the BACKGROUND — a
