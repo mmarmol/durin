@@ -348,6 +348,41 @@ async def test_registry_install_remote_no_oauth_when_endpoint_public(config_path
 
 
 @pytest.mark.asyncio
+async def test_registry_oauth_capability_route(config_path, monkeypatch):
+    from durin.service.mcp import McpOauthCapabilityQuery
+
+    async def fake_cap(url, **kw):
+        assert url == "https://m/jira"
+        return {"oauth": True, "dcr": True}
+
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]
+    )
+    monkeypatch.setattr("durin.agent.mcp_install.remote_oauth_capability", fake_cap)
+    res = await McpService().registry_oauth_capability(
+        McpOauthCapabilityQuery(ref="io.x/jira"), LOCAL
+    )
+    assert res.oauth_capable is True
+
+
+@pytest.mark.asyncio
+async def test_registry_oauth_capability_false_without_dcr(config_path, monkeypatch):
+    from durin.service.mcp import McpOauthCapabilityQuery
+
+    async def fake_cap(url, **kw):
+        return {"oauth": True, "dcr": False}
+
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]
+    )
+    monkeypatch.setattr("durin.agent.mcp_install.remote_oauth_capability", fake_cap)
+    res = await McpService().registry_oauth_capability(
+        McpOauthCapabilityQuery(ref="io.x/jira"), LOCAL
+    )
+    assert res.oauth_capable is False
+
+
+@pytest.mark.asyncio
 async def test_registry_install_does_not_block_on_connect(config_path, monkeypatch):
     """The install must return immediately and settle the connection in the BACKGROUND — a
     connect that hangs (or swallows cancellation) must never freeze the install request."""

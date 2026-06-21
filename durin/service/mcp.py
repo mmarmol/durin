@@ -130,6 +130,16 @@ class McpRuntimeStatusResult(Result):
     install_command: str  # copy-paste command when missing+auto-installable, else ""
 
 
+class McpOauthCapabilityQuery(Query):
+    ref: str
+
+
+class McpOauthCapabilityResult(Result):
+    """Whether durin can complete zero-secret OAuth (DCR) for a server's remote endpoint."""
+
+    oauth_capable: bool
+
+
 class McpUpdatesQuery(Query):
     """No inputs — checks every configured server against the registry."""
 
@@ -541,6 +551,32 @@ class McpService:
             kind="local", runtime=rt, present=present,
             auto_installable=cmd is not None,
             install_command="" if present else (cmd or ""))
+
+    @route(
+        "GET",
+        "/api/v1/mcp/registry/oauth-capability",
+        scope=Scope.MCP_READ.value,
+        request_model=McpOauthCapabilityQuery,
+        response_model=McpOauthCapabilityResult,
+        summary="Whether durin can complete zero-secret OAuth for a server's remote",
+    )
+    async def registry_oauth_capability(
+        self, query: McpOauthCapabilityQuery, principal: Principal
+    ) -> McpOauthCapabilityResult:
+        principal.require(Scope.MCP_READ)
+        from durin.agent.mcp_install import remote_oauth_capability
+        from durin.agent.mcp_registry import build_mcp_adapters
+        from durin.config.loader import load_config
+
+        detail = None
+        for adapter in build_mcp_adapters(load_config().tools.mcp_discovery.registries):
+            detail = await adapter.describe(query.ref)
+            if detail is not None:
+                break
+        if detail is None or not detail.remotes:
+            return McpOauthCapabilityResult(oauth_capable=False)
+        cap = await remote_oauth_capability(detail.remotes[0].url)
+        return McpOauthCapabilityResult(oauth_capable=bool(cap["dcr"]))
 
     @route(
         "GET",

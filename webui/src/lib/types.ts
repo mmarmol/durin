@@ -531,6 +531,10 @@ export interface McpRuntimeStatus {
   install_command: string;
 }
 
+export interface McpOauthCapability {
+  oauth_capable: boolean;
+}
+
 export interface McpUpdateInfo {
   name: string;
   current: string;
