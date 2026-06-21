@@ -402,6 +402,12 @@
       "fieldTo": "Para",
       "save": "Guardar",
       "cancel": "Cancelar",
+      "history": "Historial de ejecuciones",
+      "runAt": "Ejecutado",
+      "status": "Estado",
+      "duration": "Duración",
+      "noRuns": "Sin ejecuciones registradas.",
+      "openRun": "Abrir",
       "systemJobs": {
         "memory_dream": {
           "name": "Consolidación de memoria de entidades",

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Clock, Loader2, Pencil, Play, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Clock, ExternalLink, Loader2, Pencil, Play, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -305,7 +305,13 @@ function CronForm({
 /** Settings → Cron section. Read+manage view over the cron scheduler:
  *  list every job (user-added + system), toggle enabled, remove or edit the
  *  non-system ones, and add new ones via the inline form. */
-export function CronSettings({ token }: { token: string }) {
+export function CronSettings({
+  token,
+  onOpenSession,
+}: {
+  token: string;
+  onOpenSession?: (sessionKey: string) => void;
+}) {
   const { t, i18n } = useTranslation();
   const [jobs, setJobs] = useState<CronJobRow[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -438,6 +444,7 @@ export function CronSettings({ token }: { token: string }) {
                 onRun={() => void run(job.id)}
                 onEdit={() => setFormTarget(job)}
                 locale={i18n.language}
+                onOpenSession={onOpenSession}
               />
             ))
           )}
@@ -455,6 +462,7 @@ function CronRow({
   onRun,
   onEdit,
   locale,
+  onOpenSession,
 }: {
   job: CronJobRow;
   busy: boolean;
@@ -463,8 +471,10 @@ function CronRow({
   onRun: () => void;
   onEdit: () => void;
   locale: string;
+  onOpenSession?: (sessionKey: string) => void;
 }) {
   const { t } = useTranslation();
+  const [historyOpen, setHistoryOpen] = useState(false);
   const next = formatTimestamp(job.state.next_run_at_ms, locale);
   const last = formatTimestamp(job.state.last_run_at_ms, locale);
   const status = job.state.last_status;
@@ -480,6 +490,7 @@ function CronRow({
     ? t(`settings.cron.systemJobs.${job.id}.note`, { defaultValue: "" })
     : "";
   return (
+    <>
     <SettingsRow
       title={
         <span className="flex items-center gap-2">
@@ -582,7 +593,123 @@ function CronRow({
         )}
       </div>
     </SettingsRow>
+    {/* Run history expandable section */}
+    <RunHistory
+      history={job.run_history}
+      open={historyOpen}
+      onToggle={() => setHistoryOpen((v) => !v)}
+      locale={locale}
+      onOpenSession={onOpenSession}
+    />
+    </>
   );
+}
+
+function RunHistory({
+  history,
+  open,
+  onToggle,
+  locale,
+  onOpenSession,
+}: {
+  history: CronJobRow["run_history"];
+  open: boolean;
+  onToggle: () => void;
+  locale: string;
+  onOpenSession?: (sessionKey: string) => void;
+}) {
+  const { t } = useTranslation();
+  const runs = history ?? [];
+
+  return (
+    <div className="border-t border-border/30 bg-muted/20">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-1.5 px-5 py-1.5 text-[11px] text-muted-foreground hover:text-foreground/80"
+        aria-expanded={open}
+      >
+        {open ? (
+          <ChevronDown className="h-3 w-3" aria-hidden />
+        ) : (
+          <ChevronRight className="h-3 w-3" aria-hidden />
+        )}
+        {t("settings.cron.history")}
+        {runs.length > 0 ? (
+          <span className="ml-1 rounded-full bg-muted px-1.5 text-[10px]">
+            {runs.length}
+          </span>
+        ) : null}
+      </button>
+      {open ? (
+        <div className="px-5 pb-3">
+          {runs.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground">
+              {t("settings.cron.noRuns")}
+            </p>
+          ) : (
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="text-left text-muted-foreground">
+                  <th className="pb-1 pr-3 font-medium">{t("settings.cron.runAt")}</th>
+                  <th className="pb-1 pr-3 font-medium">{t("settings.cron.status")}</th>
+                  <th className="pb-1 pr-3 font-medium">{t("settings.cron.duration")}</th>
+                  <th className="pb-1 font-medium"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.map((run) => (
+                  <tr key={run.run_at_ms} className="border-t border-border/20">
+                    <td className="py-1 pr-3 tabular-nums">
+                      {formatTimestamp(run.run_at_ms, locale)}
+                    </td>
+                    <td className="py-1 pr-3">
+                      <span
+                        className={cn(
+                          "font-medium",
+                          run.status === "ok"
+                            ? "text-emerald-600"
+                            : run.status === "error"
+                              ? "text-destructive"
+                              : "text-muted-foreground",
+                        )}
+                        title={run.error ?? undefined}
+                      >
+                        {run.status}
+                      </span>
+                    </td>
+                    <td className="py-1 pr-3 tabular-nums text-muted-foreground">
+                      {formatDuration(run.duration_ms)}
+                    </td>
+                    <td className="py-1">
+                      {run.session_key ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-5 rounded px-1.5 text-[10px]"
+                          title={run.session_key}
+                          aria-label={t("settings.cron.openRun")}
+                          onClick={() => onOpenSession?.(run.session_key!)}
+                        >
+                          <ExternalLink className="mr-0.5 h-2.5 w-2.5" aria-hidden />
+                          {t("settings.cron.openRun")}
+                        </Button>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 function formatTimestamp(ms: number | null, locale: string): string {

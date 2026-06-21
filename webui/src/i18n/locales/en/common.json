@@ -402,6 +402,12 @@
       "fieldTo": "To",
       "save": "Save",
       "cancel": "Cancel",
+      "history": "Run history",
+      "runAt": "Ran at",
+      "status": "Status",
+      "duration": "Duration",
+      "noRuns": "No runs recorded.",
+      "openRun": "Open",
       "systemJobs": {
         "memory_dream": {
           "name": "Entity memory consolidation",

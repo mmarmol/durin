@@ -394,6 +394,14 @@
       "fieldTo": "Kepada",
       "save": "Simpan",
       "cancel": "Batal",
+      "runNow": "Jalankan sekarang",
+      "alreadyRunning": "Tugas sudah berjalan.",
+      "history": "Riwayat eksekusi",
+      "runAt": "Dijalankan",
+      "status": "Status",
+      "duration": "Durasi",
+      "noRuns": "Belum ada eksekusi.",
+      "openRun": "Buka",
       "systemJobs": {
         "memory_dream": {
           "name": "Konsolidasi memori entitas",

@@ -553,6 +553,10 @@ function Shell({
               onLogout={onLogout}
               onRestart={onRestart}
               isRestarting={isRestarting}
+              onOpenSession={(key) => {
+                setActiveKey(key);
+                setView("chat");
+              }}
             />
           </div>
         )}
