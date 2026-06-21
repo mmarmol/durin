@@ -313,7 +313,7 @@ async def test_registry_install_autodetects_oauth_remote(config_path, monkeypatc
     import durin.agent.mcp_install as mi
 
     async def _needs_oauth(_url, *, request=None):
-        return True  # the probe says: 401-Bearer
+        return True  # the endpoint answers the 401-Bearer challenge
 
     monkeypatch.setattr(mi, "remote_needs_oauth", _needs_oauth)
     from durin.service.mcp import McpRegistryInstallCommand
@@ -345,6 +345,144 @@ async def test_registry_install_remote_no_oauth_when_endpoint_public(config_path
         McpRegistryInstallCommand(ref="com.public/remote", prefer="remote"), LOCAL
     )
     assert not res.config.oauth
+
+
+@pytest.mark.asyncio
+async def test_registry_oauth_capability_route(config_path, monkeypatch):
+    from durin.service.mcp import McpOauthCapabilityQuery
+
+    async def fake_cap(url, **kw):
+        assert url == "https://m/jira"
+        return {"oauth": True, "dcr": True}
+
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]
+    )
+    monkeypatch.setattr("durin.agent.mcp_install.remote_oauth_capability", fake_cap)
+    res = await McpService().registry_oauth_capability(
+        McpOauthCapabilityQuery(ref="io.x/jira"), LOCAL
+    )
+    assert res.oauth_capable is True
+
+
+@pytest.mark.asyncio
+async def test_registry_oauth_capability_false_without_dcr(config_path, monkeypatch):
+    from durin.service.mcp import McpOauthCapabilityQuery
+
+    async def fake_cap(url, **kw):
+        return {"oauth": True, "dcr": False}
+
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]
+    )
+    monkeypatch.setattr("durin.agent.mcp_install.remote_oauth_capability", fake_cap)
+    res = await McpService().registry_oauth_capability(
+        McpOauthCapabilityQuery(ref="io.x/jira"), LOCAL
+    )
+    assert res.oauth_capable is False
+
+
+class _FakeRegWithHeader:
+    """Like _FakeReg but the remote declares a secret Authorization header."""
+
+    name = "official"
+
+    async def fetch_page(self, *, cursor=None, updated_since=None):
+        return [{"name": "io.x/jira", "description": "Jira issues"}], None
+
+    async def search(self, query, *, limit):
+        from durin.agent.mcp_registry import _hit_from_server
+
+        servers, _ = await self.fetch_page()
+        return [_hit_from_server(s, registry="official") for s in servers][:limit]
+
+    async def describe(self, ref):
+        from durin.agent.mcp_registry import parse_server_json
+
+        return parse_server_json({
+            "name": ref, "version": "1.0.0",
+            "remotes": [{"type": "streamable-http", "url": "https://m/srv",
+                         "headers": [{"name": "Authorization", "isSecret": True,
+                                      "isRequired": True}]}],
+        })
+
+
+@pytest.mark.asyncio
+async def test_registry_install_auth_method_oauth_forces_oauth(config_path, monkeypatch):
+    import durin.security.secrets as s
+
+    monkeypatch.setattr(s, "_STORE", None)
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeRegWithHeader()]
+    )
+    from durin.service.mcp import McpRegistryInstallCommand
+
+    res = await McpService().registry_install(
+        McpRegistryInstallCommand(ref="io.x/jira", prefer="remote", auth_method="oauth"),
+        LOCAL,
+    )
+    from durin.config.loader import load_config
+
+    sc = load_config().tools.mcp_servers["jira"]
+    assert sc.oauth is True
+    assert sc.headers == {}  # declared Authorization header was dropped under OAuth
+    # no MCP_JIRA_AUTHORIZATION secret stored — no token collected under OAuth path
+    store = s.get_secret_store()
+    assert "MCP_JIRA_AUTHORIZATION" not in store._entries
+
+
+@pytest.mark.asyncio
+async def test_registry_install_auth_method_token_skips_autodetect(config_path, monkeypatch):
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]
+    )
+    import durin.agent.mcp_install as mi
+
+    async def _needs_oauth(_url, *, request=None):
+        return True  # the endpoint 401s — but the explicit token path must NOT autodetect
+
+    monkeypatch.setattr(mi, "remote_needs_oauth", _needs_oauth)
+    from durin.service.mcp import McpRegistryInstallCommand
+
+    res = await McpService().registry_install(
+        McpRegistryInstallCommand(ref="io.x/jira", prefer="remote", auth_method="token"), LOCAL
+    )
+    from durin.config.loader import load_config
+
+    sc = load_config().tools.mcp_servers["jira"]
+    assert not sc.oauth  # auth_method="token" → autodetect skipped even though endpoint 401s
+
+
+@pytest.mark.asyncio
+async def test_registry_describe_attaches_help_url(config_path, monkeypatch):
+    class _GhReg:
+        name = "github"
+
+        async def describe(self, ref):
+            from durin.agent.mcp_registry import parse_server_json
+            return parse_server_json({
+                "name": "io.github.github/github-mcp-server", "version": "1",
+                "packages": [{
+                    "registryType": "oci", "transport": {"type": "stdio"},
+                    "identifier": "ghcr.io/github/github-mcp-server", "version": "1",
+                    "runtimeArguments": [
+                        {"type": "named", "name": "-e", "value": "GITHUB_PERSONAL_ACCESS_TOKEN"},
+                    ],
+                    "environmentVariables": [
+                        {"name": "GITHUB_PERSONAL_ACCESS_TOKEN", "isSecret": True},
+                    ],
+                }],
+                "remotes": [],
+            })
+
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_GhReg()]
+    )
+    res = await McpService().registry_describe(
+        McpRegistryDescribeQuery(ref="io.github.github/github-mcp-server"), LOCAL
+    )
+    tok = next(e for e in res.packages[0].env if e.name == "GITHUB_PERSONAL_ACCESS_TOKEN")
+    assert tok.help_url == "https://github.com/settings/tokens"
 
 
 @pytest.mark.asyncio

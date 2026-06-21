@@ -8,6 +8,7 @@ from durin.agent.mcp_install import (
     has_update,
     rebuild_for_update,
     remote_needs_oauth,
+    remote_oauth_capability,
     runtime_install_spec,
     runtime_present,
 )
@@ -235,6 +236,9 @@ async def test_autodetect_oauth_enables_for_bearer_remote():
     async def r401(_u):
         return 401, "Bearer"
 
+    # autodetect enables OAuth on the 401-Bearer signal alone; the SDK performs the real
+    # DCR / metadata discovery at sign-in (so a header-less remote like Atlassian is not
+    # mis-classified by a hand-rolled probe).
     sc = MCPServerConfig(type="streamableHttp", url="https://m/mcp", source_ref="io.x/a")
     await autodetect_oauth(sc, has_declared_headers=False, request=r401)
     assert sc.oauth is True
@@ -258,6 +262,63 @@ async def test_autodetect_oauth_skips_stdio_headers_and_preset():
     preset = MCPServerConfig(type="streamableHttp", url="https://m", oauth=True)
     await autodetect_oauth(preset, request=r401)
     assert preset.oauth is True  # already configured → unchanged
+
+
+@pytest.mark.asyncio
+async def test_remote_oauth_capability_reports_dcr():
+    async def r401(_u):
+        return 401, 'Bearer resource_metadata="https://rs/.well-known/oauth-protected-resource"'
+
+    async def fetch_json(u):
+        if u == "https://rs/.well-known/oauth-protected-resource":
+            return {"authorization_servers": ["https://as"]}
+        if u == "https://as/.well-known/oauth-authorization-server":
+            return {"registration_endpoint": "https://as/reg"}
+        return {}
+
+    cap = await remote_oauth_capability("https://m/mcp", request=r401, fetch_json=fetch_json)
+    assert cap == {"oauth": True, "dcr": True}
+
+
+@pytest.mark.asyncio
+async def test_remote_oauth_capability_oauth_without_dcr():
+    # GitHub shape: 401-Bearer, but the authorization server advertises no registration_endpoint.
+    async def r401(_u):
+        return 401, 'Bearer resource_metadata="https://rs/.well-known/oauth-protected-resource"'
+
+    async def fetch_json(u):
+        if u == "https://rs/.well-known/oauth-protected-resource":
+            return {"authorization_servers": ["https://github.com/login/oauth"]}
+        return {"issuer": "https://github.com/login/oauth"}  # no registration_endpoint
+
+    cap = await remote_oauth_capability("https://m/mcp", request=r401, fetch_json=fetch_json)
+    assert cap == {"oauth": True, "dcr": False}
+
+
+@pytest.mark.asyncio
+async def test_remote_oauth_capability_not_oauth():
+    async def r200(_u):
+        return 200, ""
+
+    cap = await remote_oauth_capability("https://m/mcp", request=r200, fetch_json=None)
+    assert cap == {"oauth": False, "dcr": False}
+
+
+@pytest.mark.asyncio
+async def test_remote_oauth_capability_dcr_via_direct_wellknown():
+    # Atlassian shape: the 401 carries NO resource_metadata, but the authorization-server
+    # metadata (with a registration_endpoint) lives at the well-known on the resource's own
+    # origin. The probe must follow that path too, or it wrongly reports dcr=False.
+    async def r401(_u):
+        return 401, 'Bearer realm="OAuth", error="invalid_token"'
+
+    async def fetch_json(u):
+        if u == "https://mcp.host/.well-known/oauth-authorization-server":
+            return {"registration_endpoint": "https://cf.mcp.host/register"}
+        return {}
+
+    cap = await remote_oauth_capability("https://mcp.host/v1/mcp", request=r401, fetch_json=fetch_json)
+    assert cap == {"oauth": True, "dcr": True}
 
 
 # ---------------------------------------------------------------------------
@@ -288,3 +349,60 @@ def test_build_remote_config_no_headers_is_empty():
     d = _detail(remotes=[RemoteSpec(transport_type="streamable-http", url="https://m/x")])
     sc = build_server_config_from_detail(d, prefer="remote", secret_env_refs={})
     assert sc.headers == {}
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — curated credential help_url
+# ---------------------------------------------------------------------------
+
+def test_apply_auth_help_sets_url_for_curated_input():
+    from durin.agent.mcp_install import apply_auth_help
+    from durin.agent.mcp_registry import EnvVarSpec, PackageSpec, McpServerDetail
+
+    detail = McpServerDetail(
+        name="github", ref="io.github.github/github-mcp-server",
+        description="", version="1", repository="",
+        packages=[PackageSpec(
+            registry_type="oci", identifier="x", version="1", runtime_hint="",
+            transport_type="stdio", runtime_arguments=[], package_arguments=[],
+            env=[EnvVarSpec(name="GITHUB_PERSONAL_ACCESS_TOKEN", is_secret=True)],
+        )],
+        remotes=[],
+    )
+    apply_auth_help(detail)
+    assert detail.packages[0].env[0].help_url == "https://github.com/settings/tokens"
+
+
+def test_apply_auth_help_noop_for_unknown_ref():
+    from durin.agent.mcp_install import apply_auth_help
+    from durin.agent.mcp_registry import EnvVarSpec, PackageSpec, McpServerDetail
+
+    detail = McpServerDetail(
+        name="x", ref="io.unknown/srv", description="", version="1", repository="",
+        packages=[PackageSpec(
+            registry_type="npm", identifier="x", version="1", runtime_hint="npx",
+            transport_type="stdio", runtime_arguments=[], package_arguments=[],
+            env=[EnvVarSpec(name="API_KEY", is_secret=True)],
+        )],
+        remotes=[],
+    )
+    apply_auth_help(detail)
+    assert detail.packages[0].env[0].help_url is None
+
+
+def test_apply_auth_help_noop_for_known_ref_unknown_input():
+    from durin.agent.mcp_install import apply_auth_help
+    from durin.agent.mcp_registry import EnvVarSpec, PackageSpec, McpServerDetail
+
+    detail = McpServerDetail(
+        name="github", ref="io.github.github/github-mcp-server",
+        description="", version="1", repository="",
+        packages=[PackageSpec(
+            registry_type="oci", identifier="x", version="1", runtime_hint="",
+            transport_type="stdio", runtime_arguments=[], package_arguments=[],
+            env=[EnvVarSpec(name="UNRELATED_KEY", is_secret=True)],
+        )],
+        remotes=[],
+    )
+    apply_auth_help(detail)
+    assert detail.packages[0].env[0].help_url is None

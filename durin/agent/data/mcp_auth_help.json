@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "entries": {
+    "io.github.github/github-mcp-server": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "https://github.com/settings/tokens",
+      "Authorization": "https://github.com/settings/tokens"
+    }
+  }
+}

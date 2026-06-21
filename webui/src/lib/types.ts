@@ -494,6 +494,7 @@ export interface McpRegistryEnvVar {
   is_required: boolean;
   is_secret: boolean;
   default: string | null;
+  help_url?: string | null;
 }
 
 export interface McpRegistryPackage {
@@ -529,6 +530,10 @@ export interface McpRuntimeStatus {
   present: boolean;
   auto_installable: boolean;
   install_command: string;
+}
+
+export interface McpOauthCapability {
+  oauth_capable: boolean;
 }
 
 export interface McpUpdateInfo {
