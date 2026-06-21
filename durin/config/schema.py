@@ -831,6 +831,13 @@ class ApiConfig(Base):
     timeout: float = 120.0  # Per-request timeout in seconds.
 
 
+class CronConfig(Base):
+    """Cron scheduler configuration."""
+
+    run_history_max: int = Field(default=50, ge=1, le=1000)
+    run_session_retention_hours: int = Field(default=48, ge=0, le=8760)
+
+
 class GatewayConfig(Base):
     """Gateway/server configuration."""
 
@@ -1094,6 +1101,7 @@ class Config(BaseSettings):
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    cron: CronConfig = Field(default_factory=CronConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     catalog_refresh: CatalogRefreshConfig = Field(

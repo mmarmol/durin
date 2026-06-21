@@ -99,13 +99,12 @@ def _validate_schedule_for_add(schedule: CronSchedule) -> None:
 class CronService:
     """Service for managing and executing scheduled jobs."""
 
-    _MAX_RUN_HISTORY = 20
-
     def __init__(
         self,
         store_path: Path,
         on_job: Callable[[CronJob], Coroutine[Any, Any, str | None]] | None = None,
         max_sleep_ms: int = 300_000,  # 5 minutes
+        run_history_max: int = 50,
     ):
         self.store_path = store_path
         self._action_path = store_path.parent / "action.jsonl"
@@ -120,6 +119,7 @@ class CronService:
         self._timer_task: asyncio.Task | None = None
         self._running = False
         self._timer_active = False
+        self._run_history_max = run_history_max
         # Job ids currently executing — guards against a manual run-now
         # overlapping a scheduled run (or another manual run) of the same
         # long job (e.g. dream). In-process is sufficient: a single gateway
@@ -165,7 +165,9 @@ class CronService:
                         ),
                         payload=CronPayload(
                             kind=j["payload"].get("kind", "agent_turn"),
+                            mode=j["payload"].get("mode", "reminder"),
                             message=j["payload"].get("message", ""),
+                            model=j["payload"].get("model"),
                             deliver=j["payload"].get("deliver", False),
                             channel=j["payload"].get("channel"),
                             to=j["payload"].get("to"),
@@ -187,6 +189,9 @@ class CronService:
                                     status=r["status"],
                                     duration_ms=r.get("durationMs", 0),
                                     error=r.get("error"),
+                                    session_key=r.get("sessionKey"),
+                                    model=r.get("model"),
+                                    summary=r.get("summary"),
                                 )
                                 for r in j.get("state", {}).get("runHistory", [])
                             ],
@@ -303,7 +308,9 @@ class CronService:
                     },
                     "payload": {
                         "kind": j.payload.kind,
+                        "mode": j.payload.mode,
                         "message": j.payload.message,
+                        "model": j.payload.model,
                         "deliver": j.payload.deliver,
                         "channel": j.payload.channel,
                         "to": j.payload.to,
@@ -321,6 +328,9 @@ class CronService:
                                 "status": r.status,
                                 "durationMs": r.duration_ms,
                                 "error": r.error,
+                                "sessionKey": r.session_key,
+                                "model": r.model,
+                                "summary": r.summary,
                             }
                             for r in j.state.run_history
                         ],
@@ -562,7 +572,7 @@ class CronService:
                 duration_ms=end_ms - start_ms,
                 error=job.state.last_error,
             ))
-            job.state.run_history = job.state.run_history[-self._MAX_RUN_HISTORY:]
+            job.state.run_history = job.state.run_history[-self._run_history_max:]
 
             # Handle one-shot jobs
             if job.schedule.kind == "at":
@@ -603,6 +613,8 @@ class CronService:
         delete_after_run: bool = False,
         channel_meta: dict | None = None,
         session_key: str | None = None,
+        mode: str = "reminder",
+        model: str | None = None,
     ) -> CronJob:
         """Add a new job."""
         _validate_schedule_for_add(schedule)
@@ -615,7 +627,9 @@ class CronService:
             schedule=schedule,
             payload=CronPayload(
                 kind="agent_turn",
+                mode=mode,
                 message=message,
+                model=model,
                 deliver=deliver,
                 channel=channel,
                 to=to,
@@ -763,11 +777,13 @@ class CronService:
         channel: str | None = ...,
         to: str | None = ...,
         delete_after_run: bool | None = None,
+        mode: str | None = None,
+        model: str | None = ...,
     ) -> CronJob | Literal["not_found", "protected"]:
         """Update mutable fields of an existing job. System jobs cannot be updated.
 
-        For ``channel`` and ``to``, pass an explicit value (including ``None``)
-        to update; omit (sentinel ``...``) to leave unchanged.
+        For ``channel``, ``to``, and ``model``, pass an explicit value (including
+        ``None``) to update; omit (sentinel ``...``) to leave unchanged.
         """
         with self._lock:
             store = self._load_store()
@@ -792,6 +808,10 @@ class CronService:
                 job.payload.to = to
             if delete_after_run is not None:
                 job.delete_after_run = delete_after_run
+            if mode is not None:
+                job.payload.mode = mode
+            if model is not ...:
+                job.payload.model = model
 
             job.updated_at_ms = _now_ms()
             if job.enabled:
