@@ -1587,7 +1587,16 @@ class AgentLoop:
         session_path = self.sessions._get_session_path(session_key)
         try:
             async with lock, gate:
-                async with session_turn_lease(session_path):
+                try:
+                    turn_lease_cm = session_turn_lease(session_path)
+                    await turn_lease_cm.__aenter__()
+                except TimeoutError:
+                    await self.bus.publish_outbound(OutboundMessage(
+                        channel=msg.channel, chat_id=msg.chat_id,
+                        content="This session is busy in another window. Please try again in a moment.",
+                    ))
+                    return
+                try:
                     self.sessions.reload(session_key)  # load-per-turn: refresh from disk under the lease
                     try:
                         on_stream = on_stream_end = None
@@ -1702,6 +1711,8 @@ class AgentLoop:
                             channel=msg.channel, chat_id=msg.chat_id,
                             content="Sorry, I encountered an error.",
                         ))
+                finally:
+                    await turn_lease_cm.__aexit__(None, None, None)
         finally:
             # Drain any messages still in the pending queue and re-publish
             # them to the bus so they are processed as fresh inbound messages

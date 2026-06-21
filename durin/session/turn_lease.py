@@ -8,6 +8,13 @@ save() call is never blocked by its own outer turn lease.
 
 Acquired AFTER the in-process asyncio.Lock (fast path); the flock
 auto-releases if the process dies.
+
+Scope note: this lease serializes interactive TURNS per session across
+processes. Direct out-of-turn savers (HTTP rename in service/sessions.py,
+cron/heartbeat process_direct calls) do NOT yet acquire it — they take only
+the save() ``.lock``, not this ``.turn.lock``. That is a known Phase-A
+limitation; closing it requires background/direct-saver serialization work
+not yet scheduled.
 """
 from __future__ import annotations
 
@@ -17,6 +24,11 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from durin.utils.file_lock import cross_process_lock
+
+# Generous acquire timeout: tool-heavy turns routinely take several minutes.
+# Callers (the agent loop) catch TimeoutError and surface a clear message
+# rather than dropping the turn silently.
+_DEFAULT_TURN_LEASE_TIMEOUT = 600.0
 
 
 def _turn_lock_path(session_path: Path) -> Path:
@@ -31,7 +43,7 @@ def _turn_lock_path(session_path: Path) -> Path:
 
 @asynccontextmanager
 async def session_turn_lease(
-    session_path: Path, *, timeout: float = 30.0
+    session_path: Path, *, timeout: float = _DEFAULT_TURN_LEASE_TIMEOUT
 ) -> AsyncIterator[None]:
     """Async context manager that holds the cross-process lock for one turn.
 
@@ -40,10 +52,9 @@ async def session_turn_lease(
     the OS releases the flock automatically).
 
     ``timeout`` is how long a competing surface waits for the current turn to
-    finish. NOTE: a tool-heavy turn can take several minutes; callers that
-    wire this into the agent loop should use a large timeout (or math.inf for
-    unbounded wait) and handle TimeoutError explicitly rather than letting it
-    propagate as an unhandled exception.
+    finish. When the timeout expires a ``TimeoutError`` is raised; callers
+    should catch it and publish a clear user-facing message rather than
+    letting the turn drop silently.
     """
     turn_path = _turn_lock_path(session_path)
     cm = cross_process_lock(turn_path, timeout=timeout)

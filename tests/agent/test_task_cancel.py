@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from typing import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -101,7 +103,19 @@ class TestHandleStop:
         assert "2 task" in out.content
 
 
+@asynccontextmanager
+async def _noop_lease(path: object, **kwargs: object) -> AsyncIterator[None]:
+    """Stand-in for session_turn_lease that does nothing — avoids MagicMock path
+    flowing into cross_process_lock and creating stray ``.lock`` files in the CWD."""
+    yield
+
+
 class TestDispatch:
+    @pytest.fixture(autouse=True)
+    def _patch_turn_lease(self):
+        with patch("durin.agent.loop.session_turn_lease", _noop_lease):
+            yield
+
     def test_exec_tool_not_registered_when_disabled(self):
         from durin.agent.tools.shell import ExecToolConfig
         from durin.config.schema import ToolsConfig
