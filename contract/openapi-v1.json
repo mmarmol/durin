@@ -268,6 +268,22 @@
             "title": "Message",
             "type": "string"
           },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -298,6 +314,7 @@
           "is_system",
           "schedule",
           "message",
+          "mode",
           "channel",
           "state",
           "created_at_ms",

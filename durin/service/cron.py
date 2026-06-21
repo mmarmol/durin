@@ -73,6 +73,8 @@ def _job_to_dict(job: Any, *, cron_scheduler: Any | None = None) -> dict[str, An
             "tz": sched.tz,
         },
         "message": "" if is_system else job.payload.message,
+        "mode": job.payload.mode,
+        "model": job.payload.model,
         "channel": job.payload.channel or "",
         "state": {
             "next_run_at_ms": job.state.next_run_at_ms,
@@ -116,10 +118,24 @@ def _fresh_cron_scheduler():
     return CronScheduler(path)
 
 
+_VALID_SCHEDULE_KINDS = {"cron", "every", "at"}
+
+
 def _schedule_from_cmd(cmd: Any) -> Any:
-    """Build a CronSchedule from command fields (schedule_kind/expr/every_ms/at_ms/tz)."""
+    """Build a CronSchedule from command fields (schedule_kind/expr/every_ms/at_ms/tz).
+
+    Rejects a ``schedule_kind`` outside ``{cron, every, at}`` loudly: an
+    unknown kind (e.g. the legacy webui "interval") otherwise falls through
+    ``_compute_next_run`` to ``None``, so the job is created (HTTP 200) but
+    never fires.
+    """
     from durin.cron.types import CronSchedule
 
+    if cmd.schedule_kind not in _VALID_SCHEDULE_KINDS:
+        raise ValidationFailedError(
+            f"invalid schedule_kind '{cmd.schedule_kind}'",
+            details={"allowed": sorted(_VALID_SCHEDULE_KINDS)},
+        )
     return CronSchedule(
         kind=cmd.schedule_kind,
         expr=cmd.expr,
@@ -172,6 +188,8 @@ class CronJobItem(Result):
     is_system: bool
     schedule: CronJobScheduleResult
     message: str
+    mode: str
+    model: str | None = None
     channel: str
     state: CronJobStateResult
     run_history: list[CronRunRecordResult] = []

@@ -887,7 +887,7 @@ def test_agent_config_sets_active_path(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("durin.cli.commands.sync_workspace_templates", lambda _path: None)
     monkeypatch.setattr("durin.providers.factory.make_provider", lambda _config: _fake_provider())
     monkeypatch.setattr("durin.bus.queue.MessageBus", lambda: object())
-    monkeypatch.setattr("durin.cron.service.CronService", lambda _store: object())
+    monkeypatch.setattr("durin.cron.service.CronService", lambda _store, **_kwargs: object())
 
     class _FakeAgentLoop:
         @classmethod
@@ -927,7 +927,7 @@ def test_agent_uses_workspace_directory_for_cron_store(monkeypatch, tmp_path: Pa
     monkeypatch.setattr("durin.bus.queue.MessageBus", lambda: object())
 
     class _FakeCron:
-        def __init__(self, store_path: Path) -> None:
+        def __init__(self, store_path: Path, **_kwargs) -> None:
             seen["cron_store"] = store_path
 
     class _FakeAgentLoop:
@@ -977,7 +977,7 @@ def test_agent_workspace_override_does_not_migrate_legacy_cron(
     monkeypatch.setattr("durin.config.paths.get_cron_dir", lambda: legacy_dir)
 
     class _FakeCron:
-        def __init__(self, store_path: Path) -> None:
+        def __init__(self, store_path: Path, **_kwargs) -> None:
             seen["cron_store"] = store_path
 
     class _FakeAgentLoop:
@@ -1033,7 +1033,7 @@ def test_agent_custom_config_workspace_does_not_migrate_legacy_cron(
     monkeypatch.setattr("durin.config.paths.get_cron_dir", lambda: legacy_dir)
 
     class _FakeCron:
-        def __init__(self, store_path: Path) -> None:
+        def __init__(self, store_path: Path, **_kwargs) -> None:
             seen["cron_store"] = store_path
 
     class _FakeAgentLoop:
@@ -1270,7 +1270,7 @@ def test_gateway_uses_workspace_directory_for_cron_store(monkeypatch, tmp_path: 
     seen: dict[str, Path] = {}
 
     class _StopCron:
-        def __init__(self, store_path: Path) -> None:
+        def __init__(self, store_path: Path, **_kwargs) -> None:
             seen["cron_store"] = store_path
             raise _StopGatewayError("stop")
 
@@ -1338,7 +1338,7 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
     monkeypatch.setattr("durin.session.manager.SessionManager", _FakeSessionManager)
 
     class _FakeCron:
-        def __init__(self, _store_path: Path) -> None:
+        def __init__(self, _store_path: Path, **_kwargs) -> None:
             self.on_job = None
             seen["cron"] = self
 
@@ -1473,7 +1473,7 @@ def test_gateway_cron_job_passes_none_on_progress_for_bus_callback(
     monkeypatch.setattr("durin.session.manager.SessionManager", lambda _workspace: object())
 
     class _FakeCron:
-        def __init__(self, _store_path: Path) -> None:
+        def __init__(self, _store_path: Path, **_kwargs) -> None:
             self.on_job = None
             seen["cron"] = self
 
@@ -1555,7 +1555,7 @@ def test_gateway_workspace_override_does_not_migrate_legacy_cron(
     seen: dict[str, Path] = {}
 
     class _StopCron:
-        def __init__(self, store_path: Path) -> None:
+        def __init__(self, store_path: Path, **_kwargs) -> None:
             seen["cron_store"] = store_path
             raise _StopGatewayError("stop")
 
@@ -1594,7 +1594,7 @@ def test_gateway_custom_config_workspace_does_not_migrate_legacy_cron(
     seen: dict[str, Path] = {}
 
     class _StopCron:
-        def __init__(self, store_path: Path) -> None:
+        def __init__(self, store_path: Path, **_kwargs) -> None:
             seen["cron_store"] = store_path
             raise _StopGatewayError("stop")
 
@@ -1746,7 +1746,7 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
             return None
 
     class _FakeCronService:
-        def __init__(self, _store_path: Path) -> None:
+        def __init__(self, _store_path: Path, **_kwargs) -> None:
             self.on_job = None
 
         async def start(self) -> None:

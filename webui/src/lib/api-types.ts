@@ -1417,6 +1417,13 @@ export interface components {
             is_system: boolean;
             /** Message */
             message: string;
+            /** Mode */
+            mode: string;
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
             /** Name */
             name: string;
             /**

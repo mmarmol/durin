@@ -1276,7 +1276,7 @@ def _run_gateway(
 
     # Create cron service with workspace-scoped store
     cron_store_path = config.workspace_path / "cron" / "jobs.json"
-    cron = CronService(cron_store_path)
+    cron = CronService(cron_store_path, run_history_max=config.cron.run_history_max)
 
     # Create agent with cron service
     agent = AgentLoop.from_config(
@@ -1431,6 +1431,18 @@ def _run_gateway(
                 )
             except Exception:
                 logger.exception("skill curation step (non-fatal) failed")
+
+            # Reap stale per-run cron sessions (cron:{id}:run:{ms}). These are
+            # created on every agent_turn cron execution and never otherwise
+            # removed; run_session_retention_hours bounds how long they live.
+            try:
+                from durin.cron.reaper import reap_expired_run_sessions
+
+                reap_expired_run_sessions(
+                    session_manager, config.cron.run_session_retention_hours
+                )
+            except Exception:
+                logger.exception("cron run-session reaper (non-fatal) failed")
             return None
 
         from durin.cron.prompting import build_cron_turn_prompt
@@ -1927,7 +1939,7 @@ def agent(
 
     # Create cron service with workspace-scoped store
     cron_store_path = config.workspace_path / "cron" / "jobs.json"
-    cron = CronService(cron_store_path)
+    cron = CronService(cron_store_path, run_history_max=config.cron.run_history_max)
 
     if logs:
         logger.enable("durin")
