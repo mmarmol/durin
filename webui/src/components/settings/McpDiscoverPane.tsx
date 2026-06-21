@@ -317,7 +317,10 @@ export function McpDiscoverPane({
   }
 
   const envs = detail ? requiredEnv(detail, prefer) : [];
-  const showOauthChoice = prefer === "remote" && oauthCapable;
+  // Only offer the OAuth-vs-token choice when there is BOTH an OAuth-capable endpoint AND a
+  // declared token field — otherwise "manual token" is a dead end (a header-less DCR remote
+  // like Atlassian auto-OAuths via autodetect with no field to fill).
+  const showOauthChoice = prefer === "remote" && oauthCapable && envs.length > 0;
   const hideTokenField = showOauthChoice && authMethod === "oauth";
 
   async function doInstall() {

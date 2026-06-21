@@ -255,24 +255,44 @@ def _as_metadata_urls(as_url: str) -> list[str]:
             base + "/.well-known/openid-configuration"]
 
 
-async def _discover_dcr(www: str, fetch_json) -> bool:
-    """Follow resource_metadata → authorization-server metadata; True if a ``registration_endpoint``
-    (Dynamic Client Registration) is advertised. Best-effort: any miss/error → False."""
+def _origin_metadata_urls(url: str) -> list[str]:
+    """The RFC 8414 / OIDC well-known authorization-server metadata locations on the
+    resource's OWN origin. Some MCP servers (e.g. Atlassian) advertise their authorization
+    server — with a ``registration_endpoint`` — here, and their 401 carries no
+    ``resource_metadata`` pointer, so the RFC 9728 chain alone misses them."""
+    from urllib.parse import urlsplit
+
+    p = urlsplit(url or "")
+    if not p.scheme or not p.netloc:
+        return []
+    origin = f"{p.scheme}://{p.netloc}"
+    return [origin + "/.well-known/oauth-authorization-server",
+            origin + "/.well-known/openid-configuration"]
+
+
+async def _discover_dcr(url: str, www: str, fetch_json) -> bool:
+    """True when an authorization server reachable from ``url`` advertises a
+    ``registration_endpoint`` (Dynamic Client Registration). Tries the RFC 9728
+    ``resource_metadata`` pointer from the 401 challenge first, then the well-known on the
+    resource's own origin (the path used by servers whose 401 omits ``resource_metadata``,
+    e.g. Atlassian). Best-effort: any miss/error → False."""
+    candidates: list[str] = []
     prm_url = _parse_resource_metadata(www)
-    if not prm_url:
-        return False
-    try:
-        prm = await fetch_json(prm_url)
-    except Exception:  # noqa: BLE001
-        return False
-    for as_url in (prm.get("authorization_servers") if isinstance(prm, dict) else None) or []:
-        for meta_url in _as_metadata_urls(as_url):
-            try:
-                meta = await fetch_json(meta_url)
-            except Exception:  # noqa: BLE001
-                meta = {}
-            if isinstance(meta, dict) and meta.get("registration_endpoint"):
-                return True
+    if prm_url:
+        try:
+            prm = await fetch_json(prm_url)
+        except Exception:  # noqa: BLE001
+            prm = {}
+        for as_url in (prm.get("authorization_servers") if isinstance(prm, dict) else None) or []:
+            candidates += _as_metadata_urls(as_url)
+    candidates += _origin_metadata_urls(url)
+    for meta_url in candidates:
+        try:
+            meta = await fetch_json(meta_url)
+        except Exception:  # noqa: BLE001
+            meta = {}
+        if isinstance(meta, dict) and meta.get("registration_endpoint"):
+            return True
     return False
 
 
@@ -311,7 +331,7 @@ async def remote_oauth_capability(url: str, *, request=None, fetch_json=None) ->
         return {"oauth": False, "dcr": False}
     if fetch_json is None:
         fetch_json = _default_fetch_json()
-    return {"oauth": True, "dcr": await _discover_dcr(www, fetch_json)}
+    return {"oauth": True, "dcr": await _discover_dcr(url, www, fetch_json)}
 
 
 def _auth_help_map() -> dict:
@@ -342,18 +362,18 @@ def apply_auth_help(detail) -> None:
 
 
 async def autodetect_oauth(
-    sc: MCPServerConfig, *, has_declared_headers: bool = False, request=None, fetch_json=None
+    sc: MCPServerConfig, *, has_declared_headers: bool = False, request=None
 ) -> None:
-    """Enable OAuth on a freshly-built REMOTE config only when durin can complete it.
+    """Enable OAuth on a freshly-built REMOTE config when its endpoint demands it.
 
     Skips stdio servers, configs that already declare a static auth header (e.g. github's
-    PAT) or already set ``oauth``. Sets ``oauth=True`` only when the endpoint advertises
-    zero-secret OAuth via DCR — so a 401-Bearer endpoint without DCR (e.g. GitHub) is left
-    on the token path instead of flipping to a flow that would fail at sign-in. Mutates
-    ``sc`` in place. (A server pre-configured with an ``oauth.client_id`` is already
-    ``oauth``-set and returns at the guard above.)"""
+    PAT), or already set ``oauth``. When the endpoint returns the 401-Bearer challenge,
+    set ``oauth=True`` so durin's sign-in flow + the SDK's OAuth provider (which performs
+    the real DCR / metadata discovery at sign-in) take over → the server shows
+    ``needs_auth`` instead of failing/hanging. durin does NOT pre-judge DCR here — that is
+    the SDK's job, and a hand-rolled probe mis-classifies real servers (e.g. Atlassian,
+    whose 401 omits ``resource_metadata``). Mutates ``sc`` in place."""
     if sc.command or not sc.url or sc.oauth or has_declared_headers:
         return
-    cap = await remote_oauth_capability(sc.url, request=request, fetch_json=fetch_json)
-    if cap["dcr"]:
+    if await remote_needs_oauth(sc.url, request=request):
         sc.oauth = True

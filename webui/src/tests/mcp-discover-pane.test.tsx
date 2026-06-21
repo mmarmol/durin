@@ -395,6 +395,34 @@ it("offers OAuth by default when oauth-capable, hiding the token field, with a m
   expect(screen.getByText(/Authorization/)).toBeInTheDocument();
 });
 
+it("hides the auth selector for an oauth-capable remote with no token field (autodetect handles it)", async () => {
+  const user = userEvent.setup();
+  describeMcpRegistryServer.mockResolvedValue({
+    name: "atl", ref: "com.atl/srv", description: "", version: "1", repository: "",
+    packages: [],
+    remotes: [{ transport_type: "streamable-http", url: "https://atl/mcp", headers: [] }],
+  });
+  mcpRegistryRuntime.mockResolvedValue({ kind: "remote", runtime: "", present: true, auto_installable: false, install_command: "" });
+  mcpRegistryOauthCapability.mockResolvedValue({ oauth_capable: true });
+
+  const ATL_HIT: McpRegistryHit = {
+    name: "atl", ref: "com.atl/srv", registry: "github", kind: "remote", description: "",
+    signals: { stars: 100, owner_login: "atl", verified: false },
+  };
+  searchMcpRegistry.mockResolvedValue(result([ATL_HIT]));
+
+  render(<McpDiscoverPane token="t" onClose={() => {}} />);
+  await user.type(screen.getByRole("textbox"), "atl");
+  await user.click(screen.getByRole("button", { name: /search/i }));
+  await user.click(await screen.findByText("atl"));
+
+  await screen.findByRole("button", { name: /connect/i });
+  await waitFor(() => expect(mcpRegistryOauthCapability).toHaveBeenCalled());
+  // capable=true but no declared token field → no selector, no dead-end "manual token";
+  // autodetect enables OAuth at install time.
+  expect(screen.queryByText(/Manual token/i)).toBeNull();
+});
+
 it("renders a credential help link from help_url", async () => {
   const user = userEvent.setup();
   describeMcpRegistryServer.mockResolvedValue({

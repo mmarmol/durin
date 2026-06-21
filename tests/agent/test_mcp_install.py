@@ -234,15 +234,13 @@ async def test_autodetect_oauth_enables_for_bearer_remote():
     from durin.config.schema import MCPServerConfig
 
     async def r401(_u):
-        return 401, 'Bearer resource_metadata="https://rs/prm"'
+        return 401, "Bearer"
 
-    async def fetch_json(u):
-        if u == "https://rs/prm":
-            return {"authorization_servers": ["https://as"]}
-        return {"registration_endpoint": "https://as/reg"}
-
+    # autodetect enables OAuth on the 401-Bearer signal alone; the SDK performs the real
+    # DCR / metadata discovery at sign-in (so a header-less remote like Atlassian is not
+    # mis-classified by a hand-rolled probe).
     sc = MCPServerConfig(type="streamableHttp", url="https://m/mcp", source_ref="io.x/a")
-    await autodetect_oauth(sc, has_declared_headers=False, request=r401, fetch_json=fetch_json)
+    await autodetect_oauth(sc, has_declared_headers=False, request=r401)
     assert sc.oauth is True
 
 
@@ -307,29 +305,20 @@ async def test_remote_oauth_capability_not_oauth():
 
 
 @pytest.mark.asyncio
-async def test_autodetect_oauth_requires_dcr():
-    from durin.config.schema import MCPServerConfig
-
+async def test_remote_oauth_capability_dcr_via_direct_wellknown():
+    # Atlassian shape: the 401 carries NO resource_metadata, but the authorization-server
+    # metadata (with a registration_endpoint) lives at the well-known on the resource's own
+    # origin. The probe must follow that path too, or it wrongly reports dcr=False.
     async def r401(_u):
-        return 401, 'Bearer resource_metadata="https://rs/prm"'
+        return 401, 'Bearer realm="OAuth", error="invalid_token"'
 
-    async def with_dcr(u):
-        if u == "https://rs/prm":
-            return {"authorization_servers": ["https://as"]}
-        return {"registration_endpoint": "https://as/reg"}
-
-    async def no_dcr(u):
-        if u == "https://rs/prm":
-            return {"authorization_servers": ["https://as"]}
+    async def fetch_json(u):
+        if u == "https://mcp.host/.well-known/oauth-authorization-server":
+            return {"registration_endpoint": "https://cf.mcp.host/register"}
         return {}
 
-    yes = MCPServerConfig(type="streamableHttp", url="https://m/mcp", source_ref="io.x/a")
-    await autodetect_oauth(yes, has_declared_headers=False, request=r401, fetch_json=with_dcr)
-    assert yes.oauth is True
-
-    no = MCPServerConfig(type="streamableHttp", url="https://m/mcp", source_ref="io.x/a")
-    await autodetect_oauth(no, has_declared_headers=False, request=r401, fetch_json=no_dcr)
-    assert not no.oauth  # OAuth-capable endpoint but no DCR → don't force a flow durin can't finish
+    cap = await remote_oauth_capability("https://mcp.host/v1/mcp", request=r401, fetch_json=fetch_json)
+    assert cap == {"oauth": True, "dcr": True}
 
 
 # ---------------------------------------------------------------------------
