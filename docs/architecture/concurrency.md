@@ -52,6 +52,25 @@ save()'s `<key>.jsonl.lock`; see lock-ordering below). Wired in
 (fast path). On acquire-timeout it publishes a clear "session busy in
 another window" message rather than dropping the turn silently.
 
+### `durin/config/loader.py` — `save_config` and `mutate_config`
+
+`save_config` wraps its entire write — the multi-file split-layout set plus
+stale-file unlink — in `cross_process_lock(config_path)`.  This serializes
+concurrent writers and makes the split-layout write atomic as a SET relative
+to other lock holders, so a reader under the lock never sees a torn
+cross-section state.
+
+`mutate_config(mutator)` is the lost-update-safe read-modify-write entry
+point: it acquires the lock, reloads the config from disk, calls *mutator*,
+saves, and returns the updated config.  Because `cross_process_lock` is
+reentrant (thread-local guard), the inner `save_config` re-taking the lock
+is safe.
+
+**Residual:** a direct `load_config() → edit → save_config()` not routed
+through `mutate_config` remains last-writer-wins across processes.  This
+matches hermes and is an accepted trade-off; callers are migrated
+opportunistically.
+
 ### `durin/cli/gateway_daemon.py` — `acquire_gateway_singleton()`
 
 Holds `flock(LOCK_EX|LOCK_NB)` on `DURIN_HOME/gateway.lock`. The OS
