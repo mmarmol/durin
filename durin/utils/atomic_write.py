@@ -94,7 +94,8 @@ def atomic_write_bytes(
             tmp2 = Path(tmp2_name)
             try:
                 with os.fdopen(fd2, "wb") as f2:
-                    shutil.copyfileobj(tmp.open("rb"), f2)
+                    with tmp.open("rb") as src:
+                        shutil.copyfileobj(src, f2)
                     f2.flush()
                     if fsync:
                         os.fsync(f2.fileno())
