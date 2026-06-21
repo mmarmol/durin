@@ -3,7 +3,6 @@
 Extracted from durin/channels/msteams.py:_refs_file_lock and generalized so
 every whole-file read-modify-write can serialize across the gateway, the TUI's
 own AgentLoop, cron and heartbeat processes that share one DURIN_HOME.
-Rationale: docs/architecture/concurrency.md.
 """
 from __future__ import annotations
 
