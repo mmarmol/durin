@@ -120,3 +120,13 @@ background/direct-saver serialization phase:
 
    Closing these requires background/direct-saver serialization work not
    yet scheduled.
+
+3. **`SecretStore.set_scope()` is an unlocked in-memory mutator.**
+   (`durin/security/secrets.py`) It does not write to disk itself; a caller
+   doing `load → set_scope → save()` is an unlocked read-modify-write.
+   Migrate to a locked path opportunistically.
+
+4. **`oauth/<provider>.json` token writes are not durin-locked.**
+   These files are owned by the external `oauth-cli-kit` library
+   (`FileTokenStorage`) and are intentionally outside durin's locking
+   domain — out of durin's control.
