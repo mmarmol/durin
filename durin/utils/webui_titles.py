@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
 from durin.providers.base import LLMProvider
 from durin.session.manager import Session, SessionManager
+from durin.session.turn_lease import session_turn_lease
 from durin.utils.helpers import truncate_text
 
 WEBUI_SESSION_METADATA_KEY = "webui"
@@ -62,7 +64,17 @@ async def maybe_generate_webui_title(
     provider: LLMProvider,
     model: str,
 ) -> bool:
-    """Generate and persist a short title for WebUI-owned sessions only."""
+    """Generate and persist a short title for WebUI-owned sessions only.
+
+    The LLM call runs OUTSIDE the turn lease (it can be long; holding the
+    lock across a network call would block concurrent turns for seconds).
+    The save runs INSIDE the lease, after a reload, so it cannot clobber a
+    concurrent turn's whole-file write and cannot overwrite a title set by
+    the user while the LLM was running.
+
+    See docs/architecture/concurrency.md.
+    """
+    # --- Pre-flight check (outside lease; uses cached/recent state) -------
     session = sessions.get_or_create(session_key)
     if session.metadata.get(WEBUI_SESSION_METADATA_KEY) is not True:
         return False
@@ -89,6 +101,7 @@ async def maybe_generate_webui_title(
     if assistant_text:
         prompt += f"\nAssistant: {truncate_text(assistant_text, 1_000)}"
 
+    # --- LLM call: runs OUTSIDE the lease --------------------------------
     try:
         response = await provider.chat_with_retry(
             [
@@ -114,8 +127,27 @@ async def maybe_generate_webui_title(
     title = clean_generated_title(response.content)
     if not title or title.lower().startswith("error"):
         return False
-    session.metadata[WEBUI_TITLE_METADATA_KEY] = title
-    sessions.save(session)
+
+    # --- Save: acquire lease, reload, re-check guards, then write --------
+    # Reload is required so we commit on top of the latest disk state (not the
+    # pre-LLM snapshot).  The guards are re-checked on the reloaded session so
+    # a user rename that arrived while the LLM was running is respected.
+    session_path = sessions._get_session_path(session_key)
+    try:
+        async with session_turn_lease(session_path):
+            fresh = sessions.reload(session_key)
+            if fresh.metadata.get(WEBUI_TITLE_USER_EDITED_METADATA_KEY) is True:
+                return False
+            existing = fresh.metadata.get(WEBUI_TITLE_METADATA_KEY)
+            if isinstance(existing, str) and existing.strip():
+                return False
+            fresh.metadata[WEBUI_TITLE_METADATA_KEY] = title
+            sessions.save(fresh)
+    except TimeoutError:
+        logger.debug(
+            "webui title-gen: lease timeout for {}, title not saved", session_key
+        )
+        return False
     return True
 
 

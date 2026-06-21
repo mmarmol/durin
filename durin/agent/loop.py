@@ -95,6 +95,7 @@ if TYPE_CHECKING:
 
 
 UNIFIED_SESSION_KEY = "unified:default"
+_SESSION_BUSY_NOTICE = "This session is busy in another window. Please try again in a moment."
 
 
 class TurnState(Enum):
@@ -1594,7 +1595,7 @@ class AgentLoop:
                 except TimeoutError:
                     await self.bus.publish_outbound(OutboundMessage(
                         channel=msg.channel, chat_id=msg.chat_id,
-                        content="This session is busy in another window. Please try again in a moment.",
+                        content=_SESSION_BUSY_NOTICE,
                     ))
                     return
                 try:
@@ -2520,16 +2521,43 @@ class AgentLoop:
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
     ) -> OutboundMessage | None:
-        """Process a message directly and return the outbound payload."""
+        """Process a message directly and return the outbound payload.
+
+        Acquires the per-session turn lease (cross-process advisory lock)
+        and reloads the session from disk before processing, mirroring
+        _dispatch's serialization semantics.  On TimeoutError the turn is
+        skipped with a warning; the cron/heartbeat caller is never raised to.
+
+        See docs/architecture/concurrency.md.
+        """
         await self._connect_mcp()
         msg = InboundMessage(
             channel=channel, sender_id="user", chat_id=chat_id,
             content=content, media=media or [],
         )
-        return await self._process_message(
-            msg,
-            session_key=session_key,
-            on_progress=on_progress,
-            on_stream=on_stream,
-            on_stream_end=on_stream_end,
-        )
+        session_path = self.sessions._get_session_path(session_key)
+        lock = self._session_locks.setdefault(session_key, asyncio.Lock())
+        async with lock:
+            try:
+                turn_lease_cm = session_turn_lease(session_path)
+                await turn_lease_cm.__aenter__()
+            except TimeoutError:
+                logger.warning(
+                    "process_direct: session {} is busy, skipping direct turn",
+                    session_key,
+                )
+                return OutboundMessage(
+                    channel=channel, chat_id=chat_id,
+                    content=_SESSION_BUSY_NOTICE,
+                )
+            try:
+                self.sessions.reload(session_key)  # load-per-turn under the lease
+                return await self._process_message(
+                    msg,
+                    session_key=session_key,
+                    on_progress=on_progress,
+                    on_stream=on_stream,
+                    on_stream_end=on_stream_end,
+                )
+            finally:
+                await turn_lease_cm.__aexit__(None, None, None)

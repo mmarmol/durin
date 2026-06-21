@@ -275,12 +275,70 @@ class SecretStore:
         return removed
 
     def set_scope(self, name: str, scope: list[str]) -> bool:
-        """Replace a secret's ``scope``. Returns False when unknown."""
+        """Replace a secret's ``scope`` in memory only. Returns False when unknown.
+
+        Mutates the in-memory entry but does NOT persist; callers needing
+        durability must use :meth:`set_scope_locked`.
+        """
         self._ensure()
         entry = self._entries.get(name)
         if entry is None:
             return False
         entry.scope = list(scope)
+        return True
+
+    def set_scope_locked(self, name: str, scope: list[str]) -> bool:
+        """Replace a secret's ``scope`` under a cross-process lock. Returns False when unknown.
+
+        The load→mutate→save is performed inside ``cross_process_lock`` so
+        concurrent callers from different processes cannot lose each other's
+        writes. See docs/architecture/concurrency.md.
+        """
+        with cross_process_lock(self._path):
+            self.load()
+            entry = self._entries.get(name)
+            if entry is None:
+                return False
+            entry.scope = list(scope)
+            self.save()
+        return True
+
+    def grant_consumer_locked(self, name: str, consumer: str) -> bool | None:
+        """Add *consumer* to a secret's scope under a cross-process lock.
+
+        Returns True when the tag was added, False when it was already present,
+        and None when the secret is unknown. The read-compute-write is entirely
+        inside ``cross_process_lock`` so concurrent grants from different
+        processes both survive. See docs/architecture/concurrency.md.
+        """
+        with cross_process_lock(self._path):
+            self.load()
+            entry = self._entries.get(name)
+            if entry is None:
+                return None
+            if consumer in entry.scope:
+                return False
+            entry.scope = [*entry.scope, consumer]
+            self.save()
+        return True
+
+    def revoke_consumer_locked(self, name: str, consumer: str) -> bool | None:
+        """Remove *consumer* from a secret's scope under a cross-process lock.
+
+        Returns True when the tag was removed, False when it was not present,
+        and None when the secret is unknown. The read-compute-write is entirely
+        inside ``cross_process_lock`` so concurrent revokes from different
+        processes both survive. See docs/architecture/concurrency.md.
+        """
+        with cross_process_lock(self._path):
+            self.load()
+            entry = self._entries.get(name)
+            if entry is None:
+                return None
+            if consumer not in entry.scope:
+                return False
+            entry.scope = [tag for tag in entry.scope if tag != consumer]
+            self.save()
         return True
 
     # -- resolution -------------------------------------------------------
