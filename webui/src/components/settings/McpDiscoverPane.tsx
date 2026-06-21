@@ -266,6 +266,7 @@ export function McpDiscoverPane({
   // When viewing the remote model of a server, probe whether durin can complete
   // zero-secret OAuth (DCR). Only then do we offer the OAuth choice.
   useEffect(() => {
+    setAuthMethod("oauth");
     if (!detail || prefer !== "remote") {
       setOauthCapable(false);
       return;
