@@ -1830,6 +1830,11 @@ export interface components {
             default: string | null;
             /** Description */
             description: string;
+            /**
+             * Help Url
+             * @default null
+             */
+            help_url: string | null;
             /** Is Required */
             is_required: boolean;
             /** Is Secret */

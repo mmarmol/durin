@@ -360,3 +360,42 @@ def test_build_remote_config_no_headers_is_empty():
     d = _detail(remotes=[RemoteSpec(transport_type="streamable-http", url="https://m/x")])
     sc = build_server_config_from_detail(d, prefer="remote", secret_env_refs={})
     assert sc.headers == {}
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — curated credential help_url
+# ---------------------------------------------------------------------------
+
+def test_apply_auth_help_sets_url_for_curated_input():
+    from durin.agent.mcp_install import apply_auth_help
+    from durin.agent.mcp_registry import EnvVarSpec, PackageSpec, McpServerDetail
+
+    detail = McpServerDetail(
+        name="github", ref="io.github.github/github-mcp-server",
+        description="", version="1", repository="",
+        packages=[PackageSpec(
+            registry_type="oci", identifier="x", version="1", runtime_hint="",
+            transport_type="stdio", runtime_arguments=[], package_arguments=[],
+            env=[EnvVarSpec(name="GITHUB_PERSONAL_ACCESS_TOKEN", is_secret=True)],
+        )],
+        remotes=[],
+    )
+    apply_auth_help(detail)
+    assert detail.packages[0].env[0].help_url == "https://github.com/settings/tokens"
+
+
+def test_apply_auth_help_noop_for_unknown_ref():
+    from durin.agent.mcp_install import apply_auth_help
+    from durin.agent.mcp_registry import EnvVarSpec, PackageSpec, McpServerDetail
+
+    detail = McpServerDetail(
+        name="x", ref="io.unknown/srv", description="", version="1", repository="",
+        packages=[PackageSpec(
+            registry_type="npm", identifier="x", version="1", runtime_hint="npx",
+            transport_type="stdio", runtime_arguments=[], package_arguments=[],
+            env=[EnvVarSpec(name="API_KEY", is_secret=True)],
+        )],
+        remotes=[],
+    )
+    apply_auth_help(detail)
+    assert detail.packages[0].env[0].help_url is None

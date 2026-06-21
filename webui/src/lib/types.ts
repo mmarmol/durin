@@ -494,6 +494,7 @@ export interface McpRegistryEnvVar {
   is_required: boolean;
   is_secret: boolean;
   default: string | null;
+  help_url?: string | null;
 }
 
 export interface McpRegistryPackage {

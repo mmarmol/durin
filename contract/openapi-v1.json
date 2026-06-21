@@ -1161,6 +1161,18 @@
             "title": "Description",
             "type": "string"
           },
+          "help_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Help Url"
+          },
           "is_required": {
             "title": "Is Required",
             "type": "boolean"

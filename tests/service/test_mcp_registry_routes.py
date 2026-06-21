@@ -453,6 +453,38 @@ async def test_registry_install_auth_method_empty_is_dcr_aware(config_path, monk
 
 
 @pytest.mark.asyncio
+async def test_registry_describe_attaches_help_url(config_path, monkeypatch):
+    class _GhReg:
+        name = "github"
+
+        async def describe(self, ref):
+            from durin.agent.mcp_registry import parse_server_json
+            return parse_server_json({
+                "name": "io.github.github/github-mcp-server", "version": "1",
+                "packages": [{
+                    "registryType": "oci", "transport": {"type": "stdio"},
+                    "identifier": "ghcr.io/github/github-mcp-server", "version": "1",
+                    "runtimeArguments": [
+                        {"type": "named", "name": "-e", "value": "GITHUB_PERSONAL_ACCESS_TOKEN"},
+                    ],
+                    "environmentVariables": [
+                        {"name": "GITHUB_PERSONAL_ACCESS_TOKEN", "isSecret": True},
+                    ],
+                }],
+                "remotes": [],
+            })
+
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_GhReg()]
+    )
+    res = await McpService().registry_describe(
+        McpRegistryDescribeQuery(ref="io.github.github/github-mcp-server"), LOCAL
+    )
+    tok = next(e for e in res.packages[0].env if e.name == "GITHUB_PERSONAL_ACCESS_TOKEN")
+    assert tok.help_url == "https://github.com/settings/tokens"
+
+
+@pytest.mark.asyncio
 async def test_registry_install_does_not_block_on_connect(config_path, monkeypatch):
     """The install must return immediately and settle the connection in the BACKGROUND — a
     connect that hangs (or swallows cancellation) must never freeze the install request."""

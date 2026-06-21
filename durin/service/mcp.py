@@ -175,6 +175,7 @@ class McpRegistryEnvVar(Result):
     is_required: bool
     is_secret: bool
     default: str | None
+    help_url: str | None = None
 
 
 class McpRegistryPackage(Result):
@@ -207,7 +208,8 @@ class McpRegistryServerDetail(Result):
 def _reg_envvar(e: Any) -> McpRegistryEnvVar:
     return McpRegistryEnvVar(
         name=e.name, description=e.description, is_required=e.is_required,
-        is_secret=e.is_secret, default=e.default)
+        is_secret=e.is_secret, default=e.default,
+        help_url=getattr(e, "help_url", None))
 
 
 def _reg_hit(h: Any) -> McpRegistryHit:
@@ -449,9 +451,12 @@ class McpService:
         from durin.agent.mcp_registry import build_mcp_adapters
         from durin.config.loader import load_config
 
+        from durin.agent.mcp_install import apply_auth_help
+
         for adapter in build_mcp_adapters(load_config().tools.mcp_discovery.registries):
             detail = await adapter.describe(query.ref)
             if detail is not None:
+                apply_auth_help(detail)
                 return _reg_detail(detail)
         raise NotFoundError("server not found in registry", details={"ref": query.ref})
 

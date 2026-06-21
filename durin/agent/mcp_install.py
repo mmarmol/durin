@@ -314,6 +314,33 @@ async def remote_oauth_capability(url: str, *, request=None, fetch_json=None) ->
     return {"oauth": True, "dcr": await _discover_dcr(www, fetch_json)}
 
 
+def _auth_help_map() -> dict:
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).parent / "data" / "mcp_auth_help.json"
+    try:
+        return json.loads(path.read_text("utf-8")).get("entries", {})
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def apply_auth_help(detail) -> None:
+    """Attach a curated ``help_url`` to each secret input the catalog knows about.
+
+    Keyed by ``(registry ref, input name)``. Pure no-op on a miss — the field stays
+    ``None`` and the form falls back to the input's (linkified) description."""
+    by_input = _auth_help_map().get(detail.ref) or {}
+    if not by_input:
+        return
+    inputs = [e for p in detail.packages for e in p.env]
+    inputs += [e for r in detail.remotes for e in r.headers]
+    for e in inputs:
+        url = by_input.get(e.name)
+        if url:
+            e.help_url = url
+
+
 async def autodetect_oauth(
     sc: MCPServerConfig, *, has_declared_headers: bool = False, request=None, fetch_json=None
 ) -> None:
