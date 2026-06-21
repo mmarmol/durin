@@ -18,6 +18,7 @@ from durin.session.session_meta import (
     read_derived,
     write_derived,
 )
+from durin.utils.file_lock import cross_process_lock
 from durin.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -370,6 +371,15 @@ class SessionManager:
         self._cache[key] = session
         return session
 
+    def reload(self, key: str) -> "Session":
+        """Drop any cached copy and re-read the session from disk.
+
+        The load-per-turn read path: a long-lived process must call this at
+        the start of each turn so it sees turns appended by another process.
+        """
+        self._cache.pop(key, None)
+        return self.get_or_create(key)
+
     def _load(self, key: str) -> Session | None:
         """Load a session from disk."""
         path = self._get_session_path(key)
@@ -554,84 +564,85 @@ class SessionManager:
             if k in self._DERIVED_METADATA_KEYS
         }
 
-        try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                metadata_line = {
-                    "_type": "metadata",
-                    "key": session.key,
-                    "created_at": session.created_at.isoformat(),
-                    "updated_at": session.updated_at.isoformat(),
-                    "metadata": identity_meta,
-                    "last_consolidated": session.last_consolidated
-                }
-                f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
-                for msg in session.messages:
-                    f.write(json.dumps(msg, ensure_ascii=False) + "\n")
-                if fsync:
-                    f.flush()
-                    os.fsync(f.fileno())
-
-            os.replace(tmp_path, path)
-
-            if fsync:
-                # fsync the directory so the rename is durable.
-                # On Windows, opening a directory with O_RDONLY raises
-                # PermissionError — skip the dir sync there (NTFS
-                # journals metadata synchronously).
-                with suppress(PermissionError):
-                    fd = os.open(str(path.parent), os.O_RDONLY)
-                    try:
-                        os.fsync(fd)
-                    finally:
-                        os.close(fd)
-        except BaseException:
-            tmp_path.unlink(missing_ok=True)
-            raise
-
-        # Mirror derived metadata into the .meta.json sidecar. Always
-        # invoked (even with an empty dict) so that clearing a summary
-        # via ``Session.clear()`` also wipes the persisted version.
-        # Best-effort: a meta.json write failure must not bring down the
-        # session save — the .jsonl is the durable surface.
-        try:
-            write_derived(
-                meta_path_for(session.key, self.sessions_dir),
-                session.key,
-                derived_meta,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to write derived meta for {}", session.key,
-            )
-
-        # Regenerate the navigable `<key>.md` view alongside the jsonl so
-        # memory entries can reference specific turns by markdown anchor.
-        # Best-effort: a regeneration failure must not bring down the
-        # session save — jsonl is the durable surface.
-        try:
-            from durin.memory.session_md import regenerate_session_md
-
-            regenerate_session_md(path)
-        except Exception:
-            logger.warning(
-                "Failed to regenerate session markdown view for {}",
-                session.key,
-            )
-        else:
-            # Incrementally FTS-index the new turns so the session is
-            # lexically searchable as it happens (the memory file
-            # watcher only covers memory/, not sessions/). Best-effort
-            # for the same reason as above.
+        with cross_process_lock(path):
             try:
-                from durin.memory.indexer import reindex_session_file
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    metadata_line = {
+                        "_type": "metadata",
+                        "key": session.key,
+                        "created_at": session.created_at.isoformat(),
+                        "updated_at": session.updated_at.isoformat(),
+                        "metadata": identity_meta,
+                        "last_consolidated": session.last_consolidated
+                    }
+                    f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
+                    for msg in session.messages:
+                        f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+                    if fsync:
+                        f.flush()
+                        os.fsync(f.fileno())
 
-                reindex_session_file(
-                    self.workspace, path.with_suffix(".md"),
+                os.replace(tmp_path, path)
+
+                if fsync:
+                    # fsync the directory so the rename is durable.
+                    # On Windows, opening a directory with O_RDONLY raises
+                    # PermissionError — skip the dir sync there (NTFS
+                    # journals metadata synchronously).
+                    with suppress(PermissionError):
+                        fd = os.open(str(path.parent), os.O_RDONLY)
+                        try:
+                            os.fsync(fd)
+                        finally:
+                            os.close(fd)
+            except BaseException:
+                tmp_path.unlink(missing_ok=True)
+                raise
+
+            # Mirror derived metadata into the .meta.json sidecar. Always
+            # invoked (even with an empty dict) so that clearing a summary
+            # via ``Session.clear()`` also wipes the persisted version.
+            # Best-effort: a meta.json write failure must not bring down the
+            # session save — the .jsonl is the durable surface.
+            try:
+                write_derived(
+                    meta_path_for(session.key, self.sessions_dir),
+                    session.key,
+                    derived_meta,
                 )
             except Exception:
-                logger.warning(
-                    "Failed to index session turns for {}", session.key,
+                logger.exception(
+                    "Failed to write derived meta for {}", session.key,
                 )
+
+            # Regenerate the navigable `<key>.md` view alongside the jsonl so
+            # memory entries can reference specific turns by markdown anchor.
+            # Best-effort: a regeneration failure must not bring down the
+            # session save — jsonl is the durable surface.
+            try:
+                from durin.memory.session_md import regenerate_session_md
+
+                regenerate_session_md(path)
+            except Exception:
+                logger.warning(
+                    "Failed to regenerate session markdown view for {}",
+                    session.key,
+                )
+            else:
+                # Incrementally FTS-index the new turns so the session is
+                # lexically searchable as it happens (the memory file
+                # watcher only covers memory/, not sessions/). Best-effort
+                # for the same reason as above.
+                try:
+                    from durin.memory.indexer import reindex_session_file
+
+                    reindex_session_file(
+                        self.workspace, path.with_suffix(".md"),
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to index session turns for {}", session.key,
+                    )
 
         self._cache[session.key] = session
 
