@@ -211,32 +211,79 @@ def rebuild_for_update(old: MCPServerConfig, detail: McpServerDetail) -> MCPServ
     return new
 
 
+def _default_probe():
+    """The production 401-probe: POST an MCP `initialize` and return (status, www-authenticate)."""
+    async def request(u: str):  # noqa: ANN001
+        import httpx
+
+        payload = {
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "durin", "version": "0"}},
+        }
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
+            r = await c.post(u, json=payload, headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+            })
+        return r.status_code, r.headers.get("www-authenticate", "")
+
+    return request
+
+
+def _default_fetch_json():
+    async def fetch_json(u: str):  # noqa: ANN001
+        import httpx
+
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
+            r = await c.get(u, headers={"Accept": "application/json"})
+        return r.json() if r.status_code == 200 else {}
+
+    return fetch_json
+
+
+def _parse_resource_metadata(www: str) -> str:
+    """Pull the RFC 9728 ``resource_metadata="<url>"`` value out of a WWW-Authenticate header."""
+    m = re.search(r'resource_metadata="([^"]+)"', www or "")
+    return m.group(1) if m else ""
+
+
+def _as_metadata_urls(as_url: str) -> list[str]:
+    """The two well-known authorization-server metadata locations to try (RFC 8414 + OIDC)."""
+    base = (as_url or "").rstrip("/")
+    return [base + "/.well-known/oauth-authorization-server",
+            base + "/.well-known/openid-configuration"]
+
+
+async def _discover_dcr(www: str, fetch_json) -> bool:
+    """Follow resource_metadata → authorization-server metadata; True if a ``registration_endpoint``
+    (Dynamic Client Registration) is advertised. Best-effort: any miss/error → False."""
+    prm_url = _parse_resource_metadata(www)
+    if not prm_url:
+        return False
+    try:
+        prm = await fetch_json(prm_url)
+    except Exception:  # noqa: BLE001
+        return False
+    for as_url in (prm.get("authorization_servers") if isinstance(prm, dict) else None) or []:
+        for meta_url in _as_metadata_urls(as_url):
+            try:
+                meta = await fetch_json(meta_url)
+            except Exception:  # noqa: BLE001
+                meta = {}
+            if isinstance(meta, dict) and meta.get("registration_endpoint"):
+                return True
+    return False
+
+
 async def remote_needs_oauth(url: str, *, request=None) -> bool:
     """True when the remote MCP endpoint answers an unauthenticated request with a 401
-    ``WWW-Authenticate: Bearer`` challenge — the standard MCP/RFC-9728 signal that it
-    requires OAuth. Bounded + best-effort: any error (unreachable, slow, non-401) → False,
-    so we never force OAuth onto a server that doesn't demand it.
-
-    ``request`` is an injectable ``async (url) -> (status, www_authenticate)`` seam for tests.
-    """
+    ``WWW-Authenticate: Bearer`` challenge (MCP/RFC-9728). Bounded + best-effort: any error
+    or non-401 → False. ``request`` is an injectable ``async (url) -> (status, www)`` seam."""
     if not url:
         return False
     if request is None:
-        async def request(u: str):  # noqa: ANN001
-            import httpx
-
-            payload = {
-                "jsonrpc": "2.0", "id": 1, "method": "initialize",
-                "params": {"protocolVersion": "2025-06-18", "capabilities": {},
-                           "clientInfo": {"name": "durin", "version": "0"}},
-            }
-            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as c:
-                r = await c.post(u, json=payload, headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json, text/event-stream",
-                })
-            return r.status_code, r.headers.get("www-authenticate", "")
-
+        request = _default_probe()
     try:
         status, www = await request(url)
     except Exception:  # noqa: BLE001 — unreachable/slow → don't force oauth
@@ -244,18 +291,42 @@ async def remote_needs_oauth(url: str, *, request=None) -> bool:
     return status == 401 and "bearer" in (www or "").lower()
 
 
-async def autodetect_oauth(
-    sc: MCPServerConfig, *, has_declared_headers: bool = False, request=None
-) -> None:
-    """Enable OAuth on a freshly-built REMOTE config when its endpoint demands it.
+async def remote_oauth_capability(url: str, *, request=None, fetch_json=None) -> dict:
+    """Probe whether durin can complete **zero-secret** OAuth against ``url``.
 
-    Skips: stdio servers, configs that already declare auth (a static header the user
-    supplies, e.g. github's PAT) or already set ``oauth``. When the endpoint returns the
-    401-Bearer challenge, set ``oauth=True`` so durin's existing sign-in flow + OAuth
-    provider (DCR) take over → the server shows ``needs_auth`` instead of failing/hanging.
-    Mutates ``sc`` in place.
-    """
+    Returns ``{"oauth": bool, "dcr": bool}``. ``oauth`` is the 401-Bearer signal;
+    ``dcr`` follows the RFC 9728 chain and is True when the authorization server
+    advertises a ``registration_endpoint`` (Dynamic Client Registration) — the only
+    way durin can OAuth without shipping any credential. Best-effort: any error → both
+    False. ``request``/``fetch_json`` are injectable seams for tests."""
+    if not url:
+        return {"oauth": False, "dcr": False}
+    if request is None:
+        request = _default_probe()
+    try:
+        status, www = await request(url)
+    except Exception:  # noqa: BLE001
+        return {"oauth": False, "dcr": False}
+    if not (status == 401 and "bearer" in (www or "").lower()):
+        return {"oauth": False, "dcr": False}
+    if fetch_json is None:
+        fetch_json = _default_fetch_json()
+    return {"oauth": True, "dcr": await _discover_dcr(www, fetch_json)}
+
+
+async def autodetect_oauth(
+    sc: MCPServerConfig, *, has_declared_headers: bool = False, request=None, fetch_json=None
+) -> None:
+    """Enable OAuth on a freshly-built REMOTE config only when durin can complete it.
+
+    Skips stdio servers, configs that already declare a static auth header (e.g. github's
+    PAT) or already set ``oauth``. Sets ``oauth=True`` only when the endpoint advertises
+    zero-secret OAuth via DCR — so a 401-Bearer endpoint without DCR (e.g. GitHub) is left
+    on the token path instead of flipping to a flow that would fail at sign-in. Mutates
+    ``sc`` in place. (A server pre-configured with an ``oauth.client_id`` is already
+    ``oauth``-set and returns at the guard above.)"""
     if sc.command or not sc.url or sc.oauth or has_declared_headers:
         return
-    if await remote_needs_oauth(sc.url, request=request):
+    cap = await remote_oauth_capability(sc.url, request=request, fetch_json=fetch_json)
+    if cap["dcr"]:
         sc.oauth = True

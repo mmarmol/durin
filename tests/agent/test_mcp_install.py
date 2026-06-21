@@ -8,6 +8,7 @@ from durin.agent.mcp_install import (
     has_update,
     rebuild_for_update,
     remote_needs_oauth,
+    remote_oauth_capability,
     runtime_install_spec,
     runtime_present,
 )
@@ -233,10 +234,15 @@ async def test_autodetect_oauth_enables_for_bearer_remote():
     from durin.config.schema import MCPServerConfig
 
     async def r401(_u):
-        return 401, "Bearer"
+        return 401, 'Bearer resource_metadata="https://rs/prm"'
+
+    async def fetch_json(u):
+        if u == "https://rs/prm":
+            return {"authorization_servers": ["https://as"]}
+        return {"registration_endpoint": "https://as/reg"}
 
     sc = MCPServerConfig(type="streamableHttp", url="https://m/mcp", source_ref="io.x/a")
-    await autodetect_oauth(sc, has_declared_headers=False, request=r401)
+    await autodetect_oauth(sc, has_declared_headers=False, request=r401, fetch_json=fetch_json)
     assert sc.oauth is True
 
 
@@ -258,6 +264,72 @@ async def test_autodetect_oauth_skips_stdio_headers_and_preset():
     preset = MCPServerConfig(type="streamableHttp", url="https://m", oauth=True)
     await autodetect_oauth(preset, request=r401)
     assert preset.oauth is True  # already configured → unchanged
+
+
+@pytest.mark.asyncio
+async def test_remote_oauth_capability_reports_dcr():
+    async def r401(_u):
+        return 401, 'Bearer resource_metadata="https://rs/.well-known/oauth-protected-resource"'
+
+    async def fetch_json(u):
+        if u == "https://rs/.well-known/oauth-protected-resource":
+            return {"authorization_servers": ["https://as"]}
+        if u == "https://as/.well-known/oauth-authorization-server":
+            return {"registration_endpoint": "https://as/reg"}
+        return {}
+
+    cap = await remote_oauth_capability("https://m/mcp", request=r401, fetch_json=fetch_json)
+    assert cap == {"oauth": True, "dcr": True}
+
+
+@pytest.mark.asyncio
+async def test_remote_oauth_capability_oauth_without_dcr():
+    # GitHub shape: 401-Bearer, but the authorization server advertises no registration_endpoint.
+    async def r401(_u):
+        return 401, 'Bearer resource_metadata="https://rs/.well-known/oauth-protected-resource"'
+
+    async def fetch_json(u):
+        if u == "https://rs/.well-known/oauth-protected-resource":
+            return {"authorization_servers": ["https://github.com/login/oauth"]}
+        return {"issuer": "https://github.com/login/oauth"}  # no registration_endpoint
+
+    cap = await remote_oauth_capability("https://m/mcp", request=r401, fetch_json=fetch_json)
+    assert cap == {"oauth": True, "dcr": False}
+
+
+@pytest.mark.asyncio
+async def test_remote_oauth_capability_not_oauth():
+    async def r200(_u):
+        return 200, ""
+
+    cap = await remote_oauth_capability("https://m/mcp", request=r200, fetch_json=None)
+    assert cap == {"oauth": False, "dcr": False}
+
+
+@pytest.mark.asyncio
+async def test_autodetect_oauth_requires_dcr():
+    from durin.config.schema import MCPServerConfig
+
+    async def r401(_u):
+        return 401, 'Bearer resource_metadata="https://rs/prm"'
+
+    async def with_dcr(u):
+        if u == "https://rs/prm":
+            return {"authorization_servers": ["https://as"]}
+        return {"registration_endpoint": "https://as/reg"}
+
+    async def no_dcr(u):
+        if u == "https://rs/prm":
+            return {"authorization_servers": ["https://as"]}
+        return {}
+
+    yes = MCPServerConfig(type="streamableHttp", url="https://m/mcp", source_ref="io.x/a")
+    await autodetect_oauth(yes, has_declared_headers=False, request=r401, fetch_json=with_dcr)
+    assert yes.oauth is True
+
+    no = MCPServerConfig(type="streamableHttp", url="https://m/mcp", source_ref="io.x/a")
+    await autodetect_oauth(no, has_declared_headers=False, request=r401, fetch_json=no_dcr)
+    assert not no.oauth  # OAuth-capable endpoint but no DCR → don't force a flow durin can't finish
 
 
 # ---------------------------------------------------------------------------
