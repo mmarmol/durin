@@ -1441,12 +1441,12 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
     ]
 
 
-def test_gateway_cron_job_suppresses_intermediate_progress(
+def test_gateway_cron_job_passes_none_on_progress_for_bus_callback(
     monkeypatch, tmp_path: Path
 ) -> None:
-    """Cron jobs must pass on_progress=_silent to process_direct so that
-    tool hints and streaming deltas are never leaked to the user channel
-    before evaluate_response decides whether to deliver."""
+    """Cron agent_turn jobs must pass on_progress=None to process_direct so
+    that the loop builds a real bus progress callback and the run streams live
+    to the webui. (Previously passed _silent; now the loop owns the callback.)"""
     config_file = tmp_path / "instance" / "config.json"
     config_file.parent.mkdir(parents=True)
     config_file.write_text("{}")
@@ -1535,11 +1535,8 @@ def test_gateway_cron_job_suppresses_intermediate_progress(
     response = asyncio.run(cron.on_job(job))
 
     assert response == "Done."
-    # on_progress must be a callable (the _silent noop), not None and not bus_progress
-    assert seen["on_progress"] is not None
-    assert callable(seen["on_progress"])
-    # Verify it actually swallows calls (no side effects)
-    asyncio.run(seen["on_progress"]("tool_hint", "🔧 $ echo test"))
+    # on_progress must be None so the loop builds its own bus progress callback
+    assert seen["on_progress"] is None
     # Nothing published to bus since evaluator rejected
     bus.publish_outbound.assert_not_awaited()
 

@@ -1433,23 +1433,16 @@ def _run_gateway(
                 logger.exception("skill curation step (non-fatal) failed")
             return None
 
+        from durin.cron.prompting import build_cron_turn_prompt
         from durin.utils.evaluator import evaluate_response
 
-        reminder_note = (
-            "The scheduled time has arrived. Deliver this reminder to the user now, "
-            "as a brief and natural message in their language. Speak directly to them — "
-            "do not narrate progress, summarize, include user IDs, or add status reports "
-            "like 'Done' or 'Reminded'.\n\n"
-            f"Reminder: {job.payload.message}"
-        )
+        prompt = build_cron_turn_prompt(job.payload.mode, job.payload.message)
+        session_key = job.payload.session_key or f"cron:{job.id}"
 
         cron_tool = agent.tools.get("cron")
         cron_token = None
         if isinstance(cron_tool, CronTool):
             cron_token = cron_tool.set_cron_context(True)
-
-        async def _silent(*_args, **_kwargs):
-            pass
 
         message_record_token = None
         if isinstance(message_tool, MessageTool):
@@ -1457,11 +1450,12 @@ def _run_gateway(
 
         try:
             resp = await agent.process_direct(
-                reminder_note,
-                session_key=f"cron:{job.id}",
+                prompt,
+                session_key=session_key,
                 channel=job.payload.channel or "cli",
                 chat_id=job.payload.to or "direct",
-                on_progress=_silent,
+                on_progress=None,
+                model_preset=job.payload.model,
             )
         finally:
             if isinstance(cron_tool, CronTool) and cron_token is not None:
@@ -1476,7 +1470,7 @@ def _run_gateway(
 
         if job.payload.deliver and job.payload.to and response:
             should_notify = await evaluate_response(
-                response, reminder_note, agent.provider, agent.model,
+                response, prompt, agent.provider, agent.model,
             )
             if should_notify:
                 await _deliver_to_channel(

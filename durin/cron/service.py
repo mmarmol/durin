@@ -549,6 +549,9 @@ class CronService:
             start_ms = _now_ms()
             logger.info("Cron: executing job '{}' ({})", job.name, job.id)
 
+            if job.payload.kind == "agent_turn":
+                job.payload.session_key = f"cron:{job.id}:run:{start_ms}"
+
             try:
                 if self.on_job:
                     await self.on_job(job)
@@ -571,6 +574,8 @@ class CronService:
                 status=job.state.last_status,
                 duration_ms=end_ms - start_ms,
                 error=job.state.last_error,
+                session_key=job.payload.session_key if job.payload.kind == "agent_turn" else None,
+                model=job.payload.model,
             ))
             job.state.run_history = job.state.run_history[-self._run_history_max:]
 
