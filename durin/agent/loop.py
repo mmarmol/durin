@@ -1416,6 +1416,7 @@ class AgentLoop:
                 initial_messages=initial_messages,
                 tools=self.tools,
                 model=self.model,
+                provider=self.provider,
                 max_iterations=self.max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
                 hook=hook,
