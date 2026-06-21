@@ -162,3 +162,40 @@ def test_execute_write_commits_on_success(tmp_path: Path) -> None:
     row = conn2.execute("SELECT v FROM t").fetchone()
     conn2.close()
     assert row is not None and row[0] == 7
+
+
+# ---------------------------------------------------------------------------
+# connect() — read_only
+# ---------------------------------------------------------------------------
+
+def test_connect_read_only_can_select(tmp_path: Path) -> None:
+    """A read_only connection can read existing data."""
+    db = tmp_path / "ro.sqlite"
+    rw = connect(db)
+    rw.execute("CREATE TABLE t (v INTEGER)")
+    rw.execute("INSERT INTO t VALUES (42)")
+    rw.commit()
+    rw.close()
+
+    ro = connect(db, read_only=True)
+    try:
+        row = ro.execute("SELECT v FROM t").fetchone()
+        assert row is not None and row[0] == 42
+    finally:
+        ro.close()
+
+
+def test_connect_read_only_raises_on_write(tmp_path: Path) -> None:
+    """A read_only connection raises OperationalError on any write attempt."""
+    db = tmp_path / "ro_write.sqlite"
+    rw = connect(db)
+    rw.execute("CREATE TABLE t (v INTEGER)")
+    rw.commit()
+    rw.close()
+
+    ro = connect(db, read_only=True)
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            ro.execute("INSERT INTO t VALUES (1)")
+    finally:
+        ro.close()

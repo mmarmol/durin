@@ -166,6 +166,33 @@ background/direct-saver serialization phase:
    (`FileTokenStorage`) and are intentionally outside durin's locking
    domain — out of durin's control.
 
+## SQLite helpers (FTS5 / derived indexes)
+
+`durin/utils/sqlite_util.py` provides two primitives used wherever durin opens a
+SQLite database that may have concurrent cross-process writers (currently the FTS5
+index at `<workspace>/.durin/index/fts.sqlite`):
+
+**`connect(path, *, read_only=False, busy_timeout_ms=5000)`**
+
+Opens *path* with `check_same_thread=False` and `isolation_level=None`.  For
+read-write connections it sets WAL journal mode (with a DELETE-journal fallback for
+NFS/SMB/FUSE filesystems that reject WAL locking), `PRAGMA busy_timeout`, and
+`PRAGMA synchronous=NORMAL`.  When `read_only=True` the database is opened via a
+`file:?mode=ro` URI — no write lock is ever taken and the WAL/journal/busy
+pragmas are skipped (a read-only connection cannot set them and does not need to).
+
+**`execute_write(conn, fn, *, attempts=15)`**
+
+Runs `fn(conn)` inside `BEGIN IMMEDIATE … COMMIT`.  `BEGIN IMMEDIATE` acquires the
+write lock at transaction start, so no other writer can interleave.  On
+`SQLITE_BUSY` / "locked" errors it rolls back, sleeps 20–150 ms with random jitter,
+and retries up to *attempts* times.  Any other `OperationalError` is re-raised
+immediately.
+
+Together these two primitives ensure that concurrent cross-process writers (gateway,
+TUI `AgentLoop`, cron, heartbeat) do not drop FTS5 rows due to unretried
+`SQLITE_BUSY` errors.
+
 ## AliasIndex in-process staleness (hazard #17)
 
 `AliasIndex` is built lazily once per process via

@@ -45,6 +45,16 @@ def connect(
 
     See `docs/architecture/concurrency.md` §SQLite helpers.
     """
+    if read_only:
+        # URI mode with mode=ro: never acquires a write lock.
+        # WAL/journal/busy pragmas are intentionally skipped — a read-only
+        # connection cannot set them and does not need to.
+        return sqlite3.connect(
+            f"file:{path}?mode=ro",
+            uri=True,
+            check_same_thread=False,
+        )
+
     # isolation_level=None disables Python's implicit transaction management
     # so we can issue BEGIN IMMEDIATE ourselves in execute_write.
     conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
