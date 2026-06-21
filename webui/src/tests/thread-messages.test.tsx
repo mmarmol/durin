@@ -157,3 +157,34 @@ describe("ThreadMessages — cluster count source", () => {
     expect(screen.getByText(/2/)).toBeInTheDocument();
   });
 });
+
+describe("ThreadMessages — single-member cluster bypass", () => {
+  it("renders a tools-only turn as one fold, not a cluster wrapping a tool group", () => {
+    const messages: UIMessage[] = [
+      { id: "t1", role: "tool", kind: "trace", content: "", createdAt: 1,
+        toolEvents: [
+          { phase: "end", call_id: "a", name: "read_file" },
+          { phase: "end", call_id: "b", name: "grep" },
+        ] },
+    ];
+    render(<ThreadMessages messages={messages} isStreaming={false} />);
+    // The inner tool fold is shown…
+    expect(
+      screen.getByRole("button", { name: /used 2 tools/i }),
+    ).toBeInTheDocument();
+    // …and NOT wrapped in the redundant outer "N tool calls" cluster fold.
+    expect(screen.queryByText(/tool calls/i)).not.toBeInTheDocument();
+  });
+
+  it("still clusters when reasoning and tools interleave (multi-member)", () => {
+    const messages: UIMessage[] = [
+      { id: "r1", role: "assistant", content: "", reasoning: "think",
+        reasoningStreaming: false, createdAt: 1 },
+      { id: "t1", role: "tool", kind: "trace", content: "", createdAt: 2,
+        toolEvents: [{ phase: "end", call_id: "a", name: "read_file" }] },
+    ];
+    render(<ThreadMessages messages={messages} isStreaming={false} />);
+    // Two distinct blocks → the outer cluster summary ("… tool calls") earns its keep.
+    expect(screen.getByText(/tool calls/i)).toBeInTheDocument();
+  });
+});
