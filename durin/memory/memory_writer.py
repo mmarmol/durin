@@ -58,7 +58,22 @@ def _refresh_alias_index(memory_root: Path, page: EntityPage, slug: str) -> None
     except Exception:  # noqa: BLE001 — best-effort; never block the write
         pass
 
-__all__ = ["WriteResult", "write_entity", "write_files_cas"]
+__all__ = ["WriteResult", "git_worktree_lock_path", "write_entity", "write_files_cas"]
+
+
+def git_worktree_lock_path(memory_git_root: Path) -> Path:
+    """Return the canonical cross-process lock target for git working-tree mutations.
+
+    All three sites that must not race a dulwich reset --hard agree on this path:
+    - memory_writer._commit_dirty_as_user / _fast_forward_working_tree (mutations)
+    - indexer.reindex_one_file (prune branch, sub-hazard B)
+    - vector_index.prune_orphan_rows (prune branch, sub-hazard B)
+
+    The lock FILE is ``<memory_git_root>/.git-worktree.lock``; the TARGET
+    (the arg to cross_process_lock) is ``<memory_git_root>/.git-worktree``.
+    Kept here so callers don't hardcode the path in three places.
+    """
+    return Path(memory_git_root) / ".git-worktree"
 
 _MAX_RETRIES = 30
 # Bridge: page-level author (2 values) → field-level author (3 values).
@@ -106,9 +121,15 @@ def _commit_dirty_as_user(root: Path) -> None:
     """
     if not (root / ".git").exists():
         return
-    # Lock target: <memory_git_root>/.git-worktree  →  lock file: .git-worktree.lock
-    # Placed under DURIN_HOME (inside the memory git root), not in any user workspace.
-    with cross_process_lock(root / ".git-worktree"):
+    # Sub-hazard A: concurrent commit + reset can corrupt .git/index (dulwich
+    # _transition_to_file is non-atomic).  This lock is the OUTERMOST memory
+    # lock — always acquired AFTER any dulwich-internal ref CAS lock, never
+    # while a session/config lock is held.  See docs/architecture/concurrency.md.
+    # The prune paths (indexer.reindex_one_file, vector_index.prune_orphan_rows)
+    # also acquire this lock (sub-hazard B recheck) THEN their FTS/Lance locks
+    # (inner).  No path takes an FTS/Lance lock and THEN this lock, so lock
+    # ordering is strict: git-worktree > FTS/Lance.
+    with cross_process_lock(git_worktree_lock_path(root)):
         try:
             status = porcelain.status(str(root))
         except Exception:  # noqa: BLE001 — never block a write on the guard
@@ -395,16 +416,21 @@ def _fast_forward_working_tree(root: Path) -> None:
 
     MVP: hard reset to HEAD. Resilient to the index/ref lock under concurrent
     writers (best-effort: a later ff converges the tree to HEAD anyway).
-    # TODO(human-edit): skip ff when the working tree is dirty.
 
-    Serialized under the git-worktree cross-process lock (§lock-ordering in
-    docs/architecture/concurrency.md): same lock file as _commit_dirty_as_user
-    so a commit and a reset cannot interleave.  cross_process_lock is reentrant
-    per-thread, so the common caller sequence
-    _commit_dirty_as_user → (CAS) → _fast_forward_working_tree re-enters safely
-    on the same thread.
+    Sub-hazard A: serialized under the git-worktree cross-process lock so a
+    concurrent commit and reset cannot interleave and corrupt .git/index.
+    Sub-hazard B (the transient absent-file window): dulwich reset --hard uses
+    unlink-then-recreate (_transition_to_file), opening a window during which
+    files are transiently absent.  Prune paths (reindex_one_file,
+    prune_orphan_rows) close B by acquiring THIS SAME lock before acting on an
+    absent-file observation and re-checking is_file() after acquiring it.  If
+    the file is present on re-check, the reset completed and the prune is
+    skipped.  See docs/architecture/concurrency.md §reset-absent-window.
+
+    cross_process_lock is reentrant per-thread: the common caller sequence
+    _commit_dirty_as_user → (CAS) → _fast_forward_working_tree re-enters safely.
     """
-    with cross_process_lock(root / ".git-worktree"):
+    with cross_process_lock(git_worktree_lock_path(root)):
         for i in range(10):
             try:
                 porcelain.reset(str(root), "hard")

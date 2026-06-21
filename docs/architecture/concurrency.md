@@ -127,6 +127,56 @@ Because the three flock files are always distinct and always acquired in
 the same order, there is no opposite-order acquisition and no deadlock
 risk.
 
+## Memory git-worktree lock (sub-hazard A + B)
+
+`_commit_dirty_as_user` and `_fast_forward_working_tree` in
+`durin/memory/memory_writer.py` both mutate the git working tree and
+`.git/index` via dulwich porcelain. Under concurrent durin processes
+(gateway, TUI, cron) sharing one `DURIN_HOME` these mutations could
+interleave; dulwich's `_transition_to_file` is non-atomic
+(unlink-then-recreate).
+
+Both methods acquire `cross_process_lock(<memory_git_root>/.git-worktree)`
+around the dulwich call. Because `cross_process_lock` is reentrant
+per-thread, the common call sequence
+`_commit_dirty_as_user → (CAS) → _fast_forward_working_tree` re-enters
+the lock safely on the same thread.
+
+### Sub-hazard A — concurrent commit + reset corrupt .git/index
+
+The lock serializes `add+commit` and `reset --hard` so they cannot
+interleave and leave `.git/index` in a torn state.
+
+### Sub-hazard B — reset absent-file window {#reset-absent-window}
+
+`reset --hard` (`dulwich porcelain.reset`) internally calls
+`_transition_to_file` which unlinks the file and then recreates it. During
+this window a concurrent reader that calls `path.is_file()` observes
+`False` and may permanently prune the FTS / vector row for a file that is
+still valid.
+
+**Fix:** The two prune paths that act on an absent-file observation both
+acquire the same `.git-worktree` lock before committing to a prune:
+
+- `durin/memory/indexer.py` `reindex_one_file`: when `not md_path.is_file()`
+  in the watcher, the code acquires `.git-worktree` and re-checks
+  `md_path.is_file()`.  If present on re-check, the reset completed and the
+  prune is skipped.  If still absent, the deletion is genuine.
+- `durin/memory/vector_index.py` `prune_orphan_rows`: the initial scan
+  collects rows whose `path` column resolves to an absent file, then acquires
+  `.git-worktree` and re-checks each candidate.  Only still-absent rows are
+  deleted.
+
+**Lock ordering:** `.git-worktree` is the **outermost** memory lock.  The
+prune paths take `.git-worktree` THEN FTS/LanceDB delete locks (inner).  No
+path takes an FTS/Lance lock and then `.git-worktree`, so there is no
+opposite-order acquisition and no deadlock risk.  The mutation path takes
+`.git-worktree` then dulwich only (no FTS/Lance held during the reset).
+
+The canonical lock-path helper is `git_worktree_lock_path(memory_git_root)`
+in `memory_writer.py`; all three sites (two mutation, two prune) use this
+function so the path cannot drift.
+
 ## Phase-A residual ledger
 
 The following known limitations are deferred to the

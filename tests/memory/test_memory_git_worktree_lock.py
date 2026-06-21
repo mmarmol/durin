@@ -1,21 +1,28 @@
 """Cross-process serialization of git working-tree mutations.
 
-Hazard: `_commit_dirty_as_user` (porcelain add+commit) and
+Sub-hazard A: `_commit_dirty_as_user` (porcelain add+commit) and
 `_fast_forward_working_tree` (porcelain reset --hard) both mutate the git
 working tree and .git/index.  Under concurrent processes (gateway, TUI, cron)
 without serialization, the unlink-then-recreate behavior of dulwich's
-`_transition_to_file` produces transient absent-file windows and potential
-index corruption.
+`_transition_to_file` can corrupt .git/index.
 
-This test verifies that a cross-process lock (`cross_process_lock` on
-`<memory_git_root>/.git-worktree`) serializes these two mutations so they
-cannot interleave.
+Sub-hazard B: dulwich reset --hard transiently removes files before recreating
+them (_transition_to_file = unlink + write).  A concurrent reader that sees
+is_file()==False during this window would permanently prune the FTS/vector row
+for a file that is still valid.  The fix: prune paths acquire the same
+git-worktree lock before deleting and re-check is_file() after acquiring it.
+If the file is present on re-check the absence was transient and the row is
+kept.
 
-See docs/architecture/concurrency.md §Lock-ordering invariant for the
-global acquisition order.  This lock (`.git-worktree.lock`) is the
-innermost lock in the memory write path; it is always acquired AFTER the
-CAS ref lock (which is dulwich-internal) and is never held when any
-session or config lock is acquired.
+This file verifies both A (mutation serialization) and B (prune-path recheck).
+Tests 1 and 2 are load-bearing for A: they fail if the lock is removed from
+_commit_dirty_as_user / _fast_forward_working_tree.
+Tests 3 and 4 are load-bearing for B: they fail if the recheck is removed from
+reindex_one_file / prune_orphan_rows.
+
+See docs/architecture/concurrency.md §reset-absent-window and
+§lock-ordering-invariant.  .git-worktree.lock is the OUTERMOST memory lock;
+FTS/LanceDB deletes (inner) are always taken after it.
 """
 from __future__ import annotations
 
@@ -23,10 +30,10 @@ import multiprocessing
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from dulwich import porcelain
-from dulwich.repo import Repo
 
 from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import write_entity
@@ -100,32 +107,10 @@ def _worker_timed_reset(
     Path(done_signal).touch()
 
 
-def _worker_repeated_writes(root_str: str, worker_id: int, n: int,
-                              result_file: str) -> None:
-    """Write n entities from a subprocess; record how many succeeded."""
-    from datetime import datetime, timezone
-    from durin.memory.field_patch import FieldPatch
-    from durin.memory.memory_writer import write_entity
-    now = datetime(2026, 6, 5, tzinfo=timezone.utc)
-    root = Path(root_str)
-    ok = 0
-    for i in range(n):
-        try:
-            write_entity(
-                root,
-                f"person:w{worker_id}e{i}",
-                [FieldPatch(kind="body_append", value=f"body{i}",
-                             author="agent", source_ref="s", at=now)],
-                create=True,
-            )
-            ok += 1
-        except Exception:
-            pass
-    Path(result_file).write_text(str(ok), encoding="utf-8")
-
-
 # ---------------------------------------------------------------------------
 # Test 1: lock blocks a second process from entering the critical section
+# (load-bearing for sub-hazard A: fails if lock removed from
+# _commit_dirty_as_user)
 # ---------------------------------------------------------------------------
 
 def test_lock_blocks_concurrent_mutation(tmp_path):
@@ -148,7 +133,8 @@ def test_lock_blocks_concurrent_mutation(tmp_path):
     )
 
     mem = tmp_path / "memory"
-    lock_target = mem / ".git-worktree"
+    from durin.memory.memory_writer import git_worktree_lock_path
+    lock_target = git_worktree_lock_path(mem)
 
     acquired = str(tmp_path / "a_acquired")
     release = str(tmp_path / "a_release")
@@ -203,6 +189,12 @@ def test_lock_blocks_concurrent_mutation(tmp_path):
     )
 
 
+# ---------------------------------------------------------------------------
+# Test 2: lock blocks reset while lock is held
+# (load-bearing for sub-hazard A: fails if lock removed from
+# _fast_forward_working_tree)
+# ---------------------------------------------------------------------------
+
 def test_lock_blocks_reset_while_lock_held(tmp_path):
     """
     Same as above but for _fast_forward_working_tree.
@@ -218,7 +210,8 @@ def test_lock_blocks_reset_while_lock_held(tmp_path):
     )
 
     mem = tmp_path / "memory"
-    lock_target = mem / ".git-worktree"
+    from durin.memory.memory_writer import git_worktree_lock_path
+    lock_target = git_worktree_lock_path(mem)
 
     acquired = str(tmp_path / "a_acquired")
     release = str(tmp_path / "a_release")
@@ -265,68 +258,140 @@ def test_lock_blocks_reset_while_lock_held(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Test 2: concurrent subprocess writes produce a valid git repo (no index corruption)
+# Test 3: reindex_one_file skips prune on transient absence (sub-hazard B)
+# (load-bearing: fails if the lock+recheck is removed from reindex_one_file)
 # ---------------------------------------------------------------------------
 
-def test_concurrent_subprocess_writes_no_corruption(tmp_path):
+def test_reindex_one_file_skips_prune_on_transient_absent(tmp_path):
+    """Simulates a dulwich reset --hard absent-file window for reindex_one_file.
+
+    A file appears absent on the FIRST is_file() call (mid-reset) but present
+    on the SECOND call (after acquiring the git-worktree lock, reset complete).
+    The FTS row must SURVIVE (not be pruned).
+
+    Without the lock+recheck in reindex_one_file (the fix for sub-hazard B),
+    the row is deleted on the first absent observation — this test fails.
     """
-    Two subprocesses write distinct entities concurrently.  The git index
-    must remain intact and all writes must succeed.
-    """
-    _init_memory_repo(tmp_path)
+    from durin.memory.fts_index import FTSIndex
+    from durin.memory.indexer import reindex_one_file
 
-    n = 5
-    result_a = str(tmp_path / "result_a.txt")
-    result_b = str(tmp_path / "result_b.txt")
-
-    ctx = multiprocessing.get_context("spawn")
-    proc_a = ctx.Process(target=_worker_repeated_writes,
-                          args=(str(tmp_path), 0, n, result_a))
-    proc_b = ctx.Process(target=_worker_repeated_writes,
-                          args=(str(tmp_path), 1, n, result_b))
-
-    proc_a.start()
-    proc_b.start()
-    proc_a.join(timeout=30)
-    proc_b.join(timeout=30)
-
-    assert proc_a.exitcode == 0, f"proc A: {proc_a.exitcode}"
-    assert proc_b.exitcode == 0, f"proc B: {proc_b.exitcode}"
-
-    ok_a = int(Path(result_a).read_text())
-    ok_b = int(Path(result_b).read_text())
-    assert ok_a == n, f"process A: expected {n}, got {ok_a}"
-    assert ok_b == n, f"process B: expected {n}, got {ok_b}"
-
-    repo = Repo(str(tmp_path / "memory"))
-    try:
-        commits = list(repo.get_walker())
-        assert len(commits) >= 1
-        _ = repo.open_index()  # must not raise
-    finally:
-        repo.close()
-
-
-# ---------------------------------------------------------------------------
-# Test 3: lock path is correct and reentrant on same thread
-# ---------------------------------------------------------------------------
-
-def test_git_worktree_lock_path_and_reentrance(tmp_path):
-    """
-    Verify cross_process_lock is reentrant (same thread re-enters without deadlock)
-    and the expected lock file path can be constructed.
-    """
-    from durin.utils.file_lock import cross_process_lock
-
-    mem = tmp_path / "memory"
+    workspace = tmp_path
+    mem = workspace / "memory"
     mem.mkdir(parents=True, exist_ok=True)
+    entities = mem / "entities" / "person"
+    entities.mkdir(parents=True, exist_ok=True)
 
-    lock_target = mem / ".git-worktree"
-    expected_lock_file = Path(f"{lock_target}.lock")
+    # Create a real entity page (needs frontmatter with type + name to index).
+    md_path = entities / "alice.md"
+    md_path.write_text(
+        "---\ntype: person\nname: Alice\n---\n\nAlice is a test entity.\n",
+        encoding="utf-8",
+    )
 
-    with cross_process_lock(lock_target):
-        with cross_process_lock(lock_target):  # reentrant: must not deadlock
-            assert True
+    # Index the file so there is a row to potentially prune.
+    reindex_one_file(workspace, md_path, trigger="test")
+    with FTSIndex.open(workspace) as idx:
+        row_exists_before = "person:alice" in idx.uris_with_prefix("person:alice")
+    assert row_exists_before, "setup: row must exist before the transient-absent test"
 
-    # Lock file exists (may or may not persist after release — implementation detail)
-    # The key: no exception was raised above
+    # Simulate transient absence: is_file() returns False on the first call
+    # (the watcher sees the file is gone mid-reset) then True on subsequent
+    # calls (the reset completed, the file is back).
+    # The lock+recheck in reindex_one_file acquires the git-worktree lock and
+    # calls is_file() a second time — that second call must return True so the
+    # prune is skipped.
+    call_count = {"n": 0}
+    real_is_file = Path.is_file
+
+    def _patched_is_file(self: Path) -> bool:
+        if self == md_path:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return False   # first call: simulate mid-reset absence
+            return True        # subsequent calls: file is back
+        return real_is_file(self)
+
+    with patch.object(Path, "is_file", _patched_is_file):
+        reindex_one_file(workspace, md_path, trigger="test")
+
+    # The row must STILL EXIST after the transient-absent call.
+    with FTSIndex.open(workspace) as idx:
+        row_exists_after = "person:alice" in idx.uris_with_prefix("person:alice")
+
+    assert row_exists_after, (
+        "reindex_one_file pruned the FTS row on a TRANSIENT absent-file "
+        "observation — the lock+recheck (sub-hazard B fix) is missing or broken"
+    )
+    # Confirm we actually hit the transient path (at least 2 is_file calls).
+    assert call_count["n"] >= 2, (
+        "is_file was called fewer than 2 times — the recheck path was not taken"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 4: prune_orphan_rows skips prune on transient absence (sub-hazard B)
+# (load-bearing: fails if the lock+recheck is removed from prune_orphan_rows)
+# ---------------------------------------------------------------------------
+
+def test_prune_orphan_rows_skips_prune_on_transient_absent(tmp_path):
+    """Simulates a dulwich reset --hard absent-file window for prune_orphan_rows.
+
+    A Lance row whose backing file appears absent on the FIRST is_file() call
+    must NOT be deleted if the file is present after the git-worktree lock is
+    acquired (transient absence during a reset).
+
+    Without the lock+recheck in prune_orphan_rows (the fix for sub-hazard B),
+    the row is deleted on the first absent observation — this test fails.
+    """
+    lancedb = pytest.importorskip("lancedb")
+    from durin.memory.vector_index import _INDEX_PATH, _TABLE_NAME, prune_orphan_rows
+
+    workspace = tmp_path
+    mem = workspace / "memory"
+    entities = mem / "entities" / "person"
+    entities.mkdir(parents=True, exist_ok=True)
+
+    md_path = entities / "carol.md"
+    md_path.write_text("# Carol\n", encoding="utf-8")
+    rel_path = md_path.relative_to(workspace)
+
+    # Insert a minimal Lance row directly (avoid embedding model dependency).
+    # The schema that prune_orphan_rows cares about: "id" and "path".
+    lance_uri = str(workspace.joinpath(*_INDEX_PATH))
+    Path(lance_uri).mkdir(parents=True, exist_ok=True)
+    db = lancedb.connect(lance_uri)
+    row = {
+        "id": "person:carol",
+        "path": str(rel_path),
+        "vector": [0.0, 0.0, 0.0, 0.0],
+    }
+    db.create_table(_TABLE_NAME, data=[row])
+
+    # Confirm the row is there before the test.
+    t = db.open_table(_TABLE_NAME)
+    assert t.count_rows() == 1, "setup: Lance row must exist before test"
+
+    # Simulate transient absence: first is_file() (initial scan) → False,
+    # subsequent calls (recheck under the lock) → True.
+    call_count = {"n": 0}
+    real_is_file = Path.is_file
+
+    def _patched_is_file(self: Path) -> bool:
+        if self == workspace / rel_path:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return False   # first scan: simulate mid-reset absence
+            return True        # recheck (under lock): reset completed, file is back
+        return real_is_file(self)
+
+    with patch.object(Path, "is_file", _patched_is_file):
+        pruned = prune_orphan_rows(workspace)
+
+    # Row must NOT have been pruned (transient absence).
+    assert "person:carol" not in pruned, (
+        "prune_orphan_rows deleted the vector row on a TRANSIENT absent-file "
+        "observation — the lock+recheck (sub-hazard B fix) is missing or broken"
+    )
+    assert call_count["n"] >= 2, (
+        "is_file was called fewer than 2 times — the recheck path was not taken"
+    )

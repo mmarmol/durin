@@ -38,6 +38,7 @@ from typing import Any, Iterator, Optional
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.fts_index import FTSIndex
+from durin.memory.memory_writer import git_worktree_lock_path
 from durin.memory.paths import (
     skill_path_from_uri,
     skill_uri,
@@ -46,6 +47,7 @@ from durin.memory.paths import (
     walk_skills,
 )
 from durin.memory.storage import load_entry
+from durin.utils.file_lock import cross_process_lock
 
 __all__ = [
     "IndexStats",
@@ -472,34 +474,51 @@ def reindex_one_file(
         return
     with FTSIndex.open(workspace) as idx:
         if not md_path.is_file():
-            uri = _uri_for(workspace, md_path)
-            if uri is not None:
-                t0 = time.monotonic()
-                idx.delete_by_uri(uri)
-                duration_ms = (time.monotonic() - t0) * 1000.0
-                _emit_write(
-                    uri=uri, op="delete",
-                    trigger=trigger, duration_ms=duration_ms,
-                )
-                # Keep the vector index symmetric: when a file vanishes,
-                # drop its Lance row too. Previously this path deleted only
-                # the FTS row, stranding the vector row as a search-able
-                # orphan that 404s on click. `delete_ids` is model-free and
-                # no-ops when lancedb is absent, so the hot watcher path
-                # stays cheap.
-                try:
-                    from durin.memory.vector_index import (
-                        delete_ids,
-                        vector_id_for_uri,
-                    )
+            # Sub-hazard B: dulwich reset --hard (in _fast_forward_working_tree)
+            # uses unlink-then-recreate, so a file may be transiently absent
+            # while a reset is in flight.  If we prune its FTS/vector row here
+            # we permanently destroy a valid entry.  Fix: acquire the same
+            # git-worktree lock that serializes resets and re-check is_file()
+            # after the lock is held.  If the file is present on re-check the
+            # reset completed and the file is back — skip the prune (transient).
+            # If still absent the deletion is genuine — prune as before.
+            # The FTS/Lance deletes (inner locks) are taken AFTER this lock
+            # (outer), so lock ordering is git-worktree > FTS/Lance.
+            # See docs/architecture/concurrency.md §reset-absent-window.
+            with cross_process_lock(git_worktree_lock_path(memory_root)):
+                if md_path.is_file():
+                    # Transient absence: reset completed, file is back.
+                    # Fall through to the present-file indexing path below.
+                    pass
+                else:
+                    uri = _uri_for(workspace, md_path)
+                    if uri is not None:
+                        t0 = time.monotonic()
+                        idx.delete_by_uri(uri)
+                        duration_ms = (time.monotonic() - t0) * 1000.0
+                        _emit_write(
+                            uri=uri, op="delete",
+                            trigger=trigger, duration_ms=duration_ms,
+                        )
+                        # Keep the vector index symmetric: when a file vanishes,
+                        # drop its Lance row too. Previously this path deleted only
+                        # the FTS row, stranding the vector row as a search-able
+                        # orphan that 404s on click. `delete_ids` is model-free and
+                        # no-ops when lancedb is absent, so the hot watcher path
+                        # stays cheap.
+                        try:
+                            from durin.memory.vector_index import (
+                                delete_ids,
+                                vector_id_for_uri,
+                            )
 
-                    delete_ids(workspace, [vector_id_for_uri(uri)])
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "indexer: vector delete on vanish skipped for "
-                        "%s: %s", uri, exc,
-                    )
-            return
+                            delete_ids(workspace, [vector_id_for_uri(uri)])
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "indexer: vector delete on vanish skipped for "
+                                "%s: %s", uri, exc,
+                            )
+                    return
         try:
             payload = _payload_for(workspace, md_path)
         except Exception as exc:  # noqa: BLE001
