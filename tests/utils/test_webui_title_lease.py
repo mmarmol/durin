@@ -62,10 +62,13 @@ def _make_provider(title: str = "Generated Title") -> MagicMock:
 
 
 async def test_llm_call_happens_outside_the_lease(tmp_path: Path) -> None:
-    """The LLM title generation must run before the lease is acquired.
+    """The LLM title generation must run before the lease is acquired,
+    and the save must run INSIDE the lease.
 
-    We verify this by checking that when the LLM's chat_with_retry is called,
-    the turn lock file is still acquirable (i.e., NOT held by this function).
+    Verified by probing the turn lock file at LLM call time (must be free)
+    and at save time (must be held).  A bug that moves the LLM call inside
+    the lease makes lease_held_during_llm == [True].  A bug that does the
+    save outside the lease makes lease_held_during_save == [False].
     """
     key = "websocket:outside"
     sm = SessionManager(tmp_path)
@@ -73,26 +76,37 @@ async def test_llm_call_happens_outside_the_lease(tmp_path: Path) -> None:
 
     session_path = sm._get_session_path(key)
     turn_lock_path = session_path.with_suffix(".turn.lock")
+    lock_file_path = Path(f"{turn_lock_path}.lock")
 
     lease_held_during_llm: list[bool] = []
+    lease_held_during_save: list[bool] = []
 
-    async def spy_chat_with_retry(*args, **kwargs):
-        # Try to acquire the turn lock.  If the lease is already held by
-        # maybe_generate_webui_title, this will block/fail.
-        lock_file = Path(f"{turn_lock_path}.lock")
-        # Use a very short timeout to probe; if it succeeds the lease is free.
-        import fcntl
+    import fcntl
+
+    def _probe_lease_free() -> bool:
+        """Return True if the turn lock IS held (cannot acquire NB flock)."""
         try:
-            fp = lock_file.open("a+", encoding="utf-8")
+            fp = lock_file_path.open("a+", encoding="utf-8")
             fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
             fp.close()
-            lease_held_during_llm.append(False)
+            return False  # lock was free
         except OSError:
-            lease_held_during_llm.append(True)
+            return True  # lock was held
+
+    async def spy_chat_with_retry(*args, **kwargs):
+        lease_held_during_llm.append(_probe_lease_free())
         response = MagicMock()
         response.content = "Good Title"
         return response
+
+    original_save = sm.save
+
+    def spy_save(session, **kwargs):
+        lease_held_during_save.append(_probe_lease_free())
+        return original_save(session, **kwargs)
+
+    sm.save = spy_save  # type: ignore[method-assign]
 
     provider = MagicMock()
     provider.chat_with_retry = spy_chat_with_retry
@@ -108,6 +122,11 @@ async def test_llm_call_happens_outside_the_lease(tmp_path: Path) -> None:
     assert lease_held_during_llm == [False], (
         "The turn lease must NOT be held during the LLM call; "
         f"got lease_held={lease_held_during_llm}"
+    )
+    assert lease_held_during_save, "save must be called at least once"
+    assert all(lease_held_during_save), (
+        "The turn lease MUST be held during save(); "
+        f"got lease_held={lease_held_during_save}"
     )
 
 
@@ -252,6 +271,11 @@ async def test_title_save_preserves_concurrent_turn_messages(tmp_path: Path) -> 
     The title generator reloads under the lease, so any messages committed
     to disk before the lease was acquired are visible in the reloaded session.
     The save must preserve them.
+
+    The final verification intentionally uses a FRESH SessionManager (not the
+    spy-patched one) so that the injection spy cannot re-add the follow-up
+    message during the read — a maximal clobber (writing an empty session)
+    would make this assertion fail.
     """
     key = "websocket:preserve"
     sm = SessionManager(tmp_path)
@@ -283,7 +307,11 @@ async def test_title_save_preserves_concurrent_turn_messages(tmp_path: Path) -> 
             model="test-model",
         )
 
-    fresh = sm.reload(key)
+    # Use a fresh SessionManager so the injection spy cannot re-inject the
+    # follow-up message during verification.  A real clobber (e.g. an impl
+    # that saves a brand-new empty session) will make these assertions fail.
+    fresh_sm = SessionManager(tmp_path)
+    fresh = fresh_sm.get_or_create(key)
     contents = [m["content"] for m in fresh.messages]
     assert "follow-up from concurrent turn" in contents, (
         "title save must not clobber a message written by a concurrent turn"
