@@ -264,6 +264,13 @@ class AgentRunSpec:
     # ``stop_reason="post_compaction_loop"``. Leave as ``None`` to skip
     # this layer (tests / non-loop callers don't need it).
     post_compaction_guard: Any | None = None
+    # Per-turn provider snapshot (hazard #8 — docs/architecture/concurrency.md).
+    # The gateway runs a single shared AgentRunner; _apply_provider_snapshot in
+    # loop.py mutates self.provider on every concurrent session's /model swap.
+    # Carrying the provider here lets run() resolve it once and use that local
+    # reference for the entire turn, making the turn immune to concurrent swaps.
+    # None → fall back to self.provider for backward compatibility.
+    provider: LLMProvider | None = None
 
 
 @dataclass(slots=True)
@@ -415,6 +422,10 @@ class AgentRunner:
         return injected_messages
 
     async def run(self, spec: AgentRunSpec) -> AgentRunResult:
+        # Resolve per-turn provider snapshot once (hazard #8 — docs/architecture/concurrency.md).
+        # A concurrent session's /model swap mutates self.provider; pinning the
+        # provider here makes this turn immune to that mutation.
+        provider = spec.provider or self.provider
         hook = spec.hook or AgentHook()
         messages = list(spec.initial_messages)
         final_content: str | None = None
@@ -499,7 +510,7 @@ class AgentRunner:
                             })
                 messages_for_model = self._microcompact(spec, messages_for_model)
                 messages_for_model = self._apply_tool_result_budget(spec, messages_for_model)
-                messages_for_model = self._snip_history(spec, messages_for_model)
+                messages_for_model = self._snip_history(spec, messages_for_model, provider)
                 # Snipping may have created new orphans; clean them up.
                 messages_for_model = self._drop_orphan_tool_results(messages_for_model)
                 messages_for_model = self._backfill_missing_tool_results(messages_for_model)
@@ -526,7 +537,7 @@ class AgentRunner:
             # distinguish "we hit context overflow before the model even
             # got a chance" from "model errored". A1 will re-base the
             # context for the next turn.
-            mid_turn_decision = self._mid_turn_precheck(spec, messages_for_model)
+            mid_turn_decision = self._mid_turn_precheck(spec, messages_for_model, provider)
             if mid_turn_decision is not None:
                 estimate_tokens, budget_tokens = mid_turn_decision
                 final_content = (
@@ -566,7 +577,7 @@ class AgentRunner:
                 messages=messages,
             )
             await hook.before_iteration(context)
-            response = await self._request_model(spec, messages_for_model, hook, context)
+            response = await self._request_model(spec, messages_for_model, hook, context, provider)
             raw_usage = self._usage_dict(response.usage)
             context.response = response
             context.usage = dict(raw_usage)
@@ -934,7 +945,7 @@ class AgentRunner:
                 )
                 if hook.wants_streaming():
                     await hook.on_stream_end(context, resuming=False)
-                response = await self._request_finalization_retry(spec, messages_for_model)
+                response = await self._request_finalization_retry(spec, messages_for_model, provider)
                 retry_usage = self._usage_dict(response.usage)
                 self._accumulate_usage(usage, retry_usage)
                 raw_usage = self._merge_usage(raw_usage, retry_usage)
@@ -1088,6 +1099,7 @@ class AgentRunner:
         self,
         spec: AgentRunSpec,
         messages: list[dict[str, Any]],
+        provider: LLMProvider | None = None,
     ) -> tuple[int, int] | None:
         """OpenClaw-inspired Tier 2 A2.
 
@@ -1103,10 +1115,11 @@ class AgentRunner:
         the caller gets a distinct ``mid_turn_precheck_overflow`` stop_reason
         instead of a generic provider error.
         """
+        _provider = provider if provider is not None else self.provider
         if not spec.context_window_tokens or not messages:
             return None
         try:
-            provider_max = getattr(getattr(self.provider, "generation", None), "max_tokens", 4096)
+            provider_max = getattr(getattr(_provider, "generation", None), "max_tokens", 4096)
             max_output = spec.max_tokens if isinstance(spec.max_tokens, int) else (
                 provider_max if isinstance(provider_max, int) else 4096
             )
@@ -1116,7 +1129,7 @@ class AgentRunner:
             if budget <= 0:
                 return None
             estimate, _ = estimate_prompt_tokens_chain(
-                self.provider,
+                _provider,
                 spec.model,
                 messages,
                 self._active_tool_definitions(spec),
@@ -1287,7 +1300,9 @@ class AgentRunner:
         messages: list[dict[str, Any]],
         hook: AgentHook,
         context: AgentHookContext,
+        provider: LLMProvider | None = None,
     ):
+        _provider = provider if provider is not None else self.provider
         timeout_s: float | None = spec.llm_timeout_s
         if timeout_s is None:
             # Default to a finite timeout to avoid per-session lock starvation when an LLM
@@ -1311,7 +1326,7 @@ class AgentRunner:
             not wants_streaming
             and spec.stream_progress_deltas
             and spec.progress_callback is not None
-            and getattr(self.provider, "supports_progress_deltas", False) is True
+            and getattr(_provider, "supports_progress_deltas", False) is True
         )
 
         progress_state: dict[str, bool] | None = None
@@ -1328,7 +1343,7 @@ class AgentRunner:
                 context.streamed_reasoning = True
                 await hook.emit_reasoning(delta)
 
-            coro = self.provider.chat_stream_with_retry(
+            coro = _provider.chat_stream_with_retry(
                 **kwargs,
                 on_content_delta=_stream,
                 on_thinking_delta=_thinking,
@@ -1358,12 +1373,12 @@ class AgentRunner:
                     context.streamed_content = True
                     await spec.progress_callback(incremental)
 
-            coro = self.provider.chat_stream_with_retry(
+            coro = _provider.chat_stream_with_retry(
                 **kwargs,
                 on_content_delta=_stream_progress,
             )
         else:
-            coro = self.provider.chat_with_retry(**kwargs)
+            coro = _provider.chat_with_retry(**kwargs)
 
         # Streaming requests already have provider-level idle timeouts
         # (DURIN_STREAM_IDLE_TIMEOUT_S). Do not also apply the outer wall-clock
@@ -1399,11 +1414,13 @@ class AgentRunner:
         self,
         spec: AgentRunSpec,
         messages: list[dict[str, Any]],
+        provider: LLMProvider | None = None,
     ):
+        _provider = provider if provider is not None else self.provider
         retry_messages = list(messages)
         retry_messages.append(build_finalization_retry_message())
         kwargs = self._build_request_kwargs(spec, retry_messages, tools=None)
-        return await self.provider.chat_with_retry(**kwargs)
+        return await _provider.chat_with_retry(**kwargs)
 
     @staticmethod
     def _usage_dict(usage: dict[str, Any] | None) -> dict[str, int]:
@@ -2116,11 +2133,13 @@ class AgentRunner:
         self,
         spec: AgentRunSpec,
         messages: list[dict[str, Any]],
+        provider: LLMProvider | None = None,
     ) -> list[dict[str, Any]]:
+        _provider = provider if provider is not None else self.provider
         if not messages or not spec.context_window_tokens:
             return messages
 
-        provider_max_tokens = getattr(getattr(self.provider, "generation", None), "max_tokens", 4096)
+        provider_max_tokens = getattr(getattr(_provider, "generation", None), "max_tokens", 4096)
         max_output = spec.max_tokens if isinstance(spec.max_tokens, int) else (
             provider_max_tokens if isinstance(provider_max_tokens, int) else 4096
         )
@@ -2131,7 +2150,7 @@ class AgentRunner:
             return messages
 
         estimate, _ = estimate_prompt_tokens_chain(
-            self.provider,
+            _provider,
             spec.model,
             messages,
             self._active_tool_definitions(spec),
