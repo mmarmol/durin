@@ -52,14 +52,18 @@ const EMPTY_FORM: FormState = {
 };
 
 function jobToForm(job: CronJobRow): FormState {
+  // The select only offers "cron" and "every". One-shot "at" jobs aren't
+  // creatable here; fall back to "cron" so the form can still edit the
+  // non-schedule fields without crashing.
+  const kind = job.schedule.kind === "every" ? "every" : "cron";
   return {
     name: job.name,
-    mode: job.message ? "task" : "reminder",
+    mode: job.mode,
     message: job.message ?? "",
-    schedule_kind: job.schedule.kind,
+    schedule_kind: kind,
     expr: job.schedule.expr ?? "",
     every_seconds: job.schedule.every_ms != null ? String(job.schedule.every_ms / 1000) : "",
-    model: "",
+    model: job.model ?? "",
     deliver: false,
     channel: job.channel ?? "",
     to: "",
@@ -105,7 +109,7 @@ function CronForm({
         schedule_kind: form.schedule_kind,
         expr: form.schedule_kind === "cron" ? form.expr || null : null,
         every_ms:
-          form.schedule_kind === "interval" && form.every_seconds
+          form.schedule_kind === "every" && form.every_seconds
             ? Number(form.every_seconds) * 1000
             : null,
         deliver: form.deliver,
@@ -191,7 +195,7 @@ function CronForm({
             aria-label={t("settings.cron.fieldSchedule")}
           >
             <option value="cron">{t("settings.cron.scheduleKindCron")}</option>
-            <option value="interval">{t("settings.cron.scheduleKindInterval")}</option>
+            <option value="every">{t("settings.cron.scheduleKindInterval")}</option>
           </select>
           {form.schedule_kind === "cron" ? (
             <input
@@ -654,6 +658,7 @@ function RunHistory({
                   <th className="pb-1 pr-3 font-medium">{t("settings.cron.runAt")}</th>
                   <th className="pb-1 pr-3 font-medium">{t("settings.cron.status")}</th>
                   <th className="pb-1 pr-3 font-medium">{t("settings.cron.duration")}</th>
+                  <th className="pb-1 pr-3 font-medium">{t("settings.cron.model")}</th>
                   <th className="pb-1 font-medium"></th>
                 </tr>
               </thead>
@@ -680,6 +685,9 @@ function RunHistory({
                     </td>
                     <td className="py-1 pr-3 tabular-nums text-muted-foreground">
                       {formatDuration(run.duration_ms)}
+                    </td>
+                    <td className="py-1 pr-3 text-muted-foreground">
+                      {run.model ?? "—"}
                     </td>
                     <td className="py-1">
                       {run.session_key ? (

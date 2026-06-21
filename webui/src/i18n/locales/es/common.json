@@ -373,7 +373,7 @@
     },
     "cron": {
       "title": "Tareas programadas",
-      "description": "Tareas en segundo plano que el servicio cron ejecuta según un horario. Las tareas del sistema (dream, memory dream) no se pueden eliminar pero sí desactivar. Para agregar una nueva, usa la herramienta `cron` desde el chat.",
+      "description": "Tareas en segundo plano que el servicio cron ejecuta según un horario. Agrega una desde este panel o con la herramienta `cron` en el chat. Las tareas del sistema (dream, memory dream) no se pueden eliminar pero sí desactivar.",
       "loading": "Cargando tareas…",
       "loadError": "No se pudieron cargar las tareas cron.",
       "empty": "Sin tareas programadas.",
@@ -406,6 +406,7 @@
       "runAt": "Ejecutado",
       "status": "Estado",
       "duration": "Duración",
+      "model": "Modelo",
       "noRuns": "Sin ejecuciones registradas.",
       "openRun": "Abrir",
       "systemJobs": {

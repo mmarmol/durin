@@ -367,7 +367,7 @@
     },
     "cron": {
       "title": "Tugas terjadwal",
-      "description": "Tugas latar belakang yang dijalankan layanan cron sesuai jadwal. Tugas sistem (dream, memory dream) tidak dapat dihapus tetapi bisa dinonaktifkan. Untuk menambah, gunakan tool `cron` dari chat.",
+      "description": "Tugas latar belakang yang dijalankan layanan cron sesuai jadwal. Tambah tugas dari panel ini atau lewat tool `cron` di chat. Tugas sistem (dream, memory dream) tidak dapat dihapus tetapi bisa dinonaktifkan.",
       "loading": "Memuat tugas…",
       "loadError": "Tidak dapat memuat tugas cron.",
       "empty": "Tidak ada tugas terjadwal.",
@@ -400,6 +400,7 @@
       "runAt": "Dijalankan",
       "status": "Status",
       "duration": "Durasi",
+      "model": "Model",
       "noRuns": "Belum ada eksekusi.",
       "openRun": "Buka",
       "systemJobs": {

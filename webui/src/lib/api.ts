@@ -272,6 +272,8 @@ export interface CronJobRow {
     tz: string | null;
   };
   message: string;
+  mode: string;
+  model: string | null;
   channel: string;
   state: {
     next_run_at_ms: number | null;

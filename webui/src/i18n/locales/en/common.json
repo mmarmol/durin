@@ -373,7 +373,7 @@
     },
     "cron": {
       "title": "Scheduled jobs",
-      "description": "Background tasks the cron service runs on a schedule. System jobs (dream, memory dream) cannot be removed but can be disabled. To add a new job, use the `cron` tool from the chat.",
+      "description": "Background tasks the cron service runs on a schedule. Add a job from this panel or via the `cron` tool in chat. System jobs (dream, memory dream) cannot be removed but can be disabled.",
       "loading": "Loading jobs…",
       "loadError": "Could not load cron jobs.",
       "empty": "No scheduled jobs.",
@@ -406,6 +406,7 @@
       "runAt": "Ran at",
       "status": "Status",
       "duration": "Duration",
+      "model": "Model",
       "noRuns": "No runs recorded.",
       "openRun": "Open",
       "systemJobs": {
