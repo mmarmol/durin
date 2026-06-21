@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
+from durin.utils.sqlite_util import connect as _sqlite_connect, execute_write as _execute_write
+
 __all__ = ["FTSHit", "FTSIndex", "fts_index_path"]
 
 
@@ -108,14 +110,10 @@ class FTSIndex:
         """
         path = fts_index_path(workspace)
         path.parent.mkdir(parents=True, exist_ok=True)
-        # `check_same_thread=False` is intentional: the caller is
-        # responsible for serialising access. SQLite itself serialises
-        # writes via the WAL.
-        conn = sqlite3.connect(str(path), check_same_thread=False)
-        # WAL keeps reads non-blocking against writes — useful when the
-        # search pipeline reads while the watcher is upserting.
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
+        # sqlite_util.connect sets check_same_thread=False, WAL mode, and
+        # busy_timeout so concurrent cross-process writers don't get an
+        # unretried SQLITE_BUSY. See docs/architecture/concurrency.md.
+        conn = _sqlite_connect(path)
         for stmt in _SCHEMA:
             conn.executescript(stmt)
         conn.commit()
@@ -152,49 +150,37 @@ class FTSIndex:
         before the new rows go in, so re-running on the same file
         leaves exactly one row per table.
         """
-        cur = self._conn.cursor()
-        cur.execute("BEGIN")
-        try:
-            cur.execute("DELETE FROM memory_fts WHERE uri = ?", (uri,))
-            cur.execute(
-                "DELETE FROM memory_fts_trigram WHERE uri = ?", (uri,),
-            )
-            cur.execute("DELETE FROM fts_meta WHERE uri = ?", (uri,))
-            cur.execute(
+        now = datetime.now(timezone.utc).isoformat()
+
+        def _do(c: sqlite3.Connection) -> None:
+            c.execute("DELETE FROM memory_fts WHERE uri = ?", (uri,))
+            c.execute("DELETE FROM memory_fts_trigram WHERE uri = ?", (uri,))
+            c.execute("DELETE FROM fts_meta WHERE uri = ?", (uri,))
+            c.execute(
                 "INSERT INTO memory_fts (uri, path, type, entity_type, text) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (uri, path, type_, entity_type, text),
             )
-            cur.execute(
+            c.execute(
                 "INSERT INTO memory_fts_trigram "
                 "(uri, path, type, entity_type, text) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (uri, path, type_, entity_type, text),
             )
-            cur.execute(
-                "INSERT INTO fts_meta (uri, mtime, indexed_at) "
-                "VALUES (?, ?, ?)",
-                (uri, mtime, datetime.now(timezone.utc).isoformat()),
+            c.execute(
+                "INSERT INTO fts_meta (uri, mtime, indexed_at) VALUES (?, ?, ?)",
+                (uri, mtime, now),
             )
-            self._conn.commit()
-        except sqlite3.Error:
-            self._conn.rollback()
-            raise
+
+        _execute_write(self._conn, _do)
 
     def delete_by_uri(self, uri: str) -> None:
         """Remove a uri from both FTS tables and the meta table."""
-        cur = self._conn.cursor()
-        cur.execute("BEGIN")
-        try:
-            cur.execute("DELETE FROM memory_fts WHERE uri = ?", (uri,))
-            cur.execute(
-                "DELETE FROM memory_fts_trigram WHERE uri = ?", (uri,),
-            )
-            cur.execute("DELETE FROM fts_meta WHERE uri = ?", (uri,))
-            self._conn.commit()
-        except sqlite3.Error:
-            self._conn.rollback()
-            raise
+        _execute_write(self._conn, lambda c: (
+            c.execute("DELETE FROM memory_fts WHERE uri = ?", (uri,)),
+            c.execute("DELETE FROM memory_fts_trigram WHERE uri = ?", (uri,)),
+            c.execute("DELETE FROM fts_meta WHERE uri = ?", (uri,)),
+        ))
 
     def delete_by_uris(self, uris: list[str]) -> int:
         """Remove many uris in a single transaction (chunked IN clauses).
@@ -207,42 +193,34 @@ class FTSIndex:
         unique = [u for u in dict.fromkeys(uris) if u]
         if not unique:
             return 0
-        cur = self._conn.cursor()
-        cur.execute("BEGIN")
-        try:
+
+        def _do(c: sqlite3.Connection) -> None:
             for start in range(0, len(unique), 500):
                 chunk = unique[start:start + 500]
                 placeholders = ",".join("?" * len(chunk))
-                cur.execute(
+                c.execute(
                     f"DELETE FROM memory_fts WHERE uri IN ({placeholders})",
                     chunk,
                 )
-                cur.execute(
+                c.execute(
                     f"DELETE FROM memory_fts_trigram WHERE uri IN ({placeholders})",
                     chunk,
                 )
-                cur.execute(
+                c.execute(
                     f"DELETE FROM fts_meta WHERE uri IN ({placeholders})",
                     chunk,
                 )
-            self._conn.commit()
-        except sqlite3.Error:
-            self._conn.rollback()
-            raise
+
+        _execute_write(self._conn, _do)
         return len(unique)
 
     def clear(self) -> None:
         """Drop all rows from both tables. Used by ``durin reindex``."""
-        cur = self._conn.cursor()
-        cur.execute("BEGIN")
-        try:
-            cur.execute("DELETE FROM memory_fts")
-            cur.execute("DELETE FROM memory_fts_trigram")
-            cur.execute("DELETE FROM fts_meta")
-            self._conn.commit()
-        except sqlite3.Error:
-            self._conn.rollback()
-            raise
+        _execute_write(self._conn, lambda c: (
+            c.execute("DELETE FROM memory_fts"),
+            c.execute("DELETE FROM memory_fts_trigram"),
+            c.execute("DELETE FROM fts_meta"),
+        ))
 
     # --- queries ----------------------------------------------------------
 

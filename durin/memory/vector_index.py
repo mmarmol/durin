@@ -39,6 +39,7 @@ from durin.memory.embedding import EmbeddingProvider
 from durin.memory.paths import MEMORY_CLASSES, skill_uri, walk_class
 from durin.memory.schema import MemoryEntry
 from durin.memory.storage import load_entry
+from durin.utils.file_lock import cross_process_lock
 
 logger = logging.getLogger(__name__)
 
@@ -576,6 +577,13 @@ class VectorIndex:
         after the lance probe detects breakage, never on the normal
         write path, so the window is accepted rather than swapped out.
 
+        Two processes' health-check rebuilds can race the drop+create
+        window and corrupt or lose rows (hazard #9). The body is
+        wrapped in ``cross_process_lock`` so only one rebuild runs at a
+        time. The per-row ``merge_insert`` upsert paths are already
+        atomic and are intentionally left outside this lock.
+        See docs/architecture/concurrency.md for lock-ordering invariants.
+
         Audit E9 (2026-05-28) extended this to also walk entity pages.
         Pre-E9, only memory entries (`memory/<class>/*.md`) were walked
         — entity pages were re-upserted only by Dream apply or absorb,
@@ -585,6 +593,11 @@ class VectorIndex:
         later: they live under `skills/`, an independent root, so the
         rebuild walks them even when `memory/` is absent.
         """
+        with cross_process_lock(Path(self._uri)):
+            return self._rebuild_body()
+
+    def _rebuild_body(self) -> int:
+        """Execute the rebuild under the caller-held cross-process lock."""
         # Pass 1: walk classified memory entries. `walk_class` guards on
         # the class dir's existence, so this is safe when `memory/` is
         # absent (e.g. a skills-only workspace).
