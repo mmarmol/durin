@@ -53,7 +53,11 @@ async def test_generate_webui_title_only_for_marked_webui_sessions(tmp_path: Pat
     )
 
     assert generated is True
-    assert session.metadata[WEBUI_TITLE_METADATA_KEY] == "优化 WebUI 侧边栏"
+    # maybe_generate_webui_title reloads the session under the turn lease before
+    # saving, so the title lives in the reloaded (cached) copy, not the pre-call
+    # `session` reference.  Read from the manager to get the current state.
+    saved = loop.sessions.get_or_create("websocket:chat-title")
+    assert saved.metadata[WEBUI_TITLE_METADATA_KEY] == "优化 WebUI 侧边栏"
     loop.provider.chat_with_retry.assert_awaited_once()
 
 
