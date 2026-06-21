@@ -282,6 +282,15 @@ export interface CronJobRow {
   };
   created_at_ms: number;
   updated_at_ms: number;
+  run_history?: Array<{
+    run_at_ms: number;
+    status: "ok" | "error" | "skipped";
+    duration_ms: number;
+    error: string | null;
+    session_key: string | null;
+    model: string | null;
+    summary: string | null;
+  }>;
 }
 
 export async function listCronJobs(
@@ -326,6 +335,29 @@ export async function runCronJob(
     token,
     { id },
   );
+}
+
+export async function addCronJob(
+  token: string,
+  body: {
+    name: string; message: string; mode: string; model: string | null;
+    schedule_kind: string; expr?: string | null; every_ms?: number | null;
+    at_ms?: number | null; tz?: string | null;
+    deliver: boolean; channel?: string | null; to?: string | null;
+  },
+  base = "",
+): Promise<CronJobRow> {
+  const res = await post<{ job: CronJobRow }>(`${base}/api/v1/cron`, token, body);
+  return res.job;
+}
+
+export async function updateCronJob(
+  token: string,
+  body: { id: string } & Partial<Parameters<typeof addCronJob>[1]>,
+  base = "",
+): Promise<CronJobRow> {
+  const res = await patch<{ job: CronJobRow }>(`${base}/api/v1/cron`, token, body);
+  return res.job;
 }
 
 export async function getConfig(
