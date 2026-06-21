@@ -14,6 +14,9 @@ import json
 from datetime import date
 from pathlib import Path
 
+from durin.utils.atomic_write import atomic_write_text
+from durin.utils.file_lock import cross_process_lock
+
 _VERSION = 1
 
 
@@ -59,8 +62,7 @@ def load_reviews(workspace) -> dict:
 def _write(workspace, reviews: dict) -> None:
     p = _store_path(workspace)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"version": _VERSION, "reviews": reviews}, indent=2),
-                 encoding="utf-8")
+    atomic_write_text(p, json.dumps({"version": _VERSION, "reviews": reviews}, indent=2))
 
 
 def get_review(workspace, name, skill_dir, current_findings) -> dict | None:
@@ -79,24 +81,33 @@ def get_review(workspace, name, skill_dir, current_findings) -> dict | None:
 
 def record_review(workspace, name, skill_dir, *, by, verdict, original,
                   findings, note="") -> dict:
-    reviews = load_reviews(workspace)
-    reviews[name] = {
-        "content_hash": content_hash(skill_dir),
-        "acked": sorted({fingerprint(f) for f in findings}),
-        "by": by,
-        "verdict": verdict,
-        "original": original,
-        "note": note or "",
-        "at": date.today().isoformat(),
-    }
-    _write(workspace, reviews)
+    """Record (or update) a review. The full load→mutate→save is under
+    cross_process_lock so concurrent callers cannot lose each other's writes."""
+    p = _store_path(workspace)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with cross_process_lock(p):
+        reviews = load_reviews(workspace)
+        reviews[name] = {
+            "content_hash": content_hash(skill_dir),
+            "acked": sorted({fingerprint(f) for f in findings}),
+            "by": by,
+            "verdict": verdict,
+            "original": original,
+            "note": note or "",
+            "at": date.today().isoformat(),
+        }
+        _write(workspace, reviews)
     return reviews[name]
 
 
 def clear_review(workspace, name) -> bool:
-    reviews = load_reviews(workspace)
-    if name not in reviews:
-        return False
-    del reviews[name]
-    _write(workspace, reviews)
+    """Remove a review. The full load→mutate→save is under cross_process_lock."""
+    p = _store_path(workspace)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with cross_process_lock(p):
+        reviews = load_reviews(workspace)
+        if name not in reviews:
+            return False
+        del reviews[name]
+        _write(workspace, reviews)
     return True

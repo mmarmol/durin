@@ -17,6 +17,9 @@ import threading
 import urllib.request
 from pathlib import Path
 
+from durin.utils.atomic_write import atomic_write_text
+from durin.utils.file_lock import cross_process_lock
+
 # The durin-owned catalog, published weekly as a release asset (see
 # .github/workflows/mcp-catalog.yml). Mirrors McpCatalogRefreshConfig.url — callers
 # normally pass cfg.url; this default exists only so a bare call still targets the
@@ -97,11 +100,10 @@ def refresh_catalog(data_dir: Path, *, url: str = _DEFAULT_URL, fetch=None) -> b
         return False
 
     try:
+        cache_path = data_dir / "mcp_catalog_cache.json"
         data_dir.mkdir(parents=True, exist_ok=True)
-        (data_dir / "mcp_catalog_cache.json").write_text(
-            json.dumps(data, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        with cross_process_lock(cache_path):
+            atomic_write_text(cache_path, json.dumps(data, ensure_ascii=False))
     except Exception:  # noqa: BLE001 — IO failure: keep prior data
         return False
 
