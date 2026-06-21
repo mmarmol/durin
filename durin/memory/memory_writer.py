@@ -31,6 +31,7 @@ from durin.memory.git_plumbing import (
     read_blob_at_head,
 )
 from durin.memory.provenance import current_author
+from durin.utils.file_lock import cross_process_lock
 
 # Imported lazily inside _refresh_alias_index to avoid a circular import:
 # aliases_cache → AliasIndex → entity_page → (no memory_writer dep), so the
@@ -96,35 +97,44 @@ def _commit_dirty_as_user(root: Path) -> None:
     the hard-reset ff (``_fast_forward_working_tree``) that follows can't clobber
     an in-progress hand edit (e.g. the user editing a page in Obsidian). No-op on
     a clean tree. Best-effort — a failure here must never block the system write.
+
+    Serialized under the git-worktree cross-process lock (§lock-ordering in
+    docs/architecture/concurrency.md): this lock is the sole guard for
+    working-tree / .git/index mutations and is always acquired AFTER any
+    dulwich-internal ref CAS lock.  It is never held while a session or
+    config lock is acquired, so there is no opposite-order acquisition.
     """
     if not (root / ".git").exists():
         return
-    try:
-        status = porcelain.status(str(root))
-    except Exception:  # noqa: BLE001 — never block a write on the guard
-        return
-    dirty: list[str] = []
-    for group in (status.unstaged, status.untracked):
-        for item in group:
-            rel = item.decode("utf-8") if isinstance(item, bytes) else item
-            if not rel.endswith(".md"):
-                continue
-            parts = Path(rel).parts
-            if parts and parts[0] in ("archive", "pending"):
-                continue
-            dirty.append(rel)
-    if not dirty:
-        return
-    try:
-        porcelain.add(str(root), [str(root / d) for d in dirty])
-        porcelain.commit(
-            str(root),
-            message=b"manual edit (human-edit guard)",
-            author=b"user <user@durin.local>",
-            committer=b"user <user@durin.local>",
-        )
-    except Exception:  # noqa: BLE001
-        return
+    # Lock target: <memory_git_root>/.git-worktree  →  lock file: .git-worktree.lock
+    # Placed under DURIN_HOME (inside the memory git root), not in any user workspace.
+    with cross_process_lock(root / ".git-worktree"):
+        try:
+            status = porcelain.status(str(root))
+        except Exception:  # noqa: BLE001 — never block a write on the guard
+            return
+        dirty: list[str] = []
+        for group in (status.unstaged, status.untracked):
+            for item in group:
+                rel = item.decode("utf-8") if isinstance(item, bytes) else item
+                if not rel.endswith(".md"):
+                    continue
+                parts = Path(rel).parts
+                if parts and parts[0] in ("archive", "pending"):
+                    continue
+                dirty.append(rel)
+        if not dirty:
+            return
+        try:
+            porcelain.add(str(root), [str(root / d) for d in dirty])
+            porcelain.commit(
+                str(root),
+                message=b"manual edit (human-edit guard)",
+                author=b"user <user@durin.local>",
+                committer=b"user <user@durin.local>",
+            )
+        except Exception:  # noqa: BLE001
+            return
 
 
 def _emit_relation_cap(ref: str, before: int, after: int) -> None:
@@ -383,17 +393,22 @@ def write_files_cas(
 def _fast_forward_working_tree(root: Path) -> None:
     """Reset the working tree to HEAD so readers see the committed state.
 
-    MVP: hard reset to HEAD. Safe in Phase 1 because every write goes through
-    this module (no concurrent human working-tree edit). Resilient to the
-    index/ref lock under concurrent writers (best-effort: a later ff converges
-    the tree to HEAD anyway). The "don't ff over a dirty working tree" guard
-    (design §2.5, finding 2D-1) lands with the human-edit work.
+    MVP: hard reset to HEAD. Resilient to the index/ref lock under concurrent
+    writers (best-effort: a later ff converges the tree to HEAD anyway).
     # TODO(human-edit): skip ff when the working tree is dirty.
+
+    Serialized under the git-worktree cross-process lock (§lock-ordering in
+    docs/architecture/concurrency.md): same lock file as _commit_dirty_as_user
+    so a commit and a reset cannot interleave.  cross_process_lock is reentrant
+    per-thread, so the common caller sequence
+    _commit_dirty_as_user → (CAS) → _fast_forward_working_tree re-enters safely
+    on the same thread.
     """
-    for i in range(10):
-        try:
-            porcelain.reset(str(root), "hard")
-            return
-        except (FileLocked, OSError):
-            time.sleep(random.uniform(0.0, 0.005) * (i + 1))
+    with cross_process_lock(root / ".git-worktree"):
+        for i in range(10):
+            try:
+                porcelain.reset(str(root), "hard")
+                return
+            except (FileLocked, OSError):
+                time.sleep(random.uniform(0.0, 0.005) * (i + 1))
     # Best-effort: give up silently; the canonical state is the commit (HEAD).
