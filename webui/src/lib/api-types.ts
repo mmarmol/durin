@@ -229,6 +229,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mcp/registry/oauth-capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether durin can complete zero-secret OAuth for a server's remote */
+        get: operations["mcp_registry_oauth_capability"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mcp/registry/runtime": {
         parameters: {
             query?: never;
@@ -1777,6 +1794,19 @@ export interface components {
             /** Servers */
             servers: components["schemas"]["McpServerSummary"][];
         };
+        /** McpOauthCapabilityQuery */
+        McpOauthCapabilityQuery: {
+            /** Ref */
+            ref: string;
+        };
+        /**
+         * McpOauthCapabilityResult
+         * @description Whether durin can complete zero-secret OAuth (DCR) for a server's remote endpoint.
+         */
+        McpOauthCapabilityResult: {
+            /** Oauth Capable */
+            oauth_capable: boolean;
+        };
         /** McpOauthLoginResult */
         McpOauthLoginResult: {
             /** Authorization Url */
@@ -1826,6 +1856,11 @@ export interface components {
         };
         /** McpRegistryInstallCommand */
         McpRegistryInstallCommand: {
+            /**
+             * Auth Method
+             * @default
+             */
+            auth_method: string;
             /**
              * Env Values
              * @default null
@@ -3245,6 +3280,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["McpServerDetail"];
+                };
+            };
+        };
+    };
+    mcp_registry_oauth_capability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpOauthCapabilityQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpOauthCapabilityResult"];
                 };
             };
         };
