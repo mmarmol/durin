@@ -6,6 +6,7 @@ import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { resources } from "@/i18n";
 
+const AUDIO_KEYS = ["downloadingModel", "loadingModel", "transcribing", "transcriptPrefix", "processing"];
 const QUICK_ACTION_KEYS = ["plan", "analyze", "brainstorm", "code", "summarize", "more"];
 const IMAGE_QUICK_ACTION_KEYS = ["icon", "sticker", "poster", "product", "portrait", "edit"];
 const SETTINGS_NAV_KEYS = ["general", "providers", "web-search", "secrets", "advanced"];
@@ -45,6 +46,15 @@ describe("webui i18n", () => {
     });
 
     expect(screen.getByLabelText("メッセージ入力欄")).toBeInTheDocument();
+  });
+
+  it("keeps audio keys present for every registered locale", () => {
+    for (const resource of Object.values(resources)) {
+      const audio = resource.common.audio;
+      for (const key of AUDIO_KEYS) {
+        expect(audio[key as keyof typeof audio]).toBeTruthy();
+      }
+    }
   });
 
   it("keeps welcome quick actions localized for every registered locale", () => {

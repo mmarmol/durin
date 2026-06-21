@@ -1,0 +1,151 @@
+"""Tests for the STT doctor checks (spec §8.1)."""
+
+import sys
+import types
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from durin.cli.doctor import check_stt_installed, check_stt_model_cached
+
+
+def test_doctor_reports_stt_installed_when_sherpa_onnx_present():
+    """When sherpa_onnx imports, the check passes."""
+    sys.modules.setdefault("sherpa_onnx", types.ModuleType("sherpa_onnx"))
+    result = check_stt_installed()
+    assert result.status == "ok"
+    assert "sherpa_onnx" in result.name
+    sys.modules.pop("sherpa_onnx", None)
+
+
+def test_doctor_reports_stt_missing_when_absent(monkeypatch):
+    """When sherpa_onnx is unimportable, the check warns with the [stt] hint."""
+    import importlib
+
+    real_import_module = importlib.import_module
+
+    def fake_import_module(name, *a, **k):
+        if name == "sherpa_onnx":
+            raise ImportError("nope")
+        return real_import_module(name, *a, **k)
+
+    monkeypatch.setattr(importlib, "import_module", fake_import_module)
+    result = check_stt_installed()
+    assert result.status == "warn"
+    assert result.extra == "stt"
+    # The fix hint must mention the [stt] extra so users know what to install.
+    assert result.fix is not None
+    assert "stt" in result.fix
+
+
+def test_check_stt_model_cached_skips_for_cloud_provider():
+    """When the provider is not local, the check returns ok."""
+    from durin.config.schema import Config
+    config = Config()
+    config.transcription.provider = "groq"
+    result = check_stt_model_cached(cfg=config)
+    assert result.status == "ok"
+    assert "cloud" in result.message
+
+
+def test_check_stt_model_cached_ok_when_model_present(tmp_path):
+    """When the local engine's tokens file exists, the check returns ok."""
+    from durin.config.schema import Config
+    from durin.providers.stt_models import ENGINES
+
+    config = Config()
+    config.transcription.provider = "local"
+    config.transcription.local.engine = "parakeet"
+
+    spec = ENGINES["parakeet"]
+    model_dir = tmp_path / spec.dir_name
+    model_dir.mkdir()
+    (model_dir / spec.files["tokens"]).write_text("dummy")
+
+    with patch("durin.providers.stt_models._default_stt_cache", return_value=tmp_path):
+        result = check_stt_model_cached(cfg=config)
+
+    assert result.status == "ok"
+    assert "parakeet" in result.message
+
+
+def test_check_stt_model_cached_warns_when_model_absent(tmp_path):
+    """When the local engine's tokens file is missing, the check warns."""
+    from durin.config.schema import Config
+
+    config = Config()
+    config.transcription.provider = "local"
+    config.transcription.local.engine = "parakeet"
+
+    # tmp_path is empty — no model files present
+    with patch("durin.providers.stt_models._default_stt_cache", return_value=tmp_path):
+        result = check_stt_model_cached(cfg=config)
+
+    assert result.status == "warn"
+    assert "parakeet" in result.message
+    assert result.fix is not None
+
+
+def test_check_stt_model_cached_unknown_engine():
+    """When config.transcription.local.engine is not in ENGINES, return warn with 'unknown' message."""
+    from durin.config.schema import Config
+
+    config = Config()
+    config.transcription.provider = "local"
+    config.transcription.local.engine = "bogus-engine"
+
+    result = check_stt_model_cached(cfg=config)
+
+    assert result.status == "warn"
+    assert "bogus-engine" in result.message
+    assert "unknown" in result.message
+    # Must NOT claim a model is "not cached" — the engine doesn't exist
+    assert "not cached" not in result.message
+    assert result.fix is not None
+
+
+def test_stt_round_trip_skips_cloud():
+    """A cloud provider has no local model to warm — round-trip is a no-op ok."""
+    from durin.cli.doctor import check_stt_round_trip
+    from durin.config.schema import Config
+
+    cfg = Config()
+    cfg.transcription.provider = "groq"
+    r = check_stt_round_trip(cfg)
+    assert r.status == "ok"
+    assert "no local model" in r.message
+
+
+def test_stt_round_trip_local_downloads_and_runs(monkeypatch):
+    """For a local provider the check runs the configured engine on a tiny
+    synthesized clip (proving download+load+decode) and reports ok. The model
+    is mocked so no real weights are fetched."""
+    from durin.cli.doctor import check_stt_round_trip
+    from durin.config.schema import Config
+
+    # sherpa_onnx isn't installed in CI ([stt] extra omitted) — stub the import
+    # guard so the local path runs.
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", types.ModuleType("sherpa_onnx"))
+
+    captured: dict[str, str] = {}
+
+    class FakeProvider:
+        def __init__(self, engine="parakeet"):
+            captured["engine"] = engine
+
+        async def transcribe(self, path):
+            captured["path"] = str(path)
+            return ""  # a tone has no words; the point is it ran end-to-end
+
+    monkeypatch.setattr(
+        "durin.providers.transcription.LocalSttProvider", FakeProvider
+    )
+
+    cfg = Config()
+    cfg.transcription.provider = "local"
+    cfg.transcription.local.engine = "sensevoice"
+    r = check_stt_round_trip(cfg)
+
+    assert r.status == "ok", r.message
+    assert captured.get("engine") == "sensevoice"
+    assert "path" in captured  # the synthesized clip was actually transcribed
+    assert "loaded + ran" in r.message

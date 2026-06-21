@@ -83,6 +83,15 @@ interface PendingSecretStore {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/** In-flight ``audio_transcribe`` calls, keyed by request_id, awaiting the
+ *  server's ``audio_transcript`` reply (spec §5.4). */
+interface PendingTranscription {
+  resolve: (text: string) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+  onStatus?: (phase: "downloading" | "loading" | "transcribing", bytes?: number, total?: number) => void;
+}
+
 /** A credential to write into durin's secret store over the socket. */
 export interface SecretStoreInput {
   name: string;
@@ -125,6 +134,9 @@ export class DurinClient {
   private pendingInboundByChat = new Map<string, InboundEvent[]>();
   /** In-flight `storeSecret` calls, keyed by request_id, awaiting their ack. */
   private pendingSecretStores = new Map<string, PendingSecretStore>();
+  /** In-flight `audio_transcribe` calls, keyed by request_id, awaiting
+   *  their ``audio_transcript`` reply (spec §5.4). */
+  private pendingTranscriptions = new Map<string, PendingTranscription>();
   private static readonly PENDING_INBOUND_MAX = 2000;
   // chat_ids we've attached to since connect; re-attached after reconnects
   private knownChats = new Set<string>();
@@ -319,6 +331,37 @@ export class DurinClient {
     this.queueSend(frame);
   }
 
+  /**
+   * Ask the server to transcribe one audio attachment (spec §5.4).
+   *
+   * Sends an ``audio_transcribe`` frame and resolves with the transcript text
+   * once the server replies with ``audio_transcript`` (keyed by request_id),
+   * or rejects on error / timeout. The audio itself is never sent to the
+   * agent — only the resulting text reaches the conversation.
+   */
+  transcribeAudio(
+    chatId: string,
+    media: OutboundMedia[],
+    onStatus?: (phase: "downloading" | "loading" | "transcribing", bytes?: number, total?: number) => void,
+  ): Promise<string> {
+    const requestId =
+      globalThis.crypto?.randomUUID?.() ??
+      `stt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingTranscriptions.delete(requestId);
+        reject(new Error("audio transcription timed out"));
+      }, 300_000);
+      this.pendingTranscriptions.set(requestId, { resolve, reject, timer, onStatus });
+      this.queueSend({
+        type: "audio_transcribe",
+        request_id: requestId,
+        chat_id: chatId,
+        media,
+      });
+    });
+  }
+
   /** Kick off a streaming skill audit. Reasoning arrives as ``reasoning_delta``
    *  on ``audit:<name>``; the terminal ``skill_audit_done`` carries the result.
    *  Subscribe with ``onChat("audit:" + name, handler)`` before calling. */
@@ -434,6 +477,32 @@ export class DurinClient {
       }
       return;
     }
+    if (parsed.event === "audio_transcript") {
+      // Intermediate phase events (status present) notify the caller but keep
+      // the promise pending; the terminal event (no status) settles it.
+      if (parsed.status) {
+        const pending = this.pendingTranscriptions.get(parsed.request_id);
+        if (pending?.onStatus) {
+          try {
+            pending.onStatus(parsed.status, parsed.bytes, parsed.total);
+          } catch {
+            // a subscriber fault must not stall message dispatch
+          }
+        }
+        return;
+      }
+      const pending = this.pendingTranscriptions.get(parsed.request_id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pendingTranscriptions.delete(parsed.request_id);
+        if (parsed.error) {
+          pending.reject(new Error(parsed.error));
+        } else {
+          pending.resolve(parsed.transcript ?? "");
+        }
+      }
+      return;
+    }
 
     const chatId = (parsed as { chat_id?: string }).chat_id;
     if (chatId) {
@@ -481,6 +550,13 @@ export class DurinClient {
       clearTimeout(this.pendingNewChat.timer);
       this.pendingNewChat.reject(new Error("socket closed"));
       this.pendingNewChat = null;
+    }
+    if (this.pendingTranscriptions.size > 0) {
+      for (const pending of this.pendingTranscriptions.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error("socket closed"));
+      }
+      this.pendingTranscriptions.clear();
     }
     // Surface structured reasons *before* reconnect logic so the UI can
     // display the error even while the client transparently reconnects.

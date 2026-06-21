@@ -50,7 +50,22 @@ class BaseChannel(ABC):
         self._running = False
 
     async def transcribe_audio(self, file_path: str | Path) -> str:
-        """Transcribe an audio file via Whisper (OpenAI or Groq). Returns empty string on failure."""
+        """Transcribe an audio file.
+
+        Delegates to the injected ``TranscriptionService`` when present
+        (spec §7). Falls back to constructing a Groq/OpenAI provider from the
+        channel-level config for backward compatibility (legacy channels that
+        have not been wired with a service yet).
+        """
+        service = getattr(self, "transcription", None)
+        if service is not None:
+            try:
+                result = await service.transcribe_and_cache(file_path)
+                return result.text
+            except Exception:
+                self.logger.exception("Audio transcription failed")
+                return ""
+        # Legacy fallback: channel-level Groq/OpenAI keys.
         if not self.transcription_api_key:
             return ""
         try:

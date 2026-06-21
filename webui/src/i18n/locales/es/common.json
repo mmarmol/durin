@@ -72,6 +72,7 @@
       "advanced": "Todos los ajustes",
       "channels": "Canales",
       "memory": "Memoria",
+      "transcription": "Transcripción de audio",
       "skills-security": "Seguridad de skills",
       "cron": "Cron",
       "logs": "Registros",
@@ -1102,5 +1103,12 @@
   },
   "list": {
     "scrollToBottom": "Bajar al final"
+  },
+  "audio": {
+    "downloadingModel": "Descargando modelo (una sola vez)…",
+    "loadingModel": "Cargando modelo…",
+    "transcribing": "Transcribiendo…",
+    "transcriptPrefix": "transcripción",
+    "processing": "Procesando…"
   }
 }

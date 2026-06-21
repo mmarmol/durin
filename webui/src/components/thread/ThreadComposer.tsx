@@ -13,12 +13,14 @@ import {
   Activity,
   ArrowUp,
   BookOpen,
+  Check,
   ChevronDown,
   ChevronUp,
   CircleHelp,
   History,
   ImageIcon,
   Loader2,
+  Mic,
   Paperclip,
   RotateCw,
   Sparkles,
@@ -39,6 +41,8 @@ import {
   type AttachmentError,
   MAX_IMAGES_PER_MESSAGE,
 } from "@/hooks/useAttachedImages";
+import { useAttachedAudio, type AttachedAudio } from "@/hooks/useAttachedAudio";
+import { MicButton } from "@/components/thread/MicButton";
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import { usePromptHistory } from "@/hooks/usePromptHistory";
 import { ModelPickerPopover } from "@/components/thread/ModelPickerPopover";
@@ -49,7 +53,8 @@ import { cn } from "@/lib/utils";
 
 /** ``<input accept>``: aligned with the server's MIME whitelist. SVG is
  * deliberately excluded to avoid an embedded-script XSS surface. */
-const ACCEPT_ATTR = "image/png,image/jpeg,image/webp,image/gif";
+const ACCEPT_ATTR =
+  "image/png,image/jpeg,image/webp,image/gif,audio/mpeg,audio/ogg,audio/opus,audio/wav,audio/webm,audio/x-m4a,audio/aac,audio/flac";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -59,6 +64,15 @@ function formatBytes(n: number): string {
 
 interface ThreadComposerProps {
   onSend: (content: string, images?: SendImage[]) => void;
+  /** Transcribe an audio attachment server-side (spec §5.4). Receives a
+   *  data-url + name and resolves with the transcript text. */
+  onTranscribeAudio?: (
+    media: { data_url: string; name: string }[],
+    onStatus?: (phase: "downloading" | "loading" | "transcribing", bytes?: number, total?: number) => void,
+  ) => Promise<string>;
+  /** Whether audio input (mic / attach) should be offered. False hides the
+   *  affordances and shows a disabled hint instead (gating, Gap B). */
+  audioInputAllowed?: boolean;
   disabled?: boolean;
   placeholder?: string;
   isStreaming?: boolean;
@@ -387,6 +401,8 @@ function RunElapsedStrip({
 
 export function ThreadComposer({
   onSend,
+  onTranscribeAudio,
+  audioInputAllowed = true,
   disabled,
   placeholder,
   isStreaming = false,
@@ -431,6 +447,72 @@ export function ThreadComposer({
   const { images, enqueue, remove, clear, encoding, full } =
     useAttachedImages();
 
+  const {
+    audio: audioAttachments,
+    enqueue: enqueueAudio,
+    setStatus: setAudioStatus,
+    remove: removeAudio,
+    clear: clearAudio,
+  } = useAttachedAudio();
+
+  // Resize is declared later in the component; keep a ref so the audio
+  // callbacks (declared earlier) can call it without a TDZ violation.
+  const resizeTextareaRef = useRef<() => void>(() => {});
+
+  // Transcribe an audio File server-side and append the transcript to the
+  // input value (spec §5.3, "auto" mode). Called after enqueue so we have
+  // the attachment id for per-chip status updates. Errors surface on the chip.
+  const transcribeAndAppend = useCallback(
+    async (id: string, file: File) => {
+      if (!onTranscribeAudio) return;
+      setInlineError(null);
+      setAudioStatus(id, "pending");
+      try {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(reader.error ?? new Error("read failed"));
+          reader.readAsDataURL(file);
+        });
+        const text = await onTranscribeAudio(
+          [{ data_url: dataUrl, name: file.name }],
+          (phase) => setAudioStatus(id, phase),
+        );
+        const clean = text.trim();
+        if (clean) {
+          // Plain, editable transcript — no label prefix (it would be sent
+          // to the model verbatim as noise).
+          setValue((prev) => (prev ? `${prev}\n${clean}` : clean));
+          resizeTextareaRef.current();
+          // The transcript is in the composer now; the chip's job is done.
+          // Audio is never sent to the model (only the text), so removing the
+          // chip loses nothing and avoids a redundant lingering attachment.
+          removeAudio(id);
+        } else {
+          // Produced no text (e.g. silence) — keep the chip as an error so the
+          // user sees the recording yielded nothing.
+          setAudioStatus(id, "error");
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setInlineError(`Audio transcription failed: ${msg}`);
+        setAudioStatus(id, "error");
+      }
+    },
+    [onTranscribeAudio, setAudioStatus, removeAudio],
+  );
+
+  // Enqueue an audio file (from attach or mic) and kick off transcription.
+  const handleAudioFile = useCallback(
+    (file: File) => {
+      const { accepted, rejected } = enqueueAudio([file]);
+      if (rejected.length === 0 && accepted.length > 0) {
+        void transcribeAndAppend(accepted[0].id, file);
+      }
+    },
+    [enqueueAudio, transcribeAndAppend],
+  );
+
   const formatRejection = useCallback(
     (reason: AttachmentError): string => {
       const key = `thread.composer.imageRejected.${reason}`;
@@ -442,14 +524,34 @@ export function ThreadComposer({
   const addFiles = useCallback(
     (files: File[]) => {
       if (files.length === 0) return;
-      const { rejected } = enqueue(files);
-      if (rejected.length > 0) {
-        setInlineError(formatRejection(rejected[0].reason));
+      // Route by MIME: images go through the image pipeline (chips +
+      // re-encode); audio goes through the transcription pipeline. The same
+      // Paperclip button and drag-drop now handle both — no separate audio
+      // button (Gap B: unified attachment affordance).
+      const images: File[] = [];
+      const audio: File[] = [];
+      for (const f of files) {
+        if (f.type.startsWith("audio/")) {
+          audio.push(f);
+        } else {
+          images.push(f);
+        }
+      }
+      let rejectedCount = 0;
+      if (images.length > 0) {
+        const { rejected } = enqueue(images);
+        rejectedCount += rejected.length;
+      }
+      for (const f of audio) {
+        handleAudioFile(f); // handleAudioFile enqueues + transcribes
+      }
+      if (rejectedCount > 0) {
+        setInlineError(formatRejection("unsupported_type"));
       } else {
         setInlineError(null);
       }
     },
-    [enqueue, formatRejection],
+    [enqueue, formatRejection, handleAudioFile],
   );
 
   const {
@@ -591,6 +693,9 @@ export function ThreadComposer({
     });
   }, []);
 
+  // Keep the audio callbacks (declared earlier) able to trigger a resize.
+  resizeTextareaRef.current = resizeTextarea;
+
   const chooseSlashCommand = useCallback(
     (command: SlashCommand) => {
       setValue(command.argHint ? `${command.command} ` : command.command);
@@ -721,13 +826,14 @@ export function ThreadComposer({
     setValue("");
     setInlineError(null);
     clear();
+    clearAudio();
     setSlashMenuDismissed(false);
     resizeTextarea();
     if (isStreaming) {
       setQueuedFlash(true);
       window.setTimeout(() => setQueuedFlash(false), 2500);
     }
-  }, [canSend, clear, isStreaming, onModelPick, onSend, promptHistory, readyImages, resizeTextarea, value]);
+  }, [canSend, clear, clearAudio, isStreaming, onModelPick, onSend, promptHistory, readyImages, resizeTextarea, value]);
 
   const steer = useCallback(() => {
     const trimmed = value.trim();
@@ -798,6 +904,22 @@ export function ThreadComposer({
                   if (el) chipRefs.current.set(img.id, el);
                   else chipRefs.current.delete(img.id);
                 }}
+              />
+            ))}
+          </div>
+        ) : null}
+        {audioAttachments.length > 0 ? (
+          <div className="flex flex-wrap gap-2 px-3 pt-3">
+            {audioAttachments.map((a) => (
+              <AudioAttachmentChip
+                key={a.id}
+                attachment={a}
+                labelDownloading={t("audio.downloadingModel")}
+                labelLoading={t("audio.loadingModel")}
+                labelTranscribing={t("audio.transcribing")}
+                labelPending={t("audio.processing")}
+                labelRemove={t("thread.composer.remove")}
+                onRemove={() => removeAudio(a.id)}
               />
             ))}
           </div>
@@ -874,6 +996,13 @@ export function ThreadComposer({
             >
               <Paperclip className={cn(isHero ? "h-5 w-5" : "h-4 w-4")} />
             </Button>
+            {audioInputAllowed ? (
+              <MicButton
+                onRecorded={handleAudioFile}
+                disabled={disabled || audioAttachments.length > 0}
+                variant={isHero ? "hero" : "thread"}
+              />
+            ) : null}
             {modelLabel ? (
               <div className="relative">
                 <button
@@ -1177,6 +1306,86 @@ function AttachmentChip({
         ref={registerRef}
         onClick={onRemove}
         onKeyDown={onKeyDown}
+        aria-label={labelRemove}
+        className={cn(
+          "ml-1 grid h-5 w-5 flex-none place-items-center rounded-full",
+          "text-muted-foreground/80 hover:bg-foreground/8 hover:text-foreground",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30",
+        )}
+      >
+        <X className="h-3.5 w-3.5" aria-hidden />
+      </button>
+    </div>
+  );
+}
+
+interface AudioAttachmentChipProps {
+  attachment: AttachedAudio;
+  labelDownloading: string;
+  labelLoading: string;
+  labelTranscribing: string;
+  labelPending: string;
+  labelRemove: string;
+  onRemove: () => void;
+}
+
+function AudioAttachmentChip({
+  attachment: a,
+  labelDownloading,
+  labelLoading,
+  labelTranscribing,
+  labelPending,
+  labelRemove,
+  onRemove,
+}: AudioAttachmentChipProps) {
+  const isProcessing =
+    a.status === "pending" ||
+    a.status === "downloading" ||
+    a.status === "loading" ||
+    a.status === "transcribing";
+  const tone =
+    a.status === "error"
+      ? "border-destructive/40 bg-destructive/5 text-destructive"
+      : "border-border/70 bg-muted/60";
+
+  let phaseLabel: string | null = null;
+  if (a.status === "pending") phaseLabel = labelPending;
+  else if (a.status === "downloading") phaseLabel = labelDownloading;
+  else if (a.status === "loading") phaseLabel = labelLoading;
+  else if (a.status === "transcribing") phaseLabel = labelTranscribing;
+
+  return (
+    <div
+      className={cn(
+        "group relative flex items-center gap-2 rounded-[12px] border px-2 py-1.5",
+        "transition-colors motion-reduce:transition-none",
+        tone,
+      )}
+      data-testid="audio-chip"
+    >
+      <div className="relative flex h-10 w-10 flex-none items-center justify-center overflow-hidden rounded-md bg-background">
+        <Mic className="h-4 w-4 text-muted-foreground" aria-hidden />
+        {isProcessing ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-background/60">
+            <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden />
+          </div>
+        ) : null}
+      </div>
+      <div className="flex min-w-0 flex-col text-[11.5px] leading-4">
+        <span className="truncate max-w-[14rem] font-medium" title={a.file.name}>
+          {a.file.name}
+        </span>
+        <span className="truncate text-muted-foreground">
+          {phaseLabel ? (
+            phaseLabel
+          ) : a.status === "ready" ? (
+            <Check className="h-3.5 w-3.5" aria-hidden />
+          ) : null}
+        </span>
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
         aria-label={labelRemove}
         className={cn(
           "ml-1 grid h-5 w-5 flex-none place-items-center rounded-full",

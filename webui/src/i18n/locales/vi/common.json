@@ -53,6 +53,7 @@
       "advanced": "All settings",
       "channels": "Channels",
       "memory": "Memory",
+      "transcription": "Audio transcription",
       "cron": "Cron",
       "logs": "Nhật ký"
     },
@@ -391,5 +392,12 @@
   },
   "memoryGraph": {
     "title": "Memory"
+  },
+  "audio": {
+    "downloadingModel": "Downloading model (one-time)…",
+    "loadingModel": "Loading model…",
+    "transcribing": "Transcribing…",
+    "transcriptPrefix": "transcript",
+    "processing": "Đang xử lý…"
   }
 }

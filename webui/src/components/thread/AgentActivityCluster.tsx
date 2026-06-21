@@ -57,6 +57,27 @@ export function AgentActivityCluster({
   /** Collapsed by default during “Working…” and after the turn; user expands to inspect traces. */
   const outerExpanded = userToggledOuter ? outerOpenLocal : false;
 
+  // A cluster with a single foldable member would wrap it in a redundant outer
+  // fold — "{{tools}} tool calls" / "Used {{count}} tools" describe the same
+  // thing, "{{count}} steps" duplicates the reasoning bubble's own toggle.
+  // Render the member directly so there is exactly one disclosure. The outer
+  // cluster earns its keep only when it groups multiple interleaved blocks.
+  if (messages.length === 1) {
+    const only = messages[0];
+    if (isReasoningOnlyAssistant(only)) {
+      return (
+        <ReasoningBubble
+          text={only.reasoning ?? ""}
+          streaming={!!only.reasoningStreaming}
+          hasBodyBelow={hasBodyBelow}
+        />
+      );
+    }
+    if (only.kind === "trace") {
+      return <TraceGroup message={only} animClass="" />;
+    }
+  }
+
   const headerBusy = isTurnStreaming;
 
   // With user-facing events hoisted out of the cluster, a reasoning-only

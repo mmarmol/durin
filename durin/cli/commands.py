@@ -2300,11 +2300,36 @@ def agent(
                         # Drag-and-drop: rewrite dragged image/audio paths to
                         # stable workspace copies and surface them via .media
                         # so the agent's existing multimodal pipeline sees them.
-                        from durin.cli.dragdrop import process_dragged_paths
+                        from durin.cli.dragdrop import (
+                            process_dragged_paths,
+                            transcribe_dragged_audio,
+                        )
 
                         clean_input, media_paths = process_dragged_paths(
                             user_input, agent_loop.workspace
                         )
+
+                        # Transcribe dragged audio before it reaches the agent
+                        # (spec §6.1): audio becomes text in clean_input and is
+                        # dropped from media_paths.
+                        if media_paths:
+                            try:
+                                from durin.service.transcription import (
+                                    TranscriptionService,
+                                )
+
+                                stt_svc = TranscriptionService.from_config(
+                                    config.transcription
+                                )
+                                clean_input, media_paths = await transcribe_dragged_audio(
+                                    value=clean_input,
+                                    media=media_paths,
+                                    workspace=agent_loop.workspace,
+                                    service=stt_svc,
+                                    mode=config.transcription.mode,
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
 
                         await bus.publish_inbound(InboundMessage(
                             channel=cli_channel,

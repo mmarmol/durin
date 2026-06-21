@@ -426,6 +426,186 @@ def check_cross_encoder_dep() -> CheckResult:
         )
 
 
+def check_stt_installed() -> CheckResult:
+    """Verify the [stt] extra (sherpa-onnx) is importable for local
+    transcription (spec §8.1). Always returns ok/warn, never fails."""
+    return check_optional_extra(
+        "sherpa_onnx",
+        extra="stt",
+        purpose="fast local ASR (Parakeet/SenseVoice)",
+    )
+
+
+def check_stt_model_cached(cfg: "Config | None" = None) -> CheckResult:
+    """Warn (never fail) if the configured local engine's model isn't cached."""
+    try:
+        from durin.config.loader import load_config
+        from durin.providers.stt_models import ENGINES, _default_stt_cache
+        config = cfg or load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult("stt.model_cached", "ok", "skipped", category="stt")
+    if config.transcription.provider != "local":
+        return CheckResult("stt.model_cached", "ok", "cloud provider", category="stt")
+    engine = config.transcription.local.engine
+    spec = ENGINES.get(engine)
+    if spec is None:
+        return CheckResult(
+            "stt.model_cached", "warn",
+            f"unknown engine {engine!r} in config (known: {', '.join(ENGINES)})",
+            fix="Set transcription.local.engine to one of: " + ", ".join(ENGINES),
+            category="stt",
+        )
+    eng_dir = _default_stt_cache() / spec.dir_name
+    if (eng_dir / spec.files["tokens"]).exists():
+        return CheckResult("stt.model_cached", "ok", f"{engine} model cached", category="stt")
+    return CheckResult(
+        "stt.model_cached", "warn",
+        f"{engine} model not cached — first transcription downloads it",
+        fix="Run a transcription once, or `durin doctor --ping-model`.",
+        category="stt",
+    )
+
+
+def check_voice_extra() -> CheckResult:
+    """Verify the [voice] extra (sounddevice) is importable for TUI mic
+    recording (spec §8.1). Always returns ok/warn, never fails."""
+    return check_optional_extra(
+        "sounddevice",
+        extra="voice",
+        purpose="TUI microphone recording (/voice)",
+    )
+
+
+def check_stt_cloud_keys(cfg: "Config | None" = None) -> CheckResult:
+    """When transcription.provider is a cloud backend, verify an API key is set.
+
+    The local provider (default) needs no key, so this is ok-by-default and
+    only warns when the user picked groq/openai/http without a key.
+    """
+    try:
+        from durin.config.loader import load_config
+
+        config = cfg or load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult(
+            "stt.cloud_keys", "ok",
+            "transcription config unreadable; skipping cloud-key check",
+            category="stt",
+        )
+
+    provider = config.transcription.provider
+    if provider == "local":
+        return CheckResult(
+            "stt.cloud_keys", "ok",
+            "local transcription (no API key needed)",
+            category="stt",
+        )
+
+    # Cloud providers: resolve the relevant key.
+    if provider == "groq":
+        key = config.transcription.groq.api_key
+    elif provider == "openai":
+        key = config.transcription.openai.api_key
+    else:  # http
+        key = config.transcription.http.api_key
+
+    if key:
+        return CheckResult(
+            "stt.cloud_keys", "ok",
+            f"{provider} transcription API key configured",
+            category="stt",
+        )
+    return CheckResult(
+        "stt.cloud_keys", "warn",
+        f"transcription.provider={provider!r} but no API key set — "
+        "transcription will return empty text",
+        fix="Set the key under transcription.<provider>.api_key in config, "
+        "or switch transcription.provider to 'local' (needs the [stt] extra).",
+        category="stt",
+    )
+
+
+def check_stt_round_trip(cfg: "Config | None" = None) -> CheckResult:
+    """``--ping-model``: download (if needed) + run the configured LOCAL STT
+    engine on a tiny synthesized clip, proving the model loads end-to-end and
+    **warming the cache** so the first real transcription is instant. This is
+    how you pre-install the model from the CLI. Cloud providers are skipped —
+    they have no local model to warm.
+    """
+    try:
+        from durin.config.loader import load_config
+
+        config = cfg or load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult(
+            "stt.round_trip", "ok",
+            "transcription config unreadable; skipping",
+            category="stt",
+        )
+    if config.transcription.provider != "local":
+        return CheckResult(
+            "stt.round_trip", "ok",
+            f"{config.transcription.provider} provider (no local model to warm)",
+            category="stt",
+        )
+    try:
+        import sherpa_onnx  # noqa: F401
+    except Exception:  # noqa: BLE001
+        return CheckResult(
+            "stt.round_trip", "warn",
+            "sherpa-onnx not installed — add the [stt] extra",
+            fix="pip install durin-agent[stt]",
+            category="stt",
+        )
+
+    import asyncio
+    import math
+    import struct
+    import tempfile
+    import time
+    import wave
+    from pathlib import Path
+
+    from durin.providers.transcription import LocalSttProvider
+
+    engine = config.transcription.local.engine
+    # 1 s mono 16 kHz tone — the transcript is expected to be empty; the point
+    # is to exercise download + load + decode end-to-end (and warm the cache).
+    sr = 16000
+    clip = Path(tempfile.mkdtemp()) / "ping.wav"
+    with wave.open(str(clip), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(
+            b"".join(
+                struct.pack("<h", int(3000 * math.sin(2 * math.pi * 220 * i / sr)))
+                for i in range(sr)
+            )
+        )
+    t0 = time.monotonic()
+    try:
+        provider = LocalSttProvider(engine=engine)
+        asyncio.run(provider.transcribe(clip))
+    except Exception as e:  # noqa: BLE001
+        return CheckResult(
+            "stt.round_trip", "fail",
+            f"{engine} round-trip failed: {e}",
+            category="stt",
+        )
+    finally:
+        try:
+            clip.unlink(missing_ok=True)
+        except OSError:
+            pass
+    dt = time.monotonic() - t0
+    return CheckResult(
+        "stt.round_trip", "ok",
+        f"{engine} model loaded + ran in {dt:.1f}s (cache warmed)",
+        category="stt",
+    )
+
+
 def check_cache_size() -> CheckResult:
     cache = Path.home() / ".cache" / "durin"
     if not cache.exists():
@@ -1078,6 +1258,12 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     report.add(check_optional_extra("mcp", extra="mcp", purpose="MCP server mode"))
     report.add(check_optional_extra("ddgs", extra="web", purpose="DuckDuckGo web_search"))
     report.add(check_optional_extra("readability", extra="web", purpose="web_fetch article extraction"))
+    # Audio transcription (spec §8.1): local Whisper extra, TUI mic extra,
+    # and cloud API key sanity when a cloud backend is selected.
+    report.add(check_stt_installed())
+    report.add(check_stt_model_cached())
+    report.add(check_voice_extra())
+    report.add(check_stt_cloud_keys())
     # Service-level checks: when the user opted into daemon mode or the
     # webui dashboard, verify they're actually up.
     report.add(check_gateway_daemon())
@@ -1102,6 +1288,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
         report.add(check_provider_reachable())
     if ping_model:
         report.add(check_model_ping())
+        report.add(check_stt_round_trip())
     return report
 
 

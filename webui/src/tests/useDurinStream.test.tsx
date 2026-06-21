@@ -55,6 +55,7 @@ function fakeClient() {
         return () => set!.delete(h);
       },
       sendMessage: vi.fn(),
+      transcribeAudio: vi.fn().mockResolvedValue("hola"),
       newChat: vi.fn(),
       attach: vi.fn(),
       connect: vi.fn(),
@@ -100,6 +101,28 @@ describe("useDurinStream", () => {
     );
 
     expect(result.current.isStreaming).toBe(true);
+  });
+
+  it("transcribes on the welcome screen (no active chat) instead of rejecting 'no chat'", async () => {
+    const fake = fakeClient();
+    const { result } = renderHook(
+      () => useDurinStream(null as unknown as string, EMPTY_MESSAGES),
+      { wrapper: wrap(fake.client) },
+    );
+
+    await act(async () => {
+      await expect(
+        result.current.transcribeAudio([
+          { data_url: "data:audio/webm;codecs=opus;base64,AAAA", name: "recording.webm" },
+        ]),
+      ).resolves.toBe("hola");
+    });
+
+    expect(fake.client.transcribeAudio).toHaveBeenCalledWith(
+      "",
+      [{ data_url: "data:audio/webm;codecs=opus;base64,AAAA", name: "recording.webm" }],
+      undefined,
+    );
   });
 
   it("collapses consecutive tool_hint frames into one trace row", () => {

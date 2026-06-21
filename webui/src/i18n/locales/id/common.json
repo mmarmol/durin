@@ -72,6 +72,7 @@
       "advanced": "All settings",
       "channels": "Channels",
       "memory": "Memori",
+      "transcription": "Audio transcription",
       "cron": "Cron",
       "logs": "Log"
     },
@@ -746,5 +747,12 @@
   },
   "list": {
     "scrollToBottom": "Gulir ke bawah"
+  },
+  "audio": {
+    "downloadingModel": "Downloading model (one-time)…",
+    "loadingModel": "Loading model…",
+    "transcribing": "Transcribing…",
+    "transcriptPrefix": "transcript",
+    "processing": "Memproses…"
   }
 }
