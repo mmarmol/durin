@@ -85,12 +85,14 @@ export interface paths {
         /** List all scheduled jobs (including disabled and system jobs) */
         get: operations["cron_list"];
         put?: never;
-        post?: never;
+        /** Create a new agent_turn cron job */
+        post: operations["cron_create"];
         /** Remove a non-system cron job by id */
         delete: operations["cron_remove"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Update a non-system cron job */
+        patch: operations["cron_update"];
         trace?: never;
     };
     "/api/v1/cron/run": {
@@ -1343,6 +1345,64 @@ export interface components {
             /** Ok */
             ok: boolean;
         };
+        /** CronAddCommand */
+        CronAddCommand: {
+            /**
+             * At Ms
+             * @default null
+             */
+            at_ms: number | null;
+            /**
+             * Channel
+             * @default null
+             */
+            channel: string | null;
+            /**
+             * Deliver
+             * @default false
+             */
+            deliver: boolean;
+            /**
+             * Every Ms
+             * @default null
+             */
+            every_ms: number | null;
+            /**
+             * Expr
+             * @default null
+             */
+            expr: string | null;
+            /** Message */
+            message: string;
+            /**
+             * Mode
+             * @default reminder
+             */
+            mode: string;
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
+            /** Name */
+            name: string;
+            /** Schedule Kind */
+            schedule_kind: string;
+            /**
+             * To
+             * @default null
+             */
+            to: string | null;
+            /**
+             * Tz
+             * @default null
+             */
+            tz: string | null;
+        };
+        /** CronAddResult */
+        CronAddResult: {
+            job: components["schemas"]["CronJobItem"];
+        };
         /** CronJobItem */
         CronJobItem: {
             /** Channel */
@@ -1359,6 +1419,11 @@ export interface components {
             message: string;
             /** Name */
             name: string;
+            /**
+             * Run History
+             * @default []
+             */
+            run_history: components["schemas"]["CronRunRecordResult"][];
             schedule: components["schemas"]["CronJobScheduleResult"];
             state: components["schemas"]["CronJobStateResult"];
             /** Updated At Ms */
@@ -1417,6 +1482,35 @@ export interface components {
             /** Id */
             id: string;
         };
+        /** CronRunRecordResult */
+        CronRunRecordResult: {
+            /** Duration Ms */
+            duration_ms: number;
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
+            /** Run At Ms */
+            run_at_ms: number;
+            /**
+             * Session Key
+             * @default null
+             */
+            session_key: string | null;
+            /** Status */
+            status: string;
+            /**
+             * Summary
+             * @default null
+             */
+            summary: string | null;
+        };
         /** CronRunResult */
         CronRunResult: {
             /**
@@ -1437,6 +1531,71 @@ export interface components {
         /** CronToggleResult */
         CronToggleResult: {
             job: components["schemas"]["CronJobItem"];
+        };
+        /** CronUpdateCommand */
+        CronUpdateCommand: {
+            /**
+             * At Ms
+             * @default null
+             */
+            at_ms: number | null;
+            /**
+             * Channel
+             * @default null
+             */
+            channel: string | null;
+            /**
+             * Deliver
+             * @default null
+             */
+            deliver: boolean | null;
+            /**
+             * Every Ms
+             * @default null
+             */
+            every_ms: number | null;
+            /**
+             * Expr
+             * @default null
+             */
+            expr: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Message
+             * @default null
+             */
+            message: string | null;
+            /**
+             * Mode
+             * @default null
+             */
+            mode: string | null;
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
+            /**
+             * Name
+             * @default null
+             */
+            name: string | null;
+            /**
+             * Schedule Kind
+             * @default null
+             */
+            schedule_kind: string | null;
+            /**
+             * To
+             * @default null
+             */
+            to: string | null;
+            /**
+             * Tz
+             * @default null
+             */
+            tz: string | null;
         };
         /** CrossEncoderTestQuery */
         CrossEncoderTestQuery: {
@@ -3073,6 +3232,30 @@ export interface operations {
             };
         };
     };
+    cron_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CronAddCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CronAddResult"];
+                };
+            };
+        };
+    };
     cron_remove: {
         parameters: {
             query?: never;
@@ -3093,6 +3276,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CronRemoveResult"];
+                };
+            };
+        };
+    };
+    cron_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CronUpdateCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CronToggleResult"];
                 };
             };
         };

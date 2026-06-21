@@ -11,11 +11,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from durin.service.cron import (
+    CronAddCommand,
     CronListQuery,
     CronRemoveCommand,
     CronRunCommand,
     CronService,
     CronToggleCommand,
+    CronUpdateCommand,
 )
 from durin.service.principal import Principal, Scope
 from durin.service.types import ForbiddenError, NotFoundError, UnavailableError
@@ -278,3 +280,59 @@ async def test_run_now_skips_spawn_when_already_running(monkeypatch: pytest.Monk
     assert res.started is False
     assert res.reason == "already_running"
     assert calls == []
+
+
+async def test_create_job(workspace: Path) -> None:
+    cmd = CronAddCommand(
+        name="nightly",
+        mode="task",
+        message="run X",
+        schedule_kind="cron",
+        expr="0 3 * * *",
+        deliver=False,
+        model="m1",
+    )
+    res = await CronService().create(cmd, Principal.local())
+    assert res.job.name == "nightly"
+    listed = await CronService().list(CronListQuery(), Principal.local())
+    assert any(j.name == "nightly" for j in listed.jobs)
+
+
+async def test_create_job_run_history_empty(workspace: Path) -> None:
+    cmd = CronAddCommand(
+        name="history-test",
+        message="hello",
+        schedule_kind="every",
+        every_ms=3600000,
+    )
+    res = await CronService().create(cmd, Principal.local())
+    assert res.job.run_history == []
+
+
+async def test_list_job_run_history_field(workspace: Path) -> None:
+    result = await CronService().list(CronListQuery(), Principal.local())
+    user_job = next(j for j in result.jobs if j.id == "abc12345")
+    assert hasattr(user_job, "run_history")
+    assert user_job.run_history == []
+
+
+async def test_update_rejects_system_job(workspace: Path) -> None:
+    with pytest.raises(ForbiddenError):
+        await CronService().update(
+            CronUpdateCommand(id="sys00001", message="x"), Principal.local()
+        )
+
+
+async def test_update_rejects_unknown_job(workspace: Path) -> None:
+    with pytest.raises(NotFoundError):
+        await CronService().update(
+            CronUpdateCommand(id="ghost999", message="x"), Principal.local()
+        )
+
+
+async def test_update_user_job(workspace: Path) -> None:
+    cmd = CronUpdateCommand(id="abc12345", name="renamed", message="updated msg")
+    res = await CronService().update(cmd, Principal.local())
+    assert res.job.id == "abc12345"
+    assert res.job.name == "renamed"
+    assert res.job.message == "updated msg"
