@@ -171,16 +171,16 @@ _singleton_handle: IO[str] | None = None
 def acquire_gateway_singleton() -> IO[str]:
     """Acquire an exclusive flock on DURIN_HOME/gateway.lock and hold it.
 
-    The lock is stored in a module-global so it stays alive for the process
-    lifetime.  A second call in the same process (e.g. from tests) re-raises
-    AlreadyRunningError if the global is already set to a different handle.
+    The authoritative singleton is the held flock on DURIN_HOME/gateway.lock,
+    acquired once at process startup and stored in a module-global for the
+    process lifetime.  The OS releases the lock automatically on exit or crash.
+    A different process attempting to acquire the same lock fails with
+    AlreadyRunningError.
 
     Returns the open file handle (held for process lifetime).
     Raises AlreadyRunningError if another process already holds the lock.
     """
     global _singleton_handle
-    if _singleton_handle is not None:
-        raise AlreadyRunningError()
     from durin.config.home import durin_home
 
     lock_path = durin_home() / "gateway.lock"
