@@ -193,6 +193,36 @@ Together these two primitives ensure that concurrent cross-process writers (gate
 TUI `AgentLoop`, cron, heartbeat) do not drop FTS5 rows due to unretried
 `SQLITE_BUSY` errors.
 
+## Per-turn provider snapshot (hazard #8)
+
+The gateway runs a single shared `AgentRunner` instance.
+`AgentLoop._apply_provider_snapshot` (`durin/agent/loop.py`) calls
+`runner.provider = new_provider` on each session's `/model` swap or
+per-turn provider refresh.  Because multiple sessions share the same runner,
+a concurrent swap can mutate `self.provider` while another session's turn is
+mid-flight inside `run()` — causing that in-flight turn to call the wrong
+provider (wrong model, auth, or endpoint), producing "model not found" errors
+or routing responses to the wrong backend.
+
+**Fix:** `AgentRunSpec` carries an optional `provider: LLMProvider | None`
+field (per-turn snapshot).  `AgentRunner.run()` resolves
+`provider = spec.provider or self.provider` once at entry and passes that
+local reference into every method that makes a model call
+(`_request_model`, `_request_finalization_retry`, `_mid_turn_precheck`,
+`_snip_history`).  `self.provider` is unchanged — it remains the shared
+default and the fallback for callers that do not set `spec.provider`.
+
+`AgentLoop` sets `spec.provider` in `_dispatch` immediately after
+`_apply_provider_snapshot` so the snapshot is always the provider that was
+active at the moment the turn was dispatched.
+
+`SubagentManager._run_subagent` (`durin/agent/subagent.py`) applies the same
+fix: it captures `self.runner.provider` immediately before building the
+`AgentRunSpec` and passes it as `provider=`.  `SubagentManager.set_provider`
+mutates `self.runner.provider` on each session's `/model` swap; without this
+capture, a concurrent swap could change the provider mid-flight inside a
+background subagent turn.
+
 ## AliasIndex in-process staleness (hazard #17)
 
 `AliasIndex` is built lazily once per process via

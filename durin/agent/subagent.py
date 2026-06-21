@@ -256,10 +256,17 @@ class SubagentManager:
                         pass
                 return EXPLORE_MODE
 
+            # Capture provider snapshot at spec-build time (hazard #8 —
+            # docs/architecture/concurrency.md): a concurrent session's /model
+            # swap calls set_provider(), mutating self.runner.provider. Pinning
+            # the provider here makes this in-flight subagent turn immune to
+            # that mutation, symmetric with the AgentLoop fix.
+            subagent_provider = self.runner.provider
             result = await self.runner.run(AgentRunSpec(
                 initial_messages=messages,
                 tools=tools,
                 model=self.model,
+                provider=subagent_provider,
                 max_iterations=self.max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
                 hook=_SubagentHook(task_id, status),
