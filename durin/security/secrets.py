@@ -27,6 +27,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from durin.utils.atomic_write import atomic_write_text
+from durin.utils.file_lock import cross_process_lock
 
 __all__ = [
     "SecretEntry",
@@ -235,27 +236,43 @@ class SecretStore:
         scope: list[str] | None = None,
         origin: str = "user",
     ) -> None:
-        """Create or replace a secret. ``created_at`` survives a replace."""
+        """Create or replace a secret. ``created_at`` survives a replace.
+
+        The load→mutate→save is performed inside ``cross_process_lock`` so
+        concurrent callers from different processes cannot lose each other's
+        writes. See docs/architecture/concurrency.md.
+        """
         if not is_valid_secret_name(name):
             raise SecretError(
                 f"Invalid secret name '{name}' — must match [A-Z][A-Z0-9_]*"
             )
-        self._ensure()
-        existing = self._entries.get(name)
-        self._entries[name] = SecretEntry(
-            value=value,
-            service=service,
-            account=account,
-            description=description,
-            scope=list(scope or []),
-            origin=origin,
-            created_at=existing.created_at if existing else _now(),
-        )
+        with cross_process_lock(self._path):
+            self.load()
+            existing = self._entries.get(name)
+            self._entries[name] = SecretEntry(
+                value=value,
+                service=service,
+                account=account,
+                description=description,
+                scope=list(scope or []),
+                origin=origin,
+                created_at=existing.created_at if existing else _now(),
+            )
+            self.save()
 
     def remove(self, name: str) -> bool:
-        """Delete a secret. Returns True when something was removed."""
-        self._ensure()
-        return self._entries.pop(name, None) is not None
+        """Delete a secret. Returns True when something was removed.
+
+        The load→mutate→save is performed inside ``cross_process_lock`` so
+        concurrent callers from different processes cannot lose each other's
+        writes. See docs/architecture/concurrency.md.
+        """
+        with cross_process_lock(self._path):
+            self.load()
+            removed = self._entries.pop(name, None) is not None
+            if removed:
+                self.save()
+        return removed
 
     def set_scope(self, name: str, scope: list[str]) -> bool:
         """Replace a secret's ``scope``. Returns False when unknown."""
@@ -352,7 +369,7 @@ def store_secret(
     secret_name = re.sub(r"[^A-Z0-9_]", "_", name.upper())
     if not secret_name or not secret_name[0].isalpha():
         secret_name = "S_" + secret_name
-    store = SecretStore().load()
+    store = SecretStore()
     store.put(
         secret_name,
         value=value,
@@ -361,7 +378,6 @@ def store_secret(
         scope=list(scope),
         origin=origin,
     )
-    store.save()
     get_secret_store(reload=True)
     return make_ref(secret_name)
 
@@ -571,7 +587,7 @@ def migrate_plaintext_provider_keys(config_path: Path | None = None) -> list[str
         return []
 
     backup_config(path)
-    store = SecretStore().load()
+    store = SecretStore()
     created: list[str] = []
     for pname, field, val in pending:
         base = _re.sub(r"[^A-Z0-9_]", "_", pname.upper())
@@ -588,7 +604,6 @@ def migrate_plaintext_provider_keys(config_path: Path | None = None) -> list[str
         )
         providers[pname][field] = make_ref(sec_name)
         created.append(sec_name)
-    store.save()
 
     if providers_file is not None:
         atomic_write_text(
