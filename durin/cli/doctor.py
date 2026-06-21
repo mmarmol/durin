@@ -525,6 +525,87 @@ def check_stt_cloud_keys(cfg: "Config | None" = None) -> CheckResult:
     )
 
 
+def check_stt_round_trip(cfg: "Config | None" = None) -> CheckResult:
+    """``--ping-model``: download (if needed) + run the configured LOCAL STT
+    engine on a tiny synthesized clip, proving the model loads end-to-end and
+    **warming the cache** so the first real transcription is instant. This is
+    how you pre-install the model from the CLI. Cloud providers are skipped —
+    they have no local model to warm.
+    """
+    try:
+        from durin.config.loader import load_config
+
+        config = cfg or load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult(
+            "stt.round_trip", "ok",
+            "transcription config unreadable; skipping",
+            category="stt",
+        )
+    if config.transcription.provider != "local":
+        return CheckResult(
+            "stt.round_trip", "ok",
+            f"{config.transcription.provider} provider (no local model to warm)",
+            category="stt",
+        )
+    try:
+        import sherpa_onnx  # noqa: F401
+    except Exception:  # noqa: BLE001
+        return CheckResult(
+            "stt.round_trip", "warn",
+            "sherpa-onnx not installed — add the [stt] extra",
+            fix="pip install durin-agent[stt]",
+            category="stt",
+        )
+
+    import asyncio
+    import math
+    import struct
+    import tempfile
+    import time
+    import wave
+    from pathlib import Path
+
+    from durin.providers.transcription import LocalSttProvider
+
+    engine = config.transcription.local.engine
+    # 1 s mono 16 kHz tone — the transcript is expected to be empty; the point
+    # is to exercise download + load + decode end-to-end (and warm the cache).
+    sr = 16000
+    clip = Path(tempfile.mkdtemp()) / "ping.wav"
+    with wave.open(str(clip), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(
+            b"".join(
+                struct.pack("<h", int(3000 * math.sin(2 * math.pi * 220 * i / sr)))
+                for i in range(sr)
+            )
+        )
+    t0 = time.monotonic()
+    try:
+        provider = LocalSttProvider(engine=engine)
+        asyncio.run(provider.transcribe(clip))
+    except Exception as e:  # noqa: BLE001
+        return CheckResult(
+            "stt.round_trip", "fail",
+            f"{engine} round-trip failed: {e}",
+            category="stt",
+        )
+    finally:
+        try:
+            clip.unlink(missing_ok=True)
+        except OSError:
+            pass
+    dt = time.monotonic() - t0
+    return CheckResult(
+        "stt.round_trip", "ok",
+        f"{engine} model loaded + ran in {dt:.1f}s (cache warmed)",
+        category="stt",
+    )
+
+
 def check_cache_size() -> CheckResult:
     cache = Path.home() / ".cache" / "durin"
     if not cache.exists():
@@ -1207,6 +1288,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
         report.add(check_provider_reachable())
     if ping_model:
         report.add(check_model_ping())
+        report.add(check_stt_round_trip())
     return report
 
 

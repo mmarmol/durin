@@ -480,18 +480,26 @@ export function ThreadComposer({
         );
         const clean = text.trim();
         if (clean) {
-          const prefix = t("audio.transcriptPrefix");
-          setValue((prev) => (prev ? `${prev}\n[${prefix}]: "${clean}"` : `[${prefix}]: "${clean}"`));
+          // Plain, editable transcript — no label prefix (it would be sent
+          // to the model verbatim as noise).
+          setValue((prev) => (prev ? `${prev}\n${clean}` : clean));
           resizeTextareaRef.current();
+          // The transcript is in the composer now; the chip's job is done.
+          // Audio is never sent to the model (only the text), so removing the
+          // chip loses nothing and avoids a redundant lingering attachment.
+          removeAudio(id);
+        } else {
+          // Produced no text (e.g. silence) — keep the chip as an error so the
+          // user sees the recording yielded nothing.
+          setAudioStatus(id, "error");
         }
-        setAudioStatus(id, "ready");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         setInlineError(`Audio transcription failed: ${msg}`);
         setAudioStatus(id, "error");
       }
     },
-    [onTranscribeAudio, setAudioStatus],
+    [onTranscribeAudio, setAudioStatus, removeAudio],
   );
 
   // Enqueue an audio file (from attach or mic) and kick off transcription.

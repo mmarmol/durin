@@ -101,3 +101,51 @@ def test_check_stt_model_cached_unknown_engine():
     # Must NOT claim a model is "not cached" — the engine doesn't exist
     assert "not cached" not in result.message
     assert result.fix is not None
+
+
+def test_stt_round_trip_skips_cloud():
+    """A cloud provider has no local model to warm — round-trip is a no-op ok."""
+    from durin.cli.doctor import check_stt_round_trip
+    from durin.config.schema import Config
+
+    cfg = Config()
+    cfg.transcription.provider = "groq"
+    r = check_stt_round_trip(cfg)
+    assert r.status == "ok"
+    assert "no local model" in r.message
+
+
+def test_stt_round_trip_local_downloads_and_runs(monkeypatch):
+    """For a local provider the check runs the configured engine on a tiny
+    synthesized clip (proving download+load+decode) and reports ok. The model
+    is mocked so no real weights are fetched."""
+    from durin.cli.doctor import check_stt_round_trip
+    from durin.config.schema import Config
+
+    # sherpa_onnx isn't installed in CI ([stt] extra omitted) — stub the import
+    # guard so the local path runs.
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", types.ModuleType("sherpa_onnx"))
+
+    captured: dict[str, str] = {}
+
+    class FakeProvider:
+        def __init__(self, engine="parakeet"):
+            captured["engine"] = engine
+
+        async def transcribe(self, path):
+            captured["path"] = str(path)
+            return ""  # a tone has no words; the point is it ran end-to-end
+
+    monkeypatch.setattr(
+        "durin.providers.transcription.LocalSttProvider", FakeProvider
+    )
+
+    cfg = Config()
+    cfg.transcription.provider = "local"
+    cfg.transcription.local.engine = "sensevoice"
+    r = check_stt_round_trip(cfg)
+
+    assert r.status == "ok", r.message
+    assert captured.get("engine") == "sensevoice"
+    assert "path" in captured  # the synthesized clip was actually transcribed
+    assert "loaded + ran" in r.message
