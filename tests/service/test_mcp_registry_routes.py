@@ -312,10 +312,10 @@ async def test_registry_install_autodetects_oauth_remote(config_path, monkeypatc
     )
     import durin.agent.mcp_install as mi
 
-    async def _needs_oauth(_url, *, request=None):
-        return True  # the probe says: 401-Bearer
+    async def _cap(_url, *, request=None, fetch_json=None):
+        return {"oauth": True, "dcr": True}  # 401-Bearer + DCR → durin can complete OAuth
 
-    monkeypatch.setattr(mi, "remote_needs_oauth", _needs_oauth)
+    monkeypatch.setattr(mi, "remote_oauth_capability", _cap)
     from durin.service.mcp import McpRegistryInstallCommand
 
     res = await McpService().registry_install(
@@ -335,10 +335,10 @@ async def test_registry_install_remote_no_oauth_when_endpoint_public(config_path
     )
     import durin.agent.mcp_install as mi
 
-    async def _no_oauth(_url, *, request=None):
-        return False
+    async def _no_cap(_url, *, request=None, fetch_json=None):
+        return {"oauth": False, "dcr": False}
 
-    monkeypatch.setattr(mi, "remote_needs_oauth", _no_oauth)
+    monkeypatch.setattr(mi, "remote_oauth_capability", _no_cap)
     from durin.service.mcp import McpRegistryInstallCommand
 
     res = await McpService().registry_install(
@@ -358,10 +358,10 @@ async def test_registry_install_does_not_block_on_connect(config_path, monkeypat
     )
     import durin.agent.mcp_install as mi
 
-    async def _no_oauth(_url, *, request=None):
-        return False  # plain remote → background connect (not needs_auth)
+    async def _no_cap(_url, *, request=None, fetch_json=None):
+        return {"oauth": False, "dcr": False}  # plain remote → background connect (not needs_auth)
 
-    monkeypatch.setattr(mi, "remote_needs_oauth", _no_oauth)
+    monkeypatch.setattr(mi, "remote_oauth_capability", _no_cap)
 
     connected = asyncio.Event()
 
