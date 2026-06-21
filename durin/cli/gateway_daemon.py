@@ -27,10 +27,21 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import IO, Literal
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - POSIX
+    msvcrt = None  # type: ignore[assignment]
 
 __all__ = [
+    "AlreadyRunningError",
     "DaemonStatus",
+    "acquire_gateway_singleton",
     "start_daemon",
     "stop_daemon",
     "daemon_status",
@@ -141,11 +152,52 @@ def daemon_status() -> DaemonStatus:
 
 
 class AlreadyRunningError(RuntimeError):
-    """Raised when start_daemon is called and a live gateway exists."""
+    """Raised when a gateway singleton cannot be acquired because another instance holds it."""
 
-    def __init__(self, pid: int) -> None:
-        super().__init__(f"gateway is already running (pid {pid})")
+    def __init__(self, pid: int | None = None) -> None:
+        if pid is not None:
+            super().__init__(f"gateway is already running (pid {pid})")
+        else:
+            super().__init__("Another gateway instance is already running")
         self.pid = pid
+
+
+# Module-global keeps the file descriptor (and thus the flock) alive for the
+# entire process lifetime.  The OS releases the lock automatically on crash or
+# clean exit — no explicit cleanup needed.
+_singleton_handle: IO[str] | None = None
+
+
+def acquire_gateway_singleton() -> IO[str]:
+    """Acquire an exclusive flock on DURIN_HOME/gateway.lock and hold it.
+
+    The authoritative singleton is the held flock on DURIN_HOME/gateway.lock,
+    acquired once at process startup and stored in a module-global for the
+    process lifetime.  The OS releases the lock automatically on exit or crash.
+    A different process attempting to acquire the same lock fails with
+    AlreadyRunningError.
+
+    Returns the open file handle (held for process lifetime).
+    Raises AlreadyRunningError if another process already holds the lock.
+    """
+    global _singleton_handle
+    from durin.config.home import durin_home
+
+    lock_path = durin_home() / "gateway.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fp = lock_path.open("a+", encoding="utf-8")
+    try:
+        if fcntl is not None:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        elif msvcrt is not None:  # pragma: no cover - Windows
+            msvcrt.locking(fp.fileno(), msvcrt.LK_NBLCK, 1)
+        else:  # pragma: no cover - no OS locking available
+            pass
+    except OSError as exc:
+        fp.close()
+        raise AlreadyRunningError() from exc
+    _singleton_handle = fp
+    return fp
 
 
 def start_daemon(
@@ -158,6 +210,10 @@ def start_daemon(
     Raises :class:`AlreadyRunningError` if a live daemon is found.
     Stale PID files (process gone) are cleaned up first.
     """
+    # Authoritative singleton is the held flock acquired by the child in
+    # acquire_gateway_singleton() before port bind. This PID check is
+    # best-effort early feedback; a race where a second child spawns here but
+    # fails to acquire the flock is TOCTOU-tolerant because it exits before binding.
     status = daemon_status()
     if status.state == "running":
         raise AlreadyRunningError(status.pid or -1)

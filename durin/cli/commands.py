@@ -1253,6 +1253,14 @@ def _run_gateway(
 
     port = port if port is not None else config.gateway.port
 
+    from durin.cli.gateway_daemon import AlreadyRunningError, acquire_gateway_singleton
+
+    try:
+        acquire_gateway_singleton()
+    except AlreadyRunningError:
+        console.print("[red]Error: another gateway instance is already running.[/red]")
+        raise typer.Exit(1) from None
+
     console.print(f"{__logo__} Starting durin gateway version {__version__} on port {port}...")
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()

@@ -5,12 +5,20 @@ from __future__ import annotations
 import asyncio
 import base64
 import time
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from durin.config.schema import AgentDefaults
 from durin.providers.base import LLMResponse, ToolCallRequest
+
+
+@asynccontextmanager
+async def _noop_lease(path: object, **kwargs: object) -> AsyncIterator[None]:
+    """Stand-in for session_turn_lease — avoids MagicMock path creating stray lock files."""
+    yield
 
 _MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
 
@@ -548,7 +556,8 @@ async def test_pending_queue_cleanup_on_dispatch(tmp_path):
     # The queue should not exist before dispatch
     assert msg.session_key not in loop._pending_queues
 
-    await loop._dispatch(msg)
+    with patch("durin.agent.loop.session_turn_lease", _noop_lease):
+        await loop._dispatch(msg)
 
     # The queue should be cleaned up after dispatch
     assert msg.session_key not in loop._pending_queues

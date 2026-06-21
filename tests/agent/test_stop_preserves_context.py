@@ -10,14 +10,23 @@ See: https://github.com/HKUDS/durin/issues/2966
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from durin.agent.loop import AgentLoop
 from durin.bus.queue import MessageBus
+
+
+@asynccontextmanager
+async def _noop_lease(path: object, **kwargs: object) -> AsyncIterator[None]:
+    """Stand-in for session_turn_lease that avoids MagicMock path flowing into
+    cross_process_lock and creating stray ``.lock`` files in the CWD."""
+    yield
 
 
 def _make_provider():
@@ -146,7 +155,8 @@ async def test_dispatch_cancellation_restores_checkpoint():
 
     msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="work")
 
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(asyncio.CancelledError), \
+         patch("durin.agent.loop.session_turn_lease", _noop_lease):
         await loop._dispatch(msg)
 
     roles = [m.get("role") for m in session.messages]
