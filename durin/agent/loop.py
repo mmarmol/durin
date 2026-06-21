@@ -43,6 +43,7 @@ from durin.session.goal_state import (
     goal_state_ws_blob,
     runner_wall_llm_timeout_s,
 )
+from durin.session.turn_lease import session_turn_lease
 from durin.session.manager import Session, SessionManager
 from durin.utils.document import extract_documents
 from durin.utils.helpers import image_placeholder_text
@@ -1583,121 +1584,124 @@ class AgentLoop:
             pending = asyncio.Queue(maxsize=20)
             self._pending_queues[session_key] = pending
 
+        session_path = self.sessions._get_session_path(session_key)
         try:
             async with lock, gate:
-                try:
-                    on_stream = on_stream_end = None
-                    if msg.metadata.get("_wants_stream"):
-                        # Split one answer into distinct stream segments.
-                        stream_base_id = f"{msg.session_key}:{time.time_ns()}"
-                        stream_segment = 0
-
-                        def _current_stream_id() -> str:
-                            return f"{stream_base_id}:{stream_segment}"
-
-                        async def on_stream(delta: str) -> None:
-                            meta = dict(msg.metadata or {})
-                            meta["_stream_delta"] = True
-                            meta["_stream_id"] = _current_stream_id()
-                            await self.bus.publish_outbound(OutboundMessage(
-                                channel=msg.channel, chat_id=msg.chat_id,
-                                content=delta,
-                                metadata=meta,
-                            ))
-
-                        async def on_stream_end(*, resuming: bool = False) -> None:
-                            nonlocal stream_segment
-                            meta = dict(msg.metadata or {})
-                            meta["_stream_end"] = True
-                            meta["_resuming"] = resuming
-                            meta["_stream_id"] = _current_stream_id()
-                            await self.bus.publish_outbound(OutboundMessage(
-                                channel=msg.channel, chat_id=msg.chat_id,
-                                content="",
-                                metadata=meta,
-                            ))
-                            stream_segment += 1
-
-                    response = await self._process_message(
-                        msg, on_stream=on_stream, on_stream_end=on_stream_end,
-                        pending_queue=pending,
-                    )
-                    if response is not None:
-                        await self.bus.publish_outbound(response)
-                    await self._maybe_publish_interaction_fallback(
-                        channel=msg.channel, chat_id=msg.chat_id,
-                        session_key=session_key,
-                    )
-                    if response is None and msg.channel == "cli":
-                        await self.bus.publish_outbound(OutboundMessage(
-                            channel=msg.channel, chat_id=msg.chat_id,
-                            content="", metadata=msg.metadata or {},
-                        ))
-                    if msg.channel == "websocket":
-                        # Signal that the turn is fully complete (all tools executed,
-                        # final text streamed).  This lets WS clients know when to
-                        # definitively stop the loading indicator.
-                        turn_lat = self._pending_turn_latency_ms.pop(session_key, None)
-                        turn_metadata: dict[str, Any] = {**msg.metadata, "_turn_end": True}
-                        if turn_lat is not None:
-                            turn_metadata["latency_ms"] = int(turn_lat)
-                        sess_turn = self.sessions.get_or_create(session_key)
-                        turn_metadata["goal_state"] = goal_state_ws_blob(sess_turn.metadata)
-                        await self.bus.publish_outbound(OutboundMessage(
-                            channel=msg.channel, chat_id=msg.chat_id,
-                            content="", metadata=turn_metadata,
-                        ))
-                        if msg.metadata.get("webui") is True:
-                            async def _generate_title_and_notify() -> None:
-                                generated = await maybe_generate_webui_title_after_turn(
-                                    channel=msg.channel,
-                                    metadata=msg.metadata,
-                                    sessions=self.sessions,
-                                    session_key=session_key,
-                                    provider=self.provider,
-                                    model=self.model,
-                                )
-                                if generated:
-                                    await self.bus.publish_outbound(OutboundMessage(
-                                        channel=msg.channel,
-                                        chat_id=msg.chat_id,
-                                        content="",
-                                        metadata={**msg.metadata, "_session_updated": True},
-                                    ))
-
-                            self._schedule_background(_generate_title_and_notify())
-                except asyncio.CancelledError:
-                    logger.info("Task cancelled for session {}", session_key)
-                    # Preserve partial context from the interrupted turn so
-                    # the user does not lose tool results and assistant
-                    # messages accumulated before /stop.  The checkpoint was
-                    # already persisted to session metadata by
-                    # _emit_checkpoint during tool execution; materializing
-                    # it into session history now makes it visible in the
-                    # next conversation turn.
+                async with session_turn_lease(session_path):
+                    self.sessions.reload(session_key)  # load-per-turn: refresh from disk under the lease
                     try:
-                        key = self._effective_session_key(msg)
-                        session = self.sessions.get_or_create(key)
-                        if self._restore_runtime_checkpoint(session):
-                            self._clear_pending_user_turn(session)
-                            self.sessions.save(session)
-                            logger.info(
-                                "Restored partial context for cancelled session {}",
-                                key,
-                            )
-                    except Exception:
-                        logger.debug(
-                            "Could not restore checkpoint for cancelled session {}",
-                            session_key,
-                            exc_info=True,
+                        on_stream = on_stream_end = None
+                        if msg.metadata.get("_wants_stream"):
+                            # Split one answer into distinct stream segments.
+                            stream_base_id = f"{msg.session_key}:{time.time_ns()}"
+                            stream_segment = 0
+
+                            def _current_stream_id() -> str:
+                                return f"{stream_base_id}:{stream_segment}"
+
+                            async def on_stream(delta: str) -> None:
+                                meta = dict(msg.metadata or {})
+                                meta["_stream_delta"] = True
+                                meta["_stream_id"] = _current_stream_id()
+                                await self.bus.publish_outbound(OutboundMessage(
+                                    channel=msg.channel, chat_id=msg.chat_id,
+                                    content=delta,
+                                    metadata=meta,
+                                ))
+
+                            async def on_stream_end(*, resuming: bool = False) -> None:
+                                nonlocal stream_segment
+                                meta = dict(msg.metadata or {})
+                                meta["_stream_end"] = True
+                                meta["_resuming"] = resuming
+                                meta["_stream_id"] = _current_stream_id()
+                                await self.bus.publish_outbound(OutboundMessage(
+                                    channel=msg.channel, chat_id=msg.chat_id,
+                                    content="",
+                                    metadata=meta,
+                                ))
+                                stream_segment += 1
+
+                        response = await self._process_message(
+                            msg, on_stream=on_stream, on_stream_end=on_stream_end,
+                            pending_queue=pending,
                         )
-                    raise
-                except Exception:
-                    logger.exception("Error processing message for session {}", session_key)
-                    await self.bus.publish_outbound(OutboundMessage(
-                        channel=msg.channel, chat_id=msg.chat_id,
-                        content="Sorry, I encountered an error.",
-                    ))
+                        if response is not None:
+                            await self.bus.publish_outbound(response)
+                        await self._maybe_publish_interaction_fallback(
+                            channel=msg.channel, chat_id=msg.chat_id,
+                            session_key=session_key,
+                        )
+                        if response is None and msg.channel == "cli":
+                            await self.bus.publish_outbound(OutboundMessage(
+                                channel=msg.channel, chat_id=msg.chat_id,
+                                content="", metadata=msg.metadata or {},
+                            ))
+                        if msg.channel == "websocket":
+                            # Signal that the turn is fully complete (all tools executed,
+                            # final text streamed).  This lets WS clients know when to
+                            # definitively stop the loading indicator.
+                            turn_lat = self._pending_turn_latency_ms.pop(session_key, None)
+                            turn_metadata: dict[str, Any] = {**msg.metadata, "_turn_end": True}
+                            if turn_lat is not None:
+                                turn_metadata["latency_ms"] = int(turn_lat)
+                            sess_turn = self.sessions.get_or_create(session_key)
+                            turn_metadata["goal_state"] = goal_state_ws_blob(sess_turn.metadata)
+                            await self.bus.publish_outbound(OutboundMessage(
+                                channel=msg.channel, chat_id=msg.chat_id,
+                                content="", metadata=turn_metadata,
+                            ))
+                            if msg.metadata.get("webui") is True:
+                                async def _generate_title_and_notify() -> None:
+                                    generated = await maybe_generate_webui_title_after_turn(
+                                        channel=msg.channel,
+                                        metadata=msg.metadata,
+                                        sessions=self.sessions,
+                                        session_key=session_key,
+                                        provider=self.provider,
+                                        model=self.model,
+                                    )
+                                    if generated:
+                                        await self.bus.publish_outbound(OutboundMessage(
+                                            channel=msg.channel,
+                                            chat_id=msg.chat_id,
+                                            content="",
+                                            metadata={**msg.metadata, "_session_updated": True},
+                                        ))
+
+                                self._schedule_background(_generate_title_and_notify())
+                    except asyncio.CancelledError:
+                        logger.info("Task cancelled for session {}", session_key)
+                        # Preserve partial context from the interrupted turn so
+                        # the user does not lose tool results and assistant
+                        # messages accumulated before /stop.  The checkpoint was
+                        # already persisted to session metadata by
+                        # _emit_checkpoint during tool execution; materializing
+                        # it into session history now makes it visible in the
+                        # next conversation turn.
+                        try:
+                            key = self._effective_session_key(msg)
+                            session = self.sessions.get_or_create(key)
+                            if self._restore_runtime_checkpoint(session):
+                                self._clear_pending_user_turn(session)
+                                self.sessions.save(session)
+                                logger.info(
+                                    "Restored partial context for cancelled session {}",
+                                    key,
+                                )
+                        except Exception:
+                            logger.debug(
+                                "Could not restore checkpoint for cancelled session {}",
+                                session_key,
+                                exc_info=True,
+                            )
+                        raise
+                    except Exception:
+                        logger.exception("Error processing message for session {}", session_key)
+                        await self.bus.publish_outbound(OutboundMessage(
+                            channel=msg.channel, chat_id=msg.chat_id,
+                            content="Sorry, I encountered an error.",
+                        ))
         finally:
             # Drain any messages still in the pending queue and re-publish
             # them to the bus so they are processed as fresh inbound messages
