@@ -8,10 +8,16 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
-import numpy as np
 import pytest
 
-from durin.providers.transcription import GroqTranscriptionProvider, LocalSttProvider, OpenAITranscriptionProvider
+# The [stt] extra (numpy/av) is omitted in CI; skip the whole module there.
+np = pytest.importorskip("numpy")
+
+from durin.providers.transcription import (  # noqa: E402
+    GroqTranscriptionProvider,
+    LocalSttProvider,
+    OpenAITranscriptionProvider,
+)
 
 
 @pytest.fixture
@@ -333,7 +339,7 @@ def fake_sherpa(monkeypatch):
     mod.OfflineRecognizer = _OfflineRecognizer
     monkeypatch.setitem(sys.modules, "sherpa_onnx", mod)
     monkeypatch.setattr(
-        "durin.providers.transcription.decode_to_mono_16k",
+        "durin.providers.audio_decode.decode_to_mono_16k",
         lambda p: (np.zeros(16000, dtype=np.float32), 16000),
     )
     return calls

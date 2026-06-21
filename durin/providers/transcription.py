@@ -7,7 +7,6 @@ from pathlib import Path
 import httpx
 from loguru import logger
 
-from durin.providers.audio_decode import decode_to_mono_16k
 from durin.providers.stt_models import ENGINES, _default_stt_cache, ensure_model
 
 # Up to 3 retries (4 attempts total) with exponential backoff on transient
@@ -314,6 +313,11 @@ class LocalSttProvider(TranscriptionProvider):
             logger.exception("LocalSttProvider load error: {}", e)
             return ""
         try:
+            # Lazy import: numpy/av (the [stt] extra) is only needed by the
+            # local engine. Keeping it off module scope lets the cloud
+            # providers (and anything importing this module) load without [stt].
+            from durin.providers.audio_decode import decode_to_mono_16k
+
             samples, sr = decode_to_mono_16k(path)
             if samples.size == 0:
                 return ""

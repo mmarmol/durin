@@ -1,7 +1,12 @@
 import math
 import wave
-import numpy as np
-from durin.providers.audio_decode import decode_to_mono_16k
+
+import pytest
+
+# The [stt] extra (numpy/av) is omitted in CI; skip the whole module there.
+np = pytest.importorskip("numpy")
+
+from durin.providers.audio_decode import decode_to_mono_16k  # noqa: E402
 
 
 def _write_sine_wav(path, seconds=1.0, sr=44100, freq=440.0):
