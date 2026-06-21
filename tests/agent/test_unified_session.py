@@ -12,8 +12,10 @@ Covers:
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -25,6 +27,12 @@ from durin.command.builtin import cmd_new, register_builtin_commands
 from durin.command.router import CommandContext, CommandRouter
 from durin.config.schema import AgentDefaults, Config
 from durin.session.manager import Session, SessionManager
+
+
+@asynccontextmanager
+async def _noop_lease(path: object, **kwargs: object) -> AsyncIterator[None]:
+    """Stand-in for session_turn_lease — avoids MagicMock path creating stray lock files."""
+    yield
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -65,6 +73,11 @@ def _make_msg(channel: str = "telegram", chat_id: str = "111",
 
 class TestUnifiedSessionDispatch:
     """AgentLoop._dispatch() session key rewriting logic."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_turn_lease(self):
+        with patch("durin.agent.loop.session_turn_lease", _noop_lease):
+            yield
 
     @pytest.mark.asyncio
     async def test_unified_session_rewrites_key_to_unified_default(self, tmp_path: Path):
