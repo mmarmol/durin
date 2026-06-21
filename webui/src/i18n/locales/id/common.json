@@ -367,7 +367,7 @@
     },
     "cron": {
       "title": "Tugas terjadwal",
-      "description": "Tugas latar belakang yang dijalankan layanan cron sesuai jadwal. Tugas sistem (dream, heartbeat, memory dream) tidak dapat dihapus tetapi bisa dinonaktifkan. Untuk menambah, gunakan tool `cron` dari chat.",
+      "description": "Tugas latar belakang yang dijalankan layanan cron sesuai jadwal. Tugas sistem (dream, memory dream) tidak dapat dihapus tetapi bisa dinonaktifkan. Untuk menambah, gunakan tool `cron` dari chat.",
       "loading": "Memuat tugas…",
       "loadError": "Tidak dapat memuat tugas cron.",
       "empty": "Tidak ada tugas terjadwal.",

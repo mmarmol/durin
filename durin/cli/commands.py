@@ -1243,7 +1243,6 @@ def _run_gateway(
     from durin.channels.websocket import publish_runtime_model_update
     from durin.cron.service import CronService
     from durin.cron.types import CronJob
-    from durin.heartbeat.service import HeartbeatService
     from durin.providers.factory import (
         build_provider_snapshot,
         load_default_preset,
@@ -1519,108 +1518,6 @@ def _run_gateway(
         cron_service=cron,
     )
 
-    def _pick_heartbeat_target() -> tuple[str, str]:
-        """Pick a routable channel/chat target for heartbeat-triggered messages."""
-        enabled = set(channels.enabled_channels)
-        # Prefer the most recently updated non-internal session on an enabled channel.
-        for item in session_manager.list_sessions():
-            key = item.get("key") or ""
-            if ":" not in key:
-                continue
-            channel, chat_id = key.split(":", 1)
-            if channel in {"cli", "system"}:
-                continue
-            if channel in enabled and chat_id:
-                return channel, chat_id
-        # Fallback keeps prior behavior but remains explicit.
-        return "cli", "direct"
-
-    # Create heartbeat service
-    heartbeat_preamble = (
-        "[Your response will be delivered directly to the user's messaging app. "
-        "Output ONLY the final user-facing message. Never reference internal "
-        "files (HEARTBEAT.md, AWARENESS.md, etc.), your instructions, or your "
-        "decision process. If nothing needs reporting, respond with just "
-        "'All clear.' and nothing else.]\n\n"
-    )
-
-    async def on_heartbeat_execute(tasks: str) -> str:
-        """Phase 2: execute heartbeat tasks through the full agent loop.
-
-        Two modes:
-        - **Default (shared session)**: reuse ``session_key="heartbeat"``
-          and trim via ``retain_recent_legal_suffix`` after the tick.
-          Preserves short-term context between ticks.
-        - **Isolated** (``heartbeat.isolatedSessions=true``,
-          OpenClaw-inspired): fresh ephemeral session per tick, deleted
-          after the tick. Stateless one-shots, no drift from prior runs.
-        """
-        from durin.heartbeat.service import heartbeat_session_key
-
-        channel, chat_id = _pick_heartbeat_target()
-
-        async def _silent(*_args, **_kwargs):
-            pass
-
-        session_key = heartbeat_session_key(isolated=hb_cfg.isolated_sessions)
-
-        resp = await agent.process_direct(
-            heartbeat_preamble + tasks,
-            session_key=session_key,
-            channel=channel,
-            chat_id=chat_id,
-            on_progress=_silent,
-        )
-
-        if hb_cfg.isolated_sessions:
-            # Drop the ephemeral session from cache + disk so no state
-            # carries over to the next tick.
-            try:
-                agent.sessions.delete_session(session_key)
-            except Exception:
-                logger.exception(
-                    "Failed to clean up isolated heartbeat session {}",
-                    session_key,
-                )
-        else:
-            # Keep a small tail of heartbeat history so the loop stays
-            # bounded without losing all short-term context between runs.
-            session = agent.sessions.get_or_create(session_key)
-            session.retain_recent_legal_suffix(hb_cfg.keep_recent_messages)
-            agent.sessions.save(session)
-
-        return resp.content if resp else ""
-
-    async def on_heartbeat_notify(response: str) -> None:
-        """Deliver a heartbeat response to the user's channel.
-
-        In addition to publishing the outbound message, this injects the
-        delivered text as an assistant turn into the *target channel's*
-        session.  Without this, a user reply on the channel (e.g. "Sure")
-        lands in a session that has no context about the heartbeat message
-        and the agent cannot follow through.
-        """
-        channel, chat_id = _pick_heartbeat_target()
-        if channel == "cli":
-            return  # No external channel available to deliver to
-
-        await _deliver_to_channel(
-            OutboundMessage(channel=channel, chat_id=chat_id, content=response),
-            record=True,
-        )
-
-    hb_cfg = config.gateway.heartbeat
-    heartbeat = HeartbeatService(
-        workspace=config.workspace_path,
-        provider=agent.provider,
-        model=agent.model,
-        on_execute=on_heartbeat_execute,
-        on_notify=on_heartbeat_notify,
-        interval_s=hb_cfg.interval_s,
-        enabled=hb_cfg.enabled,
-        timezone=config.agents.defaults.timezone,
-    )
-
     if channels.enabled_channels:
         console.print(f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}")
     else:
@@ -1629,8 +1526,6 @@ def _run_gateway(
     cron_status = cron.status()
     if cron_status["jobs"] > 0:
         console.print(f"[green]✓[/green] Cron: {cron_status['jobs']} scheduled jobs")
-
-    console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
 
     async def _health_server(host: str, health_port: int):
         """Lightweight HTTP health endpoint on the gateway port."""
@@ -1878,7 +1773,6 @@ def _run_gateway(
 
         try:
             await cron.start()
-            await heartbeat.start()
 
             # Unified uvicorn server: the gateway serves WS chat + /api/v1 + SPA
             # via a single Starlette app on the websocket channel's port.  The
@@ -1965,7 +1859,6 @@ def _run_gateway(
             logger.error("Gateway crashed unexpectedly:\n{}", traceback.format_exc())
         finally:
             await agent.close_mcp()
-            heartbeat.stop()
             cron.stop()
             agent.stop()
             await channels.stop_all()

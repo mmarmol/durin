@@ -1104,12 +1104,6 @@ def test_agent_hints_about_deprecated_memory_window(mock_agent_runtime, tmp_path
     assert "no longer used" in result.stdout
 
 
-def test_heartbeat_retains_recent_messages_by_default():
-    config = Config()
-
-    assert config.gateway.heartbeat.keep_recent_messages == 8
-
-
 def _write_instance_config(tmp_path: Path) -> Path:
     config_file = tmp_path / "instance" / "config.json"
     config_file.parent.mkdir(parents=True)
@@ -1773,16 +1767,6 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
         def prune_orphaned_system_jobs(self, _known_system_ids) -> list:
             return []
 
-    class _FakeHeartbeatService:
-        def __init__(self, **_kwargs) -> None:
-            return None
-
-        async def start(self) -> None:
-            return None
-
-        def stop(self) -> None:
-            return None
-
     class _FakeServer:
         async def __aenter__(self):
             return self
@@ -1829,7 +1813,6 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
     monkeypatch.setattr("durin.cli.commands.AgentLoop", _FakeAgentLoop)
     monkeypatch.setattr("durin.channels.manager.ChannelManager", _FakeChannelManager)
     monkeypatch.setattr("durin.cron.service.CronService", _FakeCronService)
-    monkeypatch.setattr("durin.heartbeat.service.HeartbeatService", _FakeHeartbeatService)
     monkeypatch.setattr("asyncio.start_server", _fake_start_server)
 
     result = runner.invoke(app, ["gateway", "--config", str(config_file)])

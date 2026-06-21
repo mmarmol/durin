@@ -16,7 +16,7 @@ integrity.
 
 Durin runs as multiple OS processes over a single shared `DURIN_HOME`:
 the gateway daemon, `durin agent --tui` (with its own in-process
-`AgentLoop`), cron, and heartbeat. Previously each process held a
+`AgentLoop`), and cron. Previously each process held a
 never-invalidated in-memory `SessionManager` cache and `save()` did a
 lockless whole-file rewrite. This caused cross-process clobber and
 split-brain: the TUI and webui could show divergent session chains for
@@ -141,7 +141,7 @@ background/direct-saver serialization phase:
    so they can still clobber a concurrent turn's whole-file write.
    Affected paths:
    - HTTP rename in `durin/service/sessions.py`
-   - Cron / heartbeat `process_direct` saves
+   - Cron `process_direct` saves
    - Webui background title-generation save
      (`durin/agent/loop.py` `_schedule_background` →
      `durin/utils/webui_titles.py`)
@@ -190,7 +190,7 @@ and retries up to *attempts* times.  Any other `OperationalError` is re-raised
 immediately.
 
 Together these two primitives ensure that concurrent cross-process writers (gateway,
-TUI `AgentLoop`, cron, heartbeat) do not drop FTS5 rows due to unretried
+TUI `AgentLoop`, cron) do not drop FTS5 rows due to unretried
 `SQLITE_BUSY` errors.
 
 ## Per-turn provider snapshot (hazard #8)

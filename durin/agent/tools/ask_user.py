@@ -10,7 +10,7 @@ proceeding. Two pause semantics (docs/architecture/ux.md):
   (webui panel / TUI bubble from the start tool_event; serialized message
   for dumb channels, published here pre-block).
 - **Yield V1 (degradation path)**: on answer timeout, media replies, no
-  live loop consumer, non-interactive sessions (cron/heartbeat), or
+  live loop consumer, non-interactive sessions (cron), or
   ``ask_user_blocking=false`` — the turn ends and the user's next message
   is the answer, with ``pending_question`` metadata keeping channel
   rendering and the turn-end fallback serializer working.
@@ -228,7 +228,7 @@ class AskUserQuestionTool(Tool, ContextAware):
         from durin.agent import pending_answers
 
         # No consumer (single-message mode) or non-interactive session
-        # (cron/heartbeat): nobody can ever resolve the wait — yield now.
+        # (cron): nobody can ever resolve the wait — yield now.
         if not pending_answers.can_block(session_key):
             return None
         await self._publish_dumb_channel_question(session_key)

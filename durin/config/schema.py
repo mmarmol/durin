@@ -823,27 +823,6 @@ class ProvidersConfig(Base):
     nvidia: ProviderConfig = Field(default_factory=ProviderConfig)  # NVIDIA NIM (nvapi- keys)
 
 
-class HeartbeatConfig(Base):
-    """Heartbeat service configuration."""
-
-    enabled: bool = True
-    interval_s: int = 30 * 60  # 30 minutes
-    keep_recent_messages: int = 8
-    # OpenClaw-inspired: when True, each heartbeat tick runs in a fresh
-    # ephemeral session that's deleted after the tick. No state carries
-    # between ticks — useful when heartbeat tasks are meant to be
-    # stateless one-shots (e.g. "did anything change?") and shouldn't
-    # drift due to accumulated context from prior runs. When False
-    # (default), the existing behaviour is preserved: one shared session
-    # named "heartbeat", trimmed by ``keep_recent_messages`` after each
-    # tick.
-    isolated_sessions: bool = Field(
-        default=False,
-        validation_alias=AliasChoices("isolatedSessions", "isolated_sessions"),
-        serialization_alias="isolatedSessions",
-    )
-
-
 class ApiConfig(Base):
     """OpenAI-compatible API server configuration."""
 
@@ -857,7 +836,6 @@ class GatewayConfig(Base):
 
     host: str = "127.0.0.1"  # Safer default: local-only bind.
     port: int = 18790
-    heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     # When True, `durin gateway` runs detached (PID file + log file) so
     # the terminal isn't locked. Opt-in because the foreground mode is
     # easier to debug on first install. Toggle via `durin config set

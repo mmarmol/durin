@@ -53,7 +53,6 @@ All turn-scoped, defensive. They shape behaviour only when the model misbehaves 
 | **Per-model `parallel_tool_calls` gating** | `agents.defaults.parallel_tool_calls` is a substring-keyed dict mapping model name → bool. Provider injects the flag only on match AND when `tools` is non-null. Emits `provider.parallel_tool_calls_injected` once per unique triple per process. | `OpenAICompatProvider._resolve_parallel_tool_calls` |
 | **Per-turn aggregate tool-result budget** (retroactive) | Sums tool result sizes; over `DURIN_TURN_BUDGET_CHARS` (default 200 KB) spills the largest not-yet-persisted results to disk, largest first, until aggregate fits. `=0` disables. Emits `turn_budget.enforced`. | `runner.py::_enforce_turn_budget` |
 | **Live per-tool output spill** (at moment of overflow) | Distinct from the retroactive turn budget: when a single tool's output exceeds its own budget, the FULL content is written to `<ws>/.durin/spills/` *as it overflows* (not later during compaction), and the model gets a truncated head+tail plus a `read_file` reference. Used by `exec`/shell. | `agent/tools/output_spill.py::truncate_with_spill` |
-| **Heartbeat session mode** | Default: one long-running `heartbeat` session (trimmed by `keep_recent_messages`). `heartbeat.isolatedSessions=true` gives each tick a fresh `heartbeat-<12hex>` session deleted after the run. | `heartbeat/service.py` |
 | **Pre-emptive compaction trigger** | Fires when `estimated_tokens > preemptive_compact_ratio * context_window` (default 0.5; 1M-window models override to ~0.15). Emits `compaction.preemptive_trigger`. | `agent/memory.py::Consolidator` |
 | **Mid-turn precheck signal** | After sanitize pipeline each iteration, estimates token cost; if over input budget, aborts with `stop_reason=mid_turn_precheck_overflow` BEFORE the LLM call. Emits `mid_turn_precheck.overflow`. | `runner.py::_mid_turn_precheck` |
 | **Compaction lock aggregate timeout** | Per-session compaction lock bounded by `DURIN_COMPACTION_LOCK_TIMEOUT_S` (default 180s). `=0` disables. Emits `compaction.lock_timeout`. | `agent/memory.py::Consolidator._lock_timeout_s` |
@@ -212,7 +211,7 @@ Session state lives in `session.metadata`:
 
 After the prune, `complete_goal` no longer consults any plan-tier verification gate. Only requires an active goal.
 
-**Turn budget (optional)**. `long_task(max_turns=N)` stores `max_turns`/`turns_used` on the goal blob; `increment_goal_turns` (per turn, from `loop._state_save`) bumps the counter and `goal_state_runtime_lines` mirrors `Turn budget: used/max`, switching to a wrap-up instruction (`complete_goal` with an honest recap, or renegotiate) once exceeded. Surfacing only — nothing is blocked. `deadline` budgets were considered and dropped (heartbeat/cron cover time-based triggers).
+**Turn budget (optional)**. `long_task(max_turns=N)` stores `max_turns`/`turns_used` on the goal blob; `increment_goal_turns` (per turn, from `loop._state_save`) bumps the counter and `goal_state_runtime_lines` mirrors `Turn budget: used/max`, switching to a wrap-up instruction (`complete_goal` with an honest recap, or renegotiate) once exceeded. Surfacing only — nothing is blocked. `deadline` budgets were considered and dropped (cron covers time-based triggers).
 
 ---
 

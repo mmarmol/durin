@@ -87,7 +87,6 @@ durin/
 ├── command/               # /commands router (/plan, /build, /mode, ...)
 ├── config/                # Config schemas, loader, validation
 ├── cron/                  # Scheduled task service
-├── heartbeat/             # Background heartbeats and timers
 ├── memory/                # Entity-centric memory subsystem (see memory/00_overview.md)
 │   ├── schema.py          # MemoryEntry pydantic model
 │   ├── entities.py        # <type>:<value> validation + SUGGESTED_TYPES

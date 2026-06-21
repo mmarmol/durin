@@ -13,7 +13,7 @@ Scope note: this lease serializes interactive TURNS per session across
 processes. Direct out-of-turn savers do NOT yet acquire it — they take only
 the save() ``.lock``, not this ``.turn.lock``. Known lease-bypassing paths:
   - HTTP rename in service/sessions.py
-  - cron/heartbeat process_direct calls
+  - cron process_direct calls
   - webui background title-generation save
     (loop.py _schedule_background -> utils/webui_titles.py)
 These are a known Phase-A limitation; closing them requires
