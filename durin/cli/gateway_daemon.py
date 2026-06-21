@@ -20,7 +20,6 @@ Lifecycle:
 
 from __future__ import annotations
 
-import io
 import os
 import signal
 import subprocess
@@ -180,6 +179,8 @@ def acquire_gateway_singleton() -> IO[str]:
     Raises AlreadyRunningError if another process already holds the lock.
     """
     global _singleton_handle
+    if _singleton_handle is not None:
+        raise AlreadyRunningError()
     from durin.config.home import durin_home
 
     lock_path = durin_home() / "gateway.lock"
@@ -209,6 +210,10 @@ def start_daemon(
     Raises :class:`AlreadyRunningError` if a live daemon is found.
     Stale PID files (process gone) are cleaned up first.
     """
+    # Authoritative singleton is the held flock acquired by the child in
+    # acquire_gateway_singleton() before port bind. This PID check is
+    # best-effort early feedback; a race where a second child spawns here but
+    # fails to acquire the flock is TOCTOU-tolerant because it exits before binding.
     status = daemon_status()
     if status.state == "running":
         raise AlreadyRunningError(status.pid or -1)
