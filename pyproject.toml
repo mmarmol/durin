@@ -188,6 +188,11 @@ filterwarnings = [
     # deprecations still surface.
     "ignore:Deprecated call to `pkg_resources.declare_namespace:DeprecationWarning",
     "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
+    # Third-party: Starlette 1.3's TestClient prefers the new `httpx2` package
+    # and warns when it falls back to `httpx` (which we pin <1.0 for the app's
+    # own use). Test-only, and the httpx fallback stays through Starlette 1.x
+    # (we pin <2), so there is nothing to migrate until httpx2 is mainstream.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning",
 ]
 markers = [
     "ollama: requires running Ollama instance with a local model",
