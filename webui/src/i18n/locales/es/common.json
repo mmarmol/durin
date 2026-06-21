@@ -542,6 +542,7 @@
         "officialOnly": "Solo oficiales",
         "fillRequired": "Completá todos los campos requeridos para continuar.",
         "runtimeMissingDocker": "Este servidor corre en un contenedor Docker, pero Docker no está instalado en esta máquina.",
+        "getCredential": "Crear token →",
         "getDocker": "Instalar Docker Desktop",
         "runtimeMissing": "Este servidor necesita {{runtime}}, que no está instalado en esta máquina.",
         "verified": "Verificado",

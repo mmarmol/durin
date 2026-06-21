@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { linkify } from "@/lib/linkify";
 import {
   describeMcpRegistryServer,
   installMcpFromRegistry,
@@ -515,8 +516,19 @@ export function McpDiscoverPane({
                 <label className="block text-[12px] text-muted-foreground">
                   {e.name}
                   {e.is_required ? " *" : ""}
-                  {e.description ? ` — ${e.description}` : ""}
+                  {e.description ? <> — {linkify(e.description)}</> : null}
                 </label>
+                {e.help_url ? (
+                  <a
+                    href={e.help_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[12px] text-primary underline"
+                  >
+                    {tx("getCredential")}
+                    <ExternalLinkIcon />
+                  </a>
+                ) : null}
                 <Input
                   type={e.is_secret ? "password" : "text"}
                   value={envValues[e.name] ?? ""}

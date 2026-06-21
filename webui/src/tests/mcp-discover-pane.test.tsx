@@ -395,6 +395,33 @@ it("offers OAuth by default when oauth-capable, hiding the token field, with a m
   expect(screen.getByText(/Authorization/)).toBeInTheDocument();
 });
 
+it("renders a credential help link from help_url", async () => {
+  const user = userEvent.setup();
+  describeMcpRegistryServer.mockResolvedValue({
+    name: "gh", ref: "io.github.github/github-mcp-server", description: "", version: "1", repository: "",
+    packages: [{
+      registry_type: "oci", identifier: "x", version: "1", runtime_hint: "",
+      transport_type: "stdio", runtime_arguments: [], package_arguments: [],
+      env: [{ name: "GITHUB_PERSONAL_ACCESS_TOKEN", description: "Set an env var",
+              is_required: true, is_secret: true, default: null,
+              help_url: "https://github.com/settings/tokens" }],
+    }],
+    remotes: [],
+  });
+  mcpRegistryRuntime.mockResolvedValue({ kind: "local", runtime: "docker", present: true, auto_installable: false, install_command: "" });
+  const GH_HIT: McpRegistryHit = {
+    name: "gh", ref: "io.github.github/github-mcp-server", registry: "github", kind: "local", description: "",
+    signals: { stars: 100, owner_login: "github", verified: true },
+  };
+  searchMcpRegistry.mockResolvedValue(result([GH_HIT]));
+  render(<McpDiscoverPane token="t" onClose={() => {}} />);
+  await user.type(screen.getByRole("textbox"), "github");
+  await user.click(screen.getByRole("button", { name: /search/i }));
+  await user.click(await screen.findByText("gh"));
+  const link = await screen.findByRole("link", { name: /token|crear/i });
+  expect(link).toHaveAttribute("href", "https://github.com/settings/tokens");
+});
+
 it("sends auth_method=oauth when installing with OAuth selected", async () => {
   const user = userEvent.setup();
   describeMcpRegistryServer.mockResolvedValue({
