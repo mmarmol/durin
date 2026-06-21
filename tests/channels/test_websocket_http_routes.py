@@ -281,10 +281,22 @@ def test_rename_during_active_turn_preserves_title_and_messages(
 ) -> None:
     """B2: a rename concurrent with an active turn must not lose-update.
 
-    The agent loop holds the cached Session and appends an in-flight
-    (unsaved) message; the user renames mid-turn. With the old `_load`
-    path the rename mutated a separate object, so the loop's end-of-turn
-    save clobbered the title. Sharing the cached instance keeps both.
+    Under R1's lease-serialization contract the agent turn holds the
+    per-session turn lease while it has unsaved messages.  The rename
+    route tries to acquire that same lease and BLOCKS until the turn
+    saves and releases.  The rename then reloads the saved messages,
+    sets the title, and saves — so both the message AND the title survive.
+
+    This test models that serialized sequence directly:
+      1. Turn appends a message and SAVES under its lease (simulated here
+         by calling sm.save before the rename).
+      2. Rename runs (lease is now free), reloads the saved message, sets
+         the title, saves.
+      3. A fresh disk load must see both.
+
+    The held-lease conflict path (rename blocked while turn is in
+    progress) is covered by
+    tests/service/test_rename_lease.py::test_rename_returns_conflict_when_lease_is_held.
     """
     from durin.utils.webui_titles import WEBUI_TITLE_METADATA_KEY
 
@@ -295,19 +307,21 @@ def test_rename_during_active_turn_preserves_title_and_messages(
     tok = _token(client)
     auth = {"Authorization": f"Bearer {tok}"}
 
-    # Loop obtains the cached session and appends an unsaved message.
+    # Turn appends its message and saves under its lease.  Under R1 all
+    # message-appending is committed to disk before the lease is released,
+    # so the rename's reload always sees the saved messages.
     cached = sm.get_or_create("websocket:test")
     cached.add_message("user", "in-flight-msg")
+    sm.save(cached)
 
+    # Rename runs after the turn releases its lease: reloads saved
+    # messages, sets title, saves.
     resp = client.post(
         "/api/v1/sessions/websocket:test/rename",
         headers=auth,
         json={"title": "Renamed"},
     )
     assert resp.status_code == 200
-
-    # Loop finishes the turn and saves its (cached) session.
-    sm.save(cached)
 
     # Disk truth (fresh manager, no cache): both must survive.
     fresh = SessionManager(tmp_path)._load("websocket:test")
