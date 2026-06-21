@@ -52,6 +52,25 @@ save()'s `<key>.jsonl.lock`; see lock-ordering below). Wired in
 (fast path). On acquire-timeout it publishes a clear "session busy in
 another window" message rather than dropping the turn silently.
 
+### `durin/config/loader.py` — `save_config` and `mutate_config`
+
+`save_config` wraps its entire write — the multi-file split-layout set plus
+stale-file unlink — in `cross_process_lock(config_path)`.  This serializes
+concurrent writers and makes the split-layout write atomic as a SET relative
+to other lock holders, so a reader under the lock never sees a torn
+cross-section state.
+
+`mutate_config(mutator)` is the lost-update-safe read-modify-write entry
+point: it acquires the lock, reloads the config from disk, calls *mutator*,
+saves, and returns the updated config.  Because `cross_process_lock` is
+reentrant (thread-local guard), the inner `save_config` re-taking the lock
+is safe.
+
+**Residual:** a direct `load_config() → edit → save_config()` not routed
+through `mutate_config` remains last-writer-wins across processes.  This
+matches hermes and is an accepted trade-off; callers are migrated
+opportunistically.
+
 ### `durin/cli/gateway_daemon.py` — `acquire_gateway_singleton()`
 
 Holds `flock(LOCK_EX|LOCK_NB)` on `DURIN_HOME/gateway.lock`. The OS
@@ -101,3 +120,13 @@ background/direct-saver serialization phase:
 
    Closing these requires background/direct-saver serialization work not
    yet scheduled.
+
+3. **`SecretStore.set_scope()` is an unlocked in-memory mutator.**
+   (`durin/security/secrets.py`) It does not write to disk itself; a caller
+   doing `load → set_scope → save()` is an unlocked read-modify-write.
+   Migrate to a locked path opportunistically.
+
+4. **`oauth/<provider>.json` token writes are not durin-locked.**
+   These files are owned by the external `oauth-cli-kit` library
+   (`FileTokenStorage`) and are intentionally outside durin's locking
+   domain — out of durin's control.

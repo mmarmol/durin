@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from durin.utils.atomic_write import atomic_write_text
+from durin.utils.file_lock import cross_process_lock
 
 _LOCK = threading.Lock()
 
@@ -128,7 +129,7 @@ class ApiTokenStore:
         now = time.time()
         expires_at = now + ttl_s if ttl_s is not None else None
 
-        with _LOCK:
+        with _LOCK, cross_process_lock(self._path):
             data = self._load()
             self._purge_expired(data, now)
             self._enforce_cap(data)
@@ -154,7 +155,7 @@ class ApiTokenStore:
         success ``last_used_at`` is updated and persisted.
         """
         now = time.time()
-        with _LOCK:
+        with _LOCK, cross_process_lock(self._path):
             data = self._load()
             for token_id, entry in data["tokens"].items():
                 expires_at = entry.get("expires_at")
@@ -169,7 +170,7 @@ class ApiTokenStore:
 
     def revoke(self, token_id: str) -> bool:
         """Remove the token with *token_id*.  Returns ``True`` if it existed."""
-        with _LOCK:
+        with _LOCK, cross_process_lock(self._path):
             data = self._load()
             if token_id in data["tokens"]:
                 del data["tokens"][token_id]
@@ -206,7 +207,7 @@ class ApiTokenStore:
         The secret is stored as base64 in the JSON file so it survives a
         process restart.
         """
-        with _LOCK:
+        with _LOCK, cross_process_lock(self._path):
             data = self._load()
             if data.get("media_secret"):
                 return base64.b64decode(data["media_secret"])

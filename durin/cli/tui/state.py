@@ -10,6 +10,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from durin.utils.atomic_write import atomic_write_text
+from durin.utils.file_lock import cross_process_lock
+
 _MAX_RECENT = 5
 _MAX_PROMPT_HISTORY = 50
 
@@ -37,12 +40,10 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
-    """Write the state dict, creating the parent dir if needed."""
+    """Write the state dict atomically, creating the parent dir if needed."""
     try:
         _state_file().parent.mkdir(parents=True, exist_ok=True)
-        _state_file().write_text(
-            json.dumps(data, indent=2), encoding="utf-8"
-        )
+        atomic_write_text(_state_file(), json.dumps(data, indent=2))
     except Exception:  # noqa: BLE001 — never crash the picker
         pass
 
@@ -57,19 +58,27 @@ def get_recent_models() -> list[str]:
 
 
 def add_recent_model(model: str) -> None:
-    """Add *model* to the front of the recent list, dedup, cap at 5."""
+    """Add *model* to the front of the recent list, dedup, cap at 5.
+
+    The entire load→mutate→save is under cross_process_lock so concurrent
+    processes cannot lose each other's writes.
+    """
     if not model:
         return
-    data = _load()
-    current = data.get("recent_models", [])
-    if not isinstance(current, list):
-        current = []
-    models = [str(m) for m in current if isinstance(m, str)]
-    models = [m for m in models if m != model]
-    models.insert(0, model)
-    models = models[:_MAX_RECENT]
-    data["recent_models"] = models
-    _save(data)
+    try:
+        _state_file().parent.mkdir(parents=True, exist_ok=True)
+        with cross_process_lock(_state_file()):
+            data = _load()
+            current = data.get("recent_models", [])
+            if not isinstance(current, list):
+                current = []
+            models = [str(m) for m in current if isinstance(m, str)]
+            models = [m for m in models if m != model]
+            models.insert(0, model)
+            data["recent_models"] = models[:_MAX_RECENT]
+            _save(data)
+    except Exception:  # noqa: BLE001 — never crash the picker
+        pass
 
 
 def get_prompt_history() -> list[str]:
@@ -82,16 +91,24 @@ def get_prompt_history() -> list[str]:
 
 
 def add_prompt(text: str) -> None:
-    """Append *text* to the prompt history, cap at 50 entries."""
+    """Append *text* to the prompt history, cap at 50 entries.
+
+    The entire load→mutate→save is under cross_process_lock so concurrent
+    processes cannot lose each other's writes.
+    """
     text = text.strip()
     if not text:
         return
-    data = _load()
-    history = data.get("prompt_history", [])
-    if not isinstance(history, list):
-        history = []
-    history = [str(p) for p in history if isinstance(p, str)]
-    history.append(text)
-    history = history[-_MAX_PROMPT_HISTORY:]
-    data["prompt_history"] = history
-    _save(data)
+    try:
+        _state_file().parent.mkdir(parents=True, exist_ok=True)
+        with cross_process_lock(_state_file()):
+            data = _load()
+            history = data.get("prompt_history", [])
+            if not isinstance(history, list):
+                history = []
+            history = [str(p) for p in history if isinstance(p, str)]
+            history.append(text)
+            data["prompt_history"] = history[-_MAX_PROMPT_HISTORY:]
+            _save(data)
+    except Exception:  # noqa: BLE001 — never crash the picker
+        pass

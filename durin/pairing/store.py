@@ -18,7 +18,8 @@ from typing import Any
 from loguru import logger
 
 from durin.config.paths import get_data_dir
-from durin.utils.helpers import _write_text_atomic
+from durin.utils.atomic_write import atomic_write_text
+from durin.utils.file_lock import cross_process_lock
 
 # threading.Lock is used so store functions remain callable from both sync CLI
 # and async channel handlers.  At private-assistant scale (small JSON file,
@@ -58,7 +59,7 @@ def _save(data: dict[str, Any]) -> None:
         "approved": {ch: sorted(list(users)) for ch, users in data.get("approved", {}).items()},
         "pending": dict(data.get("pending", {})),
     }
-    _write_text_atomic(path, json.dumps(payload, indent=2, ensure_ascii=False))
+    atomic_write_text(path, json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 def _gc_pending(data: dict[str, Any]) -> None:
@@ -80,18 +81,19 @@ def generate_code(
     Returns the code (e.g. ``"ABCD-EFGH"``).
     """
     with _LOCK:
-        data = _load()
-        _gc_pending(data)
-        raw = "".join(secrets.choice(_ALPHABET) for _ in range(_CODE_LENGTH))
-        code = f"{raw[:4]}-{raw[4:]}"
+        with cross_process_lock(_store_path()):
+            data = _load()
+            _gc_pending(data)
+            raw = "".join(secrets.choice(_ALPHABET) for _ in range(_CODE_LENGTH))
+            code = f"{raw[:4]}-{raw[4:]}"
 
-        data.setdefault("pending", {})[code] = {
-            "channel": channel,
-            "sender_id": sender_id,
-            "created_at": time.time(),
-            "expires_at": time.time() + ttl,
-        }
-        _save(data)
+            data.setdefault("pending", {})[code] = {
+                "channel": channel,
+                "sender_id": sender_id,
+                "created_at": time.time(),
+                "expires_at": time.time() + ttl,
+            }
+            _save(data)
         logger.info("Generated pairing code {} for {}@{}", code, sender_id, channel)
         return code
 
@@ -103,16 +105,17 @@ def approve_code(code: str) -> tuple[str, str] | None:
     does not exist or has expired.
     """
     with _LOCK:
-        data = _load()
-        _gc_pending(data)
-        pending: dict[str, Any] = data.get("pending", {})
-        info = pending.pop(code, None)
-        if info is None:
-            return None
-        channel = info["channel"]
-        sender_id = info["sender_id"]
-        data.setdefault("approved", {}).setdefault(channel, set()).add(sender_id)
-        _save(data)
+        with cross_process_lock(_store_path()):
+            data = _load()
+            _gc_pending(data)
+            pending: dict[str, Any] = data.get("pending", {})
+            info = pending.pop(code, None)
+            if info is None:
+                return None
+            channel = info["channel"]
+            sender_id = info["sender_id"]
+            data.setdefault("approved", {}).setdefault(channel, set()).add(sender_id)
+            _save(data)
         logger.info("Approved pairing code {} for {}@{}", code, sender_id, channel)
         return channel, sender_id
 
@@ -123,14 +126,15 @@ def deny_code(code: str) -> bool:
     Returns ``True`` if the code existed and was removed.
     """
     with _LOCK:
-        data = _load()
-        _gc_pending(data)
-        pending: dict[str, Any] = data.get("pending", {})
-        if code in pending:
-            del pending[code]
-            _save(data)
-            logger.info("Denied pairing code {}", code)
-            return True
+        with cross_process_lock(_store_path()):
+            data = _load()
+            _gc_pending(data)
+            pending: dict[str, Any] = data.get("pending", {})
+            if code in pending:
+                del pending[code]
+                _save(data)
+                logger.info("Denied pairing code {}", code)
+                return True
         return False
 
 
@@ -159,16 +163,17 @@ def revoke(channel: str, sender_id: str) -> bool:
     Returns ``True`` if the sender was present and removed.
     """
     with _LOCK:
-        data = _load()
-        approved: dict[str, set[str]] = data.get("approved", {})
-        users = approved.get(channel, set())
-        if sender_id in users:
-            users.discard(sender_id)
-            if not users:
-                del approved[channel]
-            _save(data)
-            logger.info("Revoked {} from {}", sender_id, channel)
-            return True
+        with cross_process_lock(_store_path()):
+            data = _load()
+            approved: dict[str, set[str]] = data.get("approved", {})
+            users = approved.get(channel, set())
+            if sender_id in users:
+                users.discard(sender_id)
+                if not users:
+                    del approved[channel]
+                _save(data)
+                logger.info("Revoked {} from {}", sender_id, channel)
+                return True
         return False
 
 
