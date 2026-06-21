@@ -24,12 +24,14 @@ from durin.service.principal import Principal, Scope
 from durin.service.registry import route
 from durin.service.types import (
     Command,
+    ConflictError,
     NotFoundError,
     Query,
     Result,
     UnavailableError,
     ValidationFailedError,
 )
+from durin.session.turn_lease import session_turn_lease
 
 # ---------------------------------------------------------------------------
 # DTOs — sessions list
@@ -257,8 +259,23 @@ class SessionsService:
             title = title[: TITLE_MAX_CHARS - 1].rstrip() + "…"
         if not sm.exists(cmd.key):
             raise NotFoundError("session not found", details={"key": cmd.key})
-        session = sm.get_or_create(cmd.key)
-        session.metadata[WEBUI_TITLE_METADATA_KEY] = title
-        session.metadata[WEBUI_TITLE_USER_EDITED_METADATA_KEY] = True
-        sm.save(session)
+
+        # Acquire the per-session turn lease before writing so a concurrent
+        # agent turn cannot clobber the rename's whole-file write (and vice
+        # versa).  Reload under the lease to pick up any turns that committed
+        # between the exists() check and now.  On TimeoutError (session busy)
+        # raise ConflictError — the caller retries; no partial write is applied.
+        # See docs/architecture/concurrency.md.
+        session_path = sm._get_session_path(cmd.key)
+        try:
+            async with session_turn_lease(session_path, timeout=30.0):
+                session = sm.reload(cmd.key)
+                session.metadata[WEBUI_TITLE_METADATA_KEY] = title
+                session.metadata[WEBUI_TITLE_USER_EDITED_METADATA_KEY] = True
+                sm.save(session)
+        except TimeoutError as exc:
+            raise ConflictError(
+                "session is busy, rename not applied",
+                details={"key": cmd.key},
+            ) from exc
         return SessionRenameResult(title=title)

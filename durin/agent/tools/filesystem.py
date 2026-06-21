@@ -924,6 +924,10 @@ class EditFileTool(_FsTool):
             warning = self._file_states.check_read(fp)
 
             raw = fp.read_bytes()
+            # Capture a content hash of the bytes we are about to edit against.
+            # Immediately before writing we re-hash to detect concurrent changes.
+            # See docs/architecture/concurrency.md — optimistic CAS for workspace files.
+            read_hash = _hash_file(str(fp))
             uses_crlf = b"\r\n" in raw
             content = raw.decode("utf-8").replace("\r\n", "\n")
             norm_old = old_text.replace("\r\n", "\n")
@@ -980,6 +984,15 @@ class EditFileTool(_FsTool):
                 new_content = new_content[: match.start] + replacement + new_content[end:]
             if uses_crlf:
                 new_content = new_content.replace("\n", "\r\n")
+
+            # Optimistic CAS: re-hash the file immediately before writing.
+            # If another process changed it since our read, abort to avoid
+            # a silent lost update. See docs/architecture/concurrency.md.
+            if _hash_file(str(fp)) != read_hash:
+                return (
+                    "Error: file changed on disk since it was read — "
+                    "re-read the file and retry the edit."
+                )
 
             atomic_write_bytes(fp, new_content.encode("utf-8"))
             self._file_states.record_write(fp)

@@ -206,18 +206,23 @@ async def test_consolidation_persists_summary_for_next_prepare_session(tmp_path,
 async def test_preflight_consolidation_receives_pending_summary(tmp_path) -> None:
     loop = _make_loop(tmp_path, estimated_tokens=100, context_window_tokens=200)
     session = loop.sessions.get_or_create("cli:test")
-    # Inject a summary into session metadata so _format_pending_summary returns it
+    # Inject a summary into session metadata so _format_pending_summary returns it.
+    # Must be saved to disk so process_direct's reload picks it up.
     session.metadata["_last_summary"] = {
         "text": "earlier context",
         "last_active": "2026-05-19T10:00:00",
     }
+    loop.sessions.save(session)
     loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=None)  # type: ignore[method-assign]
     loop._schedule_background = lambda coro: coro.close()  # type: ignore[method-assign]
 
     await loop.process_direct("hello", session_key="cli:test")
 
+    # process_direct reloads the session before processing, so we must assert
+    # against the post-reload object (not the pre-call reference).
+    reloaded = loop.sessions.get_or_create("cli:test")
     loop.consolidator.maybe_consolidate_by_tokens.assert_any_await(
-        session,
+        reloaded,
         replay_max_messages=loop._max_messages,
     )
 
