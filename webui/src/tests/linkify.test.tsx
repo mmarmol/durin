@@ -18,3 +18,8 @@ it("leaves plain text untouched", () => {
   const { container } = render(<span>{linkify("Set an environment variable")}</span>);
   expect(container.querySelector("a")).toBeNull();
 });
+
+it("does not linkify filenames with .sh extension", () => {
+  const { container } = render(<span>{linkify("Run install.sh to get started")}</span>);
+  expect(container.querySelector("a")).toBeNull();
+});

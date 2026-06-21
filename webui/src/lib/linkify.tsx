@@ -1,10 +1,9 @@
 import type { ReactNode } from "react";
 
-const TLD = "ai|io|com|org|net|dev|app|co|sh|cloud";
-const TOKEN = new RegExp(
-  String.raw`(https?:\/\/[^\s)]+)|((?:[a-z0-9-]+\.)+(?:${TLD})(?:\/[^\s)]*)?)`,
-  "gi",
-);
+// Bare-domain linkify is best-effort: an allowlist of common TLDs. Excludes file-extension-like
+// TLDs (e.g. .sh) to avoid linkifying filenames in prose.
+const TLD = "ai|io|com|org|net|dev|app|co|cloud";
+const TOKEN_SRC = String.raw`(https?:\/\/[^\s)]+)|((?:[a-z0-9-]+\.)+(?:${TLD})(?:\/[^\s)]*)?)`;
 
 /** Split `text` into plain strings and external links. Full `http(s)://` URLs link as-is;
  *  bare allowlisted domains get an `https://` prefix. Conservative — no false links in
@@ -14,8 +13,8 @@ export function linkify(text: string): ReactNode[] {
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;
-  TOKEN.lastIndex = 0;
-  while ((m = TOKEN.exec(text)) !== null) {
+  const re = new RegExp(TOKEN_SRC, "gi");
+  while ((m = re.exec(text)) !== null) {
     if (m.index > last) out.push(text.slice(last, m.index));
     const raw = m[0];
     const href = m[1] ? raw : `https://${raw}`;
