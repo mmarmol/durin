@@ -97,30 +97,65 @@ async def test_spec_captures_provider_at_turn_start(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_mid_turn_swap_does_not_affect_in_flight_turn(tmp_path):
-    """Swapping loop.provider mid-turn must not change the running turn's provider.
+async def test_subagent_spec_captures_provider_at_spawn_time(tmp_path):
+    """SubagentManager must pass provider= into AgentRunSpec at spawn time.
 
-    p_a is the provider when the turn starts.  During the turn's progress_callback
-    we swap loop.provider and loop.runner.provider to p_b (simulating a concurrent
-    /model command).  All LLM calls within the turn must still go to p_a.
+    set_provider() mutates manager.runner.provider (simulating a concurrent
+    /model swap from another session).  The subagent turn that was already
+    in flight must use the provider that was active when the spec was built,
+    not the post-swap provider.
+
+    This test verifies that WITHOUT the fix (not passing provider= into
+    AgentRunSpec), p_b.calls would be > 0, so the assertion would fail —
+    confirming the test is not vacuous.
     """
+    from durin.agent.subagent import SubagentManager
+    from durin.bus.queue import MessageBus
+
     p_a = _RecordingProvider("A")
     p_b = _RecordingProvider("B")
 
-    loop = _make_loop(tmp_path, p_a)
+    manager = SubagentManager(
+        provider=p_a,
+        workspace=tmp_path,
+        bus=MessageBus(),
+        max_tool_result_chars=8192,
+    )
+    manager.runner.tools = MagicMock()
+    manager.runner.tools.get_definitions = MagicMock(return_value=[])
+    manager.runner.tools.execute = AsyncMock(return_value="ok")
 
-    swap_done = False
+    captured_provider: list = []
+    original_run = manager.runner.run
 
-    async def on_stream(delta: str) -> None:
-        nonlocal swap_done
-        if not swap_done:
-            loop.provider = p_b
-            loop.runner.provider = p_b
-            swap_done = True
+    async def intercepting_run(spec):
+        captured_provider.append(spec.provider)
+        # Simulate a concurrent /model swap arriving while spec is built but run is starting
+        manager.set_provider(p_b, "test-model")
+        return await original_run(spec)
 
-    msg = InboundMessage(channel="cli", sender_id="u1", chat_id="c1", content="hello")
-    result = await loop._process_message(msg, on_stream=on_stream, on_stream_end=AsyncMock())
+    manager.runner.run = intercepting_run  # type: ignore[method-assign]
 
-    assert result is not None
-    assert p_a.calls > 0, "p_a must have served the in-flight turn"
-    assert p_b.calls == 0, "p_b (post-swap provider) must NOT be used for this turn"
+    import time
+    from durin.agent.subagent import SubagentStatus
+
+    status = SubagentStatus(
+        task_id="test-01",
+        label="test",
+        task_description="hello",
+        started_at=time.monotonic(),
+    )
+    await manager._run_subagent(
+        task_id="test-01",
+        task="hello",
+        label="test",
+        origin={"channel": "cli", "chat_id": "c1", "session_key": None},
+        status=status,
+    )
+
+    assert len(captured_provider) == 1, "runner.run must have been called once"
+    assert captured_provider[0] is p_a, (
+        "spec.provider must be the provider active at spec-build time (p_a), "
+        f"not the post-swap provider; got {captured_provider[0]}"
+    )
+    assert p_b.calls == 0, "post-swap provider p_b must NOT have been used"

@@ -216,6 +216,13 @@ default and the fallback for callers that do not set `spec.provider`.
 `_apply_provider_snapshot` so the snapshot is always the provider that was
 active at the moment the turn was dispatched.
 
+`SubagentManager._run_subagent` (`durin/agent/subagent.py`) applies the same
+fix: it captures `self.runner.provider` immediately before building the
+`AgentRunSpec` and passes it as `provider=`.  `SubagentManager.set_provider`
+mutates `self.runner.provider` on each session's `/model` swap; without this
+capture, a concurrent swap could change the provider mid-flight inside a
+background subagent turn.
+
 ## AliasIndex in-process staleness (hazard #17)
 
 `AliasIndex` is built lazily once per process via
