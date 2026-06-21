@@ -9,12 +9,14 @@ const searchMcpRegistry = vi.fn();
 const describeMcpRegistryServer = vi.fn();
 const installMcpFromRegistry = vi.fn();
 const mcpRegistryRuntime = vi.fn();
+const mcpRegistryOauthCapability = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   searchMcpRegistry: (...a: unknown[]) => searchMcpRegistry(...a),
   describeMcpRegistryServer: (...a: unknown[]) => describeMcpRegistryServer(...a),
   installMcpFromRegistry: (...a: unknown[]) => installMcpFromRegistry(...a),
   mcpRegistryRuntime: (...a: unknown[]) => mcpRegistryRuntime(...a),
+  mcpRegistryOauthCapability: (...a: unknown[]) => mcpRegistryOauthCapability(...a),
 }));
 
 // searchMcpRegistry now resolves to { hits, more } (curated+popular, then the less-popular reveal).
@@ -110,6 +112,7 @@ beforeEach(() => {
   describeMcpRegistryServer.mockReset();
   installMcpFromRegistry.mockReset();
   mcpRegistryRuntime.mockReset();
+  mcpRegistryOauthCapability.mockReset();
   // Default: remote model needs no local runtime (keeps detail tests green).
   mcpRegistryRuntime.mockResolvedValue({
     kind: "remote",
@@ -118,6 +121,8 @@ beforeEach(() => {
     auto_installable: false,
     install_command: "",
   });
+  // Default: not oauth-capable (keeps existing remote-detail tests green).
+  mcpRegistryOauthCapability.mockResolvedValue({ oauth_capable: false });
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -331,7 +336,7 @@ it("detail view keeps install button functional", async () => {
 
   await user.click(screen.getByRole("button", { name: /connect/i }));
   await waitFor(() => {
-    expect(installMcpFromRegistry).toHaveBeenCalledWith("tok", "registry/github-mcp", "remote", {});
+    expect(installMcpFromRegistry).toHaveBeenCalledWith("tok", "registry/github-mcp", "remote", {}, "");
     expect(onClose).toHaveBeenCalledWith(true);
   });
 });
@@ -355,4 +360,148 @@ it("renders hits whose stars are null without crashing (unenriched catalog rows)
   // Renders the row (no TypeError on null.toLocaleString) and shows no ★ for it
   expect(await screen.findByText("unenriched-mcp")).toBeInTheDocument();
   expect(screen.queryByText(/★/)).not.toBeInTheDocument();
+});
+
+it("offers OAuth by default when oauth-capable, hiding the token field, with a manual fallback", async () => {
+  const user = userEvent.setup();
+  describeMcpRegistryServer.mockResolvedValue({
+    name: "acme", ref: "io.acme/srv", description: "", version: "1", repository: "",
+    packages: [],
+    remotes: [{
+      transport_type: "streamable-http", url: "https://acme/mcp",
+      headers: [{ name: "Authorization", description: "token", is_required: true, is_secret: true, default: null }],
+    }],
+  });
+  mcpRegistryRuntime.mockResolvedValue({ kind: "remote", runtime: "", present: true, auto_installable: false, install_command: "" });
+  mcpRegistryOauthCapability.mockResolvedValue({ oauth_capable: true });
+
+  const ACME_HIT: McpRegistryHit = {
+    name: "acme", ref: "io.acme/srv", registry: "github", kind: "remote", description: "",
+    signals: { stars: 100, owner_login: "acme", verified: false },
+  };
+  searchMcpRegistry.mockResolvedValue(result([ACME_HIT]));
+
+  render(<McpDiscoverPane token="t" onClose={() => {}} />);
+  await user.type(screen.getByRole("textbox"), "acme");
+  await user.click(screen.getByRole("button", { name: /search/i }));
+  await user.click(await screen.findByText("acme"));
+
+  // OAuth selected by default → the token field is hidden.
+  await screen.findByText(/OAuth/i);
+  expect(screen.queryByText(/Authorization/)).not.toBeInTheDocument();
+
+  // Switch to manual token → field appears.
+  await user.click(screen.getByText(/Manual token/i));
+  expect(screen.getByText(/Authorization/)).toBeInTheDocument();
+});
+
+it("hides the auth selector for an oauth-capable remote with no token field (autodetect handles it)", async () => {
+  const user = userEvent.setup();
+  describeMcpRegistryServer.mockResolvedValue({
+    name: "atl", ref: "com.atl/srv", description: "", version: "1", repository: "",
+    packages: [],
+    remotes: [{ transport_type: "streamable-http", url: "https://atl/mcp", headers: [] }],
+  });
+  mcpRegistryRuntime.mockResolvedValue({ kind: "remote", runtime: "", present: true, auto_installable: false, install_command: "" });
+  mcpRegistryOauthCapability.mockResolvedValue({ oauth_capable: true });
+
+  const ATL_HIT: McpRegistryHit = {
+    name: "atl", ref: "com.atl/srv", registry: "github", kind: "remote", description: "",
+    signals: { stars: 100, owner_login: "atl", verified: false },
+  };
+  searchMcpRegistry.mockResolvedValue(result([ATL_HIT]));
+
+  render(<McpDiscoverPane token="t" onClose={() => {}} />);
+  await user.type(screen.getByRole("textbox"), "atl");
+  await user.click(screen.getByRole("button", { name: /search/i }));
+  await user.click(await screen.findByText("atl"));
+
+  await screen.findByRole("button", { name: /connect/i });
+  await waitFor(() => expect(mcpRegistryOauthCapability).toHaveBeenCalled());
+  // capable=true but no declared token field → no selector, no dead-end "manual token";
+  // autodetect enables OAuth at install time.
+  expect(screen.queryByText(/Manual token/i)).toBeNull();
+});
+
+it("renders a credential help link from help_url", async () => {
+  const user = userEvent.setup();
+  describeMcpRegistryServer.mockResolvedValue({
+    name: "gh", ref: "io.github.github/github-mcp-server", description: "", version: "1", repository: "",
+    packages: [{
+      registry_type: "oci", identifier: "x", version: "1", runtime_hint: "",
+      transport_type: "stdio", runtime_arguments: [], package_arguments: [],
+      env: [{ name: "GITHUB_PERSONAL_ACCESS_TOKEN", description: "Set an env var",
+              is_required: true, is_secret: true, default: null,
+              help_url: "https://github.com/settings/tokens" }],
+    }],
+    remotes: [],
+  });
+  mcpRegistryRuntime.mockResolvedValue({ kind: "local", runtime: "docker", present: true, auto_installable: false, install_command: "" });
+  const GH_HIT: McpRegistryHit = {
+    name: "gh", ref: "io.github.github/github-mcp-server", registry: "github", kind: "local", description: "",
+    signals: { stars: 100, owner_login: "github", verified: true },
+  };
+  searchMcpRegistry.mockResolvedValue(result([GH_HIT]));
+  render(<McpDiscoverPane token="t" onClose={() => {}} />);
+  await user.type(screen.getByRole("textbox"), "github");
+  await user.click(screen.getByRole("button", { name: /search/i }));
+  await user.click(await screen.findByText("gh"));
+  const link = await screen.findByRole("link", { name: /token|crear/i });
+  expect(link).toHaveAttribute("href", "https://github.com/settings/tokens");
+});
+
+it("renders no credential help link when help_url is null", async () => {
+  const user = userEvent.setup();
+  describeMcpRegistryServer.mockResolvedValue({
+    name: "gh", ref: "io.github.github/github-mcp-server", description: "", version: "1", repository: "",
+    packages: [{
+      registry_type: "oci", identifier: "x", version: "1", runtime_hint: "",
+      transport_type: "stdio", runtime_arguments: [], package_arguments: [],
+      env: [{ name: "GITHUB_PERSONAL_ACCESS_TOKEN", description: "Set an env var",
+              is_required: true, is_secret: true, default: null,
+              help_url: null }],
+    }],
+    remotes: [],
+  });
+  mcpRegistryRuntime.mockResolvedValue({ kind: "local", runtime: "docker", present: true, auto_installable: false, install_command: "" });
+  const GH_HIT: McpRegistryHit = {
+    name: "gh", ref: "io.github.github/github-mcp-server", registry: "github", kind: "local", description: "",
+    signals: { stars: 100, owner_login: "github", verified: true },
+  };
+  searchMcpRegistry.mockResolvedValue(result([GH_HIT]));
+  render(<McpDiscoverPane token="t" onClose={() => {}} />);
+  await user.type(screen.getByRole("textbox"), "github");
+  await user.click(screen.getByRole("button", { name: /search/i }));
+  await user.click(await screen.findByText("gh"));
+  await screen.findByText(/GITHUB_PERSONAL_ACCESS_TOKEN/);
+  expect(screen.queryByRole("link", { name: /token|crear/i })).toBeNull();
+});
+
+it("sends auth_method=oauth when installing with OAuth selected", async () => {
+  const user = userEvent.setup();
+  describeMcpRegistryServer.mockResolvedValue({
+    name: "acme", ref: "io.acme/srv", description: "", version: "1", repository: "",
+    packages: [],
+    remotes: [{ transport_type: "streamable-http", url: "https://acme/mcp",
+      headers: [{ name: "Authorization", description: "token", is_required: true, is_secret: true, default: null }] }],
+  });
+  mcpRegistryRuntime.mockResolvedValue({ kind: "remote", runtime: "", present: true, auto_installable: false, install_command: "" });
+  mcpRegistryOauthCapability.mockResolvedValue({ oauth_capable: true });
+  installMcpFromRegistry.mockResolvedValue({});
+
+  const ACME_HIT: McpRegistryHit = {
+    name: "acme", ref: "io.acme/srv", registry: "github", kind: "remote", description: "",
+    signals: { stars: 100, owner_login: "acme", verified: false },
+  };
+  searchMcpRegistry.mockResolvedValue(result([ACME_HIT]));
+
+  render(<McpDiscoverPane token="t" onClose={() => {}} />);
+  await user.type(screen.getByRole("textbox"), "acme");
+  await user.click(screen.getByRole("button", { name: /search/i }));
+  await user.click(await screen.findByText("acme"));
+  await screen.findByText(/OAuth/i);
+  await user.click(screen.getByRole("button", { name: /Connect/i }));
+  await waitFor(() => expect(installMcpFromRegistry).toHaveBeenCalled());
+  const call = installMcpFromRegistry.mock.calls[0];
+  expect(call[4]).toBe("oauth"); // args: (token, ref, prefer, envValues, authMethod)
 });

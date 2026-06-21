@@ -2,6 +2,7 @@ import type {
   ChatSummary,
   ProviderSettingsUpdate,
   ConfigSnapshot,
+  McpOauthCapability,
   McpOauthLoginResult,
   McpRegistryHit,
   McpRegistryServerDetail,
@@ -1583,13 +1584,26 @@ export async function installMcpFromRegistry(
   ref: string,
   prefer: "remote" | "local",
   envValues: Record<string, string>,
+  authMethod: "" | "oauth" | "token" = "",
   base: string = "",
 ): Promise<McpServerDetail> {
   return post<McpServerDetail>(`${base}/api/v1/mcp/registry/install`, token, {
     ref,
     prefer,
     env_values: envValues,
+    auth_method: authMethod,
   });
+}
+
+export async function mcpRegistryOauthCapability(
+  token: string,
+  ref: string,
+  base: string = "",
+): Promise<McpOauthCapability> {
+  return request<McpOauthCapability>(
+    `${base}/api/v1/mcp/registry/oauth-capability?ref=${encodeURIComponent(ref)}`,
+    token,
+  );
 }
 
 export async function mcpRegistryRuntime(

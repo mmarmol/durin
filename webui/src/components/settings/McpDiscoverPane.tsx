@@ -3,9 +3,11 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { linkify } from "@/lib/linkify";
 import {
   describeMcpRegistryServer,
   installMcpFromRegistry,
+  mcpRegistryOauthCapability,
   mcpRegistryRuntime,
   searchMcpRegistry,
 } from "@/lib/api";
@@ -238,6 +240,8 @@ export function McpDiscoverPane({
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runtime, setRuntime] = useState<McpRuntimeStatus | null>(null);
+  const [oauthCapable, setOauthCapable] = useState(false);
+  const [authMethod, setAuthMethod] = useState<"oauth" | "token">("oauth");
 
   // When a server is selected (or the local/remote choice changes), check whether
   // the host has the runtime needed to launch it — so we can warn before install.
@@ -258,6 +262,21 @@ export function McpDiscoverPane({
     return () => {
       cancelled = true;
     };
+  }, [detail, prefer, token]);
+
+  // When viewing the remote model of a server, probe whether durin can complete
+  // zero-secret OAuth (DCR). Only then do we offer the OAuth choice.
+  useEffect(() => {
+    setAuthMethod("oauth");
+    if (!detail || prefer !== "remote") {
+      setOauthCapable(false);
+      return;
+    }
+    let live = true;
+    mcpRegistryOauthCapability(token, detail.ref)
+      .then((c) => { if (live) { setOauthCapable(c.oauth_capable); setAuthMethod("oauth"); } })
+      .catch(() => { if (live) setOauthCapable(false); });
+    return () => { live = false; };
   }, [detail, prefer, token]);
 
   async function runSearch() {
@@ -297,12 +316,20 @@ export function McpDiscoverPane({
     setSelectedHit(null);
   }
 
+  const envs = detail ? requiredEnv(detail, prefer) : [];
+  // Only offer the OAuth-vs-token choice when there is BOTH an OAuth-capable endpoint AND a
+  // declared token field — otherwise "manual token" is a dead end (a header-less DCR remote
+  // like Atlassian auto-OAuths via autodetect with no field to fill).
+  const showOauthChoice = prefer === "remote" && oauthCapable && envs.length > 0;
+  const hideTokenField = showOauthChoice && authMethod === "oauth";
+
   async function doInstall() {
     if (!detail) return;
     setInstalling(true);
     setError(null);
     try {
-      await installMcpFromRegistry(token, detail.ref, prefer, envValues);
+      const method = showOauthChoice ? authMethod : (envs.length > 0 ? "token" : "");
+      await installMcpFromRegistry(token, detail.ref, prefer, envValues, method);
       onClose(true);
     } catch {
       setError(tx("installFailed"));
@@ -311,10 +338,9 @@ export function McpDiscoverPane({
   }
 
   if (detail) {
-    const envs = requiredEnv(detail, prefer);
     const hasLocal = detail.packages.length > 0;
     const hasRemote = detail.remotes.length > 0;
-    const missingRequired = envs.some(
+    const missingRequired = !hideTokenField && envs.some(
       (e) => (e.is_required || e.is_secret) && !(envValues[e.name] ?? "").trim(),
     );
 
@@ -429,6 +455,30 @@ export function McpDiscoverPane({
           </span>
         )}
 
+        {/* Auth method selector: shown only for OAuth-capable remotes */}
+        {showOauthChoice ? (
+          <div className="flex gap-2">
+            {([
+              ["oauth", tx("authOauth")],
+              ["token", tx("authToken")],
+            ] as const).map(([m, label]) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setAuthMethod(m)}
+                className={
+                  "rounded-full border px-3 py-1 text-[12px] " +
+                  (authMethod === m
+                    ? "border-primary bg-primary/10 text-foreground"
+                    : "border-border text-muted-foreground")
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
         {/* Missing-runtime warning (local model only) */}
         {runtime && runtime.kind === "local" && !runtime.present ? (
           <div className="space-y-1 rounded-[10px] border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px] text-foreground">
@@ -459,7 +509,7 @@ export function McpDiscoverPane({
         ) : null}
 
         {/* Env inputs */}
-        {envs.length > 0 ? (
+        {!hideTokenField && envs.length > 0 ? (
           <div className="space-y-2">
             <p className="text-[12px] font-medium text-foreground">
               {tx("configuration")}
@@ -469,8 +519,19 @@ export function McpDiscoverPane({
                 <label className="block text-[12px] text-muted-foreground">
                   {e.name}
                   {e.is_required ? " *" : ""}
-                  {e.description ? ` — ${e.description}` : ""}
+                  {e.description ? <> — {linkify(e.description)}</> : null}
                 </label>
+                {e.help_url ? (
+                  <a
+                    href={e.help_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[12px] text-primary underline"
+                  >
+                    {tx("getCredential")}
+                    <ExternalLinkIcon />
+                  </a>
+                ) : null}
                 <Input
                   type={e.is_secret ? "password" : "text"}
                   value={envValues[e.name] ?? ""}

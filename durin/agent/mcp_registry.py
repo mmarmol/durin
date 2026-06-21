@@ -32,6 +32,7 @@ class EnvVarSpec:
     is_required: bool = False
     is_secret: bool = False
     default: str | None = None
+    help_url: str | None = None
 
 
 @dataclass
