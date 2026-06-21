@@ -1153,6 +1153,29 @@ class AgentLoop:
             return True
         return False
 
+    def _audio_build_args(self) -> tuple[str, bool]:
+        """Resolve ``(audio_mode, supports_audio_input)`` for content building.
+
+        In transcription 'off' mode, audio reaches the model natively as an
+        ``input_audio`` block — but only if the active model declares audio
+        input support (capability-gated). Otherwise the audio is dropped with
+        a textual note (no silent loss). All other modes transcribe upstream,
+        so the builder never sees audio.
+        """
+        try:
+            tcfg = getattr(self.app_config, "transcription", None)
+            mode = getattr(tcfg, "mode", "auto") if tcfg else "auto"
+        except Exception:  # noqa: BLE001
+            mode = "auto"
+        if mode != "off":
+            return mode, False
+        try:
+            from durin.providers.capabilities import get_model_capabilities
+            caps = get_model_capabilities(self.model, self.provider)
+            return mode, bool(getattr(caps, "supports_audio_input", False))
+        except Exception:  # noqa: BLE001
+            return mode, False
+
     def _build_initial_messages(
         self,
         msg: InboundMessage,
@@ -1161,6 +1184,7 @@ class AgentLoop:
         pending_summary: str | None,
     ) -> list[dict[str, Any]]:
         """Build the initial message list for the LLM turn."""
+        audio_mode, supports_audio = self._audio_build_args()
         return self.context.build_messages(
             history=history,
             current_message=msg.content,
@@ -1173,6 +1197,8 @@ class AgentLoop:
             session_key=session.key,
             tools=self.tools.get_definitions() if self.tools else None,
             iteration=0,
+            audio_mode=audio_mode,
+            supports_audio_input=supports_audio,
         )
 
     async def _dispatch_command_inline(
@@ -1780,6 +1806,7 @@ class AgentLoop:
         history = session.get_history(**_hist_kwargs)
         current_role = "assistant" if is_subagent else "user"
 
+        audio_mode, supports_audio = self._audio_build_args()
         messages = self.context.build_messages(
             history=history,
             current_message="" if is_subagent else msg.content,
@@ -1792,6 +1819,8 @@ class AgentLoop:
             session_key=key,
             tools=self.tools.get_definitions() if self.tools else None,
             iteration=0,
+            audio_mode=audio_mode,
+            supports_audio_input=supports_audio,
         )
         t_wall = time.time()
         final_content, _, all_msgs, stop_reason, _, tool_events = await self._run_agent_loop(

@@ -213,6 +213,12 @@ export function useDurinStream(
   goalState: GoalStateWsPayload | undefined;
   send: (content: string, images?: SendImage[]) => void;
   stop: () => void;
+  /** Transcribe an audio attachment server-side (spec §5.4). Resolves with
+   *  the transcript text, or rejects on timeout/error. */
+  transcribeAudio: (
+    media: OutboundMedia[],
+    onStatus?: (phase: "downloading" | "loading" | "transcribing", bytes?: number, total?: number) => void,
+  ) => Promise<string>;
   setMessages: React.Dispatch<React.SetStateAction<UIMessage[]>>;
   /** Latest transport-level fault raised since the last ``dismissStreamError``.
    * ``null`` when there is nothing to show. */
@@ -591,6 +597,20 @@ export function useDurinStream(
     client.sendMessage(chatId, "/stop");
   }, [chatId, client]);
 
+  const transcribeAudio = useCallback(
+    (
+      media: OutboundMedia[],
+      onStatus?: (phase: "downloading" | "loading" | "transcribing", bytes?: number, total?: number) => void,
+    ) => {
+      // chat_id is passthrough/echo for transcription (the round-trip is keyed
+      // by request_id), so transcription must work before a chat exists —
+      // recording on the welcome screen inserts text, then sending creates the
+      // chat. Pass "" when there is no active chat.
+      return client.transcribeAudio(chatId ?? "", media, onStatus);
+    },
+    [chatId, client],
+  );
+
   return {
     messages,
     isStreaming,
@@ -598,6 +618,7 @@ export function useDurinStream(
     goalState,
     send,
     stop,
+    transcribeAudio,
     setMessages,
     streamError,
     dismissStreamError,

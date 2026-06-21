@@ -18,7 +18,11 @@ from durin.utils.helpers import safe_filename
 DEFAULT_MAX_BYTES = 10 * 1024 * 1024
 MAX_FILE_SIZE = DEFAULT_MAX_BYTES
 
-_DATA_URL_RE = re.compile(r"^data:([^;]+);base64,(.+)$", re.DOTALL)
+# Tolerate media-type parameters (e.g. ``;codecs=opus`` from MediaRecorder)
+# between the MIME and ``;base64``. Group 1 is the base ``type/subtype``;
+# params are matched and discarded. A stricter regex silently dropped recorded
+# ``audio/webm;codecs=opus`` uploads (the upload chip spun forever).
+_DATA_URL_RE = re.compile(r"^data:([^;,]+)(?:;[\w.+-]+=[^;,]*)*;base64,(.+)$", re.DOTALL)
 
 
 class FileSizeExceeded(Exception):  # noqa: N818 — deliberate event-style name, not *Error

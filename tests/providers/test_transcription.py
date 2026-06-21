@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import sys
+import types
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
-from durin.providers.transcription import GroqTranscriptionProvider, OpenAITranscriptionProvider
+# The [stt] extra (numpy/av) is omitted in CI; skip the whole module there.
+np = pytest.importorskip("numpy")
+
+from durin.providers.transcription import (  # noqa: E402
+    GroqTranscriptionProvider,
+    LocalSttProvider,
+    OpenAITranscriptionProvider,
+)
 
 
 @pytest.fixture
@@ -290,3 +299,85 @@ async def test_retries_on_every_advertised_transient_exception(
         result = await provider.transcribe(audio_file)
     assert result == "recovered"
     assert post.await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# LocalSttProvider — sherpa-onnx engine wiring (mocked; no model download)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_sherpa(monkeypatch):
+    calls = {}
+
+    class _Stream:
+        def __init__(self):
+            self.result = types.SimpleNamespace(text="hola mundo")
+
+        def accept_waveform(self, sr, samples):
+            calls["accepted"] = (sr, len(samples))
+
+    class _Rec:
+        def create_stream(self):
+            return _Stream()
+
+        def decode_stream(self, stream):
+            calls["decoded"] = True
+
+    class _OfflineRecognizer:
+        @staticmethod
+        def from_transducer(**kw):
+            calls["from_transducer"] = kw
+            return _Rec()
+
+        @staticmethod
+        def from_sense_voice(**kw):
+            calls["from_sense_voice"] = kw
+            return _Rec()
+
+    mod = types.ModuleType("sherpa_onnx")
+    mod.OfflineRecognizer = _OfflineRecognizer
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", mod)
+    monkeypatch.setattr(
+        "durin.providers.audio_decode.decode_to_mono_16k",
+        lambda p: (np.zeros(16000, dtype=np.float32), 16000),
+    )
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_parakeet_uses_transducer(tmp_path, fake_sherpa, monkeypatch):
+    monkeypatch.setattr(
+        "durin.providers.transcription.ensure_model",
+        lambda engine, cache_dir, on_status=None: {
+            "encoder": tmp_path / "e",
+            "decoder": tmp_path / "d",
+            "joiner": tmp_path / "j",
+            "tokens": tmp_path / "t",
+        },
+    )
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"x")
+    prov = LocalSttProvider(engine="parakeet", cache_dir=tmp_path)
+    text = await prov.transcribe(audio)
+    assert text == "hola mundo"
+    assert "from_transducer" in fake_sherpa
+    assert fake_sherpa["from_transducer"]["model_type"] == "nemo_transducer"
+
+
+@pytest.mark.asyncio
+async def test_sensevoice_uses_sense_voice(tmp_path, fake_sherpa, monkeypatch):
+    monkeypatch.setattr(
+        "durin.providers.transcription.ensure_model",
+        lambda engine, cache_dir, on_status=None: {
+            "model": tmp_path / "m",
+            "tokens": tmp_path / "t",
+        },
+    )
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"x")
+    prov = LocalSttProvider(engine="sensevoice", cache_dir=tmp_path)
+    text = await prov.transcribe(audio)
+    assert text == "hola mundo"
+    assert "from_sense_voice" in fake_sherpa
+    assert fake_sherpa["from_sense_voice"]["use_itn"] is True

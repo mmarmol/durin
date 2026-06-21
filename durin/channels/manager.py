@@ -97,6 +97,15 @@ class ChannelManager:
         # use (see dingtalk._background_tasks).
         self._background_tasks: set[asyncio.Task] = set()
 
+        # Shared transcription service (spec §8) — built once from the global
+        # config and injected into every channel so the backend transcribes
+        # audio before it reaches the agent loop. Channel-level
+        # ``transcription_*`` attributes remain as a legacy fallback for any
+        # channel constructed outside this manager.
+        from durin.service.transcription import TranscriptionService
+
+        self.transcription = TranscriptionService.from_config(config.transcription)
+
         self._init_channels()
 
     def _ensure_channel_extras(self) -> None:
@@ -161,6 +170,13 @@ class ChannelManager:
                 channel.transcription_api_key = transcription_key
                 channel.transcription_api_base = transcription_base
                 channel.transcription_language = transcription_language
+                # Inject the shared backend transcription service (spec §8).
+                # ``getattr`` so managers constructed via ``__new__`` in tests
+                # (which skip ``__init__``) don't crash here — they simply get
+                # no service and fall back to the legacy channel-level path.
+                shared_transcription = getattr(self, "transcription", None)
+                if shared_transcription is not None:
+                    channel.transcription = shared_transcription
                 channel.send_progress = self._resolve_bool_override(
                     section, "send_progress", self.config.channels.send_progress,
                 )

@@ -60,6 +60,7 @@
       "advanced": "All settings",
       "channels": "Channels",
       "memory": "Memory",
+      "transcription": "Audio transcription",
       "cron": "Cron",
       "logs": "日志"
     },
@@ -413,5 +414,12 @@
   },
   "memoryGraph": {
     "title": "Memory"
+  },
+  "audio": {
+    "downloadingModel": "Downloading model (one-time)…",
+    "loadingModel": "Loading model…",
+    "transcribing": "Transcribing…",
+    "transcriptPrefix": "transcript",
+    "processing": "处理中…"
   }
 }

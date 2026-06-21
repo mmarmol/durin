@@ -12,6 +12,7 @@ tool-call IDs.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 from dataclasses import dataclass
 from enum import Enum
@@ -141,6 +142,13 @@ _INITIAL_BACKOFF = 1.0
 _MAX_BACKOFF = 60.0
 _MAX_INITIAL_CONNECT_RETRIES = 3
 _MAX_RECONNECT_RETRIES = 5
+# Upper bound on the initial connect. A server can hang here indefinitely —
+# most often an OAuth server whose interactive-auth abort the MCP SDK swallows,
+# leaving the HTTP request pending forever so _ready is never set. Since
+# connect_mcp_servers connects sequentially and run() awaits _connect_mcp before
+# its consume loop, an unbounded wait lets one un-authed server brick every
+# turn. Generous enough for legitimate cold starts (stdio npx, SSE handshakes).
+_CONNECT_TIMEOUT = 30.0
 _KEEPALIVE_INTERVAL = 180.0
 _KEEPALIVE_TIMEOUT = 30.0
 
@@ -419,7 +427,22 @@ class MCPServerConnection:
 
     async def start(self) -> bool:
         self._task = asyncio.ensure_future(self.run())
-        await self._ready.wait()
+        try:
+            await asyncio.wait_for(self._ready.wait(), timeout=_CONNECT_TIMEOUT)
+        except asyncio.TimeoutError:
+            # The serve loop never reached a terminal state (success or
+            # failure) within the budget — it is stuck inside the transport
+            # connect (see _CONNECT_TIMEOUT). Cancel the hung task and report a
+            # normal per-server failure so connect_mcp_servers moves on and the
+            # agent loop can start consuming messages.
+            self._error = self._error or TimeoutError(
+                f"connect timed out after {_CONNECT_TIMEOUT:.0f}s "
+                f"(server may need interactive auth: durin mcp login {self.name})"
+            )
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._task
+            return False
         return self._error is None and self.session is not None
 
     async def run(self) -> None:

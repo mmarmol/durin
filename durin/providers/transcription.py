@@ -1,4 +1,4 @@
-"""Voice transcription providers (Groq and OpenAI Whisper)."""
+"""Voice transcription providers (Groq, OpenAI Whisper, and local sherpa-onnx)."""
 
 import asyncio
 import os
@@ -6,6 +6,8 @@ from pathlib import Path
 
 import httpx
 from loguru import logger
+
+from durin.providers.stt_models import ENGINES, _default_stt_cache, ensure_model
 
 # Up to 3 retries (4 attempts total) with exponential backoff on transient
 # failures. Whisper endpoints occasionally return 502/503 under load, and
@@ -134,7 +136,7 @@ class OpenAITranscriptionProvider:
         )
         self.language = language or None
 
-    async def transcribe(self, file_path: str | Path) -> str:
+    async def transcribe(self, file_path: str | Path, on_status=None) -> str:
         if not self.api_key:
             logger.warning("OpenAI API key not configured for transcription")
             return ""
@@ -173,7 +175,7 @@ class GroqTranscriptionProvider:
         )
         self.language = language or None
 
-    async def transcribe(self, file_path: str | Path) -> str:
+    async def transcribe(self, file_path: str | Path, on_status=None) -> str:
         """
         Transcribe an audio file using Groq.
 
@@ -200,3 +202,127 @@ class GroqTranscriptionProvider:
             provider_label="Groq",
             language=self.language,
         )
+
+
+class TranscriptionProvider:
+    """Structural interface for transcription backends (Protocol-style).
+
+    Existing providers (OpenAI/Groq/LocalSttProvider) conform via duck typing —
+    this base exists for ``isinstance`` checks and documentation. Subclasses
+    implement ``async def transcribe(file_path) -> str``.
+    """
+
+    async def transcribe(self, file_path: str | Path, on_status=None) -> str:  # pragma: no cover
+        raise NotImplementedError
+
+
+class LocalSttProvider(TranscriptionProvider):
+    """In-process ASR via sherpa-onnx. Engine must be one of {parakeet, sensevoice}.
+
+    Lazy: importing this module never imports sherpa_onnx. The model is
+    downloaded on first use and the recognizer built once (singleton). The
+    synchronous decode runs in a worker thread.
+    """
+
+    def __init__(self, engine="parakeet", model_dir=None, num_threads=None,
+                 language=None, cache_dir=None, on_status=None):
+        if engine not in ENGINES:
+            raise ValueError(f"Unknown STT engine: {engine!r}")
+        self.engine = engine
+        # model_dir, when set, must point directly to the directory containing
+        # the engine's model files (e.g. encoder.int8.onnx, tokens.txt) — the
+        # extracted tarball's inner directory, not its parent.
+        self.model_dir = Path(model_dir) if model_dir else None
+        self.num_threads = num_threads or 2
+        self.language = language or ""
+        self.cache_dir = Path(cache_dir) if cache_dir else _default_stt_cache()
+        self.on_status = on_status
+        self._rec = None
+        self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _emit(cb, phase, done=0, total=0):
+        if cb:
+            try:
+                cb(phase, done, total)
+            except Exception:
+                logger.debug("on_status callback raised; ignoring")
+
+    def _load(self, cb):
+        if self._rec is not None:
+            return self._rec
+        try:
+            import sherpa_onnx
+        except ImportError as e:
+            raise RuntimeError(
+                "sherpa-onnx is not installed. Install the [stt] extra: "
+                "pip install durin-agent[stt]"
+            ) from e
+        if self.model_dir is not None:
+            files = {k: self.model_dir / fname
+                     for k, fname in ENGINES[self.engine].files.items()}
+        else:
+            files = ensure_model(
+                self.engine, self.cache_dir,
+                on_status=lambda _phase, d, t: self._emit(cb, "downloading", d, t),
+            )
+        self._emit(cb, "loading")
+        if self.engine == "parakeet":
+            self._rec = sherpa_onnx.OfflineRecognizer.from_transducer(
+                encoder=str(files["encoder"]),
+                decoder=str(files["decoder"]),
+                joiner=str(files["joiner"]),
+                tokens=str(files["tokens"]),
+                num_threads=self.num_threads,
+                model_type="nemo_transducer",
+            )
+        else:  # sensevoice
+            self._rec = sherpa_onnx.OfflineRecognizer.from_sense_voice(
+                model=str(files["model"]),
+                tokens=str(files["tokens"]),
+                num_threads=self.num_threads,
+                language=self.language,
+                use_itn=True,
+            )
+        return self._rec
+
+    @staticmethod
+    def _decode_sync(rec, samples, sample_rate):
+        stream = rec.create_stream()
+        stream.accept_waveform(sample_rate, samples)
+        rec.decode_stream(stream)
+        return (stream.result.text or "").strip()
+
+    async def _ensure_loaded(self, cb):
+        if self._rec is not None:
+            return self._rec
+        async with self._lock:
+            if self._rec is None:
+                await asyncio.to_thread(self._load, cb)
+        return self._rec
+
+    async def transcribe(self, file_path, on_status=None) -> str:
+        cb = on_status if on_status is not None else self.on_status
+        path = Path(file_path)
+        if not path.exists():
+            logger.error("Audio file not found: {}", file_path)
+            return ""
+        try:
+            rec = await self._ensure_loaded(cb)
+        except Exception as e:
+            logger.exception("LocalSttProvider load error: {}", e)
+            return ""
+        try:
+            # Lazy import: numpy/av (the [stt] extra) is only needed by the
+            # local engine. Keeping it off module scope lets the cloud
+            # providers (and anything importing this module) load without [stt].
+            from durin.providers.audio_decode import decode_to_mono_16k
+
+            samples, sr = decode_to_mono_16k(path)
+            if samples.size == 0:
+                return ""
+            self._emit(cb, "transcribing")
+            return await asyncio.to_thread(self._decode_sync, rec, samples, sr)
+        except Exception as e:
+            logger.exception("LocalSttProvider transcribe error: {}", e)
+            return ""

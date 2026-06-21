@@ -72,6 +72,7 @@
       "web-search": "Web search",
       "channels": "Channels",
       "memory": "Memory",
+      "transcription": "Audio transcription",
       "skills-security": "Skills security",
       "cron": "Cron",
       "logs": "Logs",
@@ -1105,5 +1106,12 @@
   },
   "list": {
     "scrollToBottom": "Scroll to bottom"
+  },
+  "audio": {
+    "downloadingModel": "Downloading model (one-time)…",
+    "loadingModel": "Loading model…",
+    "transcribing": "Transcribing…",
+    "transcriptPrefix": "transcript",
+    "processing": "Processing…"
   }
 }

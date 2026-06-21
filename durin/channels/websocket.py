@@ -243,6 +243,8 @@ _MAX_IMAGES_PER_MESSAGE = 4
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 _MAX_VIDEOS_PER_MESSAGE = 1
 _MAX_VIDEO_BYTES = 20 * 1024 * 1024
+_MAX_AUDIO_BYTES = 25 * 1024 * 1024
+_MAX_AUDIO_PER_MESSAGE = 1
 
 # Image MIME whitelist — matches the Composer's ``accept`` list. SVG is
 # explicitly excluded to avoid the XSS surface inside embedded scripts.
@@ -259,9 +261,27 @@ _VIDEO_MIME_ALLOWED: frozenset[str] = frozenset({
     "video/quicktime",
 })
 
-_UPLOAD_MIME_ALLOWED: frozenset[str] = _IMAGE_MIME_ALLOWED | _VIDEO_MIME_ALLOWED
+# Audio MIME whitelist — accepted as attachments and transcribed server-side.
+# Matches the webui composer ``useAttachedAudio`` whitelist (spec §5.1).
+_AUDIO_MIME_ALLOWED: frozenset[str] = frozenset({
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/opus",
+    "audio/wav",
+    "audio/webm",
+    "audio/x-m4a",
+    "audio/aac",
+    "audio/flac",
+})
 
-_DATA_URL_MIME_RE = re.compile(r"^data:([^;]+);base64,", re.DOTALL)
+_UPLOAD_MIME_ALLOWED: frozenset[str] = _IMAGE_MIME_ALLOWED | _VIDEO_MIME_ALLOWED | _AUDIO_MIME_ALLOWED
+
+# Tolerate media-type parameters between the MIME and the ``;base64`` marker —
+# browser ``MediaRecorder`` emits ``data:audio/webm;codecs=opus;base64,...``.
+# Capture only the base ``type/subtype`` (group 1); params like ``;codecs=opus``
+# are matched and discarded. Without this, recorded audio was rejected as
+# "decode" and the upload silently failed.
+_DATA_URL_MIME_RE = re.compile(r"^data:([^;,]+)(?:;[\w.+-]+=[^;,]*)*;base64,", re.DOTALL)
 
 
 def _extract_data_url_mime(url: str) -> str | None:
@@ -325,6 +345,14 @@ _MEDIA_ALLOWED_MIMES: frozenset[str] = frozenset({
     "video/mp4",
     "video/webm",
     "video/quicktime",
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/opus",
+    "audio/wav",
+    "audio/webm",
+    "audio/x-m4a",
+    "audio/aac",
+    "audio/flac",
 })
 
 
@@ -996,16 +1024,21 @@ class WebSocketChannel(BaseChannel):
         """
         image_count = 0
         video_count = 0
+        audio_count = 0
         for item in media:
             mime = _extract_data_url_mime(item.get("data_url", "")) if isinstance(item, dict) else None
             if mime in _VIDEO_MIME_ALLOWED:
                 video_count += 1
+            elif mime in _AUDIO_MIME_ALLOWED:
+                audio_count += 1
             elif mime in _IMAGE_MIME_ALLOWED:
                 image_count += 1
         if image_count > _MAX_IMAGES_PER_MESSAGE:
             return [], "too_many_images"
         if video_count > _MAX_VIDEOS_PER_MESSAGE:
             return [], "too_many_videos"
+        if audio_count > _MAX_AUDIO_PER_MESSAGE:
+            return [], "too_many_audios"
 
         media_dir = get_media_dir("websocket")
         paths: list[str] = []
@@ -1032,7 +1065,13 @@ class WebSocketChannel(BaseChannel):
             if mime not in _UPLOAD_MIME_ALLOWED:
                 return _abort("mime")
             is_video = mime in _VIDEO_MIME_ALLOWED
-            max_bytes = _MAX_VIDEO_BYTES if is_video else _MAX_IMAGE_BYTES
+            is_audio = mime in _AUDIO_MIME_ALLOWED
+            if is_video:
+                max_bytes = _MAX_VIDEO_BYTES
+            elif is_audio:
+                max_bytes = _MAX_AUDIO_BYTES
+            else:
+                max_bytes = _MAX_IMAGE_BYTES
             try:
                 saved = save_base64_data_url(
                     data_url, media_dir, max_bytes=max_bytes,
@@ -1116,6 +1155,83 @@ class WebSocketChannel(BaseChannel):
                 metadata=metadata,
                 is_dm=False,
             )
+            return
+        if t == "audio_transcribe":
+            # Spec §5.4: store the audio, transcribe server-side, reply with
+            # the transcript so the composer can insert editable text before
+            # the message is sent. Keeps the existing WS pattern; no polling.
+            cid = envelope.get("chat_id")
+            request_id = envelope.get("request_id")
+            raw_media = envelope.get("media")
+            # Rejections MUST be sent as ``audio_transcript`` keyed by
+            # ``request_id`` — the composer correlates transcriptions by
+            # request_id, so a bare ``error`` event leaves the chip spinning
+            # forever instead of surfacing the failure.
+            if not isinstance(raw_media, list) or not raw_media:
+                await self._send_event(
+                    connection, "audio_transcript",
+                    chat_id=cid, request_id=request_id, name=None,
+                    transcript="", error="missing_media",
+                )
+                return
+            paths, reason = self._save_envelope_media(raw_media)
+            if reason is not None:
+                first = raw_media[0] if isinstance(raw_media[0], dict) else {}
+                await self._send_event(
+                    connection, "audio_transcript",
+                    chat_id=cid, request_id=request_id,
+                    name=first.get("name"),
+                    transcript="", error=reason,
+                )
+                return
+            service = getattr(self, "transcription", None)
+            for item, path in zip(raw_media, paths):
+                name = item.get("name") or Path(path).name if isinstance(item, dict) else Path(path).name
+                if service is None:
+                    await self._send_event(
+                        connection, "audio_transcript",
+                        chat_id=cid, request_id=request_id, name=name,
+                        transcript="", error="disabled",
+                    )
+                    continue
+                async def _emit_status(phase, done=0, total=0, *, _name=name):
+                    try:
+                        await self._send_event(
+                            connection, "audio_transcript",
+                            chat_id=cid, request_id=request_id, name=_name,
+                            transcript="", status=phase,
+                            **({"bytes": done, "total": total} if total else {}),
+                        )
+                    except Exception:
+                        pass
+
+                loop = asyncio.get_running_loop()
+
+                def on_status(phase, done=0, total=0):
+                    # provider may call from a worker thread; hop back to the loop
+                    asyncio.run_coroutine_threadsafe(
+                        _emit_status(phase, done, total), loop
+                    )
+
+                try:
+                    result = await service.transcribe_and_cache(path, on_status=on_status)
+                    await self._send_event(
+                        connection, "audio_transcript",
+                        chat_id=cid, request_id=request_id, name=name,
+                        transcript=result.text,
+                    )
+                except Exception:
+                    self.logger.exception(
+                        "audio_transcribe failed for {}", path
+                    )
+                    try:
+                        await self._send_event(
+                            connection, "audio_transcript",
+                            chat_id=cid, request_id=request_id, name=name,
+                            transcript="", error="failed",
+                        )
+                    except Exception:
+                        pass
             return
         if t == "secret_store":
             await self._handle_secret_store_envelope(connection, client_id, envelope)

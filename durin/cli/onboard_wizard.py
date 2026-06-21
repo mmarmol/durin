@@ -284,6 +284,12 @@ def _reconcile_extras_from_config(config: Config, extras: set[str]) -> None:
         extras.add("discord")
     if config.agents.defaults.provider in ("openai_codex", "github_copilot"):
         extras.add("oauth")
+    # Transcription: local provider needs [stt]; [voice] is opt-in via the
+    # wizard submenu (record via mic), so it's only added on explicit request.
+    transcription = getattr(config, "transcription", None)
+    if transcription is not None and getattr(transcription, "enabled", True) and \
+            getattr(transcription, "provider", "local") == "local":
+        extras.add("stt")
 
 
 def run_wizard(initial_config: Config, *, q: Any | None = None) -> WizardResult:
@@ -630,6 +636,7 @@ _HUB_ROWS: tuple[tuple[str, str], ...] = (
     ("vision-audio", "Vision / audio"),
     ("memory", "Vector memory"),
     ("web", "Web search"),
+    ("transcription", "Audio transcription"),
     ("dashboard", "Web dashboard"),
     ("channels", "Chat channels"),
     ("workspace", "Workspace"),
@@ -669,6 +676,10 @@ def _hub_state(key: str, config: Config) -> str:
             backend = getattr(config.tools.web.search, "provider", "") or "duckduckgo"
             return f"on ({backend})"
         return "off"
+    if key == "transcription":
+        if not getattr(config.transcription, "enabled", True):
+            return "off"
+        return f"on ({config.transcription.provider})"
     if key == "dashboard":
         return "on" if getattr(config.gateway, "webui_enabled", False) else "off"
     if key == "channels":
@@ -728,6 +739,8 @@ def _open_section(
         _configure_memory(config, extras, q, summary)
     elif key == "web":
         _configure_web(config, extras, q, summary)
+    elif key == "transcription":
+        _configure_transcription(config, extras, q, summary)
     elif key == "dashboard":
         _configure_dashboard(config, q, summary)
     elif key == "channels":
@@ -1133,6 +1146,87 @@ def _configure_web(
                 )
     summary.append(f"Web search: {backend_id}")
     return True
+
+
+def _configure_transcription(
+    config: Config, extras: set[str], q: Any, summary: list[str],
+) -> None:
+    """Audio transcription submenu: toggle, choose provider, opt into mic
+    recording ([voice] extra).
+
+    Re-entrant. Local provider adds ``[stt]``; enabling mic recording adds
+    ``[voice]``. Cloud/HTTP providers need no local extra (just an API key
+    or base_url set later in config).
+    """
+    while True:
+        t = config.transcription
+        on = getattr(t, "enabled", True)
+        provider = getattr(t, "provider", "local")
+        has_voice = "voice" in extras
+        toggle = "Disable transcription" if on else "Enable transcription"
+        mic_label = (
+            f"TUI mic recording (/voice) — {'ON' if has_voice else 'off'}"
+        )
+        pick = q.select(
+            f"Audio transcription — {'ON' if on else 'off'}  (provider: {provider}):",
+            choices=[
+                toggle,
+                f"Provider: {provider}",
+                mic_label,
+                _BACK_CHOICE,
+            ],
+        ).ask()
+        if pick is None or pick == _BACK_CHOICE:
+            return
+        if pick == toggle:
+            config.transcription.enabled = not on
+            continue
+        if pick.startswith("Provider:"):
+            choice = q.select(
+                "Choose a transcription provider:",
+                choices=[
+                    "Local (offline, fast — [stt] extra)",
+                    "Groq (cloud, fast, free tier)",
+                    "OpenAI (cloud, whisper-1)",
+                    "HTTP server (whisper.cpp / mlx-qwen3-asr / vLLM)",
+                    _BACK_CHOICE,
+                ],
+            ).ask()
+            if choice is None or choice == _BACK_CHOICE:
+                continue
+            if choice.startswith("Local"):
+                engine = q.select(
+                    "Choose a local STT engine:",
+                    choices=[
+                        "Parakeet v3 — European langs incl. Spanish/English (default)",
+                        "SenseVoice — Chinese / Japanese / Korean / Cantonese",
+                        _BACK_CHOICE,
+                    ],
+                ).ask()
+                if engine is None or engine == _BACK_CHOICE:
+                    continue
+                config.transcription.provider = "local"
+                extras.add("stt")
+                config.transcription.local.engine = (
+                    "sensevoice" if engine.startswith("SenseVoice") else "parakeet"
+                )
+            elif choice.startswith("Groq"):
+                config.transcription.provider = "groq"
+                extras.discard("stt")
+            elif choice.startswith("OpenAI"):
+                config.transcription.provider = "openai"
+                extras.discard("stt")
+            elif choice.startswith("HTTP"):
+                config.transcription.provider = "http"
+                extras.discard("stt")
+            summary.append(f"Transcription provider: {config.transcription.provider}")
+            continue
+        if pick == mic_label:
+            if has_voice:
+                extras.discard("voice")
+            else:
+                extras.add("voice")
+            continue
 
 
 def _configure_dashboard(config: Config, q: Any, summary: list[str]) -> bool:
