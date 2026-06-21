@@ -257,6 +257,37 @@ async def test_initial_auth_failure_does_not_retry(monkeypatch) -> None:
     assert attempts["n"] == 1  # fail-fast, no backoff retries
 
 
+async def test_initial_connect_times_out_when_serve_hangs(monkeypatch) -> None:
+    """A server whose connect never completes must not block start() forever.
+
+    The real-world trigger is an OAuth server with an expired token: the MCP
+    SDK's auth flow swallows the headless-abort exception and leaves the HTTP
+    request pending, so neither success nor failure is ever signalled and
+    ``_ready`` is never set. Because connect_mcp_servers connects sequentially
+    and ``run()`` awaits ``_connect_mcp`` *before* its consume loop, one such
+    server bricks every turn. A bounded connect timeout converts the hang into
+    an ordinary per-server failure so the agent loop can proceed.
+    """
+    import durin.agent.tools.mcp_connection as mc
+
+    monkeypatch.setattr(mc, "_CONNECT_TIMEOUT", 0.3, raising=False)
+    cfg = MCPServerConfig(command="x")
+    conn = mc.MCPServerConnection("hangs", cfg, ToolRegistry())
+
+    async def _hang(_self):
+        await asyncio.sleep(3600)  # never returns; never sets _ready
+
+    conn._open_transport_streams = _hang.__get__(conn, mc.MCPServerConnection)
+
+    # On unfixed code start() awaits _ready forever; the outer guard fires and
+    # fails the test. With the fix start() returns False well within the guard.
+    ok = await asyncio.wait_for(conn.start(), timeout=2.0)
+    assert ok is False
+    assert conn._error is not None
+    assert "tim" in str(conn._error).lower()  # "timed out"
+    await conn.aclose()
+
+
 async def test_call_recovers_after_session_expiry(live_mcp) -> None:
     import durin.agent.tools.mcp_connection as mc
 
