@@ -524,6 +524,8 @@
         "installFailed": "Falló la instalación.",
         "preferRemote": "Hosteado (sin instalación)",
         "preferLocal": "Local (corre en tu máquina)",
+        "authOauth": "OAuth (recomendado)",
+        "authToken": "Token manual",
         "hostedOnly": "Hosteado — sin instalación",
         "localOnly": "Local — corre en tu máquina",
         "badgeRemote": "sin instalación",
