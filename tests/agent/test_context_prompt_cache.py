@@ -53,7 +53,7 @@ def test_system_prompt_reflects_current_dream_memory_contract(tmp_path) -> None:
 
     prompt = builder.build_system_prompt()
 
-    # New memory model (§8a): entity pages + references, authored via
+    # New memory model: entity pages + references, authored via
     # memory_upsert_entity; SOUL.md is the user's control point.
     assert "memory_upsert_entity" in prompt
     assert "references" in prompt.lower()

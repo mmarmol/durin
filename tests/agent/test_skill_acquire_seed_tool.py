@@ -1,4 +1,4 @@
-"""§6.C — the skill_acquire_seed tool gates ONE ref via acquire_safe_seed."""
+"""The skill_acquire_seed tool gates ONE ref via acquire_safe_seed."""
 import asyncio
 
 from durin.agent.tools.skill_acquire_seed import SkillAcquireSeedTool

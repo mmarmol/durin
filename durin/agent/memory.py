@@ -508,12 +508,12 @@ class Consolidator:
         self.max_completion_tokens = max_completion_tokens
         # ``consolidation_ratio`` now means: after a compaction round, how
         # much of the *trigger threshold* should remain (default 0.5 → leave
-        # half of the trigger). Pre-emptive compaction (Tier 2 A1) raised the
-        # trigger from "near the context wall" to a much earlier point, so
+        # half of the trigger). Pre-emptive compaction raised the trigger from
+        # "near the context wall" to a much earlier point, so
         # keeping the old "fraction of budget" semantic would compact almost
         # nothing per round.
         self.consolidation_ratio = consolidation_ratio
-        # Pre-emptive compaction trigger ratio (OpenClaw-inspired Tier 2 A1).
+        # Pre-emptive compaction trigger ratio.
         # Fraction of ``context_window_tokens`` above which a turn forces
         # consolidation BEFORE the LLM call (instead of waiting for a 400
         # from context-overflow). Per-model: a 128K-window model wants ~0.5;
@@ -538,7 +538,7 @@ class Consolidator:
         # so all sessions through one Consolidator share the same window
         # size config without each AgentRunSpec carrying its own.
         self.post_compaction_guard = PostCompactionLoopGuard()
-        # Doc 25 §2.A.1 β.2: optional callback fired once per
+        # Optional callback fired once per
         # ``maybe_consolidate_by_tokens`` call that produced at least
         # one summary. Wiring layer (``cli/commands.py``) sets this to
         # a thunk that dispatches a background reactive dream (extract) pass so
@@ -795,7 +795,7 @@ class Consolidator:
     @property
     def _preemptive_trigger_tokens(self) -> int:
         """Token count at which a turn forces consolidation before the
-        LLM call (OpenClaw-inspired Tier 2 A1).
+        LLM call.
 
         Bounded above by the legacy ``_input_token_budget`` so a misconfigured
         ratio (e.g. 0.99) can't disable the hard ceiling — context overflow
@@ -1102,7 +1102,7 @@ class Consolidator:
             # ``(name, args, result)`` triples trip the guard.
             if last_summary:
                 self.post_compaction_guard.arm(session.key)
-                # Doc 25 §2.A.1 β.2: notify the post-compaction hook so
+                # Notify the post-compaction hook so
                 # the entity-centric dream can pick up freshly-archived
                 # episodic context while the signal is hot. Best-effort:
                 # callback failures must NOT break consolidation —

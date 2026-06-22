@@ -438,7 +438,7 @@ class TestReadSuggestionOnMiss:
     """ReadFileTool should suggest similar filenames when the path is not found.
 
     Mirrors the helper already used by EditFileTool, lifted to _FsTool so both
-    tools share the affordance (T3 from docs/07_external_agents_review.md).
+    tools share the affordance.
     """
 
     @pytest.fixture

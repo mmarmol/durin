@@ -93,9 +93,8 @@ voice = [
 ]
 memory = [
     # Pure-Python ONNX embedding runtime; auto-downloads model files on
-    # first use. Required for vector retrieval (Phase 2). Default model
-    # is paraphrase-multilingual-MiniLM-L12-v2 (~220 MB) — see
-    # docs/08_memory_phase2_proposal.md §0d.2.
+    # first use. Default model is intfloat/multilingual-e5-small (~450 MB
+    # fp32). Required for vector retrieval.
     #
     # Pinned narrowly: fastembed retires/renames models between minor
     # releases (e5-small was dropped in 0.6, MiniLM-L12 changed pooling
@@ -104,7 +103,7 @@ memory = [
     # (see tests/memory/test_embedding_catalog.py).
     "fastembed>=0.7,<0.9",
     # Embedded vector DB for the memory index. Single-file storage, no
-    # daemon, optional cloud backends. Phase 2.2.
+    # daemon, optional cloud backends.
     "lancedb>=0.30.0,<1.0.0",
 ]
 cross-encoder = [

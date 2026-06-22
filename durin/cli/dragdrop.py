@@ -153,7 +153,7 @@ async def transcribe_dragged_audio(
     service: object | None,
     mode: str = "auto",
 ) -> tuple[str, list[str]]:
-    """Transcribe dragged-in audio before it reaches the agent (spec §6.1).
+    """Transcribe dragged-in audio before it reaches the agent.
 
     Splits ``media`` into non-audio (kept) and audio paths. For each audio
     path, when ``mode != "off"`` and a ``service`` is provided, transcribe it

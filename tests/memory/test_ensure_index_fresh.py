@@ -1,7 +1,6 @@
-"""Auto-rebuild when `meta.json::schema_version` differs from code (P2.2).
+"""Auto-rebuild when `meta.json::schema_version` differs from code.
 
-Per `docs/architecture/memory/02_indexing.md` §7.2 + doc 10 P2.2: the indexer must
-detect a stale schema on startup and trigger a rebuild. The hook
+The indexer must detect a stale schema on startup and trigger a rebuild. The hook
 lives in :func:`durin.memory.indexer.ensure_index_fresh`. Idempotent
 per workspace within a single process.
 """

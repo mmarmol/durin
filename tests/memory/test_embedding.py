@@ -142,7 +142,8 @@ def test_default_model_is_multilingual_e5_small() -> None:
     """Default since 2026-05-30: multilingual-e5-small (MIT, 117M
     params, retrieval-tuned). Replaced MiniLM-L12 — same backbone
     architecture but fine-tuned with contrastive retrieval objective.
-    See doc 02 §indexing."""
+    Replaced MiniLM-L12 — same backbone architecture but fine-tuned with
+    contrastive retrieval objective."""
     with _inject_fake_fastembed():
         provider = FastembedProvider()
     assert provider.model_name == "intfloat/multilingual-e5-small"

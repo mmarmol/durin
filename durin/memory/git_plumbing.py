@@ -1,7 +1,7 @@
 """dulwich plumbing helpers for the optimistic memory writer.
 
 Read/write git OBJECTS directly (Blob/Tree/Commit) without touching the
-working tree, so concurrent writers never race on files (design §2.5). The
+working tree, so concurrent writers never race on files. The
 ref is moved by the caller via ``refs.set_if_equals`` (CAS).
 
 Verified against dulwich 0.25.2: ``refs.follow(b"HEAD")`` returns
@@ -126,7 +126,7 @@ def build_commit_with_changes(
     ``changes`` maps rel_path → bytes (create/update) or None (delete). Returns
     the new commit sha. No ref move, no working-tree mutation. Used for the
     entity merge (canonical updated + absorbed deleted + archive created in ONE
-    commit), so the refine never touches the working tree (design §2.5).
+    commit), so the refine never touches the working tree.
     """
     repo = Repo(str(root))
     try:

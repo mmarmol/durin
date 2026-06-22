@@ -1,18 +1,18 @@
 """Memory subsystem directory layout (workspace-scoped).
 
-The layout matches `docs/08_memory_phase2_proposal.md` §0c.2. All
+All
 memory artifacts live inside the agent workspace so different
 workspaces have independent memory:
 
     <workspace>/
     ├── sessions/                  (existing — managed by SessionManager)
-    ├── ingested/<id>/             (Phase 1.5)
+    ├── ingested/<id>/
     ├── memory/
     │   ├── stable/<id>.md         (class A + C)
     │   ├── episodic/<id>.md       (class B)
     │   ├── corpus/<id>.md         (class D)
     │   └── pending/<id>.md        (class F)
-    └── dream/cursor.json          (Phase 3)
+    └── dream/cursor.json
 """
 
 from __future__ import annotations
@@ -132,7 +132,7 @@ def walk_memory(
 
     Excludes by default:
     - `memory/archive/**` — consolidated content; reachable only via
-      explicit recovery surface (`01_data_and_entities.md` §3.6).
+      explicit recovery surface.
     - `memory/pending/**` — intake buffer; not user-visible yet.
 
     Set ``include_archive=True`` to include archived files (for
@@ -151,7 +151,7 @@ def walk_memory(
             continue
         if parts and parts[0] == "archive" and not include_archive:
             continue
-        # P9 Cambio 5 (2026-05-30): files / folders whose name starts
+        # Files / folders whose name starts
         # with `_` are skipped — reserved for navigational artefacts
         # (per-class `_INDEX.md`, future `_README.md` style helpers)
         # that exist for human consumption but should NOT be indexed

@@ -1,4 +1,4 @@
-"""§6.C — acquire_safe_seed gates ONE ref; only a risk-free allowlisted ref seeds."""
+"""acquire_safe_seed gates ONE ref; only a risk-free allowlisted ref seeds."""
 import asyncio
 from pathlib import Path
 

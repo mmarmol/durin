@@ -53,7 +53,7 @@ class BaseChannel(ABC):
         """Transcribe an audio file.
 
         Delegates to the injected ``TranscriptionService`` when present
-        (spec §7). Falls back to constructing a Groq/OpenAI provider from the
+        Falls back to constructing a Groq/OpenAI provider from the
         channel-level config for backward compatibility (legacy channels that
         have not been wired with a service yet).
         """

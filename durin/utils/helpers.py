@@ -403,7 +403,7 @@ def maybe_persist_tool_result(
     path = bucket / f"{safe_filename(tool_call_id)}.{suffix}"
     # Always write unconditionally: the current call's content is authoritative.
     # Skipping when the file exists leaves stale bytes when tool_call_id is reused
-    # (e.g. the positional tool_0 fallback in runner.py). See docs/architecture/concurrency.md.
+    # (e.g. the positional tool_0 fallback in runner.py).
     if suffix == "json" and isinstance(content, list):
         _write_text_atomic(path, json.dumps(content, ensure_ascii=False, indent=2))
     else:

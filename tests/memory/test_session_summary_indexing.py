@@ -1,20 +1,16 @@
-"""Session summaries as markdown projections (audit A10).
-
-Per doc 02 §3.3 and doc 11 audit A10:
+"""Session summaries as markdown projections.
 
 - The summary lives at `memory/session_summary/<sanitized_key>.md`
-  (single source of truth — A4 principle).
+  (single source of truth).
 - `_persist_last_summary` no longer carries the text in
-  `session.metadata["_last_summary"]`. Pre-A10 sessions are
-  migrated on the next compaction (the field is popped + session
-  saved).
+  `session.metadata["_last_summary"]`. Pre-existing sessions are
+  migrated on the next compaction (the field is popped + session saved).
 - Walker picks up the new directory; indexer assigns
   `class_name = "session_summary"`.
 
-Per [[feedback-sync-tests-exercise-behavior]]: these tests
-exercise the BEHAVIOUR — write the markdown via the store, read it
-back, verify the entry shape is index-ready, and check the
-legacy migration path.
+Tests exercise the BEHAVIOUR — write the markdown via the store, read it
+back, verify the entry shape is index-ready, and check the legacy migration
+path.
 """
 
 from __future__ import annotations

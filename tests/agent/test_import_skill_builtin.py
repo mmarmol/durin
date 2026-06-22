@@ -1,6 +1,6 @@
-"""The import-skill orchestrator builtin (§6.B). It drives the skill_import tool
+"""The import-skill orchestrator builtin. It drives the skill_import tool
 through resolve -> fetch -> gate -> install. As a shipped builtin it must itself
-pass the §8.C scan (a skill that talks ABOUT prompt-injection must not trip the
+pass the security scan (a skill that talks ABOUT prompt-injection must not trip the
 injection rules)."""
 from durin.agent.skills import BUILTIN_SKILLS_DIR
 from durin.agent.skills_import import validate_skill

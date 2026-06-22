@@ -12,7 +12,6 @@ Once stored, a secret whose ``scope`` includes ``exec`` is injected
 into the shell subprocess environment (see ``ExecTool._build_env``), so
 the agent uses it as ``$NAME`` without ever seeing the value.
 
-See ``docs/11_secrets_design.md``.
 """
 
 from __future__ import annotations

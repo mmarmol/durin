@@ -197,8 +197,8 @@ def test_env_override_garbage_falls_back(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Stats out-param (audit P1.2b: lets the runner emit telemetry without
-# re-walking the list to count what changed).
+# Stats out-param: lets the runner emit telemetry without
+# re-walking the list to count what changed.
 # ---------------------------------------------------------------------------
 
 

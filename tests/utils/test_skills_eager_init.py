@@ -8,7 +8,7 @@ def test_workspace_setup_inits_skills_store(tmp_path):
 
 
 def test_workspace_setup_does_not_create_legacy_memory_md(tmp_path):
-    # MEMORY.md is superseded by the entity-page model (design §2.10 / §8e):
+    # MEMORY.md is superseded by the entity-page model:
     # nothing injects or writes it, so the scaffold must not create it.
     sync_workspace_templates(tmp_path, silent=True)
     assert not (tmp_path / "memory" / "MEMORY.md").exists()

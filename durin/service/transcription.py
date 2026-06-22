@@ -1,4 +1,4 @@
-"""TranscriptionService — backend transcription orchestration (spec §4).
+"""TranscriptionService — backend transcription orchestration.
 
 Resolves a :class:`~durin.providers.transcription.TranscriptionProvider`
 from config, enforces the configured mode (auto/preview/off), and caches
@@ -54,7 +54,7 @@ class TranscriptionService:
 
     @classmethod
     def from_config(cls, config: Any) -> "TranscriptionService":
-        """Build the service from a :class:`TranscriptionConfig` (spec §4.4)."""
+        """Build the service from a :class:`TranscriptionConfig`."""
         mode = config.mode
         enabled = config.enabled
 

@@ -41,7 +41,7 @@ class ReactiveDreamGate:
     event (same gateway process). Without a guard, a burst of session closes
     would spawn a burst of overlapping extract passes — duplicated LLM cost and
     thread pile-up. This replaces the cross-process ``.dream.lock`` + throttle
-    the legacy consolidator owned (removed §8e). One instance is shared by
+    the legacy consolidator owned. One instance is shared by
     all reactive triggers in a gateway.
 
     ``try_begin`` is non-blocking: it returns False (skip this run) when a pass
@@ -342,7 +342,7 @@ def _build_skill_extract_tools(workspace: Path, fs: Any) -> Any:
     """Toolset for the skill-extract sub-agent.
 
     Two ways to land a skill: AUTHOR from the conversation (Read/Edit/SkillWrite)
-    or ACQUIRE a published one autonomously — Path B of acquire-on-gap (§6.C):
+    or ACQUIRE a published one autonomously — Path B of acquire-on-gap:
     ``skill_search`` finds a candidate, ``skill_acquire_seed`` pulls a SAFE seed.
     The seed gate runs in code (allowlist + scan), so a risky / un-allowlisted ref
     is never handed back; the default empty allowlist means nothing auto-seeds and
@@ -386,7 +386,7 @@ def run_skill_extract_pass(
 ) -> dict:
     """Mine recent sessions for reusable procedures and create/update skills.
 
-    The skills arm of the extract dream (design §2.7): an agentic sub-agent with
+    The skills arm of the extract dream: an agentic sub-agent with
     ``skill_write`` writes a SKILL.md when a recurring procedure appears. Sync
     wrapper over the async AgentRunner flow (the cron calls it in a thread)."""
     import asyncio

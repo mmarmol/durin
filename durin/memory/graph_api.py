@@ -147,7 +147,7 @@ def _serialize_page(page: EntityPage) -> dict[str, Any]:
         "name": page.name,
         "aliases": list(page.aliases or []),
         "identifiers": identifiers if isinstance(identifiers, dict) else None,
-        # E19: page-level authorship (user_authored | agent_created) +
+        # Page-level authorship (user_authored | agent_created) +
         # timestamps, so the panel can show "created by <author> on <date>"
         # instead of inferring it from a terse git commit.
         "author": page.author,
@@ -201,7 +201,7 @@ def _provenance_events(page: EntityPage) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
 
     rel_prov = prov.get("relations")
-    # Q1: relation provenance is a {(to,type)-key: entry} dict carrying to/type.
+    # Relation provenance is a {(to,type)-key: entry} dict carrying to/type.
     rel_entries = (
         [e for e in rel_prov.values() if isinstance(e, dict)]
         if isinstance(rel_prov, dict) else []
@@ -236,7 +236,7 @@ def _provenance_events(page: EntityPage) -> list[dict[str, Any]]:
                 "turn": turn,
             })
 
-    # M1: per-link who/when for derived_from (ref-keyed provenance), or the
+    # Per-link who/when for derived_from (ref-keyed provenance), or the
     # Procedencia tab would never surface where each source link came from.
     derived_from = prov.get("derived_from")
     if isinstance(derived_from, dict):
@@ -294,7 +294,7 @@ def _load_archive(
 ) -> list[dict[str, Any]]:
     """Archived absorbed pages for *canonical* ``<type>:<slug>``.
 
-    Spec layout (doc memory §3.2): archives live at
+    Archives live at
     ``memory/archive/entities/<type>/<absorbed_slug>.md``. Each absorbed
     page's frontmatter carries ``archived_into`` pointing back at its
     canonical (``<type>:<canonical_slug>``); this function filters to
@@ -392,7 +392,7 @@ async def search_memory_api(
     identically to the agent's ``memory_search`` invocations — vector
     retrieval when fastembed is available, entity-aware reranking when
     the AliasIndex has data, grep fallback otherwise. The returned
-    shape includes ``kind`` + ``rendered`` per result (doc 25 §2.H) so
+    shape includes ``kind`` + ``rendered`` per result so
     the frontend can display canonical vs fragment markers consistently
     with how the LLM sees them.
     """
@@ -585,7 +585,7 @@ def _read_session_meta(meta_path: Path) -> dict[str, Any] | None:
 def _filter_memory_ops(
     events: list[Any], *, limit: int,
 ) -> list[dict[str, Any]]:
-    """Subset of events for memory_* tool calls (doc 20 §P5 view)."""
+    """Subset of events for memory_* tool calls."""
     ops: list[dict[str, Any]] = []
     for ev in events:
         if not isinstance(ev, dict):
@@ -688,7 +688,7 @@ def get_edge_detail(
 
 
 # ---------------------------------------------------------------------------
-# P12 — individual entry browse / forget / backlinks
+# individual entry browse / forget / backlinks
 # ---------------------------------------------------------------------------
 
 

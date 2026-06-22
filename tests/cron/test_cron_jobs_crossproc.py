@@ -63,7 +63,8 @@ def test_two_processes_no_lost_job(tmp_path: Path) -> None:
     lost-update race deterministic.  With self._lock held across that
     sequence, the lock serialises the two processes and both jobs survive.
 
-    See docs/architecture/concurrency.md — CronService mutators section.
+    Cross-process lock ordering: CronService mutators hold self._lock across
+    the full load→mutate→save sequence to prevent lost-update races.
     """
     jobs_dir = tmp_path / "cron"
     jobs_dir.mkdir()

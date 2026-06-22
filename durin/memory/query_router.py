@@ -1,7 +1,5 @@
 """Query analysis + FTS5 routing decisions.
 
-Per `docs/architecture/memory/03_search_pipeline.md` §3.1 + §5.1:
-
   1. **NFC normalise** + **whitespace collapse** so the FTS query
      matches whatever was indexed.
   2. **Count CJK characters** (CJK Unified Ideographs, Hiragana,
@@ -58,7 +56,7 @@ _CJK_RANGES: tuple[tuple[int, int], ...] = (
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
-# Identifier patterns (P3.3). Order matters: longer / more specific
+# Identifier patterns. Order matters: longer / more specific
 # patterns first so a URL doesn't get truncated to "://" segment.
 _IDENTIFIER_PATTERNS: tuple[re.Pattern[str], ...] = (
     # HTTPS / HTTP URLs.
@@ -80,8 +78,8 @@ def _detect_auto_keywords(query: str) -> Optional[str]:
     Returns the matched substring verbatim so the lexical search can
     quote it. None when no identifier is present.
 
-    Doc 03 §3.1 footnote: version strings (`v1.2.3`) are intentionally
-    NOT matched — they're too ambiguous.
+    Version strings (`v1.2.3`) are intentionally NOT matched — they're
+    too ambiguous.
     """
     for pattern in _IDENTIFIER_PATTERNS:
         match = pattern.search(query)
@@ -106,10 +104,10 @@ class RoutingDecision:
     route: LexicalRoute
     cjk_chars: int
     keywords: Optional[str] = None
-    # P3.3: auto-detected identifier token. When the query contains
-    # an email, URL, UUID, or file path, surface it here so the
-    # search pipeline applies the lexical boost without the agent
-    # having to pass ``keywords`` explicitly.
+    # Auto-detected identifier token. When the query contains an email,
+    # URL, UUID, or file path, surface it here so the search pipeline
+    # applies the lexical boost without the agent having to pass
+    # ``keywords`` explicitly.
     auto_keywords: Optional[str] = None
 
 
@@ -147,8 +145,7 @@ def decide_lexical_route(
 ) -> RoutingDecision:
     """Decide which FTS5 table (or LIKE fallback) handles *query*.
 
-    The routing thresholds match Hermes-agent
-    ``hermes_state.py:2197-2280`` (verified pattern, per doc 03 §3.1):
+    The routing thresholds match the Hermes-agent verified pattern:
 
     - **CJK ≥ 3 + every non-operator token ≥ 3 chars** → trigram.
     - **CJK > 0 with short CJK tokens** → LIKE fallback (trigram

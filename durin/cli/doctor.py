@@ -371,14 +371,13 @@ def check_optional_extra(import_name: str, *, extra: str, purpose: str) -> Check
 
 
 def check_cross_encoder_dep() -> CheckResult:
-    """P11 Fix A (2026-05-30): conditional check for `sentence_transformers`
-    when the user has cross-encoder rerank enabled in config.
+    """Conditional check for `sentence_transformers` when the user has
+    cross-encoder rerank enabled in config.
 
-    Pattern: the H25 audit found that durin shipped with cross-encoder
-    rerank in the code path but `sentence-transformers` was never in
-    any default extra — operators who flipped the toggle silently saw
-    no improvement (CE failed to load, RRF fallback engaged). This
-    check makes the gap loud the next time someone runs `durin doctor`.
+    When CE rerank is enabled but `sentence-transformers` is not installed,
+    the CE fails to load and falls back to RRF silently — operators see
+    no improvement without knowing why. This check makes the gap visible
+    the next time someone runs `durin doctor`.
 
     States:
     - CE disabled in config → status "ok" (silent — most users don't
@@ -428,7 +427,7 @@ def check_cross_encoder_dep() -> CheckResult:
 
 def check_stt_installed() -> CheckResult:
     """Verify the [stt] extra (sherpa-onnx) is importable for local
-    transcription (spec §8.1). Always returns ok/warn, never fails."""
+    transcription. Always returns ok/warn, never fails."""
     return check_optional_extra(
         "sherpa_onnx",
         extra="stt",
@@ -468,7 +467,7 @@ def check_stt_model_cached(cfg: "Config | None" = None) -> CheckResult:
 
 def check_voice_extra() -> CheckResult:
     """Verify the [voice] extra (sounddevice) is importable for TUI mic
-    recording (spec §8.1). Always returns ok/warn, never fails."""
+    recording. Always returns ok/warn, never fails."""
     return check_optional_extra(
         "sounddevice",
         extra="voice",
@@ -801,8 +800,8 @@ def check_embedding_model() -> CheckResult:
 
 
 def check_embedding_model_loads() -> CheckResult:
-    """P11 Fix E (2026-05-30): smoke-test that the configured embedding
-    model actually loads + produces a vector.
+    """Smoke-test that the configured embedding model actually loads and
+    produces a vector.
 
     `check_embedding_model` validates the model id against fastembed's
     catalog at the boundary; this check goes further — it does a real
@@ -883,8 +882,8 @@ def check_embedding_model_loads() -> CheckResult:
 
 
 def check_cross_encoder_loads() -> CheckResult:
-    """P11 Fix E (2026-05-30): smoke-test that the configured
-    cross-encoder model actually loads + scores a pair.
+    """Smoke-test that the configured cross-encoder model actually loads
+    and scores a pair.
 
     Skip cases:
     - `memory.search.cross_encoder.enabled = false` (most users)
@@ -1258,7 +1257,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     report.add(check_optional_extra("mcp", extra="mcp", purpose="MCP server mode"))
     report.add(check_optional_extra("ddgs", extra="web", purpose="DuckDuckGo web_search"))
     report.add(check_optional_extra("readability", extra="web", purpose="web_fetch article extraction"))
-    # Audio transcription (spec §8.1): local Whisper extra, TUI mic extra,
+    # Audio transcription: local Whisper extra, TUI mic extra,
     # and cloud API key sanity when a cloud backend is selected.
     report.add(check_stt_installed())
     report.add(check_stt_model_cached())
@@ -1277,9 +1276,8 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
         pass
     report.add(check_extras_drift())
     report.add(check_embedding_model())
-    # P11 Fix E (2026-05-30): smoke-test the configured models
-    # actually load + work. Goes beyond `check_embedding_model` which
-    # only validates the id against the catalog.
+    # Smoke-test the configured models actually load + work. Goes beyond
+    # `check_embedding_model` which only validates the id against the catalog.
     report.add(check_embedding_model_loads())
     report.add(check_cross_encoder_loads())
     report.add(check_memory_summary())

@@ -20,9 +20,8 @@ _commit_dirty_as_user / _fast_forward_working_tree.
 Tests 3 and 4 are load-bearing for B: they fail if the recheck is removed from
 reindex_one_file / prune_orphan_rows.
 
-See docs/architecture/concurrency.md §reset-absent-window and
-§lock-ordering-invariant.  .git-worktree.lock is the OUTERMOST memory lock;
-FTS/LanceDB deletes (inner) are always taken after it.
+.git-worktree.lock is the OUTERMOST memory lock; FTS/LanceDB deletes (inner)
+are always taken after it.
 """
 from __future__ import annotations
 

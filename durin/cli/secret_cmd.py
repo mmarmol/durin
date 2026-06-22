@@ -4,7 +4,6 @@ Thin CLI over :class:`durin.security.secrets.SecretStore`. Values are
 entered through a hidden prompt and never printed back (``list`` and
 ``show`` mask them; ``show --reveal`` is the one explicit exception).
 
-See ``docs/11_secrets_design.md``.
 """
 
 from __future__ import annotations

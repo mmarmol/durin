@@ -1,9 +1,9 @@
-"""Runner integration: ``history_media.pruned`` telemetry (audit P1.2b).
+"""Runner integration: ``history_media.pruned`` telemetry.
 
 The runner's sanitize pipeline calls ``prune_processed_history_images``
 on each iteration. When that pruner actually removes media blocks, the
 runner emits a structured event so we can measure prune frequency and
-volume in production. Audit follow-up to Tier 2 B3.
+volume in production.
 """
 
 from __future__ import annotations

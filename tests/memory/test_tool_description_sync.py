@@ -1,24 +1,18 @@
-"""Audit: tool descriptions in code must match doc 06 §3 verbatim.
+"""Audit: tool descriptions in code must match the prompts doc verbatim.
 
-Per `docs/architecture/memory/06_prompts_and_instructions.md` §3.7: the canonical
-text the LLM sees lives in the doc. Code drift silently changes
-agent behaviour. This test parses the doc + compares against the
-LIVE memory tools' descriptions (search, upsert_entity, ingest, drill, forget)
-plus the disabled memory_store (kept in sync while it still exists).
+The canonical text the LLM sees lives in the doc. Code drift silently changes
+agent behaviour. This test parses the doc + compares against the LIVE memory
+tools' descriptions (search, upsert_entity, ingest, drill, forget) plus the
+disabled memory_store (kept in sync while it still exists).
 
-**What we compare** (audit B1, 2026-05-28): the `Tool.description`
-property — the field that `Tool.to_schema()` emits as
-`function.description` in the OpenAI function-calling spec. This
-IS what the LLM reads to decide whether to invoke the tool. The
-prior version of this test compared `_PARAMETERS["description"]`
-(which ends up as `function.parameters.description` — typically
-ignored by LLMs); the audit found the short `.description` text
-had drifted while only `_PARAMETERS` was being kept in sync.
+**What we compare**: the `Tool.description` property — the field that
+`Tool.to_schema()` emits as `function.description` in the OpenAI
+function-calling spec. This IS what the LLM reads to decide whether to invoke
+the tool.
 
-Whitespace normalization: doc markdown is indentation-sensitive
-inside code blocks; we collapse repeated whitespace before
-comparison so cosmetic line-wrapping differences don't fail the
-audit while semantic edits (added/removed sentence) still do.
+Whitespace normalization: doc markdown is indentation-sensitive inside code
+blocks; we collapse repeated whitespace before comparison so cosmetic
+line-wrapping differences don't fail the audit while semantic edits still do.
 """
 
 from __future__ import annotations
@@ -37,7 +31,7 @@ from durin.agent.tools.memory_upsert_entity import MemoryUpsertEntityTool
 
 _DOC_PATH = (
     Path(__file__).resolve().parents[2]
-    / "docs" / "architecture" / "memory" / "06_prompts_and_instructions.md"
+    / "docs" / "internals" / "memory" / "06_prompts_and_instructions.md"
 )
 
 

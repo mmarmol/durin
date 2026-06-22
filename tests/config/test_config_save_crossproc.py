@@ -9,7 +9,8 @@ The last-writer-wins residual of bare load→edit→save_config (not routed
 through mutate_config) is documented by a deterministic in-process test that
 simulates two stale snapshots: the second save drops the first's edit.
 
-See docs/architecture/concurrency.md for lock-ordering invariants.
+Cross-process lock ordering: load→mutate→save must be wrapped by
+cross_process_lock to prevent last-writer-wins corruption.
 """
 
 from __future__ import annotations
@@ -107,7 +108,8 @@ def test_bare_save_loses_one_edit(config_home: Path) -> None:
     closes this via locked reload inside the lock (see the companion test
     test_mutate_config_both_edits_survive).
 
-    See docs/architecture/concurrency.md (Phase-A residual ledger).
+    This documents the accepted residual of bare load→save_config not
+    routed through mutate_config (last-writer-wins).
     """
     os.environ["DURIN_HOME"] = str(config_home)
     from durin.config.loader import load_config, save_config

@@ -1,4 +1,4 @@
-"""`durin memory reindex` CLI smoke tests (doc 02 §7.1)."""
+"""`durin memory reindex` CLI smoke tests."""
 
 from __future__ import annotations
 

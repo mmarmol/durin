@@ -424,7 +424,7 @@ class DurinApp(App[None]):
             self._open_session_picker()
             return
         if value == "/voice":
-            # Record + transcribe via the [voice] extra (spec §6.2). Runs in a
+            # Record + transcribe via the [voice] extra. Runs in a
             # worker so it never blocks the UI thread.
             self.run_worker(self._record_and_transcribe, exclusive=True)
             return
@@ -599,7 +599,7 @@ class DurinApp(App[None]):
     async def _publish_inbound(self, value: str, media: list[str]) -> None:
         from durin.bus.events import InboundMessage
 
-        # Transcribe dragged-in audio before the agent sees it (spec §6.1).
+        # Transcribe dragged-in audio before the agent sees it.
         # The audio path is dropped from ``media`` (the loop's image-only
         # content builder would silently discard it) and its transcript is
         # appended to ``value``. Best-effort: never blocks the turn on error.
@@ -639,7 +639,7 @@ class DurinApp(App[None]):
         shows a banner prompting Enter to stop. The recorded WAV is staged in
         the workspace ``.media/`` dir and transcribed via the shared
         :class:`TranscriptionService`, then the transcript is inserted into the
-        input box as an editable quote (spec §6.2, "auto" mode).
+        input box as an editable quote ("auto" transcription mode).
         """
         if self._agent_loop is None:
             return

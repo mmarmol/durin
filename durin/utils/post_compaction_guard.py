@@ -1,16 +1,16 @@
-"""Post-compaction loop guard (OpenClaw-inspired Tier 2 C2).
+"""Post-compaction loop guard: prevents infinite loops after consolidation.
 
-durin's 1A loop-detection blocks repeats of the EXACT ``(tool_name, args)``
-pair after a known FAILURE. It does NOT catch a different failure mode:
-the model has fixated on a tool that *succeeds* but doesn't make progress —
-e.g. repeatedly reading the same file, getting the same content, but unable
-to act on what it sees. Consolidation is the runtime's natural "reset" event
-(summarises history, frees context, gives the model a clean slate). When the
-SAME `(tool_name, args, result)` triple repeats *after* a successful
-consolidation, that's a strong signal the loop is structural and not fixable
-by the model alone — abort.
+Loop detection blocks repeats of the EXACT ``(tool_name, args)`` pair after
+a known FAILURE. It does NOT catch a different failure mode: the model has
+fixated on a tool that *succeeds* but doesn't make progress — e.g. repeatedly
+reading the same file, getting the same content, but unable to act on what it
+sees. Consolidation is the runtime's natural "reset" event (summarises
+history, frees context, gives the model a clean slate). When the SAME
+`(tool_name, args, result)` triple repeats *after* a successful consolidation,
+that's a strong signal the loop is structural and not fixable by the model
+alone — abort.
 
-OpenClaw arms the guard for ``window_size`` tool calls (default 3) after a
+The guard is armed for ``window_size`` tool calls (default 3) after a
 successful compaction. Within the window, every observation is stored; once
 ``window_size`` matches of the same triple are seen, the guard trips. After
 the window expires (or trips), the guard returns to disarmed.
@@ -30,7 +30,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-# Mirrors OpenClaw's DEFAULT_WINDOW_SIZE in post-compaction-loop-guard.ts.
+# Default window size for the post-compaction guard.
 _DEFAULT_WINDOW_SIZE = 3
 
 

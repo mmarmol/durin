@@ -1,8 +1,6 @@
 """Reciprocal Rank Fusion (RRF) — cross-source merge for the search
 pipeline.
 
-Per `docs/architecture/memory/03_search_pipeline.md` §7:
-
   RRF_score(uri) = Σ over sources:  w_source / (k + rank_in_source(uri))
 
 with ``k = 60`` (Cormack/Clarke/Buettcher 2009, the de-facto IR
@@ -10,7 +8,7 @@ default) and per-source weights:
 
   - ``w_vector  = 1.0``
   - ``w_lexical = 0.7`` (boosted to ``2.5`` when the agent supplied
-    a ``keywords`` parameter — see doc 03 §7.2)
+    a ``keywords`` parameter)
   - ``w_grep    = 0.3``
 
 A uri appearing in multiple sources accumulates contributions and
@@ -88,8 +86,8 @@ def fuse_rrf(
 
     When ``keywords_provided`` is True and ``w_lexical`` was left at
     its default, the lexical weight is boosted to
-    :data:`DEFAULT_W_LEXICAL_BOOSTED` per doc 03 §7.2. An explicit
-    ``w_lexical`` override is honoured regardless.
+    :data:`DEFAULT_W_LEXICAL_BOOSTED`. An explicit ``w_lexical`` override
+    is honoured regardless.
     """
     if w_lexical is None:
         w_lexical = (

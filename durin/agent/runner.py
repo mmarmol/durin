@@ -55,7 +55,8 @@ _SNIP_SAFETY_BUFFER = 1024
 _MICROCOMPACT_KEEP_RECENT = 10
 _MICROCOMPACT_MIN_CHARS = 500
 
-# Tier 1 (OpenClaw-inspired): idle-timeout circuit breaker.
+# Idle-timeout circuit breaker: stops execution after consecutive
+# tool-call timeouts.
 #
 # Provider-level retries already absorb individual timeouts. But the runner
 # can still loop on consecutive timeout responses across iterations when
@@ -65,8 +66,7 @@ _MICROCOMPACT_MIN_CHARS = 500
 # forward progress (content or tool_calls) in between, terminating the run
 # with a distinct stop_reason so callers can distinguish from generic errors.
 #
-# Default 1 matches OpenClaw (run.ts MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT):
-# tolerate one timeout, trip on the second. Override with
+# Default 1: tolerate one timeout, trip on the second. Override with
 # DURIN_MAX_CONSECUTIVE_IDLE_TIMEOUTS.
 _DEFAULT_MAX_CONSECUTIVE_IDLE_TIMEOUTS = 1
 
@@ -82,15 +82,16 @@ def _max_consecutive_idle_timeouts() -> int:
     return max(0, value)
 
 
-# Tier 2 B2 (OpenClaw-inspired): unknown-tool loop guard.
+# Unknown-tool loop guard: stops execution when the model repeatedly
+# calls tools that do not exist.
 #
-# 1A (hash-based loop detection) blocks repeats of the exact same
+# Hash-based loop detection blocks repeats of the exact same
 # ``(tool_name, arguments)`` pair after a known failure. But a hallucinated
 # tool name (model invents ``search_web`` when the real tool is
 # ``web_search``) often comes with DIFFERENT args each iteration as the
-# model retries with variations, so 1A doesn't catch it. This counter
-# tracks calls to unknown names per-turn; after the threshold, the turn
-# terminates with a distinct stop_reason rather than burning more
+# model retries with variations, so that detection doesn't catch it. This
+# counter tracks calls to unknown names per-turn; after the threshold, the
+# turn terminates with a distinct stop_reason rather than burning more
 # iterations on a name that will never resolve.
 #
 # Default 2 → third consecutive call to the same unknown name trips.
@@ -110,15 +111,14 @@ def _max_unknown_tool_attempts() -> int:
     return max(0, value)
 
 
-# Tier 1 (OpenClaw-inspired): compaction grace window.
+# Compaction grace window: when context consolidation is in flight,
+# extend the LLM timeout by this duration to allow compaction to complete.
 #
 # When the outer LLM wall-clock timeout fires while consolidation is in
 # flight for this session, extending the deadline by ``DURIN_COMPACTION_GRACE_S``
 # avoids killing the request just because compaction is rebuilding the
-# context (typically slow LLM call). Grace is used at most once per LLM
-# request — if the call still doesn't return after the grace window, we
-# fail with the regular timeout. Matches OpenClaw's ``resolveRunTimeoutDuringCompaction``
-# semantics (run/compaction-timeout.ts).
+# context (typically a slow LLM call). Grace is applied at most once per
+# request; subsequent timeouts use the regular deadline.
 _DEFAULT_COMPACTION_GRACE_SECONDS = 30.0
 
 
@@ -133,7 +133,7 @@ def _compaction_grace_seconds() -> float:
     return max(0.0, value)
 
 
-# Hermes-inspired Tier 1: per-turn aggregate tool-result budget.
+# Per-turn aggregate tool-result budget.
 #
 # ``max_tool_result_chars`` already caps each individual tool result; large
 # outputs spill to disk via ``maybe_persist_tool_result``. But when an LLM
@@ -232,11 +232,10 @@ class AgentRunSpec:
     checkpoint_callback: Any | None = None
     injection_callback: Any | None = None
     llm_timeout_s: float | None = None
-    # Sprint B / L3 — Permission-as-data agent modes. When provided, the
-    # runner calls this each iteration to obtain the active mode and filters
-    # the tool definitions sent to the LLM. Returns None → no filtering
-    # (equivalent to BUILD_MODE = full access). See durin/agent/agent_mode.py
-    # and docs/architecture/loop.md §3.
+    # Permission-as-data agent modes. When provided, the runner calls this
+    # each iteration to obtain the active mode and filters the tool
+    # definitions sent to the LLM. Returns None → no filtering (equivalent
+    # to BUILD_MODE = full access). See durin/agent/agent_mode.py.
     mode_provider: Any | None = None
     # Inspired by pi's ``transformContext``: an optional callback that
     # receives the full message list right before it is sent to the
@@ -248,28 +247,27 @@ class AgentRunSpec:
     # the untransformed list is used (best-effort, never breaks the
     # loop).
     context_transform: Any | None = None  # Callable[[list[dict]], list[dict] | None]
-    # OpenClaw-inspired compaction grace window. Optional callable that
-    # returns True iff context consolidation is currently running for the
-    # session backing this run. When the outer wall-clock LLM timeout would
-    # have fired, the runner extends the deadline once by
-    # ``DURIN_COMPACTION_GRACE_S`` seconds *if* this returns True — protecting
-    # slow LLM calls that are slow precisely BECAUSE the context still needs
-    # to be reshaped. Grace is used at most once per request; subsequent
-    # timeouts in the same call fail with the regular timeout response.
+    # Compaction grace window. Optional callable that returns True iff context
+    # consolidation is currently running for the session backing this run.
+    # When the outer wall-clock LLM timeout would have fired, the runner
+    # extends the deadline once by ``DURIN_COMPACTION_GRACE_S`` seconds if
+    # this returns True — protecting slow LLM calls during context reshaping.
+    # Grace is used at most once per request; subsequent timeouts fail with
+    # the regular timeout response.
     is_compacting: Any | None = None  # Callable[[], bool]
-    # Tier 2 C2: optional shared ``PostCompactionLoopGuard`` instance.
-    # The consolidator arms it per-session after a successful compaction;
-    # the runner ``observe()``s every tool execution within the window.
-    # When the guard trips, the turn terminates with
-    # ``stop_reason="post_compaction_loop"``. Leave as ``None`` to skip
-    # this layer (tests / non-loop callers don't need it).
+    # Optional shared ``PostCompactionLoopGuard`` instance. The consolidator
+    # arms it per-session after a successful compaction; the runner
+    # ``observe()``s every tool execution within the window. When the guard
+    # trips, the turn terminates with ``stop_reason="post_compaction_loop"``.
+    # Leave as ``None`` to skip this layer (tests / non-loop callers don't
+    # need it).
     post_compaction_guard: Any | None = None
-    # Per-turn provider snapshot (hazard #8 — docs/architecture/concurrency.md).
-    # The gateway runs a single shared AgentRunner; _apply_provider_snapshot in
-    # loop.py mutates self.provider on every concurrent session's /model swap.
-    # Carrying the provider here lets run() resolve it once and use that local
-    # reference for the entire turn, making the turn immune to concurrent swaps.
-    # None → fall back to self.provider for backward compatibility.
+    # Per-turn provider snapshot. The gateway runs a single shared AgentRunner;
+    # _apply_provider_snapshot in loop.py mutates self.provider on every
+    # concurrent session's /model swap. Carrying the provider here lets run()
+    # resolve it once and use that local reference for the entire turn, making
+    # the turn immune to concurrent swaps. None → fall back to self.provider
+    # for backward compatibility.
     provider: LLMProvider | None = None
 
 
@@ -422,9 +420,9 @@ class AgentRunner:
         return injected_messages
 
     async def run(self, spec: AgentRunSpec) -> AgentRunResult:
-        # Resolve per-turn provider snapshot once (hazard #8 — docs/architecture/concurrency.md).
-        # A concurrent session's /model swap mutates self.provider; pinning the
-        # provider here makes this turn immune to that mutation.
+        # Resolve the per-turn provider snapshot once. A concurrent session's
+        # /model swap mutates self.provider; pinning it here makes this turn
+        # immune to that mutation.
         provider = spec.provider or self.provider
         hook = spec.hook or AgentHook()
         messages = list(spec.initial_messages)
@@ -442,7 +440,7 @@ class AgentRunner:
         had_injections = False
         injection_cycles = 0
 
-        # Idle-timeout circuit breaker state (OpenClaw-inspired Tier 1).
+        # Idle-timeout circuit breaker state.
         # Increments on every iteration whose response is an idle/wall-clock
         # timeout error; resets on any iteration that produced forward
         # progress (tool_calls or non-empty content). When it exceeds the
@@ -457,15 +455,16 @@ class AgentRunner:
         # turn starts fresh because environment state may have changed.
         seen_failed_calls: set[str] = set()
 
-        # Tier 2 B2: unknown-tool loop guard. Counter per hallucinated tool
-        # name across this turn. Trips when any name's count exceeds
+        # Unknown-tool loop guard. Counter per hallucinated tool name
+        # across this turn. Trips when any name's count exceeds
         # ``max_unknown_tool_attempts``.
         unknown_tool_attempts: dict[str, int] = {}
         max_unknown_tool_attempts = _max_unknown_tool_attempts()
 
-        # Sprint B / L3 — record the mode active at the start of this turn so
-        # we can correlate behavior + outcomes with mode. Mid-run switches are
-        # captured separately via `agent_mode.switch` telemetry from tools/CLI.
+        # Record the mode active at the start of this turn so we can
+        # correlate behavior + outcomes with mode. Mid-run switches are
+        # captured separately via `agent_mode.switch` telemetry from
+        # tools/CLI.
         if spec.mode_provider is not None:
             try:
                 _start_mode = spec.mode_provider()
@@ -487,12 +486,12 @@ class AgentRunner:
                 # later when the caller saves only the new turn.
                 messages_for_model = self._drop_orphan_tool_results(messages)
                 messages_for_model = self._backfill_missing_tool_results(messages_for_model)
-                # Tier 2 B3: prune images/audio from completed turns older
-                # than the preservation window so accumulated media doesn't
-                # ride along forever. Runs BEFORE microcompact / snip so
-                # those steps see the reduced size. Stats are collected
-                # via an out-dict so we can emit telemetry only when the
-                # pruner actually removed something (audit P1.2b).
+                # Prune images/audio from completed turns older than the
+                # preservation window so accumulated media doesn't ride
+                # along forever. Runs BEFORE microcompact / snip so those
+                # steps see the reduced size. Stats are collected via an
+                # out-dict so we can emit telemetry only when the pruner
+                # actually removed something.
                 _prune_stats: dict[str, int] = {}
                 messages_for_model = prune_processed_history_images(
                     messages_for_model, stats=_prune_stats,
@@ -526,17 +525,17 @@ class AgentRunner:
                 except Exception:
                     messages_for_model = messages
 
-            # Mid-turn precheck (OpenClaw-inspired Tier 2 A2). After the
-            # sanitize pipeline ran, estimate whether the prompt we're
-            # about to send still fits. ``_snip_history`` trims from the
-            # head but ``find_legal_message_start`` may force-keep
-            # messages that still exceed the calculated budget; if a
-            # single tool result late in the conversation is huge, even
-            # an aggressive trim won't bring us back under the wall. Fail
-            # the turn here with a distinct stop_reason so callers can
-            # distinguish "we hit context overflow before the model even
-            # got a chance" from "model errored". A1 will re-base the
-            # context for the next turn.
+            # Mid-turn precheck. After the sanitize pipeline ran, estimate
+            # whether the prompt we're about to send still fits.
+            # ``_snip_history`` trims from the head but
+            # ``find_legal_message_start`` may force-keep messages that
+            # still exceed the calculated budget; if a single tool result
+            # late in the conversation is huge, even an aggressive trim
+            # won't bring us back under the wall. Fail the turn here with
+            # a distinct stop_reason so callers can distinguish "we hit
+            # context overflow before the model even got a chance" from
+            # "model errored". Compaction will re-base the context for the
+            # next turn.
             mid_turn_decision = self._mid_turn_precheck(spec, messages_for_model, provider)
             if mid_turn_decision is not None:
                 estimate_tokens, budget_tokens = mid_turn_decision
@@ -752,10 +751,10 @@ class AgentRunner:
                     }
                     messages.append(tool_message)
                     completed_tool_results.append(tool_message)
-                    # Tier 2 C2: observe this tool call through the
-                    # post-compaction guard. Only fires if the consolidator
-                    # armed the guard recently AND the same triple is seen
-                    # window_size times within the window.
+                    # Observe this tool call through the post-compaction
+                    # guard. Only fires if the consolidator armed the guard
+                    # recently AND the same triple is seen window_size times
+                    # within the window.
                     if (
                         spec.post_compaction_guard is not None
                         and post_compact_trip is None
@@ -783,11 +782,11 @@ class AgentRunner:
                             logger.exception(
                                 "Post-compaction guard observe failed; skipping",
                             )
-                # Hermes-inspired per-turn aggregate budget: when many medium
-                # tool results combine to exceed the configured budget, spill
-                # the largest not-yet-persisted ones to disk. Mutates the
-                # appended messages in place (they're the same dicts that
-                # were just added to ``messages``).
+                # Per-turn aggregate budget: when many medium tool results
+                # combine to exceed the configured budget, spill the largest
+                # not-yet-persisted ones to disk. Mutates the appended
+                # messages in place (they're the same dicts that were just
+                # added to ``messages``).
                 try:
                     self._enforce_turn_budget(spec, completed_tool_results)
                 except Exception:
@@ -1101,7 +1100,7 @@ class AgentRunner:
         messages: list[dict[str, Any]],
         provider: LLMProvider | None = None,
     ) -> tuple[int, int] | None:
-        """OpenClaw-inspired Tier 2 A2.
+        """Mid-turn precheck.
 
         Estimate whether the post-sanitize prompt fits in the budget. Returns
         ``(estimated_tokens, budget_tokens)`` when overflow is detected,
@@ -1148,13 +1147,13 @@ class AgentRunner:
 
     @staticmethod
     def _active_tool_definitions(spec: AgentRunSpec) -> list[dict[str, Any]]:
-        """Sprint B / L3 — return tool definitions filtered by the active mode.
+        """Return tool definitions filtered by the active agent mode.
 
         If ``spec.mode_provider`` is ``None`` (no agent-mode wiring) or the
         mode has no restrictions (default BUILD_MODE), returns the cached
-        definitions verbatim — the fast path is identical to pre-Sprint-B
-        behavior. When a mode does restrict the surface, this returns a
-        filtered slice; the registry cache stays valid.
+        definitions verbatim — the fast path for most turns. When a mode does
+        restrict the surface, this returns a filtered slice; the registry
+        cache stays valid.
         """
         all_defs = spec.tools.get_definitions()
         if spec.mode_provider is None:
@@ -1198,8 +1197,8 @@ class AgentRunner:
                     # (or vice versa); Anthropic and OpenAI both reject such
                     # mismatches with a 400. The pre-call sanitize pipeline
                     # already ran on the untransformed list, so it can't
-                    # catch this. Repair here defensively. (OpenClaw-inspired
-                    # Tier 1 — re-sanitize after truncation.)
+                    # catch this. Repair here defensively
+                    # (re-sanitize after truncation).
                     try:
                         messages = self._drop_orphan_tool_results(messages)
                         messages = self._backfill_missing_tool_results(messages)
@@ -1245,8 +1244,8 @@ class AgentRunner:
         ``asyncio.TimeoutError`` is raised so the caller's existing timeout
         handler maps it to an LLMResponse error_kind="timeout".
 
-        Matches OpenClaw's ``resolveRunTimeoutDuringCompaction`` semantics
-        (grace used at most once, only when compaction is detected).
+        Grace is used at most once per request, only when compaction is
+        detected at the moment the base timeout fires.
         """
         task = asyncio.ensure_future(coro)
         try:
@@ -1838,7 +1837,7 @@ class AgentRunner:
             )
             content = result
         # Redact stored secret values before the result enters the
-        # model context — see docs/11_secrets_design.md §5.
+        # model context.
         try:
             from durin.security.secrets import redact_secrets
 
@@ -1899,7 +1898,7 @@ class AgentRunner:
         spec: AgentRunSpec,
         completed_tool_messages: list[dict[str, Any]],
     ) -> None:
-        """Hermes-inspired per-turn aggregate budget enforcement.
+        """Per-turn aggregate budget enforcement.
 
         After all tool results for a turn are collected, if their total
         size exceeds the configured budget, persist the largest

@@ -1,5 +1,4 @@
-"""Cross-encoder rerank step in `search_pipeline.run_search_pipeline`
-(P4.2 / doc 03 §9).
+"""Cross-encoder rerank step in `search_pipeline.run_search_pipeline`.
 
 The reranker is opt-in: callers pass a `cross_encoder` instance.
 When None, the pipeline behaves exactly as before — no rerank step.

@@ -1,16 +1,14 @@
-"""E2E tests for T1 wiring (doc 24 §3): full path, not units.
-
-These tests exercise the wired-up integrations from doc 24:
+"""E2E wiring tests: full path, not units.
 
 - E2E-1: ``memory_search`` invokes entity-aware ranker on real LanceDB
-  rows when the query mentions a known entity (W1+W2).
+  rows when the query mentions a known entity.
 - E2E-2: ``durin memory dream`` upserts the consolidated entity page
   into the vector index, so the page is retrievable via
-  ``VectorIndex.search`` (W3).
+  ``VectorIndex.search``.
 - E2E-3: Fresh ``MemorySearchTool`` rebuilds the AliasIndex lazily on
   first call (no persistent sidecar) and applies entity-aware ranking.
 - E2E-5: ``durin memory absorb`` CLI merges two pages, archives one,
-  drops the absorbed ref from alias_index and vector_index (W4).
+  drops the absorbed ref from alias_index and vector_index.
 
 Uses the same stubbed fastembed pattern as ``test_phase2_smoke.py`` so
 the tests stay hermetic and fast. The point is wiring correctness, not
@@ -203,8 +201,8 @@ async def test_e2e3_memory_search_rebuilds_alias_index_lazily(
 ) -> None:
     """First call to memory_search with no .aliases.json sidecar.
 
-    Setup: 2 entity pages on disk. Process-wide alias cache cleared
-    (doc 25 §2.C). Tool is a fresh instance (simulates cold start).
+    Setup: 2 entity pages on disk. Process-wide alias cache cleared.
+    Tool is a fresh instance (simulates cold start).
     Action: query that mentions a known alias.
     Assert: shared cache builds on first execute, ranker activates.
     """

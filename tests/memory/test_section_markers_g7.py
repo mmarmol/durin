@@ -1,15 +1,11 @@
-"""G7 (audit fourth pass, 2026-05-28): a single source of truth for the
-`=== KIND: ... ===` marker strings shared by the hot layer renderer
-and the sectioned_output renderer.
+"""Single source of truth for the `=== KIND: ... ===` marker strings shared
+by the hot layer renderer and the sectioned_output renderer.
 
-Two renderers stay intentionally separate (per audit G6 closing the
-F4 unification question — different responsibilities, different
-internal content). But they both wrap their output in the same
-marker convention defined in `docs/architecture/memory/06_prompts_and_instructions.md`
-§8.3. Pre-G7 each module built the marker strings independently —
-two places to drift. G7 ships a small `section_markers` helper they
-both call, eliminating the drift surface without forcing the two
-renderers to merge their body logic.
+Two renderers stay intentionally separate — different responsibilities,
+different internal content. But they both wrap their output in the same marker
+convention. Previously each module built the marker strings independently
+(two places to drift). The `section_markers` helper they both call eliminates
+the drift surface without forcing the two renderers to merge their body logic.
 """
 
 from __future__ import annotations
@@ -26,7 +22,7 @@ def test_canonical_marker_with_ts() -> None:
 def test_canonical_marker_without_ts_uses_canonical_label() -> None:
     """When no timestamp is present (entity pages never carry
     `valid_from`), the marker swaps `(consolidated <ts>)` for the
-    descriptive `(canonical entity page)` per audit F4."""
+    descriptive `(canonical entity page)`."""
     from durin.memory.section_markers import canonical_marker
 
     assert canonical_marker(

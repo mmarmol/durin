@@ -317,7 +317,7 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     loop.sessions.invalidate(session.key)
     if snapshot:
         loop._schedule_background(loop.consolidator.archive(snapshot))
-    # Doc 25 §2.A.1 β.2 — session-close trigger fires once per /new
+    # Session-close trigger fires once per /new
     # regardless of whether the snapshot above triggered compaction.
     # Independent config knob (memory.dream.on_session_close).
     # getattr keeps test scaffolds (SimpleNamespace loops) working —

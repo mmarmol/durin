@@ -1,4 +1,4 @@
-"""always_on distillation (A4, design §2.11).
+"""always_on distillation.
 
 The agent authors feedback entities (stance / practice / feedback) as the user
 gives standing guidance. THIS dream pass curates which of them are injected into
@@ -23,8 +23,8 @@ from durin.utils.helpers import estimate_text_tokens
 
 __all__ = ["run_always_on_pass", "FEEDBACK_TYPES"]
 
-# Entity types that are candidates for the always-on pin (design §2.11:
-# "stance / practice" feedback). Open vocabulary elsewhere, but the pin is
+# Entity types that are candidates for the always-on pin
+# (stance / practice feedback). Open vocabulary elsewhere, but the pin is
 # behavioural guidance only — never facts like company:/person:.
 FEEDBACK_TYPES = ("stance", "practice", "feedback")
 

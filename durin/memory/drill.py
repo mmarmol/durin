@@ -24,14 +24,13 @@ class DrillError(ValueError):
 _HEADER_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 
 
-# G6 (audit fourth pass, 2026-05-28). `memory_search` emits the
-# canonical URI shape `memory/entity_page/<type>:<slug>` for entity
-# page hits, but the on-disk file lives at
-# `memory/entities/<type>/<slug>.md`. Pre-G6 `drill()` resolved the
-# URI literally and failed for every canonical hit — every
-# `=== CANONICAL: person:marcelo ===` the agent received was
-# undrillable. The translation below is a pure URI-shape mapping;
-# any other path is passed through unchanged.
+# `memory_search` emits the canonical URI shape
+# `memory/entity_page/<type>:<slug>` for entity page hits, but the
+# on-disk file lives at `memory/entities/<type>/<slug>.md`. Without
+# this translation, `drill()` resolved the URI literally and failed
+# for every canonical hit — every `=== CANONICAL: person:marcelo ===`
+# the agent received was undrillable. The translation below is a pure
+# URI-shape mapping; any other path is passed through unchanged.
 _ENTITY_PAGE_URI_RE = re.compile(
     r"^memory/entity_page/(?P<type>[^:/]+):(?P<slug>[^/]+?)(?:\.md)?$"
 )
@@ -77,12 +76,11 @@ def drill(workspace: Path, uri: str) -> str:
     - ``memory/<class>/<id>`` (no extension, no anchor) — the full memory
       entry file. The ``.md`` suffix is appended automatically.
     - ``memory/entity_page/<type>:<slug>`` — canonical entity page URI as
-      emitted by `memory_search` for the CANONICAL section. Audit G6
-      (2026-05-28) added the translation to the on-disk path
-      ``memory/entities/<type>/<slug>.md``.
+      emitted by `memory_search` for the CANONICAL section. The URI is
+      translated to the on-disk path ``memory/entities/<type>/<slug>.md``.
     - ``memory/archive/<class>/<id>.md`` — archived content surfaced by
       ``memory_search(scope='archive')``. The full relative path under
-      ``memory/archive/`` is emitted by that path after G6.
+      ``memory/archive/`` is emitted by that path.
     - ``skills/<slug>/SKILL.md`` — a skill page as emitted by
       `memory_search` for the SKILL section. The internal index id
       ``skill/<slug>`` is also accepted and translated to this path.
@@ -99,9 +97,9 @@ def drill(workspace: Path, uri: str) -> str:
     else:
         path_part, anchor = uri, ""
 
-    # G6: translate the canonical entity page URI shape before resolving.
-    # Skills (H28, 2026-06-03): translate the internal `skill/<slug>` id
-    # to its on-disk `skills/<slug>/SKILL.md` path.
+    # Translate the canonical entity page URI shape before resolving.
+    # Also translate the internal `skill/<slug>` id to its on-disk
+    # `skills/<slug>/SKILL.md` path.
     original_uri = uri
     path_part = _translate_entity_page_uri(path_part)
     path_part = _translate_skill_uri(path_part)
@@ -117,7 +115,7 @@ def drill(workspace: Path, uri: str) -> str:
             full_path = candidate
 
     if not full_path.is_file():
-        # G6: surface the original URI (not just the resolved disk path)
+        # Surface the original URI (not just the resolved disk path)
         # in the error so the agent can debug a canonical lookup that
         # missed without parsing absolute paths.
         raise DrillError(

@@ -1,4 +1,4 @@
-"""skills_list tool — lists active skills (with §8.C verdict) + quarantine.
+"""skills_list tool — lists active skills (with security scan verdict) + quarantine.
 
 Mirrors ``tests/agent/test_skill_audit_tool.py``: a workspace with one clean
 skill and one malicious skill (prompt-injection + sensitive-path reference),

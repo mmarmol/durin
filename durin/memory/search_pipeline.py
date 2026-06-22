@@ -1,10 +1,9 @@
 """End-to-end orchestrator for the v2 search pipeline.
 
-Per `docs/architecture/memory/03_search_pipeline.md`: take a raw query string and
-optional `keywords` hint, return a list of :class:`SectionedHit` rows
-ready for rendering.
+Takes a raw query string and optional ``keywords`` hint, returns a
+list of :class:`SectionedHit` rows ready for rendering.
 
-Pipeline (steps numbered per doc 03 §1):
+Pipeline:
 
     1. Query analysis        → query_router.decide_lexical_route
     2a. Vector search        → VectorIndex.search (optional, when
@@ -18,10 +17,10 @@ Pipeline (steps numbered per doc 03 §1):
 
 Each step is wrapped in try/except so a failure of one source
 degrades that source to empty instead of failing the whole call —
-matches the graceful-degradation contract in doc 03 §14.
+matches the graceful-degradation contract.
 
-Per doc 03 §9 (Phase 4) the cross-encoder rerank step is omitted
-here; it's an opt-in module that wraps this pipeline's output.
+The cross-encoder rerank step is omitted here; it's an opt-in module
+that wraps this pipeline's output.
 """
 
 from __future__ import annotations
@@ -60,10 +59,10 @@ class SearchPipelineResult:
     # produced before fusion. Useful for the bench harness too.
     vector_count: int
     lexical_count: int
-    # P5.2: degraded-run surface. When a safe wrapper caught an
-    # exception, the source name lands in `recovered_from` and the
-    # total wall-clock spent recovering accumulates in
-    # `recovery_duration_ms`. Empty / 0 on clean runs.
+    # Degraded-run surface. When a safe wrapper caught an exception,
+    # the source name lands in `recovered_from` and the total wall-clock
+    # spent recovering accumulates in `recovery_duration_ms`. Empty / 0
+    # on clean runs.
     recovered_from: tuple[str, ...] = ()
     recovery_duration_ms: float = 0.0
 
@@ -89,8 +88,8 @@ def run_search_pipeline(
     to render via :func:`durin.memory.sectioned_output.render_sectioned`.
     """
     decision = decide_lexical_route(query, keywords=keywords)
-    # P5.2: shared accumulator passed to safe wrappers so any
-    # failure surfaces in the result.
+    # Shared accumulator passed to safe wrappers so any failure
+    # surfaces in the result.
     recovery: dict = {"sources": set(), "ms": 0.0}
 
     # Step 2a — vector retrieval (optional)
@@ -107,7 +106,7 @@ def run_search_pipeline(
     lexical_uris = [h.uri for h in lexical_hits]
     lexical_meta = {h.uri: h for h in lexical_hits}
 
-    # Step 6 (doc 03) — grep fallback over memory/, raw sessions and
+    # Step 6 — grep fallback over memory/, raw sessions and
     # ingested artifacts. Sessions are FTS-indexed too (v6); grep
     # remains their literal-scan source and the only path for raw
     # ingested artifacts and not-yet-indexed files. Best-effort: a
@@ -123,8 +122,8 @@ def run_search_pipeline(
         vector=vector_uris,
         lexical=lexical_uris,
         grep=grep_uris,
-        # P3.3: auto-detected identifier (email/URL/UUID/path) gets
-        # the same lexical boost as an explicit `keywords` param.
+        # Auto-detected identifier (email/URL/UUID/path) gets the same
+        # lexical boost as an explicit `keywords` param.
         keywords_provided=bool(keywords or decision.auto_keywords),
     )
 
@@ -151,23 +150,22 @@ def run_search_pipeline(
         },
     )
 
-    # Step 4 — entity-aware rerank (doc 03 §8). When the query
-    # mentions a known alias, hits whose entities (or ref) include
-    # that alias receive an extra RRF contribution. Reuses the
-    # existing `entity_ranker.rank_with_entities` API via a thin
-    # adapter that maps :class:`FusedHit` to the dict shape it
-    # expects.
+    # Step 4 — entity-aware rerank. When the query mentions a known
+    # alias, hits whose entities (or ref) include that alias receive an
+    # extra RRF contribution. Reuses the existing
+    # `entity_ranker.rank_with_entities` API via a thin adapter that
+    # maps :class:`FusedHit` to the dict shape it expects.
     fused = _entity_aware_rerank(
         workspace, decision.normalized_query, fused,
         vector_meta=vector_meta, lexical_meta=lexical_meta,
         grep_meta=grep_meta,
     )
 
-    # Step 5 — cross-encoder rerank (doc 03 §9). Opt-in. When a
-    # reranker instance is supplied, take the top 50 hits, build
-    # (query, doc_text) pairs, score them, and drop everything
-    # ranked below `cross_encoder_top_n`. Graceful degradation: a
-    # reranker failure returns the original RRF order.
+    # Step 5 — cross-encoder rerank. Opt-in. When a reranker instance
+    # is supplied, take the top 50 hits, build (query, doc_text) pairs,
+    # score them, and drop everything ranked below `cross_encoder_top_n`.
+    # Graceful degradation: a reranker failure returns the original RRF
+    # order.
     if cross_encoder is not None and fused:
         fused = _cross_encoder_rerank(
             cross_encoder, decision.normalized_query, fused,
@@ -176,7 +174,7 @@ def run_search_pipeline(
             top_n=cross_encoder_top_n,
         )
 
-    # Temporal decay removed (2026-05-30): search is faithful
+    # Temporal decay removed: search is faithful
     # retrieval; the LLM does temporal reasoning with `valid_from`
     # already present on every hit. Pre-judging recency without the
     # question's context perjudicated factual atemporal queries (the
@@ -199,17 +197,17 @@ def run_search_pipeline(
             snippet=meta.get("snippet", "") or meta.get("headline", ""),
             ingest_id=meta.get("ingest_id"),
             body=meta.get("body", ""),
-            # H4 (audit 2026-05-29): propagate the index's materialised
-            # summary (authoritative or body-prefix fallback) so the
-            # warm-tier renderer never falls back to a 60-char headline.
+            # Propagate the index's materialised summary (authoritative
+            # or body-prefix fallback) so the warm-tier renderer never
+            # falls back to a 60-char headline.
             summary=meta.get("summary", ""),
-            # H5 (audit 2026-05-29): propagate the source body length
-            # so the renderer can emit the completeness qualifier
-            # (``complete`` vs ``preview N/M``) in the marker line.
+            # Propagate the source body length so the renderer can emit
+            # the completeness qualifier (``complete`` vs ``preview N/M``)
+            # in the marker line.
             body_length=int(meta.get("body_length", 0) or 0),
         ))
-    # G1 (audit fourth pass, 2026-05-28): honour the configured cap
-    # when supplied; fall back to `DEFAULT_MAX_PER_SOURCE` otherwise.
+    # Honour the configured cap when supplied; fall back to
+    # `DEFAULT_MAX_PER_SOURCE` otherwise.
     if max_per_source is None:
         capped = apply_per_source_cap(section_hits)
     else:
@@ -223,12 +221,11 @@ def run_search_pipeline(
         recovered_from=tuple(sorted(recovery["sources"])),
         recovery_duration_ms=recovery["ms"],
     )
-    # Audit B9 (2026-05-28) — emit `memory.search.failure` when at
-    # least one safe wrapper caught an exception. The pipeline always
-    # recovers (the surviving sources cover the loss most of the
-    # time); the event lets dashboards see degradation rate per
-    # component. Wrapped in try/except: telemetry never breaks the
-    # search result.
+    # Emit `memory.search.failure` when at least one safe wrapper caught
+    # an exception. The pipeline always recovers (the surviving sources
+    # cover the loss most of the time); the event lets dashboards see
+    # degradation rate per component. Wrapped in try/except: telemetry
+    # never breaks the search result.
     if recovery["sources"]:
         try:
             _emit_search_failure(
@@ -296,7 +293,7 @@ def _entity_aware_rerank(
     lexical_meta: dict,
     grep_meta: dict[str, dict] | None = None,
 ) -> list:
-    """Apply entity-aware rerank (doc 03 §8) over the RRF-fused list.
+    """Apply entity-aware rerank over the RRF-fused list.
 
     Resolves query → entity URIs via the shared alias index. When the
     set is empty (query mentions no known entity), this is a no-op
@@ -378,12 +375,11 @@ def _entity_aware_rerank(
 # ---------------------------------------------------------------------------
 
 
-# Weight of the (normalised) cross-encoder score in the final blend
-# (doc 03 §9.2). The CE is fused with the RRF score, not allowed to
-# replace the order outright. Calibrated 2026-06-11 by an offline
-# recall@10 sweep over the LoCoMo run: α=0.4 / z-score maximised gold
-# recall@10 (75.0%) over both α=0 (RRF-only, 69.7%) and α=1 (full CE
-# replace). 0 ≤ α ≤ 1;
+# Weight of the (normalised) cross-encoder score in the final blend.
+# The CE is fused with the RRF score, not allowed to replace the order
+# outright. Calibrated by an offline recall@10 sweep: α=0.4 / z-score
+# maximised gold recall@10 (75.0%) over both α=0 (RRF-only, 69.7%)
+# and α=1 (full CE replace). 0 ≤ α ≤ 1;
 # α=0 disables the CE contribution, α=1 reverts to a pure CE reorder.
 DEFAULT_BLEND_ALPHA = 0.4
 
@@ -406,7 +402,7 @@ def _zscore(values: list[float]) -> list[float]:
 def _rerank_doc_text(meta: dict, uri: str) -> str:
     """Enriched (query, doc) text for the cross-encoder.
 
-    CE-demotion forensics (2026-06-11): scoring the 160-char snippet
+    CE-demotion forensics: scoring the 160-char snippet
     alone made the reranker blind to the date (fatal for temporal
     queries) and to the entry's own summary, so it demoted gold the
     RRF stage had ranked correctly. The pipeline already carries
@@ -434,9 +430,9 @@ def _cross_encoder_rerank(
     grep_meta: dict[str, dict] | None,
     top_n: int,
 ) -> list:
-    """Blend a cross-encoder score into the fused order (doc 03 §9).
+    """Blend a cross-encoder score into the fused order.
 
-    Two design choices, both set by the 2026-06-11 offline sweep:
+    Two design choices, both from an offline sweep:
 
     1. **Enriched input** — the CE scores ``<headline>. <date>.
        <summary>`` (see :func:`_rerank_doc_text`), not the bare
@@ -456,7 +452,7 @@ def _cross_encoder_rerank(
     """
     import time as _time
 
-    candidates = fused[:50]  # cap input to 50 per doc 03 §9.3
+    candidates = fused[:50]  # cap input to 50
     if not candidates:
         return fused
     docs = [
@@ -524,31 +520,28 @@ def _safe_vector_search(
         recovery["sources"].add("vector")
         recovery["ms"] += (_time.perf_counter() - t0) * 1000.0
         return []
-    # Audit H1 (2026-05-29): the production ``VectorIndex.search()``
-    # returns rows keyed on ``id`` / ``class_name`` / ``path`` — but
-    # the rest of this pipeline (RRF fusion, _resolve_meta, etc.)
-    # keys off ``uri`` / ``type``. Pre-H1 ``vector_uris`` was always
-    # empty (the comprehension at the call site filtered every row
-    # via ``if "uri" in h``), making the entire warm-tier vector
-    # path silently inert. The Phase 3 orchestrator test
-    # (``test_fake_vector_index_integrated``) passed because the
-    # fixture emits ``uri`` directly; production never matched that
-    # shape. This boundary normaliser fixes it.
+    # The production ``VectorIndex.search()`` returns rows keyed on
+    # ``id`` / ``class_name`` / ``path`` — but the rest of this pipeline
+    # (RRF fusion, _resolve_meta, etc.) keys off ``uri`` / ``type``.
+    # Without this normaliser, ``vector_uris`` was always empty (the
+    # comprehension at the call site filtered every row via
+    # ``if "uri" in h``), making the entire warm-tier vector path
+    # silently inert. The orchestrator test
+    # (``test_fake_vector_index_integrated``) passed because the fixture
+    # emits ``uri`` directly; production never matched that shape.
     #
-    # Audit H28 (2026-05-30): H1 set ``uri = id`` (bare filename
-    # stem) but the FTS indexer (``indexer._payload_for``) writes
-    # entries as ``memory/<class>/<id>`` — so RRF was fusing
-    # ``9b6f1c81724a`` (vector) and ``memory/episodic/9b6f1c81724a``
-    # (FTS) as DIFFERENT URIs. The same entry surfaced twice in the
-    # ranked list with split scores; neither contribution alone
-    # passed the threshold to top-K, so well-matched entries
-    # disappeared from fused even when both subsystems found them
-    # (verified: conv-7-q113 Deborah/Karlie case). Fix: vector
-    # normaliser builds the SAME ``memory/<class>/<id>`` URI shape
-    # as FTS. Entity-page rows (``class_name == "entity_page"``)
-    # keep the entity-ref URI (``person:deborah``, etc.) since
-    # FTS upserts those with that shape too (see
-    # ``indexer._payload_for``).
+    # A prior fix had set ``uri = id`` (bare filename stem), but the FTS
+    # indexer (``indexer._payload_for``) writes entries as
+    # ``memory/<class>/<id>`` — so RRF was fusing ``9b6f1c81724a``
+    # (vector) and ``memory/episodic/9b6f1c81724a`` (FTS) as DIFFERENT
+    # URIs. The same entry surfaced twice in the ranked list with split
+    # scores; neither contribution alone passed the threshold to top-K,
+    # so well-matched entries disappeared from fused even when both
+    # subsystems found them. Fix: the vector normaliser builds the SAME
+    # ``memory/<class>/<id>`` URI shape as FTS. Entity-page rows
+    # (``class_name == "entity_page"``) keep the entity-ref URI
+    # (``person:deborah``, etc.) since FTS upserts those with that shape
+    # too (see ``indexer._payload_for``).
     normalized: list[dict] = []
     for r in rows:
         if "uri" not in r:
@@ -561,16 +554,15 @@ def _safe_vector_search(
                 # (e.g. "person:deborah") per upsert_entity_page.
                 uri = raw_id
             elif class_name == "skill":
-                # B1 (skills, 2026-06-03): the FTS indexer writes skills
-                # under the bare `skill/<slug>` uri (via
-                # `_payload_for_skill`), NOT `skills/<slug>/SKILL.md`. To
-                # let RRF fuse the vector + FTS hits for the SAME skill,
-                # the vector normaliser must use that bare `skill/<slug>`
-                # id (== `raw_id`) as the FUSION uri — the H28 principle
-                # "build the SAME uri shape as FTS". The drillable
-                # `skills/<slug>/SKILL.md` display path rides along in the
-                # row's `path` field and is resolved at the result layer
-                # (memory_search._sectioned_to_result via
+                # The FTS indexer writes skills under the bare
+                # `skill/<slug>` uri (via `_payload_for_skill`), NOT
+                # `skills/<slug>/SKILL.md`. To let RRF fuse the vector +
+                # FTS hits for the SAME skill, the vector normaliser must
+                # use that bare `skill/<slug>` id (== `raw_id`) as the
+                # FUSION uri — building the SAME uri shape as FTS. The
+                # drillable `skills/<slug>/SKILL.md` display path rides
+                # along in the row's `path` field and is resolved at the
+                # result layer (memory_search._sectioned_to_result via
                 # `_skill_uri_to_path`).
                 uri = raw_id
             elif class_name:
@@ -609,9 +601,9 @@ def _safe_grep_fallback(
     """Run the v1 grep fallback over memory/, sessions/, ingested/.
 
     Covers two complementary cases:
-    - Raw ingested artifacts, which are not indexed by LanceDB/FTS5
-      (per `01_data_and_entities.md` §3.2) — only reachable via
-      grep. (Sessions ARE FTS-indexed since schema v6; grep stays
+    - Raw ingested artifacts, which are not indexed by LanceDB/FTS5 —
+      only reachable via grep. (Sessions ARE FTS-indexed since schema
+      v6; grep stays
       their literal-substring source and the recovery path when the
       index hasn't caught up.)
     - Memory entries written by callers that bypass the tool layer
@@ -661,7 +653,7 @@ def _grep_verify_boost(
     *,
     keywords: Optional[str] = None,
 ) -> list:
-    """Literal re-verification of vector-sourced hits (doc 03 §7.4).
+    """Literal re-verification of vector-sourced hits.
 
     RRF only credits lexical evidence inside the lexical top-50. A doc
     vector ranks high that literally contains the query terms — but
@@ -785,32 +777,28 @@ def _resolve_meta(
             meta["valid_from"] = vh["valid_from"]
         if vh.get("headline"):
             meta["headline"] = vh["headline"]
-        # E11 (2026-05-28): propagate `entities` from the vector row
-        # so the entity-aware reranker can find the tag overlap. Pre-
-        # E11 this field never reached `rank_with_entities`, which
-        # meant every memory entry had `entities=[]` and no entry was
-        # ever boosted into the entity-match list — only the canonical
-        # page got the boost. Compounded with the missing cursor
-        # wiring, this hid the regression: with no entries in the
-        # entity-match list at all, there was no observable pre/post
-        # difference to detect.
+        # Propagate `entities` from the vector row so the entity-aware
+        # reranker can find the tag overlap. Without this, the field
+        # never reached `rank_with_entities`, which meant every memory
+        # entry had `entities=[]` and no entry was ever boosted into the
+        # entity-match list — only the canonical page got the boost.
         if vh.get("entities"):
             meta["entities"] = vh["entities"]
-        # H4 (audit 2026-05-29): the vector row carries summary —
-        # authoritative when Dream / memory_store set it, otherwise
-        # the body-prefix fallback materialised at upsert time. The
-        # renderer keys off this for the warm-tier triage block.
+        # The vector row carries summary — authoritative when Dream /
+        # memory_store set it, otherwise the body-prefix fallback
+        # materialised at upsert time. The renderer keys off this for
+        # the warm-tier triage block.
         if vh.get("summary"):
             meta["summary"] = vh["summary"]
-        # H5 (audit 2026-05-29): propagate the source body length so
-        # the renderer can compute the per-hit completeness qualifier.
-        # ``body_length=0`` (the default) marks "unknown" — the
-        # renderer omits the signal entirely for backward compat.
+        # Propagate the source body length so the renderer can compute
+        # the per-hit completeness qualifier. ``body_length=0`` (the
+        # default) marks "unknown" — the renderer omits the signal
+        # entirely for backward compat.
         if vh.get("body_length") is not None:
             meta["body_length"] = int(vh["body_length"] or 0)
-        # NOTE: A4 reverted P2.5 — body is no longer stored in
-        # LanceDB. `meta["body"]` stays unset; the cold-tier caller
-        # (memory_search._enrich_body) reads it from disk.
+        # NOTE: body is no longer stored in LanceDB. `meta["body"]`
+        # stays unset; the cold-tier caller (memory_search._enrich_body)
+        # reads it from disk.
     return meta
 
 

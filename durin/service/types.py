@@ -8,7 +8,7 @@ HTTP/WS — adapters map ``DomainError.code`` to their own status vocabulary.
 Error classes carry the ``Error`` suffix to match durin's convention
 (``SecretError``, ``IngestError``, …) and satisfy ruff N818.
 
-See ``docs/architecture/api.md``.
+Nothing here imports HTTP/WS — adapters map ``DomainError.code`` to their own status vocabulary.
 """
 
 from __future__ import annotations

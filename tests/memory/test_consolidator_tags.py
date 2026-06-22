@@ -29,8 +29,8 @@ def test_parses_valid_response_with_both_keys() -> None:
 
 
 def test_lenient_drops_malformed_entity_refs() -> None:
-    """Per doc 14 §3.2: malformed entity refs are dropped silently on the
-    read path; only well-formed `<type>:<value>` strings survive."""
+    """Malformed entity refs are dropped silently on the read path;
+    only well-formed `<type>:<value>` strings survive."""
     raw = (
         "- bullet\n"
         "---\n"

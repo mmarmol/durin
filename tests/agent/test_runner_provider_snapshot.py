@@ -1,10 +1,10 @@
 """Per-turn provider snapshot isolation.
 
-Hazard #8 (docs/architecture/concurrency.md): the gateway runs a single shared
-AgentRunner whose self.provider is mutated by _apply_provider_snapshot on each
-concurrent session's /model swap. A turn must be immune to that mutation — it
-must use the provider that was active when run() was called, not whatever
-self.provider points to after a concurrent session has swapped it.
+The gateway runs a single shared AgentRunner whose self.provider is mutated by
+_apply_provider_snapshot on each concurrent session's /model swap. A turn must
+be immune to that mutation — it must use the provider that was active when
+run() was called, not whatever self.provider points to after a concurrent
+session has swapped it.
 
 AgentRunSpec.provider (optional) carries the per-turn snapshot. resolver:
     provider = spec.provider or self.provider   # resolved once in run()

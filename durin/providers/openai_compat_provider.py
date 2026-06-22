@@ -251,8 +251,12 @@ def _is_direct_openai_base(api_base: str | None) -> bool:
     """Return True for direct OpenAI endpoints, not generic OpenAI-compatible gateways."""
     if not api_base:
         return True
-    normalized = api_base.strip().lower().rstrip("/")
-    return "api.openai.com" in normalized and "openrouter" not in normalized
+    raw = api_base.strip()
+    # Compare the parsed host exactly: a substring check would let a look-alike
+    # domain or a path segment (e.g. https://evil.com/api.openai.com,
+    # https://api.openai.com.evil.com) spoof a direct-endpoint match.
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    return (parsed.hostname or "").lower() == "api.openai.com"
 
 
 def _responses_circuit_key(
@@ -306,7 +310,7 @@ class OpenAICompatProvider(LLMProvider):
         self.extra_headers = extra_headers or {}
         self._spec = spec
         self._extra_body = extra_body or {}
-        # OpenClaw-inspired per-model gating for the OpenAI ``parallel_tool_calls``
+        # Per-model gating for the OpenAI ``parallel_tool_calls``
         # request parameter. Some models (e.g. certain glm/qwen builds, some
         # Kimi configurations) misbehave when told they may emit parallel tool
         # calls — they over-emit, hallucinate args, or return 400. The dict
@@ -688,8 +692,8 @@ class OpenAICompatProvider(LLMProvider):
             existing = kwargs.get("extra_body", {})
             kwargs["extra_body"] = _deep_merge(existing, self._extra_body)
 
-        # Per-model gating for the OpenAI ``parallel_tool_calls`` parameter
-        # (OpenClaw-inspired Tier 1). Only injected for models that have an
+        # Per-model gating for the OpenAI ``parallel_tool_calls`` parameter.
+        # Only injected for models that have an
         # explicit override AND only when tools are present (the API rejects
         # the param when tools is null).
         match = self._resolve_parallel_tool_calls(model)

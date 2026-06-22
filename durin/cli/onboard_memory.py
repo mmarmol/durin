@@ -30,7 +30,6 @@ __all__ = [
 ]
 
 
-# Verbatim from `docs/architecture/memory/06_prompts_and_instructions.md` §6.3.
 AUTO_ABSORB_QUESTION_TEXT: str = dedent(
     """\
     After Dream consolidates a batch of observations, it can optionally
@@ -53,7 +52,6 @@ AUTO_ABSORB_QUESTION_TEXT: str = dedent(
 )
 
 
-# Verbatim from `docs/architecture/memory/06_prompts_and_instructions.md` §6.4.
 AUX_MODEL_QUESTION_TEXT: str = dedent(
     """\
     durin's Dream process consolidates memory using an LLM. It runs in
@@ -104,7 +102,6 @@ def prompt_memory_aux_model(
     return str(typed).strip()
 
 
-# Verbatim from `docs/architecture/memory/06_prompts_and_instructions.md` §6.2.
 CROSS_ENCODER_QUESTION_TEXT: str = dedent(
     """\
     Optional: a cross-encoder reranker can improve search quality, at a
@@ -118,14 +115,13 @@ CROSS_ENCODER_QUESTION_TEXT: str = dedent(
 def prompt_enable_cross_encoder(
     current: bool = False, *, recommended: bool = False,
 ) -> bool:
-    """Render the Q6.2 question and return the user's choice.
+    """Render the cross-encoder question and return the user's choice.
 
-    Pre-selected answer is OFF (``recommended=False``): the 2026-06-11
-    LoCoMo A/B (CE replace 0.79 / off 0.78 / enriched+blend 0.77, a
-    statistical tie) showed the reranker doesn't move aggregate answer
-    quality on dialogue-style stores, so onboarding no longer pushes it
-    — it stays a deliberate opt-in. The config-level default was always
-    OFF (CI / library safety). *current* is the abort fallback: Ctrl+C
+    Pre-selected answer is OFF (``recommended=False``): empirical testing
+    showed the reranker does not significantly improve answer quality on
+    dialogue-style knowledge stores, so onboarding no longer pushes it —
+    it stays a deliberate opt-in. The config-level default was always OFF
+    (CI / library safety). *current* is the abort fallback: Ctrl+C
     preserves the operator's existing value rather than applying the
     default.
     """

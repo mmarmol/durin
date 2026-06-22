@@ -1,7 +1,7 @@
 """A FieldPatch is one structured edit the agent or dream emits for an entity.
 
-Applied with precedence against the page's existing per-field provenance
-(design §2.4). The agent emits name/aliases/relations/body patches; the dream
+Applied with precedence against the page's existing per-field provenance.
+The agent emits name/aliases/relations/body patches; the dream
 emits attribute patches (decision b). Apply records provenance per field.
 """
 from __future__ import annotations

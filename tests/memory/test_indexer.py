@@ -1,4 +1,4 @@
-"""Workspace → FTS5 indexer (Phase 2 doc 02 §5 + §6).
+"""Workspace → FTS5 indexer.
 
 The indexer walks `memory/` via the shared `walk_memory` helper and
 writes one row per `.md` to the two FTS5 tables. It also keeps

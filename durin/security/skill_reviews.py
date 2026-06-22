@@ -1,4 +1,4 @@
-"""Workspace-level "reviewed" overrides for active skills (spec §B).
+"""Workspace-level "reviewed" overrides for active skills.
 
 A user (or the LLM judge) can clear a flagged ACTIVE skill to a "Revisada"
 state. The override is stored per-workspace (builtins live in the read-only

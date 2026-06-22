@@ -657,7 +657,7 @@ def _find_block_anchor_matches(content: str, old_text: str) -> list[_MatchSpan]:
     """T2 — Block-anchor matcher: match first+last line exactly (after strip),
     fuzzy-match middle lines with similarity threshold.
 
-    Ported from OpenCode's BlockAnchorReplacer ([edit.ts:284]). Applies only
+    Applies only
     when ``old_text`` has 3+ lines — needs anchors top and bottom plus at
     least one middle line. Useful when the model knows the start and end of
     a block but the interior has changed slightly (reformatted, comment added,
@@ -926,7 +926,7 @@ class EditFileTool(_FsTool):
             raw = fp.read_bytes()
             # Capture a content hash of the bytes we are about to edit against.
             # Immediately before writing we re-hash to detect concurrent changes.
-            # See docs/architecture/concurrency.md — optimistic CAS for workspace files.
+            # Optimistic CAS: capture a content hash before editing; re-hash before writing to detect concurrent changes.
             read_hash = _hash_file(str(fp))
             uses_crlf = b"\r\n" in raw
             content = raw.decode("utf-8").replace("\r\n", "\n")
@@ -987,7 +987,7 @@ class EditFileTool(_FsTool):
 
             # Optimistic CAS: re-hash the file immediately before writing.
             # If another process changed it since our read, abort to avoid
-            # a silent lost update. See docs/architecture/concurrency.md.
+            # a silent lost update.
             if _hash_file(str(fp)) != read_hash:
                 return (
                     "Error: file changed on disk since it was read — "

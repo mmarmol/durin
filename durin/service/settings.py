@@ -271,7 +271,7 @@ class SettingsService:
 
         The ``api_key`` is stored in the secret store and only a
         ``${secret:}`` reference is persisted in config — the dashboard must
-        never write plaintext (see ``docs/11_secrets_design.md``).
+        never write plaintext (the api_key must be stored via the secret store).
         """
         principal.require(Scope.SETTINGS_WRITE)
         from durin.config.loader import load_config, save_config

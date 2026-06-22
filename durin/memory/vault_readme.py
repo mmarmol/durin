@@ -2,8 +2,8 @@
 on-disk layout for human viewers (Obsidian users, future webui /
 desktop app users, anyone browsing the markdown files directly).
 
-Ships this as part of the vault-friendly read-only viewer work
-(2026-05-30). The README is
+Ships this as part of the vault-friendly read-only viewer work.
+The README is
 idempotent: written once at workspace boot if missing, never
 overwritten (so a user who hand-edits it doesn't lose changes on
 next start).
@@ -33,7 +33,7 @@ __all__ = [
 
 VAULT_README_FILENAME = "VAULT_README.md"
 # Per-class navigation helper. Prefixed with `_` so `walk_memory()`
-# skips it (P9 Cambio 5 — see `durin/memory/paths.py`). Lives inside
+# skips it (see `durin/memory/paths.py`). Lives inside
 # each `memory/<class>/` folder.
 CLASS_INDEX_FILENAME = "_INDEX.md"
 
@@ -197,9 +197,9 @@ installing Obsidian.
 ## Where to find more
 
 - Source: `https://github.com/mmarmol/durin`
-- Memory architecture: `docs/architecture/memory/00_overview.md`
-- Search pipeline: `docs/architecture/memory/03_search_pipeline.md`
-- Data layout (this file's source of truth): `docs/architecture/memory/01_data_and_entities.md`
+- Memory architecture: `docs/internals/memory/00_overview.md`
+- Search pipeline: `docs/internals/memory/03_search_pipeline.md`
+- Data layout (this file's source of truth): `docs/internals/memory/01_data_and_entities.md`
 """
 
 

@@ -5,7 +5,7 @@ git history of its content without depending on the system ``git``
 binary. Used by memory (entity pages) and conceptually applicable to
 skills, future X — any subsystem with versionable artifacts.
 
-Design — see ``docs/architecture/memory/05_dream_cold_path.md`` §4:
+Design:
 
 - ``memory/.git/`` (or ``skills/.git/`` etc.) — strictly **local**, no
   remote.  durin never configures sync; that's user opt-in outside our

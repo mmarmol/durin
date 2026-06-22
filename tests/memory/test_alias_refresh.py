@@ -1,10 +1,9 @@
 """Regression: write_entity must refresh the shared AliasIndex in-process.
 
-Hazard #17 (docs/architecture/concurrency.md): the shared AliasIndex
-is built lazily and then mutated incrementally.  Before this fix,
-write_entity did NOT call refresh_for on the shared index, so a
-freshly written entity was invisible to entity-aware ranking until the
-process restarted.
+The shared AliasIndex is built lazily and then mutated incrementally.
+Before this fix, write_entity did NOT call refresh_for on the shared
+index, so a freshly written entity was invisible to entity-aware ranking
+until the process restarted.
 
 This test verifies the in-process fix: build the shared index, write a
 new entity via write_entity, and assert the new entity's alias is

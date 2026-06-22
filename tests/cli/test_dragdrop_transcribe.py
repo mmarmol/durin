@@ -1,4 +1,4 @@
-"""Tests for transcribing dragged-in audio before it reaches the agent (spec §6.1)."""
+"""Tests for transcribing dragged-in audio before it reaches the agent."""
 
 from pathlib import Path
 
