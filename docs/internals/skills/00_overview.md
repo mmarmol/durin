@@ -335,9 +335,8 @@ to the scan report, and makes it inert for the agent. Approve re-gates through
 |---|---|
 | `durin skill list` | List available and quarantined skills with verdict and availability. |
 | `durin skill search <query>` | Search configured registries; returns ranked hits with ref and source. |
-| `durin skill import <ref>` | Import a skill through the full validate + scan + gate pipeline. |
 | `durin skill remove <name>` | Remove or revert-to-builtin (admin action; not an agent tool). |
-| `durin memory dream` | Run all five dream passes manually (extract → derived_from → skill_extract → refine → always_on) plus curate_catalog. |
+| `durin memory dream` | Run all five dream passes manually (extract → derived_from → skill_extract → refine → always_on). `curate_catalog` is run only by the gateway cron job, not by this command. |
 
 ### Agent tools (in-loop, `scope="core"`)
 
@@ -362,7 +361,7 @@ registers `skill_acquire_seed` directly — it is not loaded via `ToolLoader`.
 
 `durin/agent/skills_surface.py` exposes the read model (inventory, quarantine,
 verdict, review overrides) to the web panel and CLI. Web routes:
-`GET /api/skills` (inventory), `GET .../describe` (preview before import),
+`GET /api/v1/skills` (inventory), `GET .../describe` (preview before import),
 `POST .../review` (user override for a flagged active skill),
 `DELETE .../review` (reopen review). Removal routes trigger `remove_skill` or
 revert-to-builtin.

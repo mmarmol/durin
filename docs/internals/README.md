@@ -25,7 +25,24 @@ across docs, only cross-linked by relative path. These docs describe the system
 as it is built, not its history — for direction and discarded approaches, see
 [roadmap.md](../roadmap.md).
 
-## 2. The source-of-truth invariant
+## 2. Mental model
+
+Two invariants hold everywhere in the system:
+
+**Markdown is authoritative; indexes are derived.** Sessions live as
+append-only `sessions/<key>.jsonl` transcripts with a `<key>.meta.json` sidecar.
+Memory lives as `.md` files under `memory/` (entity pages, fragments, session
+summaries). The FTS5 SQLite index (`fts.sqlite`) and the LanceDB vector table are
+built from those files, never the reverse. A corrupted index is a recoverable
+condition — rebuild from the files.
+
+**One loop, many surfaces.** All ~14 chat channels (Telegram, Discord, Slack,
+Email, WebSocket, DingTalk, Feishu, Matrix, WeCom, and others), plus the CLI/TUI
+and the HTTP API, converge on the same `AgentLoop`. Each surface posts an
+`InboundMessage` to the `MessageBus`; the loop processes it identically regardless
+of origin and replies via the outbound side of the same bus.
+
+## 3. The source-of-truth invariant
 
 durin has one load-bearing data invariant, and every subsystem assumes it:
 
@@ -48,7 +65,7 @@ is a recoverable rather than fatal condition, and why concurrent writers
 coordinate over the files (locks, content-addressed commits) rather than over the
 indexes.
 
-## 3. Subsystem dependencies
+## 4. Subsystem dependencies
 
 The agent loop is the hub. The runner executes LLM and tool iterations for it;
 tools, MCP, memory, and skills are the capabilities it reaches. Channels and the
@@ -98,7 +115,7 @@ flowchart TB
     LOOP --> SKILLS
     CRON --> BUS
     DREAM --> MEM
-    DREAM --> SKILLS
+    DREAM -."skill_extract pass".-> SKILLS
 
     CONC -.-> LOOP
     CONC -.-> MEM
@@ -111,7 +128,38 @@ Solid arrows are direct dependencies on the request or cold path. Dotted arrows
 are cross-cutting concerns that apply across many subsystems rather than a single
 call edge.
 
-## 4. Component documents
+## 5. How the pieces fit together
+
+End-to-end flow for a single inbound message:
+
+1. **Surface → bus.** A channel adapter (e.g. `TelegramChannel`, `WebSocketChannel`)
+   receives a message and posts an `InboundMessage` to `MessageBus.inbound`.
+2. **Bus → loop.** `AgentLoop` pulls from the bus. It restores session state from
+   `sessions/<key>.jsonl`, builds the layered system prompt (stable + per-session +
+   volatile), and calls `AgentRunner`.
+3. **Runner → LLM + tools.** `AgentRunner` drives the provider (Claude, GLM, local
+   models, …) through one or more LLM iterations. Each tool call is dispatched via
+   `ToolRegistry`; MCP servers are called via the MCP client; memory is searched
+   via `memory_search`.
+4. **Loop → bus → surface.** The loop appends the completed turn to the session
+   transcript, posts an `OutboundMessage` to `MessageBus.outbound`, and the
+   originating channel adapter delivers the reply.
+5. **Cold path.** The dream cron job reads session transcripts, runs five
+   consolidation passes (extract → derived_from → skill_extract → refine →
+   always_on), and writes results back to `memory/` and skills files. The cron
+   scheduler posts inbound messages for agent tasks and manages per-run sessions.
+
+## 6. Core entry points
+
+| Symbol | File | Role |
+|---|---|---|
+| `AgentLoop` | `durin/agent/loop.py` | Per-turn state machine: RESTORE → RESPOND → persist. Drives `AgentRunner` and owns session state. |
+| `AgentRunner` | `durin/agent/runner.py` | LLM + tool iteration engine. Calls the provider, dispatches tool calls, enforces result budgets. |
+| `MessageBus` | `durin/bus/queue.py` | Async inbound/outbound queues that decouple channel adapters from the agent loop. |
+| `ToolRegistry` | `durin/agent/tools/registry.py` | Discovers, loads, and dispatches built-in tools; merges MCP tool schemas at runtime. |
+| Memory | `durin/memory/` | Entity-centric markdown store, FTS + vector indexing, search pipeline, dream consolidation passes. |
+
+## 7. Component documents
 
 | Component | Document | Role |
 |---|---|---|
@@ -130,7 +178,7 @@ call edge.
 | Observability | [observability.md](observability.md) | Telemetry, status, `durin doctor`, the gateway daemon and its logs. |
 | UX | [ux.md](ux.md) | The unified I/O layer: interactive CLI, Textual TUI, secrets UX, design system. |
 
-## 5. Contributor notes
+## 8. Contributor notes
 
 - **Keep these docs current** when you change a core subsystem. The doc for the
   subsystem you touched is part of the change, not a follow-up.

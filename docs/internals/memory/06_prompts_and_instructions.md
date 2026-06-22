@@ -28,12 +28,13 @@ flowchart TD
     A --> C["Tool descriptions\nMemorySearchTool.description\nand siblings\n(LLM tool-selection)"]
 
     D["Dream cron / reactive trigger"] --> E["Extract pass\nbuild_extract_prompt\nextract_dream.py"]
-    D --> F["Discover pass\nbuild_discover_prompt\nextract_dream.py"]
     D --> G["Skill-extract pass\n_SKILL_EXTRACT_PROMPT\ndream_passes.py\n(agentic sub-agent)"]
     D --> H["Derived-from pass\nbuild_link_prompt\nderived_from_dream.py"]
     D --> I["Always-on pass\n_RANK_PROMPT\nalways_on_dream.py"]
+    D --> J["Refine pass\nauto-absorb gate"]
 
-    J["Refine pass\nauto-absorb gate"] --> K["absorb_judge.md template\nabsorb_judge.py\njudge_pair"]
+    E --> F["Discover stage 2\nbuild_discover_prompt\nextract_dream.py\n(discover=True)"]
+    J --> K["absorb_judge.md template\nabsorb_judge.py\njudge_pair"]
 
     E --> L["JSON attribute object\napplied as FieldPatches"]
     F --> M["JSON entity array\ndream-authored pages"]
@@ -55,7 +56,7 @@ flowchart TD
 
 **`## Memory`** describes the four memory tools and the four content types (entity pages, references, session summaries, skills). It instructs the agent to call `memory_search` rather than answering from cold recall, to state sources, and to issue 2–3 searches for compound questions.
 
-**`## Working with search results`** (a subsection that follows `## Memory`) provides hit-consumption guidelines: read every hit, verify the entity, combine facts across hits, do not reframe, answer multi-part questions partially, never invent identifiers, follow skill hits rather than citing them, and search for skills not in the working set.
+**`## Working with search results`** (a peer `##` section at the same level as `## Memory`) provides hit-consumption guidelines: read every hit, verify the entity, combine facts across hits, do not reframe, answer multi-part questions partially, never invent identifiers, follow skill hits rather than citing them, and search for skills not in the working set.
 
 **`## Memory writing`** routes by information type: entity facts go to `memory_upsert_entity`, whole documents go to `memory_ingest`, raw interactions require nothing (the session is already recorded). It instructs the agent to search before authoring to avoid duplicates.
 
@@ -184,7 +185,7 @@ Sections with zero hits are omitted entirely.
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for `ReactiveDreamGate`; `0` disables; daily cron is never throttled |
 | `memory.dream.max_seconds_per_run` | `600` | Wall-clock cap for the extract pass; it yields after the current session and the per-session cursor resumes on the next trigger |
 | `memory.search.cross_encoder.enabled` | `false` | Enables the cross-encoder reranker (displayed in onboarding as an opt-in) |
-| `memory.search.cross_encoder.model` | (sentence-transformers default) | Cross-encoder model for reranking |
+| `memory.search.cross_encoder.model` | `BAAI/bge-reranker-base` | Cross-encoder model for reranking |
 
 **CLI surfaces:**
 - `durin memory dream` — run all five passes immediately (bypasses `ReactiveDreamGate`)

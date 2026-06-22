@@ -38,8 +38,8 @@ schemas into a stable sorted prefix + suffix so identical requests benefit from
 prompt caching.
 
 **2. Mode-as-data permission filtering.**
-`AgentMode` is a pure data object: a frozenset of allowed tool names, an optional
-frozenset of denied names, and a prompt suffix. There is no conditional code in
+`AgentMode` is a pure data object: a name, a description, a frozenset of allowed
+tool names, an optional frozenset of denied names, and a prompt suffix. There is no conditional code in
 the runner that says "in plan mode, skip edits." Instead, `_active_tool_definitions()`
 filters the definition list to what the active mode allows before each LLM call,
 so the model never sees disallowed schemas. At execution time, `_run_tool()` applies
@@ -104,9 +104,9 @@ flowchart TD
 
 At startup, `ToolLoader.load()` scans `durin/agent/tools/` with `pkgutil.iter_modules`,
 importing each module and collecting concrete `Tool` subclasses. Modules listed in
-`_SKIP_MODULES` (`base`, `schema`, `registry`, `context`, `loader`, `mcp`,
-`__init__`, `runtime_state`) are skipped because they export infrastructure, not
-tools. For each discovered class:
+`_SKIP_MODULES` (`base`, `schema`, `registry`, `context`, `loader`, `config`,
+`file_state`, `sandbox`, `mcp`, `__init__`, `runtime_state`) are skipped because
+they export infrastructure, not tools. For each discovered class:
 
 1. The class's `_scopes` set is checked against the requested scope (`core` for
    the main agent, `subagent` for spawned workers).
@@ -231,7 +231,7 @@ grants access to the tool that produced the result.
 | `ExecTool` | `durin/agent/tools/shell.py` | Shell command execution (`exec` tool); implements deny patterns, workspace boundary enforcement, sandbox wrapping, background process support, and per-output spill |
 | `truncate_with_spill` | `durin/agent/tools/output_spill.py` | Overflow helper: writes full content to `.durin/spills/`, returns head+tail+spill-ref rendering |
 | `emit_tool_event` | `durin/agent/tools/_telemetry.py` | Free function for structured telemetry from tool code; privacy-trims free-text fields; silently no-ops when no session logger is bound |
-| `AgentMode` | `durin/agent/agent_mode.py` | Frozen dataclass holding `allowed` / `denied` frozensets and `prompt_suffix`; `is_tool_allowed(name)` is the single permission check called by both the definition filter and the execution gate |
+| `AgentMode` | `durin/agent/agent_mode.py` | Frozen dataclass holding `name`, `description`, `allowed` / `denied` frozensets, and `prompt_suffix`; `is_tool_allowed(name)` is the single permission check called by both the definition filter and the execution gate |
 | `AgentRunner` | `durin/agent/runner.py` | Inner LLM/tool loop; owns `_execute_tools`, `_run_tool`, `_normalize_tool_result`, `_enforce_turn_budget`, `_drop_orphan_tool_results`, `_backfill_missing_tool_results`, and `_active_tool_definitions` |
 | MCP tool wrappers | `durin/agent/tools/mcp.py` | Wraps each remote MCP tool as a native `Tool` instance registered as `mcp_<server>_<tool>`; see [mcp.md](mcp.md) for the full MCP integration |
 

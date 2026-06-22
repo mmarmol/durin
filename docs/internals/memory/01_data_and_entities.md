@@ -7,7 +7,8 @@ This document describes what the memory system stores, where it lives, what shap
 The memory system stores two parallel tracks:
 
 - **Track 1 — entities**: synthesized, canonical knowledge (`memory/entities/`). Written through a single git-CAS write path under per-field authorship precedence.
-- **Track 2 — fragments**: raw, append-only observations (`memory/episodic/`, `memory/stable/`, `memory/corpus/`, `memory/session_summary/`). Surfaced by recency; never consolidated into entity pages.
+- **Track 2 — fragments**: raw, append-only observations (`memory/episodic/`, `memory/stable/`, `memory/session_summary/`). Surfaced by recency; never consolidated into entity pages.
+- **Track 2 — references**: ingested documents kept whole (`memory/references/<slug>.md`). Written by `memory_ingest`; token-aware chunk index stored as a `.chunks.jsonl` sidecar. Legacy `corpus/` entries are still walked and indexed for historical content but `memory_ingest` no longer writes there.
 
 Markdown files are the source of truth. Indices (LanceDB vector + SQLite FTS5) are derived and can be fully rebuilt from the files at any time.
 
@@ -43,7 +44,8 @@ flowchart TD
         subgraph memory_dir ["memory/"]
             EP["episodic/&lt;id&gt;.md"]
             ST["stable/&lt;id&gt;.md"]
-            CO["corpus/&lt;id&gt;.md"]
+            RF["references/&lt;slug&gt;.md\n+ .chunks.jsonl sidecar"]
+            CO["corpus/&lt;id&gt;.md\n(legacy — indexed, not written)"]
             PE["pending/&lt;id&gt;.md\n(not indexed)"]
             SS["session_summary/&lt;key&gt;.md"]
             EN["entities/&lt;type&gt;/&lt;slug&gt;.md"]
@@ -51,7 +53,7 @@ flowchart TD
         end
     end
 
-    EP & ST & CO & SS & EN -->|"vector + FTS5\n(derived, reconstructible)"| IDX[".durin/index/\nLanceDB + FTS5"]
+    EP & ST & RF & CO & SS & EN -->|"vector + FTS5\n(derived, reconstructible)"| IDX[".durin/index/\nLanceDB + FTS5"]
     PE -.->|never indexed| IDX
     AR -.->|excluded by default| IDX
 ```
@@ -76,7 +78,9 @@ flowchart TD
 └── memory/
     ├── episodic/<id>.md             raw atomic observations
     ├── stable/<id>.md               user-marked durable notes
-    ├── corpus/<id>.md               chunks from ingested documents
+    ├── references/<slug>.md         ingested documents kept whole
+    │   └── <slug>.chunks.jsonl      token-aware chunk index (vector units)
+    ├── corpus/<id>.md               legacy — still indexed, no longer written
     ├── pending/<id>.md              intake buffer (never indexed)
     ├── session_summary/<key>.md     compaction summaries (vector-indexed)
     ├── entities/<type>/<slug>.md    synthesized canonical entity pages
@@ -91,8 +95,9 @@ flowchart TD
 |---|---|---|---|---|
 | Session | `sessions/<key>.jsonl` + `.meta.json` | Evidence | FTS5 per-turn rows; NOT vector-indexed | Append-only during session |
 | Session summary | `memory/session_summary/<key>.md` | 2 — raw | Vector + FTS5 | Replaced on re-compaction |
-| Ingested | `ingested/<ingest_id>/` | Evidence | Not directly; via corpus | Write-once |
-| Corpus | `memory/corpus/<id>.md` | 2 — raw | Vector + FTS5 | Replaced on re-ingest |
+| Ingested | `ingested/<ingest_id>/` | Evidence | Not directly; via references | Write-once |
+| Reference | `memory/references/<slug>.md` | 2 — raw | Vector (chunks) + FTS5 (whole doc) | Replaced on re-ingest (idempotent by content hash) |
+| Corpus (legacy) | `memory/corpus/<id>.md` | 2 — raw | Vector + FTS5 | No longer written by memory_ingest; historical entries are still indexed |
 | Episodic | `memory/episodic/<id>.md` | 2 — raw | Vector + FTS5 | Append-only |
 | Stable | `memory/stable/<id>.md` | 2 — raw | Vector + FTS5 | Semi-mutable (user-editable) |
 | Pending | `memory/pending/<id>.md` | Buffer | Never indexed | Short-lived |
@@ -235,7 +240,7 @@ Before any system write touches git, `_commit_dirty_as_user()` commits any uncom
 
 ### Archive
 
-When a fragment is retired (`memory_forget` / webui) or when the refine dream merges one entity into another, the file is moved to `memory/archive/<class>/<id>.md`. The archived file gains `archived_at` and `archived_into` frontmatter fields. Corpus chunks are deleted (not archived) on re-ingest — the `memory/.git/` history already preserves every prior version.
+When a fragment is retired (`memory_forget` / webui) or when the refine dream merges one entity into another, the file is moved to `memory/archive/<class>/<id>.md`. The archived file gains `archived_at` and `archived_into` frontmatter fields. Reference files at `memory/references/<slug>.md` are replaced in-place on re-ingest (idempotent by content hash) — the `memory/.git/` history preserves prior versions. Legacy corpus entries were deleted (not archived) on re-ingest under the old model.
 
 Archive is excluded from all default search paths: the vector index, FTS5, the grep fallback, and all workspace walkers. Access requires explicit opt-in.
 
@@ -246,6 +251,7 @@ Archive is excluded from all default search paths: the vector index, FTS5, the g
 | Symbol | File | Role |
 |---|---|---|
 | `MemoryEntry` | `durin/memory/schema.py` | Pydantic model for episodic / stable / corpus / pending. Validates `<type>:<value>` entity refs at construction. |
+| `ingest_reference` | `durin/memory/reference.py` | Writes an ingested document whole to `memory/references/<slug>.md` and a token-aware `.chunks.jsonl` sidecar. Returns `ReferenceResult(ref, path, chunk_count)`. |
 | `EntityPage` | `durin/memory/entity_page.py` | Dataclass for `memory/entities/<type>/<slug>.md`. Lenient on read (`from_text`), strict on write (`to_markdown` + `_validate`). Holds `extra` dict for emergent fields. |
 | `Author` | `durin/memory/provenance.py` | `Literal["user_authored", "agent_created"]`. Used in both `MemoryEntry.author` and `EntityPage.author`. |
 | `author_scope` | `durin/memory/provenance.py` | Context manager that sets the ambient write author via `ContextVar`. Required on every memory write path. |
@@ -255,6 +261,7 @@ Archive is excluded from all default search paths: the vector index, FTS5, the g
 | `slugify_name` | `durin/memory/entities.py` | NFC → unidecode → lowercase → punct-to-underscore → truncate-64 pipeline. |
 | `resolve_slug_collision` | `durin/memory/entities.py` | Appends `_2`, `_3`, … suffix to avoid collisions in both live and archived paths. |
 | `SUGGESTED_TYPES` | `durin/memory/entities.py` | `frozenset` of 8 broad types as hints for the dream prompt. Not an enforced enum. |
+| `FieldPatch` | `durin/memory/field_patch.py` | Dataclass for one structured entity edit: `(kind, key, value, author, source_ref, at)`. Applied by `write_entity` in order, under per-field authorship precedence. |
 | `write_entity` | `durin/memory/memory_writer.py` | Single entity write path: read@HEAD → apply patches (precedence) → dulwich commit → CAS → fast-forward. Retries up to 30× on conflict. |
 | `save_entry` | `durin/memory/storage.py` | Writes a `MemoryEntry` as markdown + YAML frontmatter (wikilink-wraps `source_refs`/`related` at the storage boundary). |
 | `load_entry` | `durin/memory/storage.py` | Reads and parses a `MemoryEntry`; strips wikilink wrappers back to plain URIs. |

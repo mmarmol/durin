@@ -34,8 +34,14 @@ tries: (1) a user-declared `model_capabilities` override, (2) the vendored conse
 snapshot merged from three public sources, (3) a heuristic by model-name prefix,
 (4) a pessimistic default that assumes no vision, no audio, no PDF. The returned
 `ModelCapabilities` dataclass always carries a `source` field (`"override"`,
-`"snapshot"`, `"heuristic"`, or `"default"`). Bridge tools inspect `source` to decide
-whether the absence of a capability is *known* or merely *unknown*.
+`"snapshot"`, `"heuristic"`, or `"default"`). The `source` field is informational —
+it is not inspected by bridge tools for activation decisions.
+
+**Bridge tools gate on aux provider config, not capability source.** `InterpretImageTool`
+and `InterpretAudioTool` register themselves only when `ctx.aux_providers["vision"]`
+or `ctx.aux_providers["audio"]` is set (respectively). If the aux model is not
+configured, the tool is absent from the LLM's tool list entirely. The capability
+`source` field plays no role in bridge-tool activation.
 
 **Auxiliary models resolve independently per purpose.** The `agents.aux_models.vision`,
 `agents.aux_models.audio`, and `agents.aux_models.memory` config fields each accept
@@ -83,9 +89,9 @@ flowchart TD
     H -- "no" --> J["LLMProvider"]
     I --> J
 
-    CAPS --> K{"source not in\nheuristic/default\nAND lacks capability?"}
+    CAPS --> K{"aux_providers[vision/audio]\nconfigured?"}
     K -- "yes" --> L["Bridge tool activates\n uses AUX model"]
-    K -- "no" --> M["Bridge tool disabled\n primary model used directly"]
+    K -- "no" --> M["Bridge tool absent\n from tool list"]
 
     J --> N["provider.chat_stream_with_retry()\n transient retry + telemetry"]
 ```
@@ -96,9 +102,9 @@ flowchart TD
 |---|---|
 | Direct / custom | `custom`, `azure_openai`, `bedrock` |
 | Gateways | `openrouter`, `huggingface`, `aihubmix`, `siliconflow`, `volcengine`, `volcengine_coding_plan`, `byteplus`, `byteplus_coding_plan` |
-| Standard | `anthropic`, `openai`, `deepseek`, `gemini`, `zhipu`, `zai_coding_plan`, `dashscope`, `moonshot`, `minimax`, `minimax_anthropic`, `mistral`, `stepfun`, `xiaomi_mimo`, `longcat`, `groq`, `qianfan`, `nvidia` |
-| OAuth | `openai_codex`, `github_copilot` |
+| Standard | `anthropic`, `openai`, `openai_codex` (OAuth), `github_copilot` (OAuth), `deepseek`, `gemini`, `zhipu`, `zai_coding_plan`, `dashscope`, `moonshot`, `minimax`, `minimax_anthropic`, `mistral`, `stepfun`, `xiaomi_mimo`, `longcat` |
 | Local | `vllm`, `ollama`, `lm_studio`, `atomic_chat`, `ovms` |
+| Auxiliary | `nvidia`, `groq`, `qianfan` |
 
 Gateways appear early in the registry but have no model-name keywords, so they only
 match via key-prefix detection (`detect_by_key_prefix`) or explicit provider setting —
@@ -190,10 +196,10 @@ implements a four-tier fallthrough:
    `source="heuristic"`.
 4. **Default**: all capability flags `False`, `source="default"`.
 
-Bridge tools gate their activation on `source not in {"heuristic", "default"}` combined
-with the relevant flag being `False`. This means: if we genuinely know the model lacks
-vision, activate the vision bridge; if we just don't know, leave the primary model in
-charge.
+The `source` field is informational; bridge tools do not inspect it for activation.
+`InterpretImageTool` and `InterpretAudioTool` gate purely on whether
+`ctx.aux_providers["vision"]` or `ctx.aux_providers["audio"]` is configured — if
+the aux model entry is absent, the tool is not registered in the tool list at all.
 
 ### 4.6 Auxiliary model resolution
 
@@ -365,11 +371,12 @@ detection entirely.
 **Why four capability tiers and a `source` field?**
 Capability data degrades gracefully without crashing. A model the snapshot doesn't know
 about still gets a `heuristic` or `default` result rather than an error. The `source`
-field lets bridge tools distinguish "this model definitely has no vision" (source=snapshot,
-supports_vision=False) from "we have no idea" (source=default). Activating a bridge
-when we don't know the primary model's capabilities would send modality data to a model
-that might reject or mishandle it, so the conservative choice — leave the primary model
-in charge — is the right default.
+field is useful for diagnostics and tooling — it tells observers whether a capability
+answer came from a confirmed snapshot entry, a name-prefix heuristic, or a pessimistic
+fallback. Bridge tool activation is governed separately: `interpret_image` and
+`interpret_audio` register only when the user explicitly configures an aux provider for
+that purpose, so the conservative choice — no aux config, no bridge — is enforced at
+the config layer, not at runtime capability inspection.
 
 **Why does prompt-caching support live on the provider spec, not on `ModelCapabilities`?**
 Prompt caching requires the provider to proxy the `cache_control` field on content

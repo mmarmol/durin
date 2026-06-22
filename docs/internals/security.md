@@ -253,7 +253,7 @@ capped at 10,000 entries to bound store growth. `resolve()` iterates stored toke
 and uses `hmac.compare_digest()` for timing-safe comparison.
 
 `Principal` (`durin/service/principal.py`) is an immutable dataclass carrying
-`subject` (token id or `"local"`), `scopes` (a `frozenset` of `Scope` enum
+`subject` (token id or `"local"`), `scopes` (a `frozenset[str]` of scope string
 values), and `kind` (`"local"` or `"remote"`). In-process callers (TUI, cron)
 use `Principal.local()`, which carries `Scope.ADMIN` and is never checked against
 a token. Remote callers receive a `Principal` built from the verified token's
@@ -328,10 +328,10 @@ durin secret set-scope NAME   # update which consumers receive a secret automati
 |---|---|---|
 | `POST /api/v1/auth/tokens` | `system:write` | Issue a new API token (plaintext returned once) |
 | `GET  /api/v1/auth/tokens` | `system:read` | List token metadata (no hashes or plaintexts) |
-| `DELETE /api/v1/auth/tokens/{id}` | `system:write` | Revoke a token |
+| `DELETE /api/v1/auth/tokens` | `system:write` | Revoke a token (token_id in request body) |
 | `GET  /api/v1/secrets` | `secrets:read` | List stored secret names and metadata |
-| `POST /api/v1/secrets/{name}` | `secrets:write` | Create or replace a secret |
-| `DELETE /api/v1/secrets/{name}` | `secrets:write` | Delete a secret |
+| `POST /api/v1/secrets` | `secrets:write` | Create or replace a secret (name in request body) |
+| `DELETE /api/v1/secrets` | `secrets:write` | Delete a secret (name in request body) |
 
 ### Web UI surfaces
 

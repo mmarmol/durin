@@ -132,7 +132,7 @@ In agent runs (`headless=True`), the redirect handler raises `NeedsInteractiveAu
 
 ### Security
 
-**Injection scan.** Before registering any tool, resource, or prompt, `_scan_metadata` calls `mcp_security.scan_injection` on the name and description fields. The scan looks for structural markers only: forged role delimiters (`system:`, `<|im_start|>`), runnable tool-call fences (`` ```tool_call ``), base64 blobs of 200 or more contiguous characters, and data URIs. Findings are logged as warnings; tools are registered regardless — the scan is advisory, not a block.
+**Injection scan.** Before registering any tool, resource, or prompt, `_scan_metadata` calls `mcp_security.scan_injection` on the name and description fields. The scan looks for structural markers only: forged role delimiters (`system:`, `<|im_start|>`, `[INST]`, `## instruction:`, among others), runnable tool-call fences (`` ```tool_call ``), base64 blobs of 200 or more contiguous characters, and data URIs. Findings are logged as warnings; tools are registered regardless — the scan is advisory, not a block.
 
 **Spawn command screening.** Before opening a stdio transport, `_enforce_spawn_policy` calls `scan_spawn_command`. If the command is a shell interpreter (bash, powershell, etc.) and its inline arguments carry network-egress tools (curl, wget, nc, etc.), codes are returned. Under `spawn_egress_policy='refuse'`, the spawn is blocked with a `PermissionError`. Under the default `'warn'`, it logs and proceeds.
 
@@ -162,7 +162,9 @@ MCP servers can request sampling (asking durin's LLM to generate text), declare 
 | `MCPSamplingConfig` | `durin/config/schema.py` | Per-server sampling governance: `enabled` (default `False`), `max_tokens_cap`, `requests_per_minute`, `allowed_models`, `allow_tools`, `max_tool_rounds`. |
 | `mcp_catalog_store` (module) | `durin/agent/mcp_catalog_store.py` | Loads vendored floor + optional cache overlay; searches by substring and fuzzy matching; ranks verified tier first then by stars. |
 | `McpServerHit` / `McpServerDetail` | `durin/agent/mcp_registry.py` | Search result and full install metadata. `McpServerDetail` carries `PackageSpec` (stdio launchers) and `RemoteSpec` (HTTP endpoints). |
-| `McpRegistry` (Protocol) | `durin/agent/mcp_registry.py` | Adapter contract: `search(query, limit)` and `describe(ref)`. Implemented by `OfficialMcpRegistry` (queries GitHub catalog). |
+| `McpRegistry` (Protocol) | `durin/agent/mcp_registry.py` | Adapter contract: `search(query, limit)` and `describe(ref)`. |
+| `OfficialMcpRegistry` | `durin/agent/mcp_registry.py` | Queries `registry.modelcontextprotocol.io` (`BASE`). Used for broad install-grade search and `describe`; richer metadata wins on describe when both adapters are active. |
+| `GithubMcpRegistry` | `durin/agent/mcp_registry.py` | Queries GitHub's curated MCP catalog at `api.mcp.github.com`; always-on (no auth token required). Provides the `verified` tier signal in the catalog. |
 | `mcp_install` (module) | `durin/agent/mcp_install.py` | Converts `McpServerDetail` to `MCPServerConfig`; detects runtimes (npx/uvx/docker), pins versions, collects secrets, probes OAuth capability. |
 | `SecretsTokenStorage` | `durin/agent/tools/mcp_oauth.py` | Implements the SDK's `TokenStorage` protocol; persists OAuth tokens and DCR client registration in durin's secret store, keyed per server + URL hash. |
 | `NeedsInteractiveAuthError` | `durin/agent/tools/mcp_oauth.py` | Raised by the headless redirect handler when agent-run OAuth would require a browser; carries the `durin mcp login` instruction. |

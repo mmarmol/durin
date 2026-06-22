@@ -142,7 +142,7 @@ loop. WS and HTTP share the same port.
    which the handler maps to a 401 problem+json response.
 
 3. **Input construction.** For GET routes, the handler merges query-string
-   parameters (multi-value via `.getlist`) with URL path parameters, path params
+   parameters (multi-value via `request.query_params.multi_items()`) with URL path parameters, path params
    winning on collision, and constructs the `request_model`. For
    POST/DELETE/PATCH routes, the JSON body (absent or empty body treated as `{}`)
    is merged with path params the same way. A Pydantic `ValidationError` during
@@ -211,7 +211,7 @@ methods are added or removed.
 the peer IP (localhost-only unless a `token_issue_secret` header matches the
 configured secret) and mints an `admin`-scoped token through
 `ApiTokenStore.issue()`. The response includes `{token, ws_path, expires_in,
-model_name, requires_secret}`. The token is stored as a salted SHA-256 hash;
+model_name, model_preset, requires_secret}`. The token is stored as a salted SHA-256 hash;
 the plaintext is shown once and never persisted.
 
 The `ApiTokenStore` also generates and persists a 32-byte HMAC secret for media
@@ -249,9 +249,9 @@ URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
 
 | Key | Description |
 |---|---|
-| `auth.static_token` | Plaintext bearer token granting `ADMIN` access; accepted by `resolve_principal_from_headers` as a fallback when no stored token matches |
-| `auth.token_issue_secret` | Header value required to mint tokens via `/webui/bootstrap` when the request is not from localhost (enables reverse-proxy deployments) |
-| `auth.require_secret_to_mint_tokens` | When true, bootstrap always requires the `token_issue_secret` header; when false, localhost requests can mint tokens without it |
+| `channels.websocket.token` | Plaintext static bearer token; accepted by the WS handshake and by `resolve_principal_from_headers` as a fallback when no stored token matches |
+| `channels.websocket.token_issue_secret` | Header value (`Authorization: Bearer` or `X-Durin-Auth`) required to mint tokens via `/webui/bootstrap` when the request is not from localhost; enables reverse-proxy deployments |
+| `channels.websocket.websocket_requires_token` | When true (default), the WS handshake must include a valid token (static or issued); when false, unauthenticated connections are allowed |
 | `tools.mcp_servers` | List of MCP server configs; `McpService.update` (PATCH) and other MCP routes mutate this via `save_config` |
 | Gateway host/port | Set via the `--port` flag or config; uvicorn runs in the agent event loop; WS and HTTP share the same port |
 

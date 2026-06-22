@@ -361,11 +361,16 @@ These are for human operators, not agent tools.
 | Command | Purpose |
 |---|---|
 | `durin memory reindex [--target lancedb\|fts\|all]` | Wipe `.durin/index/` and rebuild from `.md` files. |
-| `durin memory dream [--entity <uri>]` | Manually trigger all five Dream passes, optionally scoped to one entity. |
-| `durin memory absorb [--auto\|--interactive]` | Run the absorb-judge over alias-overlap candidates. |
+| `durin memory dream [entity] [--dry-run]` | Manually trigger all five Dream passes. `entity` is an optional positional arg (e.g. `person:marcelo`); per-entity filtering is not yet applied by the passes. |
+| `durin memory absorb <canonical> <absorbed> [--reason/-r TEXT] [--yes/-y]` | Merge two entity pages: `canonical` survives, `absorbed` moves to archive. |
+| `durin memory absorb-suggest` | List candidate pairs that share at least one alias (merge hints). |
+| `durin memory stats [--days N] [--json]` | Aggregate memory telemetry and filesystem counts. |
 | `durin memory forget <uri>` | Archive an entry + drop its index rows (same helper as the agent tool). |
-| `durin memory history <uri>` | Git log for an entity's `.md` file. |
-| `durin memory health [restore --component <name>]` | Inspect health-check state; retry restoration for a paused index component. |
+| `durin memory history <entity>` | Git log for an entity's `.md` file. |
+| `durin memory show <entity> [--rev SHA]` | Print entity page content at a given revision. |
+| `durin memory diff <entity> [--from..to]` | Unified diff of an entity page between revisions. |
+| `durin memory revert <commit>` | Undo a consolidation commit. |
+| `durin memory expand <entity>` | Show sources, related entities, and archived versions for an entity. |
 
 ### Read-only webui API (not agent-facing)
 

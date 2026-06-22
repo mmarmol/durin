@@ -57,6 +57,27 @@ Direct jumps to the most-read component docs:
 - [Releasing](releasing.md) — how releases are cut.
 - [Roadmap](roadmap.md) — direction, and what durin is deliberately not doing.
 
+## Mental model
+
+Three things to hold in your head:
+
+1. **One agent loop, many surfaces.** Every message — from the terminal, the TUI,
+   the web dashboard, Telegram, Slack, or any of the ~14 supported chat channels —
+   arrives as an `InboundMessage` on the message bus and goes through the same
+   `AgentLoop`. Channels differ only in I/O; the agent behaves identically
+   regardless of origin.
+
+2. **Markdown is the truth; indexes are derived.** Sessions live as
+   `sessions/<key>.jsonl` transcripts. Memory lives as `.md` files under
+   `memory/`. The SQLite FTS index and the LanceDB vector table accelerate search
+   but are never authoritative — a corrupted index is recoverable by rebuilding
+   from the files.
+
+3. **Hot path vs cold path.** The hot path is the per-turn loop (receive →
+   restore → respond → persist). The cold path runs offline: the dream job
+   consolidates conversations into memory and skills; cron schedules reminders and
+   agent tasks.
+
 ## The whole system at a glance
 
 A message enters through a surface, crosses the message bus, runs through the
@@ -71,7 +92,7 @@ flowchart TB
         CLI["CLI"]
         TUI["Textual TUI"]
         WEB["Web dashboard"]
-        CH["Chat channels<br/>Telegram / Discord / Slack<br/>Email / WebSocket"]
+        CH["Chat channels<br/>Telegram / Discord / Slack<br/>Email / WebSocket / …"]
     end
 
     subgraph core["Agent core"]

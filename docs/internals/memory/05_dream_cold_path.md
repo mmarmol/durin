@@ -286,7 +286,7 @@ cross-process lock `SessionManager` uses for that session's sidecar.
 | `get_extract_cursor` / `set_extract_cursor` | `durin/memory/extract_runner.py` | Read / advance the per-session cursor (top-level key, legacy fallback). |
 | `EntityAbsorption.find_candidates` / `.absorb` | `durin/memory/absorption.py` | Alias-overlap candidate discovery; deterministic merge via three-file CAS commit. |
 | `memory_writer.write_entity` / `write_files_cas` | `durin/memory/memory_writer.py` | Single / multi-file CAS write path with per-field author precedence. |
-| `FieldPatch` | `durin/memory/field_patch.py` | Immutable patch (kind, key, value, author, source_ref, timestamp) applied by precedence. |
+| `FieldPatch` | `durin/memory/field_patch.py` | Immutable patch (kind, key, value, author, source_ref, at) applied by precedence. |
 | `EntityPage` | `durin/memory/entity_page.py` | Parsed entity page (frontmatter + body) with per-author provenance. |
 | `resolve_memory_model` | `durin/memory/model_resolve.py` | Resolve the dream model name across the precedence chain. |
 

@@ -161,9 +161,9 @@ The indexer's third pass in `rebuild_fts_index` walks `sessions/*.md` and yields
 | `CURRENT_SCHEMA_VERSION` | `durin/memory/index_meta.py` | Integer constant, currently `7`. Bumped when indexer row shape or derivation rules change incompatibly. |
 | `rebuild_fts_index` | `durin/memory/indexer.py` | Wipes and re-derives the entire FTS5 database from `walk_memory` + skill walk + session turn walk. Returns `IndexStats(indexed, errors)`. |
 | `reindex_one_file` | `durin/memory/indexer.py` | Synchronous per-file FTS upsert (or delete) called by the file watcher and Dream apply. Skips archive and pending; symmetric vector delete on file vanish. |
-| `reindex_one_file_vector` | `durin/memory/indexer.py` | Reactive entity-page vector upsert called by the file watcher. Covers `memory/entities/<type>/<slug>.md` only; other types are embedded at write time. |
+| `reindex_one_file_vector` | `durin/memory/indexer.py` | Reactive entity-page vector upsert called by the file watcher. Covers `memory/entities/<type>/<slug>.md` only; other types are embedded at write time. Internal — not in `__all__`. |
 | `reindex_one_skill` | `durin/memory/indexer.py` | Synchronous per-skill FTS upsert called by `skills_store` after create/edit/delete. |
-| `reindex_session_file` | `durin/memory/indexer.py` | Incremental session FTS indexing: inserts only turns whose URIs are absent from `fts_meta`. |
+| `reindex_session_file` | `durin/memory/indexer.py` | Incremental session FTS indexing: inserts only turns whose URIs are absent from `fts_meta`. Internal — not in `__all__`. |
 | `ensure_index_fresh` | `durin/memory/indexer.py` | Startup gate: compares on-disk `schema_version` and `embedding_model_id` to current code; triggers rebuild on mismatch. Idempotent within one process via `_FRESHNESS_CHECKED` cache. |
 | `detect_index_staleness` | `durin/memory/indexer.py` | Compares `fts_meta` to filesystem: reports `missing_row`, `mtime_lag`, and `row_for_missing_file` issues. Used by the health-check cron. |
 | `IndexStats` | `durin/memory/indexer.py` | Frozen dataclass: `indexed` count, `errors` count. Returned by `rebuild_fts_index`. |
@@ -177,7 +177,6 @@ The indexer's third pass in `rebuild_fts_index` walks `sessions/*.md` and yields
 | Key | Default | Effect |
 |---|---|---|
 | `memory.embedding.model` | `intfloat/multilingual-e5-small` | Embedding model for all vector writes. Changing the model triggers a full vector rebuild on next startup (detected by `ensure_index_fresh` via `meta.json`). |
-| `memory.embedding.dimension` | Derived from model catalog | Expected vector dimension. Validated against the on-disk table at startup. |
 | `memory.index_skills` | `true` | Includes `skills/<slug>/SKILL.md` in both FTS and vector index walks. When disabled, existing skill rows are pruned by the next drift-repair pass. |
 | `memory.file_watcher.enabled` | `true` | Starts the file watcher daemon that reactively re-indexes edited `.md` files under `memory/`. |
 | `memory.health_check.enabled` | `true` | Enables the periodic health-check that runs staleness detection and orphan pruning. |

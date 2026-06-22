@@ -26,7 +26,7 @@ Three ideas underpin the observability design:
 
 **Events are the only window into runtime behavior.** The memory subsystem is a background service — no TUI, no blocking calls visible to the user. An operator learns what happened by querying the telemetry log after the fact.
 
-**Hot-path and cold-path emit separately.** Each `memory_search` call emits a top-level `memory.recall` event and one sub-event per pipeline stage (vector, lexical, RRF, rerank). Dream passes emit `memory.dream.start` / `memory.dream.end` pairs, plus per-entity and per-session detail events. This separation lets dashboards attribute latency or failure to the specific stage that caused it.
+**Hot-path and cold-path emit separately.** Each `memory_search` call emits a top-level `memory.recall` event and one sub-event per pipeline stage (vector, lexical, RRF, rerank). The extract, derived_from, and refine dream passes emit `memory.dream.start` / `memory.dream.end` pairs; the skill-extract and always-on passes emit their own named events (`memory.dream.skill_extract`, `memory.dream.always_on`) with no start/end envelope. This separation lets dashboards attribute latency or failure to the specific stage that caused it.
 
 **The catalog is authoritative; this document annotates.** `EVENTS` in `schema.py` is the exhaustive list. This document explains the fields and usage patterns that need explanation; a new event shipping without a section here is expected, not drift — consult `schema.py` for the complete set.
 
@@ -40,6 +40,7 @@ flowchart TD
         MS --> RV[memory.recall.vector]
         MS --> RL[memory.recall.lexical]
         MS --> RR[memory.recall.rrf]
+        MS --> RG[memory.recall.grep_verify]
         MS --> RK[memory.recall.rerank]
         MS --> SF[memory.search.failure\nif any stage raises]
     end
@@ -55,13 +56,13 @@ flowchart TD
 
     subgraph DreamPath["Dream cold path (five passes)"]
         DS[Dream trigger\ncron / reactive / manual]
-        DS --> DST[memory.dream.start\nkind=extract or refine]
+        DS --> DST["memory.dream.start\nkind=extract | derived_from | refine"]
         DST --> PA[memory.dream.patch_applied\nper entity written]
         DST --> DC[memory.dream.discover\nper session stage-2]
-        DST --> SK[memory.dream.skill_extract]
-        DST --> SK2[memory.dream.skill_signals]
-        DST --> AO[memory.dream.always_on]
         DST --> DE[memory.dream.end]
+        DS --> SK[memory.dream.skill_extract\nskill-extract pass, no start/end]
+        SK --> SK2[memory.dream.skill_signals]
+        DS --> AO[memory.dream.always_on\nalways-on pass, no start/end]
         DS --> TH[memory.dream.throttled\nif reactive gate skips]
         DS --> MX[memory.dream.max_seconds_reached\nif cap hit]
     end
@@ -120,15 +121,18 @@ Each `memory_search` call emits:
 
 ### Dream events (cold path — five passes)
 
-Each dream pass begins with `memory.dream.start` (`kind` = `extract` or `refine`) and ends with `memory.dream.end`. Extract-pass `dream.end` carries `entities_consolidated`, `entities_failed`, `sessions`, and `yielded` (true when `max_seconds_per_run` cut the pass short). Refine-pass `dream.end` carries `merged`, `kept`, `candidates`.
+Three of the five dream passes are wrapped with a `memory.dream.start` / `memory.dream.end` pair. The remaining two emit their own named events directly, with no start/end envelope.
 
-The five passes and their events:
+**Passes that use `dream.start` / `dream.end`:**
 
-1. **Extract** — `memory.dream.patch_applied` per entity written (Stage 1: agent-upserted refs); `memory.dream.discover` per session processed (Stage 2: mention discovery, carries `proposed` / `written` / `skipped`).
-2. **Derived-from** — no dedicated event beyond the `dream.start/end` pair; attribute writes emit `memory.dream.patch_applied`.
-3. **Skill-extract** — `memory.dream.skill_extract` (`skills_touched`, optional `duration_ms`); `memory.dream.skill_signals` (`proposed`, `logged`, optional `skills` list).
-4. **Refine** — the absorb-judge events (see below).
-5. **Always-on** — `memory.dream.always_on` (`selected`, `pruned`, `dropped`, `tokens`, `duration_ms`).
+- **Extract** (`kind="extract"`) — `dream.end` carries `entities_consolidated`, `entities_failed`, `sessions`, and `yielded` (true when `max_seconds_per_run` cut the pass short). Within the pass: `memory.dream.patch_applied` per entity written (Stage 1); `memory.dream.discover` per session processed (Stage 2: mention discovery, carries `proposed` / `written` / `skipped`).
+- **Derived-from** (`kind="derived_from"`) — no dedicated event beyond the `dream.start/end` pair; attribute writes emit `memory.dream.patch_applied`. `dream.end` carries `links`, `sessions`, `errors`, `yielded`.
+- **Refine** (`kind="refine"`) — `dream.end` carries `merged`, `kept`, `candidates`. Produces the absorb-judge events (see below).
+
+**Passes that emit a single named event (no start/end):**
+
+- **Skill-extract** — emits `memory.dream.skill_extract` (`skills_touched`, `gaps_closed`, optional `duration_ms`) and `memory.dream.skill_signals` (`proposed`, `logged`, optional `skills` list).
+- **Always-on** — emits `memory.dream.always_on` (`selected`, `pruned`, `dropped`, `tokens`, `duration_ms`).
 
 Additional dream events:
 
