@@ -24,7 +24,12 @@ def _make_agent(tmp_path) -> AgentLoop:
         patch("durin.agent.loop.SubagentManager") as MockSubMgr,
     ):
         MockSubMgr.return_value.cancel_by_session = AsyncMock(return_value=0)
-        return AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path)
+        agent = AgentLoop(bus=MessageBus(), provider=provider, workspace=tmp_path)
+    # process_direct takes the turn lease on sessions._get_session_path(); with a
+    # mocked SessionManager that returns a MagicMock, filelock would stringify it
+    # into a junk lock file in cwd. Pin it to a real path under tmp_path.
+    agent.sessions._get_session_path = MagicMock(return_value=tmp_path / "session.jsonl")
+    return agent
 
 
 @pytest.mark.asyncio
