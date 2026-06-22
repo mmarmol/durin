@@ -175,7 +175,7 @@ Dashboards derive "sources active" as the set of `*_count > 0`; the
 grep_count − fused_count` (URIs counted in N sources but unified
 into one row).
 
-### 4.6 `memory.silent_retrieval_miss` (discarded — see doc 08 §2.11)
+### 4.6 `memory.silent_retrieval_miss` (discarded — see design_rationale.md)
 
 **Not emitted.** Discarded in audit B9 (2026-05-28). The v1 spec proposed three heuristics to detect "agent should have called `memory_search` but didn't":
 
@@ -185,7 +185,7 @@ into one row).
 
 Honest review: only (1) is language-agnostic — and it generates too many false positives (legitimate refinements look like re-asks). (2) and (3) are inherently English-shaped; the token lists and patterns would need per-language maintenance, and even then they wouldn't catch idiomatic corrections in CJK / Spanish. Without an LLM classifier (which breaks the telemetry budget), the event is unreliable for the multi-lingual workloads durin actually targets.
 
-The downstream consumer (§2.F eager pre-fetch) is itself deferred (doc 08 §4.1) — so even a reliable signal would have no consumer. If a future use case needs this kind of "miss" detection, the right approach is different (e.g. LLM-based classifier in background, explicit user-feedback signals, or post-hoc analysis on bench traces) — not these heuristics.
+The downstream consumer (§2.F eager pre-fetch) is itself deferred — so even a reliable signal would have no consumer. If a future use case needs this kind of "miss" detection, the right approach is different (e.g. LLM-based classifier in background, explicit user-feedback signals, or post-hoc analysis on bench traces) — not these heuristics.
 
 See `design_rationale.md` for the full rationale.
 

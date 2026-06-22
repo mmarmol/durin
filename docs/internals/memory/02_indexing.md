@@ -136,7 +136,7 @@ The text passed to the embedding model determines what the vector represents. Th
 - `EntityPage` → `VectorIndex._compose_entity_page_text` (name + aliases + rendered_frontmatter + body, 1500 chars). See §4.2.
 - `MemoryEntry` → `VectorIndex._embed_text` (headline + summary + entities + body, 1500 chars). See §4.3.
 
-Each composer is the sole place that builds embedding text for its type, so the entity-page path and the entry path cannot drift — that is the anti-drift intent originally tracked as audit F12. A unified `compose_embedding_text(item)` dispatcher over the two was tried and reverted: it added an `isinstance` indirection over genuinely-divergent per-type logic without unifying anything (every caller already holds a concrete type). See doc 08 §2.22.
+Each composer is the sole place that builds embedding text for its type, so the entity-page path and the entry path cannot drift — that is the anti-drift intent originally tracked as audit F12. A unified `compose_embedding_text(item)` dispatcher over the two was tried and reverted: it added an `isinstance` indirection over genuinely-divergent per-type logic without unifying anything (every caller already holds a concrete type).
 
 ### 4.1 Common rules
 
@@ -147,7 +147,7 @@ Each composer is the sole place that builds embedding text for its type, so the 
 
 ### 4.2 Entity pages
 
-**Shipped (v2.a, audit E9 2026-05-28):** `name + aliases + rendered_frontmatter + body`, in that order, until 1500-char budget exhausted. The optional `summary` slot from the v2 spec is **decided against** (audit G6, 2026-05-28) — see "`summary` slot — decided against" below and doc 08 §2.14.
+**Shipped (v2.a, audit E9 2026-05-28):** `name + aliases + rendered_frontmatter + body`, in that order, until 1500-char budget exhausted. The optional `summary` slot from the v2 spec is **decided against** (audit G6, 2026-05-28) — see "`summary` slot — decided against" below and (see design_rationale.md).
 
 **The composed text deliberately omits the entity's own `type:` prefix** (Phase 0.1 finding). The embedded text is the bare name/aliases, never `project:durin`. Phase 0.1 measured `project:durin` vs `durin` at cosine **0.517**, against **0.755** for the bare name — the literal `type:` token introduces noise that pulls the page centroid away from the natural-language query (which never contains a `type:` prefix). The type lives only as structural metadata (`class_name` / `entities` columns), never as embedding tokens. (This is also why relation URIs are stripped to slug-only — see "Why slug-only" below.)
 
@@ -250,7 +250,7 @@ analysis.
 
 3. **G6 fixed drill for entity-page URIs** (`memory/entity_page/<type>:<slug>` now resolves to the on-disk file). The agent that gets a canonical hit with a truncated snippet can drill to the full body. The body-recovery loop is closed.
 
-With three retrieval paths reaching the page and drill closing the body-recovery loop, the summary slot would only help the vector path's specific corner case where the embedding model could not retrieve via name + aliases + rendered_frontmatter. Shipping it would require adding a `summary` field to `EntityPage`, modifying the Dream prompt and apply to emit it, modifying this composer to substitute body for summary when present, plus a schema bump and reindex. The marginal vector-only benefit does not justify that work, and there is no failure mode whose occurrence would empirically produce a request for it (same shape as G4). Status: **decided against**, not deferred. See doc 08 §2.14 for the discarded entry and doc 11 G6 for the worked reasoning.
+With three retrieval paths reaching the page and drill closing the body-recovery loop, the summary slot would only help the vector path's specific corner case where the embedding model could not retrieve via name + aliases + rendered_frontmatter. Shipping it would require adding a `summary` field to `EntityPage`, modifying the Dream prompt and apply to emit it, modifying this composer to substitute body for summary when present, plus a schema bump and reindex. The marginal vector-only benefit does not justify that work, and there is no failure mode whose occurrence would empirically produce a request for it (same shape as G4). Status: **decided against**, not deferred. See design_rationale.md for the discarded entry.
 
 ### 4.3 Entries (episodic / stable / corpus)
 
@@ -556,7 +556,7 @@ All open decisions for this module have been resolved (2026-05-27) in line with 
 | **1** | What gets indexed | Entity pages + entries (episodic/stable/corpus) + session summaries + raw session turns (FTS-only, per-turn, schema v6 — §3.3.2). NOT indexed: archive, pending, raw session `.jsonl` streams, raw ingested files. | §3.3 |
 | **2** | Single vs multiple embedding models | **Single model per workspace** (default `intfloat/multilingual-e5-small` since 2026-05-30). Stored in `meta.json`; mismatch on startup forces rebuild. | §3.2, §7.2 |
 | **3** | Body in the vector row | **Not stored.** Body is read from disk on demand for cold-tier enrichment. Storing in LanceDB doubles index size for no retrieval benefit. | §3.1 |
-| **4** | Embedding text composition (entity pages) | **Shipped (v2.a, audit E9 2026-05-28):** `name` + `aliases` + `rendered_frontmatter` + `body`, hard cap 1500 chars. Frontmatter renders as prose; provenance + internal timestamps skipped; stateful attributes render `current` only. Optional `summary` slot **decided against** (audit G6, 2026-05-28; doc 08 §2.14). | §4.2 |
+| **4** | Embedding text composition (entity pages) | **Shipped (v2.a, audit E9 2026-05-28):** `name` + `aliases` + `rendered_frontmatter` + `body`, hard cap 1500 chars. Frontmatter renders as prose; provenance + internal timestamps skipped; stateful attributes render `current` only. Optional `summary` slot **decided against** (audit G6, 2026-05-28; see design_rationale.md). | §4.2 |
 | **5** | Embedding text composition (entries) | **Shipped v1; v2.b superseded (audit E9 2026-05-28):** `headline` + `summary` + `entities_list` + `body`. The originally-planned `entities_with_aliases` expansion is covered at query time by the entity-aware ranker (audit A1) — implementing it in the embedding text would duplicate the ranker's work without measurable benefit. | §4.3 |
 | **6** | Sessions in the vector index | One row per session as `type=session_summary` using `_last_summary.text` as content. Sessions without a summary yet are not in the vector index (grep over raw `.jsonl` covers them). | §3.3, §4.4 |
 | **7** | Re-embed sync vs async | **Synchronous on write** for single-document updates. Bulk rebuild path uses async batching (32 docs/batch). | §6.2 |

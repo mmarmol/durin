@@ -139,10 +139,6 @@ A single public classmethod routing on input type to the two specialised embeddi
 
 The dispatcher was never called anywhere in the codebase. An `EntityPage` and a `MemoryEntry` embed structurally different fields, so the two composers are genuinely divergent — not two implementations of one rule. Every real caller already holds a concrete type, so routing through an `isinstance` dispatcher is pure indirection. The anti-drift goal is met by having exactly one composer per indexable type, each the sole authority for its type.
 
-### Cross-encoder default ON (revisited)
-
-Cross-encoder default ON was also proposed as a separate item from a different angle and reached the same conclusion. Default OFF is correct for the system's primary deployment shape: a personal assistant on the operator's own hardware. Default ON would surprise users upgrading from a prior version with a latency regression they did not opt into. The operator who wants the quality-over-latency tradeoff enables it explicitly.
-
 ### Temporal decay extended to stable, entity, and corpus classes
 
 Extending temporal decay to classes beyond `episodic` and `session_summary` was proposed and decided against.
