@@ -1243,7 +1243,6 @@ def _run_gateway(
     from durin.channels.websocket import publish_runtime_model_update
     from durin.cron.service import CronService
     from durin.cron.types import CronJob
-    from durin.heartbeat.service import HeartbeatService
     from durin.providers.factory import (
         build_provider_snapshot,
         load_default_preset,
@@ -1277,7 +1276,7 @@ def _run_gateway(
 
     # Create cron service with workspace-scoped store
     cron_store_path = config.workspace_path / "cron" / "jobs.json"
-    cron = CronService(cron_store_path)
+    cron = CronService(cron_store_path, run_history_max=config.cron.run_history_max)
 
     # Create agent with cron service
     agent = AgentLoop.from_config(
@@ -1373,6 +1372,7 @@ def _run_gateway(
             _absorb = config.memory.dream.auto_absorb
             _discover = config.memory.dream.discover_enabled
             _skill_signals = config.memory.dream.skill_signals_enabled
+            _dream_error: Exception | None = None
             try:
                 ex = await _asyncio.to_thread(
                     run_extract_pass, workspace, model=model,
@@ -1402,8 +1402,9 @@ def _run_gateway(
                     len(rf.get("kept_separate", [])), rf.get("duration_ms", 0),
                     ao.get("selected", 0), ao.get("tokens", 0), ao.get("duration_ms", 0),
                 )
-            except Exception:
+            except Exception as _dream_exc:
                 logger.exception("memory_dream cron failed")
+                _dream_error = _dream_exc
 
             try:
                 from durin.agent.skill_curation import curate_catalog
@@ -1432,25 +1433,37 @@ def _run_gateway(
                 )
             except Exception:
                 logger.exception("skill curation step (non-fatal) failed")
+
+            # Reap stale per-run cron sessions (cron:{id}:run:{ms}). These are
+            # created on every agent_turn cron execution and never otherwise
+            # removed; run_session_retention_hours bounds how long they live.
+            try:
+                from durin.cron.reaper import reap_expired_run_sessions
+
+                reap_expired_run_sessions(
+                    session_manager, config.cron.run_session_retention_hours
+                )
+            except Exception:
+                logger.exception("cron run-session reaper (non-fatal) failed")
+
+            if _dream_error is not None:
+                # Surface the failure so _execute_job records status="error"
+                # (not a false "ok") — the consolidation passes did not complete.
+                raise RuntimeError(
+                    f"memory_dream consolidation failed: {_dream_error}"
+                ) from _dream_error
             return None
 
+        from durin.cron.prompting import build_cron_turn_prompt
         from durin.utils.evaluator import evaluate_response
 
-        reminder_note = (
-            "The scheduled time has arrived. Deliver this reminder to the user now, "
-            "as a brief and natural message in their language. Speak directly to them — "
-            "do not narrate progress, summarize, include user IDs, or add status reports "
-            "like 'Done' or 'Reminded'.\n\n"
-            f"Reminder: {job.payload.message}"
-        )
+        prompt = build_cron_turn_prompt(job.payload.mode, job.payload.message)
+        session_key = job.payload.session_key or f"cron:{job.id}"
 
         cron_tool = agent.tools.get("cron")
         cron_token = None
         if isinstance(cron_tool, CronTool):
             cron_token = cron_tool.set_cron_context(True)
-
-        async def _silent(*_args, **_kwargs):
-            pass
 
         message_record_token = None
         if isinstance(message_tool, MessageTool):
@@ -1458,11 +1471,12 @@ def _run_gateway(
 
         try:
             resp = await agent.process_direct(
-                reminder_note,
-                session_key=f"cron:{job.id}",
+                prompt,
+                session_key=session_key,
                 channel=job.payload.channel or "cli",
                 chat_id=job.payload.to or "direct",
-                on_progress=_silent,
+                on_progress=None,
+                model_preset=job.payload.model,
             )
         finally:
             if isinstance(cron_tool, CronTool) and cron_token is not None:
@@ -1477,7 +1491,7 @@ def _run_gateway(
 
         if job.payload.deliver and job.payload.to and response:
             should_notify = await evaluate_response(
-                response, reminder_note, agent.provider, agent.model,
+                response, prompt, agent.provider, agent.model,
             )
             if should_notify:
                 await _deliver_to_channel(
@@ -1519,108 +1533,6 @@ def _run_gateway(
         cron_service=cron,
     )
 
-    def _pick_heartbeat_target() -> tuple[str, str]:
-        """Pick a routable channel/chat target for heartbeat-triggered messages."""
-        enabled = set(channels.enabled_channels)
-        # Prefer the most recently updated non-internal session on an enabled channel.
-        for item in session_manager.list_sessions():
-            key = item.get("key") or ""
-            if ":" not in key:
-                continue
-            channel, chat_id = key.split(":", 1)
-            if channel in {"cli", "system"}:
-                continue
-            if channel in enabled and chat_id:
-                return channel, chat_id
-        # Fallback keeps prior behavior but remains explicit.
-        return "cli", "direct"
-
-    # Create heartbeat service
-    heartbeat_preamble = (
-        "[Your response will be delivered directly to the user's messaging app. "
-        "Output ONLY the final user-facing message. Never reference internal "
-        "files (HEARTBEAT.md, AWARENESS.md, etc.), your instructions, or your "
-        "decision process. If nothing needs reporting, respond with just "
-        "'All clear.' and nothing else.]\n\n"
-    )
-
-    async def on_heartbeat_execute(tasks: str) -> str:
-        """Phase 2: execute heartbeat tasks through the full agent loop.
-
-        Two modes:
-        - **Default (shared session)**: reuse ``session_key="heartbeat"``
-          and trim via ``retain_recent_legal_suffix`` after the tick.
-          Preserves short-term context between ticks.
-        - **Isolated** (``heartbeat.isolatedSessions=true``,
-          OpenClaw-inspired): fresh ephemeral session per tick, deleted
-          after the tick. Stateless one-shots, no drift from prior runs.
-        """
-        from durin.heartbeat.service import heartbeat_session_key
-
-        channel, chat_id = _pick_heartbeat_target()
-
-        async def _silent(*_args, **_kwargs):
-            pass
-
-        session_key = heartbeat_session_key(isolated=hb_cfg.isolated_sessions)
-
-        resp = await agent.process_direct(
-            heartbeat_preamble + tasks,
-            session_key=session_key,
-            channel=channel,
-            chat_id=chat_id,
-            on_progress=_silent,
-        )
-
-        if hb_cfg.isolated_sessions:
-            # Drop the ephemeral session from cache + disk so no state
-            # carries over to the next tick.
-            try:
-                agent.sessions.delete_session(session_key)
-            except Exception:
-                logger.exception(
-                    "Failed to clean up isolated heartbeat session {}",
-                    session_key,
-                )
-        else:
-            # Keep a small tail of heartbeat history so the loop stays
-            # bounded without losing all short-term context between runs.
-            session = agent.sessions.get_or_create(session_key)
-            session.retain_recent_legal_suffix(hb_cfg.keep_recent_messages)
-            agent.sessions.save(session)
-
-        return resp.content if resp else ""
-
-    async def on_heartbeat_notify(response: str) -> None:
-        """Deliver a heartbeat response to the user's channel.
-
-        In addition to publishing the outbound message, this injects the
-        delivered text as an assistant turn into the *target channel's*
-        session.  Without this, a user reply on the channel (e.g. "Sure")
-        lands in a session that has no context about the heartbeat message
-        and the agent cannot follow through.
-        """
-        channel, chat_id = _pick_heartbeat_target()
-        if channel == "cli":
-            return  # No external channel available to deliver to
-
-        await _deliver_to_channel(
-            OutboundMessage(channel=channel, chat_id=chat_id, content=response),
-            record=True,
-        )
-
-    hb_cfg = config.gateway.heartbeat
-    heartbeat = HeartbeatService(
-        workspace=config.workspace_path,
-        provider=agent.provider,
-        model=agent.model,
-        on_execute=on_heartbeat_execute,
-        on_notify=on_heartbeat_notify,
-        interval_s=hb_cfg.interval_s,
-        enabled=hb_cfg.enabled,
-        timezone=config.agents.defaults.timezone,
-    )
-
     if channels.enabled_channels:
         console.print(f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}")
     else:
@@ -1629,8 +1541,6 @@ def _run_gateway(
     cron_status = cron.status()
     if cron_status["jobs"] > 0:
         console.print(f"[green]✓[/green] Cron: {cron_status['jobs']} scheduled jobs")
-
-    console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
 
     async def _health_server(host: str, health_port: int):
         """Lightweight HTTP health endpoint on the gateway port."""
@@ -1878,7 +1788,6 @@ def _run_gateway(
 
         try:
             await cron.start()
-            await heartbeat.start()
 
             # Unified uvicorn server: the gateway serves WS chat + /api/v1 + SPA
             # via a single Starlette app on the websocket channel's port.  The
@@ -1965,7 +1874,6 @@ def _run_gateway(
             logger.error("Gateway crashed unexpectedly:\n{}", traceback.format_exc())
         finally:
             await agent.close_mcp()
-            heartbeat.stop()
             cron.stop()
             agent.stop()
             await channels.stop_all()
@@ -2040,7 +1948,7 @@ def agent(
 
     # Create cron service with workspace-scoped store
     cron_store_path = config.workspace_path / "cron" / "jobs.json"
-    cron = CronService(cron_store_path)
+    cron = CronService(cron_store_path, run_history_max=config.cron.run_history_max)
 
     if logs:
         logger.enable("durin")

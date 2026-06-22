@@ -275,3 +275,56 @@ def test_full_round_trip_survives_repeated_save_load(tmp_path: Path) -> None:
     s2._load_store()
     assert s2._store is not None
     assert [j.name for j in s2._store.jobs] == ["Daily Loving Message"]
+
+
+def test_add_job_mode_model_persisted_and_reloaded(tmp_path: Path) -> None:
+    """mode and model on CronPayload round-trip through jobs.json."""
+    store_path = tmp_path / "cron" / "jobs.json"
+    s1 = CronService(store_path)
+    s1.add_job(
+        name="task job",
+        schedule=CronSchedule(kind="every", every_ms=60_000),
+        message="do it",
+        mode="task",
+        model="m1",
+    )
+    s1._running = True
+    try:
+        s1._load_store()
+    finally:
+        s1._running = False
+
+    s2 = CronService(store_path)
+    s2._load_store()
+    assert s2._store is not None
+    job = s2._store.jobs[0]
+    assert job.payload.mode == "task"
+    assert job.payload.model == "m1"
+
+
+def test_run_history_cap_respected(tmp_path: Path) -> None:
+    """run_history_max=3 keeps at most 3 records after 4 runs."""
+    import asyncio
+    from durin.cron.types import CronJob, CronRunRecord
+
+    store_path = tmp_path / "cron" / "jobs.json"
+    service = CronService(store_path, run_history_max=3)
+    service.add_job(
+        name="capped",
+        schedule=CronSchedule(kind="every", every_ms=60_000),
+        message="x",
+    )
+    service._running = True
+    try:
+        service._load_store()
+    finally:
+        service._running = False
+
+    job = service._store.jobs[0]
+    for i in range(4):
+        job.state.run_history.append(
+            CronRunRecord(run_at_ms=i, status="ok", duration_ms=1)
+        )
+        job.state.run_history = job.state.run_history[-service._run_history_max:]
+
+    assert len(job.state.run_history) == 3

@@ -2,22 +2,30 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from durin.service.cron import (
+    CronAddCommand,
     CronListQuery,
     CronRemoveCommand,
     CronRunCommand,
     CronService,
     CronToggleCommand,
+    CronUpdateCommand,
 )
 from durin.service.principal import Principal, Scope
-from durin.service.types import ForbiddenError, NotFoundError, UnavailableError
+from durin.service.types import (
+    ForbiddenError,
+    NotFoundError,
+    UnavailableError,
+    ValidationFailedError,
+)
 
 
 def _seed_jobs(tmp_path: Path) -> Path:
@@ -220,6 +228,7 @@ async def test_run_returns_started_true_when_ready(workspace: Path) -> None:
     mock_scheduler = MagicMock()
     mock_scheduler.get_job.return_value = MagicMock()
     mock_scheduler.is_executing.return_value = False
+    mock_scheduler.run_job = AsyncMock()
 
     result = await CronService(cron_scheduler=mock_scheduler).run(
         CronRunCommand(id="abc12345"), Principal.local()
@@ -235,3 +244,168 @@ async def test_run_requires_write_scope(workspace: Path) -> None:
         await CronService(cron_scheduler=mock_scheduler).run(
             CronRunCommand(id="abc12345"), principal
         )
+
+
+async def test_run_now_spawns_run_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, bool]] = []
+
+    class FakeScheduler:
+        def get_job(self, jid: str) -> SimpleNamespace:
+            return SimpleNamespace(id=jid)
+
+        def is_executing(self, jid: str) -> bool:
+            return False
+
+        async def run_job(self, jid: str, force: bool = False) -> None:
+            calls.append((jid, force))
+
+    svc = CronService(cron_scheduler=FakeScheduler())
+    res = await svc.run(CronRunCommand(id="abc"), Principal.local())
+    await asyncio.sleep(0.01)
+    assert res.started is True
+    assert calls == [("abc", True)]
+
+
+async def test_run_now_skips_spawn_when_already_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, bool]] = []
+
+    class FakeScheduler:
+        def get_job(self, jid: str) -> SimpleNamespace:
+            return SimpleNamespace(id=jid)
+
+        def is_executing(self, jid: str) -> bool:
+            return True
+
+        async def run_job(self, jid: str, force: bool = False) -> None:
+            calls.append((jid, force))
+
+    svc = CronService(cron_scheduler=FakeScheduler())
+    res = await svc.run(CronRunCommand(id="abc"), Principal.local())
+    await asyncio.sleep(0.01)
+    assert res.started is False
+    assert res.reason == "already_running"
+    assert calls == []
+
+
+async def test_create_job(workspace: Path) -> None:
+    cmd = CronAddCommand(
+        name="nightly",
+        mode="task",
+        message="run X",
+        schedule_kind="cron",
+        expr="0 3 * * *",
+        deliver=False,
+        model="m1",
+    )
+    res = await CronService().create(cmd, Principal.local())
+    assert res.job.name == "nightly"
+    listed = await CronService().list(CronListQuery(), Principal.local())
+    assert any(j.name == "nightly" for j in listed.jobs)
+
+
+async def test_create_interval_job_has_next_run(workspace: Path) -> None:
+    """An 'every' job created via the API must get a non-None next_run_at_ms.
+
+    Regression for the form/backend schedule-kind vocabulary mismatch
+    (the form sent "interval", which fell through _compute_next_run → None,
+    so the job was created but never fired). The backend vocabulary is
+    "every"; a job created with it must be schedulable.
+    """
+    cmd = CronAddCommand(
+        name="interval-job",
+        message="ping",
+        schedule_kind="every",
+        every_ms=3_600_000,
+    )
+    res = await CronService().create(cmd, Principal.local())
+    assert res.job.schedule.kind == "every"
+    assert res.job.schedule.every_ms == 3_600_000
+    assert res.job.state.next_run_at_ms is not None
+
+
+async def test_create_rejects_invalid_schedule_kind(workspace: Path) -> None:
+    cmd = CronAddCommand(
+        name="bad-kind",
+        message="ping",
+        schedule_kind="interval",
+        every_ms=3_600_000,
+    )
+    with pytest.raises(ValidationFailedError):
+        await CronService().create(cmd, Principal.local())
+
+
+async def test_update_rejects_invalid_schedule_kind(workspace: Path) -> None:
+    cmd = CronUpdateCommand(
+        id="abc12345",
+        schedule_kind="interval",
+        every_ms=3_600_000,
+    )
+    with pytest.raises(ValidationFailedError):
+        await CronService().update(cmd, Principal.local())
+
+
+async def test_create_job_carries_mode_and_model(workspace: Path) -> None:
+    """CronJobItem must expose mode + model so the edit form can restore them."""
+    cmd = CronAddCommand(
+        name="with-meta",
+        mode="task",
+        message="run X",
+        schedule_kind="cron",
+        expr="0 3 * * *",
+        model="zai/glm-5",
+    )
+    res = await CronService().create(cmd, Principal.local())
+    assert res.job.mode == "task"
+    assert res.job.model == "zai/glm-5"
+
+    listed = await CronService().list(CronListQuery(), Principal.local())
+    created = next(j for j in listed.jobs if j.name == "with-meta")
+    assert created.mode == "task"
+    assert created.model == "zai/glm-5"
+
+
+async def test_list_job_mode_model_defaults(workspace: Path) -> None:
+    result = await CronService().list(CronListQuery(), Principal.local())
+    user_job = next(j for j in result.jobs if j.id == "abc12345")
+    assert user_job.mode == "reminder"
+    assert user_job.model is None
+
+
+async def test_create_job_run_history_empty(workspace: Path) -> None:
+    cmd = CronAddCommand(
+        name="history-test",
+        message="hello",
+        schedule_kind="every",
+        every_ms=3600000,
+    )
+    res = await CronService().create(cmd, Principal.local())
+    assert res.job.run_history == []
+
+
+async def test_list_job_run_history_field(workspace: Path) -> None:
+    result = await CronService().list(CronListQuery(), Principal.local())
+    user_job = next(j for j in result.jobs if j.id == "abc12345")
+    assert hasattr(user_job, "run_history")
+    assert user_job.run_history == []
+
+
+async def test_update_rejects_system_job(workspace: Path) -> None:
+    with pytest.raises(ForbiddenError):
+        await CronService().update(
+            CronUpdateCommand(id="sys00001", message="x"), Principal.local()
+        )
+
+
+async def test_update_rejects_unknown_job(workspace: Path) -> None:
+    with pytest.raises(NotFoundError):
+        await CronService().update(
+            CronUpdateCommand(id="ghost999", message="x"), Principal.local()
+        )
+
+
+async def test_update_user_job(workspace: Path) -> None:
+    cmd = CronUpdateCommand(id="abc12345", name="renamed", message="updated msg")
+    res = await CronService().update(cmd, Principal.local())
+    assert res.job.id == "abc12345"
+    assert res.job.name == "renamed"
+    assert res.job.message == "updated msg"

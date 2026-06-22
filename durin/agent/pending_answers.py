@@ -33,7 +33,7 @@ _CONSUMER_ACTIVE = False
 
 # Sessions that never receive interactive replies: blocking there would
 # always end in a useless timeout.
-NON_INTERACTIVE_SESSION_PREFIXES = ("cron:", "heartbeat:", "system:")
+NON_INTERACTIVE_SESSION_PREFIXES = ("cron:", "system:")
 
 
 def set_consumer_active(active: bool) -> None:

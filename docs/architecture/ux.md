@@ -74,7 +74,7 @@ Interactive and presentational tools (`ask_user_question`, `request_secret`,
   Degradation to V1 yield semantics is automatic on: answer timeout
   (`ask_user_answer_timeout_s`), media-bearing replies (routed as a normal
   message), no live loop consumer (single-message mode), and non-interactive
-  sessions (`cron:`/`heartbeat:`/`system:`). Slash commands are never consumed
+  sessions (`cron:`/`system:`). Slash commands are never consumed
   as answers; `/stop` cancels the blocked turn (priority dispatch precedes the
   interception). Channel note: `ChannelManager` always forwards tool_hint
   frames to payload-rendering channels (`send_tool_hints` only gates chat-text

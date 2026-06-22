@@ -22,7 +22,9 @@ class CronSchedule:
 class CronPayload:
     """What to do when the job runs."""
     kind: Literal["system_event", "agent_turn"] = "agent_turn"
+    mode: Literal["reminder", "task"] = "reminder"
     message: str = ""
+    model: str | None = None
     # Deliver response to channel
     deliver: bool = False
     channel: str | None = None  # e.g. "whatsapp"
@@ -38,6 +40,9 @@ class CronRunRecord:
     status: Literal["ok", "error", "skipped"]
     duration_ms: int = 0
     error: str | None = None
+    session_key: str | None = None
+    model: str | None = None
+    summary: str | None = None
 
 
 @dataclass

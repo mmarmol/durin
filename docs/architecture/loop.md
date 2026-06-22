@@ -53,7 +53,6 @@ All turn-scoped, defensive. They shape behaviour only when the model misbehaves 
 | **Per-model `parallel_tool_calls` gating** | `agents.defaults.parallel_tool_calls` is a substring-keyed dict mapping model name → bool. Provider injects the flag only on match AND when `tools` is non-null. Emits `provider.parallel_tool_calls_injected` once per unique triple per process. | `OpenAICompatProvider._resolve_parallel_tool_calls` |
 | **Per-turn aggregate tool-result budget** (retroactive) | Sums tool result sizes; over `DURIN_TURN_BUDGET_CHARS` (default 200 KB) spills the largest not-yet-persisted results to disk, largest first, until aggregate fits. `=0` disables. Emits `turn_budget.enforced`. | `runner.py::_enforce_turn_budget` |
 | **Live per-tool output spill** (at moment of overflow) | Distinct from the retroactive turn budget: when a single tool's output exceeds its own budget, the FULL content is written to `<ws>/.durin/spills/` *as it overflows* (not later during compaction), and the model gets a truncated head+tail plus a `read_file` reference. Used by `exec`/shell. | `agent/tools/output_spill.py::truncate_with_spill` |
-| **Heartbeat session mode** | Default: one long-running `heartbeat` session (trimmed by `keep_recent_messages`). `heartbeat.isolatedSessions=true` gives each tick a fresh `heartbeat-<12hex>` session deleted after the run. | `heartbeat/service.py` |
 | **Pre-emptive compaction trigger** | Fires when `estimated_tokens > preemptive_compact_ratio * context_window` (default 0.5; 1M-window models override to ~0.15). Emits `compaction.preemptive_trigger`. | `agent/memory.py::Consolidator` |
 | **Mid-turn precheck signal** | After sanitize pipeline each iteration, estimates token cost; if over input budget, aborts with `stop_reason=mid_turn_precheck_overflow` BEFORE the LLM call. Emits `mid_turn_precheck.overflow`. | `runner.py::_mid_turn_precheck` |
 | **Compaction lock aggregate timeout** | Per-session compaction lock bounded by `DURIN_COMPACTION_LOCK_TIMEOUT_S` (default 180s). `=0` disables. Emits `compaction.lock_timeout`. | `agent/memory.py::Consolidator._lock_timeout_s` |
@@ -212,7 +211,7 @@ Session state lives in `session.metadata`:
 
 After the prune, `complete_goal` no longer consults any plan-tier verification gate. Only requires an active goal.
 
-**Turn budget (optional)**. `long_task(max_turns=N)` stores `max_turns`/`turns_used` on the goal blob; `increment_goal_turns` (per turn, from `loop._state_save`) bumps the counter and `goal_state_runtime_lines` mirrors `Turn budget: used/max`, switching to a wrap-up instruction (`complete_goal` with an honest recap, or renegotiate) once exceeded. Surfacing only — nothing is blocked. `deadline` budgets were considered and dropped (heartbeat/cron cover time-based triggers).
+**Turn budget (optional)**. `long_task(max_turns=N)` stores `max_turns`/`turns_used` on the goal blob; `increment_goal_turns` (per turn, from `loop._state_save`) bumps the counter and `goal_state_runtime_lines` mirrors `Turn budget: used/max`, switching to a wrap-up instruction (`complete_goal` with an honest recap, or renegotiate) once exceeded. Surfacing only — nothing is blocked. `deadline` budgets were considered and dropped (cron covers time-based triggers).
 
 ---
 
@@ -297,6 +296,10 @@ Two top-level blocks:
 The active model is a **preset**, resolved through `loop.set_model_preset(name)`. Named presets (`config.model_presets`) and the reserved `default` (resolved from `agents.defaults.{provider,model}` via `config.resolve_default_preset()`) live in `loop.model_presets`. `/model` switches presets, `/effort` clones the active preset with a different `reasoning_effort`; the picker (`agent/model_picker.py`) commits a `default` ref or an explicit `provider model` pair.
 
 The daemon re-reads the on-disk config at the start of every message (`_refresh_provider_snapshot`, via `factory.load_provider_snapshot`), so a model change in Settings takes effect without a restart. **`model_presets["default"]` is captured once at construction**, so that same refresh re-resolves it through `factory.load_default_preset` (the loop's `default_preset_loader`, wired only on the gateway). Without this, name-based resolution of `default` — which prefers the in-memory preset object over re-reading config (`factory._resolve_model_preset`) — would keep serving the model that was default at startup, silently reverting `/model default` and `/effort` to the previous model.
+
+#### Per-turn model_preset override
+
+`process_direct` and `_process_message` accept an optional `model_preset: str | None` parameter. When set, `_run_agent_loop` resolves it to a model string via `_build_model_preset_snapshot` and passes that to `AgentRunSpec(model=...)` for that turn only — `self.model_preset` (the global) is never mutated. This is used by cron jobs to run with a job-specific preset without racing a concurrent interactive session's model.
 
 ### OAuth providers (Codex / Copilot)
 
