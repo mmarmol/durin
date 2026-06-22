@@ -340,14 +340,18 @@ decision — the maintainer decides which to fix.
      only a transient snapshot-staleness across an `await` remains (a missed
      in-flight streaming frame / a one-turn incomplete MCP tool set), self-healing
      on the next frame / registry rebuild.
-   - **#16 deletion tombstone** — the lockless `.deleted.json` RMW is real, but no
-     live delete-issuing path exists (CLI `forget` and agent `memory_forget`
-     refuse entity pages; the only tombstone writer is single-writer). *Latent
-     trigger:* the instant a concurrent delete-issuing path is wired, serialize
-     the RMW under flock and re-check `is_deleted` inside `write_entity`'s CAS.
+   - ~~**#16 deletion tombstone**~~ — **fixed**: `_mutate_deleted` in
+     `durin/memory/deletion.py` wraps every `.deleted.json` RMW under
+     `cross_process_lock(_deleted_path)` (lock file `.deleted.json.lock`).
+     All three mutators (`clear_delete_tombstone`, `delete_entity`,
+     `delete_reference`) route through it.  Lock ordering: the
+     `.deleted.json.lock` is acquired and fully released *before*
+     `write_entity` takes the in-process RLock or the `.git-worktree`
+     cross-process lock — no nesting, no deadlock path.
 
-(Audit items **#10**, **#12**, and **#18** are now fixed — see "Stream-delta
-coalescing", "`edit_file`", and "Memory git-worktree lock" above.)
+(Audit items **#10**, **#12**, **#16**, and **#18** are now fixed — see
+"Stream-delta coalescing", "`edit_file`", "Memory git-worktree lock", and
+"Deletion tombstone lock" above.)
 
 ## SQLite helpers (FTS5 / derived indexes)
 
