@@ -232,3 +232,14 @@ async def test_read_all_synthesizes_full_text(tmp_path, monkeypatch):
         if any(json.loads(r).get("event") == "voice_audio" for r in conn.sent):
             break
     assert "code" in captured["text"]  # full speakable text, not a summary
+
+
+def test_manager_injects_speech_synthesis_and_voice_config():
+    import inspect
+
+    import durin.channels.manager as mgr
+
+    src = inspect.getsource(mgr)
+    assert "SpeechSynthesisService" in src
+    assert "speech_synthesis" in src
+    assert "voice_config" in src

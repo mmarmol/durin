@@ -106,6 +106,10 @@ class ChannelManager:
 
         self.transcription = TranscriptionService.from_config(config.transcription)
 
+        from durin.service.speech import SpeechSynthesisService
+
+        self.speech_synthesis = SpeechSynthesisService.from_config(config.tts)
+
         self._init_channels()
 
     def _ensure_channel_extras(self) -> None:
@@ -177,6 +181,8 @@ class ChannelManager:
                 shared_transcription = getattr(self, "transcription", None)
                 if shared_transcription is not None:
                     channel.transcription = shared_transcription
+                channel.speech_synthesis = getattr(self, "speech_synthesis", None)
+                channel.voice_config = self.config.voice
                 channel.send_progress = self._resolve_bool_override(
                     section, "send_progress", self.config.channels.send_progress,
                 )
