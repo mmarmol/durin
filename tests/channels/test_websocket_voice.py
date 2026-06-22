@@ -185,3 +185,50 @@ async def test_send_skips_speak_for_progress_breadcrumb(tmp_path):
         await asyncio.sleep(0)
     events = [json.loads(r) for r in conn.sent]
     assert not any(e.get("event") == "voice_audio" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_barge_in_cancels_speak_and_listens():
+    ch = _voice_channel()
+    conn = _FakeConn()
+    ch._subs["c1"] = {conn}
+    sess = VoiceSession(chat_id="c1")
+    ch._voice["c1"] = sess
+
+    async def _block():
+        await asyncio.sleep(10)
+
+    sess.speak_task = asyncio.create_task(_block())
+    await asyncio.sleep(0)
+    await ch._dispatch_envelope(conn, "client1", {"type": "voice_barge_in", "chat_id": "c1"})
+    assert sess.speak_task is None
+    events = [json.loads(r) for r in conn.sent]
+    assert any(e.get("event") == "voice_state" and e.get("state") == "listening" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_read_all_synthesizes_full_text(tmp_path, monkeypatch):
+    monkeypatch.setattr("durin.channels.websocket.get_media_dir", lambda ch=None: tmp_path)
+    ch = _voice_channel()
+    ch._media_secret = b"test-secret"
+    ch.voice_config = VoiceConfig()
+    conn = _FakeConn()
+    ch._subs["c1"] = {conn}
+    ch._voice["c1"] = VoiceSession(chat_id="c1")
+
+    captured = {}
+
+    class FakeTTS:
+        async def synthesize(self, text, *, voice=None, language=None):
+            captured["text"] = text
+            return SpeechAudio(_wav_bytes(), 22050)
+
+    ch.speech_synthesis = FakeTTS()
+    await ch._dispatch_envelope(conn, "client1", {
+        "type": "voice_read_all", "chat_id": "c1", "text": "Full answer with `code` here.",
+    })
+    for _ in range(20):
+        await asyncio.sleep(0)
+        if any(json.loads(r).get("event") == "voice_audio" for r in conn.sent):
+            break
+    assert "code" in captured["text"]  # full speakable text, not a summary

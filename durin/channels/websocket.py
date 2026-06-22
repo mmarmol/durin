@@ -1447,6 +1447,22 @@ class WebSocketChannel(BaseChannel):
                 is_dm=False,
             )
             return
+        if t == "voice_barge_in":
+            cid = envelope.get("chat_id")
+            sess = self._voice.get(cid)
+            if sess is not None:
+                sess.cancel_speak()
+                await self.send_voice_state(cid, "listening")
+            return
+        if t == "voice_read_all":
+            cid = envelope.get("chat_id")
+            text = envelope.get("text")
+            sess = self._voice.get(cid)
+            if sess is None or not isinstance(text, str) or not text.strip():
+                return
+            sess.cancel_speak()
+            sess.speak_task = asyncio.create_task(self._speak(cid, text, full=True))
+            return
         await self._send_event(connection, "error", detail=f"unknown type: {t!r}")
 
     async def _handle_secret_store_envelope(
