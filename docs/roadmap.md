@@ -84,9 +84,9 @@ Tested, or strong reasons against. (Detailed experiment analysis in `git log`.)
 - ❌ Phase-aware temperatures
 - ❌ Self-verification / self-review loops (same model)
 - ❌ Pre-completion Critic (without a genuinely different model)
-- ❌ Role-based SOUL.md router (refuted V9e) — efficiency gain captured by a single
-  default SOUL with no routing
-- ❌ Temporal decay in `memory_search` ranking (removed H26) — search must be
+- ❌ Role-based SOUL.md router (tested; no correctness gain) — the efficiency win
+  is captured by a single default SOUL with no routing
+- ❌ Temporal decay in `memory_search` ranking (removed) — search must be
   faithful retrieval, not pre-judge what the LLM should decide
 
 ---
