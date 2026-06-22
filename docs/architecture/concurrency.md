@@ -291,63 +291,69 @@ as a normal turn.
   `derived.extract_cursor` is still read for back-compat) and its RMW runs under
   `cross_process_lock(jsonl_path)` — the same `.jsonl.lock` the manager holds.
 
-## Known residuals (not fixed — disposition is the maintainer's call)
+## Known residuals (decided — not pending work, not technical debt)
 
-These are not addressed; each carries a written failure mode so the trade-off is
-explicit. The "leave it" framing below is a recommendation, **not** a closed
-decision — the maintainer decides which to fix.
+Every correctness/data-loss hazard is fixed. **No lockless cross-process
+whole-file RMW remains** — every store of that class is now serialized. Each
+item below is a deliberate decision, not deferred work: it self-recovers, is
+external to durin, or is a measured trade-off where durin stays stable. None
+is a latent unlocked RMW.
 
-1. **No TTL on the held turn lease — not built.** *Failure mode:* an
+1. **No TTL on the held turn lease — decided not to build.** *Failure mode:* an
    alive-but-stuck process holds `<key>.turn.lock` until it exits or crashes
    (the OS releases the flock on crash); meanwhile a new turn on that session
    gets a retriable "session busy in another window" message after the 600s
-   acquire timeout — **not data loss**. *Why not a TTL/steal:* a steal-after-TTL
-   table (hermes `compression_locks` style) would let a waiter seize the lease
-   from a slow-but-alive holder and re-introduce the very clobber the lease
-   prevents — a turn is not idempotent the way compression is. Revisit only if
-   alive-but-stuck holds (not crashes) become common.
+   acquire timeout — **not data loss**, and self-resolving when the process
+   ends. *Why not built:* a steal-after-TTL table (hermes `compression_locks`
+   style) would let a waiter seize the lease from a slow-but-alive holder and
+   re-introduce the very clobber the lease prevents — a turn is not idempotent
+   the way compression is. Building it would be net-negative.
 
-2. **`oauth/<provider>.json` token writes — external boundary.** Owned by the
-   `oauth-cli-kit` `FileTokenStorage`; durin performs no read-modify-write of
+2. **`oauth/<provider>.json` token writes — external, out of scope.** Owned by
+   the `oauth-cli-kit` `FileTokenStorage`; durin performs no read-modify-write of
    these files, so there is nothing durin-side to lock. *Failure mode:* two
    processes refreshing the same provider token concurrently → last-writer-wins,
    but both write the same refreshed token, so it is non-destructive and rare
    (refresh fires ~once per token lifetime). Not a durin residual.
 
-3. **Sessions Phase-B append-only — measured defer.** After Phase B (mid-turn
-   checkpoints → sidecar), a turn-end `save()` still does one whole-file `.jsonl`
-   rewrite + one `.md` regen. *Failure mode:* none for correctness — purely
-   write amplification of ~one bounded rewrite per turn (≤~2.5 MB ceiling).
-   Finishing append-only would save ~2× on that single write (marginal) while
-   touching core session truth (consolidation boundary + partial-append crash
-   recovery). Risk > gain at current scale; revisit only if profiling shows the
-   `.jsonl` rewrite is a measured turn-latency cost.
+3. **Sessions Phase-B append-only — decided not to do (current design is final).**
+   After Phase B (mid-turn checkpoints → sidecar), a turn-end `save()` does one
+   whole-file `.jsonl` rewrite + one `.md` regen. *Failure mode:* none for
+   correctness — purely write amplification of ~one bounded rewrite per turn
+   (≤~2.5 MB ceiling), and durin is stable at that cost. Finishing append-only
+   would save ~2× on that single write (marginal) while touching core session
+   truth (consolidation boundary + partial-append crash recovery) — the perf gain
+   does not justify the risk. (A measured `.jsonl`-rewrite latency problem would
+   be the trigger to reopen; that is a condition, not a backlog item.)
 
-4. **Cron same-job schedule edit during the execution window.** If an external
-   writer changes the *schedule* of the *same* job that is currently executing,
-   the post-execution reload-merge re-applies that job's run-state delta —
-   including a `next_run_at_ms` computed from the *old* schedule. *Failure mode:*
-   the job fires once on the old cadence, then self-heals on the next execution
-   (which recomputes `next_run` from the current schedule). Bounded,
-   single-cycle, self-healing; edits to *other* jobs are unaffected.
+4. **Cron same-job schedule edit during the execution window — self-healing.** If
+   an external writer changes the *schedule* of the *same* job currently
+   executing, the post-execution reload-merge re-applies that job's run-state
+   delta including a `next_run_at_ms` computed from the *old* schedule. *Failure
+   mode:* the job fires once on the old cadence, then self-heals on the next
+   execution (which recomputes from the current schedule). Bounded, single-cycle;
+   edits to *other* jobs are unaffected.
 
-5. **Benign / dormant audit items (verified non-issues).**
-   - **#13 tool-results bucket** — stale-content reuse only on the `tool_{idx}`
-     positional fallback (real providers emit unique ids); cleanup only removes
-     already-stale peer buckets. Recoverable, low-probability.
-   - **#14 `_subs` snapshot / #19 `ToolRegistry`** — the mutators have no `await`
-     between read and mutate, so they are atomic under single-thread asyncio;
-     only a transient snapshot-staleness across an `await` remains (a missed
-     in-flight streaming frame / a one-turn incomplete MCP tool set), self-healing
-     on the next frame / registry rebuild.
-   - **#16 deletion tombstone** — the lockless `.deleted.json` RMW is real, but no
-     live delete-issuing path exists (CLI `forget` and agent `memory_forget`
-     refuse entity pages; the only tombstone writer is single-writer). *Latent
-     trigger:* the instant a concurrent delete-issuing path is wired, serialize
-     the RMW under flock and re-check `is_deleted` inside `write_entity`'s CAS.
+5. **In-memory, self-healing (no file RMW) — accepted as-is.** **#14** `_subs`
+   snapshot and **#19** `ToolRegistry`: the mutators have no `await` between read
+   and mutate, so they are atomic under single-thread asyncio; only a transient
+   snapshot-staleness across an `await` remains (a missed in-flight streaming
+   frame / a one-turn incomplete MCP tool set), self-healing on the next frame /
+   registry rebuild. Neither is a persisted-file RMW.
 
-(Audit items **#10**, **#12**, and **#18** are now fixed — see "Stream-delta
-coalescing", "`edit_file`", and "Memory git-worktree lock" above.)
+**Fixed in the final round:** **#13** tool-result stale content — the spill now
+writes the current payload authoritatively (`maybe_persist_tool_result`), so a
+reused filename can no longer serve stale bytes; the bucket-cleanup `rmtree` only
+removes already-stale (>7d / over-cap) peer buckets and is benign/self-healing,
+left as-is. **#16** deletion-tombstone RMW — `_mutate_deleted` in
+`durin/memory/deletion.py` wraps every `.deleted.json` RMW
+(`clear_delete_tombstone`, `delete_entity`, `delete_reference`) under
+`cross_process_lock(_deleted_path)`; the `.deleted.json.lock` is acquired and
+released *before* `write_entity` takes the in-process RLock / `.git-worktree`
+lock (no nesting, no deadlock).
+
+(Audit items **#10**, **#12**, **#13**, **#16**, **#18** are now fixed — see the
+resolved sections above — as is the in-process ref-CAS thread race.)
 
 ## SQLite helpers (FTS5 / derived indexes)
 

@@ -12,12 +12,14 @@ Un-merge restores an absorbed entity from the archive and writes the
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.refine_dream import add_tombstone
 from durin.utils.atomic_write import atomic_write_text
+from durin.utils.file_lock import cross_process_lock
 
 __all__ = [
     "is_deleted",
@@ -50,16 +52,29 @@ def _save_deleted(workspace: Path, refs: set[str]) -> None:
     atomic_write_text(p, json.dumps(sorted(refs)))
 
 
+def _mutate_deleted(workspace: Path, fn: "Callable[[set[str]], None]") -> None:
+    """Locked read-modify-write for the tombstone set.
+
+    Acquires cross_process_lock on .deleted.json.lock, reloads the set under
+    the lock, applies fn in place, and saves.  Mirrors mutate_config in
+    durin/config/loader.py.  See docs/architecture/concurrency.md (hazard #16).
+    """
+    with cross_process_lock(_deleted_path(workspace)):
+        refs = _load_deleted(workspace)
+        fn(refs)
+        _save_deleted(workspace, refs)
+
+
 def is_deleted(workspace: Path, ref: str) -> bool:
     return ref in _load_deleted(workspace)
 
 
 def clear_delete_tombstone(workspace: Path, ref: str) -> None:
     """User override: re-creating a deleted entity clears its tombstone."""
-    refs = _load_deleted(workspace)
-    if ref in refs:
+    def _clear(refs: set[str]) -> None:
         refs.discard(ref)
-        _save_deleted(workspace, refs)
+
+    _mutate_deleted(workspace, _clear)
 
 
 def _archive_file(src: Path, dest: Path, stamp: dict[str, str]) -> None:
@@ -78,9 +93,7 @@ def delete_entity(workspace: Path, ref: str, *, reason: str = "user_delete") -> 
     """Archive the entity + record a permanent delete tombstone."""
     type_, _, slug = ref.partition(":")
     src = Path(workspace) / "memory" / "entities" / type_ / f"{slug}.md"
-    refs = _load_deleted(workspace)
-    refs.add(ref)
-    _save_deleted(workspace, refs)
+    _mutate_deleted(workspace, lambda refs: refs.add(ref))
     if not src.exists():
         return None
     dest = Path(workspace) / "memory" / "archive" / "entities" / type_ / f"{slug}.md"
@@ -95,9 +108,7 @@ def delete_reference(workspace: Path, ref: str, *, reason: str = "user_delete") 
     """Archive the reference (+ its chunk sidecar) + record a tombstone."""
     slug = ref.split(":", 1)[1] if ":" in ref else ref
     src = Path(workspace) / "memory" / "references" / f"{slug}.md"
-    refs = _load_deleted(workspace)
-    refs.add(ref)
-    _save_deleted(workspace, refs)
+    _mutate_deleted(workspace, lambda refs: refs.add(ref))
     if not src.exists():
         return None
     dest = Path(workspace) / "memory" / "archive" / "references" / f"{slug}.md"
