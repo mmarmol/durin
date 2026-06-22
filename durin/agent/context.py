@@ -102,7 +102,7 @@ def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
 class ContextBuilder:
     """Builds the context (system prompt + messages) for the agent."""
 
-    # §8e: USER.md dropped — the user profile lives in the principal person
+    # USER.md dropped — the user profile lives in the principal person
     # entity (pinned context), not a bootstrap file. SOUL.md (personality, user
     # control) stays.
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "TOOLS.md"]
@@ -146,8 +146,7 @@ class ContextBuilder:
         session_summary: str | None = None,
         agent_mode_name: str | None = None,
     ) -> str:
-        """Build the system prompt in 3 cache-friendly tiers (Tier 2 C1,
-        Hermes-inspired).
+        """Build the system prompt in 3 cache-friendly tiers.
 
         Providers cache by *prefix*, so the canonical order is:
 
@@ -211,9 +210,9 @@ class ContextBuilder:
             breakdown["skills_catalog"] = block
             parts.append(block)
 
-        # Pinned memory (Phase 8b): who the user is + always_on feedback
+        # Pinned memory: who the user is + always_on feedback
         # (stance/practice). Always injected, independent of retrieval — this
-        # is what re-feeds the agent its authored knowledge (design §2.10-2.12).
+        # is what re-feeds the agent its authored knowledge.
         pinned = self._build_pinned_memory(channel=channel)
         if pinned:
             breakdown["memory_pinned"] = pinned
@@ -234,7 +233,7 @@ class ContextBuilder:
     def _build_pinned_memory(self, *, channel: str | None) -> str:
         """The pinned memory layer: the principal's entity + always_on feedback.
 
-        Always injected, independent of retrieval (design §2.10-2.12). The
+        Always injected, independent of retrieval. The
         principal is resolved channel → owner (config) → person:anonymous; the
         owner config is optional (defaults to anonymous until set). Never raises
         — a failure degrades to no pinned block so the prompt still builds.
@@ -287,13 +286,9 @@ class ContextBuilder:
     def _build_context_layer(self, *, agent_mode_name: str | None) -> str:
         """Session-stable blocks that may differ between sessions.
 
-        Sprint B / L3 — the active-mode prompt suffix. It used to be
-        placed near the top of the prompt so the model would weight it
-        heavily; in the 3-tier layout it sits between the stable prefix
-        and the volatile suffix — still ABOVE the volatile blocks (so
-        model attention isn't diluted by memory/history scrolling past
-        it) and still cache-stable within a session for the common case
-        (no mid-session mode switch).
+        Active-mode prompt suffix, positioned between stable prefix and
+        volatile suffix (above volatile blocks to maintain attention;
+        cache-stable per-session).
         """
         breakdown: dict[str, str] = {}
         parts: list[str] = []
@@ -315,11 +310,10 @@ class ContextBuilder:
         breakdown: dict[str, str] = {}
         parts: list[str] = []
 
-        # §8e: the legacy MEMORY.md long-term block + the history.jsonl
-        # "recent history" block are removed. In the new model that knowledge
-        # lives in the pinned context + entities (stable tier) and the raw turns
-        # are the session replay — injecting MEMORY.md/history here double-fed
-        # the prompt. The compaction summary below survives.
+        # Legacy MEMORY.md and history.jsonl blocks are removed; long-term
+        # knowledge lives in the pinned entity context (stable tier), while
+        # raw turns form the session replay — preventing double-feeding.
+        # The compaction summary below survives.
         if session_summary:
             block = f"[Archived Context Summary]\n\n{session_summary}"
             breakdown["session_summary"] = block
@@ -414,15 +408,15 @@ class ContextBuilder:
         supports_audio_input: bool = False,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
-        # Concern B: the task-state anchor groups goal + decision log + todos
+        # The task-state anchor groups goal + decision log + todos
         # + executing-plan pointer under one <task-state> frame, re-injected
         # every turn (derived from session.metadata, so it survives
-        # compaction). See durin/agent/task_state.py and docs/architecture/loop.md.
+        # compaction). See durin/agent/task_state.py.
         extra = task_state_runtime_lines(session_metadata)
-        # Sprint B / file-based plans — after /build approves a plan,
-        # surface the path so the next turn can read it without the user
-        # having to copy/paste it. One-shot (consumed below); the persistent
-        # counterpart is the executing-plan pointer injected just above.
+        # After /build approves a plan, surface the path so the next turn
+        # can read it without the user having to copy/paste it. One-shot
+        # (consumed below); the persistent counterpart is the executing-plan
+        # pointer injected just above.
         if session_metadata is not None:
             approved_path = session_metadata.get("approved_plan_path")
             if approved_path:

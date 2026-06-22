@@ -95,7 +95,7 @@ class TranscriptionProviderKeysConfig(Base):
 
 
 class TranscriptionConfig(Base):
-    """Global transcription settings (spec §4.3).
+    """Global transcription settings.
 
     Channel-level ``transcription_provider`` / ``transcription_api_key`` /
     ``transcription_language`` override these per-channel.
@@ -132,8 +132,8 @@ class MemoryEmbeddingConfig(Base):
     # Default model: multilingual-e5-small (registered as custom model
     # in durin/memory/embedding.py::_CUSTOM_MODELS). 117M params, 384-
     # dim, 100+ languages, MIT, retrieval-tuned. Replaced
-    # paraphrase-multilingual-MiniLM-L12-v2 on 2026-05-30 — see doc 02
-    # §indexing and the wizard `_EMBEDDING_CHOICES` for the rationale.
+    # paraphrase-multilingual-MiniLM-L12-v2; see `_EMBEDDING_CHOICES` in
+    # the onboarding wizard for the rationale.
     model: str = "intfloat/multilingual-e5-small"
     base_url: str | None = Field(
         default=None,
@@ -150,7 +150,7 @@ class MemoryEmbeddingConfig(Base):
 
 
 class MemoryDreamConfig(Base):
-    """Memory dream config: when the extract / refine / skill passes run (§8e).
+    """Memory dream config: when the extract / refine / skill passes run.
 
     Governs the daily ``memory_dream`` cron plus two reactive triggers. The
     manual ``durin memory dream`` always works regardless of ``enabled``.
@@ -230,7 +230,7 @@ class MemoryDreamConfig(Base):
         validation_alias=AliasChoices("maxSecondsPerRun", "max_seconds_per_run"),
     )
 
-    # Token budget for the always-on guidance pin (A4, design §2.11). The
+    # Token budget for the always-on guidance pin. The
     # always_on distillation pass ranks feedback (stance/practice), drops
     # contradictions, and keeps the highest-priority items that fit this many
     # tokens — injected into EVERY prompt, so this is a per-turn cost. 0
@@ -250,13 +250,12 @@ class MemoryDreamConfig(Base):
 
 
 class AutoAbsorbConfig(Base):
-    """Auto-absorb post-dream config (doc 25 §2.D).
+    """Auto-absorb post-dream config.
 
     After a successful dream pass, optionally run an LLM-judge over
     alias-overlap candidates and auto-merge those above the confidence
     threshold. Designed to close the loop between dream consolidation
-    and manual ``durin memory absorb`` without destructive false-merges
-    (see archived doc 24 §7 for the risk analysis).
+    and manual ``durin memory absorb`` without destructive false-merges.
 
     Defaults are opt-in conservative: disabled by default, threshold
     high enough that only obvious matches pass, quarantine window so
@@ -290,7 +289,7 @@ class AutoAbsorbConfig(Base):
     # created (or last dreamed) at least this many hours ago. Blocks
     # the "premature consolidation" loop where a dream pass that
     # alucinated two near-identical pages immediately merges its own
-    # output (glm peer review C3, 2026-05-24).
+    # output (avoids premature merging of a dream pass's own output).
     min_age_hours: int = Field(
         default=24,
         ge=0,
@@ -299,7 +298,7 @@ class AutoAbsorbConfig(Base):
 
 
 class CrossEncoderConfig(Base):
-    """Cross-encoder reranker config (doc 03 §9, doc 10 P4).
+    """Cross-encoder reranker config.
 
     OFF by default — but this is a *library/CI-safe* default, NOT a
     recommendation against it. Enabling it triggers a one-time
@@ -324,24 +323,23 @@ class CrossEncoderConfig(Base):
     # want a different trade-off.
     model: str = "BAAI/bge-reranker-base"
     batch_size: int = 32
-    # Top-N to keep after the rerank step. Doc 03 §9.3 says 10.
+    # Top-N to keep after the rerank step.
     top_n: int = 10
 
 
 class MemorySearchSectioningConfig(Base):
-    """Sectioning step configuration (audit G1, 2026-05-28).
+    """Sectioning step configuration.
 
     ``max_per_source`` caps how many `corpus` hits sharing the same
     `ingest_id` can survive the sectioning step. Default 3 — set
     when an ingested document is chunked into many corpus entries
     and a single semantic query would otherwise monopolise the
-    top-K with consecutive chunks of the same source. Doc 03 §12.4.
+    top-K with consecutive chunks of the same source.
 
-    Pre-G1 the value was hard-coded at
-    `durin.memory.sectioned_output.DEFAULT_MAX_PER_SOURCE`. Doc 03
-    §16 row 8 had promised configurability since Phase 3 but the
-    field never landed. G1 ships it; default unchanged so existing
-    workspaces see zero behaviour change.
+    The value was previously hard-coded in
+    `durin.memory.sectioned_output.DEFAULT_MAX_PER_SOURCE`; it is now
+    configurable. Default unchanged so existing workspaces see zero
+    behaviour change.
     """
 
     max_per_source: int = 3
@@ -359,7 +357,7 @@ class MemorySearchConfig(Base):
 
 
 class MemoryFileWatcherConfig(Base):
-    """Background filesystem watcher for ``memory/`` (audit A11 / doc 02 §6.3).
+    """Background filesystem watcher for ``memory/``.
 
     Default ON. When enabled, the agent loop starts a
     :class:`durin.memory.file_watcher.MemoryFileWatcher` that listens
@@ -378,14 +376,14 @@ class MemoryFileWatcherConfig(Base):
 
 
 class MemoryHealthCheckConfig(Base):
-    """Periodic memory subsystem health probe (audit A11 / doc 02 §5.1).
+    """Periodic memory subsystem health probe.
 
     Default ON. When enabled, the agent loop starts a daemon thread
     that calls :meth:`durin.memory.health_check.HealthChecker.run_tick`
     every ``interval_seconds``. Each tick emits
-    ``memory.health_check`` (per A6 — `tick_id`, `duration_ms`,
-    `components`, `drift_count`, `errors`) and runs the retention
-    pass for telemetry files (P7.2 piggyback).
+    ``memory.health_check`` (``tick_id``, ``duration_ms``,
+    ``components``, ``drift_count``, ``errors``) and runs the retention
+    pass for telemetry files.
 
     Disable to skip the cron (one less background thread). Health
     can still be probed on demand by calling ``run_tick()`` directly
@@ -397,7 +395,7 @@ class MemoryHealthCheckConfig(Base):
 
 
 class SkillsHotTierConfig(Base):
-    """Hot working-set tier for skills (Spec 2 §2.2/§8).
+    """Hot working-set tier for skills.
 
     The cache-stable prefix injects only the usage-ranked working set
     instead of the whole catalog; the long tail is reachable via
@@ -417,7 +415,7 @@ class SkillsHotTierConfig(Base):
 
 class SkillJudgeConfig(Base):
     """LLM semantic-audit pass over an imported skill, after the deterministic
-    §8.C scan (spec 2026-06-03 §A3). ``trigger`` decides WHEN it auto-runs:
+    AST scan. ``trigger`` decides WHEN it auto-runs:
     ``off`` (default) — never auto; invoke on-demand per skill ("Audit with LLM").
     ``uncertain`` — only when the gate is already unsure (carries code / caution /
     out-of-allowlist), to break the tie; clean allowlisted skills skip it (zero
@@ -456,7 +454,7 @@ DEFAULT_SKILL_ALLOWLIST: list[str] = [
 
 
 class SkillSecurityConfig(Base):
-    """Security floor + policy for skill import (§8.C/§6.B). ``allowlist`` =
+    """Security floor + policy for skill import. ``allowlist`` =
     trusted source-ref prefixes (e.g. ``github:anthropics/``). A match skips only
     the *source* confirmation; the verdict/code gates have no opt-out. Ships with a
     vetted default of first-party vendor + de-facto orgs (``DEFAULT_SKILL_ALLOWLIST``),
@@ -519,22 +517,22 @@ class McpDiscoveryConfig(Base):
     search_limit: int = 10
     install_policy: Literal["never", "approve", "auto"] = "approve"
     quality: Literal["official", "all"] = "official"
-    """Default discovery view. 'official' applies the star/first-party gate
-    (§3.3 of the design); 'all' returns the full registry (legacy firehose)."""
+    """Default discovery view. 'official' applies the star/first-party gate;
+    'all' returns the full registry."""
     min_stars: int = 100
     """Star floor for the 'official' gate; user-configurable."""
 
 
 class SkillsConfig(Base):
-    """Global skill-subsystem governance (spec 2026-06-03 §9). Per-agent
-    skill-context tuning (``skills_hot_tier``, ``disabled_skills``) lives on
-    ``agents.defaults``; the memory-index toggle stays at ``memory.index_skills``.
-    ``discovery`` (registries + search) is added by the discovery feature."""
+    """Global skill-subsystem governance. Per-agent skill-context tuning
+    (``skills_hot_tier``, ``disabled_skills``) lives on ``agents.defaults``;
+    the memory-index toggle stays at ``memory.index_skills``.
+    ``discovery`` (registries + search) is configured here."""
 
     security: SkillSecurityConfig = Field(default_factory=SkillSecurityConfig)
     discovery: SkillsDiscoveryConfig = Field(default_factory=SkillsDiscoveryConfig)
     install_policy: Literal["never", "approve", "auto"] = "approve"
-    """P6 #1 — how `skill_install_deps` runs a skill's declared install specs.
+    """How `skill_install_deps` runs a skill's declared install specs.
     'never' = report only (never run, even with confirm); 'approve' = dry-run then
     run on confirm (default); 'auto' = run without a per-call confirm. All policies
     still execute through ExecTool's gate."""
@@ -555,21 +553,21 @@ class MemoryConfig(Base):
     use via fastembed; only the Python extra can't self-install).
 
     ``dream`` configures the entity-centric dream passes (extract / refine /
-    skill / always_on) and their cron + reactive triggers (doc 25 §2.A.1).
+    skill / always_on) and their cron + reactive triggers.
     Manual ``durin memory dream`` works regardless of the triggers.
 
     ``search`` configures the search pipeline (cross-encoder etc.).
 
-    ``file_watcher`` and ``health_check`` (audit A11) wire the
-    background services the agent loop runs.
+    ``file_watcher`` and ``health_check`` wire the background services
+    the agent loop runs.
     """
 
     enabled: bool = True
     # Skills are authored + injected already; this gates making them
     # searchable as a `skill` memory class (skill-memory-class indexing).
     index_skills: bool = True
-    # §8b/8e: the workspace owner entity ref (e.g. "person:marcelo"). Resolves
-    # the principal for the pinned context (channel → owner → person:anonymous).
+    # The workspace owner entity ref (e.g. "person:marcelo"). Resolves the
+    # principal for the pinned context (channel → owner → person:anonymous).
     # None defaults to anonymous until the user sets it.
     owner: str | None = None
     embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
@@ -619,13 +617,13 @@ class ModelPresetConfig(Base):
     context_window_tokens: int = 65_536
     temperature: float = 0.1
     reasoning_effort: str | None = None
-    # Pre-emptive compaction trigger (OpenClaw-inspired Tier 2 A1).
-    # Fraction of ``context_window_tokens`` above which the consolidator
-    # fires BEFORE the next LLM call instead of waiting for a context
-    # overflow 400. Per-model because the right value depends on the
-    # window: 128K models can sit at 0.5 (compact at 64K); 1M models
-    # want ~0.15 (compact at 150K — you pay per token shipped, so
-    # waiting until 500K means shipping a huge prompt every turn).
+    # Pre-emptive compaction trigger ratio: fraction of
+    # ``context_window_tokens`` above which the consolidator fires BEFORE
+    # the next LLM call instead of waiting for a context overflow 400.
+    # Per-model because the right value depends on the window: 128K models
+    # can sit at 0.5 (compact at 64K); 1M models want ~0.15 (compact at
+    # 150K — you pay per token shipped, so waiting until 500K means
+    # shipping a huge prompt every turn).
     # ``None`` inherits from ``AgentDefaults.preemptive_compact_ratio``.
     preemptive_compact_ratio: float | None = Field(
         default=None,
@@ -701,7 +699,7 @@ class AgentDefaults(Base):
     unified_session: bool = False  # Share one session across all channels (single-user multi-device)
     # Blocking ask_user (V2): the tool awaits the user's next message inside
     # the same turn instead of yielding; on timeout it degrades to the V1
-    # yield semantics. See docs/architecture/ux.md.
+    # yield semantics.
     ask_user_blocking: bool = True
     ask_user_answer_timeout_s: int = Field(default=300, ge=10, le=3600)
     plan_stall_turns: int = Field(
@@ -727,7 +725,7 @@ class AgentDefaults(Base):
         le=0.99,
         validation_alias=AliasChoices("preemptiveCompactRatio", "preemptive_compact_ratio"),
         serialization_alias="preemptiveCompactRatio",
-    )  # Tier 2 A1: default trigger ratio when preset doesn't override.
+    )  # Default trigger ratio when preset doesn't override.
     decision_log_enabled: bool = True  # Concern B task-state anchor: record key decisions/findings across compaction
     decision_log_max_entries: int = Field(default=10, ge=1, le=100)  # Cap on decision-log entries (re-injected every turn)
     decision_log_max_chars: int = Field(default=1500, ge=100, le=20_000)  # Total chars cap on the decision log
@@ -823,27 +821,6 @@ class ProvidersConfig(Base):
     nvidia: ProviderConfig = Field(default_factory=ProviderConfig)  # NVIDIA NIM (nvapi- keys)
 
 
-class HeartbeatConfig(Base):
-    """Heartbeat service configuration."""
-
-    enabled: bool = True
-    interval_s: int = 30 * 60  # 30 minutes
-    keep_recent_messages: int = 8
-    # OpenClaw-inspired: when True, each heartbeat tick runs in a fresh
-    # ephemeral session that's deleted after the tick. No state carries
-    # between ticks — useful when heartbeat tasks are meant to be
-    # stateless one-shots (e.g. "did anything change?") and shouldn't
-    # drift due to accumulated context from prior runs. When False
-    # (default), the existing behaviour is preserved: one shared session
-    # named "heartbeat", trimmed by ``keep_recent_messages`` after each
-    # tick.
-    isolated_sessions: bool = Field(
-        default=False,
-        validation_alias=AliasChoices("isolatedSessions", "isolated_sessions"),
-        serialization_alias="isolatedSessions",
-    )
-
-
 class ApiConfig(Base):
     """OpenAI-compatible API server configuration."""
 
@@ -852,12 +829,18 @@ class ApiConfig(Base):
     timeout: float = 120.0  # Per-request timeout in seconds.
 
 
+class CronConfig(Base):
+    """Cron scheduler configuration."""
+
+    run_history_max: int = Field(default=50, ge=1, le=1000)
+    run_session_retention_hours: int = Field(default=48, ge=0, le=8760)
+
+
 class GatewayConfig(Base):
     """Gateway/server configuration."""
 
     host: str = "127.0.0.1"  # Safer default: local-only bind.
     port: int = 18790
-    heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     # When True, `durin gateway` runs detached (PID file + log file) so
     # the terminal isn't locked. Opt-in because the foreground mode is
     # easier to debug on first install. Toggle via `durin config set
@@ -1014,7 +997,7 @@ class AppearanceConfig(Base):
 
 
 class TelemetryPushConfig(Base):
-    """Opt-in HTTPS push of telemetry events (audit A8 / doc 07 §12.2).
+    """Opt-in HTTPS push of telemetry events.
 
     Default OFF. When enabled, every event emitted locally also POSTs
     to ``url`` (buffered, batched per ``batch_size``). The local JSONL
@@ -1025,7 +1008,7 @@ class TelemetryPushConfig(Base):
     snippets, needles — 200 chars max via ``_truncate_freetext`` in
     ``durin/agent/tools/_telemetry.py``). Enable this only when
     exporting to YOUR OWN infrastructure (Grafana/Loki/Datadog/custom
-    endpoint). Read doc 07 §12.2 + §13 before enabling.
+    endpoint).
 
     **Auth**: ``token_secret_name`` references a secret stored in
     ``~/.durin/secrets.json`` — NEVER put the bearer token directly
@@ -1044,7 +1027,7 @@ class TelemetryPushConfig(Base):
 
 
 class TelemetryConfig(Base):
-    """Telemetry subsystem configuration (audit A8).
+    """Telemetry subsystem configuration.
 
     Events emit locally to JSONL by default; optional fan-out to an
     HTTPS endpoint via :class:`TelemetryPushConfig`.
@@ -1116,6 +1099,7 @@ class Config(BaseSettings):
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    cron: CronConfig = Field(default_factory=CronConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     catalog_refresh: CatalogRefreshConfig = Field(

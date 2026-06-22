@@ -1,8 +1,8 @@
 """memory_ingest tool — persist external artifacts as memory sources.
 
 The tool copies the source file to ``ingested/<id>/`` and, when memory is
-enabled, stores the document WHOLE as a reference (§A2:
-``memory/references/<slug>.md`` + a token-aware ``.chunks.jsonl`` sidecar) and
+enabled, stores the document WHOLE as a reference
+(``memory/references/<slug>.md`` + a token-aware ``.chunks.jsonl`` sidecar) and
 indexes it (FTS + vector) so it's searchable the moment it's ingested — not
 only after a dream pass. This replaced the legacy chunked ``corpus/`` model;
 full content stays in ``ingested/<id>/source.*``.
@@ -79,10 +79,6 @@ class MemoryIngestTool(Tool):
 
     @property
     def description(self) -> str:
-        # Canonical text per `docs/architecture/memory/06_prompts_and_instructions.md` §3.3.
-        # Reads via `Tool.to_schema()` → `function.description` in the
-        # OpenAI spec — what the LLM sees. Audit B1 (2026-05-28) caught
-        # the prior short text drifted from the canonical doc.
         return _PARAMETERS["description"]
 
     @classmethod
@@ -143,9 +139,9 @@ class MemoryIngestTool(Tool):
             },
         )
 
-        # §A2: store the ingested document WHOLE as a reference (design §2.3/§2.8)
-        # — FTS the whole doc + vector-index its token-aware chunks. Replaces the
-        # legacy chunked `corpus/` model. Best-effort: a failure here does not
+        # Store the ingested document WHOLE as a reference — FTS the whole
+        # doc + vector-index its token-aware chunks. Replaces the legacy
+        # chunked `corpus/` model. Best-effort: a failure here does not
         # roll back the verbatim ingest above.
         ref = self._create_reference(source_path=source, content=result["content"])
 

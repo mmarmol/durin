@@ -3,7 +3,7 @@
 Every gateway capability is a service method taking a validated ``Command`` or
 ``Query`` plus a ``Principal`` and returning a ``Result`` (or raising a
 ``DomainError``). The HTTP/WS adapters and the in-process TUI all call the same
-methods. See ``docs/architecture/api.md``.
+methods. Transport adapters (HTTP/WS) and the in-process TUI all call the same methods.
 """
 
 from durin.service.principal import Principal, Scope

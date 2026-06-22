@@ -1,14 +1,15 @@
 """Ingest external artifacts (markdown / plain-text) as memory sources.
 
-Phase 1.5 scope: pure file persistence. The LLM-derived fields in
+Pure file persistence. The LLM-derived fields in
 ``meta.json::derived`` (``summary``, ``entities``, ``relations``) are
-populated later — either by dream (Phase 3) over the ``ingested/``
-directory or by a follow-up ``memory_store`` call from the agent that
-just read the file content.
+populated later — either by dream over the ``ingested/`` directory or
+by a follow-up ``memory_store`` call from the agent that just read the
+file content.
 
 V1 accepts markdown and plain-text only. PDFs / binary formats are
-rejected until Phase 2 adds a converter step that produces
-``ingested/<id>/source.md`` alongside the canonical original.
+rejected; a converter step for non-text types is not yet implemented
+(it would produce ``ingested/<id>/source.md`` alongside the canonical
+original).
 """
 
 from __future__ import annotations
@@ -67,7 +68,7 @@ def ingest_artifact(workspace: Path, source_path: Path) -> dict[str, Any]:
             "ingested_at": datetime.now(timezone.utc).isoformat(),
             "source_path": str(source_path),
             "size_bytes": size_bytes,
-            # LLM-derived fields stay empty until dream (Phase 3) or a
+            # LLM-derived fields stay empty until dream or a
             # follow-up memory_store call fills them in.
             "summary": "",
             "entities": [],

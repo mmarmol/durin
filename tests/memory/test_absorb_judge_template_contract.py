@@ -7,7 +7,6 @@ envelope (``===VERDICT===`` etc.). A drift between template and code
 would make every judge call fail at parse time — so this test is the
 canary.
 
-Doc-level reference: `docs/architecture/memory/06_prompts_and_instructions.md` §5.
 """
 
 from __future__ import annotations
@@ -55,17 +54,16 @@ def test_template_uses_v2_envelope(template_text: str) -> None:
 
 
 def test_valid_verdicts_match_doc_06(template_text: str) -> None:
-    """Doc 06 §5 names the three verdicts. Lock the set so a future
+    """The three verdicts are same/different/unclear. Lock the set so a future
     refactor that adds/removes a verdict breaks this loudly."""
     assert _VALID_VERDICTS == frozenset({"same", "different", "unclear"})
 
 
 def test_template_keeps_peer_review_framing(template_text: str) -> None:
-    """Doc 06 §5 + the prompt's design note (`feedback_question_user_input`
-    pattern) require a peer-review tone — the LLM should default to
-    'different' when content evidence is thin, not confirm Dream's
-    most recent decision (self-consistency bias mitigation, doc 05
-    §8.7). Lock the safety net so a future rewrite can't drop it."""
+    """The prompt must require a peer-review tone — the LLM should default to
+    'different' when content evidence is thin, not confirm Dream's most recent
+    decision (self-consistency bias mitigation). Lock the safety net so a
+    future rewrite can't drop it."""
     # Lenient match — the prompt's exact wording is in Spanish; we
     # check for one of two semantic anchors that must be present.
     assert (

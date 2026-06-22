@@ -133,6 +133,34 @@ async def test_execute_job_records_run_history(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_execute_job_links_per_run_session_key(tmp_path) -> None:
+    store_path = tmp_path / "cron" / "jobs.json"
+    captured: list = []
+
+    async def capture(job):
+        captured.append(job.payload.session_key)
+
+    service = CronService(store_path, on_job=capture)
+    job = service.add_job(
+        name="link-test",
+        schedule=CronSchedule(kind="every", every_ms=60_000),
+        message="do something",
+    )
+    await service.run_job(job.id)
+
+    loaded = service.get_job(job.id)
+    assert loaded is not None
+    assert len(loaded.state.run_history) == 1
+    rec = loaded.state.run_history[0]
+    assert rec.session_key is not None
+    assert rec.session_key.startswith(f"cron:{job.id}:run:")
+    run_at_ms = rec.run_at_ms
+    assert rec.session_key == f"cron:{job.id}:run:{run_at_ms}"
+    assert len(captured) == 1
+    assert captured[0] == rec.session_key
+
+
+@pytest.mark.asyncio
 async def test_run_history_records_errors(tmp_path) -> None:
     store_path = tmp_path / "cron" / "jobs.json"
 
@@ -156,7 +184,7 @@ async def test_run_history_records_errors(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_run_history_trimmed_to_max(tmp_path) -> None:
     store_path = tmp_path / "cron" / "jobs.json"
-    service = CronService(store_path, on_job=lambda _: asyncio.sleep(0))
+    service = CronService(store_path, on_job=lambda _: asyncio.sleep(0), run_history_max=10)
     job = service.add_job(
         name="trim",
         schedule=CronSchedule(kind="every", every_ms=60_000),
@@ -166,7 +194,7 @@ async def test_run_history_trimmed_to_max(tmp_path) -> None:
         await service.run_job(job.id)
 
     loaded = service.get_job(job.id)
-    assert len(loaded.state.run_history) == CronService._MAX_RUN_HISTORY
+    assert len(loaded.state.run_history) == service._run_history_max
 
 
 @pytest.mark.asyncio

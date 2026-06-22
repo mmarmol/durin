@@ -1,4 +1,4 @@
-"""Tests that ChannelManager wires a TranscriptionService into channels (spec §8)."""
+"""Tests that ChannelManager wires a TranscriptionService into channels."""
 
 from durin.channels.manager import ChannelManager
 from durin.config.schema import Config

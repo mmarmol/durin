@@ -1,16 +1,14 @@
-"""Shared `=== KIND: ... ===` marker construction (audit G7, 2026-05-28).
+"""Shared `=== KIND: ... ===` marker construction.
 
 Two renderers in this package wrap canonical / fragment / session /
-ingested content in the marker convention documented in
-``docs/architecture/memory/06_prompts_and_instructions.md`` §8.3:
+ingested content in the marker convention:
 
 - ``durin.memory.hot_layer`` — eager pre-injection into every agent
   prompt; renders structured EntityPage objects.
 - ``durin.memory.sectioned_output`` — lazy search-result rendering
   for ``memory_search``; renders SectionedHit rows.
 
-Audit F4 (2026-05-28) unified the body-rendering paths for search;
-audit G6 (2026-05-28) reaffirmed that the two renderers stay
+The body-rendering paths for search are unified; the two renderers stay
 intentionally separate — the hot layer carries the full entity-page
 structure (attributes/relations/identifiers/body excerpt) while the
 search renderer carries the search-hit shape (summary > body >
@@ -62,8 +60,8 @@ def _skill_name(uri: str) -> str:
 def _compose_qualifiers(*parts: str) -> str:
     """Join non-empty qualifiers inside a single trailing parenthesis.
 
-    H5 (audit 2026-05-29) introduces an optional ``completeness``
-    qualifier (``"complete"`` / ``"preview N/M"``) that lives in the
+    An optional ``completeness`` qualifier (``"complete"`` / ``"preview N/M"``)
+    lives in the
     same parens as the existing ``ts`` / ``consolidated`` qualifier.
     Composing them here keeps the marker shape predictable and lets
     each marker helper express its specific qualifiers without
@@ -89,9 +87,9 @@ def canonical_marker(
     (the file mtime of the entity page) so it always gets the
     timestamped variant.
 
-    H5 (audit 2026-05-29): ``completeness`` (optional) is appended to
-    the trailing parens — ``"complete"`` when the rendered body is the
-    whole entry, ``"preview N/M"`` when more is available via drill.
+    ``completeness`` (optional) is appended to the trailing parens —
+    ``"complete"`` when the rendered body is the whole entry,
+    ``"preview N/M"`` when more is available via drill.
     """
     primary = f"consolidated {ts}" if ts else "canonical entity page"
     return f"=== CANONICAL: {ref}{_compose_qualifiers(primary, completeness)} ==="

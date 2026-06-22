@@ -1,4 +1,4 @@
-"""Tests for TranscriptionService: caching, modes, error handling (spec §4)."""
+"""Tests for TranscriptionService: caching, modes, error handling."""
 
 import asyncio
 from pathlib import Path

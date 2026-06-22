@@ -199,8 +199,8 @@ def test_dream_transformed_entity_fully_searchable(tmp_path):
 
 
 def test_vector_search_finds_attributes_and_semantic(tmp_path):
-    # The embedding includes attributes/relations (audit E9), and the vector
-    # path adds SEMANTIC recall the token paths miss. Guarded: needs the model.
+    # The embedding includes attributes/relations, and the vector path adds
+    # SEMANTIC recall the token paths miss. Guarded: needs the model.
     from durin.memory.vector_index import vector_index_available
     if not vector_index_available():
         pytest.skip("vector index unavailable in this environment")

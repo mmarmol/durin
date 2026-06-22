@@ -63,7 +63,7 @@ class TestBuild:
         assert len(idx.all_entities()) == 2
 
     def test_collision_returns_list(self, tmp_path: Path) -> None:
-        """Per doc 18 §10 R6: ambiguous aliases return list with both."""
+        """Ambiguous aliases return a list with all matching entity refs."""
         _write_page(
             tmp_path, "person", "marcelo_marmol",
             name="Marcelo Marmol",
@@ -102,7 +102,7 @@ class TestBuild:
         assert idx.lookup("+5491234567") == ["person:marcelo"]
 
     def test_archive_subfolders_excluded(self, tmp_path: Path) -> None:
-        """Pages under <slug>/archive/ are de-indexed per doc 18 §3 + R6."""
+        """Pages under <slug>/archive/ are excluded from the alias index."""
         _write_page(tmp_path, "person", "marcelo", name="Marcelo")
         # Archived absorbed alias — should NOT be in index
         archived = tmp_path / "entities" / "person" / "marcelo" / "archive"
@@ -133,7 +133,7 @@ class TestBuild:
 
 
 # ---------------------------------------------------------------------------
-# (no persistence — per doc 23 T1.4 + G14, AliasIndex is rebuild-only.
+# (no persistence — AliasIndex is rebuild-only.
 # Tests for `save()` and `load()` removed; `build()` is the only way to
 # populate the index from disk.)
 # ---------------------------------------------------------------------------
@@ -227,7 +227,7 @@ class TestLookup:
 
 
 # ---------------------------------------------------------------------------
-# thread safety (shared instance, doc 25 §2.C)
+# thread safety (shared instance)
 # ---------------------------------------------------------------------------
 
 

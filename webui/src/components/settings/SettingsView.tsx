@@ -110,6 +110,7 @@ interface SettingsViewProps {
   onLogout?: () => void;
   onRestart?: () => void;
   isRestarting?: boolean;
+  onOpenSession?: (sessionKey: string) => void;
 }
 
 export function SettingsView({
@@ -122,6 +123,7 @@ export function SettingsView({
   onLogout,
   onRestart,
   isRestarting = false,
+  onOpenSession,
 }: SettingsViewProps) {
   const { t } = useTranslation();
   const { token } = useClient();
@@ -428,7 +430,7 @@ export function SettingsView({
               ) : activeSection === "mcp" ? (
                 <McpSettings token={token} />
               ) : activeSection === "cron" ? (
-                <CronSettings token={token} />
+                <CronSettings token={token} onOpenSession={onOpenSession} />
               ) : activeSection === "secrets" ? (
                 <SecretsSettings token={token} />
               ) : activeSection === "advanced" ? (

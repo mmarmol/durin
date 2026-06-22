@@ -1,13 +1,8 @@
-"""Tests for the LoCoMo dataset loader — canonical category mapping
-(audit H13, 2026-05-29).
+"""Tests for the LoCoMo dataset loader — canonical category mapping.
 
-Pre-H13 ``_CATEGORY_BY_CODE`` mapped codes 1..5 to ``single_hop /
-multi_hop / temporal / open_domain / adversarial``, which is the
-order of the LoCoMo paper §4.1 NARRATIVE but NOT the dataset's
-own category-code-to-label mapping. The dataset (verified by
-counting against mem0's public ``benchmarks/locomo/prompts.py``
-``CATEGORY_NAMES`` dict and against the raw counts in
-``locomo10.json``: 282/321/96/841/446) actually labels:
+``_CATEGORY_BY_CODE`` must map codes 1..5 to the dataset's own label order
+(verified against mem0's ``CATEGORY_NAMES`` dict and raw counts in
+``locomo10.json``: 282/321/96/841/446):
 
   1 = multi_hop    (282 questions)
   2 = temporal     (321 questions)
@@ -15,14 +10,9 @@ counting against mem0's public ``benchmarks/locomo/prompts.py``
   4 = single_hop   (841 questions)
   5 = adversarial  (446 questions)
 
-The bug silently re-labelled every prior bench: what we called
-"single_hop is our worst category at 20%" was actually multi_hop;
-what we celebrated as "adversarial 100%" was a sample of size 2
-(442 adversarial questions had ``answer=None`` and were skipped at
-load time — separate audit H14).
-
-These tests pin the canonical mapping so a future edit of
-``_CATEGORY_BY_CODE`` re-introducing the swap fails loudly.
+Prior versions used the paper narrative order instead, silently mis-labelling
+every benchmark run. Tests pin the canonical mapping so a future edit
+re-introducing the swap fails loudly.
 """
 
 from __future__ import annotations

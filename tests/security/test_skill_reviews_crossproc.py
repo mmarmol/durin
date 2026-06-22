@@ -5,7 +5,8 @@ the same skill-reviews.json. Without cross_process_lock wrapping the
 load→mutate→save, one write overwrites the other. With the lock, both
 reviews must survive.
 
-See docs/architecture/concurrency.md for lock-ordering invariants.
+Cross-process lock ordering: cross_process_lock wraps load→mutate→save
+to prevent one write from overwriting the other.
 """
 
 from __future__ import annotations

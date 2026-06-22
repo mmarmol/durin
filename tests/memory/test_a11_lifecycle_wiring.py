@@ -1,6 +1,4 @@
-"""Memory background services wiring (audit A11).
-
-Per doc 02 §5.1 + §6.3 and doc 11 audit A11:
+"""Memory background services wiring.
 
 - `MemoryFileWatcher` and `HealthCheckScheduler` are started by
   `AgentLoop.__init__` when the corresponding config flag is true
@@ -9,8 +7,7 @@ Per doc 02 §5.1 + §6.3 and doc 11 audit A11:
 - Failure-to-start is isolated — the agent loop keeps working
   without the optional background service.
 
-Per [[feedback-sync-tests-exercise-behavior]]: these tests
-exercise the wiring path with real config + verify the threads
+Tests exercise the wiring path with real config + verify the threads
 start, the scheduler ticks fire, and stop() cleans up.
 """
 

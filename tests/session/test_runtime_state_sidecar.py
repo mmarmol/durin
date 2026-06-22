@@ -6,7 +6,8 @@ Covers:
 - Round-trip: a fresh ``SessionManager`` load recovers volatile keys from sidecar
 - Full ``save()`` still writes volatile keys to sidecar (not line-0)
 
-See docs/architecture/concurrency.md for the sidecar split design.
+The sidecar split design keeps volatile state separate from the .jsonl to
+reduce write amplification per turn.
 """
 
 from __future__ import annotations

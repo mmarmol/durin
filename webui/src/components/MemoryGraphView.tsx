@@ -78,6 +78,22 @@ const TYPE_PALETTE: Record<string, string> = {
 };
 const FALLBACK_HUES = [200, 25, 145, 285, 60, 320, 95];
 
+/**
+ * Strip HTML comment markers (provenance metadata) from memory body text.
+ * Applies the removal repeatedly until the string is stable so that nested or
+ * overlapping ``<!-- -->`` sequences cannot leave a dangling ``<!--`` behind
+ * (a single pass over multi-character delimiters is not sufficient).
+ */
+function stripHtmlComments(text: string): string {
+  let prev: string;
+  let out = text;
+  do {
+    prev = out;
+    out = out.replace(/<!--[\s\S]*?-->/g, "");
+  } while (out !== prev);
+  return out;
+}
+
 function colorForType(type: string): string {
   if (TYPE_PALETTE[type]) return TYPE_PALETTE[type];
   let h = 0;
@@ -719,8 +735,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               if (!tokenRef.current) return;
               void fetchMemoryEntity(tokenRef.current, hid)
                 .then((d) => {
-                  const body = (d?.page?.body ?? "")
-                    .replace(/<!--[\s\S]*?-->/g, "")
+                  const body = stripHtmlComments(d?.page?.body ?? "")
                     .trim()
                     .slice(0, 400);
                   hoverBodyCache.current.set(hid, body);
@@ -1502,7 +1517,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                         {/* Strip the inline `<!-- author [[sessions/…]] -->`
                             provenance markers — they're machine metadata, not
                             content, and render as raw noise. */}
-                        {detail.page.body.replace(/<!--[\s\S]*?-->/g, "").trim()}
+                        {stripHtmlComments(detail.page.body).trim()}
                       </MarkdownTextRenderer>
                     ) : (
                       <p className="text-muted-foreground">{t("memoryGraph.noBody")}</p>
@@ -1718,7 +1733,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
               {referenceDetail.body ? (
                 <MarkdownTextRenderer className="text-[12.5px] leading-relaxed">
-                  {referenceDetail.body.replace(/<!--[\s\S]*?-->/g, "").trim()}
+                  {stripHtmlComments(referenceDetail.body).trim()}
                 </MarkdownTextRenderer>
               ) : (
                 <p className="text-muted-foreground">{t("memoryGraph.noBody")}</p>

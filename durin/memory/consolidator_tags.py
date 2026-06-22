@@ -1,7 +1,7 @@
 """Parse the consolidator LLM response into (summary, tags).
 
 The consolidator prompt (``templates/agent/consolidator_archive.md``) is
-extended in Phase 1.4 to emit a trailing YAML block with two fields:
+extended to emit a trailing YAML block with two fields:
 
     entities: [...]
     topics: [...]
@@ -59,7 +59,7 @@ def parse_consolidator_response(raw: str) -> tuple[str, dict[str, list[str]]]:
     if not isinstance(parsed, dict):
         return summary_text, empty_tags
 
-    # Lenient entity validation on the read path (per doc 14 §3.2):
+    # Lenient entity validation on the read path:
     # drop malformed refs silently — a degraded LLM output should never
     # break consolidation. Valid refs flow through; invalid ones are
     # dropped on the floor.

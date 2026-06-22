@@ -85,15 +85,15 @@ def build_memory_graph(
     sessions_root = workspace / "sessions"
 
     # 1. Walk entity pages — `walk_class` excludes the top-level
-    # archive folder by default (Phase 0 deliverables 1 + 5).
+    # archive folder by default.
     from durin.memory.paths import walk_class
 
     nodes_by_ref: dict[str, dict[str, Any]] = {}
-    # G1: explicit entity-page relations become typed edges (source, target,
+    # Explicit entity-page relations become typed edges (source, target,
     # type). Previously the graph only drew co-occurrence edges from entry tags,
     # so the new model's `relations` field rendered as 0 edges.
     relation_edges: list[tuple[str, str, str]] = []
-    # P5: entity → source-document links (`derived_from`). Collected here,
+    # Entity → source-document links (`derived_from`). Collected here,
     # emitted as a SEPARATE edge loop after reference nodes are registered so
     # both endpoints exist (the both-endpoints guard would otherwise drop them).
     derived_from_edges: list[tuple[str, str]] = []  # (entity_ref, reference_ref)
@@ -164,7 +164,7 @@ def build_memory_graph(
             key = (a, b) if a < b else (b, a)
             edge_counts[key] += 1
         # Session evidence: parse source_refs for sessions/<key>.md
-        # (doc 18 §5.3 link format). Tracks per-(session,entity)
+        # links. Tracks per-(session,entity)
         # co-mentions so the resulting edge weight is meaningful.
         if include_sessions:
             for src in (entry.source_refs or []):
@@ -290,7 +290,7 @@ def build_memory_graph(
         if a in nodes_by_ref and b in nodes_by_ref:
             edges.append({"source": a, "target": b, "weight": weight})
 
-    # G1: explicit entity-page relations as typed edges (carry the relation
+    # Explicit entity-page relations as typed edges (carry the relation
     # type so the webui can label "founded_by", "partner", …).
     for src_ref, to_ref, rtype in relation_edges:
         if src_ref in nodes_by_ref and to_ref in nodes_by_ref:
@@ -302,7 +302,7 @@ def build_memory_graph(
                 "weight": 1,
             })
 
-    # P5: entity → reference (`derived_from`) as typed edges. Its own loop —
+    # Entity → reference (`derived_from`) as typed edges. Its own loop —
     # NOT folded into the relations loop above (that reads page.relations).
     # References are registered in step 3.7, so both endpoints exist here.
     for entity_ref, ref_target in derived_from_edges:
@@ -496,7 +496,7 @@ def _read_session_summary(jsonl_path: Path) -> tuple[str | None, int]:
 
     1. ``metadata.title`` from the identity block — the webui title
        set by :func:`maybe_generate_webui_title` (LLM-generated) or by
-       the user via the P2 rename endpoint. This is the authoritative
+       the user via the rename endpoint. This is the authoritative
        source when present.
     2. Legacy top-level keys ``display_name`` / ``title`` / ``name``
        — older sessions or non-webui channels may stash a name here.

@@ -112,6 +112,136 @@
         "title": "ConfigSetResult",
         "type": "object"
       },
+      "CronAddCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "At Ms"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Channel"
+          },
+          "deliver": {
+            "default": false,
+            "title": "Deliver",
+            "type": "boolean"
+          },
+          "every_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Every Ms"
+          },
+          "expr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expr"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "mode": {
+            "default": "reminder",
+            "title": "Mode",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "schedule_kind": {
+            "title": "Schedule Kind",
+            "type": "string"
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "To"
+          },
+          "tz": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tz"
+          }
+        },
+        "required": [
+          "name",
+          "message",
+          "schedule_kind"
+        ],
+        "title": "CronAddCommand",
+        "type": "object"
+      },
+      "CronAddResult": {
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/CronJobItem"
+          }
+        },
+        "required": [
+          "job"
+        ],
+        "title": "CronAddResult",
+        "type": "object"
+      },
       "CronJobItem": {
         "properties": {
           "channel": {
@@ -138,9 +268,33 @@
             "title": "Message",
             "type": "string"
           },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "run_history": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CronRunRecordResult"
+            },
+            "title": "Run History",
+            "type": "array"
           },
           "schedule": {
             "$ref": "#/components/schemas/CronJobScheduleResult"
@@ -160,6 +314,7 @@
           "is_system",
           "schedule",
           "message",
+          "mode",
           "channel",
           "state",
           "created_at_ms",
@@ -359,6 +514,77 @@
         "title": "CronRunCommand",
         "type": "object"
       },
+      "CronRunRecordResult": {
+        "properties": {
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "run_at_ms": {
+            "title": "Run At Ms",
+            "type": "integer"
+          },
+          "session_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Session Key"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Summary"
+          }
+        },
+        "required": [
+          "run_at_ms",
+          "status",
+          "duration_ms"
+        ],
+        "title": "CronRunRecordResult",
+        "type": "object"
+      },
       "CronRunResult": {
         "properties": {
           "reason": {
@@ -413,6 +639,164 @@
           "job"
         ],
         "title": "CronToggleResult",
+        "type": "object"
+      },
+      "CronUpdateCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "At Ms"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Channel"
+          },
+          "deliver": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Deliver"
+          },
+          "every_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Every Ms"
+          },
+          "expr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expr"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Mode"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          },
+          "schedule_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Schedule Kind"
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "To"
+          },
+          "tz": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tz"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "CronUpdateCommand",
         "type": "object"
       },
       "CrossEncoderTestQuery": {
@@ -3740,6 +4124,60 @@
         },
         "summary": "List all scheduled jobs (including disabled and system jobs)",
         "x-required-scope": "cron:read"
+      },
+      "patch": {
+        "operationId": "cron_update",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronUpdateCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronToggleResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Update a non-system cron job",
+        "x-required-scope": "cron:write"
+      },
+      "post": {
+        "operationId": "cron_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronAddCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronAddResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Create a new agent_turn cron job",
+        "x-required-scope": "cron:write"
       }
     },
     "/api/v1/cron/run": {

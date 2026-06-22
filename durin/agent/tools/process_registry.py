@@ -9,7 +9,7 @@ Adapted from hermes-agent's process_registry (MIT, Nous Research 2025),
 minus the sync→async bridge (durin's loop is already async) and minus the
 crash-recovery checkpoint (v1 limitation: a gateway restart orphans running
 background processes — they keep running, untracked; AgentLoop shutdown
-kills tracked process groups to bound this). See docs/architecture/loop.md.
+kills tracked process groups to bound this).
 """
 
 from __future__ import annotations

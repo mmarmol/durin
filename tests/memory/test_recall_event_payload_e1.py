@@ -1,15 +1,10 @@
-"""E1 (audit second pass, 2026-05-28): `memory.recall` payload must
-expose the diagnostic fields documented in `docs/architecture/memory/07` §4.1.
-
-Pre-E1, the event only carried `query`, `scope`, `level`,
-`result_count` — useful for counts but blind to: which path produced
-results (`strategy`), wall-clock cost (`duration_ms`), whether the
-LLM passed a keyword hint (`keywords`), whether the pipeline degraded
-(`recovered_from` + `recovery_duration_ms`), and what the pre-limit
-candidate population looked like (`total_candidates`).
-
-A8 principle (telemetry is first-class observability infra): all of
-these are already computed at the emission site in
+"""`memory.recall` payload must expose the diagnostic fields needed for
+observability. Pre-fix, the event only carried `query`, `scope`, `level`,
+`result_count` — useful for counts but blind to: which path produced results
+(`strategy`), wall-clock cost (`duration_ms`), whether the LLM passed a
+keyword hint (`keywords`), whether the pipeline degraded (`recovered_from` +
+`recovery_duration_ms`), and what the pre-limit candidate population looked
+like (`total_candidates`). All of these are computed at the emission site in
 `memory_search.py` — including them is a payload change, not new
 instrumentation.
 """

@@ -317,7 +317,7 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     loop.sessions.invalidate(session.key)
     if snapshot:
         loop._schedule_background(loop.consolidator.archive(snapshot))
-    # Doc 25 §2.A.1 β.2 — session-close trigger fires once per /new
+    # Session-close trigger fires once per /new
     # regardless of whether the snapshot above triggered compaction.
     # Independent config knob (memory.dream.on_session_close).
     # getattr keeps test scaffolds (SimpleNamespace loops) working —
@@ -367,6 +367,40 @@ def _model_command_status(loop) -> str:
     ])
 
 
+def adhoc_preset_config(config: Any, provider: str, model: str):
+    """Build an ad-hoc ``ModelPresetConfig`` for a ``provider model`` ref (the
+    picker form). Shared by the ``/model`` command and the per-turn cron model
+    override so both resolve a picker ref identically. Params resolve: the
+    user's per-model config override -> the catalog caps -> the schema default.
+    """
+    from durin.config.schema import ModelPresetConfig
+    from durin.providers.provider_catalog import catalog_model_caps
+
+    entry = None
+    if config is not None and provider and provider != "auto":
+        pc = getattr(config.providers, provider, None)
+        entry = (getattr(pc, "models", None) or {}).get(model)
+    caps = catalog_model_caps(provider, model)
+    return ModelPresetConfig(
+        model=model,
+        provider=provider,
+        context_window_tokens=(
+            entry.context_window_tokens
+            if entry and entry.context_window_tokens is not None
+            else (caps.max_input_tokens if caps and caps.max_input_tokens else 65_536)
+        ),
+        max_tokens=(
+            entry.max_tokens
+            if entry and entry.max_tokens is not None
+            else (caps.max_output_tokens if caps and caps.max_output_tokens else 8192)
+        ),
+        temperature=(entry.temperature if entry and entry.temperature is not None else 0.1),
+        reasoning_effort=(
+            entry.reasoning_effort if entry and entry.reasoning_effort is not None else None
+        ),
+    )
+
+
 async def cmd_model(ctx: CommandContext) -> OutboundMessage:
     """Show or switch model presets."""
     loop = ctx.loop
@@ -395,42 +429,11 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
 
     config = getattr(loop, "app_config", None)
 
-    def _config_entry(provider: str, model: str):
-        if config is None or not provider or provider == "auto":
-            return None
-        pc = getattr(config.providers, provider, None)
-        return (getattr(pc, "models", None) or {}).get(model)
-
-    def _preset_for(model: str, provider: str) -> ModelPresetConfig:
-        # Params resolve: the user's per-model config override → the catalog caps
-        # → the schema default. Switching to a configured/custom model uses the
-        # params set in Settings, not generic defaults.
-        entry = _config_entry(provider, model)
-        caps = catalog_model_caps(provider, model)
-        return ModelPresetConfig(
-            model=model,
-            provider=provider,
-            context_window_tokens=(
-                entry.context_window_tokens
-                if entry and entry.context_window_tokens is not None
-                else (caps.max_input_tokens if caps and caps.max_input_tokens else 65_536)
-            ),
-            max_tokens=(
-                entry.max_tokens
-                if entry and entry.max_tokens is not None
-                else (caps.max_output_tokens if caps and caps.max_output_tokens else 8192)
-            ),
-            temperature=(entry.temperature if entry and entry.temperature is not None else 0.1),
-            reasoning_effort=(
-                entry.reasoning_effort if entry and entry.reasoning_effort is not None else None
-            ),
-        )
-
     if len(parts) == 2:
         # Explicit `provider model` pair (the picker commits this form) — no
         # provider inference needed; the model resolves on the named provider.
         provider, model = parts
-        loop.model_presets[model] = _preset_for(model, provider)
+        loop.model_presets[model] = adhoc_preset_config(config, provider, model)
         name = model
     else:
         name = parts[0]
@@ -455,7 +458,7 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
                 ):
                     serving.append(p)
         if len(serving) == 1:
-            loop.model_presets[name] = _preset_for(name, serving[0])
+            loop.model_presets[name] = adhoc_preset_config(config, serving[0], name)
             try:
                 loop.set_model_preset(name)
             except (KeyError, ValueError) as exc:

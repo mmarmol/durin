@@ -1,4 +1,4 @@
-"""Memory file watcher (P2.3 / doc 02 §6.3).
+"""Memory file watcher.
 
 Detects manual edits under `memory/` and triggers
 `reindex_one_file` synchronously, plus auto-commits to

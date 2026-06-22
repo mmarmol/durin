@@ -3,7 +3,7 @@
 A write = read page@HEAD → apply FieldPatches with precedence → build a commit
 via plumbing (no working-tree mutation) → ``refs.set_if_equals`` CAS → retry on
 conflict. The working tree is fast-forwarded to HEAD afterward so Obsidian and
-other readers see the latest (design §2.5).
+other readers see the latest.
 
 All first-class writers (agent upsert, dream extract/refine, dashboard) call
 ``write_entity``. The page-level ``author_scope`` (durin/memory/provenance.py)
@@ -47,7 +47,7 @@ def _refresh_alias_index(memory_root: Path, page: EntityPage, slug: str) -> None
     (don't force-build on every write — the search pipeline builds lazily on
     first use). Best-effort: a refresh failure must never fail the write.
 
-    See docs/architecture/concurrency.md §AliasIndex staleness (hazard #17).
+    Guards AliasIndex staleness (hazard #17).
     """
     try:
         from durin.memory.aliases_cache import _cache, get_shared_alias_index
@@ -79,16 +79,15 @@ def git_worktree_lock_path(memory_git_root: Path) -> Path:
 _MAX_RETRIES = 30
 # Bridge: page-level author (2 values) → field-level author (3 values).
 # `dream` is passed explicitly by the dream paths; there is no page-level
-# equivalent, by design (§2.4).
+# equivalent, by design.
 _PAGE_TO_FIELD = {"agent_created": "agent", "user_authored": "user"}
 
-# In-process per-repo write lock (in-process ref-CAS thread race — surfaced in R5
-# verification, NOT audit #9/#18; see docs/architecture/concurrency.md
-# §"In-process ref-CAS lock"). The bare loose-ref CAS
-# (`refs.set_if_equals` under a `GitFile` O_EXCL `.lock`) is robust on its own
-# across both processes and threads. The in-process loss comes from the
-# concurrent, UNLOCKED `_fast_forward_working_tree` (`reset --hard`): R5
-# serializes that reset cross-process via `.git-worktree`, but in-process it was
+# In-process per-repo write lock (in-process ref-CAS thread race, NOT audit
+# #9/#18). The bare loose-ref CAS (`refs.set_if_equals` under a `GitFile`
+# O_EXCL `.lock`) is robust on its own across both processes and threads.
+# The in-process loss comes from the concurrent, UNLOCKED
+# `_fast_forward_working_tree` (`reset --hard`): this lock serializes that
+# reset cross-process via `.git-worktree`, but in-process it was
 # not serialized against a peer thread's read-apply-CAS. Mid-reset the ref is
 # transiently stale/absent (`head_sha()` can return None), so a peer reads a
 # stale `base`, commits on it, and its CAS lands — orphaning a concurrent commit
@@ -146,16 +145,15 @@ def _ensure_repo(root: Path) -> None:
 
 
 def _commit_dirty_as_user(root: Path) -> None:
-    """Human-edit guard (design §2.5, N1): before a system write touches git,
+    """Human-edit guard: before a system write touches git,
     commit any uncommitted working-tree ``.md`` edits with author ``user`` — so
     the hard-reset ff (``_fast_forward_working_tree``) that follows can't clobber
     an in-progress hand edit (e.g. the user editing a page in Obsidian). No-op on
     a clean tree. Best-effort — a failure here must never block the system write.
 
-    Serialized under the git-worktree cross-process lock (§lock-ordering-invariant
-    in docs/architecture/concurrency.md): this lock is the sole guard for
-    working-tree / .git/index mutations and is always acquired AFTER any
-    dulwich-internal ref CAS lock.  It is never held while a session or
+    Serialized under the git-worktree cross-process lock: this lock is the sole
+    guard for working-tree / .git/index mutations and is always acquired AFTER
+    any dulwich-internal ref CAS lock.  It is never held while a session or
     config lock is acquired, so there is no opposite-order acquisition.
     """
     if not (root / ".git").exists():
@@ -163,7 +161,7 @@ def _commit_dirty_as_user(root: Path) -> None:
     # Sub-hazard A: concurrent commit + reset can corrupt .git/index (dulwich
     # _transition_to_file is non-atomic).  This lock is the OUTERMOST memory
     # lock — always acquired AFTER any dulwich-internal ref CAS lock, never
-    # while a session/config lock is held.  See docs/architecture/concurrency.md.
+    # while a session/config lock is held.
     # The prune paths (indexer.reindex_one_file, vector_index.prune_orphan_rows)
     # also acquire this lock (sub-hazard B recheck) THEN their FTS/Lance locks
     # (inner).  No path takes an FTS/Lance lock and THEN this lock, so lock
@@ -198,7 +196,7 @@ def _commit_dirty_as_user(root: Path) -> None:
 
 
 def _emit_relation_cap(ref: str, before: int, after: int) -> None:
-    """A3 — per-entity relation cap (doc 01 §4.4), soft 50 / hard 200.
+    """Per-entity relation cap, soft 50 / hard 200.
 
     Alert-only "de momento": emit telemetry + log when a write crosses the soft
     or hard cap, but NEVER block the write or drop a relation (no data loss).
@@ -333,7 +331,7 @@ def write_entity(
     # stale base to a peer thread's CAS). Outer lock; the inner `.git-worktree`
     # lock is taken below inside _commit_dirty_as_user / _fast_forward_working_tree.
     with _root_write_lock(root):
-        _commit_dirty_as_user(root)  # N1: preserve any in-progress hand edit first
+        _commit_dirty_as_user(root)  # preserve any in-progress hand edit first
         for attempt in range(_MAX_RETRIES):
             base = head_sha(root)
             raw = read_blob_at_head(root, rel)
@@ -350,7 +348,7 @@ def write_entity(
                     type=type_, name=slug
                 )
 
-            # §2.4: default is agent-managed. memory_writer IS the agent/dream
+            # Default is agent-managed. memory_writer IS the agent/dream
             # write path, so every page it writes is agent_created. The user opts
             # to manage a page (page-level user_authored) via a SEPARATE path
             # (direct edit / dashboard), which the refine dream then leaves alone.
@@ -427,7 +425,7 @@ def write_files_cas(
     # read-apply-CAS-reset (in-process thread race — see write_entity and the
     # registry note above). Outer lock; `.git-worktree` is taken inside (inner).
     with _root_write_lock(root):
-        _commit_dirty_as_user(root)  # N1: preserve any in-progress hand edit first
+        _commit_dirty_as_user(root)  # preserve any in-progress hand edit first
         for attempt in range(_MAX_RETRIES):
             base = head_sha(root)
             new_commit = build_commit_with_changes(
@@ -474,7 +472,7 @@ def _fast_forward_working_tree(root: Path) -> None:
     prune_orphan_rows) close B by acquiring THIS SAME lock before acting on an
     absent-file observation and re-checking is_file() after acquiring it.  If
     the file is present on re-check, the reset completed and the prune is
-    skipped.  See docs/architecture/concurrency.md §reset-absent-window.
+    skipped.
 
     cross_process_lock is reentrant per-thread: the common caller sequence
     _commit_dirty_as_user → (CAS) → _fast_forward_working_tree re-enters safely.

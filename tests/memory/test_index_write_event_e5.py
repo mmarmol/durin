@@ -1,7 +1,6 @@
-"""E5 (audit second pass, 2026-05-28): `memory.index.write` payload
-must include `duration_ms` and `trigger` so the documented dashboards
-in `docs/architecture/memory/07` §10.3 (`index_write_p95_ms`) and `docs/architecture/memory/09`
-§216 (FTS5 trigram size monitoring) actually become computable.
+"""`memory.index.write` payload must include `duration_ms` and `trigger`
+so the `index_write_p95_ms` dashboard alert and FTS5 trigram size
+monitoring are computable.
 
 Trigger taxonomy reflects real callsites of `reindex_one_file`:
 - `watcher`   — file_watcher detected a write under memory/
@@ -41,8 +40,7 @@ def _capture(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict]]:
 def test_index_write_includes_duration_ms(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`duration_ms` powers `index_write_p95_ms` alert (doc 07 §10.3,
-    healthy range < 50ms per row)."""
+    """`duration_ms` powers the `index_write_p95_ms` alert (healthy range < 50ms per row)."""
     p = _seed(tmp_path)
     events = _capture(monkeypatch)
 

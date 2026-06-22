@@ -1,4 +1,4 @@
-"""Cross-encoder reranker (P4.1 / doc 03 §9).
+"""Cross-encoder reranker.
 
 A cross-encoder model scores (query, doc) pairs together in a single
 forward pass, producing relevance scores that are typically tighter
@@ -8,8 +8,7 @@ bi-encoder + RRF path.
 
 This module is **infrastructure-only**. The reranker is OFF by
 default — :mod:`durin.memory.search_pipeline` decides whether to
-invoke it based on workspace config. Doc 03 §9 + doc 10 P4 are the
-spec.
+invoke it based on workspace config.
 
 Two surfaces:
 
@@ -32,12 +31,11 @@ from typing import Any, Optional, Protocol
 logger = logging.getLogger(__name__)
 
 
-# P11 Fix C (2026-05-30): seconds to wait before retrying a failed
-# model load. Without this, a one-time load failure (network blip,
-# OOM at startup, HF rate limit) would keep cross-encoder OFF for the
-# entire process lifetime. With it, the reranker self-recovers
-# automatically — degrades to RRF for at most ~60 seconds, then
-# transparently re-tries the load on the next score call.
+# Seconds to wait before retrying a failed model load. Without this,
+# a one-time load failure (network blip, OOM at startup, HF rate limit)
+# would keep cross-encoder OFF for the entire process lifetime. With it,
+# the reranker self-recovers automatically — degrades to RRF for at most
+# ~60 seconds, then transparently re-tries the load on the next score call.
 _RELOAD_RETRY_SECONDS: float = 60.0
 
 __all__ = [
@@ -48,7 +46,7 @@ __all__ = [
 ]
 
 
-# Default cross-encoder reranker. H30 (2026-05-30): switched from
+# Default cross-encoder reranker. Switched from
 # `jinaai/jina-reranker-v2-base-multilingual` to `BAAI/bge-reranker-
 # base` because:
 #   1. jina-v2 needs `trust_remote_code=True` + custom code that
@@ -90,20 +88,18 @@ class CrossEncoderReranker:
         # the first ``score`` call. Set to True after the attempt
         # regardless of outcome so we don't retry on every call.
         self._load_attempted = scorer is not None
-        # P11 Fix C (2026-05-30): timestamp of the last failed load
-        # attempt. Used to gate retries — see `_should_retry_load`.
+        # Timestamp of the last failed load attempt. Used to gate retries
+        # — see `_should_retry_load`.
         self._last_failed_load_at: float = 0.0
 
     def reset(self) -> None:
-        """P11 Fix C (2026-05-30): force the next ``score`` call to
-        retry the model load.
+        """Force the next ``score`` call to retry the model load.
 
         Called by the HealthChecker probe when it detects the
         reranker is dead. Without this, a transient load failure
         (network blip, HF rate-limit, OOM at startup) would keep
-        cross-encoder OFF for the entire process lifetime — H25
-        documented this exact failure mode. With reset, the system
-        self-recovers transparently.
+        cross-encoder OFF for the entire process lifetime. With reset,
+        the system self-recovers transparently.
         """
         self._scorer = None
         self._load_attempted = False
@@ -126,11 +122,11 @@ class CrossEncoderReranker:
         """Return a relevance score per document, OR ``None`` on
         model/load failure. Order matches ``docs``.
 
-        P11 Fix C: if a prior load attempt failed, retry the load
-        after ``_RELOAD_RETRY_SECONDS`` (default 60s). This keeps
-        the reranker self-healing without a process restart — a
-        transient failure (network/cache/OOM) degrades to RRF for
-        at most a minute, then transparently re-attempts.
+        If a prior load attempt failed, retry the load after
+        ``_RELOAD_RETRY_SECONDS`` (default 60s). This keeps the
+        reranker self-healing without a process restart — a transient
+        failure (network/cache/OOM) degrades to RRF for at most a
+        minute, then transparently re-attempts.
         """
         if not docs:
             return []
@@ -184,12 +180,11 @@ def rerank_hits(
     order — never raises, so the search pipeline keeps shipping
     results.
 
-    Audit H25 (2026-05-30): when the reranker returns ``None``
-    (model never loaded, scoring failed, etc.) we log ONCE per
-    process at WARNING level so the operator knows the rerank step
-    was a no-op for the rest of the session. The per-call fallback
-    stays silent after the first log to avoid spamming on every
-    search.
+    When the reranker returns ``None`` (model never loaded, scoring
+    failed, etc.) we log ONCE per process at WARNING level so the
+    operator knows the rerank step was a no-op for the rest of the
+    session. The per-call fallback stays silent after the first log
+    to avoid spamming on every search.
     """
     if not hits:
         return []
@@ -219,11 +214,9 @@ def probe_model(
 ) -> dict:
     """Probe a cross-encoder model id: load + score a trivial pair.
 
-    Audit B12 (2026-05-28). Replaces the previously-considered
-    hard-coded enum of "supported models" — any id that
-    ``sentence_transformers.CrossEncoder`` (or a custom loader) can
-    resolve is accepted. The validation happens dynamically when an
-    operator clicks "Test" in the webui or runs ``durin doctor``.
+    Validates any model id that ``sentence_transformers.CrossEncoder``
+    (or a custom loader) can resolve. The validation happens dynamically
+    when an operator clicks "Test" in the webui or runs ``durin doctor``.
 
     Returns a dict with:
     - ``status``: ``"ok"`` | ``"fail"``.
@@ -309,13 +302,11 @@ def _load_default_scorer(model: str) -> Optional[Scorer]:
     Returns a :class:`Scorer` shim or ``None`` on failure (missing
     dep, model download failure, OOM, etc.).
 
-    Audit H25 (2026-05-30): failures escalate to ERROR-level logs
-    (was INFO / WARNING) so an operator who enabled the feature in
-    config sees a loud signal that the rerank step is disabled.
-    Search continues without rerank — pure RRF fusion still ships
-    results — but the operator's intent (enable rerank) silently
-    became no-op pre-H25, which masked the dead-code bug discovered
-    while investigating bench-100-prop chicken retrieval failures.
+    Failures escalate to ERROR-level logs so an operator who enabled
+    the feature in config sees a loud signal that the rerank step is
+    disabled. Search continues without rerank — pure RRF fusion still
+    ships results — but the operator's intent (enable rerank) would
+    silently become a no-op without the loud error signal.
     """
     try:
         from sentence_transformers import CrossEncoder  # type: ignore[import-not-found]
@@ -331,12 +322,12 @@ def _load_default_scorer(model: str) -> Optional[Scorer]:
         )
         return None
     try:
-        # H30 (2026-05-30): pass trust_remote_code=True. Several
-        # production-grade rerankers (jina-reranker-v2, jina-reranker-v3,
-        # qwen-reranker) ship custom architecture code that lives in the
-        # HuggingFace repo, not in sentence-transformers — without this
-        # flag the load raises with "The repository contains custom code
-        # which must be executed to correctly load the model".
+        # Pass trust_remote_code=True: several production-grade rerankers
+        # (jina-reranker-v2, jina-reranker-v3, qwen-reranker) ship custom
+        # architecture code that lives in the HuggingFace repo, not in
+        # sentence-transformers — without this flag the load raises with
+        # "The repository contains custom code which must be executed to
+        # correctly load the model".
         #
         # Security note: trust_remote_code lets the model definition
         # execute arbitrary code from the HF repo at load time. This is

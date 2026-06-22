@@ -1,4 +1,4 @@
-"""Tests for the LoCoMo judge retry/jitter behaviour (audit H2, 2026-05-29).
+"""Tests for the LoCoMo judge retry/jitter behaviour.
 
 Previous behaviour (`max_retries=2`, no backoff, no temperature
 variance) made the judge fragile under transient upstream outages:

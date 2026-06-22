@@ -224,9 +224,8 @@ def _b64_byte_len(data: Any) -> int:
 def _image_block_or_none(data: Any, mime: Any, label: str) -> list[dict[str, Any]] | None:
     """Native image content blocks, or None when data/mime are missing/invalid.
 
-    Guard for anthropics/issue#90710: emitting an image block with undefined
-    data or media-type makes Anthropic 400 and poisons the whole message history
-    on every replay. Never emit a half-built image block.
+    Never emit a half-built image block (undefined data or media-type fails
+    validation and poisons message history on replay).
     """
     if not data or not isinstance(mime, str) or not mime.startswith("image/"):
         return None

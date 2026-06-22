@@ -1,4 +1,4 @@
-"""Tool-call argument repair (OpenClaw-inspired Tier 2 B1).
+"""Tool-call argument repair: fixes malformed JSON and type mismatches.
 
 Durin already calls ``json_repair.loads`` on tool-call argument strings,
 which fixes common JSON sins (trailing commas, unquoted keys, single
@@ -18,9 +18,6 @@ and returns the repaired string plus a list of repair-token strings for
 telemetry. Bounded by a 64 KB buffer (anything larger is suspicious —
 no real tool-call argument is that long; either the provider already
 truncated or the model emitted a hallucinated payload).
-
-Mirrors OpenClaw's ``attempt.tool-call-argument-repair.ts`` constants
-where possible so behaviour is comparable across the two stacks.
 """
 
 from __future__ import annotations
@@ -28,7 +25,6 @@ from __future__ import annotations
 import html
 import re
 
-# Mirrors OpenClaw run/attempt.tool-call-argument-repair.ts
 MAX_REPAIR_BUFFER_CHARS = 64_000
 MAX_LEADING_GARBAGE_CHARS = 96
 MAX_TRAILING_GARBAGE_CHARS = 3

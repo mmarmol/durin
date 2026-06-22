@@ -12,12 +12,10 @@ auto-releases if the process dies.
 Scope note: this lease serializes interactive TURNS per session across
 processes. All known out-of-turn savers now acquire it:
   - HTTP rename in service/sessions.py
-  - cron/heartbeat process_direct calls (in loop.py)
+  - cron process_direct calls (in loop.py)
   - webui background title-generation save
     (loop.py _schedule_background -> utils/webui_titles.py)
 
-See docs/architecture/concurrency.md for the full Phase-A rationale and
-residual ledger.
 """
 from __future__ import annotations
 

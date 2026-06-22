@@ -5,7 +5,8 @@ Without the cross-process lock the non-atomic drop+create leaves a
 table-missing window; with the lock they are serialized so only one
 rebuild runs at a time.
 
-See docs/architecture/concurrency.md for the lock-ordering invariants.
+Cross-process lock ordering: rebuild_from_workspace holds the rebuild lock
+to prevent concurrent drop+create from leaving a table-missing window.
 """
 
 from __future__ import annotations

@@ -59,3 +59,14 @@ def test_ddgs_missing_install_fails_returns_message(monkeypatch):
     out = asyncio.run(tool._search_duckduckgo("q", 1))
     assert "boom" in out
     assert "unavailable" in out.lower()
+
+
+def test_strip_tags_removes_script_with_whitespace_close():
+    """Closing tags may carry whitespace (``</script >``, ``</script\n>``); the
+    stripper must still drop the whole element, not leak its body."""
+    assert web._strip_tags("a<script>evil()</script >b") == "ab"
+    assert web._strip_tags("a<script>evil()</script\n>b") == "ab"
+    assert web._strip_tags("a<script>evil()</script\t\n bar>b") == "ab"
+    assert web._strip_tags("a<style>.x{}</style >b") == "ab"
+    # plain close still works
+    assert web._strip_tags("a<script>x</script>b") == "ab"

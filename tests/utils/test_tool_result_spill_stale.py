@@ -1,10 +1,10 @@
 """Regression test: tool-result spill must NOT leave stale content when filename is reused.
 
-Hazard #13 (stale-content sub-claim): `maybe_persist_tool_result` previously skipped
-the write if the spill file already existed (`if not path.exists()`).  When a
-tool_call_id is reused across turns (e.g. the positional `tool_0` fallback in runner.py),
-the second call would return a reference whose size/preview described the NEW content
-while the file on disk still held the OLD bytes.
+`maybe_persist_tool_result` previously skipped the write if the spill file already
+existed (`if not path.exists()`). When a tool_call_id is reused across turns (e.g.
+the positional `tool_0` fallback in runner.py), the second call would return a
+reference whose size/preview described the NEW content while the file on disk still
+held the OLD bytes.
 """
 
 from __future__ import annotations

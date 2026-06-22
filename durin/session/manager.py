@@ -333,7 +333,8 @@ class SessionManager:
     #
     # These correspond to ``AgentLoop._RUNTIME_CHECKPOINT_KEY`` and
     # ``AgentLoop._PENDING_USER_TURN_KEY`` in ``durin/agent/loop.py``.
-    # See docs/architecture/concurrency.md for the sidecar split design.
+    # Sidecar split: volatile keys are written to a separate .sidecar file
+    # so per-turn saves avoid a full .jsonl rewrite.
     _VOLATILE_METADATA_KEYS = frozenset({"runtime_checkpoint", "pending_user_turn"})
 
     def __init__(self, workspace: Path):
@@ -689,7 +690,8 @@ class SessionManager:
         ``session.metadata`` are still merged back on load so existing readers
         are unchanged.
 
-        See docs/architecture/concurrency.md for the sidecar split design.
+        Sidecar split: volatile keys go to a separate .sidecar file,
+        avoiding a full .jsonl rewrite on every turn.
         """
         if getattr(session, "_deleted", False):
             logger.debug("Skipping save_runtime_state of deleted session {}", session.key)

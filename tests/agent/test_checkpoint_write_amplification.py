@@ -8,7 +8,7 @@ After the fix, ``_set_runtime_checkpoint`` calls ``sessions.save_runtime_state``
 (sidecar-only) so the ``.jsonl`` rewrite count stays ~constant (≈3: early +
 final + end-of-turn) regardless of N.
 
-See docs/architecture/concurrency.md for the sidecar split design.
+The sidecar split design keeps .jsonl rewrite count constant.
 """
 from __future__ import annotations
 

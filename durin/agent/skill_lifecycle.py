@@ -1,7 +1,7 @@
 """Unverified-origin sweep (Part C). A workspace skill in `skills/` WITHOUT
 `metadata.durin.provenance` reached the filesystem outside every durin path (a
 registry CLI, a manual copy) — never scanned or gated. Relocate it to the import
-quarantine, scan it (§8.C), and prepend an `unverified_origin` finding. The agent
+quarantine, scan it through the import security gate, and prepend an `unverified_origin` finding. The agent
 loads only from `skills/` (+ builtins), so relocating makes it INERT automatically
 — no retrieval filter needed. Surfaced in the existing quarantine; approve
 re-gates, reject deletes. Idempotent."""

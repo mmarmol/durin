@@ -261,7 +261,7 @@ async def test_blocking_skipped_without_live_consumer(tmp_path):
 
 @pytest.mark.asyncio
 async def test_blocking_skipped_for_non_interactive_sessions(tmp_path):
-    """cron/heartbeat sessions never get interactive replies — yield now."""
+    """cron sessions never get interactive replies — yield now."""
     from durin.agent import pending_answers as pa
 
     pa.reset()

@@ -1,6 +1,6 @@
 """Skills management surface — the shared read model (inventory + quarantine)
 for the CLI, web panel, and chat. Augments the fast list_skills_info with the
-§8.C security verdict; kept separate so the agent context path stays scan-free."""
+security verdict; kept separate so the agent context path stays scan-free."""
 from __future__ import annotations
 
 import json
@@ -30,7 +30,7 @@ def _skill_dirs(workspace: Path) -> dict[str, Path]:
 
 
 def skills_inventory(workspace) -> list[dict]:
-    """Active skills (E1 fields) + §8.C verdict/findings + status='active'."""
+    """Active skills (E1 fields) + security verdict/findings + status='active'."""
     workspace = Path(workspace)
     from durin.agent.skill_lifecycle import sweep_unverified_skills
     sweep_unverified_skills(workspace)
@@ -96,7 +96,7 @@ def skills_inventory(workspace) -> list[dict]:
 
 
 def quarantined_skills(workspace) -> list[dict]:
-    """Skills awaiting import decision in .durin/import-quarantine/ (filled by §6.B)."""
+    """Skills awaiting import decision in .durin/import-quarantine/."""
     workspace = Path(workspace)
     from durin.agent.skill_lifecycle import sweep_unverified_skills
     sweep_unverified_skills(workspace)

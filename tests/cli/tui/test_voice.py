@@ -1,4 +1,4 @@
-"""Tests for the TUI /voice recorder module (spec §6.2)."""
+"""Tests for the TUI /voice recorder module."""
 
 import pytest
 

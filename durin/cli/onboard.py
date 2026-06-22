@@ -948,7 +948,7 @@ _SETTINGS_SECTIONS: dict[str, tuple[str, str, set[str] | None]] = {
     "Agent Settings": ("Agent Defaults", "Configure default model, temperature, and behavior", None),
     "Channel Common": ("Channel Common", "Configure cross-channel behavior: progress, tool hints, retries", None),
     "API Server": ("API Server", "Configure OpenAI-compatible API endpoint", None),
-    "Gateway": ("Gateway Settings", "Configure server host, port, and heartbeat", None),
+    "Gateway": ("Gateway Settings", "Configure server host, port, and channels", None),
     "Tools": ("Tools Settings", "Configure web search, shell exec, and other tools", {"mcp_servers"}),
 }
 

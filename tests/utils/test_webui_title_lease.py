@@ -4,7 +4,7 @@ maybe_generate_webui_title previously ran the LLM call AND the session save
 in the same call, with no turn lease, so its save() could clobber a
 concurrent agent turn.
 
-Contract (per docs/architecture/concurrency.md):
+Contract:
 - The LLM call runs OUTSIDE the lease (long; must not hold the lock).
 - The save happens INSIDE the lease.
 - Under the lease, the session is reloaded from disk so the save is based on

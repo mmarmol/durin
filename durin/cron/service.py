@@ -99,13 +99,12 @@ def _validate_schedule_for_add(schedule: CronSchedule) -> None:
 class CronService:
     """Service for managing and executing scheduled jobs."""
 
-    _MAX_RUN_HISTORY = 20
-
     def __init__(
         self,
         store_path: Path,
         on_job: Callable[[CronJob], Coroutine[Any, Any, str | None]] | None = None,
         max_sleep_ms: int = 300_000,  # 5 minutes
+        run_history_max: int = 50,
     ):
         self.store_path = store_path
         self._action_path = store_path.parent / "action.jsonl"
@@ -113,13 +112,15 @@ class CronService:
         # Separate lock for timer ticks — distinct path and distinct instance
         # from self._lock.  Acquired NON-BLOCKING in _on_timer; if a second
         # scheduler is already ticking, the contender skips the tick rather
-        # than queuing.  See docs/architecture/concurrency.md.
+        # than queuing.  If a second scheduler is already ticking, the
+        # contender skips the tick (NON-BLOCKING acquire).
         self._tick_lock = FileLock(str(store_path.parent / ".tick.lock"))
         self.on_job = on_job
         self._store: CronStore | None = None
         self._timer_task: asyncio.Task | None = None
         self._running = False
         self._timer_active = False
+        self._run_history_max = run_history_max
         # Job ids currently executing — guards against a manual run-now
         # overlapping a scheduled run (or another manual run) of the same
         # long job (e.g. dream). In-process is sufficient: a single gateway
@@ -165,7 +166,9 @@ class CronService:
                         ),
                         payload=CronPayload(
                             kind=j["payload"].get("kind", "agent_turn"),
+                            mode=j["payload"].get("mode", "reminder"),
                             message=j["payload"].get("message", ""),
+                            model=j["payload"].get("model"),
                             deliver=j["payload"].get("deliver", False),
                             channel=j["payload"].get("channel"),
                             to=j["payload"].get("to"),
@@ -187,6 +190,9 @@ class CronService:
                                     status=r["status"],
                                     duration_ms=r.get("durationMs", 0),
                                     error=r.get("error"),
+                                    session_key=r.get("sessionKey"),
+                                    model=r.get("model"),
+                                    summary=r.get("summary"),
                                 )
                                 for r in j.get("state", {}).get("runHistory", [])
                             ],
@@ -303,7 +309,9 @@ class CronService:
                     },
                     "payload": {
                         "kind": j.payload.kind,
+                        "mode": j.payload.mode,
                         "message": j.payload.message,
+                        "model": j.payload.model,
                         "deliver": j.payload.deliver,
                         "channel": j.payload.channel,
                         "to": j.payload.to,
@@ -321,6 +329,9 @@ class CronService:
                                 "status": r.status,
                                 "durationMs": r.duration_ms,
                                 "error": r.error,
+                                "sessionKey": r.session_key,
+                                "model": r.model,
+                                "summary": r.summary,
                             }
                             for r in j.state.run_history
                         ],
@@ -462,8 +473,7 @@ class CronService:
         self._lock is released before _execute_job to avoid a cross-instance
         FileLock deadlock: if on_job creates a second CronService and calls a
         mutator, that mutator also tries to acquire self._lock — both objects
-        point to the same path and FileLock is NOT reentrant across instances
-        (see docs/architecture/concurrency.md).
+        point to the same path and FileLock is NOT reentrant across instances.
         """
         try:
             self._tick_lock.acquire(timeout=0)
@@ -520,7 +530,7 @@ class CronService:
                 # during the execution window (add_job / remove_job / update_job
                 # from another process) are not clobbered.  We then re-apply
                 # only the run-state deltas produced by _execute_job onto the
-                # freshly-reloaded store.  See docs/architecture/concurrency.md.
+                # freshly-reloaded store.
                 # _timer_active is already False (set in the finally above),
                 # so _load_store will read from disk rather than the cache.
                 self._load_store()
@@ -590,6 +600,9 @@ class CronService:
             start_ms = _now_ms()
             logger.info("Cron: executing job '{}' ({})", job.name, job.id)
 
+            if job.payload.kind == "agent_turn":
+                job.payload.session_key = f"cron:{job.id}:run:{start_ms}"
+
             try:
                 if self.on_job:
                     await self.on_job(job)
@@ -612,8 +625,10 @@ class CronService:
                 status=job.state.last_status,
                 duration_ms=end_ms - start_ms,
                 error=job.state.last_error,
+                session_key=job.payload.session_key if job.payload.kind == "agent_turn" else None,
+                model=job.payload.model,
             ))
-            job.state.run_history = job.state.run_history[-self._MAX_RUN_HISTORY:]
+            job.state.run_history = job.state.run_history[-self._run_history_max:]
 
             # Handle one-shot jobs
             if job.schedule.kind == "at":
@@ -654,6 +669,8 @@ class CronService:
         delete_after_run: bool = False,
         channel_meta: dict | None = None,
         session_key: str | None = None,
+        mode: str = "reminder",
+        model: str | None = None,
     ) -> CronJob:
         """Add a new job."""
         _validate_schedule_for_add(schedule)
@@ -666,7 +683,9 @@ class CronService:
             schedule=schedule,
             payload=CronPayload(
                 kind="agent_turn",
+                mode=mode,
                 message=message,
+                model=model,
                 deliver=deliver,
                 channel=channel,
                 to=to,
@@ -814,11 +833,13 @@ class CronService:
         channel: str | None = ...,
         to: str | None = ...,
         delete_after_run: bool | None = None,
+        mode: str | None = None,
+        model: str | None = ...,
     ) -> CronJob | Literal["not_found", "protected"]:
         """Update mutable fields of an existing job. System jobs cannot be updated.
 
-        For ``channel`` and ``to``, pass an explicit value (including ``None``)
-        to update; omit (sentinel ``...``) to leave unchanged.
+        For ``channel``, ``to``, and ``model``, pass an explicit value (including
+        ``None``) to update; omit (sentinel ``...``) to leave unchanged.
         """
         with self._lock:
             store = self._load_store()
@@ -843,6 +864,10 @@ class CronService:
                 job.payload.to = to
             if delete_after_run is not None:
                 job.delete_after_run = delete_after_run
+            if mode is not None:
+                job.payload.mode = mode
+            if model is not ...:
+                job.payload.model = model
 
             job.updated_at_ms = _now_ms()
             if job.enabled:
@@ -859,23 +884,60 @@ class CronService:
         return job
 
     async def run_job(self, job_id: str, force: bool = False) -> bool:
-        """Manually run a job without disturbing the service's running state."""
+        """Manually run a job without disturbing the service's running state.
+
+        Mirrors ``_on_timer``'s lock discipline: ``self._lock`` is acquired only
+        to load + select the job, released before ``_execute_job``, then
+        re-acquired to re-apply the run-state deltas onto a freshly-reloaded
+        store.  Holding the lock across the (possibly minutes-long) execution
+        would block every other cron-store reader — and, because a concurrent
+        ``list`` opens a second CronService whose FileLock points at the same
+        path, trip filelock's cross-instance deadlock guard.
+
+        """
         was_running = self._running
         self._running = True
         try:
             with self._lock:
                 store = self._load_store()
-                for job in store.jobs:
-                    if job.id == job_id:
-                        if not force and not job.enabled:
-                            return False
-                        if job.id in self._executing:
-                            # Already running — refuse rather than overlap.
-                            return False
-                        await self._execute_job(job)
-                        self._save_store()
-                        return True
-            return False
+                job = next((j for j in store.jobs if j.id == job_id), None)
+                if job is None:
+                    return False
+                if not force and not job.enabled:
+                    return False
+                if job.id in self._executing:
+                    # Already running — refuse rather than overlap.
+                    return False
+
+            # Execute OUTSIDE the lock (see docstring): a long job must not
+            # block concurrent cron-store readers or deadlock a fresh instance.
+            await self._execute_job(job)
+
+            with self._lock:
+                # Reload from disk so external writes during the execution
+                # window are not clobbered, then re-apply only the run-state
+                # deltas — the same merge _on_timer performs.
+                self._load_store()
+                if self._store:
+                    if job.schedule.kind == "at" and job.delete_after_run:
+                        self._store.jobs = [
+                            j for j in self._store.jobs if j.id != job.id
+                        ]
+                    else:
+                        fresh = next(
+                            (j for j in self._store.jobs if j.id == job.id), None
+                        )
+                        if fresh is not None:
+                            fresh.state.last_status = job.state.last_status
+                            fresh.state.last_error = job.state.last_error
+                            fresh.state.last_run_at_ms = job.state.last_run_at_ms
+                            fresh.state.run_history = job.state.run_history
+                            fresh.state.next_run_at_ms = job.state.next_run_at_ms
+                            fresh.updated_at_ms = job.updated_at_ms
+                            if job.schedule.kind == "at" and not job.enabled:
+                                fresh.enabled = False
+                    self._save_store()
+            return True
         finally:
             self._running = was_running
             if was_running:

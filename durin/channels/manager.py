@@ -97,7 +97,7 @@ class ChannelManager:
         # use (see dingtalk._background_tasks).
         self._background_tasks: set[asyncio.Task] = set()
 
-        # Shared transcription service (spec §8) — built once from the global
+        # Shared transcription service — built once from the global
         # config and injected into every channel so the backend transcribes
         # audio before it reaches the agent loop. Channel-level
         # ``transcription_*`` attributes remain as a legacy fallback for any
@@ -170,7 +170,7 @@ class ChannelManager:
                 channel.transcription_api_key = transcription_key
                 channel.transcription_api_base = transcription_base
                 channel.transcription_language = transcription_language
-                # Inject the shared backend transcription service (spec §8).
+                # Inject the shared backend transcription service.
                 # ``getattr`` so managers constructed via ``__new__`` in tests
                 # (which skip ``__init__``) don't crash here — they simply get
                 # no service and fall back to the legacy channel-level path.
@@ -482,7 +482,7 @@ class ChannelManager:
         """
         target_key = (first_msg.channel, first_msg.chat_id)
         # Guard against cross-stream bleed for concurrent same-(channel, chat_id) streams
-        # (e.g. Telegram forum topics).  See docs/architecture/concurrency.md.
+        # (e.g. Telegram forum topics): only merge messages from the same stream_id.
         target_stream_id = (first_msg.metadata or {}).get("_stream_id")
         combined_content = first_msg.content
         final_metadata = dict(first_msg.metadata or {})

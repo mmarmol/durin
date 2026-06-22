@@ -1,4 +1,4 @@
-"""skill_import tool — resolve / fetch / install / reject over the §8.C floor.
+"""skill_import tool — resolve / fetch / install / reject over the security scan floor.
 Driven with LOCAL sources so the pipeline runs fully offline."""
 from __future__ import annotations
 

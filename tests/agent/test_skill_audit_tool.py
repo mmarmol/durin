@@ -1,4 +1,4 @@
-"""skill_audit tool + `durin skill audit` CLI — §8.C scan on an existing skill.
+"""skill_audit tool + `durin skill audit` CLI — security scan on an existing skill.
 
 The tool resolves a skill (by ``name`` under the workspace ``skills/`` dir,
 or by ``path``), runs the format lint (:func:`validate_skill`) plus the

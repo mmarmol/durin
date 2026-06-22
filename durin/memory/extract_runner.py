@@ -4,7 +4,7 @@ Per-session cursor (stored in the session's ``.meta.json`` ``derived`` block):
 process only turns after the cursor, discover the entities the agent authored
 in those turns (``memory_upsert_entity`` tool calls), extract attributes for
 each, and advance the cursor to the last turn. Re-running is safe — the
-extractor's writes are idempotent under per-field precedence (design §2.6, 3A-1).
+extractor's writes are idempotent under per-field precedence.
 
 The discovery is precise (the agent's explicit upsert refs in the new turns);
 mention-based discovery for entities the agent did not upsert is a refinement.
@@ -78,8 +78,8 @@ def get_extract_cursor(jsonl_path: Path) -> int:
     """Return the per-session extract cursor (number of turns already processed).
 
     The cursor is stored as a top-level ``"extract_cursor"`` key in the
-    ``.meta.json`` sidecar (see docs/architecture/concurrency.md #15).
-    Falls back to the legacy ``derived.extract_cursor`` location so that
+    ``.meta.json`` sidecar. Falls back to the legacy ``derived.extract_cursor``
+    location so that
     pre-existing sessions are not re-processed from turn 0.
     """
     mp = _meta_path(jsonl_path)
@@ -106,8 +106,7 @@ def set_extract_cursor(jsonl_path: Path, n: int) -> None:
 
     The read-modify-write is serialized under the same
     ``cross_process_lock(jsonl_path)`` that ``SessionManager`` uses for that
-    session's sidecar, preventing lost-update races (hazard #15-B).
-    See docs/architecture/concurrency.md.
+    session's sidecar, preventing lost-update races.
     """
     mp = _meta_path(jsonl_path)
     # Use the same lock key that SessionManager uses: cross_process_lock

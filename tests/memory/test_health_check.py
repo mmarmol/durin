@@ -1,4 +1,4 @@
-"""Health-check cron (P2.4 / doc 02 §5.1).
+"""Health-check cron.
 
 Periodic probe of memory subsystem components:
 - FTS5 index reachable.

@@ -7,7 +7,6 @@ calling _process_message, mirror _dispatch's reload-before-process
 semantics, and on TimeoutError log a warning and return None (never raise
 to its caller, which is a background cron/heartbeat path).
 
-See docs/architecture/concurrency.md.
 """
 
 from __future__ import annotations

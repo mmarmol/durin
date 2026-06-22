@@ -1,4 +1,4 @@
-"""Tests for the STT doctor checks (spec §8.1)."""
+"""Tests for the STT doctor checks."""
 
 import sys
 import types

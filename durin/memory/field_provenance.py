@@ -2,7 +2,7 @@
 
 Distinct from the PAGE-level author (durin/memory/provenance.py, 2 values
 user_authored/agent_created). This is FIELD-level, 3 values, and drives the
-write-time precedence (user > dream > agent). The two coexist (design §2.4).
+write-time precedence (user > dream > agent). The two coexist.
 """
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ def incoming_wins(*, existing: dict[str, Any] | None,
                   incoming: dict[str, Any]) -> bool:
     """Decide whether ``incoming`` overwrites ``existing`` for one field.
 
-    Rule (design §2.4): higher author-rank wins (user > dream > agent);
+    Rule: higher author-rank wins (user > dream > agent);
     same rank → newer ``extracted_at`` wins; missing existing → incoming wins.
     """
     if not existing:

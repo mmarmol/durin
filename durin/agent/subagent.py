@@ -239,12 +239,12 @@ class SubagentManager:
                 else None
             )
             # Subagent mode = parent's mode when known, else EXPLORE.
-            # Mirrors OpenClaude's pattern: if parent is in plan mode, the
-            # subagent is also in plan — both restricted to read-only +
-            # exit_plan_mode. The model understands delegation does not
-            # escape the mode, so it doesn't fall into "spawn to work
-            # around restrictions". Without a SessionManager handle we
-            # fall back to EXPLORE — the safer-but-stricter default.
+            # If parent is in plan mode, the subagent is also in plan —
+            # both restricted to read-only + exit_plan_mode. The model
+            # understands delegation does not escape the mode, so it
+            # doesn't fall into "spawn to work around restrictions".
+            # Without a SessionManager handle we fall back to EXPLORE —
+            # the safer-but-stricter default.
             from durin.agent.agent_mode import EXPLORE_MODE, get_active_mode
 
             def _subagent_mode_provider():
@@ -256,8 +256,8 @@ class SubagentManager:
                         pass
                 return EXPLORE_MODE
 
-            # Capture provider snapshot at spec-build time (hazard #8 —
-            # docs/architecture/concurrency.md): a concurrent session's /model
+            # Capture provider snapshot at spec-build time: a concurrent
+            # session's /model
             # swap calls set_provider(), mutating self.runner.provider. Pinning
             # the provider here makes this in-flight subagent turn immune to
             # that mutation, symmetric with the AgentLoop fix.
@@ -359,8 +359,7 @@ class SubagentManager:
         # existing tool_hint pipeline (websocket frame → webui card, TUI
         # bubble, transcript replay). The inbound announce above remains
         # the MODEL's context — the model adds a brief natural summary; the
-        # card shows the full result (payload-canonical contract,
-        # docs/architecture/ux.md).
+        # card shows the full result (payload-canonical contract).
         event: dict[str, Any] = {
             "version": 1,
             "phase": "end" if status == "ok" else "error",

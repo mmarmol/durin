@@ -1,4 +1,4 @@
-"""A3: per-entity relation cap (doc 01 §4.4). Soft 50 / hard 200.
+"""Per-entity relation cap. Soft 50 / hard 200.
 
 Decision (2026-06-06): alert-only "de momento" — emit telemetry + log at both
 thresholds but NEVER block the write or drop a relation (no data loss). The

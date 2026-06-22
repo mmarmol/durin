@@ -1,6 +1,6 @@
 """memory_upsert_entity tool — the agent authors/updates an entity directly.
 
-Design §2.2/§2.4 + decision b: the agent provides name + aliases + relations +
+The agent provides name + aliases + relations +
 body (prose); the system (dream) owns structured attributes. The entity exists
 immediately via ``memory_writer`` (optimistic CAS). Merge semantics; dangling
 relations allowed; dedup deferred to dream.
@@ -89,7 +89,7 @@ _PARAMETERS = tool_parameters_schema(
 
 @tool_parameters(_PARAMETERS)
 class MemoryUpsertEntityTool(Tool):
-    """memory_upsert_entity — agent-authored entity pages (design §2.4)."""
+    """memory_upsert_entity — agent-authored entity pages."""
 
     config_key = "memory"
 
@@ -140,7 +140,7 @@ class MemoryUpsertEntityTool(Tool):
             patches.append(FieldPatch(
                 kind=body_kind, value=str(body), author=None,
                 source_ref=src, at=now))
-        # §2.13: explicitly (re-)authoring an entity overrides a prior delete
+        # Explicitly (re-)authoring an entity overrides a prior delete
         # tombstone — the user asked for it back.
         from durin.memory.deletion import clear_delete_tombstone
         clear_delete_tombstone(self._workspace, ref)

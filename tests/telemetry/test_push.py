@@ -1,4 +1,4 @@
-"""Opt-in HTTPS push of telemetry events (P7.3 / doc 07 §10).
+"""Opt-in HTTPS push of telemetry events.
 
 The push runs alongside the local JSONL persistence — it's an
 additional sink, not a replacement. When the configured URL or

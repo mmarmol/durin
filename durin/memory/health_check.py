@@ -1,4 +1,4 @@
-"""Health-check cron for the memory subsystem (doc 02 §5.1, P2.4).
+"""Health-check cron for the memory subsystem.
 
 Periodically probes:
 
@@ -69,9 +69,9 @@ class HealthChecker:
     def run_tick(self) -> dict[str, Any]:
         """Run all probes once. Returns the status map + drift count.
 
-        A6 (2026-05-28) added ``tick_id`` and ``duration_ms`` to the
-        emitted payload. ``tick_id`` is a per-tick UUID hex for log
-        correlation; ``duration_ms`` is the wall-clock of the tick.
+        ``tick_id`` and ``duration_ms`` were added to the emitted
+        payload. ``tick_id`` is a per-tick UUID hex for log correlation;
+        ``duration_ms`` is the wall-clock of the tick.
         """
         tick_id = uuid.uuid4().hex
         t0 = time.perf_counter()
@@ -81,11 +81,11 @@ class HealthChecker:
         for name, probe in (
             ("fts", self._probe_fts),
             ("lance", self._probe_lance),
-            # P11 Fix B (2026-05-30): cross-encoder probe. "skipped"
+            # Cross-encoder probe. "skipped"
             # when CE disabled in config (most common case — silent).
             # "fail" surfaces missing sentence_transformers OR model
             # unreachable; escalates after 3 strikes per the standard
-            # streak. P11 Fix C handles the in-process retry.
+            # streak. ``_reset_cross_encoder`` handles the in-process retry.
             ("cross_encoder", self._probe_cross_encoder),
         ):
             status, error = probe()
@@ -105,8 +105,8 @@ class HealthChecker:
                 self._failure_count[name] = 0
                 self._critical_emitted.discard(name)
 
-        # P11 Fix C (2026-05-30): if cross-encoder probe failed,
-        # reset the global-ish reranker state so the next user-facing
+        # If cross-encoder probe failed, reset the global-ish reranker
+        # state so the next user-facing
         # search retries the load. Combined with the time-based
         # retry in `CrossEncoderReranker.score()`, this gives two
         # paths to recovery: in-process retry every 60s OR an
@@ -119,7 +119,7 @@ class HealthChecker:
                     "health_check: cross_encoder reset failed: %s", exc,
                 )
 
-        # P11 Fix D (2026-05-30): if lance probe failed, attempt a
+        # If lance probe failed, attempt a
         # rebuild_from_workspace. Only fires when the .lance dir is
         # present (the probe returns "ok" for a missing index — that
         # case is normal during cold start). Best-effort: a rebuild
@@ -208,7 +208,7 @@ class HealthChecker:
         except Exception:  # pragma: no cover
             pass
 
-        # P7.2: telemetry retention pass piggybacks on the cron tick.
+        # Telemetry retention pass piggybacks on the cron tick.
         try:
             from durin.memory.stats import DEFAULT_TELEMETRY_DIR
             from durin.telemetry.retention import run_retention
@@ -252,7 +252,7 @@ class HealthChecker:
             return ("skipped", "vector_index module import failed")
         if not vector_index_available():
             return ("skipped", "lancedb not installed")
-        # P9: path moved from memory/.index.lance to .durin/index/lance.
+        # Path is at .durin/index/lance (moved from memory/.index.lance).
         from durin.memory.vector_index import _INDEX_PATH
         lance_dir = self._workspace.joinpath(*_INDEX_PATH)
         if not lance_dir.is_dir():
@@ -268,13 +268,12 @@ class HealthChecker:
         return ("ok", "")
 
     def _probe_cross_encoder(self) -> tuple[str, str]:
-        """P11 Fix B (2026-05-30): check the cross-encoder rerank
-        subsystem can actually score a pair.
+        """Check the cross-encoder rerank subsystem can actually score a pair.
 
         States:
         - CE not enabled in config → ``("skipped", reason)``. Most
           users disable CE; reporting fail/warn would be noise.
-        - sentence_transformers missing → ``("fail", reason)``. H25's
+        - sentence_transformers missing → ``("fail", reason)``. The
           static doctor check should have caught this at install
           time, but the runtime probe catches drift (someone removed
           the package after enabling CE).
@@ -283,9 +282,9 @@ class HealthChecker:
           standard 3-strike escalation in ``run_tick`` AND calls
           ``CrossEncoderReranker.reset()`` so the next user-facing
           search retries the load instead of falling through to RRF
-          forever. P11 Fix C is the in-process retry; this is the
-          out-of-process detection that escalates if the retry also
-          fails repeatedly.
+          forever. ``_reset_cross_encoder`` is the in-process retry;
+          this is the out-of-process detection that escalates if the
+          retry also fails repeatedly.
         """
         try:
             from durin.config.loader import load_config
@@ -326,9 +325,8 @@ class HealthChecker:
     # ------------------------------------------------------------------
 
     def _reset_cross_encoder(self) -> None:
-        """P11 Fix C (2026-05-30): clear cached reranker state in any
-        live tool instance, so the next user-facing search re-attempts
-        the model load.
+        """Clear cached reranker state in any live tool instance, so
+        the next user-facing search re-attempts the model load.
 
         We can't reach into the per-tool-instance cache from here
         (HealthChecker doesn't know about the agent's tool registry),
@@ -343,8 +341,7 @@ class HealthChecker:
         ce_mod._RERANK_FALLBACK_LOGGED = False
 
     def _rebuild_lance(self) -> bool:
-        """P11 Fix D (2026-05-30): rebuild the LanceDB vector index
-        when the periodic probe finds it dead.
+        """Rebuild the LanceDB vector index when the periodic probe finds it dead.
 
         Returns True on success, False on no-op (lance unavailable
         or index dir missing — both legitimate states, not failures).
@@ -487,13 +484,13 @@ class HealthChecker:
                 return
 
 
-# A7 (2026-05-28): map probe-component names → the CLI command that
-# rebuilds that component from `memory/`. Probe names are not the
-# same as CLI --target values (drift between health_check probes
-# and `durin memory reindex`); this dict is where the translation
-# lives. If `durin memory reindex --target ...` renames, the
-# anti-drift test (test_health_critical_a7_recovery_hint.py) fails
-# loudly — the hint never goes stale silently.
+# Map probe-component names → the CLI command that rebuilds that
+# component from `memory/`. Probe names are not the same as CLI
+# --target values (drift between health_check probes and
+# `durin memory reindex`); this dict is where the translation lives.
+# If `durin memory reindex --target ...` renames, the anti-drift
+# test (test_health_critical_a7_recovery_hint.py) fails loudly —
+# the hint never goes stale silently.
 _RECOVERY_HINTS: dict[str, str] = {
     "fts": "durin memory reindex --target fts",
     "lance": "durin memory reindex --target lancedb",
@@ -504,10 +501,10 @@ _RECOVERY_HINT_FALLBACK = "durin memory reindex --target all"
 def _emit_critical(component: str, error: str, count: int) -> None:
     """One-shot critical-status emit (re-armed on recovery).
 
-    A7: payload includes ``manual_recovery_hint`` — the CLI command
+    Payload includes ``manual_recovery_hint`` — the CLI command
     an operator can run to rebuild the failed component. The hint is
-    informational; nothing executes it automatically. See doc 07
-    §9.5 and ``_RECOVERY_HINTS`` above.
+    informational; nothing executes it automatically. See
+    ``_RECOVERY_HINTS`` above.
     """
     try:
         emit_tool_event(
@@ -526,15 +523,15 @@ def _emit_critical(component: str, error: str, count: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# A11 — periodic scheduler (daemon thread)
+# periodic scheduler (daemon thread)
 # ---------------------------------------------------------------------------
 
 
 class HealthCheckScheduler:
     """Daemon thread that calls ``HealthChecker.run_tick()`` periodically.
 
-    Audit A11 (2026-05-28). The HealthChecker itself ships the logic
-    but the docstring (and doc 02 §5.1) leaves the "drive it on an
+    The HealthChecker itself ships the logic
+    but the docstring leaves the "drive it on an
     interval" job to the agent loop. This is that driver.
 
     Lifecycle: ``start()`` spawns one daemon thread; ``stop()``

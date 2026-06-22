@@ -1,6 +1,5 @@
 """Mention-based entity discovery — the dream grows the entity graph from
-conversation, not only from the agent's explicit memory_upsert_entity calls
-(design: .workdocs/superpowers/specs/2026-06-18-memory-entity-building-design.md)."""
+conversation, not only from the agent's explicit memory_upsert_entity calls."""
 import json
 from datetime import datetime, timezone
 

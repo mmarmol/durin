@@ -1,4 +1,4 @@
-"""Sectioned output renderer (doc 03 §12).
+"""Sectioned output renderer.
 
 Groups final top-K hits by source class, applies the per-source cap
 for corpus chunks, and renders structural marker blocks the agent
@@ -37,7 +37,7 @@ def _h(
 
 
 # ---------------------------------------------------------------------------
-# Per-source cap (doc 03 §12.4)
+# Per-source cap
 # ---------------------------------------------------------------------------
 
 
@@ -80,7 +80,7 @@ class TestPerSourceCap:
         assert b_count == 3
 
     def test_entity_class_not_capped(self) -> None:
-        """Only corpus gets capped (doc 03 §12.4)."""
+        """Only corpus gets capped; entity hits are uncapped."""
         hits = [_h(f"person:p{i}", "entity") for i in range(10)]
         assert apply_per_source_cap(hits, max_per_source=3) == hits
 
@@ -93,7 +93,7 @@ class TestPerSourceCap:
 
 
 # ---------------------------------------------------------------------------
-# Section rendering (doc 03 §12.1)
+# Section rendering
 # ---------------------------------------------------------------------------
 
 
@@ -153,8 +153,8 @@ class TestRender:
         assert "=== INGESTED:" not in out
 
     def test_section_order_canonical_fragment_session_ingested(self) -> None:
-        """Sections appear in spec order regardless of input order
-        (doc 03 §12.1)."""
+        """Sections appear in the correct order regardless of input order:
+        canonical → fragment → session → ingested."""
         hits = [
             _h("corpus:c", "corpus", ingest_id="ig"),
             _h("session:s/x", "session_summary"),
@@ -178,20 +178,20 @@ class TestRender:
         assert out.index("HIGH") < out.index("MID") < out.index("LOW")
 
     def test_stable_class_renders_as_fragment(self) -> None:
-        """Per doc 03 §12.1 + doc 06 §8: stable entries are FRAGMENTs."""
+        """Stable entries render as FRAGMENTs (same section as episodic)."""
         hits = [_h("s1", "stable", path="memory/stable/s1.md")]
         out = render_sectioned(hits)
         assert "=== FRAGMENT: memory/stable/s1.md" in out
 
 
 # ---------------------------------------------------------------------------
-# Doc 03 §12.2 prohibition — no valuative language in section headers
+# Prohibition — no valuative language in section headers
 # ---------------------------------------------------------------------------
 
 
 def test_section_intro_has_no_valuative_language() -> None:
-    """Section intro sentences (per §12.2) carry descriptive metadata
-    only — no "trust this" / "authoritative" / similar."""
+    """Section intro sentences carry descriptive metadata only —
+    no "trust this" / "authoritative" / similar."""
     hits = [_h("person:m", "entity")]
     out = render_sectioned(hits).lower()
     for forbidden in ("authoritative", "trust this", "treat as"):
