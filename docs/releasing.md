@@ -144,4 +144,4 @@ not ready to ship.
 
 ---
 
-Last updated: 2026-06-07 (D8).
+Last updated: 2026-06-07.
