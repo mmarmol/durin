@@ -14,8 +14,7 @@ by opening an :func:`author_scope`. Calling :func:`current_author`
 outside an active scope raises :class:`MissingAuthorScopeError` — a
 loud failure beats a silent mismarking. Rationale: the implicit
 default makes "forgot to wrap" indistinguishable from "intentional
-default", which has bitten benchmarks + tests already (see
-``docs/internals/memory/01_data_and_entities.md`` §4.6.1).
+default", which has bitten benchmarks + tests already.
 
 Usage::
 

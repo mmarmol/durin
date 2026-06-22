@@ -1,6 +1,6 @@
 """Workspace ↔ FTS5 indexer.
 
-Per `docs/internals/memory/02_indexing.md` §6: the indexer is the bridge between
+The indexer is the bridge between
 the markdown source-of-truth under ``memory/`` and the FTS5 sqlite
 database at ``.durin/index/fts.sqlite``.
 
@@ -19,7 +19,7 @@ The vector index (LanceDB) is handled separately in
 fan out at the tool layer (re-index-on-write hooks); this module
 focuses on the lexical side only.
 
-Text composition (doc 02 §5.2):
+Text composition:
 
   - Entity pages: ``name`` + ``aliases`` + rendered frontmatter +
     ``body`` (full).
@@ -314,11 +314,9 @@ def _emit_write(
     trigger: str = "watcher",
     duration_ms: float = 0.0,
 ) -> None:
-    """E5 (audit second pass, 2026-05-28): added `trigger` +
-    `duration_ms` so the documented dashboards become computable
-    (doc 07 §10.3 `index_write_p95_ms` < 50ms; doc 09 §216 trigram
-    capacity monitoring needs to distinguish watcher vs drift_repair
-    bursts).
+    """Added `trigger` + `duration_ms` so dashboards can compute
+    `index_write_p95_ms` and distinguish watcher vs drift_repair
+    bursts for trigram capacity monitoring.
     """
     try:
         from durin.agent.tools._telemetry import emit_tool_event
@@ -344,7 +342,7 @@ def _emit_staleness(
 ) -> None:
     """Used by the health-check cron + the indexer's drift detection.
 
-    Audit G3 (2026-05-28): when ``reason='mtime_lag'`` the caller
+    When ``reason='mtime_lag'`` the caller
     supplies ``delta_seconds = current_file_mtime - indexed_mtime``
     so dashboards can graph p50/p95 staleness magnitude (not just
     event count). For ``missing_row`` and ``row_for_missing_file``
@@ -366,7 +364,7 @@ def _emit_staleness(
 def detect_index_staleness(workspace: Path) -> list[dict]:
     """Compare on-disk markdown to the FTS index and report drift.
 
-    Three failure modes (per doc 07 §9.3):
+    Three failure modes:
 
     - ``missing_row``: a `.md` file exists under `memory/` but has no
       row in `fts_meta`.
@@ -414,9 +412,8 @@ def detect_index_staleness(workspace: Path) -> list[dict]:
                 issues.append({"uri": uri, "reason": "row_for_missing_file"})
                 continue
             if current > indexed_mtime:
-                # G3 (audit fourth pass, 2026-05-28): include the
-                # magnitude of the gap so dashboards can graph
-                # staleness p50/p95 instead of just event counts.
+                # Include the magnitude of the gap so dashboards can
+                # graph staleness p50/p95 instead of just event counts.
                 delta = current - indexed_mtime
                 _emit_staleness(
                     uri=uri,
@@ -451,12 +448,11 @@ def reindex_one_file(
     - The file disappeared between the write and this call (we
       delete the row instead).
 
-    E5 (audit second pass, 2026-05-28): ``trigger`` propagates the
-    caller context into ``memory.index.write`` so dashboards can
-    split steady-state (`watcher`) from burst (`dream_apply`,
-    `drift_repair`) writes. Default is `watcher` because that's the
-    most common callsite (every agent write goes through the file
-    watcher).
+    ``trigger`` propagates the caller context into ``memory.index.write``
+    so dashboards can split steady-state (`watcher`) from burst
+    (`dream_apply`, `drift_repair`) writes. Default is `watcher` because
+    that's the most common callsite (every agent write goes through the
+    file watcher).
     """
     import time
 
@@ -484,7 +480,6 @@ def reindex_one_file(
             # If still absent the deletion is genuine — prune as before.
             # The FTS/Lance deletes (inner locks) are taken AFTER this lock
             # (outer), so lock ordering is git-worktree > FTS/Lance.
-            # See docs/internals/concurrency.md §reset-absent-window.
             with cross_process_lock(git_worktree_lock_path(memory_root)):
                 if md_path.is_file():
                     # Transient absence: reset completed, file is back.
@@ -544,7 +539,7 @@ def reindex_one_file(
 
 
 def reindex_one_file_vector(workspace: Path, md_path: Path, vi) -> bool:
-    """Re-embed ONE entity page into the vector index (N2, 2026-06-06).
+    """Re-embed ONE entity page into the vector index.
 
     The reactive index path (file watcher) calls this so agent/dream-authored AND
     hand-edited entity pages become vector-searchable. Previously NOTHING embedded
@@ -688,7 +683,7 @@ def _payload_for(workspace: Path, md_path: Path) -> Optional[dict]:
         }
 
     if parts[0] == "references":
-        # Coherent reference doc (design §2.8): FTS the WHOLE doc. The
+        # FTS the WHOLE reference doc. The
         # `.chunks.jsonl` sidecar feeds the vector index separately and isn't a
         # `.md`, so it never reaches here. Previously these fell through to the
         # MemoryEntry branch and were rejected (G2).
@@ -771,8 +766,8 @@ def _session_turn_payloads(workspace: Path) -> Iterator[dict]:
     indexed representation.
 
     Per-turn rows so the uri matches the grep path's
-    ``sessions/<key>.md#turn-N`` shape (H28 principle — same uri across
-    sources or RRF never accumulates) and BM25 isn't diluted by
+    ``sessions/<key>.md#turn-N`` shape (same uri across sources or RRF
+    never accumulates) and BM25 isn't diluted by
     transcript length. The turn header (role + timestamp) stays in the
     indexed text: a hit shows when it was said without a schema change.
     The preamble and the ``consolidated-1`` note are boilerplate, not
@@ -885,7 +880,7 @@ def _uri_for(workspace: Path, md_path: Path) -> Optional[str]:
 
 
 def _entity_text(page: EntityPage) -> str:
-    """Compose the BM25 text for an entity page (doc 02 §5.2)."""
+    """Compose the BM25 text for an entity page."""
     parts: list[str] = [page.name]
     if page.aliases:
         parts.append(" ".join(page.aliases))

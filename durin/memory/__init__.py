@@ -1,4 +1,4 @@
-"""Memory subsystem. See docs/08_memory_phase2_proposal.md §0c for design."""
+"""Memory subsystem."""
 
 from durin.memory.consolidator_tags import parse_consolidator_response
 from durin.memory.drill import DrillError, drill

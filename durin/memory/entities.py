@@ -11,13 +11,11 @@ Examples valid:    ``person:marcelo``, ``project:durin``,
 ``topic:autocompaction``, ``artifact:settings.py``.
 
 The vocabulary of types is **open**: any well-formed type is accepted.
-:data:`SUGGESTED_TYPES` lists the 8 broad types from
-``docs/internals/memory/01_data_and_entities.md`` §3.7 — these are hints for the
+:data:`SUGGESTED_TYPES` lists 8 broad types — these are hints for the
 consolidator/dream prompt, not an enforced enum. The LLM can introduce
-new types when content demands it (Phase 0.3 confirmed ``agent:``,
-``org:`` emerge naturally).
+new types when content demands it (``agent:``, ``org:`` emerge naturally).
 
-Validation policy (per ``docs/14_typed_entities_proposal.md`` §3.2):
+Validation policy:
 
 - ``memory_store`` write-path: **strict**. Invalid refs → error
   returned to the model so it can rewrite.
@@ -49,11 +47,11 @@ __all__ = [
 ]
 
 
-# Regex per doc 14 §3.2.  Anchored to whole string.
+# Anchored to whole string.
 ENTITY_REF_PATTERN = re.compile(r"^[a-z][a-z0-9_]*:[^\s].*$")
 
 
-# 8 broad types suggested by doc 18 §4 — Tulving/CoALA-grounded.
+# 8 broad types — Tulving/CoALA-grounded.
 # Open vocabulary: NOT enforced; types outside this set are welcome.
 SUGGESTED_TYPES: frozenset[str] = frozenset(
     [
@@ -124,7 +122,7 @@ def split_valid_invalid(refs: list[str]) -> tuple[list[str], list[str]]:
 
 
 # ---------------------------------------------------------------------------
-# Slug normalization (doc memory §4.5)
+# Slug normalization
 # ---------------------------------------------------------------------------
 
 _SLUG_MAX_LEN = 64
@@ -134,7 +132,7 @@ _SLUG_NON_ALNUM = re.compile(r"[^a-z0-9]+")
 def slugify_name(name: str) -> str:
     """Derive a canonical entity slug from a free-form name.
 
-    Pipeline per ``docs/internals/memory/01_data_and_entities.md`` §4.5:
+    Normalization pipeline:
       1. Unicode NFC normalize
       2. Transliterate non-Latin scripts (CJK, Cyrillic, Arabic, ...)
          to Latin ASCII via :mod:`unidecode`.

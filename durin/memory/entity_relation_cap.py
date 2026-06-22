@@ -1,27 +1,23 @@
-"""Per-entity relation cap enforcement (audit B-19, 2026-05-29).
+"""Per-entity relation cap enforcement.
 
-`docs/internals/memory/01_data_and_entities.md` §4.4 documented soft / hard
-relation caps (50 / 200) as intent, but Dream apply never enforced
-them. An entity could legitimately accumulate 500 relations with no
-signal. B-19 ships the brake pedal:
+Soft / hard relation caps (50 / 200) are defined here and enforced in
+``memory_writer.write_entity``. An entity could legitimately accumulate
+hundreds of relations with no signal — this module provides the brake:
 
 - **Soft cap** (50): if a Dream apply takes the relation count
   ACROSS the threshold (was < 50, becomes ≥ 50), a telemetry event
   fires (`memory.entity_relation_cap_warned`) but the apply
   proceeds. Operators / dashboards can spot mega-hub formation
-  before sub-paging (B-14) becomes necessary.
+  before sub-paging becomes necessary.
 
 - **Hard cap** (200): if a write takes the relation count over the
   hard cap a telemetry event fires (`memory.entity_relation_cap_rejected`)
   with the entity_ref + the count so operators can act.
 
-A3 (2026-06-06) wires this into ``memory_writer.write_entity`` as
-**alert-only "de momento"**: both thresholds emit telemetry + a log, but the
-write always proceeds and no relation is ever dropped (the old
-``DreamApplyFailureKind.VALIDATION`` rejection path died with the legacy dream).
-Enforcing the hard cap (actually rejecting) is deferred until mega-hubs prove
-real — flip ``memory_writer._emit_relation_cap`` to honour
-``decision.action == "reject"``.
+Both thresholds are currently **alert-only**: they emit telemetry + a log, but
+the write always proceeds and no relation is ever dropped. Enforcing the hard
+cap (actually rejecting) is deferred until mega-hubs prove real — flip
+``memory_writer._emit_relation_cap`` to honour ``decision.action == "reject"``.
 """
 
 from __future__ import annotations

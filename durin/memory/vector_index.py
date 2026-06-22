@@ -1,9 +1,6 @@
 """LanceDB-backed vector index over memory entry summaries.
 
-Phase 2.2 of the memory subsystem. The index lives at
-``<workspace>/.durin/index/lance/`` (moved 2026-05-30 — P9 vault-
-friendly cleanup; was previously ``<workspace>/memory/.index.lance``
-where it polluted the markdown-vault folder layout). Holds three
+The index lives at ``<workspace>/.durin/index/lance/``. Holds three
 record types — memory entry, entity page, and skill — sharing the
 same row schema: ``(id, class_name, summary, headline, vector,
 valid_from, entities, path, body_length)``. Vectors are produced by an
@@ -53,11 +50,10 @@ __all__ = [
 
 
 _TABLE_NAME = "memory_entries"
-# Relative path from workspace root. Moved 2026-05-30 (P9) from
-# `memory/.index.lance` to `.durin/index/lance/` so the `memory/`
-# folder stays pure markdown (vault-friendly: Obsidian and the
-# webui MemoryGraphView no longer see the binary blob mixed with
-# the .md files they render).
+# Relative path from workspace root, inside the `.durin/` hidden
+# directory. Keeps the `memory/` folder pure markdown (vault-friendly:
+# Obsidian and the webui MemoryGraphView no longer see the binary blob
+# mixed with the .md files they render).
 _INDEX_PATH = (".durin", "index", "lance")
 
 
@@ -78,10 +74,10 @@ def vector_index_available() -> bool:
 
 
 SUMMARY_FALLBACK_CHARS: int = 400
-"""H4 (audit 2026-05-29): module-level export of the body-prefix cap so
-the FTS indexer (`durin/memory/indexer.py`) shares the same value as
-the vector index. See ``VectorIndex._SUMMARY_FALLBACK_CHARS`` for the
-class-level alias kept for backward compat."""
+"""Module-level export of the body-prefix cap so the FTS indexer
+(`durin/memory/indexer.py`) shares the same value as the vector index.
+See ``VectorIndex._SUMMARY_FALLBACK_CHARS`` for the class-level alias
+kept for backward compat."""
 
 
 def _effective_summary(entry: MemoryEntry) -> str:
@@ -119,9 +115,9 @@ class VectorIndex:
     def __init__(self, workspace: Path, provider: EmbeddingProvider) -> None:
         self._workspace = workspace
         self._provider = provider
-        # P9 (2026-05-30): index lives at `.durin/index/lance/`, no
-        # longer inside `memory/`. Keeps the vault clean of binary
-        # files for Obsidian / MemoryGraphView consumers.
+        # Index lives at `.durin/index/lance/`, no longer inside
+        # `memory/`. Keeps the vault clean of binary files for
+        # Obsidian / MemoryGraphView consumers.
         self._uri = str(workspace.joinpath(*_INDEX_PATH))
 
     # ------------------------------------------------------------------
@@ -177,17 +173,16 @@ class VectorIndex:
     ) -> None:
         """Index a consolidated entity page (``memory/entities/<type>/<slug>.md``).
 
-        Per ``docs/internals/memory/02_indexing.md`` §4.2 (Phase 0.1 finding),
-        the embedded text omits the ``<type>:`` prefix (which Phase 0.1
-        measured at cosine 0.517 against ``durin``, vs 0.755 for
+        The embedded text omits the ``<type>:`` prefix (which was measured
+        at cosine 0.517 against ``durin``, vs 0.755 for
         ``durin``/``durin-agent`` — the prefix introduces token noise).
 
-        Audit E9 (2026-05-28) ships v2.a: when `attributes` and
-        `relations` are passed, they're rendered into the embedding
-        text between aliases and body so attribute queries
-        ("Marcelo's email", "who is X's spouse") hit the centroide.
-        Pre-E9 callsites that pass only `name`/`aliases`/`body`
-        continue to work — frontmatter defaults to empty.
+        Schema version 2.a: when `attributes` and `relations` are
+        passed, they're rendered into the embedding text between
+        aliases and body so attribute queries ("Marcelo's email",
+        "who is X's spouse") hit the centroide. Callsites that pass
+        only `name`/`aliases`/`body` continue to work — frontmatter
+        defaults to empty.
 
         Stored as ``class_name="entity_page"`` so search consumers can
         distinguish from memory entries via the same field that already
@@ -213,12 +208,12 @@ class VectorIndex:
             "class_name": "entity_page",
             "summary": summary,
             "headline": name,
-            # H5 (audit 2026-05-29): schema parity with memory-entry
-            # rows. Entity pages don't carry a single ``body`` field
-            # in the same shape as MemoryEntry; the closest analogue
-            # is the rendered page body the caller passed. Persisting
-            # its length lets the renderer compute completeness for
-            # entity hits with the same logic as fragments.
+            # Schema parity with memory-entry rows. Entity pages don't
+            # carry a single ``body`` field in the same shape as
+            # MemoryEntry; the closest analogue is the rendered page
+            # body the caller passed. Persisting its length lets the
+            # renderer compute completeness for entity hits with the
+            # same logic as fragments.
             "body_length": len(body or ""),
             "vector": vec,
             "valid_from": "",
@@ -293,7 +288,7 @@ class VectorIndex:
         text: str,
         path: Any,
     ) -> None:
-        """Index one token-aware chunk of a reference document (design §2.8).
+        """Index one token-aware chunk of a reference document.
 
         The whole reference doc is the FTS unit (``indexer._payload_for``); the
         chunks are the vector unit. The row ``id`` is ``<ref>#<idx>`` so a
@@ -352,8 +347,8 @@ class VectorIndex:
 
     _PAGE_EMBED_BUDGET_CHARS = 1500
 
-    # E9 (audit second pass, 2026-05-28): attribute keys that are
-    # internal metadata, never rendered into the embedding centroid.
+    # Attribute keys that are internal metadata, never rendered into
+    # the embedding centroid.
     _SKIP_FRONTMATTER_KEYS = frozenset({
         "created_at", "updated_at", "provenance",
         "dream_processed_through",
@@ -369,7 +364,7 @@ class VectorIndex:
         """E9 v2.a: render structured attributes + relations as prose
         for the embedding centroid.
 
-        Rules (doc 02 §4.2 v2):
+        Rules:
         - Stateful attributes (`{current, history}`) render only
           `current` to avoid centroid drift toward defunct facts.
         - Internal metadata (provenance, timestamps) is skipped.
@@ -439,14 +434,14 @@ class VectorIndex:
     ) -> str:
         """Compose embedding text for an entity page.
 
-        Layout (v2.a, audit E9 2026-05-28):
+        Layout (v2.a):
         ``name`` → ``aliases`` → ``rendered_frontmatter`` → ``body``,
         in order, until 1500-char budget exhausted. Most distilled
         signal first (name); structured attributes/relations next so
         attribute queries hit the centroide; body (longest, most
         truncatable) last.
 
-        Pre-E9 layout was ``name + aliases + body`` (v1) — the
+        The prior layout was ``name + aliases + body`` (v1) — the
         ``attributes`` and ``relations`` params default to None so
         existing callsites continue to work; v1 behaviour is the
         empty-frontmatter case (see test_compose_empty_attributes).
@@ -507,9 +502,9 @@ class VectorIndex:
     ) -> list[dict[str, Any]]:
         """Same as :meth:`search` but skips the embedding step.
 
-        Used by callers (e.g. ``memory_store`` dedup check per doc 23
-        T1.7 + G5) that have already computed the query embedding and
-        want to reuse it for both dedup search AND upsert.
+        Used by callers (e.g. ``memory_store`` dedup check) that have
+        already computed the query embedding and want to reuse it for
+        both dedup search AND upsert.
         """
         if top_k <= 0:
             return []
@@ -533,8 +528,8 @@ class VectorIndex:
     ) -> None:
         """Variant of :meth:`upsert` that reuses a precomputed embedding.
 
-        Per doc 23 T1.7 + G5: the write path is
-        ``compute_embedding → search (dedup) → upsert``. Without this
+        The write path is ``compute_embedding → search (dedup) → upsert``.
+        Without this
         method, ``upsert`` would recompute the embedding internally,
         doubling the embed cost per write. Pass the same vector that
         was used for the dedup check.
@@ -552,7 +547,7 @@ class VectorIndex:
     def delete_by_id(self, record_id: str) -> bool:
         """Drop a single row by ``id``. Returns True if the table existed.
 
-        Used by Phase 5 absorption — when a page is archived, the
+        Used by the absorption step — when a page is archived, the
         ``entity_page`` row keyed to its entity_ref must come out of the
         searchable index. No-op when the table is absent.
         """
@@ -578,18 +573,17 @@ class VectorIndex:
         write path, so the window is accepted rather than swapped out.
 
         Two processes' health-check rebuilds can race the drop+create
-        window and corrupt or lose rows (hazard #9). The body is
-        wrapped in ``cross_process_lock`` so only one rebuild runs at a
-        time. The per-row ``merge_insert`` upsert paths are already
-        atomic and are intentionally left outside this lock.
-        See docs/internals/concurrency.md for lock-ordering invariants.
+        window and corrupt or lose rows. The body is wrapped in
+        ``cross_process_lock`` so only one rebuild runs at a time. The
+        per-row ``merge_insert`` upsert paths are already atomic and are
+        intentionally left outside this lock.
 
-        Audit E9 (2026-05-28) extended this to also walk entity pages.
-        Pre-E9, only memory entries (`memory/<class>/*.md`) were walked
-        — entity pages were re-upserted only by Dream apply or absorb,
-        which meant that after a forced rebuild (e.g. schema version
-        bump) entity pages were silently missing from the vector index
-        until the next consolidation pass. Skills (Pass 3) were added
+        Also walks entity pages: only memory entries
+        (`memory/<class>/*.md`) were originally walked — entity pages
+        were re-upserted only by Dream apply or absorb, which meant
+        that after a forced rebuild (e.g. schema version bump) entity
+        pages were silently missing from the vector index until the
+        next consolidation pass. Skills (Pass 3) were added
         later: they live under `skills/`, an independent root, so the
         rebuild walks them even when `memory/` is absent.
         """
@@ -612,7 +606,7 @@ class VectorIndex:
                 entries.append((entry, class_name, path))
 
         # Pass 2: walk entity pages. Carry attributes/relations into the
-        # embed text via v2.a composition (audit E9). `from_file`
+        # embed text via v2.a composition. `from_file`
         # returns None for malformed pages (frontmatter missing or
         # invalid) — skip them silently like the rest of the walker.
         from durin.memory.entity_page import EntityPage
@@ -654,10 +648,10 @@ class VectorIndex:
                 continue
             skills.append((sp, md))
 
-        # Pass 4: references — the token-aware chunks are the vector unit
-        # (A2 / design §2.8). A forced rebuild MUST restore them too, else a
-        # `durin memory reindex` (or the N5 model-change rebuild) silently drops
-        # reference semantic search — only ingest-time indexing would survive.
+        # Pass 4: references — the token-aware chunks are the vector unit.
+        # A forced rebuild MUST restore them too, else a `durin memory reindex`
+        # (or the N5 model-change rebuild) silently drops reference semantic
+        # search — only ingest-time indexing would survive.
         from durin.memory.reference import reference_chunks
         ref_chunks: list[tuple[str, int, str, Path]] = []  # (ref, idx, text, md)
         refs_root = self._workspace / "memory" / "references"
@@ -816,11 +810,11 @@ class VectorIndex:
         return {
             "id": entry.id,
             "class_name": class_name,
-            # H4 (audit 2026-05-29): when the source has no summary
-            # (bench seeds, memory_ingest chunks, raw episodic turns
-            # all leave it empty by design — Dream is the intended
-            # summary author but doesn't process corpus and only
-            # consolidates episodic into entity_pages), materialise
+            # When the source has no summary (bench seeds,
+            # memory_ingest chunks, raw episodic turns all leave it
+            # empty by design — Dream is the intended summary author
+            # but doesn't process corpus and only consolidates episodic
+            # into entity_pages), materialise
             # ``body[:SUMMARY_FALLBACK_CHARS]`` into the index row.
             # The .md on disk keeps ``summary: ''`` as a legitimate
             # pre-Dream state; the index always carries triage content
@@ -831,30 +825,29 @@ class VectorIndex:
             # value.
             "summary": _effective_summary(entry),
             "headline": entry.headline,
-            # H5 (audit 2026-05-29): persist the source body's total
-            # length so the search pipeline / renderer can compute the
-            # per-hit completeness qualifier (``complete`` vs
-            # ``preview N/M``). Without this, every hit would have to
-            # guess whether drilling reveals more — the agent drills
-            # defensively. ``len()`` on a Python str is char count
-            # (consistent with the H4 ``body[:400]`` slice unit).
+            # Persist the source body's total length so the search
+            # pipeline / renderer can compute the per-hit completeness
+            # qualifier (``complete`` vs ``preview N/M``). Without
+            # this, every hit would have to guess whether drilling
+            # reveals more — the agent drills defensively. ``len()``
+            # on a Python str is char count (consistent with the
+            # ``body[:400]`` slice unit).
             "body_length": len(entry.body or ""),
             "vector": vector,
             "valid_from": entry.valid_from.isoformat() if entry.valid_from else "",
-            # B1 (doc 24 §7): persist entity tags so entity_ranker's
-            # entity-match boost can match c.get("entities", []) against
-            # query entities. Without this column, the ranker can never
-            # boost tagged entries — W1 would be inoperative.
+            # Persist entity tags so entity_ranker's entity-match boost
+            # can match c.get("entities", []) against query entities.
+            # Without this column, the ranker can never boost tagged
+            # entries.
             "entities": list(entry.entities),
             "path": str(rel_path),
             # NOTE: `body` is deliberately NOT stored here. The .md on
             # disk is the single source of truth; the search pipeline
             # reads the body on demand via `memory_search._enrich_body`
-            # when level=cold is requested. P2.5 (commit a266344)
-            # briefly stored body here for a latency micro-optimisation,
-            # reverted in audit A4 because it duplicated content and
-            # opened a drift window between disk edits and LanceDB
-            # reads. See docs/internals/memory/08_scope_and_discarded.md §2.10.
+            # when level=cold is requested. Storing body here was briefly
+            # attempted as a latency micro-optimisation but reverted
+            # because it duplicated content and opened a drift window
+            # between disk edits and LanceDB reads.
         }
 
     _EMBED_BUDGET_CHARS = 1500  # ~375 tokens; e5-small max_seq is 512.
@@ -898,14 +891,14 @@ class VectorIndex:
             used += len(chunk) + extra
 
         _add(entry.headline)
-        # H4 (audit 2026-05-29): when ``summary`` is the body-prefix
-        # fallback (carried for renderer / triage use, not as new
-        # semantic signal), embedding it AS WELL AS body would weight
-        # those tokens twice and shrink the budget available to unique
-        # body content. Skip the summary slot when it matches the
-        # leading slice of the body. Authoritative summaries (Dream
-        # output, memory_store explicit) survive intact because they
-        # describe the entry differently from its body prefix.
+        # When ``summary`` is the body-prefix fallback (carried for
+        # renderer / triage use, not as new semantic signal), embedding
+        # it AS WELL AS body would weight those tokens twice and shrink
+        # the budget available to unique body content. Skip the summary
+        # slot when it matches the leading slice of the body.
+        # Authoritative summaries (Dream output, memory_store explicit)
+        # survive intact because they describe the entry differently
+        # from its body prefix.
         if not _is_body_prefix(entry.summary, entry.body):
             _add(entry.summary)
         if entry.entities:
@@ -946,9 +939,9 @@ class VectorIndex:
         actionable message pointing at ``rebuild_from_workspace`` /
         the ``/memory reindex`` CLI command.
 
-        Also checks for the ``entities`` column (B1 per doc 24): tables
-        created before the ranker-aware schema lack this field. Without
-        it, entity_ranker can never boost tagged entries → W1 inoperative.
+        Also checks for the ``entities`` column: tables created before
+        the ranker-aware schema lack this field. Without it,
+        entity_ranker can never boost tagged entries.
         """
         try:
             schema = table.schema
@@ -1061,7 +1054,6 @@ def prune_orphan_rows(workspace: Path) -> list[str]:
     is kept.  Lock ordering: git-worktree (outer, acquired here) > LanceDB
     delete (inner, inside delete_ids).  No path takes a LanceDB lock and then
     git-worktree, so there is no deadlock risk.
-    See docs/internals/concurrency.md §reset-absent-window.
     """
     try:
         import lancedb  # type: ignore[import-not-found]

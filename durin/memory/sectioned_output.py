@@ -1,4 +1,4 @@
-"""Sectioned output renderer for the search pipeline (doc 03 §12).
+"""Sectioned output renderer for the search pipeline.
 
 The final top-K from the search pipeline is grouped by source class
 into four sections and rendered with structural markers the LLM
@@ -12,12 +12,12 @@ parses:
 Sections with zero hits are omitted entirely. Within each section,
 hits are ordered by score descending.
 
-Per doc 03 §12.2 the section intro carries descriptive metadata only;
-**no valuative language** ("authoritative", "trust this", etc.) —
-those have been verified as weak signals.
+The section intro carries descriptive metadata only; **no valuative
+language** ("authoritative", "trust this", etc.) — those have been
+verified as weak signals.
 
-The per-source cap (doc 03 §12.4) keeps a long ingested doc from
-monopolising the top-K with consecutive chunks of itself: at most
+The per-source cap keeps a long ingested doc from monopolising the
+top-K with consecutive chunks of itself: at most
 ``max_per_source`` corpus hits per ``ingest_id``. Other classes are
 not capped (their clustering is triangulation, not duplication).
 """
@@ -45,7 +45,7 @@ class SectionedHit:
     Built upstream by the pipeline after fusion + entity-aware rerank.
     The renderer only consumes these fields; it does not enrich them.
 
-    Audit F4 (2026-05-28): added ``summary`` and ``entities`` so the
+    Added ``summary`` and ``entities`` so the
     renderer has the same data Result.render_block used to reach. The
     body preference inside the block is `summary > body > snippet`;
     the entities tail tags fragments so the LLM can drill to canonical.
@@ -61,23 +61,23 @@ class SectionedHit:
     ingest_id: Optional[str] = None
     # Body stays in this dataclass for backward-compat with call
     # sites that consult `hit.body`, but it is no longer populated
-    # by the pipeline (audit A4 reverted P2.5). Cold-tier callers
+    # by the pipeline. Cold-tier callers
     # default-fall to disk reads via `_enrich_body` — the empty
     # default here is the trigger that activates that path.
     body: str = ""
     summary: str = ""
     entities: tuple[str, ...] = ()
-    # H5 (audit 2026-05-29): total source body length so the renderer
-    # can compute the per-hit completeness qualifier. ``0`` means
+    # Total source body length so the renderer can compute the per-hit
+    # completeness qualifier. ``0`` means
     # unknown (lexical-only hits, legacy callers) — the renderer
     # then omits the signal entirely (backward-compat marker shape).
     body_length: int = 0
 
 
 # Map each source class to a section bucket. Stable entries surface as
-# fragments per doc 06 §8 (recent observations beyond the canonical's
-# cursor); session summaries get their own section because their
-# provenance is different (a conversation, not a memory tool).
+# fragments (recent observations beyond the canonical's cursor); session
+# summaries get their own section because their provenance is different
+# (a conversation, not a memory tool).
 _SECTION_FOR_TYPE: dict[str, str] = {
     "skill": "skill",
     "entity": "canonical",
@@ -132,7 +132,7 @@ def apply_per_source_cap(
     *,
     max_per_source: int = DEFAULT_MAX_PER_SOURCE,
 ) -> list[SectionedHit]:
-    """Drop corpus hits beyond the cap per ``ingest_id`` (doc 03 §12.4).
+    """Drop corpus hits beyond the cap per ``ingest_id``.
 
     Preserves order. Only ``type == "corpus"`` hits are subject to the
     cap; everything else passes through untouched.
@@ -185,8 +185,8 @@ def render_sectioned(hits: Iterable[SectionedHit]) -> str:
 
 
 def _render_block(section: str, hit: SectionedHit) -> str:
-    """One marker block. Audit F4 (2026-05-28): brought to feature
-    parity with the (now retired) `Result.render_block`:
+    """One marker block. Brought to feature parity with the (now
+    retired) `Result.render_block`:
 
     - Body preference: ``summary > body > snippet``.
     - END marker (`=== END KIND ===`) closes each block.
@@ -195,8 +195,8 @@ def _render_block(section: str, hit: SectionedHit) -> str:
     - Canonical header uses ``(canonical entity page)`` when no ts,
       ``(consolidated <ts>)`` when ts is present.
 
-    H5 (audit 2026-05-29): the marker gets a completeness qualifier
-    when the source body length is known (``hit.body_length > 0``).
+    The marker gets a completeness qualifier when the source body
+    length is known (``hit.body_length > 0``).
     ``complete`` means the rendered text IS the whole body — drilling
     returns the same content; ``preview N/M`` means more is available.
     """
@@ -233,11 +233,11 @@ def _completeness_for(hit: SectionedHit, rendered_body: str) -> str:
 def _marker_for(
     section: str, hit: SectionedHit, *, completeness: str = "",
 ) -> str:
-    # G7 (audit fourth pass, 2026-05-28): delegate to the shared
-    # `section_markers` helper so the marker format has one source
-    # of truth across both this renderer and `hot_layer`. The body
-    # composition stays here — only the header strings are shared.
-    # H5 (2026-05-29): pass through the completeness qualifier.
+    # Delegate to the shared `section_markers` helper so the marker
+    # format has one source of truth across both this renderer and
+    # `hot_layer`. The body composition stays here — only the header
+    # strings are shared.
+    # Pass through the completeness qualifier.
     from durin.memory.section_markers import (
         canonical_marker,
         fragment_marker,

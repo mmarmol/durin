@@ -1,7 +1,6 @@
 """Process-wide shared cache for :class:`AliasIndex`.
 
-Implements §4.5 of ``docs/internals/memory/01_data_and_entities.md``: three
-runtime consumers (``memory_search``, the refine pass,
+Three runtime consumers (``memory_search``, the refine pass,
 ``EntityAbsorption``) previously each built their own AliasIndex on
 first use. Each rebuild parses every entity page in
 ``memory/entities/<type>/*.md``; harmless but wasteful when the same

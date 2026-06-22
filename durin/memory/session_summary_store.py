@@ -1,12 +1,12 @@
 """Session summaries as markdown projections under `memory/session_summary/`.
 
-Audit A10 (2026-05-28). Pre-A10, session summaries lived as
+Previously, session summaries lived as
 `session.metadata["_last_summary"] = {"text", "last_active"}` inside
-`<session_key>.meta.json`. The hot layer read them directly from
-the in-memory dict; nothing indexed them. Doc 02 §3.3 promised
-indexing but the walker only iterates `.md` under `memory/`.
+`<session_key>.meta.json`. The hot layer read them directly from the
+in-memory dict; nothing indexed them, and the walker only iterates
+`.md` under `memory/`.
 
-A10 picks the single-source-of-truth path (per A4 lessons): the
+This module picks the single-source-of-truth path: the
 summary lives ONLY in `memory/session_summary/<sanitized_key>.md`.
 The JSON metadata stops carrying `_last_summary` going forward.
 This module owns the write / read / sanitize and the one-shot

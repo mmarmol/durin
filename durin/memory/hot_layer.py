@@ -1,26 +1,23 @@
 """Hot layer — the always-loaded memory section of the stable prompt tier.
 
-Phase 1.9 of the memory subsystem (renderer), refreshed in Phase 1.5
-(canonical spec: ``docs/internals/memory/06_prompts_and_instructions.md``
-§8). The hot layer is what the agent carries in every prompt without
-any tool call: identity essentials, canonical entity pages (the "main
-memory"), recent tagged fragments (two-track model, N3: fragments are not
-consolidated into pages, so they surface by recency), top headlines and a
-de-duplicated entity name list. By design it changes at most once per Dream pass; between
-passes it is read-only so the upstream provider's prompt cache stays
-warm across many turns.
+The hot layer renderer builds the prompt context block: identity essentials,
+canonical entity pages (the "main memory"), recent tagged fragments (two-track
+model — fragments are not consolidated into pages, so they surface by
+recency), top headlines and a de-duplicated entity name list. By design it
+changes at most once per Dream pass; between passes it is read-only so the
+upstream provider's prompt cache stays warm across many turns.
 
 The renderer reads from disk on every prompt build (cheap walk + YAML
 parse, <5ms typical). Sections that fail to assemble degrade silently
-and emit ``memory.hot_layer.failure`` telemetry per §8.7 — the agent
+and emit ``memory.hot_layer.failure`` telemetry — the agent
 still works, just without the broken section.
 
-Per doc 06 §8.3, canonical pages and recent fragments are wrapped in
+Canonical pages and recent fragments are wrapped in
 ``=== CANONICAL: <uri> (consolidated <ts>) ===`` and
 ``=== FRAGMENT: <path> (ts <ts>) ===`` markers so the LLM reconciles
 contradictions at read time using the timestamps embedded in the
 markers. Same convention as the compaction
-``=== ARCHIVED SUMMARY ===`` block (logbook 2026-05-19) and
+``=== ARCHIVED SUMMARY ===`` block and
 ``memory_search``'s result rendering.
 """
 
@@ -37,7 +34,7 @@ from durin.telemetry.logger import current_telemetry
 
 __all__ = ["HotLayer", "read_hot_layer"]
 
-# Budgets per docs/internals/memory/06_prompts_and_instructions.md §8.2.
+# Token budgets:
 # Total ~1900 tokens — still cache-friendly between dreams.
 _IDENTITY_BUDGET_CHARS = 800    # ~200 tokens
 _CANONICAL_BUDGET_CHARS = 2400  # ~600 tokens — N entity pages
@@ -55,7 +52,7 @@ _CANONICAL_BODY_PER_PAGE = 600
 # Per-fragment body cap for the same reason.
 _FRAGMENT_BODY_PER_PAGE = 400
 
-# Classes that surface as "fragments" in the hot layer per §8.4.
+# Classes that surface as "fragments" in the hot layer.
 # Corpus and pending are intentionally excluded.
 _FRAGMENT_CLASSES: tuple[str, ...] = ("episodic", "stable")
 
@@ -70,7 +67,7 @@ class HotLayer(NamedTuple):
     def render(self) -> str:
         """Render the hot layer as markdown for the stable prompt tier.
 
-        Section order follows §8.3: identity → canonical (main memory) →
+        Section order: identity → canonical (main memory) →
         fragments (recent, by recency) → headlines (legacy entries) →
         entity list. The LLM sees the canonical first, marked as
         authoritative; fragments come next with their timestamp so the
@@ -109,7 +106,7 @@ def read_hot_layer(workspace: Path) -> HotLayer:
     """Assemble the hot layer for a workspace.
 
     Each section is wrapped in its own try/except: any failure emits
-    ``memory.hot_layer.failure`` telemetry per §8.7 and degrades the
+    ``memory.hot_layer.failure`` telemetry and degrades the
     section to empty so the prompt still builds.
     """
     try:
@@ -230,7 +227,7 @@ def _render_canonical_block(
 ) -> str:
     """Format one canonical entity page for the hot layer.
 
-    Layout (per doc 06 §8.3 + Phase 1.5 v2 rendering):
+    Layout:
 
         === CANONICAL: <ref> (consolidated <ts>) ===
         <name>[ (aliases: a, b, c)].
@@ -243,8 +240,7 @@ def _render_canonical_block(
     aliases line is omitted when ``aliases`` is empty. This keeps the
     block tight — no empty lines or label-only rows.
     """
-    # G7 (audit fourth pass, 2026-05-28): single source of truth for
-    # marker construction. `hot_layer` always supplies the
+    # Single source of truth for marker construction. `hot_layer` always supplies the
     # consolidated_ts so it gets the timestamped variant; the helper
     # also handles the no-ts case used by `sectioned_output`.
     from durin.memory.section_markers import canonical_marker
@@ -313,7 +309,7 @@ def _render_attribute_value(value: Any) -> str | None:
         items = [i for i in items if i]
         return ", ".join(items) if items else None
     if isinstance(value, dict):
-        # Stateful attribute (doc 01 §4.3) — render compactly.
+        # Stateful attribute — render compactly.
         sub_parts = []
         for k, v in value.items():
             rv = _render_attribute_value(v)
@@ -327,7 +323,7 @@ def _render_relations_line(relations: list[dict[str, Any]]) -> str:
     """Prose form: ``Relations: <type> of <to> (since N); ...``.
 
     Renders ``since`` when present (the most common temporal qualifier
-    Dream emits per doc 01 §3.5). Other free-form metadata
+    Dream emits). Other free-form metadata
     (``intensity``, ``role``, etc.) is dropped from the prose to keep
     the line tight — full data is still on disk and surfaces via the
     canonical drill / memory_search.
@@ -382,8 +378,8 @@ def _read_fragment_blocks(
     """Render up to N recent entries from episodic/stable as FRAGMENT blocks.
 
     A fragment qualifies when its class is ``episodic`` or ``stable`` (corpus
-    and pending out) and it tags at least one entity. Two-track model
-    (2026-06-06, N3): fragments are NOT consolidated into entity pages, so there
+    and pending out) and it tags at least one entity. Two-track model:
+    fragments are NOT consolidated into entity pages, so there
     is no cursor-based "graduation" — recent tagged fragments surface by recency,
     capped by the budget.
 
@@ -427,9 +423,9 @@ def _read_fragment_blocks(
 
 
 def _render_fragment_block(entry: Any, rel_path: str) -> str:
-    """``=== FRAGMENT: <path> (ts <ts>) ===`` per doc 06 §8.3.
+    """``=== FRAGMENT: <path> (ts <ts>) ===`` format.
 
-    G7 (audit fourth pass, 2026-05-28): delegates to the shared
+    Delegates to the shared
     `section_markers` helper. ``unknown`` is preserved as the ts
     fallback when ``valid_from`` is missing — historical convention
     used by the hot layer; the helper accepts any ts string including

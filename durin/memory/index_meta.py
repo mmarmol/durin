@@ -1,8 +1,7 @@
 """Indexer state file: `<workspace>/.durin/index/meta.json`.
 
-Per `docs/internals/memory/02_indexing.md` §2 + §7.2 the file carries the
-indexer's notion of "what does the index correspond to". Today the
-relevant fields are:
+The file carries the indexer's notion of "what does the index correspond to".
+Today the relevant fields are:
 
 - ``schema_version`` (int) — bumped when the indexer's row shape or
   derivation rules change.
@@ -15,10 +14,9 @@ relevant fields are:
 - ``previous_models`` (tuple of strings) — audit trail of model
   migrations.
 
-Phase 0 scope (per ``docs/internals/memory/02_indexing.md`` §7.2
-deliverable 6) is **the field plumbing**. The §7.2 enforcement
+The scope here is **the field plumbing**. The enforcement
 consumer (refuse to operate on mismatch, auto-rebuild if absent)
-lands in a later phase that wires this into the indexer entry point.
+is wired in at the indexer entry point.
 """
 
 from __future__ import annotations
@@ -65,14 +63,14 @@ def skills_indexing_enabled() -> bool:
 
 # Bumped any time the on-disk schema (frontmatter fields, archive
 # layout, derivation rules) changes in a way that requires a reindex.
-# Phase 0 introduces walker + archive + slug + EntityPage v2 + decay
-# fields — they are all additive against v1 entries, but the indexer
-# now skips the top-level archive and that's enough to call it v2.
-# v3 (audit A4, 2026-05-28): P2.5 body column reverted. Existing v2
+# v2: added walker + archive + slug + EntityPage v2 + decay fields —
+# all additive against v1 entries, but the indexer now skips the
+# top-level archive and that's enough to call it v2.
+# v3: body column reverted. Existing v2
 # LanceDB tables carry an extra `body` field that the new code does
 # not write or read — the bump forces a clean rebuild so the tables
 # match the documented schema (8 columns, no body).
-# v4 (audit E9, 2026-05-28): entity page embedding gets v2.a
+# v4: entity page embedding gets v2.a
 # rendered_frontmatter (attributes/relations as prose between aliases
 # and body) so attribute queries hit the centroid. Pre-v4 centroids
 # omit this signal — a forced rebuild realigns the table.
@@ -85,9 +83,9 @@ def skills_indexing_enabled() -> bool:
 # third pass). Pre-v6 indexes carry no session rows — the bump forces
 # an auto-rebuild so existing workspaces pick them up.
 # v7 (porter-stemming): `memory_fts` tokenizer gains Porter stemming
-# (LoCoMo forensics 2026-06-10: write/writes/writing were distinct
-# tokens, so morphological variants never matched). Pre-v7 indexes
-# were tokenized without stemming — the bump forces a rebuild so
+# (write/writes/writing were distinct tokens without stemming, so
+# morphological variants never matched). Pre-v7 indexes were
+# tokenized without stemming — the bump forces a rebuild so
 # query-time and index-time tokenization agree.
 CURRENT_SCHEMA_VERSION: int = 7
 

@@ -1,7 +1,7 @@
 """Embedding provider abstraction for the memory subsystem.
 
-Phase 2.1 ships :class:`FastembedProvider`, a load-once-keep-loaded
-adapter over fastembed (ONNX runtime, in-process, no Ollama required).
+:class:`FastembedProvider` is a load-once-keep-loaded adapter over
+fastembed (ONNX runtime, in-process, no Ollama required).
 
 **Default model**: ``intfloat/multilingual-e5-small`` (~450 MB fp32 /
 ~115 MB int8, 384-dim, 100+ languages, MIT). Registered as a custom
@@ -9,8 +9,7 @@ fastembed model (see :func:`_register_custom_models`) because the
 fastembed default catalog doesn't include it. For heavy workloads
 needing top-tier multilingual recall, ``intfloat/multilingual-e5-large``
 (2.24 GB, 1024-dim) is the override; it ships in fastembed's catalog
-natively. See ``docs/internals/memory/02_indexing.md`` and the wizard in
-``durin/cli/onboard_wizard.py``.
+natively.
 
 **E5 prefix convention**: E5-family models were trained with asymmetric
 prompts — documents must be prefixed with ``passage: `` and queries

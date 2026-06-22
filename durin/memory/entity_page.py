@@ -1,8 +1,7 @@
 """Parser for entity pages: `memory/entities/<type>/<slug>.md`.
 
 Each page is a markdown document with a YAML frontmatter header followed
-by a free-form body. Per ``docs/internals/memory/01_data_and_entities.md`` §3.4 the
-**minimum required** frontmatter is:
+by a free-form body. The **minimum required** frontmatter is:
 
     type: <type>             # lowercase [a-z][a-z0-9_]*
     name: <display name>
@@ -42,8 +41,8 @@ _TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 # Known top-level fields the parser explicitly understands. Anything
 # outside this set lands in ``extra`` and is preserved on write.
-# v2 (doc memory §3.5) adds attributes / relations / provenance — first
-# class so callers don't have to fish them out of `extra`.
+# attributes / relations / provenance are first-class so callers don't
+# have to fish them out of `extra`.
 _KNOWN_FIELDS = frozenset(
     {
         "type",
@@ -58,10 +57,9 @@ _KNOWN_FIELDS = frozenset(
         # relation. Per-link provenance lives in provenance["derived_from"].
         "derived_from",
         "provenance",
-        # E19 (2026-05-28): explicit authorship parity with
-        # `MemoryEntry.author`. Pre-E19 entity pages had no author
-        # field, so the §4.6.1 promise of "auto-absorb skips user-
-        # authored pages" was arch-unsupported. Now first-class.
+        # Explicit authorship parity with `MemoryEntry.author`: entity
+        # pages that lack this field had no way to signal "auto-absorb
+        # skips user-authored pages". Now first-class.
         "author",
     }
 )
@@ -95,20 +93,18 @@ class EntityPage:
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
-    # v2 typed fields (doc memory §3.5). Empty defaults so v1 pages
-    # construct without surprises.
+    # Typed fields. Empty defaults so older pages construct without surprises.
     attributes: dict[str, Any] = field(default_factory=dict)
     relations: list[dict[str, Any]] = field(default_factory=list)
     # Source documents this entity was distilled from: `reference:<slug>` refs.
     derived_from: list[str] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
 
-    # E19 (2026-05-28): authorship parity with `MemoryEntry`. Pages
-    # default to ``user_authored`` so a hand-written page without
-    # the field is treated as user content (same convention as
-    # entries — safe default per §4.6.1 of doc 01). Dream and
-    # absorption set ``author="agent_created"`` when they write a
-    # page so auto-absorb knows it can modify it.
+    # Authorship parity with `MemoryEntry`. Pages default to
+    # ``user_authored`` so a hand-written page without the field is
+    # treated as user content (safe default). Dream and absorption set
+    # ``author="agent_created"`` when they write a page so auto-absorb
+    # knows it can modify it.
     author: str = "user_authored"
 
     # Emergent fields preserved as-is. The dream may add ``identifiers``,
@@ -344,7 +340,7 @@ class EntityPage:
             raise EntityPageError("name is required and must be non-empty")
         if not isinstance(self.aliases, list):
             raise EntityPageError("aliases must be a list")
-        # v2 write-side checks (doc memory §3.5 "Write-side constraints").
+        # Write-side constraints.
         if not isinstance(self.attributes, dict):
             raise EntityPageError("attributes must be a dict")
         if not isinstance(self.relations, list):
@@ -415,7 +411,6 @@ def _coerce_dt(value: Any) -> datetime | None:
 
 def _slugify(name: str) -> str:
     """Canonical slug derivation — delegates to :func:`entities.slugify_name`
-    which implements the full pipeline from doc memory §4.5
     (NFC + transliterate + lowercase + punct→_ + trim + truncate 64).
     """
     from durin.memory.entities import slugify_name

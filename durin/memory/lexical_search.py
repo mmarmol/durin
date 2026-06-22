@@ -1,6 +1,6 @@
 """Lexical retrieval — execute the query against the right FTS5 table.
 
-Per `docs/internals/memory/03_search_pipeline.md` §5: take a
+Take a
 :class:`durin.memory.query_router.RoutingDecision` and run it against
 the corresponding FTS5 path, returning a ranked list of URIs that
 the RRF fusion step consumes.
@@ -77,11 +77,11 @@ def lexical_search(
 
 
 def _quote_for_fts(query: str) -> str:
-    """Per `03_search_pipeline.md` §5.2: quote non-operator tokens so
+    """Quote non-operator tokens so
     special chars (``%``, ``*``, ``:``) don't confuse the parser.
 
-    Audit H10 (2026-05-29): respect agent-supplied double-quoted
-    phrases. A balanced ``"like this"`` substring in the query is
+    Respects agent-supplied double-quoted phrases. A balanced
+    ``"like this"`` substring in the query is
     preserved as a single FTS5 phrase token (words must appear
     adjacent and in order); the remaining tokens are quoted
     individually as before. An unbalanced quote falls back to

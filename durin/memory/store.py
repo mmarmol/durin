@@ -1,6 +1,6 @@
 """Write memory entries to ``memory/<class>/<id>.md``.
 
-Phase 1.6 of the memory subsystem. The agent (or any caller) hands a
+The agent (or any caller) hands a
 piece of distilled content; this module gives it a stable id, fills
 the multi-resolution frontmatter (auto-generating the headline if not
 supplied), tags the entry with the ambient provenance author, and
@@ -59,9 +59,8 @@ def store_memory(
             f"unknown class {class_name!r}; expected one of {MEMORY_CLASSES}"
         )
 
-    # Strict entity validation on the write path (per doc 14 §3.2 +
-    # doc 18 §4 vocabulario abierto): every entity ref must match
-    # the <type>:<value> shape. The vocabulary of types is open;
+    # Strict entity validation on the write path: every entity ref must
+    # match the <type>:<value> shape. The vocabulary of types is open;
     # only the form is checked.
     entities_list = list(entities or [])
     if entities_list:

@@ -1,13 +1,12 @@
 """Entity absorption: merge two entity pages into one canonical.
 
-Phase 5 per ``docs/19_implementation_plan.md`` §7. When the dream
-detects that two pages refer to the same identity (aliases overlap,
+When the dream detects that two pages refer to the same identity (aliases overlap,
 identifier overlap, or LLM judgment), one is absorbed into the other:
 
 - Canonical: receives merged aliases + identifiers + body section.
 - Absorbed: moved to ``memory/archive/entities/<type>/<absorbed_slug>.md``
   with frontmatter ``archived_into: <type>:<canonical_slug>`` for
-  traceability (doc memory §3.2 — archive is top-level, not nested).
+  traceability (archive is top-level, not nested).
 - Alias index drops the absorbed entity_ref (and any aliases unique
   to it become aliases of the canonical via the merged frontmatter).
 - Vector index drops the absorbed entity row.
@@ -16,8 +15,8 @@ Designed to be safe to re-run: if the absorbed file is already
 archived, ``absorb()`` is a no-op and returns the prior commit SHA
 when reconstructible (else None).
 
-This is **structural** absorption, not the temporal lifecycle from
-doc 18 §10 R6 — no entries are dropped, just remapped. The whole
+This is **structural** absorption, not the temporal lifecycle —
+no entries are dropped, just remapped. The whole
 archive subfolder remains git-tracked, navigable, and accessible via
 ``durin memory expand``.
 """
@@ -131,12 +130,11 @@ class EntityAbsorption:
         7. Refresh alias_index (canonical) and remove absorbed entity_ref.
         8. Remove absorbed from vector_index (if provided).
         9. Re-upsert canonical to vector_index with the merged body
-           (doc 25 §2.D + glm peer review C4: without this the
-           canonical's embedding still corresponds to its pre-merge
-           body, so semantic search returns stale results).
+           (without this the canonical's embedding still corresponds
+           to its pre-merge body, so semantic search returns stale results).
 
         ``judge_reasoning`` and ``judge_confidence`` are optional metadata
-        from the auto-absorb path (doc 25 §2.D). When provided they are
+        from the auto-absorb path. When provided they are
         recorded in the commit body + trailers so
         ``durin memory history`` shows why the merge happened. The
         ``reason`` field stays short (e.g. ``"auto"``) for the trailer;
@@ -153,8 +151,7 @@ class EntityAbsorption:
         if not canonical_path.exists():
             raise AbsorptionError(f"canonical page missing: {canonical_path}")
         if not absorbed_path.exists():
-            # Maybe already archived? Top-level archive layout per
-            # `docs/internals/memory/01_data_and_entities.md` §3.6:
+            # Maybe already archived? Top-level archive layout:
             #   memory/archive/entities/<type>/<slug>.md
             archive_target = (
                 self.workspace / "memory" / "archive" / "entities"
@@ -174,7 +171,7 @@ class EntityAbsorption:
                 f"absorbed_parsed={absorbed_page is not None})"
             )
 
-        # 2-6 (G3 fix, design §2.5): compute the merge as in-memory content
+        # Compute the merge as in-memory content
         # (canonical merged + absorbed archived) and commit all three file ops
         # in ONE plumbing+CAS commit — NO porcelain working-tree staging. This
         # makes the refine resilient to the ref-lock contention memory_writer's
@@ -219,14 +216,14 @@ class EntityAbsorption:
         )
 
         # 7: alias_index — refresh canonical, drop absorbed entity_ref
-        # In-memory only (per doc 23 T1.4): no save() to disk.
+        # In-memory only: no save() to disk.
         idx = self._get_alias_index()
         idx.refresh_for(merged, slug=canonical_slug)
         idx.remove(absorbed)
 
         # 8 + 9: vector_index — drop absorbed page row AND re-upsert
-        # canonical with the merged body (glm peer review C4 fix). The
-        # canonical's content changed in step 2-3; without re-upsert the
+        # canonical with the merged body. The canonical's content changed
+        # in step 2-3; without re-upsert the
         # embedding still corresponds to the pre-merge body and
         # `memory_search` returns stale results. Both ops best-effort:
         # markdown is the source of truth, vectors are derivable.
@@ -262,8 +259,8 @@ class EntityAbsorption:
 
     def _get_alias_index(self) -> AliasIndex:
         # Injected index (tests) takes precedence; otherwise resolve the
-        # workspace-shared instance from durin.memory.aliases_cache
-        # (doc 25 §2.C). The shared map is mutated in place by refresh_for
+        # workspace-shared instance from durin.memory.aliases_cache.
+        # The shared map is mutated in place by refresh_for
         # and remove during absorb(), so memory_search and the refine pass
         # see those writes immediately.
         if self._alias_index is not None:
@@ -357,12 +354,12 @@ def _merge_pages(
             merged_relations.append(dict(r))
 
     # attributes: union; the canonical (survivor) wins on a key conflict.
-    # (User-managed pages are never merged — Phase 4 skips them — so this can't
+    # (User-managed pages are never merged — the agent skips user-authored pages — so this can't
     # clobber a user attribute.)
     merged_attributes = dict(absorbed.attributes)
     merged_attributes.update(canonical.attributes)
 
-    # derived_from (P2): union+dedup, canonical order first. The field is NOT
+    # derived_from: union+dedup, canonical order first. The field is NOT
     # carried via `extra` (it's a known kwarg), so it must be passed explicitly
     # to the constructor below or it would be silently dropped.
     merged_derived_from = list(canonical.derived_from or [])

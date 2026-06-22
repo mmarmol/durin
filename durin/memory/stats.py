@@ -2,9 +2,9 @@
 
 Reads JSONL events from ``~/.cache/durin/telemetry/`` and walks the
 workspace filesystem for ground-truth counts. Read-only — never mutates
-state. Per ``docs/internals/memory/07_telemetry_and_observability.md`` §10 this is the
-prerequisite for the §2.A / §2.D / §2.F / §2.G gates: each one is an
-observable metric and without aggregation those gates are faith-based.
+state. This is the prerequisite for the feature activation gates: each
+is an observable metric and without aggregation those gates are
+faith-based.
 
 Used by ``durin memory stats`` (see ``cli/memory_cmd.py``).
 """
@@ -211,9 +211,9 @@ def _scan_filesystem(workspace: Path, stats: MemoryStats) -> None:
     for md in walk_class(workspace, "entities"):
         stats.entity_pages_on_disk += 1
 
-    # Archived entity pages live top-level at memory/archive/entities/
-    # (Phase 0 deliverable 5). Tracked separately so the §2.D gate
-    # metric ("duplicates absorbed") is observable from disk too.
+    # Archived entity pages live top-level at memory/archive/entities/.
+    # Tracked separately so the "duplicates absorbed" metric is
+    # observable from disk too.
     archive_entities_root = memory_root / "archive" / "entities"
     if archive_entities_root.is_dir():
         for md in archive_entities_root.rglob("*.md"):
