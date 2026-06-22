@@ -47,13 +47,42 @@ from durin.utils.tool_result_validation import validate_tool_result_blocks
 
 _DEFAULT_ERROR_MESSAGE = "Sorry, I encountered an error calling the AI model."
 _PERSISTED_MODEL_ERROR_PLACEHOLDER = "[Assistant reply unavailable due to model error.]"
+_PERSISTED_OVERFLOW_PLACEHOLDER = (
+    "[Turn skipped before the model ran: the prompt exceeded the input budget "
+    "even after emergency trimming. The next turn retries with a compacted context.]"
+)
 _MAX_EMPTY_RETRIES = 2
 _MAX_LENGTH_RECOVERIES = 3
 _MAX_INJECTIONS_PER_TURN = 3
 _MAX_INJECTION_CYCLES = 5
 _SNIP_SAFETY_BUFFER = 1024
+# Cap on how much output headroom is *reserved* from the input budget. A
+# model's configured ``max_tokens`` is a ceiling on what a turn MAY emit, not
+# what every turn does emit; reserving the full ceiling (e.g. 128k on a 202k
+# window) collapses the usable input budget. We reserve at most this many
+# tokens for output when sizing the input, then send a dynamic ``max_tokens``
+# that fills whatever room the prompt actually leaves (up to the ceiling).
+_MAX_OUTPUT_RESERVATION = 32_768
+# Emergency-trim floor: an oversized tool result is shrunk no smaller than
+# this many characters (plus a marker) before we give up on a turn.
+_EMERGENCY_TRIM_FLOOR_CHARS = 800
+_EMERGENCY_TRIM_MARKER = "\n…[truncated: context budget]"
+_EMERGENCY_TRIM_MAX_PASSES = 64
 _MICROCOMPACT_KEEP_RECENT = 10
 _MICROCOMPACT_MIN_CHARS = 500
+
+
+def _output_reservation(max_output: int) -> int:
+    """Tokens to hold back for output when sizing the input budget.
+
+    Capped at ``_MAX_OUTPUT_RESERVATION`` so a large configured output
+    ceiling does not collapse the usable input budget. Never below 1.
+    """
+    try:
+        ceiling = int(max_output)
+    except (TypeError, ValueError):
+        ceiling = 4096
+    return min(max(1, ceiling), _MAX_OUTPUT_RESERVATION)
 
 # Tier 1 (OpenClaw-inspired): idle-timeout circuit breaker.
 #
@@ -285,6 +314,10 @@ class AgentRunResult:
     error: str | None = None
     tool_events: list[dict[str, str]] = field(default_factory=list)
     had_injections: bool = False
+    # Total wall-clock spent in provider/model round-trips across all
+    # iterations of this run. The loop subtracts this (and tool durations)
+    # from the turn wall-clock to attribute "local processing" time.
+    llm_ms: float = 0.0
 
 
 class AgentRunner:
@@ -450,6 +483,8 @@ class AgentRunner:
         # ``stop_reason="circuit_breaker_idle_timeout"``.
         consecutive_idle_timeouts = 0
         max_idle_timeouts = _max_consecutive_idle_timeouts()
+        # Accumulates provider/model round-trip wall-clock across iterations.
+        total_llm_ms = 0.0
 
         # 1A — Loop-detection state. Tracks signatures of tool calls that already
         # failed in this turn. We block repeats to break model fixation. Scope is
@@ -527,57 +562,86 @@ class AgentRunner:
                     messages_for_model = messages
 
             # Mid-turn precheck (OpenClaw-inspired Tier 2 A2). After the
-            # sanitize pipeline ran, estimate whether the prompt we're
-            # about to send still fits. ``_snip_history`` trims from the
-            # head but ``find_legal_message_start`` may force-keep
-            # messages that still exceed the calculated budget; if a
-            # single tool result late in the conversation is huge, even
-            # an aggressive trim won't bring us back under the wall. Fail
-            # the turn here with a distinct stop_reason so callers can
-            # distinguish "we hit context overflow before the model even
-            # got a chance" from "model errored". A1 will re-base the
-            # context for the next turn.
-            mid_turn_decision = self._mid_turn_precheck(spec, messages_for_model, provider)
-            if mid_turn_decision is not None:
-                estimate_tokens, budget_tokens = mid_turn_decision
-                final_content = (
-                    "Error: prompt overflow before LLM call "
-                    f"(estimated {estimate_tokens} tokens, budget {budget_tokens}). "
-                    "The next turn will retry with a freshly-compacted context."
-                )
-                stop_reason = "mid_turn_precheck_overflow"
-                error = final_content
-                self._append_model_error_placeholder(messages)
-                context = AgentHookContext(iteration=iteration, messages=messages)
-                context.final_content = final_content
-                context.error = error
-                context.stop_reason = stop_reason
-                _mt_logger = current_telemetry()
-                if _mt_logger is not None:
-                    with suppress(Exception):
-                        _mt_logger.log("mid_turn_precheck.overflow", {
-                            "iteration": iteration,
-                            "session_key": spec.session_key,
-                            "estimated_tokens": estimate_tokens,
-                            "budget_tokens": budget_tokens,
-                        })
-                logger.warning(
-                    "Mid-turn precheck overflow on turn {} for {}: "
-                    "estimated={} tokens, budget={} tokens",
-                    iteration,
-                    spec.session_key or "default",
-                    estimate_tokens,
-                    budget_tokens,
-                )
-                await hook.after_iteration(context)
-                break
+            # sanitize pipeline ran, estimate whether the prompt we're about
+            # to send still fits. ``_snip_history`` trims from the head but
+            # ``find_legal_message_start`` may force-keep messages that still
+            # exceed the budget; a single oversized tool result late in the
+            # conversation can survive snipping. The reused estimate also
+            # sizes the dynamic output budget below, so a high ``max_tokens``
+            # ceiling never starves input.
+            effective_max_tokens: int | None = None
+            budget_decision = self._estimate_and_budget(spec, messages_for_model, provider)
+            if budget_decision is not None:
+                estimate_tokens, budget_tokens = budget_decision
+                if estimate_tokens > budget_tokens:
+                    # B: emergency-trim oversized tool results on the
+                    # model-facing copy and proceed when that brings the
+                    # prompt under budget — instead of silently dropping the
+                    # in-flight request. The canonical history is untouched.
+                    trimmed, fit, trimmed_estimate = self._emergency_trim_for_budget(
+                        spec, messages_for_model, budget_tokens, provider,
+                    )
+                    if fit:
+                        messages_for_model = trimmed
+                        estimate_tokens = trimmed_estimate if trimmed_estimate is not None else budget_tokens
+                        _rec_logger = current_telemetry()
+                        if _rec_logger is not None:
+                            with suppress(Exception):
+                                _rec_logger.log("mid_turn_precheck.recovered", {
+                                    "iteration": iteration,
+                                    "session_key": spec.session_key,
+                                    "estimated_tokens": estimate_tokens,
+                                    "budget_tokens": budget_tokens,
+                                })
+                    else:
+                        # Genuinely unrecoverable: abort before the LLM call
+                        # with a distinct stop_reason and an overflow-specific
+                        # placeholder (NOT "model error"). A1 re-bases the
+                        # context for the next turn.
+                        final_content = (
+                            "Error: prompt overflow before LLM call "
+                            f"(estimated {estimate_tokens} tokens, budget {budget_tokens}). "
+                            "The next turn will retry with a freshly-compacted context."
+                        )
+                        stop_reason = "mid_turn_precheck_overflow"
+                        error = final_content
+                        self._append_overflow_placeholder(messages)
+                        context = AgentHookContext(iteration=iteration, messages=messages)
+                        context.final_content = final_content
+                        context.error = error
+                        context.stop_reason = stop_reason
+                        _mt_logger = current_telemetry()
+                        if _mt_logger is not None:
+                            with suppress(Exception):
+                                _mt_logger.log("mid_turn_precheck.overflow", {
+                                    "iteration": iteration,
+                                    "session_key": spec.session_key,
+                                    "estimated_tokens": estimate_tokens,
+                                    "budget_tokens": budget_tokens,
+                                })
+                        logger.warning(
+                            "Mid-turn precheck overflow on turn {} for {}: "
+                            "estimated={} tokens, budget={} tokens",
+                            iteration,
+                            spec.session_key or "default",
+                            estimate_tokens,
+                            budget_tokens,
+                        )
+                        await hook.after_iteration(context)
+                        break
+                effective_max_tokens = self._effective_max_tokens(spec, estimate_tokens, provider)
 
             context = AgentHookContext(
                 iteration=iteration,
                 messages=messages,
             )
             await hook.before_iteration(context)
-            response = await self._request_model(spec, messages_for_model, hook, context, provider)
+            _llm_started = time.monotonic()
+            response = await self._request_model(
+                spec, messages_for_model, hook, context, provider,
+                max_tokens_override=effective_max_tokens,
+            )
+            total_llm_ms += (time.monotonic() - _llm_started) * 1000.0
             raw_usage = self._usage_dict(response.usage)
             context.response = response
             context.usage = dict(raw_usage)
@@ -1093,7 +1157,73 @@ class AgentRunner:
             error=error,
             tool_events=tool_events,
             had_injections=had_injections,
+            llm_ms=total_llm_ms,
         )
+
+    @staticmethod
+    def _resolve_max_output(spec: AgentRunSpec, provider: LLMProvider | None) -> int:
+        """The configured output ceiling for this run (max_tokens), falling
+        back to the provider's generation default when the spec leaves it
+        unset."""
+        if isinstance(spec.max_tokens, int):
+            return spec.max_tokens
+        provider_max = getattr(getattr(provider, "generation", None), "max_tokens", 4096)
+        return provider_max if isinstance(provider_max, int) else 4096
+
+    def _input_budget(self, spec: AgentRunSpec, provider: LLMProvider | None) -> int | None:
+        """Input-token budget: ``context_block_limit`` when set, else the
+        context window minus a *capped* output reservation and the safety
+        buffer. Returns ``None`` when no window is configured.
+
+        The reservation is capped at ``_MAX_OUTPUT_RESERVATION`` so a large
+        configured ``max_tokens`` ceiling does not starve the input — the
+        ceiling is still honoured for output via the dynamic ``max_tokens``
+        sent on the request (see ``_effective_max_tokens``).
+        """
+        if not spec.context_window_tokens:
+            return None
+        if spec.context_block_limit:
+            return spec.context_block_limit
+        reservation = _output_reservation(self._resolve_max_output(spec, provider))
+        return spec.context_window_tokens - reservation - _SNIP_SAFETY_BUFFER
+
+    def _estimate_and_budget(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+        provider: LLMProvider | None = None,
+    ) -> tuple[int, int] | None:
+        """Estimate the post-sanitize prompt size and return
+        ``(estimated_tokens, budget_tokens)``.
+
+        Returns ``None`` when no budget can be computed (no window, empty
+        message list, non-positive budget, or estimator failure) — callers
+        then proceed without a precheck. Unlike ``_mid_turn_precheck`` this
+        returns the estimate *whether or not* it fits, so the caller can
+        reuse it to size the dynamic output budget without re-estimating.
+        """
+        _provider = provider if provider is not None else self.provider
+        if not messages:
+            return None
+        budget = self._input_budget(spec, _provider)
+        if budget is None or budget <= 0:
+            return None
+        try:
+            estimate, _ = estimate_prompt_tokens_chain(
+                _provider,
+                spec.model,
+                messages,
+                self._active_tool_definitions(spec),
+            )
+        except Exception:
+            # Token estimation is best-effort; never block a turn on the
+            # estimator failing. Let the provider's own 400 handle it.
+            logger.exception(
+                "Mid-turn precheck estimation failed for {}; skipping",
+                spec.session_key or "default",
+            )
+            return None
+        return estimate, budget
 
     def _mid_turn_precheck(
         self,
@@ -1115,36 +1245,123 @@ class AgentRunner:
         the caller gets a distinct ``mid_turn_precheck_overflow`` stop_reason
         instead of a generic provider error.
         """
-        _provider = provider if provider is not None else self.provider
-        if not spec.context_window_tokens or not messages:
+        decision = self._estimate_and_budget(spec, messages, provider)
+        if decision is None:
             return None
+        estimate, budget = decision
+        if estimate <= budget:
+            return None
+        return estimate, budget
+
+    def _effective_max_tokens(
+        self,
+        spec: AgentRunSpec,
+        estimate: int,
+        provider: LLMProvider | None = None,
+    ) -> int | None:
+        """Dynamic output cap to send on a request: the output ceiling clamped
+        to the room the prompt actually leaves in the window.
+
+        The ceiling is ``spec.max_tokens`` when set, else the provider's
+        ``generation.max_tokens`` — because the main loop leaves
+        ``spec.max_tokens`` unset and the real output ceiling lives on the
+        provider. Returns ``None`` only when no window is known (then the
+        caller omits ``max_tokens`` and the provider uses its own default).
+
+        When a window is known the result never lets ``estimate + max_tokens``
+        exceed ``window - buffer`` — so the full ceiling is sent only when
+        there is room, and it shrinks to fit otherwise. This is what keeps the
+        capped *input* reservation honest: a large input borrows from the
+        output headroom rather than overflowing the window.
+        """
+        if not spec.context_window_tokens:
+            return None
+        ceiling = self._resolve_max_output(spec, provider if provider is not None else self.provider)
+        room = spec.context_window_tokens - estimate - _SNIP_SAFETY_BUFFER
+        return max(1, min(ceiling, room))
+
+    def _emergency_trim_for_budget(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+        budget: int,
+        provider: LLMProvider | None = None,
+    ) -> tuple[list[dict[str, Any]], bool, int | None]:
+        """Last-resort recovery for a prompt that overflows after sanitize.
+
+        Works on a *copy* (the canonical history is never mutated): the
+        largest string-valued tool result is truncated, then the prompt is
+        re-estimated, repeating until it fits or nothing more can be
+        trimmed. Truncating content (rather than dropping messages) keeps
+        role-alternation intact.
+
+        Returns ``(trimmed_messages, fit, new_estimate)``. ``fit`` is
+        ``True`` only when the trimmed prompt is at or under ``budget``;
+        ``new_estimate`` is the estimate of the returned list (``None`` when
+        there was nothing to trim).
+        """
+        _provider = provider if provider is not None else self.provider
+
+        def _trimmable(msg: dict[str, Any]) -> bool:
+            return (
+                msg.get("role") == "tool"
+                and isinstance(msg.get("content"), str)
+                and len(msg["content"]) > _EMERGENCY_TRIM_FLOOR_CHARS + len(_EMERGENCY_TRIM_MARKER)
+            )
+
+        if not any(_trimmable(m) for m in messages):
+            return messages, False, None
+
+        work = [dict(m) for m in messages]
+        new_estimate: int | None = None
+        for _ in range(_EMERGENCY_TRIM_MAX_PASSES):
+            decision = self._estimate_and_budget_for(work, spec, _provider)
+            if decision is None:
+                break
+            new_estimate = decision
+            if new_estimate <= budget:
+                return work, True, new_estimate
+            # Truncate the single largest trimmable tool result by half,
+            # flooring its length so we don't loop forever on a result that
+            # is already small.
+            largest_idx = -1
+            largest_len = 0
+            for idx, msg in enumerate(work):
+                if _trimmable(msg) and len(msg["content"]) > largest_len:
+                    largest_len = len(msg["content"])
+                    largest_idx = idx
+            if largest_idx < 0:
+                break
+            content = work[largest_idx]["content"]
+            keep = max(_EMERGENCY_TRIM_FLOOR_CHARS, len(content) // 2)
+            work[largest_idx] = dict(work[largest_idx])
+            work[largest_idx]["content"] = content[:keep] + _EMERGENCY_TRIM_MARKER
+        # Final re-estimate after the loop's last truncation.
+        decision = self._estimate_and_budget_for(work, spec, _provider)
+        if decision is not None:
+            new_estimate = decision
+            if new_estimate <= budget:
+                return work, True, new_estimate
+        return work, False, new_estimate
+
+    def _estimate_and_budget_for(
+        self,
+        messages: list[dict[str, Any]],
+        spec: AgentRunSpec,
+        provider: LLMProvider | None,
+    ) -> int | None:
+        """Estimate the prompt size for ``messages`` (best-effort, returns
+        ``None`` on estimator failure)."""
         try:
-            provider_max = getattr(getattr(_provider, "generation", None), "max_tokens", 4096)
-            max_output = spec.max_tokens if isinstance(spec.max_tokens, int) else (
-                provider_max if isinstance(provider_max, int) else 4096
-            )
-            budget = spec.context_block_limit or (
-                spec.context_window_tokens - max_output - _SNIP_SAFETY_BUFFER
-            )
-            if budget <= 0:
-                return None
             estimate, _ = estimate_prompt_tokens_chain(
-                _provider,
+                provider,
                 spec.model,
                 messages,
                 self._active_tool_definitions(spec),
             )
         except Exception:
-            # Token estimation is best-effort; never block a turn on the
-            # estimator failing. Let the provider's own 400 handle it.
-            logger.exception(
-                "Mid-turn precheck estimation failed for {}; skipping",
-                spec.session_key or "default",
-            )
             return None
-        if estimate <= budget:
-            return None
-        return estimate, budget
+        return estimate
 
     @staticmethod
     def _active_tool_definitions(spec: AgentRunSpec) -> list[dict[str, Any]]:
@@ -1178,6 +1395,7 @@ class AgentRunner:
         messages: list[dict[str, Any]],
         *,
         tools: list[dict[str, Any]] | None,
+        max_tokens_override: int | None = None,
     ) -> dict[str, Any]:
         # Apply the optional context_transform hook (pi-style). The hook
         # gets a shallow copy of the message list so it can mutate
@@ -1221,7 +1439,22 @@ class AgentRunner:
         }
         if spec.temperature is not None:
             kwargs["temperature"] = spec.temperature
-        if spec.max_tokens is not None:
+        if max_tokens_override is not None:
+            # Dynamic output budget reused from the precheck estimate: fills
+            # the room the prompt actually left, up to the ceiling. Applied
+            # even when ``spec.max_tokens`` is unset (the main-loop case),
+            # overriding the provider's generation default so a capped input
+            # reservation can't let input+output overflow the window.
+            kwargs["max_tokens"] = max_tokens_override
+        elif spec.context_window_tokens:
+            # No estimate available (finalization-retry / direct callers) but
+            # a window is known: send a conservative window-safe cap. Input
+            # already fits under ``window - reservation - buffer``, so
+            # ``_MAX_OUTPUT_RESERVATION`` of output can never overflow.
+            ceiling = spec.max_tokens if isinstance(spec.max_tokens, int) else _MAX_OUTPUT_RESERVATION
+            kwargs["max_tokens"] = min(ceiling, _MAX_OUTPUT_RESERVATION)
+        elif spec.max_tokens is not None:
+            # No window to protect — honour the configured ceiling verbatim.
             kwargs["max_tokens"] = spec.max_tokens
         if spec.reasoning_effort is not None:
             kwargs["reasoning_effort"] = spec.reasoning_effort
@@ -1301,6 +1534,8 @@ class AgentRunner:
         hook: AgentHook,
         context: AgentHookContext,
         provider: LLMProvider | None = None,
+        *,
+        max_tokens_override: int | None = None,
     ):
         _provider = provider if provider is not None else self.provider
         timeout_s: float | None = spec.llm_timeout_s
@@ -1320,6 +1555,7 @@ class AgentRunner:
             spec,
             messages,
             tools=self._active_tool_definitions(spec),
+            max_tokens_override=max_tokens_override,
         )
         wants_streaming = hook.wants_streaming()
         wants_progress_streaming = (
@@ -1802,6 +2038,18 @@ class AgentRunner:
             return
         messages.append(build_assistant_message(_PERSISTED_MODEL_ERROR_PLACEHOLDER))
 
+    @staticmethod
+    def _append_overflow_placeholder(messages: list[dict[str, Any]]) -> None:
+        """Persist an overflow-specific assistant placeholder.
+
+        Distinct from ``_append_model_error_placeholder`` so the transcript
+        (and any downstream reader) can tell "durin aborted the turn because
+        the prompt exceeded the input budget" apart from "the LLM errored".
+        """
+        if messages and messages[-1].get("role") == "assistant" and not messages[-1].get("tool_calls"):
+            return
+        messages.append(build_assistant_message(_PERSISTED_OVERFLOW_PLACEHOLDER))
+
     def _normalize_tool_result(
         self,
         spec: AgentRunSpec,
@@ -2139,14 +2387,8 @@ class AgentRunner:
         if not messages or not spec.context_window_tokens:
             return messages
 
-        provider_max_tokens = getattr(getattr(_provider, "generation", None), "max_tokens", 4096)
-        max_output = spec.max_tokens if isinstance(spec.max_tokens, int) else (
-            provider_max_tokens if isinstance(provider_max_tokens, int) else 4096
-        )
-        budget = spec.context_block_limit or (
-            spec.context_window_tokens - max_output - _SNIP_SAFETY_BUFFER
-        )
-        if budget <= 0:
+        budget = self._input_budget(spec, _provider)
+        if budget is None or budget <= 0:
             return messages
 
         estimate, _ = estimate_prompt_tokens_chain(

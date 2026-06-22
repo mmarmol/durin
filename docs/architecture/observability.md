@@ -34,6 +34,7 @@ Wiring points:
 
 - **Provider rate limits**: `provider.set_telemetry()` is called in `AgentLoop.from_config`; the provider emits `provider.rate_limit{,_exhausted}` events directly.
 - **Per-task tool events**: `AgentLoop._run_agent_loop` calls `bind_telemetry(get_session_logger(session_key))` before invoking the runner and `reset_telemetry(token)` in the finally block.
+- **Per-turn latency breakdown**: at the end of each turn the dispatch loop emits `turn.latency` with `total_ms` split into `llm_ms` (provider round-trips, accumulated in the runner and handed off via `_pending_llm_ms`), `tools_ms` (summed `tool_events` durations), and `local_ms` (everything else — context build, memory, sanitize, consolidation, save/respond), plus per-state-machine `states` durations. Answers "where did the turn's wall-clock go: the model, tools, or local processing?". Emitted via `get_session_logger` directly because the per-run telemetry binding is already torn down by the time the breakdown is computed.
 
 Tool-level instrumentation:
 

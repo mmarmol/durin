@@ -1163,20 +1163,23 @@ class Config(BaseSettings):
     def _resolve_model_params(self, provider: str, model: str):
         """Return ``(entry, caps)`` for a ``(provider, model)``: the user's
         ``ModelEntry`` override (if any) and the catalog capabilities (if any).
-        Skips the catalog for codex (no caps there, and it is a network call)."""
+
+        Codex models inherit the matching ``openai`` caps via
+        ``provider_models('openai_codex')``; the lookup uses the static codex
+        slug fallback (no token → no network), so it is safe to consult here.
+        """
         entry = None
         caps = None
         if provider and provider != "auto":
             pc = getattr(self.providers, provider, None)
             if pc is not None:
                 entry = (getattr(pc, "models", None) or {}).get(model)
-            if provider not in ("openai_codex", "openai-codex"):
-                try:
-                    from durin.providers.provider_catalog import catalog_model_caps
+            try:
+                from durin.providers.provider_catalog import catalog_model_caps
 
-                    caps = catalog_model_caps(provider, model)
-                except Exception:  # noqa: BLE001
-                    caps = None
+                caps = catalog_model_caps(provider, model)
+            except Exception:  # noqa: BLE001
+                caps = None
         return entry, caps
 
     def resolve_default_preset(self) -> ModelPresetConfig:

@@ -58,6 +58,39 @@ class MidTurnPrecheckOverflowEvent(TypedDict):
     budget_tokens: int
 
 
+class MidTurnPrecheckRecoveredEvent(TypedDict):
+    """Post-sanitize prompt was over budget, but emergency-trimming the
+    largest tool results brought it back under the wall — the turn proceeded
+    instead of aborting."""
+    iteration: int
+    session_key: NotRequired[str | None]
+    estimated_tokens: int
+    budget_tokens: int
+
+
+class OverflowRetryForcedConsolidationEvent(TypedDict):
+    """An iteration-0 overflow (before any tool ran) forced a fresh
+    consolidation + context rebuild, then re-ran the turn once."""
+    session_key: NotRequired[str | None]
+    attempt: int
+
+
+class TurnLatencyEvent(TypedDict):
+    """Per-turn wall-clock breakdown so dashboards can split where the time
+    went: the model round-trips (``llm_ms``), tool execution (``tools_ms``),
+    and everything else — context build, memory, sanitize, consolidation,
+    save/respond — as ``local_ms``. ``states`` carries the per-state-machine
+    durations (RESTORE/COMPACT/BUILD/RUN/SAVE/RESPOND)."""
+    session_key: NotRequired[str | None]
+    turn_id: str
+    total_ms: float
+    llm_ms: float
+    tools_ms: float
+    local_ms: float
+    states: dict[str, float]
+    stop_reason: NotRequired[str]
+
+
 class UnknownToolLoopGuardEvent(TypedDict):
     """Model called an unknown tool name more than ``threshold`` times
     within one turn (Tier 2 B2)."""
@@ -1175,6 +1208,9 @@ EVENTS: dict[str, type] = {
     # Loop control
     "circuit_breaker.idle_timeout": CircuitBreakerIdleTimeoutEvent,
     "mid_turn_precheck.overflow": MidTurnPrecheckOverflowEvent,
+    "mid_turn_precheck.recovered": MidTurnPrecheckRecoveredEvent,
+    "overflow_retry.forced_consolidation": OverflowRetryForcedConsolidationEvent,
+    "turn.latency": TurnLatencyEvent,
     "unknown_tool.loop_guard": UnknownToolLoopGuardEvent,
     "post_compaction_loop.tripped": PostCompactionLoopTrippedEvent,
     "turn_budget.enforced": TurnBudgetEnforcedEvent,
@@ -1275,6 +1311,9 @@ __all__ = [
     # Loop control
     "CircuitBreakerIdleTimeoutEvent",
     "MidTurnPrecheckOverflowEvent",
+    "MidTurnPrecheckRecoveredEvent",
+    "OverflowRetryForcedConsolidationEvent",
+    "TurnLatencyEvent",
     "UnknownToolLoopGuardEvent",
     "PostCompactionLoopTrippedEvent",
     "TurnBudgetEnforcedEvent",
