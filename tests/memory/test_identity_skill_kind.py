@@ -5,7 +5,7 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
 _IDENTITY = _ROOT / "durin" / "templates" / "agent" / "identity.md"
-_DOC06 = _ROOT / "docs" / "architecture" / "memory" / "06_prompts_and_instructions.md"
+_DOC06 = _ROOT / "docs" / "internals" / "memory" / "06_prompts_and_instructions.md"
 _SKILLS_SECTION = _ROOT / "durin" / "templates" / "agent" / "skills_section.md"
 
 def _norm(p: Path) -> str:

@@ -20,7 +20,100 @@ Three principles shape every LLM-facing string in the memory system.
 
 ---
 
-## 3. Diagram
+## 3. Memory tool descriptions
+
+The blocks below are the canonical LLM-facing tool descriptions, kept in sync with code by `tests/memory/test_tool_description_sync.py`. Each tool class exposes a `description` property emitted as `function.description` in the OpenAI function-calling spec — the field the LLM reads when selecting a tool. Skills are a searchable memory pseudo-class surfaced via `memory_search kind=skill`; a matching `=== SKILL: <name> ===` result block contains steps to follow as a procedure, not facts to cite.
+
+### 3.1 `memory_search`
+
+```
+Search durin's memory for content relevant to your question. Searches across canonical entity pages, recent observations, session summaries, and ingested documents in one call.
+
+Usage:
+- For most queries, use a single call with a natural-language `query`.
+- For multi-part questions, issue 2-3 calls with different phrasings rather than one long query.
+- For literal-match queries (emails, IDs, URLs), pass the literal string in `keywords` in addition to a natural-language `query`. This biases the search toward exact matches.
+- For exact phrase matching, wrap the phrase in double quotes inside `query` — e.g. `"shooting percentage" basketball` requires the two words to appear adjacent and in order, while `basketball` matches anywhere. Words outside quotes stay as loose tokens. An unbalanced quote is treated as a typo and discarded.
+- Use `level: "cold"` only when you need full body content (verbose; consumes many tokens). `warm` (default) returns headline + summary, enough for most tasks.
+- `limit` defaults to 10. Reduce to 3-5 for chat-style short answers, raise to 20-30 for audit / investigative queries that need to see every relevant hit. Hard cap 50.
+
+Results come pre-sectioned with structural markers:
+- `=== SKILL: <name> ===` — a matching procedure; these are steps to FOLLOW, not facts to cite
+- `=== CANONICAL: <uri> ===` — consolidated entity pages (durable knowledge)
+- `=== FRAGMENT: <path> ===` — recent observations not yet consolidated
+- `=== SESSION: <id> ===` — conversation summaries
+- `=== INGESTED: <id> ===` — chunks of documents the user has loaded
+
+Each marker also carries a completeness qualifier:
+- `(complete)` — the body shown IS the full entry; do NOT call memory_drill on this uri, it returns the same text.
+- `(preview N/M)` — N chars shown, M chars exist; call memory_drill on this uri only if you need the remaining body.
+Markers without a completeness qualifier are rare (legacy / lexical-only hits) — use judgment.
+
+When sources disagree, more recent fragments may reflect updates that have not yet been consolidated into the canonical entity page. Use timestamps in the markers to reason about recency.
+
+State the source of any fact you cite (uri or section marker) in parentheses. Do not claim facts that are not in the search results.
+```
+
+### 3.2 `memory_store`
+
+```
+Persist an observation to memory. Use this when you learn a fact the user is likely to need again — preferences, decisions, facts about people/projects/ tasks, etc.
+
+Storage class (default: episodic):
+- `episodic`: working memory; short atomic observation. Most uses.
+- `stable`: durable, identity-level. Use sparingly — only when the user has explicitly said "remember this" or the fact is clearly identity-level.
+- `corpus`: chunks of inline reference text. For files on disk use memory_ingest instead — it preserves the original artifact and handles chunking.
+
+Always populate `entities` with the URIs this observation mentions (format: `<type>:<value>`, e.g., `person:marcelo`, `project:durin`). This enables entity-aware retrieval later.
+
+Keep `headline` short and specific — it can be omitted and the system will auto-generate one from the first ~10 words of `content`. `content` is the full body of the observation; don't truncate.
+
+If the user is restating something already known, do NOT call this tool — it creates duplicates. The Dream consolidation process will eventually fold duplicates but in the meantime they pollute results. A near-duplicate (cosine ≥ 0.95 of an existing entry) returns a warning instead of persisting; pass `force=true` only when you intentionally want to re-affirm an existing fact.
+```
+
+### 3.3 `memory_ingest`
+
+```
+Add a local document (markdown or plain text) to durin's memory as a REFERENCE — coherent source material the user wants kept whole: research notes, transcripts, technical specs, exported pages, markdown books, etc.
+
+`path` is the absolute or workspace-relative path to the file. The original is preserved verbatim and the document is indexed for retrieval. Re-ingesting the same file is idempotent — the id is a hash of (filename + content). The result includes a `reference:<slug>`; when you then author an entity distilled from this document, pass that ref in `memory_upsert_entity(derived_from=[...])` so the entity links back to its source.
+
+For web content, use `web_fetch(url=...)` first to get clean markdown, then `memory_ingest` on the saved file. For a fact about a *thing* (a person, company, product, topic…), use `memory_upsert_entity` instead — `memory_ingest` is for whole documents, not individual facts.
+```
+
+### 3.4 `memory_drill`
+
+```
+Read the full content of one or more memory items by URI.
+
+Pass either ``uri`` (single string) for one item, or ``uris`` (array, up to 10) for multiple items in one round-trip. With ``uris`` the response carries one ``{uri, content}`` record per request in the same order, plus an ``error`` field on entries that failed — individual failures don't abort the batch.
+
+Use this ONLY when the corresponding memory_search result block is marked ``preview N/M`` in its section header — N chars were shown, M chars exist — i.e. more body is available beyond what you already have. Drill in that case to fetch the rest.
+
+Do NOT drill when the block is marked ``complete``: the search already showed you the entire body and drill will return the same text, wasting tokens and an LLM round-trip. Blocks without an explicit completeness qualifier (rare; legacy / lexical-only hits) are best-guess — drill only if the visible content seems truncated.
+
+Prefer the ``uris`` form whenever 2+ URIs from one search all need follow-up. Drill on URIs never expands the candidate set — use memory_search to find new candidates.
+```
+
+### 3.5 `memory_upsert_entity`
+
+```
+Author or update an entity (a person, company, product, topic, place, etc.) you have learned a fact about. Provide `ref` as `<type>:<slug>` (e.g. company:mxhero, person:marcelo), the display `name`, any `aliases`, `relations` to other entities ({to: '<type>:<slug>', type: 'partner'}), and prose `body` describing what you know. Merges into the existing entity if it exists, creates it otherwise. Do NOT pass structured attributes — the system extracts those from your prose. When this entity was distilled from a document you ingested, pass `derived_from` with the `reference:<slug>` ref(s) memory_ingest returned, so the entity links back to its sources. Use this for facts about a THING; use memory_ingest for documents. By default the `body` is APPENDED to what is already there (nothing is lost). Pass `body_mode: "replace"` only when you are rewriting the whole body to correct or clean it up — and only when you have the full current body in context. A replace cannot overwrite prose a user authored (it degrades to an append); git history preserves prior versions either way.
+```
+
+### 3.6 `memory_forget`
+
+```
+Remove a memory entry you no longer want surfaced. Archives it to memory/archive/<class>/<id>.md (reversible) and removes its search index rows so it stops appearing in memory_search.
+
+This is the ONLY correct way to delete a memory entry — never rm or move files under memory/ via shell, which leaves the search indices pointing at a missing file.
+
+Pass `uri` exactly as memory_search returned it. Refuses entity pages (memory/entities/...): those have their own absorb/revert lifecycle.
+```
+
+---
+
+## 4. Architecture diagram
 
 ```mermaid
 flowchart TD
@@ -48,9 +141,9 @@ flowchart TD
 
 ---
 
-## 4. How it works
+## 5. How it works
 
-### 4.1 Agent identity prompt
+### 5.1 Agent identity prompt
 
 `durin/templates/agent/identity.md` is the persistent identity file injected into every agent turn inside the stable prompt tier. It contains three memory-related sections.
 
@@ -60,9 +153,9 @@ flowchart TD
 
 **`## Memory writing`** routes by information type: entity facts go to `memory_upsert_entity`, whole documents go to `memory_ingest`, raw interactions require nothing (the session is already recorded). It instructs the agent to search before authoring to avoid duplicates.
 
-The two `## Memory writing` rules about `body_mode` and `derived_from` are embedded inline in the `memory_upsert_entity` tool description (§4.2) and summarized here.
+The two `## Memory writing` rules about `body_mode` and `derived_from` are embedded inline in the `memory_upsert_entity` tool description (§3.5 and §5.2) and summarized here.
 
-### 4.2 Tool descriptions
+### 5.2 Tool descriptions
 
 Each tool class exposes a `description` property that delegates to `_PARAMETERS["description"]`. That string is emitted as `function.description` in the OpenAI function-calling spec — the field the LLM reads when selecting a tool. Both the `function.description` field and the `function.parameters.description` field carry the same string so there is no divergence between them.
 
@@ -79,7 +172,7 @@ The six memory tools and their descriptions:
 | `memory_forget` | Active | Archive-only removal; never use shell to delete memory files |
 | `memory_store` | Disabled | `MemoryStoreTool.enabled()` returns False; description kept in sync but LLM never sees it |
 
-### 4.3 Dream pass prompts
+### 5.3 Dream pass prompts
 
 The five Dream passes each build their prompt in Python. No pass uses a multi-file template assembly; only the absorb-judge retains a standalone template file.
 
@@ -93,7 +186,7 @@ The five Dream passes each build their prompt in Python. No pass uses a multi-fi
 
 **Skill-extract pass** (`_SKILL_EXTRACT_PROMPT` in `dream_passes.py`): A system prompt for an agentic sub-agent that spins up an `AgentRunner` with `ReadFileTool`, `EditFileTool`, `SkillWriteTool`, `SkillSearchTool`, and `SkillAcquireSeedTool`. The sub-agent receives recent sessions as the user turn, optionally including logged gap observations. It decides whether to call `skill_write` based on whether the conversation reveals a genuinely reusable procedure. It may call `skill_search` first to acquire an existing published skill rather than authoring from scratch. All skills must be authored in English regardless of conversation language.
 
-### 4.4 Absorb-judge template
+### 5.4 Absorb-judge template
 
 `durin/templates/dream/absorb_judge.md` is loaded by `absorb_judge.py` at call time (`_load_template` extracts the largest fenced code block). It is the only surviving file under `templates/dream/`.
 
@@ -120,13 +213,13 @@ same | different | unclear
 
 Up to `max_retries` (default 2) re-attempts are made on parse failure; each retry sends the same prompt without feedback (parse failures are usually transient model formatting errors). The function either returns a `JudgeResult` or raises `JudgeError`, giving the caller a single failure mode.
 
-### 4.5 Hot layer
+### 5.5 Hot layer
 
 `durin/memory/hot_layer.py` eagerly assembles a memory context block that is injected into the stable prompt tier on every turn without any tool call. It renders five sections in order: Identity (from `memory/stable/IDENTITY.md`), Canonical pages (top 12 entity pages by `updated_at` desc), Recent fragments (top 8 post-cursor episodic/stable entries by `valid_from` desc), Key Points (top 12 headlines), and Known Entities (up to 50 entity URIs). Each section has a hard character budget; the total is approximately 1 900 tokens, sized to stay within a single prompt-cache window between Dream passes.
 
 Canonical pages are wrapped in `=== CANONICAL: <uri> (consolidated <ts>) ===` markers; fragments in `=== FRAGMENT: <path> (ts <ts>) ===`. The intro sentence above the fragments section ("Reconcile with the canonical above using the timestamps.") cues the LLM to treat fragments as recent amendments rather than authoritative rewrites.
 
-### 4.6 Structural markers
+### 5.6 Structural markers
 
 Structural markers appear in both hot-layer output and `memory_search` results. They communicate class and URI; they do not communicate trust level or relevance rank — those the model reasons from content and timestamps.
 
@@ -146,7 +239,7 @@ Sections with zero hits are omitted entirely.
 
 ---
 
-## 5. Key types and entry points
+## 6. Key types and entry points
 
 | Symbol | File | Role |
 |---|---|---|
@@ -169,7 +262,7 @@ Sections with zero hits are omitted entirely.
 
 ---
 
-## 6. Configuration and surfaces
+## 7. Configuration and surfaces
 
 | Config key | Default | Effect |
 |---|---|---|
@@ -202,7 +295,7 @@ Sections with zero hits are omitted entirely.
 
 ---
 
-## 7. Curated rationale
+## 8. Curated rationale
 
 **Why declarative phrasing works.** The v2 form of the `## Memory` section — "call `memory_search` rather than answering from cold recall" plus "state the source of any fact you cite" plus "issue 2-3 searches for compound questions" — outperformed earlier imperative drafts ("USE BEFORE answering", "ALWAYS call memory first") by a measurable margin on retrieval accuracy. Imperatives that read as rules tend to be ignored or over-applied; descriptions that explain what the tool does and what good retrieval behavior looks like are structural rather than performative and generalize more reliably.
 

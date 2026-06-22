@@ -31,7 +31,7 @@ from durin.agent.tools.memory_upsert_entity import MemoryUpsertEntityTool
 
 _DOC_PATH = (
     Path(__file__).resolve().parents[2]
-    / "docs" / "architecture" / "memory" / "06_prompts_and_instructions.md"
+    / "docs" / "internals" / "memory" / "06_prompts_and_instructions.md"
 )
 
 
