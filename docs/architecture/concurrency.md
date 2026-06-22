@@ -184,6 +184,48 @@ The canonical lock-path helper is `git_worktree_lock_path(memory_git_root)`
 in `memory_writer.py`; all three sites (two mutation, two prune) use this
 function so the path cannot drift.
 
+## In-process ref-CAS lock (hazard #9)
+
+`write_entity` and `write_files_cas` move the memory branch ref with
+dulwich's loose-ref compare-and-swap, `refs.set_if_equals(ref, base,
+new_commit)`. That CAS re-reads and compares the ref under a `GitFile`
+`O_EXCL` `.lock` file, which serializes **cross-process** writers correctly
+(a second process either sees the moved ref and its CAS returns False, or
+contends on the lock file).
+
+**Hazard (in-process only):** within a *single* process the GIL is released
+during that `GitFile` I/O, so two threads can interleave inside
+`set_if_equals` such that **both read the same parent sha, both pass the
+compare, and both write** — the second commit silently overwrites the first
+on the ref. The first thread's commit becomes unreachable from HEAD
+(orphaned) and its write is lost, **with no exception and no CAS retry** (the
+losing thread observed `ok=True`). Reproduced deterministically: 32 threads
+each appending a distinct relation to one entity lose ≥1 relation in ~95% of
+20-round trials; instrumentation confirmed one parent sha receiving two
+distinct successful `set_if_equals` moves, the earlier winner orphaned.
+
+**Fix (in-process):** a module-level `dict[str, threading.RLock]` in
+`memory_writer.py`, keyed by the resolved repo-root path and guarded by a
+small dict lock (`_root_write_lock`), serializes same-process writers around
+the entire read-apply-CAS critical section of both `write_entity` and
+`write_files_cas`. `RLock` (reentrant) so the two writers can nest on one
+thread without self-deadlock. Cross-process writers are unaffected — they run
+in different processes and still serialize on the git ref-CAS.
+
+**Lock ordering:** this in-process `RLock` is the **outermost** memory lock —
+acquired only at the top of the two writers, strictly before the
+`.git-worktree` `cross_process_lock` taken inside `_commit_dirty_as_user` /
+`_fast_forward_working_tree` (which remains inner). The only `.git-worktree`
+holders are the indexer/vector_index prune paths, which never call back into
+`write_entity` / `write_files_cas`, so no path takes `.git-worktree` and then
+this `RLock`: there is no opposite-order edge and no deadlock. Being
+in-process only, the `RLock` cannot deadlock cross-process.
+
+The load-bearing regression is
+`tests/memory/test_memory_writer.py::test_concurrency_threads_stress_no_lost_write`
+(60 rounds × 32 threads): it fails reliably without the lock and passes
+deterministically with it.
+
 ## Out-of-turn / direct savers (resolved)
 
 The three savers that previously wrote a session file without holding the turn
