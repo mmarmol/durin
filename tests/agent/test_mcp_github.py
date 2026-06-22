@@ -1,5 +1,12 @@
 import pytest
-from durin.agent.mcp_github import parse_repo_url, resolve_token, GithubMeta, fetch_repo_meta, classify_official
+
+from durin.agent.mcp_github import (
+    GithubMeta,
+    classify_official,
+    fetch_repo_meta,
+    parse_repo_url,
+    resolve_token,
+)
 
 
 @pytest.mark.parametrize("url,expected", [
@@ -71,6 +78,25 @@ def test_fetch_repo_meta_parses_and_handles_missing():
 
 def test_fetch_repo_meta_empty():
     assert fetch_repo_meta([], token="t", post=_fake_post) == {}
+
+
+def test_fetch_repo_meta_paces_between_batches():
+    """fetch_repo_meta sleeps `pace` seconds between batches (avoids secondary limits)."""
+    keys = [("o", f"r{i}") for i in range(5)]
+    slept: list[float] = []
+    fetch_repo_meta(keys, token="t", post=lambda q, t: {"data": {}},
+                    batch=2, pace=0.5, sleep=slept.append)
+    # 5 keys / batch 2 = 3 batches -> 2 inter-batch sleeps (none before the first)
+    assert slept == [0.5, 0.5]
+
+
+def test_fetch_repo_meta_no_pacing_by_default():
+    """No pace -> no sleeps; default behavior unchanged."""
+    keys = [("o", f"r{i}") for i in range(5)]
+    slept: list[float] = []
+    fetch_repo_meta(keys, token="t", post=lambda q, t: {"data": {}},
+                    batch=2, sleep=slept.append)
+    assert slept == []
 
 
 def test_official_vendor_domain():

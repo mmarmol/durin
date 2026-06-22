@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass, field
 
 _GH_RE = re.compile(r"github\.com[/:]([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+?)(?:\.git)?(?:/|$)")
@@ -126,13 +127,20 @@ def _parse_node(node: dict) -> GithubMeta:
 
 
 def fetch_repo_meta(
-    repo_keys: list[tuple[str, str]], *, token: str, post=None, batch: int = 80
+    repo_keys: list[tuple[str, str]], *, token: str, post=None, batch: int = 80,
+    pace: float = 0.0, sleep=time.sleep,
 ) -> dict[tuple[str, str], GithubMeta]:
     """Resolve GitHub metadata for repos via batched GraphQL. Missing repos get
-    GithubMeta(stars=None). Keys in the returned dict are lowercased."""
+    GithubMeta(stars=None). Keys in the returned dict are lowercased.
+
+    ``pace`` is the number of seconds to sleep *between* batches (never before the
+    first) so a large crawl stays under GitHub's secondary rate limits, which
+    trigger on bursts of unspaced requests. Defaults to 0.0 (no pacing)."""
     post = _default_post if post is None else post
     out: dict[tuple[str, str], GithubMeta] = {}
-    for i in range(0, len(repo_keys), batch):
+    for batch_idx, i in enumerate(range(0, len(repo_keys), batch)):
+        if batch_idx and pace:
+            sleep(pace)
         chunk = repo_keys[i : i + batch]
         query = "query {\n" + "\n".join(
             _repo_field(f"r{j}", o, n) for j, (o, n) in enumerate(chunk)
