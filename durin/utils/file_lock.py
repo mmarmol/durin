@@ -2,7 +2,7 @@
 
 Extracted from durin/channels/msteams.py:_refs_file_lock and generalized so
 every whole-file read-modify-write can serialize across the gateway, the TUI's
-own AgentLoop, cron and heartbeat processes that share one DURIN_HOME.
+own AgentLoop, and cron processes that share one DURIN_HOME.
 
 See docs/architecture/concurrency.md for lock-ordering invariants and the
 Phase-A residual ledger.

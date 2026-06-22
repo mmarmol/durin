@@ -27,6 +27,14 @@ def _build_server(name: str = "harness") -> FastMCP:
         await ctx.session.send_tool_list_changed()
         return "emitted"
 
+    @server.tool()
+    async def slow() -> str:
+        # Never reports progress and sleeps far longer than any test timeout,
+        # so a small call_tool timeout deterministically trips the idle
+        # watchdog (instead of racing a near-instant echo round-trip).
+        await asyncio.sleep(5)
+        return "slow"
+
     return server
 
 
@@ -389,7 +397,9 @@ async def test_call_tool_native_timeout_returns_sentinel(live_mcp) -> None:
     factory, _harness = live_mcp
     conn, _registry = factory()
     await conn.start()
-    out = await conn.call_tool("echo", {"text": "x"}, timeout=0.0005)
+    # 'slow' sleeps 5s with no progress; a 0.1s idle timeout always trips the
+    # watchdog (deterministic, unlike a tiny timeout racing a fast echo).
+    out = await conn.call_tool("slow", {}, timeout=0.1)
     assert isinstance(out, mc._ConnDown)
     assert "failed" in out.message or "timed out" in out.message.lower()
     await conn.aclose()

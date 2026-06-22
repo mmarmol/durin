@@ -5,6 +5,7 @@ import pytest
 
 # The [stt] extra (numpy/av) is omitted in CI; skip the whole module there.
 np = pytest.importorskip("numpy")
+pytest.importorskip("av")
 
 from durin.providers.audio_decode import decode_to_mono_16k  # noqa: E402
 

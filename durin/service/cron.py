@@ -73,6 +73,8 @@ def _job_to_dict(job: Any, *, cron_scheduler: Any | None = None) -> dict[str, An
             "tz": sched.tz,
         },
         "message": "" if is_system else job.payload.message,
+        "mode": job.payload.mode,
+        "model": job.payload.model,
         "channel": job.payload.channel or "",
         "state": {
             "next_run_at_ms": job.state.next_run_at_ms,
@@ -84,6 +86,18 @@ def _job_to_dict(job: Any, *, cron_scheduler: Any | None = None) -> dict[str, An
                 and cron_scheduler.is_executing(job.id)
             ),
         },
+        "run_history": [
+            {
+                "run_at_ms": r.run_at_ms,
+                "status": r.status,
+                "duration_ms": r.duration_ms,
+                "error": r.error,
+                "session_key": r.session_key,
+                "model": r.model,
+                "summary": r.summary,
+            }
+            for r in job.state.run_history
+        ],
         "created_at_ms": job.created_at_ms,
         "updated_at_ms": job.updated_at_ms,
     }
@@ -102,6 +116,33 @@ def _fresh_cron_scheduler():
     cfg = load_config()
     path = cfg.workspace_path / "cron" / "jobs.json"
     return CronScheduler(path)
+
+
+_VALID_SCHEDULE_KINDS = {"cron", "every", "at"}
+
+
+def _schedule_from_cmd(cmd: Any) -> Any:
+    """Build a CronSchedule from command fields (schedule_kind/expr/every_ms/at_ms/tz).
+
+    Rejects a ``schedule_kind`` outside ``{cron, every, at}`` loudly: an
+    unknown kind (e.g. the legacy webui "interval") otherwise falls through
+    ``_compute_next_run`` to ``None``, so the job is created (HTTP 200) but
+    never fires.
+    """
+    from durin.cron.types import CronSchedule
+
+    if cmd.schedule_kind not in _VALID_SCHEDULE_KINDS:
+        raise ValidationFailedError(
+            f"invalid schedule_kind '{cmd.schedule_kind}'",
+            details={"allowed": sorted(_VALID_SCHEDULE_KINDS)},
+        )
+    return CronSchedule(
+        kind=cmd.schedule_kind,
+        expr=cmd.expr,
+        every_ms=cmd.every_ms,
+        at_ms=cmd.at_ms,
+        tz=cmd.tz,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +171,16 @@ class CronJobStateResult(Result):
     executing: bool
 
 
+class CronRunRecordResult(Result):
+    run_at_ms: int
+    status: str
+    duration_ms: int
+    error: str | None = None
+    session_key: str | None = None
+    model: str | None = None
+    summary: str | None = None
+
+
 class CronJobItem(Result):
     id: str
     name: str
@@ -137,8 +188,11 @@ class CronJobItem(Result):
     is_system: bool
     schedule: CronJobScheduleResult
     message: str
+    mode: str
+    model: str | None = None
     channel: str
     state: CronJobStateResult
+    run_history: list[CronRunRecordResult] = []
     created_at_ms: int
     updated_at_ms: int
 
@@ -170,6 +224,41 @@ class CronToggleCommand(Command):
 
 
 class CronToggleResult(Result):
+    job: CronJobItem
+
+
+class CronAddCommand(Command):
+    name: str
+    message: str
+    mode: str = "reminder"
+    model: str | None = None
+    schedule_kind: str
+    expr: str | None = None
+    every_ms: int | None = None
+    at_ms: int | None = None
+    tz: str | None = None
+    deliver: bool = False
+    channel: str | None = None
+    to: str | None = None
+
+
+class CronUpdateCommand(Command):
+    id: str
+    name: str | None = None
+    message: str | None = None
+    mode: str | None = None
+    model: str | None = None
+    schedule_kind: str | None = None
+    expr: str | None = None
+    every_ms: int | None = None
+    at_ms: int | None = None
+    tz: str | None = None
+    deliver: bool | None = None
+    channel: str | None = None
+    to: str | None = None
+
+
+class CronAddResult(Result):
     job: CronJobItem
 
 
@@ -237,15 +326,18 @@ class CronService:
         summary="Manually trigger a cron job now (non-blocking)",
     )
     async def run(self, cmd: CronRunCommand, principal: Principal) -> CronRunResult:
-        """Validate whether the job can run; background spawn stays in the shim.
+        """Validate the job and spawn it immediately as a background task.
 
         Raises ``UnavailableError`` when the live scheduler is absent,
         ``ValidationFailedError`` when ``id`` is empty,
         ``NotFoundError`` when the job does not exist.
         Returns ``CronRunResult(started=False, reason="already_running")`` when
-        the job is already in flight.  On success, returns
-        ``CronRunResult(started=True)``; the shim does the actual task spawn.
+        the job is already in flight.  On success, spawns
+        ``run_job(force=True)`` as a background task (overlap-guarded by
+        ``_executing``) and returns ``CronRunResult(started=True)``.
         """
+        import asyncio
+
         principal.require(Scope.CRON_WRITE)
         if self._cron_scheduler is None:
             raise UnavailableError("scheduler not available")
@@ -255,6 +347,7 @@ class CronService:
             raise NotFoundError("no such job", details={"id": cmd.id})
         if self._cron_scheduler.is_executing(cmd.id):
             return CronRunResult(started=False, reason="already_running")
+        asyncio.create_task(self._cron_scheduler.run_job(cmd.id, force=True))
         return CronRunResult(started=True)
 
     @route(
@@ -273,4 +366,61 @@ class CronService:
             raise NotFoundError("no such job", details={"id": cmd.id})
         return CronToggleResult(
             job=CronJobItem(**_job_to_dict(job, cron_scheduler=self._cron_scheduler))
+        )
+
+    @route(
+        "POST",
+        "/api/v1/cron",
+        scope=Scope.CRON_WRITE.value,
+        request_model=CronAddCommand,
+        response_model=CronAddResult,
+        summary="Create a new agent_turn cron job",
+    )
+    async def create(self, cmd: CronAddCommand, principal: Principal) -> CronAddResult:
+        principal.require(Scope.CRON_WRITE)
+        cron = _fresh_cron_scheduler()
+        schedule = _schedule_from_cmd(cmd)
+        job = cron.add_job(
+            name=cmd.name,
+            schedule=schedule,
+            message=cmd.message,
+            deliver=cmd.deliver,
+            channel=cmd.channel,
+            to=cmd.to,
+            mode=cmd.mode,
+            model=cmd.model,
+        )
+        return CronAddResult(
+            job=CronJobItem(**_job_to_dict(job, cron_scheduler=self._cron_scheduler))
+        )
+
+    @route(
+        "PATCH",
+        "/api/v1/cron",
+        scope=Scope.CRON_WRITE.value,
+        request_model=CronUpdateCommand,
+        response_model=CronToggleResult,
+        summary="Update a non-system cron job",
+    )
+    async def update(self, cmd: CronUpdateCommand, principal: Principal) -> CronToggleResult:
+        principal.require(Scope.CRON_WRITE)
+        cron = _fresh_cron_scheduler()
+        schedule = _schedule_from_cmd(cmd) if cmd.schedule_kind else None
+        result = cron.update_job(
+            cmd.id,
+            name=cmd.name,
+            schedule=schedule,
+            message=cmd.message,
+            deliver=cmd.deliver,
+            mode=cmd.mode,
+            model=(cmd.model if cmd.model is not None else ...),
+            channel=(cmd.channel if cmd.channel is not None else ...),
+            to=(cmd.to if cmd.to is not None else ...),
+        )
+        if result == "not_found":
+            raise NotFoundError("no such job", details={"id": cmd.id})
+        if result == "protected":
+            raise ForbiddenError("system job; cannot update", details={"id": cmd.id})
+        return CronToggleResult(
+            job=CronJobItem(**_job_to_dict(result, cron_scheduler=self._cron_scheduler))
         )

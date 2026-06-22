@@ -16,7 +16,7 @@ integrity.
 
 Durin runs as multiple OS processes over a single shared `DURIN_HOME`:
 the gateway daemon, `durin agent --tui` (with its own in-process
-`AgentLoop`), cron, and heartbeat. Previously each process held a
+`AgentLoop`), and cron. Previously each process held a
 never-invalidated in-memory `SessionManager` cache and `save()` did a
 lockless whole-file rewrite. This caused cross-process clobber and
 split-brain: the TUI and webui could show divergent session chains for
@@ -247,11 +247,11 @@ saving** (so they write fresh disk state, never a stale in-memory copy):
 - **HTTP rename** (`durin/service/sessions.py`) — acquires the lease with a
   short `timeout=30.0`; on `TimeoutError` it raises `ConflictError` ("session
   is busy, rename not applied") with no partial write, rather than clobbering.
-- **`process_direct`** (`durin/agent/loop.py`) — the cron / heartbeat / HTTP-API
+- **`process_direct`** (`durin/agent/loop.py`) — the cron / HTTP-API
   / SDK / CLI direct-message entrypoint. Wrapped in the lease (default 600s).
   On `TimeoutError` it returns the same `_SESSION_BUSY_NOTICE` that `_dispatch`
   publishes (so API/SDK/CLI callers get a meaningful busy message, not an empty
-  response) and processes nothing — a cron/heartbeat fire simply retries next
+  response) and processes nothing — a cron fire simply retries next
   schedule; no user turn is half-written or duplicated.
 - **Webui background title generation** (`durin/utils/webui_titles.py`, scheduled
   from `_schedule_background`) — the LLM title call runs **outside** any lease;
@@ -379,7 +379,7 @@ and retries up to *attempts* times.  Any other `OperationalError` is re-raised
 immediately.
 
 Together these two primitives ensure that concurrent cross-process writers (gateway,
-TUI `AgentLoop`, cron, heartbeat) do not drop FTS5 rows due to unretried
+TUI `AgentLoop`, cron) do not drop FTS5 rows due to unretried
 `SQLITE_BUSY` errors.
 
 ## Per-turn provider snapshot (hazard #8)
