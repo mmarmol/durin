@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 from durin.memory.extract_dream import discover_entities, extract_entity
 from durin.utils.atomic_write import atomic_write_text
+from durin.utils.file_lock import cross_process_lock
 
 __all__ = [
     "load_session",
@@ -74,6 +75,13 @@ def _meta_path(jsonl_path: Path) -> Path:
 
 
 def get_extract_cursor(jsonl_path: Path) -> int:
+    """Return the per-session extract cursor (number of turns already processed).
+
+    The cursor is stored as a top-level ``"extract_cursor"`` key in the
+    ``.meta.json`` sidecar (see docs/architecture/concurrency.md #15).
+    Falls back to the legacy ``derived.extract_cursor`` location so that
+    pre-existing sessions are not re-processed from turn 0.
+    """
     mp = _meta_path(jsonl_path)
     if not mp.exists():
         return 0
@@ -81,19 +89,38 @@ def get_extract_cursor(jsonl_path: Path) -> int:
         d = json.loads(mp.read_text(encoding="utf-8"))
     except Exception:
         return 0
+    # Top-level key takes precedence; fall back to legacy derived location.
+    top = d.get("extract_cursor")
+    if top is not None:
+        return int(top)
     return int((d.get("derived") or {}).get("extract_cursor") or 0)
 
 
 def set_extract_cursor(jsonl_path: Path, n: int) -> None:
+    """Advance the per-session extract cursor to ``n`` (turns processed so far).
+
+    Stores the value as a top-level ``"extract_cursor"`` key in the
+    ``.meta.json`` sidecar, outside the ``derived`` block, so that
+    ``SessionManager.save()`` / ``save_runtime_state()`` — which replace
+    only ``data["derived"]`` — cannot erase it (hazard #15-A).
+
+    The read-modify-write is serialized under the same
+    ``cross_process_lock(jsonl_path)`` that ``SessionManager`` uses for that
+    session's sidecar, preventing lost-update races (hazard #15-B).
+    See docs/architecture/concurrency.md.
+    """
     mp = _meta_path(jsonl_path)
-    d: dict = {}
-    if mp.exists():
-        try:
-            d = json.loads(mp.read_text(encoding="utf-8"))
-        except Exception:
-            d = {}
-    d.setdefault("derived", {})["extract_cursor"] = n
-    atomic_write_text(mp, json.dumps(d, indent=2))
+    # Use the same lock key that SessionManager uses: cross_process_lock
+    # appends ".lock" to the path, yielding "<session>.jsonl.lock".
+    with cross_process_lock(Path(jsonl_path)):
+        d: dict = {}
+        if mp.exists():
+            try:
+                d = json.loads(mp.read_text(encoding="utf-8"))
+            except Exception:
+                d = {}
+        d["extract_cursor"] = n
+        atomic_write_text(mp, json.dumps(d, indent=2))
 
 
 def run_extract_for_session(
