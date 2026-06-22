@@ -126,8 +126,9 @@ def test_idempotent_attribute_reapply(tmp_path):
     assert list(page.attributes.keys()) == ["hq"]
 
 
-def test_real_concurrency_threads(tmp_path):
-    ws = tmp_path
+def _concurrent_relation_round(ws, n_threads):
+    """Seed an entity, then have ``n_threads`` threads each append a distinct
+    relation concurrently. Return (distinct_relations_landed_at_HEAD, errors)."""
     write_entity(ws, "company:x",
                  [FieldPatch(kind="body_append", value="seed", author="agent",
                              source_ref="s", at=NOW)], create=True)
@@ -143,17 +144,46 @@ def test_real_concurrency_threads(tmp_path):
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
 
-    ts = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    ts = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
     for t in ts:
         t.start()
     for t in ts:
         t.join()
-    assert not errors, errors
     # The concurrency guarantee is about the COMMITTED state (HEAD), read via
     # plumbing — independent of working-tree ff timing.
     raw = read_blob_at_head(ws / "memory", "entities/company/x.md")
     page = EntityPage.from_text(raw.decode("utf-8"))
-    assert len({r["to"] for r in page.relations}) == 8   # all 8 landed via CAS
+    return len({r["to"] for r in page.relations}), errors
+
+
+def test_real_concurrency_threads(tmp_path):
+    landed, errors = _concurrent_relation_round(tmp_path, 16)
+    assert not errors, errors
+    assert landed == 16   # all 16 landed via CAS
+
+
+def test_concurrency_threads_stress_no_lost_write(tmp_path):
+    """Load-bearing regression for hazard #9 (in-process ref-CAS lost update).
+
+    Without the per-repo in-process write lock in memory_writer, dulwich's
+    loose-ref CAS (`refs.set_if_equals`) is not atomic across same-process
+    threads: two threads read the same parent sha, both pass the compare, both
+    write, and the second silently orphans the first's commit — losing one
+    relation with NO exception and NO CAS retry. A single high-contention round
+    flakes only ~1-in-8; this loops many rounds so the loss is caught reliably
+    (~99.9%) without the fix, and passes deterministically with it.
+    See docs/architecture/concurrency.md §"In-process ref-CAS lock (hazard #9)".
+    """
+    n_threads = 32
+    for rnd in range(60):
+        ws = tmp_path / f"round{rnd}"
+        ws.mkdir()
+        landed, errors = _concurrent_relation_round(ws, n_threads)
+        assert not errors, (rnd, errors)
+        assert landed == n_threads, (
+            f"round {rnd}: lost a write — {landed}/{n_threads} relations landed "
+            f"(hazard #9 in-process ref-CAS lost update)"
+        )
 
 
 # ---- author scope bridge (Task 7) -----------------------------------------
