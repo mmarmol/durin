@@ -17,13 +17,52 @@ from pathlib import Path
 from durin.agent.mcp_github import GithubMeta, classify_official, parse_repo_url
 
 _RETRY_ATTEMPTS = 4
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+# Seconds between GraphQL batches in CI. GitHub's secondary rate limit trips on
+# bursts of unspaced requests; ~1s/batch keeps the weekly crawl under it. The
+# default GITHUB_TOKEN has tighter secondary limits than a user PAT.
+_ENRICH_PACE_SECONDS = 1.0
+
+
+def _http_status_retryable(resp) -> bool:
+    """Whether an HTTP error response is worth retrying.
+
+    Retries 429 and 5xx, plus a 403 that carries a rate-limit signal — GitHub
+    returns *secondary* rate-limit blocks as 403 with a ``Retry-After`` header
+    and/or ``x-ratelimit-remaining: 0``. A bare 401/403/404 is a hard error and
+    is not retried.
+    """
+    code = getattr(resp, "status_code", None)
+    if code in _RETRYABLE_STATUS:
+        return True
+    if code == 403:
+        headers = getattr(resp, "headers", {}) or {}
+        return bool(headers.get("retry-after")) or headers.get("x-ratelimit-remaining") == "0"
+    return False
+
+
+def _retry_delay(resp, attempt: int, *, cap: float = 60.0) -> float:
+    """Seconds to wait before retrying: honor ``Retry-After`` when present, else
+    capped exponential backoff. The cap bounds a pathological ``Retry-After`` so
+    the weekly job can't hang."""
+    headers = getattr(resp, "headers", {}) or {}
+    retry_after = headers.get("retry-after")
+    if retry_after:
+        try:
+            return min(float(retry_after), cap)
+        except (TypeError, ValueError):
+            pass  # http-date form — fall back to backoff
+    return min(2.0 ** attempt, cap)
 
 
 def _with_retry(fn, *, attempts: int = _RETRY_ATTEMPTS, sleep=time.sleep):
-    """Call fn(); on transient error retry with exponential backoff.
+    """Call fn(); on transient error retry with backoff.
 
-    Retries on httpx.TimeoutException, httpx.TransportError, and OSError.
-    Raises the last exception after exhausting all attempts.
+    Retries network-transport errors (httpx.TimeoutException, httpx.TransportError,
+    OSError) with exponential backoff, and retryable HTTP responses (429/5xx, and
+    rate-limited 403s) honoring the server's ``Retry-After``. Non-retryable HTTP
+    errors (401, 404, bare 403) re-raise immediately; exhausted retries re-raise
+    the last exception.
     """
     import httpx  # local import — not a new dep
 
@@ -32,6 +71,11 @@ def _with_retry(fn, *, attempts: int = _RETRY_ATTEMPTS, sleep=time.sleep):
     for attempt in range(attempts):
         try:
             return fn()
+        except httpx.HTTPStatusError as exc:
+            last_exc = exc
+            if attempt >= attempts - 1 or not _http_status_retryable(exc.response):
+                raise
+            sleep(_retry_delay(exc.response, attempt))
         except transient as exc:
             last_exc = exc
             if attempt < attempts - 1:
@@ -220,7 +264,10 @@ def main() -> None:
         def enriching_fetch(repo_keys, *, token, post=None, batch=80):
             if not token:
                 return {k: GithubMeta(stars=None) for k in repo_keys}
-            return _fetch_repo_meta(repo_keys, token=token, post=pooled_post, batch=batch)
+            return _fetch_repo_meta(
+                repo_keys, token=token, post=pooled_post, batch=batch,
+                pace=_ENRICH_PACE_SECONDS,
+            )
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         catalog = build_catalog(
