@@ -797,6 +797,39 @@ class AgentLoop:
         self._apply_provider_snapshot(snapshot, publish_update=publish_update, model_preset=name)
         self._active_preset = name
 
+    def _resolve_model_override(self, ref: str) -> ProviderSnapshot | None:
+        """Resolve a model picker ref to a per-turn ``ProviderSnapshot`` WITHOUT
+        mutating global model state (``self.provider`` / ``self.model`` /
+        ``self._active_preset`` stay untouched — concurrency-safe for a cron turn
+        running alongside an interactive turn).
+
+        ``ref`` is the same value the chat ``/model`` command takes: a preset
+        name, ``"default"``, or a ``"provider model"`` pair (the picker form).
+        For a provider+model pair we register an ad-hoc preset (idempotent cache
+        keyed by model name — the same thing ``cmd_model`` does) so the snapshot
+        resolves on the named provider, including a cross-provider switch.
+        Returns ``None`` (logged) if the ref cannot be resolved, so callers fall
+        back to the agent default.
+        """
+        try:
+            parts = ref.split()
+            if len(parts) == 2:
+                provider, model = parts
+                if model not in self.model_presets:
+                    from durin.command.builtin import adhoc_preset_config
+                    self.model_presets[model] = adhoc_preset_config(
+                        self.app_config, provider, model
+                    )
+                name = model
+            else:
+                name = ref
+            return self._build_model_preset_snapshot(name)
+        except Exception:
+            logger.warning(
+                "Could not resolve model override {!r}; using agent default", ref
+            )
+            return None
+
     def _register_default_tools(self) -> None:
         """Register the default set of tools via plugin loader."""
         from durin.agent.tools.context import ToolContext
@@ -1415,22 +1448,28 @@ class AgentLoop:
             lock = self.consolidator.get_lock(_session_key_for_compact)
             return lock.locked()
 
-        effective_preset = model_preset or self.model_preset
-        if effective_preset and effective_preset != self.model_preset:
-            try:
-                effective_model = self._build_model_preset_snapshot(effective_preset).model
-            except Exception:
-                logger.warning("Could not resolve model_preset override {!r}; falling back to default", effective_preset)
-                effective_model = self.model
+        # Per-turn model override (cron per-job model): resolve the picker ref to
+        # a full provider snapshot for THIS turn only — provider + model + context
+        # window — without touching global model state. Falls back to the agent
+        # default if no override is given or the ref cannot be resolved.
+        override_snapshot = None
+        if model_preset and model_preset != self.model_preset:
+            override_snapshot = self._resolve_model_override(model_preset)
+        if override_snapshot is not None:
+            effective_provider = override_snapshot.provider
+            effective_model = override_snapshot.model
+            effective_context_window = override_snapshot.context_window_tokens
         else:
+            effective_provider = self.provider
             effective_model = self.model
+            effective_context_window = self.context_window_tokens
 
         try:
             result = await self.runner.run(AgentRunSpec(
                 initial_messages=initial_messages,
                 tools=self.tools,
                 model=effective_model,
-                provider=self.provider,
+                provider=effective_provider,
                 max_iterations=self.max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
                 hook=hook,
@@ -1438,7 +1477,7 @@ class AgentLoop:
                 concurrent_tools=True,
                 workspace=self.workspace,
                 session_key=session.key if session else None,
-                context_window_tokens=self.context_window_tokens,
+                context_window_tokens=effective_context_window,
                 context_block_limit=self.context_block_limit,
                 provider_retry_mode=self.provider_retry_mode,
                 progress_callback=on_progress,
