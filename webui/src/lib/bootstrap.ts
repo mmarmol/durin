@@ -1,38 +1,14 @@
 import type { BootstrapResponse } from "./types";
 
-const SECRET_STORAGE_KEY = "durin-webui.bootstrap-secret";
-
-/** Read a previously saved bootstrap secret from localStorage. */
-export function loadSavedSecret(): string {
-  if (typeof window === "undefined") return "";
-  try {
-    return window.localStorage.getItem(SECRET_STORAGE_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-/** Persist the bootstrap secret so page reloads don't re-prompt. */
-export function saveSecret(secret: string): void {
-  try {
-    window.localStorage.setItem(SECRET_STORAGE_KEY, secret);
-  } catch {
-    // ignore storage errors (private mode, etc.)
-  }
-}
-
-/** Clear the saved bootstrap secret (sign out). */
-export function clearSavedSecret(): void {
-  try {
-    window.localStorage.removeItem(SECRET_STORAGE_KEY);
-  } catch {
-    // ignore
-  }
-}
-
 /**
  * Fetch a short-lived token + the WebSocket path from the gateway's
  * ``/webui/bootstrap`` endpoint.
+ *
+ * Authentication is session-cookie based: pass the setup ``secret`` only on the
+ * initial sign-in. On success the gateway sets an ``httpOnly`` ``durin_session``
+ * cookie; subsequent calls (reloads, token refresh) send no secret and are
+ * re-authorized by that cookie, which the browser attaches automatically
+ * (``credentials: "same-origin"``). The secret is never stored client-side.
  */
 export async function fetchBootstrap(
   baseUrl: string = "",
@@ -55,6 +31,23 @@ export async function fetchBootstrap(
     throw new Error("bootstrap response missing token or ws_path");
   }
   return body;
+}
+
+/**
+ * End the session: ask the gateway to revoke the session token and clear the
+ * ``durin_session`` cookie. Best-effort — network errors are ignored because
+ * the caller transitions to the auth screen regardless (the cookie also
+ * expires on its own).
+ */
+export async function signout(baseUrl: string = ""): Promise<void> {
+  try {
+    await fetch(`${baseUrl}/webui/signout`, {
+      method: "POST",
+      credentials: "same-origin",
+    });
+  } catch {
+    // ignore — the UI re-prompts and the cookie expires server-side.
+  }
 }
 
 /** Derive a WebSocket URL from the current window location and the server-provided path.

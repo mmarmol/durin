@@ -53,9 +53,7 @@ vi.mock("@/lib/bootstrap", () => ({
     requires_secret: true,
   }),
   deriveWsUrl: vi.fn(() => "ws://test"),
-  loadSavedSecret: vi.fn(() => ""),
-  saveSecret: vi.fn(),
-  clearSavedSecret: vi.fn(),
+  signout: vi.fn(),
 }));
 
 vi.mock("@/lib/durin-client", () => {
