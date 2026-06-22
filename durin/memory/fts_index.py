@@ -1,6 +1,6 @@
 """FTS5 lexical index for memory entries and entity pages.
 
-Per `docs/architecture/memory/02_indexing.md` §5: one SQLite database at
+One SQLite database at
 ``<workspace>/.durin/index/fts.sqlite`` with two FTS5 virtual tables
 sharing a bookkeeping table:
 
@@ -12,7 +12,7 @@ sharing a bookkeeping table:
 
 Both FTS5 tables carry the same row schema (uri / path / type /
 entity_type / text). Every write goes to both: routing at query time
-is the search pipeline's concern (Phase 3).
+is the search pipeline's concern.
 
 Thread safety: a single :class:`FTSIndex` instance is **not** thread
 safe (SQLite connection is per-instance). Production typically opens
@@ -51,9 +51,9 @@ class FTSHit:
 
 _SCHEMA = [
     # Default tokenizer table (Latin and similar). Porter stemming
-    # added 2026-06-10 (LoCoMo forensics, conv-3-q169): without it,
-    # `write` / `writes` / `writing` are distinct tokens and a query
-    # using one form never matches a doc using another. Porter is an
+    # is enabled so that `write` / `writes` / `writing` are treated
+    # as the same token — without it, a query using one form never
+    # matches a doc using another. Porter is an
     # English suffix-stripper — non-English tokens pass through mostly
     # untouched (terminal-s plural stripping mildly helps Spanish);
     # CJK is unaffected (routed to the trigram table).
@@ -112,7 +112,7 @@ class FTSIndex:
         path.parent.mkdir(parents=True, exist_ok=True)
         # sqlite_util.connect sets check_same_thread=False, WAL mode, and
         # busy_timeout so concurrent cross-process writers don't get an
-        # unretried SQLITE_BUSY. See docs/architecture/concurrency.md.
+        # unretried SQLITE_BUSY.
         conn = _sqlite_connect(path)
         for stmt in _SCHEMA:
             conn.executescript(stmt)

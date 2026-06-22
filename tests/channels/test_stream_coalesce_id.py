@@ -4,7 +4,7 @@ Two concurrent streams sharing the same (channel, chat_id) — e.g. Telegram for
 topics with distinct session_keys — interleave deltas in the outbound queue.
 Without a _stream_id guard, _coalesce_stream_deltas merges them, blending text
 from stream B into stream A's edit bubble.  These tests verify the guard is in
-place.  See docs/architecture/concurrency.md.
+place.
 """
 import asyncio
 

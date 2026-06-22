@@ -1,4 +1,4 @@
-"""Tests for typed entity references — doc 14 §3.1-3.2 + doc 18 §4."""
+"""Tests for typed entity references."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from durin.memory.entities import (
 
 
 class TestIsValidEntityRef:
-    """Format validation per doc 14 §3.2 — shape only, not vocabulary."""
+    """Format validation — shape only, not vocabulary."""
 
     @pytest.mark.parametrize(
         "ref",
@@ -142,7 +142,7 @@ class TestNormalizeEntityRef:
 
 
 class TestSuggestedTypes:
-    """8 broad types from doc 18 §4 — these are hints, NOT enforced."""
+    """8 broad cross-profession types — these are hints, NOT enforced."""
 
     def test_contains_doc_18_set(self) -> None:
         # The 8 broad cross-profession types

@@ -1,12 +1,10 @@
-"""Tests for archive helpers — Phase 0 deliverable 5.
+"""Tests for archive helpers.
 
-Per `docs/architecture/memory/01_data_and_entities.md` §3.6 + §5.3, the archive
-convention moves consolidated content to `memory/archive/<class>/...`
-with `archived_at` (and optional `archived_into`) frontmatter fields
-added.
+The archive convention moves consolidated content to `memory/archive/<class>/...`
+with `archived_at` (and optional `archived_into`) frontmatter fields added.
 
-The functions tested here are the canonical move operations. Dream
-apply and absorption are their consumers.
+The functions tested here are the canonical move operations. Dream apply and
+absorption are their consumers.
 """
 
 from __future__ import annotations

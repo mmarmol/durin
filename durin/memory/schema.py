@@ -1,9 +1,8 @@
 """Memory entry schema — frontmatter + body model.
 
-Matches the frontmatter spec in `docs/08_memory_phase2_proposal.md`
-§0c.5 (multi-resolution memory entries). The schema is a pydantic
-model so writes validate at construction time and reads catch
-malformed frontmatter early.
+Multi-resolution memory entries. The schema is a pydantic model so
+writes validate at construction time and reads catch malformed
+frontmatter early.
 
 Resolution semantics:
 - ``headline`` (~10 words) — pulled in bulk into the hot layer.
@@ -43,8 +42,8 @@ class MemoryEntry(BaseModel):
     @field_validator("entities")
     @classmethod
     def _validate_entities_format(cls, value: list[str]) -> list[str]:
-        # Strict <type>:<value> validation per doc 14 §3.2 + doc 18 §4.
-        # Vocabulary of types is open; only the shape is enforced.
+        # Strict <type>:<value> validation. Vocabulary of types is open;
+        # only the shape is enforced.
         # Lenient read paths (e.g. consolidator_tags) should drop bad
         # refs before MemoryEntry construction.
         from durin.memory.entities import is_valid_entity_ref

@@ -1,4 +1,4 @@
-"""skill_audit tool — run the §8.C security scan on an existing skill.
+"""skill_audit tool — run the security scan on an existing skill.
 
 Auto-discovered into the agent's ``core`` toolset (like ``skill_edit`` /
 ``skill_write``). Resolves a skill (by ``name`` under the workspace ``skills/``
@@ -42,7 +42,7 @@ _PARAMETERS = tool_parameters_schema(
 
 @tool_parameters(_PARAMETERS)
 class SkillAuditTool(Tool):
-    """skill_audit tool — §8.C scan on an existing skill."""
+    """skill_audit tool — security scan on an existing skill."""
 
     def __init__(self, workspace: str | Path) -> None:
         self._workspace = Path(workspace).expanduser()

@@ -21,7 +21,7 @@ from typing import Any
 
 from durin.telemetry.logger import current_telemetry
 
-# Privacy bound for free-text fields (doc 07 §13). The full query is
+# Privacy bound for free-text fields. The full query is
 # never persisted to telemetry — only the first N chars, enough to
 # debug + bucket without exposing user content. Applied to any field
 # named ``query`` / ``text`` / ``snippet`` / ``content``.
@@ -42,26 +42,23 @@ def emit_tool_event(event_type: str, data: dict[str, Any]) -> None:
 
     Privacy: free-text fields (``query`` / ``text`` / ``snippet`` /
     ``content`` / ``needle``) are truncated to 200 characters before
-    persistence per `docs/architecture/memory/07_telemetry_and_observability.md`
-    §13. The truncation is non-destructive — it does NOT mutate the
-    caller's dict.
+    persistence. The truncation is non-destructive — it does NOT mutate
+    the caller's dict.
 
-    Audit F20 (2026-05-28): the bound
-    :class:`durin.telemetry.logger.TelemetryLogger` carries the
-    active ``session_key`` and per-turn ``iteration``; both are
+    The bound :class:`durin.telemetry.logger.TelemetryLogger` carries
+    the active ``session_key`` and per-turn ``iteration``; both are
     auto-injected into the payload when the caller hasn't already
-    populated them. Dashboards joining `memory.recall` to other
-    events on `(session_key, iteration)` now have data to join on.
+    populated them. Dashboards joining `memory.recall` to other events
+    on `(session_key, iteration)` now have data to join on.
     """
     logger_obj = current_telemetry()
     if logger_obj is None:
         return
     safe_data = _truncate_freetext(data)
-    # F20: auto-inject identity fields if absent. Caller-supplied
-    # values always win so subagents / replay tools can stamp a
-    # different identity when they need to. `getattr` defaults keep
-    # ad-hoc test loggers (`_RecordingTelemetry`-style mocks without
-    # the F20 fields) working — they just won't carry the identity.
+    # Auto-inject identity fields if absent. Caller-supplied values always
+    # win so subagents / replay tools can stamp a different identity when
+    # they need to. `getattr` defaults keep ad-hoc test loggers working —
+    # they just won't carry the identity.
     if "session_key" not in safe_data:
         sk = getattr(logger_obj, "session_key", None)
         if sk:

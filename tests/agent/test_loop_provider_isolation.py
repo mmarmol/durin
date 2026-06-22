@@ -1,10 +1,10 @@
 """Per-turn provider isolation in AgentLoop.
 
-Hazard #8 (docs/architecture/concurrency.md): the gateway runs a single shared
-AgentLoop.  _apply_provider_snapshot mutates self.provider on every concurrent
-session's /model swap.  AgentLoop must pass provider=self.provider into the
-AgentRunSpec so the in-flight turn carries its own reference and is immune to a
-concurrent swap of self.provider / self.runner.provider.
+The gateway runs a single shared AgentLoop.  _apply_provider_snapshot mutates
+self.provider on every concurrent session's /model swap.  AgentLoop must pass
+provider=self.provider into the AgentRunSpec so the in-flight turn carries its
+own reference and is immune to a concurrent swap of self.provider /
+self.runner.provider.
 """
 from __future__ import annotations
 

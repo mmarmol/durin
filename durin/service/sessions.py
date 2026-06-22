@@ -265,7 +265,7 @@ class SessionsService:
         # versa).  Reload under the lease to pick up any turns that committed
         # between the exists() check and now.  On TimeoutError (session busy)
         # raise ConflictError — the caller retries; no partial write is applied.
-        # See docs/architecture/concurrency.md.
+        # Reload under the lease to pick up any commits between exists() and now.
         session_path = sm._get_session_path(cmd.key)
         try:
             async with session_turn_lease(session_path, timeout=30.0):

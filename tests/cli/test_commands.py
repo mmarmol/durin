@@ -77,7 +77,7 @@ def test_onboard_fresh_install(mock_paths):
     assert config_file.exists()
     assert (workspace_dir / "AGENTS.md").exists()
     assert (workspace_dir / "memory" / "history.jsonl").exists()
-    assert not (workspace_dir / "memory" / "MEMORY.md").exists()  # superseded (§2.10/§8e)
+    assert not (workspace_dir / "memory" / "MEMORY.md").exists()  # superseded by entity-page model
     expected_workspace = Config().workspace_path
     assert mock_ws.call_args.args == (expected_workspace,)
 

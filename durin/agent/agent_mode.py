@@ -1,26 +1,20 @@
-"""Agent modes — Sprint B / L3 (docs/architecture/loop.md §3).
+"""Agent modes.
 
 Permission-as-data agent modes. The loop doesn't have any conditional logic
 about "what to do in plan mode vs build mode"; modes are pure data, applied by
 filtering the available tool set at the start of each turn.
 
-This avoids the V7/V8 PlanHook pitfall (refuted across V3–V8; see
-docs/roadmap.md "What we are explicitly NOT doing") — that
-design forced behavior (verify-before-complete) via code. Here we only
-restrict what tools the model can call. The model retains full agency within
-the filtered surface.
+This avoids forcing behavior (verify-before-complete) via code; behavior is
+surfaced via data instead (permission status controls what the user can do).
+Here we only restrict what tools the model can call. The model retains full
+agency within the filtered surface.
 
 Modes are stored on ``session.metadata["agent_mode"]``. The previous mode
 gets stashed in ``session.metadata["pre_plan_mode"]`` when entering plan
-mode, so ``exit_plan_mode`` restores the prior state (the ``prePlanMode``
-pattern from OpenClaude).
+mode, so ``exit_plan_mode`` restores the prior state.
 
-Inspirations:
-- OpenCode: declarative rulesets with wildcard matching (we simplified to
-  explicit ``frozenset`` because Durin has ~15 tools, not 100s).
-- OpenClaude: ``prePlanMode`` restore pattern.
-- Hermes: ``set_thread_tool_whitelist`` per-thread filtering — same idea,
-  ours is per-session.
+Per-session tool filtering is implemented via explicit frozensets, balancing
+expressiveness and simplicity for a ~15-tool set.
 """
 
 from __future__ import annotations
@@ -316,11 +310,10 @@ def plan_mode_runtime_lines(metadata: Any) -> list[str]:
     """Per-turn reminder lines for the runtime context block.
 
     Returns a strongly-worded reminder that gets injected alongside the
-    current user message every turn the session is in plan mode. Mirrors
-    OpenClaude's approach: a per-turn attachment-style reminder beats a
-    system-prompt suffix because the system prompt gets buried in long
-    sessions while the runtime context is always fresh near the current
-    message.
+    current user message every turn the session is in plan mode. A per-turn
+    attachment-style reminder beats a system-prompt suffix because the system
+    prompt gets buried in long sessions while the runtime context is always
+    fresh near the current message.
 
     The wording deliberately includes "supersedes any other instructions"
     because frontier models otherwise weight earlier prompt content over
@@ -356,9 +349,8 @@ EXECUTING_PLAN_PATH_KEY = "executing_plan_path"
 
 # Stall stop-condition. Bookkeeping lives in session.metadata (same store
 # as the todo list, survives compaction). Surfacing only — the runtime
-# line nudges the model to reassess; nothing is blocked (the V7/V8
-# PlanHook lesson: restrict/surface via data, never force behavior via
-# code).
+# line nudges the model to reassess; nothing is blocked — behavior is
+# controlled via data (permission flags), not code constraints.
 PLAN_STALL_COUNT_KEY = "plan_stall_count"
 PLAN_STALL_FINGERPRINT_KEY = "plan_stall_fingerprint"
 PLAN_STALL_NOTICE_KEY = "plan_stall_notice"
@@ -423,9 +415,9 @@ def executing_plan_runtime_lines(metadata: Any) -> list[str]:
     "you are executing an approved plan" frame survives compaction: the
     path lives in ``session.metadata`` and survives, but the model only
     sees it if we render it back into the runtime-context block each turn.
-    This restores the carry-over that the (refuted) ``autocompact`` module
-    used to provide by splicing plan content into the summary — but as a
-    lightweight pointer, not the content.
+    Plan summaries are spliced into the context as lightweight pointers
+    (rather than full content) to reduce token overhead while preserving
+    continuity.
 
     Crucially this is a POINTER, not the plan body: progress is tracked by
     the todo list (the execution cursor, which only moves forward), so

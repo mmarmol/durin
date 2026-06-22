@@ -71,7 +71,7 @@ def test_drift_out_of_allowlist_needs_confirm(tmp_path, monkeypatch):
     _install(ws, "x", "github:stranger/r/x", "STALEHASH")
     _patch(monkeypatch, up, "github:stranger/r/x")
     rep = skill_drift.check_upstream_drift(ws, "x", allowlist=[])  # not allowlisted
-    assert rep is not None and rep.action == "confirm"   # §8.D: not auto-incorporable
+    assert rep is not None and rep.action == "confirm"   # not auto-incorporable
 
 
 def test_local_source_is_skipped(tmp_path):

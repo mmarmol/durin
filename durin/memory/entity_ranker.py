@@ -1,7 +1,5 @@
 """L1 light retrieval ranker — Reciprocal Rank Fusion (RRF) over signals.
 
-Per doc 18 §7 + doc 23 T1.3 (post glm peer review, doc 22 A2 validated).
-
 Two pure functions:
 
 1. :func:`extract_query_entities` — case-insensitive lookup of the query
@@ -21,7 +19,7 @@ Two pure functions:
    For each candidate, final score = ``Σ 1 / (rank_in_list + RRF_K)``
    across lists in which it appears. Sorted descending.
 
-**Why RRF instead of multiplicative boost** (doc 22 A2 + doc 23 §9 G):
+**Why RRF instead of multiplicative boost**:
 LanceDB L2 distances are non-linear and corpus-dependent (can be 10-50
 for poorly-normalized embeddings); applying ``score × 1.5`` over a
 ``1/(1+d)`` normalization distorts ordering rather than improving it.

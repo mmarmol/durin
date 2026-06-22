@@ -11,8 +11,9 @@ Scopes:
   artifacts match against ``meta.json::derived`` and the source text.
 - ``all``: union of both, dreamed first.
 
-This module is intentionally simple — no vector, no fuzzy. Phase 2
-layers LanceDB on top via the same public ``search_memory`` entrypoint.
+This module is intentionally simple — no vector, no fuzzy. Vector and
+fuzzy search are layered on top via the same public ``search_memory``
+entrypoint.
 """
 
 from __future__ import annotations
@@ -50,11 +51,10 @@ _SNIPPET_RADIUS = 80
 class Result:
     """One match returned by search.
 
-    Per doc 25 §2.H (fragment/canonical retrieval contract): each result
-    carries enough metadata for the LLM to distinguish a canonical
-    entity page from a recent tagged fragment, and to know when
-    the data was valid. The model can drill into the canonical via the
-    ``entities`` pointer.
+    Each result carries enough metadata for the LLM to distinguish a
+    canonical entity page from a recent tagged fragment, and to know
+    when the data was valid. The model can drill into the canonical via
+    the ``entities`` pointer.
 
     Fields beyond the original `source / uri / headline / snippet /
     summary / body` set:
@@ -75,16 +75,16 @@ class Result:
     snippet: str
     summary: str = ""
     body: str = ""
-    # §2.H fragment/canonical contract fields. All optional with safe
-    # defaults so existing callers (and grep paths that don't have the
-    # info yet) keep working.
+    # Fragment/canonical contract fields. All optional with safe defaults
+    # so existing callers (and grep paths that don't have the info yet)
+    # keep working.
     class_name: str = ""
     valid_from: str = ""
     entities: tuple[str, ...] = ()
 
     @property
     def kind(self) -> str:
-        """Marker label for the §2.H contract. One of:
+        """Marker label for this result. One of:
 
         - ``"canonical"`` — entity_page row
         - ``"fragment"`` — episodic/stable/corpus/pending entry
@@ -106,8 +106,8 @@ class Result:
             "uri": self.uri,
             "headline": self.headline,
             "snippet": self.snippet,
-            # §2.H: kind is the marker the LLM uses to decide whether
-            # to treat this as the main answer or as recent context.
+            # kind is the marker the LLM uses to decide whether to treat
+            # this as the main answer or as recent context.
             "kind": self.kind,
         }
         if self.summary:
@@ -122,14 +122,13 @@ class Result:
             d["entities"] = list(self.entities)
         return d
 
-    # Audit F4 (2026-05-28): `render_block` retired. The LLM-facing
-    # rendering moved to `durin.memory.sectioned_output.render_sectioned`,
-    # which groups hits by section, adds intros, applies the
-    # per-source cap (doc 03 §12.4), and emits per-block markers
-    # with the same END / body-preference / entities-tail semantics
-    # this method used to provide. Direct callers should consume
-    # `to_dict()` for raw fields and `sectioned_rendered` from the
-    # tool response for the marker output.
+    # `render_block` retired. The LLM-facing rendering moved to
+    # `durin.memory.sectioned_output.render_sectioned`, which groups
+    # hits by section, adds intros, applies the per-source cap, and
+    # emits per-block markers with the same END / body-preference /
+    # entities-tail semantics this method used to provide. Direct
+    # callers should consume `to_dict()` for raw fields and
+    # `sectioned_rendered` from the tool response for the marker output.
 
 
 def search_memory(
@@ -166,11 +165,11 @@ def search_dreamed(
 ) -> list[Result]:
     """Grep over ``memory/<class>/*.md`` plus ``memory/entities/<type>/*.md``.
 
-    Per doc 25 §2.H: canonical entity pages and per-entry fragments
-    must both be reachable from the lazy retrieval path so the LLM can
-    receive them with the right marker. Previously this function only
-    walked the four legacy classes (stable/episodic/corpus/pending) —
-    canonical pages were vector-only, breaking the fallback contract.
+    Canonical entity pages and per-entry fragments must both be
+    reachable from the lazy retrieval path so the LLM can receive them
+    with the right marker. Previously this function only walked the four
+    legacy classes (stable/episodic/corpus/pending) — canonical pages
+    were vector-only, breaking the fallback contract.
     """
     needle_low = needle.lower()
     results: list[Result] = []
@@ -195,9 +194,9 @@ def search_dreamed(
                     snippet=snippet,
                     summary=entry.summary if level == "warm" else "",
                     body=entry.body if level == "cold" else "",
-                    # §2.H: carry the fields the LLM needs to tell a
-                    # fragment from a canonical and to know its time
-                    # reference + which entity it pertains to.
+                    # Carry the fields the LLM needs to tell a fragment
+                    # from a canonical and to know its time reference +
+                    # which entity it pertains to.
                     class_name=class_name,
                     valid_from=(
                         entry.valid_from.isoformat() if entry.valid_from else ""
@@ -206,9 +205,9 @@ def search_dreamed(
                 )
             )
 
-    # §2.H: also walk canonical entity pages — these are the "main
-    # memory" that fragments above amend. Skip the `archive/`
-    # subfolders (absorbed pages stay reachable via expand only).
+    # Also walk canonical entity pages — these are the "main memory"
+    # that fragments above amend. Skip the `archive/` subfolders
+    # (absorbed pages stay reachable via expand only).
     results.extend(_search_entity_pages(memory_root, needle_low, level))
     # G2: coherent reference docs (memory/references/) are authoritative
     # consolidated knowledge — surface them in the dreamed tier too.
@@ -233,8 +232,8 @@ def _search_entity_pages(
 ) -> list[Result]:
     """Grep over ``memory/entities/<type>/<slug>.md`` (canonical pages).
 
-    Returns results with ``class_name="entity_page"`` so the §2.H
-    contract surfaces them as CANONICAL when rendered.
+    Returns results with ``class_name="entity_page"`` so they surface
+    as CANONICAL when rendered.
     """
     from durin.memory.entity_page import EntityPage
 
@@ -270,7 +269,7 @@ def _search_entity_pages(
                 class_name="entity_page",
                 # Entity pages don't carry a single valid_from; the
                 # body uses prose ("since 2026-03-15...") for
-                # temporal claims, per doc 18 §6 protocol α.
+                # temporal claims.
                 valid_from="",
                 entities=(ref,),
             )
@@ -286,9 +285,8 @@ def _search_reference_pages(
     """Grep over ``memory/references/<slug>.md`` (coherent reference docs).
 
     Returns results with ``class_name="reference"``. References are
-    authoritative consolidated knowledge (design §2.8), so they live in the
-    dreamed tier alongside canonical entity pages. (G2: previously references
-    were not surfaced by any searcher.)
+    authoritative consolidated knowledge, so they live in the dreamed
+    tier alongside canonical entity pages.
     """
     from durin.memory.indexer import _reference_title_body
 
@@ -330,10 +328,10 @@ def search_skills(
     Mirrors :func:`_search_entity_pages` but rooted at ``skills/``: walks
     via :func:`walk_skills`, parses each via :class:`SkillPage`, and
     substring-matches the needle against name + description + body. Emits
-    ``Result(class_name="skill")`` so the §2.H contract surfaces the hit
-    as a SKILL when rendered. This is the grep fallback the dispatcher
-    uses when the vector index is cold/absent — a freshly authored skill
-    that hasn't been embedded yet is still reachable here.
+    ``Result(class_name="skill")`` so the hit surfaces as a SKILL when
+    rendered. This is the grep fallback the dispatcher uses when the
+    vector index is cold/absent — a freshly authored skill that hasn't
+    been embedded yet is still reachable here.
 
     Disabled skills (``disable_model_invocation``) and unreadable files
     are skipped silently, matching the rebuild walkers.
@@ -359,7 +357,7 @@ def search_skills(
         out.append(
             Result(
                 source="memory",
-                # B1 (2026-06-03): emit the canonical `skill/<slug>`
+                # Emit the canonical `skill/<slug>`
                 # fusion uri so the grep arm fuses with vector + FTS for
                 # the same skill (instead of splitting under
                 # `skills/<slug>/SKILL.md`). The result layer

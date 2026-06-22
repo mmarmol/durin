@@ -2,7 +2,7 @@
 
 Auto-discovered into the agent's ``core`` toolset (like ``skill_audit`` /
 ``skill_edit``). Returns the Skills-Surface read model so the agent can list
-active skills (with the §8.C verdict/findings) plus the import quarantine from
+active skills (with the security verdict/findings) plus the import quarantine from
 any chat, without re-running a scan by hand. Read-only.
 
 Optional ``status`` filter (``active`` | ``quarantined``) narrows the result to

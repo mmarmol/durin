@@ -1,17 +1,13 @@
-"""G3 (audit fourth pass, 2026-05-28): `memory.index.staleness_detected`
-emits `delta_seconds` when `reason='mtime_lag'`.
+"""`memory.index.staleness_detected` emits `delta_seconds` when `reason='mtime_lag'`.
 
-F11 dropped this field from doc 07 §9.3 claiming "the delta is
-implicit in the join with `memory.index.write` posterior". That
-justification was technically wrong: the recovery latency
-(write_time - detect_time) is a different metric from the
-staleness magnitude (file_mtime - indexed_mtime). Without the
-magnitude, an operator can only count staleness events but not
-graph p50/p95 of how far behind the watcher fell.
+The recovery latency (write_time - detect_time) is a different metric from
+the staleness magnitude (file_mtime - indexed_mtime). Without the magnitude,
+an operator can only count staleness events but not graph p50/p95 of how far
+behind the watcher fell.
 
-G3 ships the field as `NotRequired[float]` — set only on
-`mtime_lag` events where the delta is meaningful (missing_row and
-row_for_missing_file have no indexed_mtime to compare).
+The field is `NotRequired[float]` — set only on `mtime_lag` events where the
+delta is meaningful (missing_row and row_for_missing_file have no indexed_mtime
+to compare).
 """
 
 from __future__ import annotations

@@ -73,8 +73,8 @@ def test_stable_layer_isolated_from_volatile(tmp_path):
 
 def test_volatile_blocks_appear_after_stable(builder):
     """The volatile signal (the session summary) must land AFTER the stable
-    prefix — never before. §8e removed the legacy MEMORY.md + history.jsonl
-    volatile blocks; that knowledge now lives in the stable pinned/hot tier, so
+    prefix — never before. The legacy MEMORY.md + history.jsonl volatile blocks
+    were removed; that knowledge now lives in the stable pinned/hot tier, so
     the compaction summary is the remaining volatile signal."""
     prompt = builder.build_system_prompt(
         channel="cli", session_summary="Past discussion summarized."

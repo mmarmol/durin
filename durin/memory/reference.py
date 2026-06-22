@@ -1,4 +1,4 @@
-"""References — coherent ingested documents kept WHOLE (design §2.3/§2.8).
+"""References — coherent ingested documents kept WHOLE.
 
 A reference is stored intact (never synthesized by dream) under
 ``memory/references/<slug>.md`` with a REFERENCE marker. A token-aware chunk
@@ -6,7 +6,7 @@ index (<=512 tokens each — the e5-small embedder's max_seq) is written
 alongside as a ``.chunks.jsonl`` sidecar, every chunk carrying a ``parent``
 pointer back to the reference so a fragment hit can pull the whole document.
 
-The whole doc is the FTS unit; the chunks are the vector unit (design §2.8).
+The whole doc is the FTS unit; the chunks are the vector unit.
 Wiring the chunks into the live FTS/vector index is a follow-on; this module
 owns the storage model + token-aware chunking.
 """

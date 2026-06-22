@@ -2,9 +2,9 @@
 
 Reads raw conversation turns about an entity and extracts STRUCTURED
 ATTRIBUTES, applying them as field author ``dream`` via ``memory_writer``
-(design §2.6/§2.7, decision b: dream owns the attribute schema; the agent
-owns name/aliases/relations/body). Per-field precedence (user > dream >
-agent) means a user-set attribute is never overwritten by extraction.
+(dream owns the attribute schema; the agent owns name/aliases/relations/body).
+Per-field precedence (user > dream > agent) means a user-set attribute is
+never overwritten by extraction.
 
 This is the CORE extractor: ``extract_entity(workspace, ref, turns)``. The
 discovery/orchestration (which sessions, which entities, the per-session
@@ -98,7 +98,7 @@ def extract_entity(
 ) -> WriteResult:
     """Extract attributes for ``entity_ref`` from ``turns`` and apply as dream."""
     llm_invoke = llm_invoke or default_llm_invoke
-    # §2.13: the extract dream respects a delete tombstone — it never re-creates
+    # The extract dream respects a delete tombstone — it never re-creates
     # an entity the user deleted (the user overrides by explicitly re-authoring).
     from durin.memory.deletion import is_deleted
     if is_deleted(workspace, entity_ref):
@@ -213,7 +213,7 @@ def discover_entities(
     source_ref: str | None = None,
 ) -> list[dict[str, Any]]:
     """Discover entities mentioned in ``turns`` that the agent did NOT upsert and
-    write them as dream-authored pages (design §5).
+    write them as dream-authored pages.
 
     Skips refs already handled by the precise extract stage (``existing_refs``)
     and refs under a delete tombstone (a user-deleted entity is never re-created).

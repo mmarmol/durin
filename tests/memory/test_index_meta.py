@@ -1,16 +1,13 @@
 """Index meta.json helper.
 
-Per `docs/architecture/memory/02_indexing.md` §2 + §7.2:
-
 - Lives at `<workspace>/.durin/index/meta.json`.
 - Carries `schema_version` (int) and `embedding_model_id` (str).
 - Missing → fresh install (caller treats as empty).
 - Read returns a frozen dataclass-ish record.
 - Write is atomic (tmp + rename).
 
-Phase 0 scope: the **field is present** (read + write + load returns
-None when missing). The §7.2 "refuse on mismatch" enforcement consumer
-is a later phase.
+Scope: the **field is present** (read + write + load returns None when
+missing). The "refuse on mismatch" enforcement consumer is a later phase.
 """
 
 from __future__ import annotations

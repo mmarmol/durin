@@ -4,7 +4,8 @@ Two processes each add a DIFFERENT secret concurrently to the same
 secrets.json. Without a lock the RMW race drops one secret. With
 cross_process_lock wrapping load→mutate→save both survive.
 
-See docs/architecture/concurrency.md for lock-ordering invariants.
+Cross-process lock ordering: cross_process_lock wraps the load→mutate→save
+sequence to prevent lost-update races on secrets.json.
 """
 
 from __future__ import annotations

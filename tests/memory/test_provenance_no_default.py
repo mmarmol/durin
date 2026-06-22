@@ -1,11 +1,8 @@
-"""`current_author` raises when no scope is active (option C: no default).
+"""`current_author` raises when no scope is active (explicit-only contract).
 
-Lock the explicit-only contract: every memory write declares its
-author via :func:`author_scope`. Calling :func:`current_author`
-outside an active scope must raise loud, not silently produce a
-default that masks "I forgot to wrap" bugs.
-
-Doc reference: `docs/architecture/memory/99_phase_progress_review.md` D2.
+Every memory write declares its author via :func:`author_scope`. Calling
+:func:`current_author` outside an active scope must raise loud, not silently
+produce a default that masks "I forgot to wrap" bugs.
 """
 
 from __future__ import annotations

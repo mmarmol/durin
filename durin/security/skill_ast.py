@@ -1,4 +1,4 @@
-"""Stdlib-AST behavioral scan for bundled Python scripts (spec §4.c).
+"""Stdlib-AST behavioral scan for bundled Python scripts.
 
 Catches dangerous call shapes that regex over/under-matches. Python-only; ``.sh``
 and other languages stay regex-covered in ``skill_scan``. Never raises — a syntax
@@ -13,8 +13,8 @@ from durin.security.skill_scan import Finding
 # Dotted call names to flag regardless of args, mapped to ``(label, severity)``.
 # ``compile`` is CAUTION not dangerous: it produces a code object but does not
 # execute — execution needs a subsequent ``exec``/``eval``, which is flagged
-# ``dangerous`` on its own (so ``exec(compile(...))`` stays dangerous). See
-# docs/architecture/skills/00_overview.md (security scan). ``subprocess.*`` is
+# ``dangerous`` on its own (so ``exec(compile(...))`` stays dangerous).
+# ``subprocess.*`` is
 # deliberately NOT here: a plain ``subprocess.run`` is common and benign — only
 # ``shell=True`` is flagged, by the dedicated check below.
 _DANGER_CALLS = {

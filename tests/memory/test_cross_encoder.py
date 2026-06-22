@@ -1,8 +1,8 @@
-"""Cross-encoder reranker (P4.1 / doc 03 §9).
+"""Cross-encoder reranker.
 
 Opt-in step 5 of the search pipeline. Default model
-`jinaai/jina-reranker-v2-base-multilingual` (per spec); tests stub
-the scorer so the heavy dep isn't required for CI.
+`jinaai/jina-reranker-v2-base-multilingual`; tests stub the scorer
+so the heavy dep isn't required for CI.
 """
 
 from __future__ import annotations
@@ -65,8 +65,8 @@ def test_batch_size_configurable() -> None:
 
 
 def test_scorer_failure_returns_none() -> None:
-    """Per doc 03 §9.4: model load failure / inference crash → return
-    None so the pipeline can skip the rerank step gracefully."""
+    """Model load failure / inference crash → return None so the pipeline
+    can skip the rerank step gracefully."""
     class _Broken:
         def score(self, pairs):
             raise RuntimeError("model OOM")

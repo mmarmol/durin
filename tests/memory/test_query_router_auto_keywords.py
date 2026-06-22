@@ -1,4 +1,4 @@
-"""Auto-keyword detection in the query router (P3.3 / doc 03 §3.1).
+"""Auto-keyword detection in the query router.
 
 When the query contains an exact identifier (email, URL, UUID,
 file path), the router surfaces it as `auto_keywords` so the

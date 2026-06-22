@@ -5,7 +5,7 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
 _IDENTITY = _ROOT / "durin" / "templates" / "agent" / "identity.md"
-_DOC06 = _ROOT / "docs" / "architecture" / "memory" / "06_prompts_and_instructions.md"
+_DOC06 = _ROOT / "docs" / "internals" / "memory" / "06_prompts_and_instructions.md"
 _SKILLS_SECTION = _ROOT / "durin" / "templates" / "agent" / "skills_section.md"
 
 def _norm(p: Path) -> str:
@@ -24,7 +24,7 @@ def test_identity_search_results_say_follow_not_cite():
     assert "follow" in t and "skill" in t
 
 def test_doc06_skill_bullet_in_sync_with_identity():
-    # the skill kind bullet must appear in BOTH identity.md and doc 06 §2
+    # the skill kind bullet must appear in BOTH identity.md and the prompts doc
     assert "Skills" in _norm(_IDENTITY)
     assert "Skills" in _norm(_DOC06)
 
@@ -38,7 +38,7 @@ def test_skills_section_reframed_as_working_set_with_search_nudge():
     t = _norm(_SKILLS_SECTION).lower()
     # the stale "always available [full catalog]" claim is gone
     assert "always available" not in t
-    # the §5.2 nudge: search when the shown skills don't cover the task
+    # nudge: search when the shown skills don't cover the task
     assert "memory_search" in t
     assert ("if nothing" in t or "if none" in t or "don't cover" in t
             or "doesn't cover" in t)

@@ -42,7 +42,7 @@ from typing import NotRequired, TypedDict
 
 class CircuitBreakerIdleTimeoutEvent(TypedDict):
     """Idle-timeout circuit breaker tripped after N consecutive provider
-    timeouts (Tier 1 2C)."""
+    timeouts."""
     consecutive_timeouts: int
     threshold: int
     iteration: int
@@ -51,7 +51,7 @@ class CircuitBreakerIdleTimeoutEvent(TypedDict):
 
 class MidTurnPrecheckOverflowEvent(TypedDict):
     """Post-sanitize prompt still exceeded the input budget; turn was
-    aborted BEFORE making the LLM call (Tier 2 A2)."""
+    aborted BEFORE making the LLM call."""
     iteration: int
     session_key: NotRequired[str | None]
     estimated_tokens: int
@@ -60,7 +60,7 @@ class MidTurnPrecheckOverflowEvent(TypedDict):
 
 class UnknownToolLoopGuardEvent(TypedDict):
     """Model called an unknown tool name more than ``threshold`` times
-    within one turn (Tier 2 B2)."""
+    within one turn."""
     tool_name: str
     attempts: int
     threshold: int
@@ -70,7 +70,7 @@ class UnknownToolLoopGuardEvent(TypedDict):
 
 class PostCompactionLoopTrippedEvent(TypedDict):
     """Same ``(tool_name, args_hash, result_hash)`` triple repeated
-    ``window_size`` times after a successful compaction (Tier 2 C2)."""
+    ``window_size`` times after a successful compaction."""
     tool_name: str
     repeat_count: int
     iteration: int
@@ -79,7 +79,7 @@ class PostCompactionLoopTrippedEvent(TypedDict):
 
 class TurnBudgetEnforcedEvent(TypedDict):
     """Aggregate tool-result size exceeded the per-turn budget; the
-    largest results were spilled to disk (Tier 1 2H)."""
+    largest results were spilled to disk."""
     session_key: NotRequired[str | None]
     budget_chars: int
     before_chars: int
@@ -95,7 +95,7 @@ class TurnBudgetEnforcedEvent(TypedDict):
 
 class CompactionPreemptiveTriggerEvent(TypedDict):
     """Consolidation fired BEFORE the input budget ceiling because the
-    pre-emptive ratio kicked in (Tier 2 A1)."""
+    pre-emptive ratio kicked in."""
     session_key: str
     estimated_tokens: int
     trigger_tokens: int
@@ -106,7 +106,7 @@ class CompactionPreemptiveTriggerEvent(TypedDict):
 
 class CompactionGraceExtendedEvent(TypedDict):
     """LLM wall-clock timeout would have fired during active compaction;
-    deadline extended by one grace window (Tier 1 2F)."""
+    deadline extended by one grace window."""
     base_timeout_s: float
     grace_s: float
     session_key: NotRequired[str | None]
@@ -114,7 +114,7 @@ class CompactionGraceExtendedEvent(TypedDict):
 
 class CompactionLockTimeoutEvent(TypedDict):
     """Per-session compaction lock acquisition timed out — a prior
-    compaction is still holding it (Tier 2 A3)."""
+    compaction is still holding it."""
     session_key: str
     timeout_s: float
 
@@ -125,9 +125,8 @@ class CompactionLockTimeoutEvent(TypedDict):
 
 
 class ProviderParallelToolCallsInjectedEvent(TypedDict):
-    """Per-model ``parallel_tool_calls`` override fired (Tier 1 2G).
-    Emitted at most once per (model, value, needle) per process —
-    audit follow-up P1.2a."""
+    """Per-model ``parallel_tool_calls`` override fired.
+    Emitted at most once per (model, value, needle) per process."""
     model: str
     value: bool
     match_needle: str
@@ -135,8 +134,7 @@ class ProviderParallelToolCallsInjectedEvent(TypedDict):
 
 class ToolCallArgumentRepairEvent(TypedDict):
     """Tool-call argument JSON needed pre-processing before
-    ``json_repair.loads`` (HTML entities, leading/trailing garbage) —
-    Tier 2 B1."""
+    ``json_repair.loads`` (HTML entities, leading/trailing garbage)."""
     repairs: list[str]
     original_len: int
     cleaned_len: int
@@ -176,8 +174,7 @@ class CacheUsageEvent(TypedDict):
 
 class HistoryMediaPrunedEvent(TypedDict):
     """History image/audio prune removed at least one media block from
-    a completed turn older than the preservation window (Tier 2 B3,
-    audit follow-up P1.2b)."""
+    a completed turn older than the preservation window."""
     image_blocks_removed: int
     audio_blocks_removed: int
     preserve_turns: int
@@ -237,7 +234,7 @@ class TurnMemoryUsageEvent(TypedDict):
 
 
 # ===========================================================================
-# Agent mode (Sprint B / L3)
+# Agent mode
 # ===========================================================================
 
 
@@ -544,12 +541,11 @@ class SleepEndEvent(TypedDict):
 class MemoryRecallEvent(TypedDict):
     """memory_search invocation. Logged once per call (not per result).
 
-    Audit E1 (2026-05-28): payload extended to match docs/architecture/memory/07
-    §4.1. Diagnostic fields (`strategy`, `duration_ms`,
-    `total_candidates`) emit on every call. `keywords` carries the
-    LLM-supplied hint string (None when omitted). `recovered_from` +
-    `recovery_duration_ms` only emit on degraded runs — matches the
-    tool response shape, which omits them on clean runs.
+    Diagnostic fields (`strategy`, `duration_ms`, `total_candidates`)
+    emit on every call. `keywords` carries the LLM-supplied hint string
+    (None when omitted). `recovered_from` + `recovery_duration_ms` only
+    emit on degraded runs — matches the tool response shape, which omits
+    them on clean runs.
     """
 
     query: str
@@ -561,9 +557,9 @@ class MemoryRecallEvent(TypedDict):
     total_candidates: int
     skill_result_count: NotRequired[int]
     keywords: NotRequired[str | None]
-    # P4 (2026-06-10): hits collapsed to pointer lines because their
-    # rendered content was already in the caller's hot layer. 0 when
-    # nothing deduped or when dedup is off (subagent scope).
+    # Hits collapsed to pointer lines because their rendered content was
+    # already in the caller's hot layer. 0 when nothing deduped or when
+    # dedup is off (subagent scope).
     in_context_deduped: NotRequired[int]
     recovered_from: NotRequired[list[str]]
     recovery_duration_ms: NotRequired[float]
@@ -627,10 +623,9 @@ class MemoryRecallVectorEvent(TypedDict):
     Separate from ``memory.recall`` (the generic grep-or-vector summary
     event) so dashboards can split latency / hit count by strategy.
 
-    Entity-aware ranking telemetry (S2 per archived doc 24) piggy-backs
-    on this event instead of duplicating into ``memory.recall.entity_aware``
-    so consumers can correlate distance-based vs entity-boosted retrieval
-    on a single record.
+    Entity-aware ranking telemetry piggy-backs on this event instead of
+    duplicating into ``memory.recall.entity_aware`` so consumers can
+    correlate distance-based vs entity-boosted retrieval on a single record.
     """
 
     query: str
@@ -638,8 +633,8 @@ class MemoryRecallVectorEvent(TypedDict):
     embedding_model: str
     hit_count: int
     duration_ms: float
-    # Entity-aware ranking fields (S2 doc 24). NotRequired so the schema
-    # accepts older events that pre-date W1 wiring.
+    # Entity-aware ranking fields. NotRequired so the schema accepts older
+    # events that pre-date the entity-aware wiring.
     ranking: NotRequired[str]                 # "default" | "entity_aware"
     query_entities_count: NotRequired[int]
     reordered: NotRequired[bool]              # True if top-1 changed pre/post rerank
@@ -679,7 +674,7 @@ class MemoryDreamEndEvent(TypedDict):
 
 
 class MemoryAbsorbJudgedEvent(TypedDict):
-    """LLM-judge ran on an alias-overlap candidate pair (doc 25 §2.D).
+    """LLM-judge ran on an alias-overlap candidate pair.
 
     Emitted for every candidate that survived the cross-type filter
     and the 24h quarantine — i.e. every pair that actually reached
@@ -697,7 +692,7 @@ class MemoryAbsorbJudgedEvent(TypedDict):
 
 
 class MemoryAbsorbAutoMergedEvent(TypedDict):
-    """Auto-absorb actually ran a merge (doc 25 §2.D).
+    """Auto-absorb actually ran a merge.
 
     Emitted after :meth:`EntityAbsorption.absorb` succeeds via the
     auto-trigger path. ``sha`` points to the merge commit (empty
@@ -714,14 +709,14 @@ class MemoryAbsorbAutoMergedEvent(TypedDict):
 
 
 class MemoryAbsorbSkippedEvent(TypedDict):
-    """Auto-absorb considered a candidate but did not merge (doc 25 §2.D).
+    """Auto-absorb considered a candidate but did not merge.
 
     Reasons:
 
     - ``"cross_type"``: candidate refs span different entity types
       (e.g. person:marcelo vs project:marcelo) — filtered before judge.
     - ``"quarantine"``: at least one page is younger than ``min_age_hours``
-      (mitigates premature consolidation per glm peer review C3).
+      (mitigates premature consolidation).
     - ``"below_threshold"``: judge said "same" but confidence < floor.
     - ``"verdict_different"`` / ``"verdict_unclear"``: judge declined.
     - ``"judge_failed"``: LLM call or parse failure after all retries.
@@ -737,7 +732,7 @@ class MemoryAbsorbSkippedEvent(TypedDict):
 
 
 class MemoryAbsorbRevertedEvent(TypedDict):
-    """A previously auto-absorbed merge was reverted (doc 25 §2.D + glm C5).
+    """A previously auto-absorbed merge was reverted.
 
     Emitted from ``durin memory revert`` when the target commit's
     trailers include ``Reason: auto``. This is the "regret rate"
@@ -754,12 +749,11 @@ class MemoryAbsorbRevertedEvent(TypedDict):
 
 
 class MemoryStoreBlockedNearDuplicateEvent(TypedDict):
-    """memory_store dedup pre-persist (T1.7 per archived doc 23) refused
-    a write because the embedding distance to an existing entry fell
-    below the configured threshold. The model receives a warning and may
-    re-call with ``force=True`` to bypass; this event records the
-    underlying decision so the §2.D gate can be measured ("duplicates
-    detected per month").
+    """memory_store dedup pre-persist refused a write because the embedding
+    distance to an existing entry fell below the configured threshold. The
+    model receives a warning and may re-call with ``force=True`` to bypass;
+    this event records the underlying decision so duplicate rates can be
+    measured over time.
     """
 
     candidate_class_name: str
@@ -789,11 +783,11 @@ class MemoryDreamPatchAppliedEvent(TypedDict):
 class MemoryDreamDiscoverEvent(TypedDict):
     """The extract dream's mention-discovery stage processed one session.
 
-    Stage 2 of the extract pass (doc 05 §2.1): it found durable facts about
-    entities the agent did NOT upsert and wrote them as dream-authored pages.
-    ``proposed`` is what the LLM returned; ``written`` is what was committed
-    (new/updated entities); ``skipped`` were dropped as already-handled (stage 1)
-    or tombstoned. Lets dashboards measure discovery precision over time.
+    It found durable facts about entities the agent did NOT upsert and
+    wrote them as dream-authored pages. ``proposed`` is what the LLM
+    returned; ``written`` is what was committed (new/updated entities);
+    ``skipped`` were dropped as already-handled or tombstoned. Lets
+    dashboards measure discovery precision over time.
     """
 
     proposed: int
@@ -804,9 +798,8 @@ class MemoryDreamDiscoverEvent(TypedDict):
 
 class MemoryEntityRelationCapWarnedEvent(TypedDict):
     """An entity write took its relation count across the soft cap (50). The
-    write proceeded (alert-only, A3 2026-06-06, `memory_writer._emit_relation_
-    cap`); this event lets dashboards spot mega-hub formation before sub-paging
-    (audit B-14) becomes necessary.
+    write proceeded (alert-only); this event lets dashboards spot mega-hub
+    formation before sub-paging becomes necessary.
     """
 
     entity_ref: str
@@ -817,10 +810,10 @@ class MemoryEntityRelationCapWarnedEvent(TypedDict):
 
 
 class MemoryEntityRelationCapRejectedEvent(TypedDict):
-    """An entity write crossed the hard relation cap (200). A3 (2026-06-06):
-    this is ALERT-ONLY — the write is NOT blocked and no relation is dropped
-    (`memory_writer._emit_relation_cap`); the event is the operator signal that
-    an entity has grown a pathological number of relations.
+    """An entity write crossed the hard relation cap (200). This is
+    ALERT-ONLY — the write is NOT blocked and no relation is dropped;
+    the event is the operator signal that an entity has grown a
+    pathological number of relations.
     """
 
     entity_ref: str
@@ -831,7 +824,7 @@ class MemoryEntityRelationCapRejectedEvent(TypedDict):
 
 
 class MemoryIndexWriteEvent(TypedDict):
-    """One upsert into the FTS5 lexical index (doc 07 §9.1).
+    """One upsert into the FTS5 lexical index.
 
     Fires per file written, so dashboards can detect bursty writes
     (e.g., during dream consolidations or drift repairs) vs
@@ -839,11 +832,9 @@ class MemoryIndexWriteEvent(TypedDict):
     (lexical) or ``"lancedb"`` (vector); only ``"fts"`` is emitted
     today since `reindex_one_file` only writes the FTS row.
 
-    Audit E5 (2026-05-28) added ``trigger`` + ``duration_ms`` to
-    close the two documented dashboards: doc 07 §10.3
-    (``index_write_p95_ms`` < 50ms per row) and doc 09 §216
-    (FTS5 trigram capacity monitoring needs to split watcher steady
-    state from dream/drift bursts).
+    ``trigger`` + ``duration_ms`` enable dashboards to measure
+    index write latency and split watcher steady state from
+    dream/drift bursts.
     """
 
     uri: str
@@ -856,7 +847,7 @@ class MemoryIndexWriteEvent(TypedDict):
 
 
 class MemoryIndexRebuildEvent(TypedDict):
-    """A full index rebuild completed (doc 07 §9.2).
+    """A full index rebuild completed.
 
     Emitted by ``durin reindex``. ``target`` is ``"fts"``,
     ``"lancedb"``, or ``"all"``. ``indexed`` + ``errors`` mirror
@@ -872,7 +863,7 @@ class MemoryIndexRebuildEvent(TypedDict):
 
 
 class MemoryIndexStalenessDetectedEvent(TypedDict):
-    """The on-disk index disagrees with the markdown source (doc 07 §9.3).
+    """The on-disk index disagrees with the markdown source.
 
     Emitted by the health-check cron when it spots a uri whose
     ``fts_meta.mtime`` lags behind the file's mtime, or a file under
@@ -880,16 +871,13 @@ class MemoryIndexStalenessDetectedEvent(TypedDict):
     detection signal so dashboards can split "missing row" vs "stale
     mtime" trends.
 
-    Audit G3 (2026-05-28): ``delta_seconds`` ships the staleness
-    magnitude (``current_file_mtime - indexed_mtime``) but only on
+    ``delta_seconds`` carries the staleness magnitude
+    (``current_file_mtime - indexed_mtime``) but only on
     ``reason='mtime_lag'`` — the other two reasons have no
     indexed_mtime to compare against. Dashboards graph p50/p95 of
-    ``delta_seconds`` to detect watcher gap regressions; pre-G3 they
-    could only count events without knowing how far behind the
-    watcher fell. F11 wrongly justified dropping the field as
-    "implicit in the join with memory.index.write" — recovery
-    latency (write_time - detect_time) and staleness magnitude are
-    different metrics.
+    ``delta_seconds`` to detect watcher gap regressions. Note that
+    recovery latency (write_time - detect_time) and staleness magnitude
+    are different metrics.
     """
 
     uri: str
@@ -900,7 +888,7 @@ class MemoryIndexStalenessDetectedEvent(TypedDict):
 
 
 class MemoryRecallLexicalEvent(TypedDict):
-    """One FTS5 lexical search ran (doc 07 §4.3).
+    """One FTS5 lexical search ran.
 
     ``route`` is the value of
     :class:`durin.memory.query_router.LexicalRoute`
@@ -919,7 +907,7 @@ class MemoryRecallLexicalEvent(TypedDict):
 
 
 class MemoryRecallRRFEvent(TypedDict):
-    """Cross-source RRF fusion completed (doc 07 §4.5).
+    """Cross-source RRF fusion completed.
 
     Logs the per-source contribution so dashboards can see whether the
     vector / lexical / grep paths each surfaced anything. ``boosted``
@@ -938,7 +926,7 @@ class MemoryRecallRRFEvent(TypedDict):
 
 
 class MemoryRecallGrepVerifyEvent(TypedDict):
-    """Grep-verify boost step completed (doc 03 §7.4).
+    """Grep-verify boost step completed.
 
     Emitted when the pipeline literally re-verified vector-sourced
     hits that the lexical top-50 missed. ``candidates`` is how many
@@ -954,13 +942,13 @@ class MemoryRecallGrepVerifyEvent(TypedDict):
 
 
 class MemoryRecallRerankEvent(TypedDict):
-    """Cross-encoder rerank step completed (doc 07 §4.4 / doc 03 §9).
+    """Cross-encoder rerank step completed.
 
     Emitted whenever the opt-in reranker ran. ``output_count``
     reflects the candidates carried forward (the reordered top-50).
     ``blend_alpha`` is the CE weight in the RRF/CE blend (0.0 when the
     CE fell through); ``fallback`` is True when the CE failed to score
-    and the RRF order was kept verbatim (P-CE-blend, 2026-06-11).
+    and the RRF order was kept verbatim.
     """
 
     input_count: int
@@ -973,8 +961,7 @@ class MemoryRecallRerankEvent(TypedDict):
 
 
 class MemoryRecallFailureEvent(TypedDict):
-    """A search-path component failed and the pipeline recovered or
-    degraded (audit B9 / doc 07 §8.1).
+    """A search-path component failed and the pipeline recovered or degraded.
 
     Emitted once per `run_search_pipeline` invocation where at least
     one of the safe wrappers (`_safe_vector_search`,
@@ -1017,16 +1004,15 @@ class MemorySkillMissEvent(TypedDict):
 
 
 class MemoryHealthCheckEvent(TypedDict):
-    """One health-check tick completed (doc 02 §5.1 + doc 07 §9.4).
+    """One health-check tick completed.
 
     ``status`` is the aggregate label (``ok`` / ``degraded`` /
     ``critical``); ``components`` carries per-probe status
     (``fts`` / ``lance`` / future additions).
 
-    Audit A6 (2026-05-28) added ``tick_id`` (per-tick UUID hex for
-    log correlation) and ``duration_ms`` (wall-clock of the tick).
-    Both fields are required — adding them is additive vs. the
-    pre-A6 payload, and no consumer pinned to the prior shape.
+    ``tick_id`` (per-tick UUID hex) and ``duration_ms`` (wall-clock of
+    the tick) are required fields enabling log correlation and latency
+    tracking.
     """
 
     tick_id: str
@@ -1040,15 +1026,14 @@ class MemoryHealthCheckEvent(TypedDict):
 
 
 class MemoryHealthCriticalEvent(TypedDict):
-    """A component crossed the consecutive-failure threshold (doc 02
-    §5.1 escalation rule; doc 07 §9.5).
+    """A component crossed the consecutive-failure threshold.
 
     Emitted once per component per failure burst. Reset on the next
     successful tick.
 
-    Audit A7 (2026-05-28) added ``manual_recovery_hint`` — the CLI
-    command an operator runs to rebuild the failed component
-    (informational; nothing executes it automatically).
+    ``manual_recovery_hint`` carries the CLI command an operator runs
+    to rebuild the failed component (informational; nothing executes
+    it automatically).
     """
 
     component: str
@@ -1061,15 +1046,12 @@ class MemoryHealthCriticalEvent(TypedDict):
 
 class MemoryFallbackToolUsedEvent(TypedDict):
     """Agent invoked a non-memory tool (grep / list_dir / read_file /
-    etc.) while a memory-enabled workspace was active (audit H17,
-    2026-05-29).
+    etc.) while a memory-enabled workspace was active.
 
-    Pattern observed in bench-100 v8: 27 / 102 traces (26%) fell to
-    grep after exhausting memory_search/memory_drill candidates.
-    The agent's fallback is rational — try the curated tool, fall
-    back to raw search — but the high rate masks a memory_search
-    recall gap. This event lets dashboards quantify the rate
-    longitudinally without re-instrumenting per-tool.
+    The agent's fallback is rational — try the curated tool, fall back
+    to raw search — but a high rate masks a memory_search recall gap.
+    This event lets dashboards quantify the fallback rate longitudinally
+    without re-instrumenting per-tool.
 
     ``is_bench_relevant`` is True when the tool is one of the
     filesystem-scanning fallbacks (grep / list_dir / read_file /
@@ -1085,7 +1067,7 @@ class MemoryFallbackToolUsedEvent(TypedDict):
 
 
 class MemoryHotLayerFailureEvent(TypedDict):
-    """Hot-layer assembly failed for one component (per doc 06 §8.7).
+    """Hot-layer assembly failed for one component.
 
     The hot layer renders five sections (identity / canonical / fragments /
     headlines / entities). If any section's disk read or parse raises,
@@ -1107,7 +1089,7 @@ class MemoryHotLayerFailureEvent(TypedDict):
 
 
 class MemoryDreamSkillExtractEvent(TypedDict):
-    """The extract dream's skill pass wrote/updated procedural skills (§8e)."""
+    """The extract dream's skill pass wrote/updated procedural skills."""
 
     skills_touched: int
     duration_ms: NotRequired[int]
@@ -1126,7 +1108,7 @@ class MemoryDreamSkillSignalsEvent(TypedDict):
 
 class MemoryDreamMaxSecondsReachedEvent(TypedDict):
     """An extract pass hit ``memory.dream.max_seconds_per_run`` and yielded;
-    the per-session cursor resumes the remainder on the next trigger (§8e)."""
+    the per-session cursor resumes the remainder on the next trigger."""
 
     kind: str  # "extract"
     max_seconds: int
@@ -1144,7 +1126,7 @@ class MemoryDreamThrottledEvent(TypedDict):
 
 
 class MemoryDreamAlwaysOnEvent(TypedDict):
-    """The always_on distillation pass curated the pinned guidance set (A4).
+    """The always_on distillation pass curated the pinned guidance set.
 
     ``selected`` items are kept always_on (fit the token budget); ``pruned``
     were ranked but didn't fit; ``dropped`` were removed by the contradiction
@@ -1192,7 +1174,7 @@ EVENTS: dict[str, type] = {
     "context.composition": ContextCompositionEvent,
     "turn.memory_usage": TurnMemoryUsageEvent,
     "history_media.pruned": HistoryMediaPrunedEvent,
-    # Agent mode (Sprint B / L3)
+    # Agent mode
     "agent_mode.turn_start": AgentModeTurnStartEvent,
     "agent_mode.switch": AgentModeSwitchEvent,
     "agent_mode.tool_denied": AgentModeToolDeniedEvent,

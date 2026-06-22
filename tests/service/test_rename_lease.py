@@ -13,7 +13,6 @@ Contract:
 - Reload semantics: rename reads fresh state from disk under the lease so it
   cannot overwrite turns that committed between the exists() check and the save.
 
-See docs/architecture/concurrency.md.
 """
 
 from __future__ import annotations

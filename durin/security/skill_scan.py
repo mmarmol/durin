@@ -1,4 +1,4 @@
-"""Deterministic security scan for skills (§8.C). Body-first. Honest finite
+"""Deterministic security scan for skills. Body-first. Honest finite
 recall — feeds the human gate, not a guarantee. v2 = LLM-judge semantic layer.
 Rule set curated from SkillSpector (Apache-2.0) / Prompt-Shield / AgentShield /
 SkillSieve. Ported SkillSpector categories: data_exfiltration, privilege_escalation,
@@ -136,7 +136,7 @@ def _apply(text: str, where: str, rules) -> list[Finding]:
     return [Finding(c, s, where, d) for rx, c, s, d in rules if re.search(rx, text)]
 
 
-# Install-spec safe-pattern allowlists (OpenClaw src/agents/skills/frontmatter.ts:28-110).
+# Install-spec safe-pattern allowlists.
 # An install spec is an import vector; reject anything outside the proven-safe shapes.
 _BREW_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9@+._/-]*$")
 _GO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~+\-/]*(?:@[A-Za-z0-9][A-Za-z0-9._~+\-/]*)?$")

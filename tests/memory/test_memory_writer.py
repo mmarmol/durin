@@ -172,7 +172,7 @@ def test_concurrency_threads_stress_no_lost_write(tmp_path):
     relation with NO exception and NO CAS retry. A single high-contention round
     flakes only ~1-in-8; this loops many rounds so the loss is caught reliably
     (~99.9%) without the fix, and passes deterministically with it.
-    See docs/architecture/concurrency.md §"In-process ref-CAS lock (hazard #9)".
+    The per-repo in-process write lock in memory_writer closes this race.
     """
     n_threads = 32
     for rnd in range(60):

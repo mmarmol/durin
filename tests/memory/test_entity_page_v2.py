@@ -1,6 +1,5 @@
 """EntityPage v2 schema: `attributes`, `relations`, `provenance`.
 
-Per `docs/architecture/memory/01_data_and_entities.md` §3.5:
 - v2 extends v1 — v1 pages parse with `attributes={}` and `relations=[]`.
 - `attributes`: dict[str, Any]. Free-form keys.
 - `relations`: list[dict[str, Any]]. Each item must have `to` matching

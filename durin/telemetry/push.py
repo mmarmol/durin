@@ -1,4 +1,4 @@
-"""Opt-in HTTPS push of telemetry events (P7.3 / doc 07 §10).
+"""Opt-in HTTPS push of telemetry events.
 
 When `telemetry.push_url` + `telemetry.push_token` are configured,
 the sink buffers events and POSTs them to the endpoint in batches.

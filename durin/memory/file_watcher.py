@@ -1,4 +1,4 @@
-"""Filesystem watcher for the memory subsystem (doc 02 §6.3).
+"""Filesystem watcher for the memory subsystem.
 
 Watches `<workspace>/memory/` for `.md` mutations and triggers a
 synchronous `reindex_one_file` for each change. Edits under

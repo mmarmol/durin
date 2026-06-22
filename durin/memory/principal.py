@@ -1,4 +1,4 @@
-"""Principal resolution + the pinned hot-context (design §2.10-2.12).
+"""Principal resolution + the pinned hot-context.
 
 The "user" of a message is resolved PER-MESSAGE: channel-id → owner (config) →
 ``person:anonymous``. The pinned context (always injected, independent of
@@ -6,7 +6,7 @@ retrieval) is the principal's person entity + the ``always_on`` feedback
 entities (stance/practice the dream marked always_on). This closes the loop:
 authored knowledge is re-injected so the agent actually uses it.
 
-USER.md / MEMORY.md dissolve into this dynamic composition (design §2.10).
+USER.md / MEMORY.md dissolve into this dynamic composition.
 """
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def ensure_owner(workspace: Path, owner_ref: str, *, name: str | None = None) ->
 
 
 def mark_always_on(workspace: Path, ref: str, on: bool = True) -> None:
-    """Mark a feedback entity always_on (dream-owned attribute, design §2.11)."""
+    """Mark a feedback entity always_on (dream-owned attribute)."""
     write_entity(
         workspace, ref,
         [FieldPatch(kind="attribute", key="always_on", value=bool(on),

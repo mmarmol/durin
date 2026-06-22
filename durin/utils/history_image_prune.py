@@ -1,4 +1,4 @@
-"""History image pruning (OpenClaw-inspired Tier 2 B3).
+"""History image pruning: removes processed images to reduce token overhead.
 
 A conversation that exchanged images / audio in earlier turns keeps shipping
 those payloads on every subsequent request — the LLM already attended to
@@ -10,9 +10,7 @@ older than the last ``preserve_recent_turns`` (default 3), replaces
 ``image_url`` / ``image`` blocks in user/tool messages with a textual
 marker so the model knows the data existed without seeing the bytes.
 
-Mirrors OpenClaw ``run/history-image-prune.ts::pruneProcessedHistoryImages``.
-
-Per-block validation (Tier 1 2D) caps images on the WAY IN at write time.
+Per-block validation caps images on the WAY IN at write time.
 History prune handles the READ-time problem of accumulated images surviving
 across many turns.
 """
@@ -25,7 +23,7 @@ from typing import Any
 PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]"
 PRUNED_HISTORY_AUDIO_MARKER = "[audio data removed - already processed by model]"
 
-# Mirrors OpenClaw PRESERVE_RECENT_COMPLETED_TURNS. Override with
+# Number of recent completed turns to preserve. Override with
 # DURIN_HISTORY_IMAGE_PRESERVE_TURNS.
 _DEFAULT_PRESERVE_TURNS = 3
 
@@ -146,8 +144,7 @@ def prune_processed_history_images(
         preserve_turns = _preserve_turns_setting()
     # Always preserve at least the most-recent completed turn — pruning
     # absolutely everything would let the model lose context for the
-    # immediately preceding exchange. Mirrors OpenClaw which doesn't
-    # define the preserve=0 case cleanly either.
+    # immediately preceding exchange.
     preserve_turns = max(1, preserve_turns)
     prune_before = _resolve_prune_before_index(messages, preserve_turns)
     if prune_before <= 0:

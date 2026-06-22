@@ -1,4 +1,4 @@
-"""skill_acquire_seed tool — §6.C. Given ONE registry ref the dream chose from a raw
+"""skill_acquire_seed tool. Given ONE registry ref the dream chose from a raw
 skill_search hit, return a RISK-FREE seed (gate verdict 'allow') to author from, or
 {seed: null} to tell the dream to pick another. The gate runs in code
 (acquire_safe_seed), so a risky/un-allowlisted ref is never handed back. Lives in the

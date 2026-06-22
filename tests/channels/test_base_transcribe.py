@@ -1,4 +1,4 @@
-"""Tests for BaseChannel delegating to TranscriptionService (spec §7)."""
+"""Tests for BaseChannel delegating to TranscriptionService."""
 
 from pathlib import Path
 

@@ -15,7 +15,6 @@ another process) adds a new job to jobs.json.  After _on_timer returns we
 assert BOTH that the externally-added job still exists AND that the executed
 job's run-state delta was persisted.
 
-See docs/architecture/concurrency.md.
 """
 
 import asyncio

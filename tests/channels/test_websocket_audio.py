@@ -1,4 +1,4 @@
-"""Tests for audio MIME acceptance in the websocket channel (spec §5.1/§6)."""
+"""Tests for audio MIME acceptance in the websocket channel."""
 
 import base64
 

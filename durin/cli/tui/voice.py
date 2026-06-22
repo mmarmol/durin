@@ -1,6 +1,6 @@
 """TUI ``/voice`` command — record audio via sounddevice and return a WAV path.
 
-Spec §6.2: recording is cross-platform (Linux/Win/Mac) via the optional
+Recording is cross-platform (Linux/Win/Mac) via the optional
 ``[voice]`` extra (``sounddevice`` + PortAudio). The recorded WAV is staged
 in the workspace ``.media/`` dir and handed back to the caller, which then
 runs it through :class:`TranscriptionService` exactly like a dragged-in file.

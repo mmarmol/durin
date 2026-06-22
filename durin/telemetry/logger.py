@@ -4,11 +4,10 @@ Writes one .jsonl file per session under ~/.cache/durin/telemetry/.
 Each line is a self-contained event with timestamp, type, and payload.
 Zero external dependencies — pure stdlib JSON + file append.
 
-Audit A8 (2026-05-28): the logger gained an `extra_sinks` list so an
-optional HTTPS push (`PushSink`) can fan out the same events to a
-remote endpoint. The JSONL local persistence is ALWAYS the primary
-sink; extra_sinks are additive and isolated — failures there never
-affect the JSONL write. See doc 07 §12.2.
+An `extra_sinks` list allows an optional HTTPS push (`PushSink`) to fan
+out the same events to a remote endpoint. The JSONL local persistence is
+ALWAYS the primary sink; extra_sinks are additive and isolated — failures
+there never affect the JSONL write.
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ class _Sink(Protocol):
 class TelemetryLogger:
     """Append-only structured event logger for a single session.
 
-    A8: ``extra_sinks`` carries additional consumers (e.g. PushSink).
+    ``extra_sinks`` carries additional consumers (e.g. PushSink).
     ``log()`` writes to the JSONL file FIRST (canonical persistence),
     then iterates the extra sinks. Any sink raising an exception is
     logged and skipped — telemetry must never break the calling tool.
@@ -51,10 +50,10 @@ class TelemetryLogger:
         self._path = path
         self._count = 0
         self._extra_sinks: list[_Sink] = []
-        # F20 (audit third pass, 2026-05-28): identity fields the
-        # emit_tool_event helper auto-injects into every payload so
-        # dashboards can join cross-event by (session_key, iteration)
-        # without each callsite stamping the IDs by hand.
+        # Identity fields the emit_tool_event helper auto-injects into
+        # every payload so dashboards can join cross-event by
+        # (session_key, iteration) without each callsite stamping the
+        # IDs by hand.
         self._session_key = session_key
         self._iteration = 0
 
@@ -100,10 +99,10 @@ class TelemetryLogger:
             f.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")))
             f.write("\n")
         self._count += 1
-        # A8: fan out to extra sinks (e.g. PushSink). Isolation: each
-        # sink runs in its own try/except so a failure in one (network
-        # down, endpoint 5xx, etc.) never affects the JSONL write or
-        # the other sinks.
+        # Fan out to extra sinks (e.g. PushSink). Isolation: each sink
+        # runs in its own try/except so a failure in one (network down,
+        # endpoint 5xx, etc.) never affects the JSONL write or the
+        # other sinks.
         for sink in self._extra_sinks:
             try:
                 sink.log(event_type, data or {})

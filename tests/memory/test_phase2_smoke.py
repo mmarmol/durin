@@ -11,9 +11,7 @@ Walks the full Phase-2 surface:
 
 Uses a stubbed fastembed (first-character → vector seed) so the test
 suite stays offline and fast. The point of this smoke is wiring +
-telemetry correctness, not retrieval quality — quality benchmarks
-against LoCoMo / EverMemBench are Phase 3 post-implementation per
-docs/08 §0d.8.
+telemetry correctness, not retrieval quality — Quality benchmarks against LoCoMo / EverMemBench are post-implementation.
 """
 
 from __future__ import annotations

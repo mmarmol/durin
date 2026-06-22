@@ -1,14 +1,12 @@
 """Tests for the shared workspace walker `walk_memory`.
 
-Per `docs/architecture/memory/02_indexing.md` §6.5 + `01_data_and_entities.md` §3.6:
-the walker is the single chokepoint for "what .md files under memory/
-should be processed". Excludes archive/ (consolidated content) and
-pending/ (intake buffer) by default. An `include_archive=True` opt-in
-lets recovery surfaces walk archive explicitly.
+The walker is the single chokepoint for "what .md files under memory/ should
+be processed". Excludes archive/ (consolidated content) and pending/ (intake
+buffer) by default. An `include_archive=True` opt-in lets recovery surfaces
+walk archive explicitly.
 
-These tests lock the chokepoint contract. Every caller in the codebase
-(indexer, entity_ranker, alias bootstrap, etc.) MUST use this walker;
-the tests verify the walker's own behavior.
+Tests lock the chokepoint contract. Every caller in the codebase (indexer,
+entity_ranker, alias bootstrap, etc.) MUST use this walker.
 """
 
 from __future__ import annotations
@@ -52,7 +50,7 @@ def test_walk_memory_yields_episodic_stable_corpus(tmp_path: Path) -> None:
 
 
 def test_walk_memory_excludes_archive_by_default(tmp_path: Path) -> None:
-    """memory/archive/** is invisible to default callers (§3.6 of doc 01)."""
+    """memory/archive/** is invisible to default callers."""
     _touch(tmp_path / "memory" / "episodic" / "kept.md")
     _touch(tmp_path / "memory" / "archive" / "episodic" / "consolidated.md")
     _touch(tmp_path / "memory" / "archive" / "entities" / "person" / "absorbed.md")
@@ -138,9 +136,8 @@ def test_walk_class_entities_recurses_into_types(tmp_path: Path) -> None:
 def test_walk_class_entities_skips_nested_archive(tmp_path: Path) -> None:
     """Legacy `entities/<type>/<canonical>/archive/<absorbed>.md` is never yielded.
 
-    Spec (doc memory §3.2) places archived content at top-level
-    `memory/archive/`; the nested layout shouldn't exist after Phase 0,
-    but if it lingers in an older workspace we must NOT surface it.
+    Archived content belongs at top-level `memory/archive/`; the nested layout
+    shouldn't exist in modern workspaces, but if it lingers we must NOT surface it.
     """
     _touch(tmp_path / "memory" / "entities" / "person" / "marcelo.md")
     _touch(

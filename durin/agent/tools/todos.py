@@ -23,8 +23,7 @@ Design notes:
 
 - One tool, full replacement: simpler than ``TodoAdd``/``TodoUpdate``/
   ``TodoComplete`` triplets, easier for small models to use correctly,
-  and matches the reference pattern adopted by all four agents in the
-  comparative review (OpenHands, Hermes, OpenCode, OpenClaude).
+  and matches the reference pattern adopted by other coding agents.
 - No persistence beyond the session: todos live on
   ``session.metadata[TODOS_KEY]``, so they survive compaction (the meta
   bag is preserved) but are not exposed via the on-disk session meta

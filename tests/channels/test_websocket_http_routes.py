@@ -456,7 +456,7 @@ def test_skills_quarantine_route_not_shadowed_by_skill_name(
     assert "pending" in names
 
 
-# --- §6.B import routes (local source, no network) ---------------------------
+# --- import routes (local source, no network) --------------------------------
 
 def _mk_source_skill(root: Path, name: str = "imported", body: str = "Step 1: do it.\n") -> Path:
     d = root / "src" / name

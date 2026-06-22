@@ -1,5 +1,5 @@
-"""LLM semantic-audit pass over an imported skill (§A3), after the deterministic
-§8.C scan. Catches what regex can't: disguised malicious logic, intent, subtle
+"""LLM semantic-audit pass over an imported skill, after the deterministic
+AST scan. Catches what regex can't: disguised malicious logic, intent, subtle
 exfiltration, social-engineering of the agent. Mirrors the absorb-judge pattern
 (injected ``llm_invoke``, marker-parsed output, retry, raise-or-return).
 
@@ -209,7 +209,7 @@ async def judge_skill_astream(skill_dir: Path, *, ainvoke_stream, model: str,
 def audit_skill(skill_dir: Path, *, judge_enabled: bool = False, judge_model: str = "",
                 judge_max_severity: str = "caution",
                 llm_invoke: LLMInvoke | None = None) -> ScanReport:
-    """Deterministic §8.C scan, merged with the LLM judge when enabled. The judge
+    """Deterministic AST scan, merged with the LLM judge when enabled. The judge
     only adds findings (severity already capped); a judge failure degrades
     silently to the deterministic report (clean skills never blocked by an
     unavailable judge)."""

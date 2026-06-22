@@ -16,7 +16,6 @@ Caps default to the module constants but callers pass the configured values
 Schema (each entry):
     {"text": str, "ts": str (iso8601, may be ""), "source": "tool" | "auto"}
 
-See docs/architecture/loop.md.
 """
 from __future__ import annotations
 

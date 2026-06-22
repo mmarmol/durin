@@ -65,8 +65,8 @@ def split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 def save_entry(entry: MemoryEntry, path: Path) -> None:
     """Write a memory entry to ``path`` as markdown + YAML frontmatter.
 
-    P9 Cambio 3 (2026-05-30): `source_refs` and `related` are
-    serialised as Obsidian wikilinks (`[[uri]]`) so Obsidian's graph
+    `source_refs` and `related` are serialised as Obsidian wikilinks
+    (`[[uri]]`) so Obsidian's graph
     view + backlinks pane render automatically when the vault is
     opened. The in-memory `MemoryEntry` keeps plain string refs; the
     wikilink wrap lives at the storage boundary only. Other consumers
@@ -75,8 +75,7 @@ def save_entry(entry: MemoryEntry, path: Path) -> None:
 
     Verified safe for search: source_refs/related are NOT included in
     vector embedding text (`_embed_text`) or FTS text (`_entry_text`),
-    so wikilink wrapping is purely cosmetic. See doc 20 §P9 for the
-    audit trail.
+    so wikilink wrapping is purely cosmetic.
     """
     payload = entry.model_dump(exclude={"body"}, mode="json")
     # Wrap source_refs and related as Obsidian wikilinks on the way out.
@@ -103,8 +102,8 @@ def load_entry(path: Path) -> MemoryEntry:
     Raises :class:`FrontmatterError` for parse-level issues and
     :class:`pydantic.ValidationError` for schema violations.
 
-    Tolerant on the wikilink boundary: accepts both `[[uri]]` (new
-    P9 format) and plain `uri` (legacy) in `source_refs` / `related`.
+    Tolerant on the wikilink boundary: accepts both `[[uri]]` (wikilink
+    format) and plain `uri` (legacy) in `source_refs` / `related`.
     Strips wikilink wrappers so the in-memory representation stays as
     plain strings (matches what callers expect).
     """

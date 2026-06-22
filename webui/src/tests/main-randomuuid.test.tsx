@@ -19,7 +19,7 @@ describe("main entry crypto shim", () => {
     createRoot.mockClear();
     render.mockClear();
     document.body.innerHTML = '<div id="root"></div>';
-    delete (globalThis.crypto as Crypto & { randomUUID?: Crypto["randomUUID"] }).randomUUID;
+    delete (globalThis.crypto as { randomUUID?: Crypto["randomUUID"] }).randomUUID;
   });
 
   afterEach(() => {

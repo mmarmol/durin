@@ -1,12 +1,9 @@
-"""Tests for the hot layer Phase 1.5 deliverables.
+"""Tests for the hot layer v2 rendering format.
 
-Covers the v2 rendering format per ``docs/architecture/memory/06_prompts_and_instructions.md``
-§8.3 — exact marker format, v2 entity fields rendered as prose, intro
-sentences locked, and telemetry failure event wiring per §8.7.
-
-These tests are intentionally tight on string assertions: the spec
-states the markers verbatim and the prompts are LLM-facing — drift
-needs to break loudly.
+Covers exact marker format, v2 entity fields rendered as prose, intro
+sentences locked, and telemetry failure event wiring. Intentionally tight on
+string assertions: the markers are verbatim and the prompts are LLM-facing —
+drift needs to break loudly.
 """
 
 from __future__ import annotations
@@ -32,12 +29,12 @@ from durin.memory.store import store_memory
 from durin.telemetry.logger import TelemetryLogger, bind_telemetry, reset_telemetry
 
 # ---------------------------------------------------------------------------
-# §8.2 Budgets — spec values locked
+# Budgets — spec values locked
 # ---------------------------------------------------------------------------
 
 
 def test_budget_constants_match_spec_8_2() -> None:
-    """doc 06 §8.2 — locks the five budget chars + four caps."""
+    """Locks the five budget chars + four caps."""
     assert _IDENTITY_BUDGET_CHARS == 800
     assert _CANONICAL_BUDGET_CHARS == 2400
     assert _FRAGMENTS_BUDGET_CHARS == 1200
@@ -50,7 +47,7 @@ def test_budget_constants_match_spec_8_2() -> None:
 
 
 # ---------------------------------------------------------------------------
-# §8.3 Section rendering — H2 + intro sentences + markers
+# Section rendering — H2 + intro sentences + markers
 # ---------------------------------------------------------------------------
 
 
@@ -69,7 +66,7 @@ def _write_v1_page(workspace: Path, *, slug: str, name: str,
 
 
 def test_canonical_marker_format_includes_consolidated_ts(tmp_path: Path) -> None:
-    """doc 06 §8.3 — `=== CANONICAL: <uri> (consolidated <ts>) ===` literal."""
+    """`=== CANONICAL: <uri> (consolidated <ts>) ===` literal marker format."""
     _write_v1_page(tmp_path, slug="marcelo", name="Marcelo",
                    updated_at="2026-05-20T10:00:00")
     rendered = read_hot_layer(tmp_path).render()
@@ -77,7 +74,7 @@ def test_canonical_marker_format_includes_consolidated_ts(tmp_path: Path) -> Non
 
 
 def test_canonical_intro_sentence_present(tmp_path: Path) -> None:
-    """doc 06 §8.3 — intro line cues the LLM to treat canonical as truth."""
+    """Intro line cues the LLM to treat canonical as truth."""
     _write_v1_page(tmp_path, slug="marcelo", name="Marcelo")
     rendered = read_hot_layer(tmp_path).render()
     assert "## Memory: Canonical pages" in rendered
@@ -88,7 +85,7 @@ def test_canonical_intro_sentence_present(tmp_path: Path) -> None:
 
 
 def test_fragment_marker_format_includes_path_and_ts(tmp_path: Path) -> None:
-    """doc 06 §8.3 — `=== FRAGMENT: <path> (ts <ts>) ===` literal.
+    """`=== FRAGMENT: <path> (ts <ts>) ===` literal marker format.
 
     The page anchor makes the fragment post-cursor (cursor None → all
     entries qualify).
@@ -110,7 +107,7 @@ def test_fragment_marker_format_includes_path_and_ts(tmp_path: Path) -> None:
 
 
 def test_fragment_intro_sentence_present(tmp_path: Path) -> None:
-    """doc 06 §8.3 — intro line tells the LLM to reconcile by timestamp."""
+    """Intro line tells the LLM to reconcile fragments by timestamp."""
     _write_v1_page(tmp_path, slug="marcelo", name="Marcelo")
     store_memory(
         tmp_path,
@@ -127,12 +124,12 @@ def test_fragment_intro_sentence_present(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# §8.4 Cursor logic — only post-cursor episodic/stable; corpus + pending out
+# Cursor logic — only post-cursor episodic/stable; corpus + pending out
 # ---------------------------------------------------------------------------
 
 
 def test_fragments_include_stable_class(tmp_path: Path) -> None:
-    """§8.4 — both ``episodic`` AND ``stable`` qualify as fragments."""
+    """Both ``episodic`` AND ``stable`` qualify as hot-layer fragments."""
     _write_v1_page(tmp_path, slug="marcelo", name="Marcelo")
     store_memory(
         tmp_path,
@@ -148,7 +145,7 @@ def test_fragments_include_stable_class(tmp_path: Path) -> None:
 
 
 def test_fragments_exclude_corpus_class(tmp_path: Path) -> None:
-    """§8.4 — corpus entries never surface as fragments."""
+    """Corpus entries never surface as hot-layer fragments."""
     _write_v1_page(tmp_path, slug="marcelo", name="Marcelo")
     store_memory(
         tmp_path,
@@ -163,14 +160,14 @@ def test_fragments_exclude_corpus_class(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# §8.7 Failure handling — telemetry + degraded prompt
+# Failure handling — telemetry + degraded prompt
 # ---------------------------------------------------------------------------
 
 
 def test_hot_layer_failure_emits_telemetry_and_continues(
     tmp_path: Path,
 ) -> None:
-    """§8.7 — disk error → telemetry event + degraded (empty) layer, no raise."""
+    """Disk error → telemetry event + degraded (empty) layer, no raise."""
     # Bind a fresh telemetry logger to a temp file so we can inspect events.
     log_path = tmp_path / "telemetry.jsonl"
     logger = TelemetryLogger(log_path)
@@ -331,7 +328,7 @@ def test_v2_page_empty_aliases_no_aliases_prose(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# §4b.2 Done criterion — exact snapshot of a v2 canonical block
+# Done criterion — exact snapshot of a v2 canonical block
 # ---------------------------------------------------------------------------
 
 

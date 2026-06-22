@@ -116,7 +116,7 @@ app = typer.Typer(
     # Hide the auto-injected `--install-completion` / `--show-completion`
     # flags. They're Typer boilerplate, not durin functionality —
     # power users who want tab-completion can still set it up manually
-    # via their shell (see docs/INSTALL.md).
+    # via their shell (see docs/guide/install.md).
     add_completion=False,
 )
 
@@ -1361,12 +1361,10 @@ def _run_gateway(
             )
             from durin.memory.model_resolve import resolve_memory_model
 
-            # New model (§8c/8d/8e): the daily cron runs the extract pass
-            # (sessions → entity attributes), the skill-extract pass (sessions →
-            # reusable procedures as skills), then the refine pass (dedup). This
-            # replaces the legacy episodic-entry
-            # JSON-Patch consolidation via working-tree writes — the obsolete
-            # model + the G3 race). Writes go through memory_writer / skill_write.
+            # The daily cron runs the extract pass (sessions → entity attributes),
+            # the skill-extract pass (sessions → reusable procedures as skills),
+            # then the refine pass (dedup). Writes go through memory_writer /
+            # skill_write.
             model = resolve_memory_model(config)
             _cron_max_s = config.memory.dream.max_seconds_per_run
             _absorb = config.memory.dream.auto_absorb
@@ -1586,9 +1584,9 @@ def _run_gateway(
             await server.serve_forever()
     from durin.cron.types import CronJob, CronPayload, CronSchedule
 
-    # Register the memory dream system job (doc 25 §2.A.1): the daily
-    # extract/refine/skill passes that consolidate sessions into
-    # memory/entities/<type>/<slug>.md pages + skills.
+    # Register the memory dream system job: the daily extract/refine/skill
+    # passes that consolidate sessions into memory/entities/<type>/<slug>.md
+    # pages + skills.
     mem_dream_cfg = config.memory.dream
     if mem_dream_cfg.enabled:
         cron.register_system_job(CronJob(
@@ -1616,13 +1614,13 @@ def _run_gateway(
             f"[green]✓[/green] Cron: pruned orphaned system job(s): {', '.join(pruned)}"
         )
 
-    # Doc 25 §2.A.1 β.2: wire the post-compaction + session-close
-    # hooks so dream picks up consolidated context while the signal
-    # is fresh. Background daemon threads keep the agent loop
-    # responsive. The reactive dream gate's lock + throttle absorbs collisions
-    # with the daily cron. `hasattr` checks keep test scaffolds
-    # (_FakeAgentLoop without consolidator / on_session_close) working
-    # — production AgentLoop always has both attributes.
+    # Wire the post-compaction + session-close hooks so dream picks up
+    # consolidated context while the signal is fresh. Background daemon
+    # threads keep the agent loop responsive. The reactive dream gate's
+    # lock + throttle absorbs collisions with the daily cron. `hasattr`
+    # checks keep test scaffolds (_FakeAgentLoop without consolidator /
+    # on_session_close) working — production AgentLoop always has both
+    # attributes.
     if mem_dream_cfg.enabled and (
         mem_dream_cfg.post_compaction or mem_dream_cfg.on_session_close
     ):
@@ -1656,7 +1654,7 @@ def _run_gateway(
                     return
                 t_run = _time_dream.perf_counter()
                 try:
-                    # §8c: reactive EXTRACT — when a session closes or compacts,
+                    # Reactive EXTRACT — when a session closes or compacts,
                     # extract its new turns into entity attributes immediately
                     # (the frequent dream, event-driven; the per-session cursor
                     # makes it idempotent). Refine stays on the daily cron.
@@ -2225,9 +2223,9 @@ def agent(
                             user_input, agent_loop.workspace
                         )
 
-                        # Transcribe dragged audio before it reaches the agent
-                        # (spec §6.1): audio becomes text in clean_input and is
-                        # dropped from media_paths.
+                        # Transcribe dragged audio before it reaches the agent:
+                        # audio becomes text in clean_input and is dropped
+                        # from media_paths.
                         if media_paths:
                             try:
                                 from durin.service.transcription import (

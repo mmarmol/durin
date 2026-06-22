@@ -1,7 +1,4 @@
-"""Tests for the secret store — durin/security/secrets.py.
-
-See docs/11_secrets_design.md.
-"""
+"""Tests for the secret store — durin/security/secrets.py."""
 
 from __future__ import annotations
 

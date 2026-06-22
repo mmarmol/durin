@@ -1,22 +1,16 @@
-"""`memory.search.failure` event (audit B9 / doc 07 §8.1).
+"""`memory.search.failure` event tests.
 
-Per the asymmetric B9 decision:
+- `memory.search.failure` is emitted when at least one safe wrapper caught
+  an exception during `run_search_pipeline`. The infrastructure to detect
+  this (`SearchPipelineResult.recovered_from` / `.recovery_duration_ms`) was
+  already shipped; the emit is wired separately.
 
-- `memory.search.failure` is emitted when at least one safe wrapper
-  caught an exception during `run_search_pipeline`. The infrastructure
-  to detect this (`SearchPipelineResult.recovered_from` /
-  `.recovery_duration_ms`) was already shipped in P5.2; B9 just
-  attaches the telemetry emit.
+- `memory.silent_retrieval_miss` was DISCARDED (not deferred) — heuristics
+  for this are inherently language-specific and would not work cross-lingual
+  without an LLM-based classifier that breaks the telemetry budget.
 
-- `memory.silent_retrieval_miss` was DISCARDED (not deferred) — the
-  heuristics promised in doc 07 §4.6 v1 are inherently
-  language-specific and would not work cross-lingual without an
-  LLM-based classifier that breaks the telemetry budget. See doc 08
-  §2.X for the rationale.
-
-These tests exercise the BEHAVIOUR per
-[[feedback-sync-tests-exercise-behavior]] — emit the event with the
-right payload shape under each failure scenario.
+Tests exercise the behaviour: emit the event with the right payload shape
+under each failure scenario.
 """
 
 from __future__ import annotations

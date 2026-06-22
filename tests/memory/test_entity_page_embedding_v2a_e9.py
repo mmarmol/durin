@@ -1,6 +1,5 @@
-"""E9 (audit second pass, 2026-05-28): v2.a embedding text for
-entity pages now includes `rendered_frontmatter` between aliases
-and body.
+"""v2.a embedding text for entity pages now includes `rendered_frontmatter`
+between aliases and body.
 
 Concrete benefit: queries like "Marcelo's email" / "who is
 Marcelo's spouse" hit the entity page centroide via the rendered
@@ -8,8 +7,8 @@ attributes/relations, instead of depending on the body prose
 mentioning the attribute key.
 
 v2.b (entities_with_aliases for memory entries) is NOT shipped —
-the entity-aware ranker (audit A1) already covers alias matching
-at query time without inflating the embedding text.
+the entity-aware ranker already covers alias matching at query time
+without inflating the embedding text.
 """
 
 from __future__ import annotations
@@ -100,8 +99,7 @@ def test_compose_empty_attributes_skips_frontmatter_section() -> None:
 
 def test_compose_skips_provenance_and_timestamps() -> None:
     """`provenance`, `dream_processed_through`, `created_at`,
-    `updated_at` are internal metadata; never rendered (doc 02
-    §4.2 v2 spec)."""
+    `updated_at` are internal metadata — never rendered."""
     text = VectorIndex._compose_entity_page_text(
         name="Marcelo",
         aliases=[],

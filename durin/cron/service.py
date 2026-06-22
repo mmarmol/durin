@@ -112,7 +112,8 @@ class CronService:
         # Separate lock for timer ticks — distinct path and distinct instance
         # from self._lock.  Acquired NON-BLOCKING in _on_timer; if a second
         # scheduler is already ticking, the contender skips the tick rather
-        # than queuing.  See docs/architecture/concurrency.md.
+        # than queuing.  If a second scheduler is already ticking, the
+        # contender skips the tick (NON-BLOCKING acquire).
         self._tick_lock = FileLock(str(store_path.parent / ".tick.lock"))
         self.on_job = on_job
         self._store: CronStore | None = None
@@ -472,8 +473,7 @@ class CronService:
         self._lock is released before _execute_job to avoid a cross-instance
         FileLock deadlock: if on_job creates a second CronService and calls a
         mutator, that mutator also tries to acquire self._lock — both objects
-        point to the same path and FileLock is NOT reentrant across instances
-        (see docs/architecture/concurrency.md).
+        point to the same path and FileLock is NOT reentrant across instances.
         """
         try:
             self._tick_lock.acquire(timeout=0)
@@ -530,7 +530,7 @@ class CronService:
                 # during the execution window (add_job / remove_job / update_job
                 # from another process) are not clobbered.  We then re-apply
                 # only the run-state deltas produced by _execute_job onto the
-                # freshly-reloaded store.  See docs/architecture/concurrency.md.
+                # freshly-reloaded store.
                 # _timer_active is already False (set in the finally above),
                 # so _load_store will read from disk rather than the cache.
                 self._load_store()
@@ -893,7 +893,7 @@ class CronService:
         would block every other cron-store reader — and, because a concurrent
         ``list`` opens a second CronService whose FileLock points at the same
         path, trip filelock's cross-instance deadlock guard.
-        See docs/architecture/concurrency.md.
+
         """
         was_running = self._running
         self._running = True

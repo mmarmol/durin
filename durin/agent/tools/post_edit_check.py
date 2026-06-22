@@ -8,7 +8,6 @@ sees breakage immediately instead of discovering it at run time.
 
 Graceful skip everywhere — disabled config, unknown extension, missing
 binary, timeout, checker crash. A check failure must NEVER break an edit.
-See docs/architecture/loop.md §"Tool write durability".
 """
 
 from __future__ import annotations

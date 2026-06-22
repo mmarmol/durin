@@ -1,4 +1,4 @@
-"""LLM-judge for entity absorption (doc 25 §2.D).
+"""LLM-judge for entity absorption.
 
 When auto-absorb is enabled, the refine pass (``refine_dream.run_refine``)
 calls :func:`judge_pair` on every alias-overlap candidate that survived the
@@ -15,7 +15,7 @@ Design notes:
 - **Temporal context**: every page block carries ``created_at`` (file
   mtime), ``dream_processed_through`` (cursor), and the page's own
   body. This mitigates self-consistency bias when ``judge_model ==
-  dream_model`` (glm peer review C2, 2026-05-24) — the judge can see
+  dream_model`` — the judge can see
   that two pages observed years apart probably aren't the same
   entity even if alias coincides.
 - **Markdown markers**: a ``===MARKER===`` envelope format

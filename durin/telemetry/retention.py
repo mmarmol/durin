@@ -1,4 +1,4 @@
-"""Telemetry log retention + rotation (P7.2 / doc 07 §10).
+"""Telemetry log retention and rotation.
 
 Two age horizons:
 
@@ -8,8 +8,8 @@ Two age horizons:
   are removed. This caps disk usage at ~2 months of compressed
   telemetry per workspace.
 
-The rotation runs as part of the health-check tick (P2.4) so there's
-no separate scheduler thread. Failures inside the rotation are
+The rotation runs as part of the health-check tick so there's no
+separate scheduler thread. Failures inside the rotation are
 counted (``errors``) but never propagate — a broken rotation must
 not break the agent.
 """

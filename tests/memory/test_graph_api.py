@@ -279,9 +279,8 @@ def test_entity_detail_referencing_entries_surface(tmp_path: Path) -> None:
 
 
 def test_entity_detail_includes_archive(tmp_path: Path) -> None:
-    """Spec layout (doc memory §3.2): archives live at
-    `memory/archive/entities/<type>/<absorbed_slug>.md` and carry
-    `archived_into = <type>:<canonical_slug>`.
+    """Archives live at `memory/archive/entities/<type>/<absorbed_slug>.md`
+    and carry `archived_into = <type>:<canonical_slug>`.
     """
     _write_page(tmp_path, "person", "marcelo")
     archive_dir = tmp_path / "memory" / "archive" / "entities" / "person"
@@ -330,7 +329,7 @@ def test_search_grep_path_finds_entry(tmp_path: Path) -> None:
 
 
 def test_search_results_carry_kind(tmp_path: Path) -> None:
-    """Doc 25 §2.H: every result must carry the `kind` marker."""
+    """Every search result must carry the `kind` marker."""
     _store(tmp_path, "marcelo solo", ["person:marcelo"])
     payload = asyncio.run(search_memory_api(tmp_path, "marcelo"))
     for r in payload["results"]:

@@ -4,9 +4,9 @@ Reuses the existing absorb machinery (``EntityAbsorption.find_candidates`` +
 ``absorb`` + ``absorb_judge.judge_pair``). In the new model absorb is ON by
 default but CONSERVATIVE (confidence threshold 95). It RESPECTS:
 - **do_not_absorb tombstones** — a pair the user rejected/un-merged is never
-  re-merged (design §2.13/§2.14, finding 3B-2);
+  re-merged;
 - **user-managed pages** — a page the user opted to manage (page-level
-  ``author == user_authored``) is left alone (design §2.4).
+  ``author == user_authored``) is left alone.
 
 Recovery of a bad merge is ``git revert`` of the absorb commit; recording the
 tombstone afterward (``add_tombstone``) stops the next refine from undoing the

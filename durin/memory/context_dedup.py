@@ -1,4 +1,4 @@
-"""Search-output dedup against the hot layer (P4, 2026-06-10).
+"""Search-output dedup against the hot layer.
 
 ``memory_search`` hits whose rendered content is already visible in the
 caller's system prompt — the hot layer's ``=== CANONICAL ===`` /

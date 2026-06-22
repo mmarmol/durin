@@ -4,7 +4,7 @@ name: Release
 # uploads them to a GitHub Release, then publishes to PyPI via OIDC
 # trusted publishing (no API token required on the repo side).
 #
-# See docs/RELEASING.md for the maintainer workflow.
+# See docs/releasing.md for the maintainer workflow.
 
 on:
   push:

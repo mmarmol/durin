@@ -1,4 +1,4 @@
-"""Source resolution for skill import (§6.B). A source is rarely a direct
+"""Source resolution for skill import. A source is rarely a direct
 `.../SKILL.md`: a GitHub repo may hold many skills under subdirs, a local path
 may be a directory of skills. `resolve_candidates` turns any source into a list
 of concrete `SkillCandidate`s. The *mechanical* discovery is deterministic; the

@@ -7,17 +7,17 @@
 > commit is the canonical record (`git log` finds it by message). Partial progress
 > is updated in place. Detailed history (refuted experiments, the day-by-day
 > implementation log) lives in `git log`; as-built internals live in
-> `docs/architecture/`.
+> `docs/internals/`.
 
 ---
 
-## Current state (2026-06-18)
+## Current state (2026-06-22)
 
 Durin is a Nanobot baseline + a full entity-centric memory system + daily-driver
 lifecycle + capability bridges (vision/audio) + secrets + an HTTP/WebSocket service
 platform + web/TUI parity.
 
-**Shipped subsystems** (as-built detail in `docs/architecture/`):
+**Shipped subsystems** (as-built detail in `docs/internals/`):
 
 - **Memory** (entity-centric): 5 tools (`memory_search`, `memory_upsert_entity`,
   `memory_ingest`, `memory_drill`, `memory_forget`) over FTS5 + LanceDB + grep + RRF
@@ -70,7 +70,7 @@ today; tracked under Pending work.
 
 Entity-centric pages + classes + LLM-driven dream consolidator + opt-in auto-absorb.
 The final shape differs from the original "5 node types with milestone promotion"
-design. See `docs/architecture/memory/`.
+design. See `docs/internals/memory/`.
 
 ---
 
@@ -84,9 +84,9 @@ Tested, or strong reasons against. (Detailed experiment analysis in `git log`.)
 - ❌ Phase-aware temperatures
 - ❌ Self-verification / self-review loops (same model)
 - ❌ Pre-completion Critic (without a genuinely different model)
-- ❌ Role-based SOUL.md router (refuted V9e) — efficiency gain captured by a single
-  default SOUL with no routing
-- ❌ Temporal decay in `memory_search` ranking (removed H26) — search must be
+- ❌ Role-based SOUL.md router (tested; no correctness gain) — the efficiency win
+  is captured by a single default SOUL with no routing
+- ❌ Temporal decay in `memory_search` ranking (removed) — search must be
   faithful retrieval, not pre-judge what the LLM should decide
 
 ---
@@ -138,16 +138,6 @@ scope-prefilled token page) as fallback, and `gh` CLI passthrough. Skills + MCP 
 per-feature key for now and migrate to read `config.github` once it lands; contextual "Connect
 GitHub to improve results" buttons in skills/MCP deep-link there. Design spec pending.
 
-**MCP discovery = durin-owned catalog (DECIDED 2026-06-19; in progress).** Live verification
-refuted per-client enrichment (paginate 12.8k + GraphQL-enrich ~9.7k repos took >8 min, ×every
-client — does not scale). Chosen architecture: a **weekly CI build job** produces the enriched
-catalog (registry + GitHub stars + classify), **vendored in the wheel** (day-1/offline floor) and
-**refreshed client-side weekly** from a rolling GitHub **release asset** (rebuilt by CI weekly; a
-release asset, not a committed file, so no git-history bloat) — clients never hit the registry/
-GitHub, decoupled from the upstream provider. Mirrors `durin/providers/catalog_refresh.py` 1:1
-(vendored floor + overlay + daemon scheduler). Spec:
-`.workdocs/superpowers/specs/2026-06-19-mcp-discovery-quality-filter-design.md` (v2).
-
 ### Deferred / no trigger
 
 - **`list_dir` recursive perf** — switch the pure-Python walk to `os.scandir` (no
@@ -164,4 +154,4 @@ GitHub, decoupled from the upstream provider. Mirrors `durin/providers/catalog_r
 
 ---
 
-## Last updated: 2026-06-19 (added: unified GitHub credential section + connect UX; MCP catalog seed + throttled refresh)
+## Last updated: 2026-06-22 (removed shipped MCP-catalog item; refreshed state date)

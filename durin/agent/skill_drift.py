@@ -1,5 +1,5 @@
-"""Upstream drift detection for imported skills (§8.D). Re-fetches a skill's
-recorded origin, scans the new content (§8.C), and reports whether it drifted +
+"""Upstream drift detection for imported skills. Re-fetches a skill's
+recorded origin, scans the new content through the import security gate, and reports whether it drifted +
 whether dream may auto-incorporate it (decide_action 'allow') or it needs the
 human gate. It NEVER touches the installed skill — drift is a SIGNAL for the
 dream curation pass, which EVOLVES (incorporates) rather than replaces, so a
@@ -18,7 +18,7 @@ class DriftReport:
     name: str
     source: str
     action: str        # 'allow' (dream may incorporate) | 'confirm' | 'block' (human gate)
-    verdict: str       # §8.C verdict of the NEW upstream content
+    verdict: str       # security gate verdict of the NEW upstream content
     carries_code: bool
     qdir: Path         # the fetched upstream, in a drift quarantine
     upstream_md: str   # the new SKILL.md content (context for the curation judge)

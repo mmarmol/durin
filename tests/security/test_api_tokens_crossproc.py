@@ -9,7 +9,8 @@ converge on the SAME secret (without locking they each mint a different
 32-byte value and whichever writes last wins, invalidating the other's
 signed URLs).
 
-See docs/architecture/concurrency.md for lock-ordering invariants.
+Cross-process lock ordering: both operations use cross_process_lock to prevent
+last-writer-wins data loss.
 """
 
 from __future__ import annotations

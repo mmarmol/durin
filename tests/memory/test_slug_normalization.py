@@ -1,4 +1,4 @@
-"""Slug normalization per `docs/architecture/memory/01_data_and_entities.md` §4.5.
+"""Slug normalization contract.
 
 The slug derivation pipeline is:
   1. Unicode NFC normalize

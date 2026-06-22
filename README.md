@@ -31,8 +31,8 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-See [docs/INSTALL.md](docs/INSTALL.md) for prerequisites, optional extras,
-and platform notes. Maintainers cutting a release: [docs/RELEASING.md](docs/RELEASING.md).
+See [docs/guide/install.md](docs/guide/install.md) for prerequisites, optional extras,
+and platform notes. Maintainers cutting a release: [docs/releasing.md](docs/releasing.md).
 
 ## Lifecycle commands
 
@@ -73,7 +73,7 @@ Inside the TUI:
 - `/compact [hint]` / `/copy` / `/name <name>` — session ergonomics
 - Drag-and-drop a file path into the input to attach it
 - Attach or record audio — transcribed to text locally before reaching the
-  agent (`[stt]`/`[voice]` extras; see [docs/INSTALL.md](docs/INSTALL.md)).
+  agent (`[stt]`/`[voice]` extras; see [docs/guide/install.md](docs/guide/install.md)).
   Default engine: Parakeet TDT v3 (~30× real-time on CPU, 25 European
   languages). Use `sensevoice` for Chinese/Japanese/Korean, or configure a
   cloud provider (Groq/OpenAI). In the TUI: drag an audio file or `/voice`
@@ -102,10 +102,9 @@ Inside the TUI:
 
 ## Documentation
 
-- [docs/INSTALL.md](docs/INSTALL.md) — prerequisites, optional extras
-- [docs/architecture/README.md](docs/architecture/README.md) — system layout
-- [docs/roadmap.md](docs/roadmap.md) / [docs/bitacora.md](docs/bitacora.md) — direction and historical context
-- [docs/backlog.md](docs/backlog.md) — active pending work
+- [docs/guide/install.md](docs/guide/install.md) — prerequisites, optional extras
+- [docs/internals/README.md](docs/internals/README.md) — system layout
+- [docs/roadmap.md](docs/roadmap.md) — direction
 
 ## License
 

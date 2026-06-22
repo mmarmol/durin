@@ -1,6 +1,5 @@
 """Shared SQLite connection helpers for multi-process WAL databases.
 
-See `docs/architecture/concurrency.md` for the broader concurrency model.
 This module provides two primitives used wherever durin opens a SQLite
 database that may have concurrent cross-process writers:
 
@@ -43,7 +42,7 @@ def connect(
       SQLITE_BUSY; the higher-level ``execute_write`` adds application-layer
       jitter on top.
 
-    See `docs/architecture/concurrency.md` §SQLite helpers.
+    Uses WAL mode, busy timeout, and BEGIN IMMEDIATE for safe concurrent writes.
     """
     if read_only:
         # URI mode with mode=ro: never acquires a write lock.
@@ -107,7 +106,7 @@ def execute_write(
 
     Other ``OperationalError`` exceptions are re-raised immediately.
 
-    See `docs/architecture/concurrency.md` §SQLite helpers.
+    Uses WAL mode, busy timeout, and BEGIN IMMEDIATE for safe concurrent writes.
     """
     last_exc: sqlite3.OperationalError | None = None
     for _ in range(attempts):
