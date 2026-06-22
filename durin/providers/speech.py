@@ -146,3 +146,30 @@ class LocalSupertonicProvider(SpeechSynthesisProvider):
         finally:
             Path(tmp_path).unlink(missing_ok=True)
         return SpeechAudio(data=data, sample_rate=_wav_sample_rate(data))
+
+
+class FallbackSpeechProvider(SpeechSynthesisProvider):
+    """Try the primary backend; on failure or empty audio, use the fallback.
+
+    Net-new: the transcription subsystem has no fallback wrapper, and the LLM
+    ``FallbackProvider`` is a different (circuit-breaker) shape. This is a plain
+    one-shot failover — adequate for TTS where a turn either renders or doesn't.
+    """
+
+    def __init__(self, primary: SpeechSynthesisProvider,
+                 fallback: SpeechSynthesisProvider):
+        self._primary = primary
+        self._fallback = fallback
+
+    async def synthesize(
+        self, text: str, *, voice: str | None = None, language: str | None = None
+    ) -> SpeechAudio:
+        try:
+            out = await self._primary.synthesize(text, voice=voice, language=language)
+            if out.data:
+                return out
+            logger.warning("Primary TTS returned empty audio; falling back")
+        except Exception as e:  # noqa: BLE001 — failover is the whole point
+            logger.warning("Primary TTS failed ({}); falling back", e)
+        # Voice ids are provider-specific; let the fallback use its own default.
+        return await self._fallback.synthesize(text, voice=None, language=language)

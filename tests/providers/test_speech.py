@@ -8,7 +8,12 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from durin.providers.speech import OpenAISpeechProvider, SpeechAudio
+from durin.providers.speech import (
+    FallbackSpeechProvider,
+    OpenAISpeechProvider,
+    SpeechAudio,
+    SpeechSynthesisProvider,
+)
 
 
 def _make_wav_bytes(sample_rate: int = 24000) -> bytes:
@@ -92,3 +97,46 @@ async def test_local_supertonic_missing_extra(monkeypatch):
     prov = LocalSupertonicProvider()
     with pytest.raises(RuntimeError, match=r"\[tts\] extra"):
         await prov.synthesize("hi")
+
+
+class _StubProvider(SpeechSynthesisProvider):
+    def __init__(self, data=b"PRIMARY", sr=22050, exc=None):
+        self._data = data
+        self._sr = sr
+        self._exc = exc
+        self.calls = 0
+
+    async def synthesize(self, text, *, voice=None, language=None):
+        self.calls += 1
+        if self._exc is not None:
+            raise self._exc
+        return SpeechAudio(self._data, self._sr)
+
+
+@pytest.mark.asyncio
+async def test_fallback_uses_primary_when_ok():
+    primary = _StubProvider(b"PRIMARY")
+    secondary = _StubProvider(b"CLOUD")
+    prov = FallbackSpeechProvider(primary, secondary)
+    out = await prov.synthesize("hi")
+    assert out.data == b"PRIMARY"
+    assert secondary.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_fallback_on_exception():
+    primary = _StubProvider(exc=RuntimeError("boom"))
+    secondary = _StubProvider(b"CLOUD")
+    prov = FallbackSpeechProvider(primary, secondary)
+    out = await prov.synthesize("hi")
+    assert out.data == b"CLOUD"
+    assert secondary.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_fallback_on_empty_audio():
+    primary = _StubProvider(data=b"")
+    secondary = _StubProvider(b"CLOUD")
+    prov = FallbackSpeechProvider(primary, secondary)
+    out = await prov.synthesize("hi")
+    assert out.data == b"CLOUD"
