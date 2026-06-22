@@ -1,9 +1,8 @@
 """Reciprocal Rank Fusion (RRF) cross-source merge.
 
-Per `docs/architecture/memory/03_search_pipeline.md` §7: merge vector + lexical +
-grep result lists into one ranked list using RRF with k=60 and
-per-source weights. When the agent supplied ``keywords``, the lexical
-weight is boosted from 0.7 to 2.5.
+Merges vector + lexical + grep result lists into one ranked list using RRF
+with k=60 and per-source weights. When the agent supplied ``keywords``, the
+lexical weight is boosted from 0.7 to 2.5.
 """
 
 from __future__ import annotations
@@ -142,7 +141,7 @@ def test_keywords_boost_elevates_lexical_only_hit() -> None:
 
 def test_boost_does_not_change_grep_weight() -> None:
     """Grep weight stays 0.3 even when keywords is set — the boost is
-    intentionally lexical-only (doc 03 §7.2 final paragraph)."""
+    intentionally lexical-only."""
     hits = fuse_rrf(
         vector=[], lexical=[], grep=["g"],
         keywords_provided=True,

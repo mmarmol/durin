@@ -1,10 +1,9 @@
 """Path B (autonomous skill acquisition) must be wired into the skill-extract pass.
 
-Regression guard: the entity-centric migration deleted the 2h Dream's phase-2,
-which was the home the acquire-on-gap design (§6.C) gave `skill_acquire_seed`
-(`_scopes={"dream"}`). The replacement — the daily `memory_dream` skill-extract
-pass (`run_skill_extract_pass`) — must now host Path B, or the dream can only ever
-author skills from scratch and the autonomous-acquire capability stays orphaned.
+Regression guard: the entity-centric migration removed the previous host of
+`skill_acquire_seed`. The replacement — the daily `memory_dream` skill-extract
+pass (`run_skill_extract_pass`) — must now host Path B, or the dream can only
+ever author skills from scratch and the autonomous-acquire capability stays orphaned.
 """
 from durin.agent.tools.file_state import FileStates
 from durin.memory.dream_passes import _build_skill_extract_tools

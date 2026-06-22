@@ -151,11 +151,11 @@ class TestRankWithEntities:
     def test_combined_realistic_mix(self) -> None:
         """Page + tagged entries + neutral entry.
 
-        Per doc 18 §3.4 (read-time reconciliation), the page and tagged
-        entries COEXIST in results — the LLM reconciles. We require the
-        canonical page and the freshest tagged entry in the top 2; the
-        untagged neutral entry (vector signal only) ranks last.
-        """
+        The page and tagged entries COEXIST in results — the LLM reconciles
+        at read-time using timestamps. We require the canonical page and the
+        freshest tagged entry in the top 2; the untagged neutral entry
+        (vector signal only) ranks last.
+"""
         candidates = [
             {"id": "neutral", "_distance": 0.5, "class_name": "episodic",
              "entities": [], "valid_from": "2026-05-23"},

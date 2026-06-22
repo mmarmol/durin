@@ -1,4 +1,4 @@
-"""Cross-encoder model validation via dynamic test (audit B12).
+"""Cross-encoder model validation via dynamic test.
 
 Per the user's feedback on the original B12 plan ("los modelos
 antes de seleccionarlos y asignarlos deberian pasar un test"):

@@ -5,7 +5,8 @@ tui-state.json (one adds a model, one adds a prompt). Without
 cross_process_lock wrapping load→mutate→save, one write can overwrite
 the other. With the lock, both entries must survive.
 
-See docs/architecture/concurrency.md for lock-ordering invariants.
+Cross-process lock ordering: load→mutate→save must be wrapped by
+cross_process_lock to prevent last-writer-wins corruption.
 """
 
 from __future__ import annotations

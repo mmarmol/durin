@@ -1,5 +1,4 @@
-"""Unit tests for the enriched-input + blended cross-encoder
-(P-CE-blend, 2026-06-11; doc 03 §9.2).
+"""Unit tests for the enriched-input + blended cross-encoder.
 
 Validates the two design choices the offline recall@10 sweep
 established, deterministically:

@@ -1,9 +1,9 @@
-"""Lock the identity.md Memory section against doc 06 §2.
+"""Lock the identity.md Memory section against prompt drift.
 
 If a future edit drifts the prompt out of sync with the canonical
-spec text, this test breaks loudly. Per doc 06 §2.2 the v2 wording
-is what produced +12pp on single_hop and +3.9pp net on LoCoMo
-(2026-05-25); changing it without bench evidence regresses.
+wording, this test breaks loudly. The v2 wording produced +12pp on
+single_hop and +3.9pp net on LoCoMo; changing it without bench
+evidence regresses.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ def identity_text() -> str:
     return _IDENTITY_PATH.read_text(encoding="utf-8")
 
 
-# Spec anchors taken verbatim from doc 06 §2. We don't anchor on the
+# Spec anchors taken verbatim from identity.md. We don't anchor on the
 # whole block (whitespace + Jinja interpolation make exact equality
 # brittle) but we lock the load-bearing sentences.
 _REQUIRED_PHRASES = (
@@ -29,7 +29,7 @@ _REQUIRED_PHRASES = (
     # Tool list may wrap across lines in the file; normalise whitespace
     # before comparing.
     # (Checked separately below.)
-    # §8a new model: entity pages + references replace canonical/fragments/
+    # New model: entity pages + references replace canonical/fragments/
     # ingested-chunks. The bench-validated anchors below are PRESERVED.
     "Entity pages",
     "References",
@@ -57,8 +57,8 @@ def test_each_required_phrase_present(identity_text: str) -> None:
     normalised = re.sub(r"\s+", " ", identity_text)
     missing = [p for p in _REQUIRED_PHRASES if p not in normalised]
     assert not missing, (
-        "identity.md drifted from docs/architecture/memory/06_prompts_and_instructions.md "
-        "§2. Missing spec phrases:\n  - " + "\n  - ".join(missing)
+        "identity.md drifted from its expected content. "
+        "Missing phrases:\n  - " + "\n  - ".join(missing)
     )
     # The full tool name list must be present (in any whitespace
     # arrangement).
@@ -69,8 +69,8 @@ def test_each_required_phrase_present(identity_text: str) -> None:
 
 
 def test_does_not_contain_dropped_v1_phrasing(identity_text: str) -> None:
-    """Phrases that v2 explicitly dropped (per doc 06 §2.1) — drift in
-    the wrong direction also breaks loudly."""
+    """Phrases that v2 explicitly dropped — drift in the wrong direction
+    also breaks loudly."""
     forbidden = (
         "always call memory_search before answering",
         "trust X over Y",

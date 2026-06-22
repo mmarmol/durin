@@ -1,8 +1,7 @@
-"""Tests for the new D1 slash commands.
+"""Tests for the D1 slash commands.
 
 Covers /sessions, /resume, /compact, /copy, /name, /hotkeys —
-the read-side and write-side surface added for daily-driver
-ergonomics in docs/09_daily_driver_plan.md §D1.
+the read-side and write-side surface added for daily-driver ergonomics.
 """
 
 from __future__ import annotations

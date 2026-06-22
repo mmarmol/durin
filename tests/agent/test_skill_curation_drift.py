@@ -56,7 +56,7 @@ def test_risky_drift_not_in_prompt(tmp_path, monkeypatch):
         return _DR(name, "confirm", "RISKY UPSTREAM BODY", qdir)
 
     sc.curate_catalog(ws, judge=judge, drift_check=drift, allowlist=[])
-    # §8.D: a confirm/block upstream is NOT fed to the auto-evolve judge
+    # a confirm/block upstream is NOT fed to the auto-evolve judge
     assert "RISKY UPSTREAM BODY" not in seen["prompt"]
     assert not qdir.exists()  # still cleaned up
 

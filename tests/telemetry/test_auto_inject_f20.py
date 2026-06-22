@@ -1,10 +1,8 @@
-"""F20 (audit third pass, 2026-05-28): doc 07 §4.1 promised that
-`iteration` and `session_key` are "auto-injected by emit_tool_event".
+"""Auto-inject `iteration` and `session_key` into every `emit_tool_event` call.
 
-Pre-F20 the claim was aspirational: the TypedDicts declared both
-fields as ``NotRequired`` and no emit site ever populated them.
-Dashboards joining `memory.recall` to other events on
-`(session_key, iteration)` had nothing to join on.
+Before the fix, the TypedDicts declared both fields as ``NotRequired`` and no
+emit site ever populated them. Dashboards joining `memory.recall` to other
+events on `(session_key, iteration)` had nothing to join on.
 
 F20 wires the producer:
 - `TelemetryLogger` carries a `session_key` and a per-turn

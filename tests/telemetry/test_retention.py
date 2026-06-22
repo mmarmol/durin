@@ -1,4 +1,4 @@
-"""Telemetry retention/rotation (P7.2 / doc 07 §10).
+"""Telemetry retention/rotation.
 
 JSONL telemetry files under `~/.cache/durin/telemetry/` are:
 

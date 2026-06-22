@@ -7,10 +7,9 @@ Wires together (without live LLM):
 - Phase 3.1 query → entity extraction via alias_index
 - Phase 3.2/3.3 multi-factor ranking applied to vector results
 
-Validates the integration assertion of doc 18 §7 / doc 19 §5: when a
-query mentions an entity by name/alias/identifier, the canonical page
-+ post-cursor entries surface in the top results, and pre-cursor
-entries are demoted (info is consolidated).
+Validates the integration: when a query mentions an entity by
+name/alias/identifier, the canonical page + post-cursor entries surface in
+the top results, and pre-cursor entries are demoted (info is consolidated).
 """
 
 from __future__ import annotations
@@ -131,7 +130,7 @@ def test_retrieval_l1_light_end_to_end(
     page.save(page_path)
 
     # --- Phase 1.4: build alias_index from the page -------------------
-    # (rebuild-only — no persistent sidecar per doc 23 T1.4)
+    # (rebuild-only — AliasIndex has no persistent sidecar)
     alias_idx = AliasIndex(workspace / "memory")
     alias_idx.build()
 
@@ -204,9 +203,9 @@ def test_retrieval_l1_light_end_to_end(
         f"order: {ids}"
     )
 
-    # ASSERT 3: ranking annotated which signals fired. Under RRF (doc 23 T1.3)
-    # the page gets vector_rank + entity_page_rank; tagged entries get
-    # vector_rank + tagged_rank (two-track model: no cursor exclusion).
+    # ASSERT 3: ranking annotated which signals fired. Under RRF the page gets
+    # vector_rank + entity_page_rank; tagged entries get vector_rank +
+    # tagged_rank (two-track model: no cursor exclusion).
     page_result = next(r for r in ranked if r.record["id"] == "person:marcelo")
     assert any("entity_page_rank" in s for s in page_result.signals)
 

@@ -1,9 +1,8 @@
 """Query analysis + FTS5 routing.
 
-Per `docs/architecture/memory/03_search_pipeline.md` §3.1 + §5.1: the search
-pipeline routes each query to one of three lexical paths based on
-CJK content and token length. The router is pure (no I/O); it
-returns a typed decision the lexical-search layer consumes.
+The search pipeline routes each query to one of three lexical paths based on
+CJK content and token length. The router is pure (no I/O); it returns a typed
+decision the lexical-search layer consumes.
 """
 
 from __future__ import annotations
@@ -127,7 +126,7 @@ def test_route_empty_query_returns_unicode61() -> None:
 
 
 def test_route_keywords_param_recorded() -> None:
-    """The router records `keywords` for the dynamic-boost step in §7.2,
+    """The router records `keywords` for the dynamic-boost step,
     but does NOT alter the routing decision based on it."""
     decision = decide_lexical_route(
         "marcelo", keywords="mmarmol@mxhero.com",

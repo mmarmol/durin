@@ -1,4 +1,4 @@
-"""End-to-end orchestrator tests (doc 03 §1)."""
+"""End-to-end search pipeline orchestrator tests."""
 
 from __future__ import annotations
 

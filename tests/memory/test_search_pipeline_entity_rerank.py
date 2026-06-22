@@ -1,4 +1,4 @@
-"""Search pipeline applies entity-aware rerank after RRF (doc 03 §8)."""
+"""Search pipeline applies entity-aware rerank after RRF."""
 
 from __future__ import annotations
 

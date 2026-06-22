@@ -1,16 +1,12 @@
-"""`memory.health_check` payload carries the A6 fields (tick_id +
-duration_ms).
-
-Per doc 07 §9.4 and doc 11 audit A6:
+"""`memory.health_check` payload carries tick_id + duration_ms.
 
 - `tick_id` (string, 32-char UUID hex) — per-tick correlation id.
 - `duration_ms` (float, > 0) — wall-clock of the probe round.
 
-Per [[feedback-sync-tests-exercise-behavior]]: the test exercises
-the emit path with real `run_tick()` calls, not just the TypedDict
-declaration. Per [[feedback-verify-quantifiers]]: the tick_id length
-is asserted explicitly so the test catches a regression that drops
-the `.hex` (would return a 36-char dashed string instead of 32).
+The test exercises the emit path with real `run_tick()` calls, not just the
+TypedDict declaration. The tick_id length is asserted explicitly so the test
+catches a regression that drops the `.hex` (would return a 36-char dashed
+string instead of 32).
 """
 
 from __future__ import annotations

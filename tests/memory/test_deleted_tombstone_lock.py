@@ -1,9 +1,8 @@
 """Cross-process lost-update test for the .deleted.json tombstone set.
 
-Hazard #16 (docs/architecture/concurrency.md): two concurrent processes each
-call clear_delete_tombstone on a DIFFERENT ref; without a lock one process's
-load happens before the other's save, so one removal is overwritten and that
-ref remains tombstoned.
+Two concurrent processes each call clear_delete_tombstone on a DIFFERENT ref;
+without a lock one process's load happens before the other's save, so one
+removal is overwritten and that ref remains tombstoned.
 
 This test:
 1. Seeds .deleted.json with two refs.

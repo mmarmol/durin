@@ -1,4 +1,4 @@
-"""Schema tests for the global transcription config (spec §4.3)."""
+"""Schema tests for the global transcription config."""
 
 import pytest
 

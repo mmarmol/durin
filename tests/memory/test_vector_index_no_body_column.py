@@ -1,18 +1,16 @@
-"""LanceDB row schema must NOT carry a `body` column (audit A4).
+"""LanceDB row schema must NOT carry a `body` column.
 
 The `.md` file on disk is the single source of truth for entry
 content. LanceDB stores metadata + vector for retrieval; the body
 is read on demand from disk via
 `memory_search.MemorySearchTool._enrich_body`.
 
-P2.5 (commit a266344) briefly introduced a body column for a
-cold-tier latency micro-optimisation; audit A4 reverted it because
-the optimisation was prematurely introduced (no benchmark showed
-the file reads as bottleneck) and the duplication opened a drift
-window between disk edits and LanceDB reads.
+Commit a266344 briefly introduced a body column for a cold-tier latency
+micro-optimisation that was reverted because no benchmark showed file reads
+as a bottleneck and the duplication opened a drift window between disk edits
+and LanceDB reads.
 
-These tests enforce the post-A4 invariant. If a future change
-re-introduces a body column, this test fails loudly.
+If a future change re-introduces a body column, this test fails loudly.
 """
 
 from __future__ import annotations

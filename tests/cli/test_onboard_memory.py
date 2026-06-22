@@ -1,9 +1,8 @@
-"""Onboarding question for the auto-absorb opt-in (doc 06 §6.3).
+"""Onboarding question for the auto-absorb opt-in.
 
-The text ships in Phase 1 (alongside the absorb-judge feature). The
-full wizard integration is Phase 6 — for now we verify the contract:
-the helper returns a bool reflecting the user's choice, defaults to
-False (off), and the prompt body matches the doc 06 wording verbatim.
+The text ships alongside the absorb-judge feature. Tests verify the
+contract: the helper returns a bool reflecting the user's choice,
+defaults to False (off), and the prompt body contains the expected anchors.
 """
 
 from __future__ import annotations
@@ -27,9 +26,8 @@ from durin.cli.onboard_memory import (
 
 
 def test_question_text_anchors() -> None:
-    """The text the user sees must communicate the four things
-    doc 06 §6.3 lists: what auto-absorb does, why it's OFF by default,
-    the defaults when enabled, and the y/N prompt."""
+    """The text the user sees must communicate: what auto-absorb does,
+    why it's OFF by default, the defaults when enabled, and the y/N prompt."""
     text = AUTO_ABSORB_QUESTION_TEXT
     assert "auto" in text.lower() and "absorb" in text.lower()
     assert "OFF by default" in text

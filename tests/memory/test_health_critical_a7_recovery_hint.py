@@ -1,6 +1,4 @@
-"""`memory.health.critical` carries the A7 `manual_recovery_hint`.
-
-Per doc 07 §9.5 and doc 11 audit A7:
+"""`memory.health.critical` carries a `manual_recovery_hint`.
 
 - The payload includes a `manual_recovery_hint` (string) — the CLI
   command an operator runs to rebuild the failed component.
@@ -8,10 +6,9 @@ Per doc 07 §9.5 and doc 11 audit A7:
   a real `--target` value, or the hint goes stale silently the
   next time someone renames a target.
 
-Per [[feedback-sync-tests-exercise-behavior]]: anti-drift tests
-exercise the real CLI validation (without executing the command),
-not just compare strings. If `durin memory reindex` renames or its
-`--target` accepted set changes, this test fails loudly.
+Anti-drift tests exercise the real CLI validation (without executing the
+command), not just compare strings. If `durin memory reindex` renames or
+its `--target` accepted set changes, this test fails loudly.
 """
 
 from __future__ import annotations
@@ -48,9 +45,8 @@ def test_all_known_probes_have_a_recovery_hint() -> None:
 
 
 def test_hints_use_the_canonical_durin_memory_reindex_prefix() -> None:
-    """Doc 07 §9.5 v1 had `durin reindex` — the real command is
-    `durin memory reindex`. This guards against re-introducing the
-    spec-typo."""
+    """The real command is `durin memory reindex` (not `durin reindex`).
+    This guards against re-introducing that typo."""
     for component, hint in _RECOVERY_HINTS.items():
         assert hint.startswith("durin memory reindex"), (
             f"hint for {component!r} does not start with the canonical "

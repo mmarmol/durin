@@ -1,4 +1,4 @@
-"""Unit tests for the §2.D LLM-judge module."""
+"""Unit tests for the absorb-judge LLM-judge module."""
 
 from __future__ import annotations
 

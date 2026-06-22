@@ -1,16 +1,10 @@
-"""G1 (audit fourth pass, 2026-05-28): ship the
-`memory.search.sectioning.max_per_source` config knob.
+"""Ship the `memory.search.sectioning.max_per_source` config knob.
 
-Doc 03 §16 row 8 has promised `Configurable via
-memory.search.sectioning.max_per_source` since Phase 3 (commit
-792f1c6) but the field never landed. `DEFAULT_MAX_PER_SOURCE = 3`
-was hard-coded in `sectioned_output.py` and the 3 callsites
-(`search_pipeline.py:182`, `memory_search.py:461`,
-`memory_search.py:657`) all used the default. Operators with
-PDF-heavy ingest corpora had no way to tune the cap without
-patching code.
+`DEFAULT_MAX_PER_SOURCE = 3` was hard-coded in `sectioned_output.py` and all
+callsites used the default. Operators with PDF-heavy ingest corpora had no way
+to tune the cap without patching code.
 
-G1 wires:
+Wires:
 - `MemorySearchSectioningConfig.max_per_source: int = 3`.
 - `run_search_pipeline(..., max_per_source=...)` accepts an override.
 - `memory_search.execute` reads the config and threads it through.

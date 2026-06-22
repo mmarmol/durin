@@ -1,16 +1,11 @@
-"""§2.H — fragment/canonical retrieval contract.
+"""Fragment/canonical retrieval contract.
 
-The doc 18 §6 promise — "consolidated page and post-cursor entries
-coexist in the results; the LLM reconciles at read-time with
-timestamps and context" — was a design intent that did not survive
-into the LLM delivery contract until §2.H. These tests pin the
-contract on both delivery paths (lazy `memory_search` + eager
-`hot_layer`) so future changes don't silently regress it.
+The fragment/canonical contract: consolidated page and post-cursor entries
+coexist in the results; the LLM reconciles at read-time with timestamps and
+context. Tests pin the contract on both delivery paths (lazy `memory_search` +
+eager `hot_layer`) so future changes don't silently regress it.
 
-Marker convention follows the compaction precedent
-(``=== ARCHIVED SUMMARY ===`` per logbook 2026-05-19) and was
-formalised in ``docs/architecture/memory/06_prompts_and_instructions.md`` §8.3 to:
-
+Marker format:
 - ``=== CANONICAL: <ref> (consolidated <ts>) === ... === END CANONICAL ===``
 - ``=== FRAGMENT: <path> (ts <ts>) === ... === END FRAGMENT ===``
 """
@@ -104,13 +99,12 @@ class TestToDictContract:
 
 
 # ---------------------------------------------------------------------------
-# render_block markers — migrated to sectioned_output (audit F4, 2026-05-28)
+# render_block markers — migrated to sectioned_output
 # ---------------------------------------------------------------------------
 #
-# Pre-F4 `Result.render_block` produced per-row marker blocks consumed
-# by the agent. F4 completed the Phase 3 migration: the renderer is
-# now `durin.memory.sectioned_output.render_sectioned`, which groups
-# hits by section and emits intros + per-block markers + END closes.
+# Pre-migration `Result.render_block` produced per-row marker blocks consumed
+# by the agent. The renderer is now `durin.memory.sectioned_output.render_sectioned`,
+# which groups hits by section and emits intros + per-block markers + END closes.
 #
 # Tests for marker format moved to `tests/memory/test_sectioned_migration_f4.py`
 # (END markers, summary > body > snippet preference, entities tail,
@@ -151,7 +145,7 @@ class TestSearchDreamedGrep:
         assert c.entities == ("person:marcelo",)
 
     def test_canonical_and_fragment_coexist(self, tmp_path: Path) -> None:
-        """doc 18 §6 promise: ambos en los resultados."""
+        """Canonical page and fragment entries coexist in search results."""
         page = EntityPage(type="person", name="Marcelo", aliases=["marcelo"])
         page.save(tmp_path / "memory" / "entities" / "person" / "marcelo.md")
         store_memory(
@@ -261,7 +255,7 @@ class TestHotLayerFragmentsSection:
 
         rendered = read_hot_layer(tmp_path).render()
         assert "## Memory: Recent fragments" in rendered
-        # Marker format (doc 06 §8.3): `=== FRAGMENT: <path> (ts <ts>) ===`
+        # Marker format: `=== FRAGMENT: <path> (ts <ts>) ===`
         # — path is workspace-relative, not the entity ref.
         assert "=== FRAGMENT: memory/episodic/" in rendered
         assert "(ts 2026-05-22" in rendered

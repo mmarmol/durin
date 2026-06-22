@@ -1,13 +1,11 @@
-"""F4 (audit third pass, 2026-05-28): complete Phase 3 sectioned
-rendering migration.
+"""Complete Phase 3 sectioned rendering migration.
 
-Before F4 we shipped Phase 3 building blocks (`query_router`, `RRF`,
-`sectioned_output`, `lexical_executor`) but kept the legacy
-`Result.render_block` wiring in `memory_search`. Result: per-source
-cap (doc 03 §12.4) never activated; section intros (doc 03 §12)
-never reached the LLM; two parallel renderers (`Result.render_block`
-in search.py vs `sectioned_output._render_block`) emitted different
-formats.
+Before the migration we shipped Phase 3 building blocks (`query_router`,
+`RRF`, `sectioned_output`, `lexical_executor`) but kept the legacy
+`Result.render_block` wiring in `memory_search`. Result: per-source cap
+never activated; section intros never reached the LLM; two parallel renderers
+(`Result.render_block` in search.py vs `sectioned_output._render_block`)
+emitted different formats.
 
 F4 closes the gap:
 - `sectioned_output._render_block` reaches feature parity with the

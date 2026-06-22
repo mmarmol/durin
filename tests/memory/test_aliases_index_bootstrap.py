@@ -15,7 +15,7 @@ Per glm review:
 - Slugs are indexed AS-IS — no underscore splitting (anti-pattern that
   produces noisy partial matches like "data_migration" → "data").
 - Ambiguous slugs across types are preserved as a list (consistent
-  with the existing collision semantics per doc 18 §7).
+  with existing collision semantics).
 - Malformed entity refs (no ':') skip silently.
 """
 
@@ -198,9 +198,8 @@ class TestEdgeCasesPerGlmReview:
         self, tmp_path: Path,
     ) -> None:
         """Same slug across distinct entity types (project:python +
-        snake:python) → lookup returns BOTH refs. This mirrors doc 18
-        §7 + R6 collision semantics — disambiguation belongs to the
-        consumer, not the index."""
+        snake:python) → lookup returns BOTH refs. Disambiguation belongs
+        to the consumer, not the index."""
         store_memory(
             tmp_path, content="Python project release",
             entities=["project:python"],

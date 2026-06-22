@@ -1,7 +1,5 @@
-"""F2 (audit third pass, 2026-05-28): `memory_search(scope='archive')`
-walks `memory/archive/**` on demand for recovery / diagnostic queries.
-
-Doc 01 §3.6 promised this surface; pre-F2 the scope enum rejected
+"""`memory_search(scope='archive')` walks `memory/archive/**` on demand for
+recovery / diagnostic queries. Before this fix, the scope enum rejected
 `'archive'` with `{"error": "invalid scope 'archive'"}` because the
 allowed set was `{'all', 'dreamed', 'undreamed'}`.
 

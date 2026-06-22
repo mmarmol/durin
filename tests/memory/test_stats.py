@@ -1,4 +1,4 @@
-"""Tests for memory telemetry aggregator (doc 25 §2.E)."""
+"""Tests for memory telemetry aggregator."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def _write_entity_page(workspace: Path, type_: str, slug: str,
                        archived: bool = False) -> Path:
     """Build a minimal entity page on disk."""
     if archived:
-        # Spec layout (doc memory §3.2): archived entities live at
+        # Archived entities live at
         # memory/archive/entities/<type>/<slug>.md, NOT under the
         # canonical's subtree.
         base = workspace / "memory" / "archive" / "entities" / type_
