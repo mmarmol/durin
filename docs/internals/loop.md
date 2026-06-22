@@ -219,7 +219,12 @@ The handlers, in order:
 - **`_state_run`** — calls `_run_agent_loop`, which delegates to
   `AgentRunner.run`. The result tuple
   `(final_content, tools_used, all_messages, stop_reason, had_injections, tool_events)`
-  is stored on the context.
+  is stored on the context. An overflow that aborted *before any tool ran*
+  (the consolidator budget is structurally tighter than the runner's, so a
+  successful BUILD consolidation always fits — an iteration-0 overflow means it
+  failed) triggers one bounded retry: force a fresh consolidation, rebuild the
+  context, re-run (`overflow_retry.forced_consolidation`); skipped once a tool
+  has run, so side-effecting tools never re-fire.
 - **`_state_save`** — finalizes plan/stall/goal bookkeeping, records skill-usage
   signals, appends only the new turn's messages to the session
   (`_save_turn` rewrites the `.jsonl` and mirrors derived/volatile metadata to
@@ -245,6 +250,17 @@ sanitization (dropping orphan tool results, backfilling missing ones),
 per-result and per-turn tool-output budgets with spill-to-disk, and microcompact
 / media pruning of the in-flight message list. Crucially these reshape only the
 copy sent to the model — the persisted transcript is untouched.
+
+**Context budget.** The input budget reserves only a *capped* output headroom
+(`_output_reservation`, not the full configured `max_tokens` ceiling), so a high
+ceiling never collapses the usable input; the request then sends a *dynamic*
+`max_tokens` sized to the room the prompt actually leaves (resolving the ceiling
+from the provider when the spec leaves it unset). A mid-turn precheck estimates
+the post-sanitize prompt each iteration: when it is over budget the runner
+emergency-trims the largest string tool results on the model-facing copy and
+proceeds if that fits (`mid_turn_precheck.recovered`); only when trimming can't
+recover does it abort *before* the LLM call with
+`stop_reason=mid_turn_precheck_overflow` and an overflow-specific placeholder.
 
 Two behaviors connect the runner back to the loop:
 
@@ -313,8 +329,11 @@ Once the state machine returns, `_dispatch` publishes the outbound message,
 serializes any pending interactive payloads for channels that cannot render
 structured tool output, and for websocket clients emits a `_turn_end` signal
 (carrying turn latency and goal state) and, for the webui, schedules background
-title generation. Finally it drains leftover pending messages back to the bus
-and clears the per-session latency entry.
+title generation. It also emits a `turn.latency` breakdown — total wall-clock
+split into `llm_ms` (model round-trips, accumulated in the runner and handed off
+via `_pending_llm_ms`), `tools_ms`, and `local_ms` (everything else), plus the
+per-state-machine durations from the `trace`. Finally it drains leftover pending
+messages back to the bus and clears the per-session latency entry.
 
 ---
 

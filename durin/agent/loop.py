@@ -43,8 +43,8 @@ from durin.session.goal_state import (
     goal_state_ws_blob,
     runner_wall_llm_timeout_s,
 )
-from durin.session.turn_lease import session_turn_lease
 from durin.session.manager import Session, SessionManager
+from durin.session.turn_lease import session_turn_lease
 from durin.utils.document import extract_documents
 from durin.utils.helpers import image_placeholder_text
 from durin.utils.helpers import truncate_text as truncate_text_fn
@@ -60,6 +60,26 @@ from durin.utils.webui_turn_helpers import publish_turn_run_status
 # the leading context is the relevant part. Inspired by pi's per-tool
 # truncation direction policy.
 _TAIL_TRUNCATION_TOOLS = frozenset({"exec", "shell"})
+
+# Terminal stop reasons where the model never streamed any content to the user
+# — the turn aborted with an ``Error: ...`` final_content before/without output.
+# These must NOT be marked ``_streamed``, or ``ChannelManager._send_once`` treats
+# the message as already-delivered and drops it, surfacing as a silent failure.
+_NON_STREAMED_STOP_REASONS = frozenset({
+    "error",
+    "tool_error",
+    "mid_turn_precheck_overflow",
+    "circuit_breaker_idle_timeout",
+})
+
+# Bounded in-turn recovery for an overflow that aborted BEFORE any tool ran:
+# the consolidator's budget is structurally tighter than the runner's, so a
+# successful BUILD-time consolidation always fits — an iteration-0 overflow
+# means that consolidation failed (e.g. compaction lock timeout). Force a
+# fresh consolidation + rebuild and re-run the turn this many times before
+# surfacing the error. Only retried when no tool has executed (re-running
+# would re-fire side-effecting tools).
+_MAX_OVERFLOW_RETRIES = 1
 
 
 def _truncate_tool_output(content: str, max_chars: int, tool_name: str | None) -> str:
@@ -185,6 +205,7 @@ class TurnContext:
     stop_reason: str = ""
     had_injections: bool = False
     tool_events: list[dict[str, Any]] = field(default_factory=list)
+    llm_ms: float = 0.0
 
     user_persisted_early: bool = False
     save_skip: int = 0
@@ -351,6 +372,10 @@ class AgentLoop:
         self._start_time = time.time()
         self._last_usage: dict[str, int] = {}
         self._pending_turn_latency_ms: dict[str, int] = {}
+        # Per-session handoff of the last run's model round-trip wall-clock,
+        # consumed by the turn.latency breakdown (the per-run telemetry binding
+        # can't reach the dispatch loop where the breakdown is emitted).
+        self._pending_llm_ms: dict[str, float] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
 
         self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
@@ -1283,12 +1308,12 @@ class AgentLoop:
         """Derive a token budget for session history replay from the context window."""
         if self.context_window_tokens <= 0:
             return 0
+        from durin.agent.runner import _output_reservation
         max_output = getattr(getattr(self.provider, "generation", None), "max_tokens", 4096)
-        try:
-            reserved_output = int(max_output)
-        except (TypeError, ValueError):
-            reserved_output = 4096
-        budget = self.context_window_tokens - max(1, reserved_output) - 1024
+        # Cap the output reservation so a large configured ceiling does not
+        # collapse the replay budget (mirrors the runner's input budgeting).
+        reserved_output = _output_reservation(max_output)
+        budget = self.context_window_tokens - reserved_output - 1024
         return budget if budget > 0 else max(128, self.context_window_tokens // 2)
 
     async def _run_agent_loop(
@@ -1506,6 +1531,10 @@ class AgentLoop:
                 from durin.telemetry.logger import reset_telemetry
                 reset_telemetry(telemetry_token)
         self._last_usage = result.usage
+        if session_key is not None:
+            # Optional model-latency metric; a result that doesn't model timing
+            # (test doubles) defaults to 0.0 — the breakdown just shows no LLM time.
+            self._pending_llm_ms[session_key] = getattr(result, "llm_ms", 0.0)
         if result.stop_reason == "max_iterations":
             logger.warning("Max iterations ({}) reached", self.max_iterations)
             # Push final content through stream so streaming channels (e.g. Feishu)
@@ -2015,7 +2044,40 @@ class AgentLoop:
             ctx.turn_id,
             len(ctx.trace),
         )
+        self._emit_turn_latency(ctx)
         return ctx.outbound
+
+    def _emit_turn_latency(self, ctx: TurnContext) -> None:
+        """Emit a per-turn wall-clock breakdown: model round-trips
+        (``llm_ms``), tool execution (``tools_ms``), and everything else
+        (``local_ms`` — context build, memory, sanitize, consolidation,
+        save/respond), plus per-state-machine durations."""
+        if not ctx.trace:
+            return
+        state_ms: dict[str, float] = {}
+        for entry in ctx.trace:
+            state_ms[entry.state.name] = state_ms.get(entry.state.name, 0.0) + entry.duration_ms
+        total_ms = sum(state_ms.values())
+        tools_ms = 0.0
+        for ev in ctx.tool_events:
+            with suppress(TypeError, ValueError):
+                tools_ms += float(ev.get("duration_ms") or 0.0)
+        llm_ms = ctx.llm_ms
+        local_ms = max(0.0, total_ms - llm_ms - tools_ms)
+        # The per-run telemetry binding is torn down inside _run_agent_loop, so
+        # fetch the session logger directly rather than via the contextvar.
+        from durin.telemetry.logger import get_session_logger
+        with suppress(Exception):
+            get_session_logger(ctx.session_key).log("turn.latency", {
+                "session_key": ctx.session_key,
+                "turn_id": ctx.turn_id,
+                "total_ms": round(total_ms, 1),
+                "llm_ms": round(llm_ms, 1),
+                "tools_ms": round(tools_ms, 1),
+                "local_ms": round(local_ms, 1),
+                "states": {k: round(v, 1) for k, v in state_ms.items()},
+                "stop_reason": ctx.stop_reason,
+            })
 
     def _assemble_outbound(
         self,
@@ -2038,7 +2100,7 @@ class AgentLoop:
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
 
         meta = dict(msg.metadata or {})
-        if on_stream is not None and stop_reason not in {"error", "tool_error"}:
+        if on_stream is not None and stop_reason not in _NON_STREAMED_STOP_REASONS:
             meta["_streamed"] = True
         if turn_latency_ms is not None:
             meta["latency_ms"] = int(turn_latency_ms)
@@ -2142,29 +2204,72 @@ class AgentLoop:
         return "ok"
 
     async def _state_run(self, ctx: TurnContext) -> str:
-        await publish_turn_run_status(self.bus, ctx.msg, "running")
-        result = await self._run_agent_loop(
-            ctx.initial_messages,
-            on_progress=ctx.on_progress,
-            on_stream=ctx.on_stream,
-            on_stream_end=ctx.on_stream_end,
-            on_retry_wait=ctx.on_retry_wait,
-            session=ctx.session,
-            channel=ctx.msg.channel,
-            chat_id=ctx.msg.chat_id,
-            message_id=ctx.msg.metadata.get("message_id"),
-            metadata=ctx.msg.metadata,
-            session_key=ctx.session_key,
-            pending_queue=ctx.pending_queue,
-            model_preset=ctx.model_preset_override,
-        )
-        final_content, tools_used, all_msgs, stop_reason, had_injections, tool_events = result
-        ctx.final_content = final_content
-        ctx.tools_used = tools_used
-        ctx.all_messages = all_msgs
-        ctx.stop_reason = stop_reason
-        ctx.had_injections = had_injections
-        ctx.tool_events = tool_events
+        for attempt in range(1 + _MAX_OVERFLOW_RETRIES):
+            await publish_turn_run_status(self.bus, ctx.msg, "running")
+            result = await self._run_agent_loop(
+                ctx.initial_messages,
+                on_progress=ctx.on_progress,
+                on_stream=ctx.on_stream,
+                on_stream_end=ctx.on_stream_end,
+                on_retry_wait=ctx.on_retry_wait,
+                session=ctx.session,
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                message_id=ctx.msg.metadata.get("message_id"),
+                metadata=ctx.msg.metadata,
+                session_key=ctx.session_key,
+                pending_queue=ctx.pending_queue,
+                model_preset=ctx.model_preset_override,
+            )
+            final_content, tools_used, all_msgs, stop_reason, had_injections, tool_events = result
+            ctx.final_content = final_content
+            ctx.tools_used = tools_used
+            ctx.all_messages = all_msgs
+            ctx.stop_reason = stop_reason
+            ctx.had_injections = had_injections
+            ctx.tool_events = tool_events
+            # _run_agent_loop stashed this call's model wall-clock keyed by
+            # session (the per-run telemetry binding can't reach the dispatch
+            # loop); accumulate across the overflow-retry so the breakdown sees
+            # every round-trip this turn.
+            ctx.llm_ms += self._pending_llm_ms.pop(ctx.session_key, 0.0)
+
+            # In-turn recovery for an overflow that aborted before any tool
+            # ran: BUILD's consolidation must have failed (the consolidator
+            # budget is structurally tighter than the runner's, so a
+            # successful consolidation always fits). Force a fresh
+            # consolidation, rebuild the context, and retry — bounded, and
+            # skipped once a tool has run so we never re-fire side effects.
+            if (
+                stop_reason == "mid_turn_precheck_overflow"
+                and not tools_used
+                and attempt < _MAX_OVERFLOW_RETRIES
+            ):
+                logger.warning(
+                    "Iteration-0 overflow for {}; forcing consolidation and retrying turn",
+                    ctx.session_key,
+                )
+                from durin.telemetry.logger import current_telemetry
+                _ov_logger = current_telemetry()
+                if _ov_logger is not None:
+                    with suppress(Exception):
+                        _ov_logger.log("overflow_retry.forced_consolidation", {
+                            "session_key": ctx.session_key,
+                            "attempt": attempt,
+                        })
+                await self.consolidator.maybe_consolidate_by_tokens(
+                    ctx.session, replay_max_messages=self._max_messages,
+                )
+                ctx.history = ctx.session.get_history(
+                    max_messages=self._max_messages,
+                    max_tokens=self._replay_token_budget(),
+                    include_timestamps=True,
+                )
+                ctx.initial_messages = self._build_initial_messages(
+                    ctx.msg, ctx.session, ctx.history, ctx.pending_summary,
+                )
+                continue
+            break
         return "ok"
 
     async def _state_save(self, ctx: TurnContext) -> str:
