@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "copy:vad": "node scripts/copy-vad-assets.mjs",
+    "prebuild": "node scripts/copy-vad-assets.mjs",
+    "predev": "node scripts/copy-vad-assets.mjs",
     "build": "tsc -p tsconfig.build.json && vite build",
     "preview": "vite preview",
     "test": "vitest run",
@@ -22,6 +25,7 @@
     "@radix-ui/react-separator": "^1.1.1",
     "@radix-ui/react-slot": "^1.3.0",
     "@radix-ui/react-tooltip": "^1.2.10",
+    "@ricky0123/vad-web": "^0.0.30",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "i18next": "^26.3.1",
