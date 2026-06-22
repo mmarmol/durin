@@ -108,6 +108,80 @@ def test_bootstrap_token_resolves_via_store(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# webui session cookie (httpOnly, opaque, revocable)
+# ---------------------------------------------------------------------------
+
+
+def _secret_gated_app(tmp_path, monkeypatch, secret: str = "hunter2"):
+    from durin.api.asgi import build_gateway_http_app
+
+    monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
+    ch = _channel(tmp_path, tokenIssueSecret=secret)
+    auth = ch._services.get("auth")
+    auth._store._path = tmp_path / "api_tokens.json"
+    return build_gateway_http_app(ch, ch._services, auth=auth), ch
+
+
+def test_bootstrap_secret_login_sets_httponly_session_cookie(tmp_path, monkeypatch):
+    from starlette.testclient import TestClient
+
+    app, _ch = _secret_gated_app(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    boot = client.get("/webui/bootstrap", headers={"X-Durin-Auth": "hunter2"})
+    assert boot.status_code == 200
+    set_cookie = boot.headers.get("set-cookie", "")
+    assert "durin_session=" in set_cookie
+    assert "httponly" in set_cookie.lower()
+    assert "samesite=strict" in set_cookie.lower()
+    # The secret is NOT echoed back in the JSON body.
+    assert "hunter2" not in boot.text
+    # The session token is opaque, not the secret.
+    assert "hunter2" not in set_cookie
+
+
+def test_bootstrap_reauthorizes_via_session_cookie_without_secret(tmp_path, monkeypatch):
+    from starlette.testclient import TestClient
+
+    app, _ch = _secret_gated_app(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    # Initial sign-in with the secret sets the cookie (kept by the client jar).
+    first = client.get("/webui/bootstrap", headers={"X-Durin-Auth": "hunter2"})
+    assert first.status_code == 200
+
+    # Reload: no secret header, but the durin_session cookie re-authorizes.
+    again = client.get("/webui/bootstrap")
+    assert again.status_code == 200
+    assert again.json()["token"]
+
+
+def test_bootstrap_rejects_without_secret_or_cookie(tmp_path, monkeypatch):
+    from starlette.testclient import TestClient
+
+    app, _ch = _secret_gated_app(tmp_path, monkeypatch)
+    client = TestClient(app)  # fresh jar — no cookie
+
+    res = client.get("/webui/bootstrap")
+    assert res.status_code == 401
+
+
+def test_signout_revokes_session_and_clears_cookie(tmp_path, monkeypatch):
+    from starlette.testclient import TestClient
+
+    app, _ch = _secret_gated_app(tmp_path, monkeypatch)
+    client = TestClient(app)
+
+    client.get("/webui/bootstrap", headers={"X-Durin-Auth": "hunter2"})
+    out = client.post("/webui/signout")
+    assert out.status_code == 200
+    # Cookie cleared client-side (max-age=0) AND token revoked server-side, so a
+    # subsequent secret-less bootstrap is rejected.
+    after = client.get("/webui/bootstrap")
+    assert after.status_code == 401
+
+
+# ---------------------------------------------------------------------------
 # Media secret stability (loaded from store, same across instances)
 # ---------------------------------------------------------------------------
 
