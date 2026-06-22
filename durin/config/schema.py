@@ -113,6 +113,32 @@ class TranscriptionConfig(Base):
     cache_transcripts: bool = True
 
 
+class TtsLocalConfig(Base):
+    """Local on-CPU TTS via Supertonic (ONNX, self-downloading)."""
+
+    engine: Literal["supertonic"] = "supertonic"
+    voice: str = "F4"   # F1-F5 / M1-M5 (proven default F4)
+    model_dir: str | None = None   # None = supertonic auto-downloads (~260 MB)
+    quality: Literal["normal", "high"] = "normal"   # normal = 8 steps, high = 20
+
+
+class TtsConfig(Base):
+    """Global text-to-speech settings. Sibling of TranscriptionConfig.
+
+    The webui presents this together with `transcription` under one "Voice"
+    pane, but the two stay separate flat config blocks (back-compat).
+    """
+
+    enabled: bool = True
+    provider: Literal["local", "openai"] = "local"
+    language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$")
+    fallback: Literal["none", "openai"] = "none"   # net-new local→cloud fallback
+    local: TtsLocalConfig = Field(default_factory=TtsLocalConfig)
+    openai: TranscriptionProviderKeysConfig = Field(
+        default_factory=TranscriptionProviderKeysConfig
+    )
+
+
 class MemoryEmbeddingConfig(Base):
     """Embedding model configuration for the memory subsystem (Phase 2).
 
@@ -1098,6 +1124,7 @@ class Config(BaseSettings):
     appearance: AppearanceConfig = Field(default_factory=AppearanceConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
+    tts: TtsConfig = Field(default_factory=TtsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
