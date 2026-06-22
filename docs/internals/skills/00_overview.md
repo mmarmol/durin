@@ -25,7 +25,7 @@ Two locations:
 (create → edits → fuse) is in git: rollback = `git revert`, "why" = the commit message,
 and **the original (as-imported / as-created) is the first commit** — never lost,
 always diffable (`git diff <import-commit>..HEAD`). There is no separate `original/`
-copy; git *is* that layer (see `skills_evolutivas.md §5.2`).
+copy; git *is* that layer.
 
 ### Frontmatter durin reads (`metadata.durin.*`)
 
@@ -56,7 +56,7 @@ standard — see `01_format_and_interop.md`.
                                   memory_dream cron, curate_catalog pass: curate (evolve/fuse) + drift (§8.D)
 ```
 
-Six capabilities (vision §1, `skills_evolutivas.md`): **create · import · discover ·
+Six capabilities: **create · import · discover ·
 acquire · evolve · remove**. The first five converge on the same versioned `adapted` skill
 in the git subtree; **remove** (§3a) is their inverse — the only mutation that takes a skill
 out of the workspace.
@@ -423,8 +423,8 @@ agent tool, 2026-06-11).
 **Pending (active):** P6 #2 (run bundled skill *scripts* through the tool gate) · P6 #3 (per-skill FS/net sandbox) ·
 extra discovery adapters (github-taps / well-known / lobehub). See `docs/roadmap.md`.
 
-**Discarded (decided against, with rationale in `skills_evolutivas.md`):** §6.D
-adapt-to-native-tools / §8.F GEPA-SkillOpt optimizer (no value over `curate_catalog` +
+**Discarded (decided against):**
+adapt-to-native-tools / GEPA-SkillOpt optimizer (no value over `curate_catalog` +
 usage signal too sparse for personal skills) · a separate `original/` layer (git already
 provides it) · per-registry `registry`/`registry_id` version provenance (update detection
 stays content-addressed).
