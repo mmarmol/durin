@@ -2811,6 +2811,11 @@ export interface components {
         };
         /** SkillsImportCommand */
         SkillsImportCommand: {
+            /**
+             * Replace
+             * @default false
+             */
+            replace: boolean;
             /** Source */
             source: string;
         };

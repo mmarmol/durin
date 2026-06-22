@@ -336,7 +336,10 @@ Three tiers, all in `durin/agent/context.py` + `skills.py`:
 
 `durin/agent/skills_surface.py` exposes the inventory (+ verdict/findings) and the
 quarantine to CLI/web; usage signal (`skill_usage.py`) drives the hot-tier (it does **not**
-drive curation — that's deliberate).
+drive curation — that's deliberate). **First-party builtins (`source == "builtin"`) are
+exempt from the inventory scan** — they ship vetted, so carrying scripts never flags them
+caution/insecure; verdict is fixed `safe`. A *forked* builtin lives in the workspace
+(`source != "builtin"`) and is scanned like any other workspace skill.
 
 **Active-skill review overrides ("Revisada").** A flagged *active* skill can be cleared by
 a user or the LLM judge without mutating the package (builtins are read-only).

@@ -269,7 +269,13 @@ function SkillPreview({
           {t("skills.preview.back")}
         </button>
         <Button type="button" size="sm" disabled={importing} onClick={onImport}>
-          {t("skills.import.button")}
+          {importing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : hit.installed ? (
+            t("skills.import.reinstall")
+          ) : (
+            t("skills.import.button")
+          )}
         </Button>
       </div>
 
@@ -277,6 +283,11 @@ function SkillPreview({
         <span className="flex items-center gap-1.5">
           <span className="text-[14px] font-medium text-foreground">{hit.name}</span>
           <RegistryTag registry={hit.registry} />
+          {hit.installed ? (
+            <span className="shrink-0 rounded-full border border-border/40 bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              {t("skills.search.installed")}
+            </span>
+          ) : null}
           {typeof hit.signals?.installs === "number" ? (
             <span className="text-[11px] text-muted-foreground">
               {t("skills.search.installs", { count: hit.signals.installs })}
@@ -347,6 +358,8 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
   const [error, setError] = useState<string | null>(null);
   const [importSrc, setImportSrc] = useState("");
   const [importing, setImporting] = useState(false);
+  const [importingRef, setImportingRef] = useState<string | null>(null);
+  const [reinstallSrc, setReinstallSrc] = useState<string | null>(null);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [auditMsg, setAuditMsg] = useState<{ kind: "summary" | "error"; text: string } | null>(null);
   const [auditLive, setAuditLive] = useState<string>("");
@@ -405,16 +418,28 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
   }, [pane]);
 
   const doImport = useCallback(
-    async (source: string) => {
+    async (source: string, replace = false) => {
       const src = source.trim();
       if (!src) return;
       setImporting(true);
+      setImportingRef(src);
       setImportMsg(null);
+      setReinstallSrc(null);
       setPicker(null);
       try {
-        const res = await importSource(token, src);
+        const res = await importSource(token, src, "", replace);
         if (res.candidates && res.candidates.length > 0) {
           setPicker(res.candidates);
+        } else if (res.installed) {
+          // gate cleared it (`allow`) → auto-installed, no manual second step
+          setImportSrc("");
+          setImportMsg(t("skills.import.installedOk", { name: res.installed }));
+          setListTab("active");
+          await refresh();
+        } else if (res.already_installed) {
+          // present locally — offer a re-install/override
+          setImportMsg(t("skills.import.alreadyInstalled", { name: res.already_installed }));
+          setReinstallSrc(src);
         } else if (res.quarantined) {
           setImportSrc("");
           setListTab("pending"); // show where it landed
@@ -426,6 +451,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
         setImportMsg(errMsg(e));
       } finally {
         setImporting(false);
+        setImportingRef(null);
       }
     },
     [token, refresh, t],
@@ -1006,7 +1032,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                     hit={previewHit}
                     detail={descCache[previewHit.ref]}
                     importing={importing}
-                    onImport={() => void doImport(previewHit.ref)}
+                    onImport={() => void doImport(previewHit.ref, previewHit.installed === true)}
                     onBack={() => setPreviewHit(null)}
                   />
                 ) : (
@@ -1074,6 +1100,11 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                                       {h.name}
                                     </button>
                                     <RegistryTag registry={h.registry} />
+                                    {h.installed ? (
+                                      <span className="shrink-0 rounded-full border border-border/40 bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                        {t("skills.search.installed")}
+                                      </span>
+                                    ) : null}
                                     {typeof h.signals?.installs === "number" ? (
                                       <span className="shrink-0 text-[11px] text-muted-foreground">
                                         {t("skills.search.installs", { count: h.signals.installs })}
@@ -1094,9 +1125,15 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                                   size="sm"
                                   variant="ghost"
                                   disabled={importing}
-                                  onClick={() => void doImport(h.ref)}
+                                  onClick={() => void doImport(h.ref, h.installed === true)}
                                 >
-                                  {t("skills.import.button")}
+                                  {importingRef === h.ref ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : h.installed ? (
+                                    t("skills.import.reinstall")
+                                  ) : (
+                                    t("skills.import.button")
+                                  )}
                                 </Button>
                               </div>
                             </div>
@@ -1160,6 +1197,21 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                         </div>
                         {importMsg ? (
                           <p className="text-[12px] text-muted-foreground">{importMsg}</p>
+                        ) : null}
+                        {reinstallSrc ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={importing}
+                            onClick={() => void doImport(reinstallSrc, true)}
+                          >
+                            {importing ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              t("skills.import.reinstall")
+                            )}
+                          </Button>
                         ) : null}
                       </form>
 

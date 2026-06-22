@@ -16,3 +16,19 @@ def test_web_skill_search_returns_hits(monkeypatch, tmp_path):
 def test_web_skill_search_empty_query(tmp_path):
     status, payload = ss.web_skill_search(tmp_path, "", 0)
     assert status == 400 or payload.get("hits") == []
+
+
+def test_web_skill_search_flags_installed(monkeypatch, tmp_path):
+    async def fake(query, *, adapters, allowlist, limit):
+        return [
+            SkillSearchHit(name="pdf", ref="github:o/r/pdf", registry="skills.sh",
+                           description="d", signals={}),
+            SkillSearchHit(name="calc", ref="github:o/r/calc", registry="skills.sh",
+                           description="d", signals={}),
+        ]
+    monkeypatch.setattr("durin.agent.skill_registry.search_registries", fake)
+    monkeypatch.setattr(ss, "_installed_skill_names", lambda w: {"pdf"})
+    status, payload = ss.web_skill_search(tmp_path, "x", 0)
+    by_name = {h["name"]: h for h in payload["hits"]}
+    assert by_name["pdf"]["installed"] is True
+    assert by_name["calc"]["installed"] is False

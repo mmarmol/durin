@@ -748,11 +748,37 @@ def web_import_resolve(workspace: Path, source: str) -> tuple[int, dict]:
     }
 
 
-def web_import_fetch(workspace: Path, source: str) -> tuple[int, dict]:
-    """`GET /api/skills/import?source=` — fetch ONE candidate into quarantine +
-    scan. If the source resolves to many, return the candidate list to pick from."""
+def _installed_skill_names(workspace: Path) -> set[str]:
+    """Cheap set of available skill names (workspace + builtin) via the loader —
+    no scanning. Used to flag search hits and short-circuit re-imports."""
+    from durin.agent.skills_surface import _skill_dirs
+    try:
+        return set(_skill_dirs(Path(workspace)).keys())
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def web_import_fetch(workspace: Path, source: str, replace: bool = False) -> tuple[int, dict]:
+    """`POST /api/skills/import` — resolve a source, then:
+
+    - multiple candidates → return the list to pick from;
+    - already installed (and not ``replace``) → short-circuit BEFORE the
+      expensive fetch+judge, returning ``already_installed`` so the UI can
+      offer a re-install/override;
+    - fetch into quarantine + scan, then gate via ``decide_action``:
+        * ``allow`` (safe + allowlisted + no code) → auto-install and return
+          ``installed`` — no manual second step;
+        * ``confirm`` / ``block`` → leave in quarantine, return ``quarantined``
+          + ``needs`` so the UI surfaces the decision.
+    """
     from durin.agent.skill_resolve import resolve_candidates
-    from durin.agent.skills_import import decide_action, fetch_candidate, validate_skill
+    from durin.agent.skills_import import (
+        SkillImportRefused,
+        decide_action,
+        fetch_candidate,
+        install_imported_skill,
+        validate_skill,
+    )
     from durin.security.skill_scan import scan_skill
 
     res = resolve_candidates(source)
@@ -765,6 +791,9 @@ def web_import_fetch(workspace: Path, source: str) -> tuple[int, dict]:
             "note": "multiple skills found; import one by passing its ref as source",
         }
     cand = res.candidates[0]
+    if not replace and cand.name in _installed_skill_names(workspace):
+        return 200, {"already_installed": cand.name, "source": cand.ref}
+
     qroot = Path(workspace) / ".durin" / "import-quarantine"
     mf, mt, mfb = _import_caps()
     jt, jm, jms = _import_judge()
@@ -774,12 +803,28 @@ def web_import_fetch(workspace: Path, source: str) -> tuple[int, dict]:
                            allowlist=_import_allowlist())
     rep = scan_skill(qdir)
     vr = validate_skill(qdir)
+    findings = [{"category": f.category, "severity": f.severity,
+                 "where": f.where, "detail": f.detail} for f in rep.findings]
     needs = decide_action(cand.ref, verdict=rep.verdict,
                           carries_code=vr.carries_code, allowlist=_import_allowlist())
+    if needs == "allow":
+        # The gate cleared it without friction — finish the install instead of
+        # parking a trusted, safe skill in quarantine for a manual second step.
+        try:
+            r = install_imported_skill(
+                workspace, qdir, source=cand.ref, allowlist=_import_allowlist(),
+                confirmed=True, replace=replace)
+            return 200, {"installed": r.get("name", cand.name), "source": cand.ref,
+                         "verdict": rep.verdict, "needs": needs, "findings": findings,
+                         "commit": r.get("commit")}
+        except SkillImportRefused as exc:
+            # Lost a race (skill appeared meanwhile) or a stricter re-scan —
+            # fall back to the quarantine response carrying the new decision.
+            return 200, {"quarantined": cand.name, "source": cand.ref,
+                         "verdict": exc.verdict or rep.verdict, "needs": exc.action,
+                         "findings": findings}
     return 200, {"quarantined": cand.name, "source": cand.ref,
-                 "verdict": rep.verdict, "needs": needs,
-                 "findings": [{"category": f.category, "severity": f.severity,
-                               "where": f.where, "detail": f.detail} for f in rep.findings]}
+                 "verdict": rep.verdict, "needs": needs, "findings": findings}
 
 
 def web_skill_search(workspace: Path, query: str, limit: int = 0) -> tuple[int, dict]:
@@ -801,8 +846,10 @@ def web_skill_search(workspace: Path, query: str, limit: int = 0) -> tuple[int, 
         allowlist=list(cfg.skills.security.allowlist),
         limit=int(limit) or disc.search_limit,
     ))
+    installed = _installed_skill_names(workspace)
     return 200, {"hits": [{"name": h.name, "ref": h.ref, "registry": h.registry,
-                           "description": h.description, "signals": h.signals} for h in hits]}
+                           "description": h.description, "signals": h.signals,
+                           "installed": h.name in installed} for h in hits]}
 
 
 def web_skill_describe(ref: str) -> tuple[int, dict]:

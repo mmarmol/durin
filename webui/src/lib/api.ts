@@ -439,14 +439,20 @@ export interface SkillCandidate {
   detail: string;
 }
 
-/** Result of fetching a source into quarantine. Exactly one shape applies:
- *  a single skill landed (`quarantined`), several were found (`candidates` —
- *  pick one), or the source was fuzzy (`unresolved_reason`). */
+/** Result of an import. Exactly one shape applies:
+ *  - `installed` — the gate cleared it (`allow`) and it was auto-installed;
+ *  - `already_installed` — present locally; re-import with `replace` to override;
+ *  - `quarantined` — needs a decision (`needs` = confirm/block);
+ *  - `candidates` — several skills found (pick one);
+ *  - `unresolved_reason` — the source was fuzzy. */
 export interface ImportResult {
+  installed?: string;
+  already_installed?: string;
   quarantined?: string;
   source?: string;
   verdict?: SkillVerdict;
   needs?: "allow" | "confirm" | "block";
+  commit?: string;
   findings?: SkillFinding[];
   candidates?: SkillCandidate[];
   unresolved_reason?: string;
@@ -469,8 +475,13 @@ export async function importSource(
   token: string,
   source: string,
   base: string = "",
+  replace = false,
 ): Promise<ImportResult> {
-  const res = await post<{ data: ImportResult }>(`${base}/api/v1/skills/import`, token, { source });
+  const res = await post<{ data: ImportResult }>(
+    `${base}/api/v1/skills/import`,
+    token,
+    { source, replace },
+  );
   return res.data;
 }
 
@@ -482,6 +493,7 @@ export interface SkillSearchHit {
   registry: string;
   description: string;
   signals: { installs?: number };
+  installed?: boolean;
 }
 
 export async function searchSkills(

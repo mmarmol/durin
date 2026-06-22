@@ -638,6 +638,9 @@
     "import": {
       "placeholder": "Import a skill: path, https://…/SKILL.md, or github:owner/repo",
       "button": "Import",
+      "reinstall": "Re-install",
+      "installedOk": "Installed {{name}}.",
+      "alreadyInstalled": "{{name}} is already installed — re-install to override.",
       "pick": "Several skills found — pick one",
       "approve": "Approve",
       "reject": "Reject",
@@ -676,6 +679,7 @@
     "search": {
       "placeholder": "Search the registry for skills",
       "button": "Search",
+      "installed": "Installed",
       "empty": "No skills matched that search.",
       "installs_one": "{{count}} install",
       "installs_other": "{{count}} installs",

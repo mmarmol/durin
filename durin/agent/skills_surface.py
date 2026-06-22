@@ -46,7 +46,13 @@ def skills_inventory(workspace) -> list[dict]:
         entry["status"] = "active"
         entry["removable"] = removable_action(workspace, info["name"], loader)
         d = dirs.get(info["name"])
-        if d is not None and d.is_dir():
+        if info.get("source") == "builtin":
+            # First-party skills durin ships are trusted (vetted at release):
+            # they are NOT subject to the third-party import scan, so carrying
+            # scripts never flags them as caution/insecure. A forked builtin
+            # lives in the workspace (source != "builtin") and IS scanned.
+            entry.update({"verdict": "safe", "findings": []})
+        elif d is not None and d.is_dir():
             entry.update(_scan_payload(d))
             prov_verdict = (info.get("provenance") or {}).get("verdict")
             if prov_verdict:
@@ -57,7 +63,9 @@ def skills_inventory(workspace) -> list[dict]:
         # A user/LLM "Revisada" override (workspace-level, hash + findings
         # pinned). Surfaced as a separate block — verdict/findings are preserved
         # so the report still shows the underlying deterministic findings.
-        if d is not None and d.is_dir():
+        # Builtins are exempt from the scan (always safe), so a review override
+        # on one is moot — never surface a "Revisada" chip for a builtin.
+        if info.get("source") != "builtin" and d is not None and d.is_dir():
             from durin.security.skill_reviews import get_review
             review = get_review(workspace, info["name"], d, entry.get("findings") or [])
             if review:
