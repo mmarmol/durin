@@ -139,6 +139,26 @@ class TtsConfig(Base):
     )
 
 
+class SpokenRenderConfig(Base):
+    """How long replies are rendered for speech (spoken != displayed)."""
+
+    mode: Literal["model_led", "aux_summary", "verbatim"] = "model_led"
+    summarizer_model: str | None = None   # None = main model (aux_summary only)
+    long_threshold_words: int = Field(default=60, ge=1)
+    pointer: str = "The full answer is on screen."
+
+
+class VoiceConfig(Base):
+    """Hands-free conversational voice mode (the gateway loop)."""
+
+    enabled: bool = True
+    barge_in: bool = True
+    vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)   # browser VAD (relayed)
+    end_of_turn_silence_ms: int = Field(default=700, ge=100)    # browser VAD (relayed)
+    idle_timeout_s: int = Field(default=300, ge=0)              # 0 = no auto-exit
+    spoken_render: SpokenRenderConfig = Field(default_factory=SpokenRenderConfig)
+
+
 class MemoryEmbeddingConfig(Base):
     """Embedding model configuration for the memory subsystem (Phase 2).
 
@@ -1125,6 +1145,7 @@ class Config(BaseSettings):
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
     tts: TtsConfig = Field(default_factory=TtsConfig)
+    voice: VoiceConfig = Field(default_factory=VoiceConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
