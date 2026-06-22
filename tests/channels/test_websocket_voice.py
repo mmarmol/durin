@@ -115,3 +115,73 @@ async def test_voice_utterance_empty_transcript_does_not_enqueue(tmp_path):
         "media": [{"data_url": _data_url("audio/wav"), "name": "u.wav"}],
     })
     ch._handle_message.assert_not_awaited()
+
+
+import asyncio
+
+from durin.bus.events import OutboundMessage
+from durin.config.schema import VoiceConfig
+from durin.providers.speech import SpeechAudio
+from durin.voice.session import VoiceSession
+
+
+def _wav_bytes():
+    import io
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(22050)
+        w.writeframes(b"\x00\x00" * 50)
+    return buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_send_final_reply_speaks_and_emits_voice_audio(tmp_path, monkeypatch):
+    monkeypatch.setattr("durin.channels.websocket.get_media_dir", lambda ch=None: tmp_path)
+    ch = _voice_channel()
+    ch._media_secret = b"test-secret"
+    ch._try_append_webui_transcript = lambda *a, **k: None
+    ch.voice_config = VoiceConfig()
+    conn = _FakeConn()
+    ch._subs["c1"] = {conn}
+    ch._voice["c1"] = VoiceSession(chat_id="c1")
+
+    class FakeTTS:
+        async def synthesize(self, text, *, voice=None, language=None):
+            return SpeechAudio(_wav_bytes(), 22050)
+
+    ch.speech_synthesis = FakeTTS()
+
+    await ch.send(OutboundMessage(channel="websocket", chat_id="c1", content="A short reply."))
+    # _speak runs as a background task; let it finish.
+    for _ in range(20):
+        await asyncio.sleep(0)
+        if any(json.loads(r).get("event") == "voice_audio" for r in conn.sent):
+            break
+
+    events = [json.loads(r) for r in conn.sent]
+    audio = [e for e in events if e.get("event") == "voice_audio"]
+    assert audio and audio[0]["url"].startswith("/api/media/")
+    assert any(e.get("event") == "voice_state" and e.get("state") == "speaking" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_send_skips_speak_for_progress_breadcrumb(tmp_path):
+    ch = _voice_channel()
+    ch._try_append_webui_transcript = lambda *a, **k: None
+    ch.voice_config = VoiceConfig()
+    ch.speech_synthesis = object()  # would explode if used
+    conn = _FakeConn()
+    ch._subs["c1"] = {conn}
+    ch._voice["c1"] = VoiceSession(chat_id="c1")
+
+    await ch.send(OutboundMessage(
+        channel="websocket", chat_id="c1", content="thinking…", metadata={"_progress": True}
+    ))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    events = [json.loads(r) for r in conn.sent]
+    assert not any(e.get("event") == "voice_audio" for e in events)

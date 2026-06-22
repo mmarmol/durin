@@ -933,6 +933,62 @@ class WebSocketChannel(BaseChannel):
         ).digest()[:16]
         return f"/api/media/{_b64url_encode(mac)}/{payload}"
 
+    def _write_and_sign_audio(self, audio: Any) -> str | None:
+        if not audio.data:
+            return None
+        media_dir = get_media_dir("websocket")
+        path = media_dir / f"voice-{uuid.uuid4().hex[:12]}.{audio.format}"
+        try:
+            path.write_bytes(audio.data)
+        except OSError as e:
+            self.logger.warning("failed to write voice audio: {}", e)
+            return None
+        return self._sign_media_path(path)
+
+    async def _send_voice_audio(self, chat_id: str, url: str, mime: str) -> None:
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        raw = json.dumps(
+            {"event": "voice_audio", "chat_id": chat_id, "url": url, "mime": mime},
+            ensure_ascii=False,
+        )
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" voice_audio ")
+
+    async def _speak(self, chat_id: str, text: str, *, full: bool = False) -> None:
+        svc = getattr(self, "speech_synthesis", None)
+        if svc is None or chat_id not in self._voice:
+            return
+        cfg = getattr(self, "voice_config", None)
+        sr = cfg.spoken_render if cfg is not None else None
+        try:
+            await self.send_voice_state(chat_id, "speaking")
+            from durin.voice.rendition import build_spoken_rendition, speakable_transform
+
+            if full or sr is None:
+                spoken = speakable_transform(text)
+            else:
+                rendition = await build_spoken_rendition(
+                    text,
+                    mode=sr.mode,
+                    long_threshold_words=sr.long_threshold_words,
+                    summarizer=None,  # aux_summary wiring deferred; degrades to lead
+                    pointer=sr.pointer,
+                )
+                spoken = rendition.spoken
+            audio = await svc.synthesize(spoken)
+            url = self._write_and_sign_audio(audio)
+            if url is not None:
+                await self._send_voice_audio(chat_id, url, mime="audio/wav")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.logger.warning("voice synthesis failed: {}", e)
+        finally:
+            if chat_id in self._voice:
+                await self.send_voice_state(chat_id, "listening")
+
     def _sign_or_stage_media_path(self, path: Path) -> dict[str, str] | None:
         """Return a signed media URL payload for *path*.
 
@@ -1594,6 +1650,16 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(payload, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" ")
+        # Voice mode: synthesize the spoken rendition for the FINAL reply only.
+        if (
+            msg.content
+            and not msg.metadata.get("_tool_hint")
+            and not msg.metadata.get("_progress")
+            and msg.chat_id in self._voice
+        ):
+            sess = self._voice[msg.chat_id]
+            sess.cancel_speak()
+            sess.speak_task = asyncio.create_task(self._speak(msg.chat_id, msg.content))
 
     async def send_reasoning_delta(
         self,
