@@ -66,6 +66,7 @@ def test_strip_tags_removes_script_with_whitespace_close():
     stripper must still drop the whole element, not leak its body."""
     assert web._strip_tags("a<script>evil()</script >b") == "ab"
     assert web._strip_tags("a<script>evil()</script\n>b") == "ab"
+    assert web._strip_tags("a<script>evil()</script\t\n bar>b") == "ab"
     assert web._strip_tags("a<style>.x{}</style >b") == "ab"
     # plain close still works
     assert web._strip_tags("a<script>x</script>b") == "ab"
