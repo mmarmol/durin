@@ -62,3 +62,23 @@ async def test_verbatim_mode_speaks_full_even_when_long():
     r = await build_spoken_rendition(long_text, mode="verbatim", long_threshold_words=60)
     assert r.summarized is False
     assert r.spoken == long_text
+
+
+@pytest.mark.asyncio
+async def test_model_led_takes_first_paragraph_and_appends_pointer():
+    text = "Short spoken lead sentence here.\n\n" + " ".join(["detail"] * 80)
+    r = await build_spoken_rendition(text, mode="model_led", long_threshold_words=60)
+    assert r.summarized is True
+    assert r.lead_present is True
+    assert r.spoken.startswith("Short spoken lead sentence here.")
+    assert r.spoken.endswith("The full answer is on screen.")
+    assert "detail detail" not in r.spoken  # body not spoken
+
+
+@pytest.mark.asyncio
+async def test_model_led_degrades_when_lead_is_a_described_block():
+    # Starts with a big code block (no prose lead) → still safe, never speaks code.
+    text = "```\n" + "\n".join(["line"] * 80) + "\n```\n\nthen prose"
+    r = await build_spoken_rendition(text, mode="model_led", long_threshold_words=2)
+    assert "line\nline" not in r.spoken
+    assert r.spoken.endswith("The full answer is on screen.")

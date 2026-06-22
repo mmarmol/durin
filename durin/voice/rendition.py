@@ -87,6 +87,15 @@ class SpokenRendition:
     lead_present: bool  # telemetry: was a usable lead found?
 
 
+def _model_led_lead(speakable: str) -> tuple[str, bool]:
+    paras = [p.strip() for p in re.split(r"\n\s*\n", speakable) if p.strip()]
+    if not paras:
+        return speakable, False
+    lead = paras[0]
+    lead_present = len(lead.split()) >= 4  # prose heuristic for telemetry
+    return lead, lead_present
+
+
 async def build_spoken_rendition(
     full_text: str,
     *,
@@ -101,5 +110,10 @@ async def build_spoken_rendition(
         return SpokenRendition(
             spoken=speakable, displayed=full_text, summarized=False, lead_present=False
         )
-    # Long, summarizing modes are implemented in Tasks 3-4.
-    raise NotImplementedError(mode)
+    if mode == "model_led":
+        lead, lead_present = _model_led_lead(speakable)
+        spoken = f"{lead} {pointer}".strip()
+        return SpokenRendition(
+            spoken=spoken, displayed=full_text, summarized=True, lead_present=lead_present
+        )
+    raise NotImplementedError(mode)  # aux_summary handled in Task 4
