@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -404,12 +405,22 @@ async def test_empty_response_falls_back(aiohttp_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_direct_accepts_media() -> None:
-    """process_direct should forward media paths to _process_message."""
+async def test_process_direct_accepts_media(tmp_path: Path) -> None:
+    """process_direct should forward media paths to _process_message.
+
+    Under R1, process_direct acquires the per-session turn lease and calls
+    sessions.reload() before dispatching.  The test supplies a real
+    SessionManager (uncontended) and an empty _session_locks dict so the
+    lease acquisition succeeds and the stubbed _process_message receives the
+    correct InboundMessage.
+    """
     from durin.agent.loop import AgentLoop
+    from durin.session.manager import SessionManager
 
     loop = AgentLoop.__new__(AgentLoop)
     loop._connect_mcp = AsyncMock()
+    loop.sessions = SessionManager(tmp_path)
+    loop._session_locks = {}
 
     captured_msg = None
 

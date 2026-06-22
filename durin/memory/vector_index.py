@@ -1052,6 +1052,16 @@ def prune_orphan_rows(workspace: Path) -> list[str]:
 
     No-op (returns ``[]``) when lancedb is unavailable, the index dir is
     absent, the table is missing, or the table is empty.
+
+    Sub-hazard B: dulwich reset --hard (in _fast_forward_working_tree) uses
+    unlink-then-recreate, so a file may be transiently absent mid-reset.
+    Candidates found absent on the initial scan are rechecked after acquiring
+    the git-worktree lock (the same lock that serializes resets).  If a file
+    is present after the lock is acquired the absence was transient and the row
+    is kept.  Lock ordering: git-worktree (outer, acquired here) > LanceDB
+    delete (inner, inside delete_ids).  No path takes a LanceDB lock and then
+    git-worktree, so there is no deadlock risk.
+    See docs/architecture/concurrency.md §reset-absent-window.
     """
     try:
         import lancedb  # type: ignore[import-not-found]
@@ -1069,11 +1079,24 @@ def prune_orphan_rows(workspace: Path) -> list[str]:
         return []
     ws = Path(workspace)
     rows = table.search().select(["id", "path"]).limit(total).to_list()
-    orphan_ids = [
-        r["id"]
-        for r in rows
+    # First pass: cheaply collect rows whose file appears absent.
+    absent_rows = [
+        r for r in rows
         if r.get("path") and not (ws / r["path"]).is_file()
     ]
+    if not absent_rows:
+        return []
+    # Second pass: hold the git-worktree lock and re-check each candidate.
+    # Any file that is present after we hold the lock was transiently absent
+    # during a dulwich reset --hard; skip it.  Genuine orphans are still gone.
+    from durin.memory.memory_writer import git_worktree_lock_path
+    memory_git_root = ws / "memory"
+    with cross_process_lock(git_worktree_lock_path(memory_git_root)):
+        orphan_ids = [
+            r["id"]
+            for r in absent_rows
+            if not (ws / r["path"]).is_file()
+        ]
     if orphan_ids:
         delete_ids(workspace, orphan_ids)
     return orphan_ids

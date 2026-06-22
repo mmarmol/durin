@@ -31,6 +31,7 @@ from durin.memory.git_plumbing import (
     read_blob_at_head,
 )
 from durin.memory.provenance import current_author
+from durin.utils.file_lock import cross_process_lock
 
 # Imported lazily inside _refresh_alias_index to avoid a circular import:
 # aliases_cache → AliasIndex → entity_page → (no memory_writer dep), so the
@@ -57,7 +58,22 @@ def _refresh_alias_index(memory_root: Path, page: EntityPage, slug: str) -> None
     except Exception:  # noqa: BLE001 — best-effort; never block the write
         pass
 
-__all__ = ["WriteResult", "write_entity", "write_files_cas"]
+__all__ = ["WriteResult", "git_worktree_lock_path", "write_entity", "write_files_cas"]
+
+
+def git_worktree_lock_path(memory_git_root: Path) -> Path:
+    """Return the canonical cross-process lock target for git working-tree mutations.
+
+    All three sites that must not race a dulwich reset --hard agree on this path:
+    - memory_writer._commit_dirty_as_user / _fast_forward_working_tree (mutations)
+    - indexer.reindex_one_file (prune branch, sub-hazard B)
+    - vector_index.prune_orphan_rows (prune branch, sub-hazard B)
+
+    The lock FILE is ``<memory_git_root>/.git-worktree.lock``; the TARGET
+    (the arg to cross_process_lock) is ``<memory_git_root>/.git-worktree``.
+    Kept here so callers don't hardcode the path in three places.
+    """
+    return Path(memory_git_root) / ".git-worktree"
 
 _MAX_RETRIES = 30
 # Bridge: page-level author (2 values) → field-level author (3 values).
@@ -96,35 +112,50 @@ def _commit_dirty_as_user(root: Path) -> None:
     the hard-reset ff (``_fast_forward_working_tree``) that follows can't clobber
     an in-progress hand edit (e.g. the user editing a page in Obsidian). No-op on
     a clean tree. Best-effort — a failure here must never block the system write.
+
+    Serialized under the git-worktree cross-process lock (§lock-ordering-invariant
+    in docs/architecture/concurrency.md): this lock is the sole guard for
+    working-tree / .git/index mutations and is always acquired AFTER any
+    dulwich-internal ref CAS lock.  It is never held while a session or
+    config lock is acquired, so there is no opposite-order acquisition.
     """
     if not (root / ".git").exists():
         return
-    try:
-        status = porcelain.status(str(root))
-    except Exception:  # noqa: BLE001 — never block a write on the guard
-        return
-    dirty: list[str] = []
-    for group in (status.unstaged, status.untracked):
-        for item in group:
-            rel = item.decode("utf-8") if isinstance(item, bytes) else item
-            if not rel.endswith(".md"):
-                continue
-            parts = Path(rel).parts
-            if parts and parts[0] in ("archive", "pending"):
-                continue
-            dirty.append(rel)
-    if not dirty:
-        return
-    try:
-        porcelain.add(str(root), [str(root / d) for d in dirty])
-        porcelain.commit(
-            str(root),
-            message=b"manual edit (human-edit guard)",
-            author=b"user <user@durin.local>",
-            committer=b"user <user@durin.local>",
-        )
-    except Exception:  # noqa: BLE001
-        return
+    # Sub-hazard A: concurrent commit + reset can corrupt .git/index (dulwich
+    # _transition_to_file is non-atomic).  This lock is the OUTERMOST memory
+    # lock — always acquired AFTER any dulwich-internal ref CAS lock, never
+    # while a session/config lock is held.  See docs/architecture/concurrency.md.
+    # The prune paths (indexer.reindex_one_file, vector_index.prune_orphan_rows)
+    # also acquire this lock (sub-hazard B recheck) THEN their FTS/Lance locks
+    # (inner).  No path takes an FTS/Lance lock and THEN this lock, so lock
+    # ordering is strict: git-worktree > FTS/Lance.
+    with cross_process_lock(git_worktree_lock_path(root)):
+        try:
+            status = porcelain.status(str(root))
+        except Exception:  # noqa: BLE001 — never block a write on the guard
+            return
+        dirty: list[str] = []
+        for group in (status.unstaged, status.untracked):
+            for item in group:
+                rel = item.decode("utf-8") if isinstance(item, bytes) else item
+                if not rel.endswith(".md"):
+                    continue
+                parts = Path(rel).parts
+                if parts and parts[0] in ("archive", "pending"):
+                    continue
+                dirty.append(rel)
+        if not dirty:
+            return
+        try:
+            porcelain.add(str(root), [str(root / d) for d in dirty])
+            porcelain.commit(
+                str(root),
+                message=b"manual edit (human-edit guard)",
+                author=b"user <user@durin.local>",
+                committer=b"user <user@durin.local>",
+            )
+        except Exception:  # noqa: BLE001
+            return
 
 
 def _emit_relation_cap(ref: str, before: int, after: int) -> None:
@@ -383,17 +414,27 @@ def write_files_cas(
 def _fast_forward_working_tree(root: Path) -> None:
     """Reset the working tree to HEAD so readers see the committed state.
 
-    MVP: hard reset to HEAD. Safe in Phase 1 because every write goes through
-    this module (no concurrent human working-tree edit). Resilient to the
-    index/ref lock under concurrent writers (best-effort: a later ff converges
-    the tree to HEAD anyway). The "don't ff over a dirty working tree" guard
-    (design §2.5, finding 2D-1) lands with the human-edit work.
-    # TODO(human-edit): skip ff when the working tree is dirty.
+    MVP: hard reset to HEAD. Resilient to the index/ref lock under concurrent
+    writers (best-effort: a later ff converges the tree to HEAD anyway).
+
+    Sub-hazard A: serialized under the git-worktree cross-process lock so a
+    concurrent commit and reset cannot interleave and corrupt .git/index.
+    Sub-hazard B (the transient absent-file window): dulwich reset --hard uses
+    unlink-then-recreate (_transition_to_file), opening a window during which
+    files are transiently absent.  Prune paths (reindex_one_file,
+    prune_orphan_rows) close B by acquiring THIS SAME lock before acting on an
+    absent-file observation and re-checking is_file() after acquiring it.  If
+    the file is present on re-check, the reset completed and the prune is
+    skipped.  See docs/architecture/concurrency.md §reset-absent-window.
+
+    cross_process_lock is reentrant per-thread: the common caller sequence
+    _commit_dirty_as_user → (CAS) → _fast_forward_working_tree re-enters safely.
     """
-    for i in range(10):
-        try:
-            porcelain.reset(str(root), "hard")
-            return
-        except (FileLocked, OSError):
-            time.sleep(random.uniform(0.0, 0.005) * (i + 1))
+    with cross_process_lock(git_worktree_lock_path(root)):
+        for i in range(10):
+            try:
+                porcelain.reset(str(root), "hard")
+                return
+            except (FileLocked, OSError):
+                time.sleep(random.uniform(0.0, 0.005) * (i + 1))
     # Best-effort: give up silently; the canonical state is the commit (HEAD).

@@ -526,6 +526,57 @@ class CronService:
                 self._timer_active = False
 
             with self._lock:
+                # Reload from disk before saving so that external writes made
+                # during the execution window (add_job / remove_job / update_job
+                # from another process) are not clobbered.  We then re-apply
+                # only the run-state deltas produced by _execute_job onto the
+                # freshly-reloaded store.  See docs/architecture/concurrency.md.
+                # _timer_active is already False (set in the finally above),
+                # so _load_store will read from disk rather than the cache.
+                self._load_store()
+                if self._store:
+                    # Build a map of the post-execution job objects by id so we
+                    # can look up the deltas quickly.
+                    executed_map = {j.id: j for j in due_jobs}
+                    # Determine which job ids were removed by delete_after_run
+                    # inside _execute_job (they will no longer be in self._store
+                    # after the reload, which is the desired state, but they
+                    # might have been re-added externally — unlikely but we
+                    # follow spec: delete_after_run takes precedence over an
+                    # external add of the same id).
+                    delete_after_ids = {
+                        j.id for j in due_jobs
+                        if j.schedule.kind == "at" and j.delete_after_run
+                    }
+                    reloaded_map = {j.id: j for j in self._store.jobs}
+                    for job_id, executed_job in executed_map.items():
+                        if job_id in delete_after_ids:
+                            # One-shot delete: remove from the reloaded store
+                            # (may already be absent if the external reload
+                            # reflects the pre-execution advance-and-save that
+                            # already removed it).
+                            reloaded_map.pop(job_id, None)
+                            continue
+                        fresh = reloaded_map.get(job_id)
+                        if fresh is None:
+                            # Externally removed during the window — do not
+                            # resurrect (spec requirement 3).
+                            continue
+                        # Re-apply run-state deltas only; all non-run-state
+                        # fields (name, schedule, payload, enabled for repeating
+                        # jobs) come from the reloaded store, preserving any
+                        # concurrent external edit.
+                        fresh.state.last_status = executed_job.state.last_status
+                        fresh.state.last_error = executed_job.state.last_error
+                        fresh.state.last_run_at_ms = executed_job.state.last_run_at_ms
+                        fresh.state.run_history = executed_job.state.run_history
+                        fresh.state.next_run_at_ms = executed_job.state.next_run_at_ms
+                        fresh.updated_at_ms = executed_job.updated_at_ms
+                        # For one-shot (at) jobs that should be disabled (not
+                        # deleted): apply disable to the reloaded entry.
+                        if executed_job.schedule.kind == "at" and not executed_job.enabled:
+                            fresh.enabled = False
+                    self._store.jobs = list(reloaded_map.values())
                 self._save_store()
             self._arm_timer()
         finally:

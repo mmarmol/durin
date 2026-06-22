@@ -10,14 +10,11 @@ Acquired AFTER the in-process asyncio.Lock (fast path); the flock
 auto-releases if the process dies.
 
 Scope note: this lease serializes interactive TURNS per session across
-processes. Direct out-of-turn savers do NOT yet acquire it — they take only
-the save() ``.lock``, not this ``.turn.lock``. Known lease-bypassing paths:
+processes. All known out-of-turn savers now acquire it:
   - HTTP rename in service/sessions.py
-  - cron process_direct calls
+  - cron process_direct calls (in loop.py)
   - webui background title-generation save
     (loop.py _schedule_background -> utils/webui_titles.py)
-These are a known Phase-A limitation; closing them requires
-background/direct-saver serialization work not yet scheduled.
 
 See docs/architecture/concurrency.md for the full Phase-A rationale and
 residual ledger.

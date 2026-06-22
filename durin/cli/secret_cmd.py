@@ -161,16 +161,14 @@ def cmd_grant(
     ),
 ) -> None:
     """Add a consumer tag to a secret's scope."""
-    store = SecretStore().load()
-    entry = store.get(name)
-    if entry is None:
+    store = SecretStore()
+    result = store.grant_consumer_locked(name, consumer)
+    if result is None:
         console.print(f"[red]✗[/red] No secret named '{name}'.")
         raise typer.Exit(1)
-    if consumer in entry.scope:
+    if result is False:
         console.print(f"[dim]{name} already grants '{consumer}'.[/dim]")
         return
-    store.set_scope(name, [*entry.scope, consumer])
-    store.save()
     console.print(f"[green]✓[/green] {name} now grants [bold]{consumer}[/bold].")
 
 
@@ -206,14 +204,12 @@ def cmd_revoke(
     consumer: str = typer.Option(..., "--from", help="Consumer tag to remove."),
 ) -> None:
     """Remove a consumer tag from a secret's scope."""
-    store = SecretStore().load()
-    entry = store.get(name)
-    if entry is None:
+    store = SecretStore()
+    result = store.revoke_consumer_locked(name, consumer)
+    if result is None:
         console.print(f"[red]✗[/red] No secret named '{name}'.")
         raise typer.Exit(1)
-    if consumer not in entry.scope:
+    if result is False:
         console.print(f"[dim]{name} does not grant '{consumer}'.[/dim]")
         return
-    store.set_scope(name, [tag for tag in entry.scope if tag != consumer])
-    store.save()
     console.print(f"[green]✓[/green] {name} no longer grants [bold]{consumer}[/bold].")
