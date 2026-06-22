@@ -475,6 +475,35 @@ def check_voice_extra() -> CheckResult:
     )
 
 
+def check_tts_installed() -> CheckResult:
+    """Verify the [tts] extra (Supertonic) is importable for local speech
+    synthesis. Always returns ok/warn, never fails."""
+    return check_optional_extra(
+        "supertonic",
+        extra="tts",
+        purpose="local on-device TTS (Supertonic)",
+    )
+
+
+def check_tts_model_cached(cfg: "Config | None" = None) -> CheckResult:
+    """Informational: the Supertonic model self-downloads on first synth.
+
+    Never fails. Cloud provider → no local model. Local → note the one-time
+    download (the package fetches ~260 MB on first use)."""
+    try:
+        from durin.config.loader import load_config
+        config = cfg or load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult("tts.model_cached", "ok", "skipped", category="tts")
+    if getattr(config, "tts", None) is None or config.tts.provider != "local":
+        return CheckResult("tts.model_cached", "ok", "cloud provider", category="tts")
+    return CheckResult(
+        "tts.model_cached", "ok",
+        "Supertonic downloads on first synth (~260 MB)",
+        category="tts",
+    )
+
+
 def check_stt_cloud_keys(cfg: "Config | None" = None) -> CheckResult:
     """When transcription.provider is a cloud backend, verify an API key is set.
 
@@ -640,6 +669,7 @@ _EXTRAS_IMPORT_PROBES: dict[str, tuple[str, ...]] = {
     "slack": ("slack_sdk",),
     "discord": ("discord",),
     "local": ("llama_cpp", "huggingface_hub"),
+    "tts": ("supertonic",),
 }
 
 
@@ -1262,6 +1292,8 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     report.add(check_stt_installed())
     report.add(check_stt_model_cached())
     report.add(check_voice_extra())
+    report.add(check_tts_installed())
+    report.add(check_tts_model_cached())
     report.add(check_stt_cloud_keys())
     # Service-level checks: when the user opted into daemon mode or the
     # webui dashboard, verify they're actually up.
