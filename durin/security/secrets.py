@@ -1,4 +1,4 @@
-"""Secret store — see ``docs/11_secrets_design.md``.
+"""Secret store.
 
 Secrets live in ``~/.durin/secrets.json`` (mode ``0600``), separate
 from the config tree so config files stay shareable. Config fields

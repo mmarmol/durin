@@ -937,7 +937,7 @@ async def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
                             install_deps: bool = False,
                             exec_run=None) -> tuple[int, dict]:
     """`GET /api/skills/{name}/approve?...&install_deps=true` — install a
-    quarantined skill through the §8.C gate, optionally auto-installing deps."""
+    quarantined skill through the import security gate, optionally auto-installing deps."""
     import json as _json
 
     from durin.agent.skills_import import SkillImportRefused, install_imported_skill

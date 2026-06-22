@@ -262,7 +262,7 @@ _VIDEO_MIME_ALLOWED: frozenset[str] = frozenset({
 })
 
 # Audio MIME whitelist — accepted as attachments and transcribed server-side.
-# Matches the webui composer ``useAttachedAudio`` whitelist (spec §5.1).
+# Matches the webui composer ``useAttachedAudio`` whitelist.
 _AUDIO_MIME_ALLOWED: frozenset[str] = frozenset({
     "audio/mpeg",
     "audio/ogg",
@@ -1157,7 +1157,7 @@ class WebSocketChannel(BaseChannel):
             )
             return
         if t == "audio_transcribe":
-            # Spec §5.4: store the audio, transcribe server-side, reply with
+            # Store the audio, transcribe server-side, reply with
             # the transcript so the composer can insert editable text before
             # the message is sent. Keeps the existing WS pattern; no polling.
             cid = envelope.get("chat_id")

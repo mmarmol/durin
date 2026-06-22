@@ -1,7 +1,7 @@
-"""§6.C acquire-on-gap — gated per-ref seed retrieval.
+"""Acquire-on-gap — gated per-ref seed retrieval.
 
 Given ONE registry ref the dream chose from a raw ``skill_search`` result, run the
-§8.C gate and return its SKILL.md body ONLY if ``decide_action == 'allow'`` — else
+import security gate and return its SKILL.md body ONLY if ``decide_action == 'allow'`` — else
 None ("pick another"). The autonomous risk rule is enforced HERE, in code: the dream
 (no human present) can never receive risky content. Cost-aware: a non-allowlisted ref
 can never reach 'allow', so it is rejected INSTANTLY without a download; only
@@ -18,7 +18,7 @@ from pathlib import Path
 
 async def acquire_safe_seed(workspace, source: str, *, allowlist) -> dict | None:
     """Gate ONE registry ref for use as a seed. Returns
-    ``{"name", "source", "content"}`` when the §8.C gate rates it ``allow``, else
+    ``{"name", "source", "content"}`` when the security gate rates it ``allow``, else
     ``None``. Rejects a non-allowlisted ref without downloading it."""
     from durin.agent.skill_resolve import resolve_candidates
     from durin.agent.skills_import import (

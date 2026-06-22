@@ -260,7 +260,7 @@ class SkillsLoader:
 
     def _platform_ok(self, name: str) -> bool:
         """Honor the agentskills.io root ``platforms`` field. No field = all
-        platforms. Accepts standard (macos/linux/windows) + OpenClaw aliases
+        platforms. Accepts standard (macos/linux/windows) + common aliases
         (darwin/win32)."""
         meta = self.get_skill_metadata(name) or {}
         plats = meta.get("platforms")

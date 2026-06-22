@@ -289,7 +289,7 @@ class AutoAbsorbConfig(Base):
     # created (or last dreamed) at least this many hours ago. Blocks
     # the "premature consolidation" loop where a dream pass that
     # alucinated two near-identical pages immediately merges its own
-    # output (glm peer review C3, 2026-05-24).
+    # output (avoids premature merging of a dream pass's own output).
     min_age_hours: int = Field(
         default=24,
         ge=0,

@@ -102,7 +102,7 @@ def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
 class ContextBuilder:
     """Builds the context (system prompt + messages) for the agent."""
 
-    # §8e: USER.md dropped — the user profile lives in the principal person
+    # USER.md dropped — the user profile lives in the principal person
     # entity (pinned context), not a bootstrap file. SOUL.md (personality, user
     # control) stays.
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "TOOLS.md"]

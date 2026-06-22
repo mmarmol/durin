@@ -1,4 +1,4 @@
-"""Skill import (§6.B) + validation. Deterministic, dependency-free where it
+"""Skill import + validation. Deterministic, dependency-free where it
 matters. The security SCAN lives in durin/security/skill_scan.py."""
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ def validate_skill(skill_dir: Path) -> ValidationReport:
 
 
 def decide_action(source: str, *, verdict: str, carries_code: bool, allowlist: list[str]) -> str:
-    """§8.C trust×verdict gate. Returns 'allow' | 'confirm' | 'block'.
+    """Import security trust×verdict gate. Returns 'allow' | 'confirm' | 'block'.
     'block' needs an explicit override; 'confirm' needs confirmation. The
     dangerous-block and carries-code-confirm have no opt-out; only the source
     check is loosened by the allowlist."""
@@ -255,7 +255,7 @@ def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
                     judge_max_severity: str = "caution",
                     allowlist: list[str] | None = None) -> Path:
     """Download one resolved candidate into `<quarantine_root>/<name>/`, run the
-    §8.C audit (deterministic scan + optional LLM judge), and drop a `.scan.json`
+    security audit (deterministic scan + optional LLM judge), and drop a `.scan.json`
     (source + merged verdict + findings) beside it. The downloaded tree is NOT
     installed — it sits in quarantine for the gate. Caps (config-driven) bound the
     total/per-file size and file count."""
@@ -299,7 +299,7 @@ def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
 
 class SkillImportRefused(Exception):  # noqa: N818 — deliberate event-style name, not *Error
     """install_imported_skill refused the install. `.action` is the gate verdict
-    ('block' | 'confirm' | 'invalid' | 'exists'); `.verdict` is the §8.C verdict."""
+    ('block' | 'confirm' | 'invalid' | 'exists'); `.verdict` is the security gate verdict."""
 
     def __init__(self, action: str, verdict: str, message: str):
         super().__init__(message)
@@ -332,7 +332,7 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
                            allowlist: list[str], confirmed: bool = False,
                            override: bool = False, replace: bool = False,
                            attribution: "Attribution | None" = None) -> dict:
-    """Install a quarantined skill — but ONLY through the §8.C gate, enforced
+    """Install a quarantined skill — but ONLY through the import security gate, enforced
     HERE in code (not in the tool/skill/UI): `block` (dangerous) needs
     `override`; `confirm` (code / caution / out-of-allowlist) needs `confirmed`
     or `override`; a name that already exists needs `replace`. On pass: copy out
@@ -476,7 +476,7 @@ _NEEDS_PRIV = {"apt"}
 
 def runnable_install_specs(skill_dir) -> list[dict]:
     """Safe, runnable install specs as ``[{kind, value, command, needs_privileges}]``.
-    A spec the §8.C scanner flags ``dangerous`` is dropped; the ``download`` kind is
+    A spec the security scanner flags ``dangerous`` is dropped; the ``download`` kind is
     excluded (install manually). No execution here — see the skill_install_deps tool."""
 
     from durin.security.skill_scan import validate_install_specs
@@ -489,7 +489,7 @@ def runnable_install_specs(skill_dir) -> list[dict]:
     except OSError:
         return []
 
-    # Collect list-level locators the §8.C scanner flagged dangerous.
+    # Collect list-level locators the security scanner flagged dangerous.
     bad = {f.where for f in validate_install_specs(data) if f.severity == "dangerous"}
 
     out: list[dict] = []

@@ -162,7 +162,7 @@ REHOSTER_NAMESPACES = {"ai.smithery", "com.mcparmory", "eu.ansvar", "io.github.m
 def classify_official(
     name: str, *, owner_type: str, stars: int | None, denylist: set[str] | None = None
 ) -> bool:
-    """First-party heuristic for the 'Official' badge / gate (design §3.6)."""
+    """First-party heuristic for the 'Official' badge / gate."""
     denylist = REHOSTER_NAMESPACES if denylist is None else denylist
     namespace = name.split("/", 1)[0]
     if namespace in denylist:

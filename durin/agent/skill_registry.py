@@ -66,8 +66,8 @@ class ClawHubRegistry:
     ref (fetched via the zip endpoint, not github). NOTE: `/api/v1/skills` is a
     recency LIST that silently ignores its query — only `/api/v1/search` performs
     the real (vector) ranking. A third-party registry whose vetting durin does not
-    control → treated as community-trust, so every install still passes the §8.C
-    gate. Degrades to [] on any error."""
+    control → treated as community-trust, so every install still passes the
+    import security gate. Degrades to [] on any error."""
 
     name = "clawhub"
     BASE_URL = "https://clawhub.ai/api/v1"
