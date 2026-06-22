@@ -45,7 +45,7 @@ _PARAMETERS = tool_parameters_schema(
         ),
     ),
     description=(
-        # Canonical text per `docs/architecture/memory/06_prompts_and_instructions.md` §3.4.
+        # Canonical text per `docs/internals/memory/06_prompts_and_instructions.md` §3.4.
         "Read the full content of one or more memory items by URI.\n\n"
         "Pass either ``uri`` (single string) for one item, or ``uris`` "
         f"(array, up to {MAX_BATCH_URIS}) for multiple items in one "

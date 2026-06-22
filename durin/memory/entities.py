@@ -12,7 +12,7 @@ Examples valid:    ``person:marcelo``, ``project:durin``,
 
 The vocabulary of types is **open**: any well-formed type is accepted.
 :data:`SUGGESTED_TYPES` lists the 8 broad types from
-``docs/architecture/memory/01_data_and_entities.md`` §3.7 — these are hints for the
+``docs/internals/memory/01_data_and_entities.md`` §3.7 — these are hints for the
 consolidator/dream prompt, not an enforced enum. The LLM can introduce
 new types when content demands it (Phase 0.3 confirmed ``agent:``,
 ``org:`` emerge naturally).
@@ -134,7 +134,7 @@ _SLUG_NON_ALNUM = re.compile(r"[^a-z0-9]+")
 def slugify_name(name: str) -> str:
     """Derive a canonical entity slug from a free-form name.
 
-    Pipeline per ``docs/architecture/memory/01_data_and_entities.md`` §4.5:
+    Pipeline per ``docs/internals/memory/01_data_and_entities.md`` §4.5:
       1. Unicode NFC normalize
       2. Transliterate non-Latin scripts (CJK, Cyrillic, Arabic, ...)
          to Latin ASCII via :mod:`unidecode`.

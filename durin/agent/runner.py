@@ -236,7 +236,7 @@ class AgentRunSpec:
     # runner calls this each iteration to obtain the active mode and filters
     # the tool definitions sent to the LLM. Returns None → no filtering
     # (equivalent to BUILD_MODE = full access). See durin/agent/agent_mode.py
-    # and docs/architecture/loop.md §3.
+    # and docs/internals/loop.md §3.
     mode_provider: Any | None = None
     # Inspired by pi's ``transformContext``: an optional callback that
     # receives the full message list right before it is sent to the
@@ -264,7 +264,7 @@ class AgentRunSpec:
     # ``stop_reason="post_compaction_loop"``. Leave as ``None`` to skip
     # this layer (tests / non-loop callers don't need it).
     post_compaction_guard: Any | None = None
-    # Per-turn provider snapshot (hazard #8 — docs/architecture/concurrency.md).
+    # Per-turn provider snapshot (hazard #8 — docs/internals/concurrency.md).
     # The gateway runs a single shared AgentRunner; _apply_provider_snapshot in
     # loop.py mutates self.provider on every concurrent session's /model swap.
     # Carrying the provider here lets run() resolve it once and use that local
@@ -422,7 +422,7 @@ class AgentRunner:
         return injected_messages
 
     async def run(self, spec: AgentRunSpec) -> AgentRunResult:
-        # Resolve per-turn provider snapshot once (hazard #8 — docs/architecture/concurrency.md).
+        # Resolve per-turn provider snapshot once (hazard #8 — docs/internals/concurrency.md).
         # A concurrent session's /model swap mutates self.provider; pinning the
         # provider here makes this turn immune to that mutation.
         provider = spec.provider or self.provider

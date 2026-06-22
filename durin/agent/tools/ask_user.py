@@ -1,7 +1,7 @@
 """``ask_user_question`` tool — explicit clarification mid-turn.
 
 Lets the model pause its work to ask the user a specific question before
-proceeding. Two pause semantics (docs/architecture/ux.md):
+proceeding. Two pause semantics (docs/internals/ux.md):
 
 - **Blocking V2 (default)**: the tool awaits the user's next plain-text
   message inside the SAME turn (``durin/agent/pending_answers.py``); the

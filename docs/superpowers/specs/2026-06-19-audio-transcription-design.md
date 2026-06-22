@@ -342,7 +342,7 @@ transcript is correct and editable in all three modes.
 
 ## 10. Documentation
 
-- `docs/INSTALL.md` — "Audio transcription" section: `[stt]` for local,
+- `docs/guide/install.md` — "Audio transcription" section: `[stt]` for local,
   `[voice]` for TUI recording, PortAudio prerequisite on Linux.
 - `docs/config.md` (or the existing config doc) — full `transcription.*`
   schema with examples for local, Groq, OpenAI, and custom `http`

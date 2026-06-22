@@ -72,7 +72,7 @@ async def maybe_generate_webui_title(
     concurrent turn's whole-file write and cannot overwrite a title set by
     the user while the LLM was running.
 
-    See docs/architecture/concurrency.md.
+    See docs/internals/concurrency.md.
     """
     # --- Pre-flight check (outside lease; uses cached/recent state) -------
     session = sessions.get_or_create(session_key)

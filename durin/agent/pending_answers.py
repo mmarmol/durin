@@ -1,6 +1,6 @@
 """In-turn pending-answer registry for the blocking ``ask_user_question``.
 
-V2 of the ask_user contract (docs/architecture/ux.md): instead of yielding
+V2 of the ask_user contract (docs/internals/ux.md): instead of yielding
 the turn, the tool awaits a Future registered here; the agent loop's inbound
 consumer resolves it with the user's next plain-text message, so the model
 continues the SAME turn with the answer as the tool result.

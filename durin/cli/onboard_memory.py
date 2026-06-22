@@ -30,7 +30,7 @@ __all__ = [
 ]
 
 
-# Verbatim from `docs/architecture/memory/06_prompts_and_instructions.md` §6.3.
+# Verbatim from `docs/internals/memory/06_prompts_and_instructions.md` §6.3.
 AUTO_ABSORB_QUESTION_TEXT: str = dedent(
     """\
     After Dream consolidates a batch of observations, it can optionally
@@ -53,7 +53,7 @@ AUTO_ABSORB_QUESTION_TEXT: str = dedent(
 )
 
 
-# Verbatim from `docs/architecture/memory/06_prompts_and_instructions.md` §6.4.
+# Verbatim from `docs/internals/memory/06_prompts_and_instructions.md` §6.4.
 AUX_MODEL_QUESTION_TEXT: str = dedent(
     """\
     durin's Dream process consolidates memory using an LLM. It runs in
@@ -104,7 +104,7 @@ def prompt_memory_aux_model(
     return str(typed).strip()
 
 
-# Verbatim from `docs/architecture/memory/06_prompts_and_instructions.md` §6.2.
+# Verbatim from `docs/internals/memory/06_prompts_and_instructions.md` §6.2.
 CROSS_ENCODER_QUESTION_TEXT: str = dedent(
     """\
     Optional: a cross-encoder reranker can improve search quality, at a

@@ -482,7 +482,7 @@ class ChannelManager:
         """
         target_key = (first_msg.channel, first_msg.chat_id)
         # Guard against cross-stream bleed for concurrent same-(channel, chat_id) streams
-        # (e.g. Telegram forum topics).  See docs/architecture/concurrency.md.
+        # (e.g. Telegram forum topics).  See docs/internals/concurrency.md.
         target_stream_id = (first_msg.metadata or {}).get("_stream_id")
         combined_content = first_msg.content
         final_metadata = dict(first_msg.metadata or {})

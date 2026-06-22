@@ -1,6 +1,6 @@
 """Workspace ↔ FTS5 indexer.
 
-Per `docs/architecture/memory/02_indexing.md` §6: the indexer is the bridge between
+Per `docs/internals/memory/02_indexing.md` §6: the indexer is the bridge between
 the markdown source-of-truth under ``memory/`` and the FTS5 sqlite
 database at ``.durin/index/fts.sqlite``.
 
@@ -484,7 +484,7 @@ def reindex_one_file(
             # If still absent the deletion is genuine — prune as before.
             # The FTS/Lance deletes (inner locks) are taken AFTER this lock
             # (outer), so lock ordering is git-worktree > FTS/Lance.
-            # See docs/architecture/concurrency.md §reset-absent-window.
+            # See docs/internals/concurrency.md §reset-absent-window.
             with cross_process_lock(git_worktree_lock_path(memory_root)):
                 if md_path.is_file():
                     # Transient absence: reset completed, file is back.

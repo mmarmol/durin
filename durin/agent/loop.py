@@ -1431,7 +1431,7 @@ class AgentLoop:
                 telemetry_token = None
         # Sprint B / L3 — agent-mode provider, resolved per iteration so a
         # mid-run mode switch (via /plan or enter_plan_mode tool) takes
-        # effect at the very next iteration. See docs/architecture/loop.md §3.
+        # effect at the very next iteration. See docs/internals/loop.md §3.
         def _mode_provider():
             from durin.agent.agent_mode import get_active_mode
             return get_active_mode(session)
@@ -2419,7 +2419,7 @@ class AgentLoop:
         regeneration, or FTS re-index.  The volatile key is merged back into
         ``session.metadata`` on load, so recovery readers are unchanged.
 
-        See docs/architecture/concurrency.md for the sidecar split design.
+        See docs/internals/concurrency.md for the sidecar split design.
         """
         session.metadata[self._RUNTIME_CHECKPOINT_KEY] = payload
         self.sessions.save_runtime_state(session)
@@ -2584,7 +2584,7 @@ class AgentLoop:
         _dispatch's serialization semantics.  On TimeoutError the turn is
         skipped with a warning; the cron caller is never raised to.
 
-        See docs/architecture/concurrency.md.
+        See docs/internals/concurrency.md.
         """
         await self._connect_mcp()
         msg = InboundMessage(

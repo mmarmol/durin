@@ -57,7 +57,7 @@ def _mutate_deleted(workspace: Path, fn: "Callable[[set[str]], None]") -> None:
 
     Acquires cross_process_lock on .deleted.json.lock, reloads the set under
     the lock, applies fn in place, and saves.  Mirrors mutate_config in
-    durin/config/loader.py.  See docs/architecture/concurrency.md (hazard #16).
+    durin/config/loader.py.  See docs/internals/concurrency.md (hazard #16).
     """
     with cross_process_lock(_deleted_path(workspace)):
         refs = _load_deleted(workspace)

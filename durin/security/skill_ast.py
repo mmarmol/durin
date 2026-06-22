@@ -14,7 +14,7 @@ from durin.security.skill_scan import Finding
 # ``compile`` is CAUTION not dangerous: it produces a code object but does not
 # execute — execution needs a subsequent ``exec``/``eval``, which is flagged
 # ``dangerous`` on its own (so ``exec(compile(...))`` stays dangerous). See
-# docs/architecture/skills/00_overview.md (security scan). ``subprocess.*`` is
+# docs/internals/skills/00_overview.md (security scan). ``subprocess.*`` is
 # deliberately NOT here: a plain ``subprocess.run`` is common and benign — only
 # ``shell=True`` is flagged, by the dedicated check below.
 _DANGER_CALLS = {

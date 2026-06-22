@@ -31,7 +31,7 @@
 | `durin/cli/dragdrop.py` | (No change — already copies audio; wiring happens in TUI entrypoint.) | — |
 | `durin/cli/tui/widgets/composer.py` | Route dragged audio through the service; add `/voice` recorder. | Modify |
 | `durin/cli/doctor.py` | Add `stt.*` checks. | Modify |
-| `docs/INSTALL.md` | Document `[stt]`/`[voice]` extras and PortAudio. | Modify |
+| `docs/guide/install.md` | Document `[stt]`/`[voice]` extras and PortAudio. | Modify |
 
 ### Frontend (webui)
 
@@ -1685,9 +1685,9 @@ git commit -m "feat(tui): add /voice recorder command"
 ## Task 16: Documentation
 
 **Files:**
-- Modify: `docs/INSTALL.md`, `README.md`
+- Modify: `docs/guide/install.md`, `README.md`
 
-- [ ] **Step 1: Add an "Audio transcription" section to `docs/INSTALL.md`**
+- [ ] **Step 1: Add an "Audio transcription" section to `docs/guide/install.md`**
 
 Cover: `pip install durin-agent[stt]` (local Whisper), `pip install durin-agent[voice]` (TUI mic), PortAudio on Linux (`apt install libportaudio2`), and the `transcription.*` config pointer.
 
@@ -1695,13 +1695,13 @@ Cover: `pip install durin-agent[stt]` (local Whisper), `pip install durin-agent[
 
 ```markdown
 - Attach or record audio — it's transcribed to text before reaching the agent
-  (`[stt]` extra; see [docs/INSTALL.md](docs/INSTALL.md))
+  (`[stt]` extra; see [docs/guide/install.md](../../guide/install.md))
 ```
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add docs/INSTALL.md README.md
+git add docs/guide/install.md README.md
 git commit -m "docs: document audio transcription setup"
 ```
 

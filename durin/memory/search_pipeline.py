@@ -1,6 +1,6 @@
 """End-to-end orchestrator for the v2 search pipeline.
 
-Per `docs/architecture/memory/03_search_pipeline.md`: take a raw query string and
+Per `docs/internals/memory/03_search_pipeline.md`: take a raw query string and
 optional `keywords` hint, return a list of :class:`SectionedHit` rows
 ready for rendering.
 

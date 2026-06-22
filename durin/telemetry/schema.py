@@ -544,7 +544,7 @@ class SleepEndEvent(TypedDict):
 class MemoryRecallEvent(TypedDict):
     """memory_search invocation. Logged once per call (not per result).
 
-    Audit E1 (2026-05-28): payload extended to match docs/architecture/memory/07
+    Audit E1 (2026-05-28): payload extended to match docs/internals/memory/07
     §4.1. Diagnostic fields (`strategy`, `duration_ms`,
     `total_candidates`) emit on every call. `keywords` carries the
     LLM-supplied hint string (None when omitted). `recovered_from` +

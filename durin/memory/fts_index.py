@@ -1,6 +1,6 @@
 """FTS5 lexical index for memory entries and entity pages.
 
-Per `docs/architecture/memory/02_indexing.md` §5: one SQLite database at
+Per `docs/internals/memory/02_indexing.md` §5: one SQLite database at
 ``<workspace>/.durin/index/fts.sqlite`` with two FTS5 virtual tables
 sharing a bookkeeping table:
 
@@ -112,7 +112,7 @@ class FTSIndex:
         path.parent.mkdir(parents=True, exist_ok=True)
         # sqlite_util.connect sets check_same_thread=False, WAL mode, and
         # busy_timeout so concurrent cross-process writers don't get an
-        # unretried SQLITE_BUSY. See docs/architecture/concurrency.md.
+        # unretried SQLITE_BUSY. See docs/internals/concurrency.md.
         conn = _sqlite_connect(path)
         for stmt in _SCHEMA:
             conn.executescript(stmt)

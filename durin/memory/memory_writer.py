@@ -47,7 +47,7 @@ def _refresh_alias_index(memory_root: Path, page: EntityPage, slug: str) -> None
     (don't force-build on every write — the search pipeline builds lazily on
     first use). Best-effort: a refresh failure must never fail the write.
 
-    See docs/architecture/concurrency.md §AliasIndex staleness (hazard #17).
+    See docs/internals/concurrency.md §AliasIndex staleness (hazard #17).
     """
     try:
         from durin.memory.aliases_cache import _cache, get_shared_alias_index
@@ -83,7 +83,7 @@ _MAX_RETRIES = 30
 _PAGE_TO_FIELD = {"agent_created": "agent", "user_authored": "user"}
 
 # In-process per-repo write lock (in-process ref-CAS thread race — surfaced in R5
-# verification, NOT audit #9/#18; see docs/architecture/concurrency.md
+# verification, NOT audit #9/#18; see docs/internals/concurrency.md
 # §"In-process ref-CAS lock"). The bare loose-ref CAS
 # (`refs.set_if_equals` under a `GitFile` O_EXCL `.lock`) is robust on its own
 # across both processes and threads. The in-process loss comes from the
@@ -153,7 +153,7 @@ def _commit_dirty_as_user(root: Path) -> None:
     a clean tree. Best-effort — a failure here must never block the system write.
 
     Serialized under the git-worktree cross-process lock (§lock-ordering-invariant
-    in docs/architecture/concurrency.md): this lock is the sole guard for
+    in docs/internals/concurrency.md): this lock is the sole guard for
     working-tree / .git/index mutations and is always acquired AFTER any
     dulwich-internal ref CAS lock.  It is never held while a session or
     config lock is acquired, so there is no opposite-order acquisition.
@@ -163,7 +163,7 @@ def _commit_dirty_as_user(root: Path) -> None:
     # Sub-hazard A: concurrent commit + reset can corrupt .git/index (dulwich
     # _transition_to_file is non-atomic).  This lock is the OUTERMOST memory
     # lock — always acquired AFTER any dulwich-internal ref CAS lock, never
-    # while a session/config lock is held.  See docs/architecture/concurrency.md.
+    # while a session/config lock is held.  See docs/internals/concurrency.md.
     # The prune paths (indexer.reindex_one_file, vector_index.prune_orphan_rows)
     # also acquire this lock (sub-hazard B recheck) THEN their FTS/Lance locks
     # (inner).  No path takes an FTS/Lance lock and THEN this lock, so lock
@@ -474,7 +474,7 @@ def _fast_forward_working_tree(root: Path) -> None:
     prune_orphan_rows) close B by acquiring THIS SAME lock before acting on an
     absent-file observation and re-checking is_file() after acquiring it.  If
     the file is present on re-check, the reset completed and the prune is
-    skipped.  See docs/architecture/concurrency.md §reset-absent-window.
+    skipped.  See docs/internals/concurrency.md §reset-absent-window.
 
     cross_process_lock is reentrant per-thread: the common caller sequence
     _commit_dirty_as_user → (CAS) → _fast_forward_working_tree re-enters safely.

@@ -279,7 +279,7 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
         A direct ``load_config() → edit → save_config()`` sequence that is
         **not** routed through :func:`mutate_config` remains
         last-writer-wins across processes.  This is an accepted residual
-        (matches hermes).  See ``docs/architecture/concurrency.md``.
+        (matches hermes).  See ``docs/internals/concurrency.md``.
     """
     path = config_path or get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -312,7 +312,7 @@ def mutate_config(
     process's edit to a disjoint section.  A direct
     ``load_config() → edit → save_config()`` outside this helper remains
     last-writer-wins — an accepted residual.  See
-    ``docs/architecture/concurrency.md``.
+    ``docs/internals/concurrency.md``.
 
     Example::
 

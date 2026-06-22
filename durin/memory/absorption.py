@@ -154,7 +154,7 @@ class EntityAbsorption:
             raise AbsorptionError(f"canonical page missing: {canonical_path}")
         if not absorbed_path.exists():
             # Maybe already archived? Top-level archive layout per
-            # `docs/architecture/memory/01_data_and_entities.md` §3.6:
+            # `docs/internals/memory/01_data_and_entities.md` §3.6:
             #   memory/archive/entities/<type>/<slug>.md
             archive_target = (
                 self.workspace / "memory" / "archive" / "entities"

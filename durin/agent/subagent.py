@@ -257,7 +257,7 @@ class SubagentManager:
                 return EXPLORE_MODE
 
             # Capture provider snapshot at spec-build time (hazard #8 —
-            # docs/architecture/concurrency.md): a concurrent session's /model
+            # docs/internals/concurrency.md): a concurrent session's /model
             # swap calls set_provider(), mutating self.runner.provider. Pinning
             # the provider here makes this in-flight subagent turn immune to
             # that mutation, symmetric with the AgentLoop fix.
@@ -360,7 +360,7 @@ class SubagentManager:
         # bubble, transcript replay). The inbound announce above remains
         # the MODEL's context — the model adds a brief natural summary; the
         # card shows the full result (payload-canonical contract,
-        # docs/architecture/ux.md).
+        # docs/internals/ux.md).
         event: dict[str, Any] = {
             "version": 1,
             "phase": "end" if status == "ok" else "error",

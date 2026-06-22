@@ -417,7 +417,7 @@ class ContextBuilder:
         # Concern B: the task-state anchor groups goal + decision log + todos
         # + executing-plan pointer under one <task-state> frame, re-injected
         # every turn (derived from session.metadata, so it survives
-        # compaction). See durin/agent/task_state.py and docs/architecture/loop.md.
+        # compaction). See durin/agent/task_state.py and docs/internals/loop.md.
         extra = task_state_runtime_lines(session_metadata)
         # Sprint B / file-based plans — after /build approves a plan,
         # surface the path so the next turn can read it without the user

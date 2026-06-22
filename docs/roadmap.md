@@ -7,7 +7,7 @@
 > commit is the canonical record (`git log` finds it by message). Partial progress
 > is updated in place. Detailed history (refuted experiments, the day-by-day
 > implementation log) lives in `git log`; as-built internals live in
-> `docs/architecture/`.
+> `docs/internals/`.
 
 ---
 
@@ -17,7 +17,7 @@ Durin is a Nanobot baseline + a full entity-centric memory system + daily-driver
 lifecycle + capability bridges (vision/audio) + secrets + an HTTP/WebSocket service
 platform + web/TUI parity.
 
-**Shipped subsystems** (as-built detail in `docs/architecture/`):
+**Shipped subsystems** (as-built detail in `docs/internals/`):
 
 - **Memory** (entity-centric): 5 tools (`memory_search`, `memory_upsert_entity`,
   `memory_ingest`, `memory_drill`, `memory_forget`) over FTS5 + LanceDB + grep + RRF
@@ -70,7 +70,7 @@ today; tracked under Pending work.
 
 Entity-centric pages + classes + LLM-driven dream consolidator + opt-in auto-absorb.
 The final shape differs from the original "5 node types with milestone promotion"
-design. See `docs/architecture/memory/`.
+design. See `docs/internals/memory/`.
 
 ---
 

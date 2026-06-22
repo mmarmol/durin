@@ -2,7 +2,7 @@
 
 Reads JSONL events from ``~/.cache/durin/telemetry/`` and walks the
 workspace filesystem for ground-truth counts. Read-only — never mutates
-state. Per ``docs/architecture/memory/07_telemetry_and_observability.md`` §10 this is the
+state. Per ``docs/internals/memory/07_telemetry_and_observability.md`` §10 this is the
 prerequisite for the §2.A / §2.D / §2.F / §2.G gates: each one is an
 observable metric and without aggregation those gates are faith-based.
 

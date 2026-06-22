@@ -73,7 +73,7 @@ pip install ./dist/durin_agent-*.whl
 ```
 
 The wheel build normally calls `bun` (preferred) or `npm` to bundle
-`webui/` into `durin/web/dist/` — see [hatch_build.py](../hatch_build.py).
+`webui/` into `durin/web/dist/` — see [hatch_build.py](../../hatch_build.py).
 
 ### Optional extras
 
@@ -157,7 +157,7 @@ Memory subsystem note: with `[memory]` installed, durin's workspace at
 `VAULT_README.md` is auto-generated at the workspace root on first
 boot explaining the layout, and the on-disk format (markdown +
 frontmatter + wikilinks) opens natively in Obsidian or any markdown
-reader. See `docs/architecture/memory/` for the subsystem deep-dive.
+reader. See `docs/internals/memory/` for the subsystem deep-dive.
 
 ### First-time configuration
 
@@ -183,7 +183,7 @@ durin config set providers.zhipu.api_key sk-...
 ## Configure
 
 durin keeps a single canonical config at `~/.durin/config.json`, validated by
-the Pydantic `Config` schema in [durin/config/schema.py](../durin/config/schema.py).
+the Pydantic `Config` schema in [durin/config/schema.py](../../durin/config/schema.py).
 
 > **`DURIN_HOME` — durin is multi-instance.** A durin *instance* is a
 > self-contained data root selected by this env var; everything is relative to
@@ -278,7 +278,7 @@ Useful flags:
 - `--migrate-only` — skip the package step; just rerun config migration.
 
 After the package upgrade, durin replays the config migration pass
-(`_migrate_config` in [durin/config/loader.py](../durin/config/loader.py))
+(`_migrate_config` in [durin/config/loader.py](../../durin/config/loader.py))
 and re-injects any newly added schema defaults — same merge that `durin
 onboard` (no-wizard) performs.
 

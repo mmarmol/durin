@@ -2,7 +2,7 @@
 
 Two renderers in this package wrap canonical / fragment / session /
 ingested content in the marker convention documented in
-``docs/architecture/memory/06_prompts_and_instructions.md`` §8.3:
+``docs/internals/memory/06_prompts_and_instructions.md`` §8.3:
 
 - ``durin.memory.hot_layer`` — eager pre-injection into every agent
   prompt; renders structured EntityPage objects.

@@ -16,7 +16,7 @@ processes. All known out-of-turn savers now acquire it:
   - webui background title-generation save
     (loop.py _schedule_background -> utils/webui_titles.py)
 
-See docs/architecture/concurrency.md for the full Phase-A rationale and
+See docs/internals/concurrency.md for the full Phase-A rationale and
 residual ledger.
 """
 from __future__ import annotations

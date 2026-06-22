@@ -1,7 +1,7 @@
 """Hot layer — the always-loaded memory section of the stable prompt tier.
 
 Phase 1.9 of the memory subsystem (renderer), refreshed in Phase 1.5
-(canonical spec: ``docs/architecture/memory/06_prompts_and_instructions.md``
+(canonical spec: ``docs/internals/memory/06_prompts_and_instructions.md``
 §8). The hot layer is what the agent carries in every prompt without
 any tool call: identity essentials, canonical entity pages (the "main
 memory"), recent tagged fragments (two-track model, N3: fragments are not
@@ -37,7 +37,7 @@ from durin.telemetry.logger import current_telemetry
 
 __all__ = ["HotLayer", "read_hot_layer"]
 
-# Budgets per docs/architecture/memory/06_prompts_and_instructions.md §8.2.
+# Budgets per docs/internals/memory/06_prompts_and_instructions.md §8.2.
 # Total ~1900 tokens — still cache-friendly between dreams.
 _IDENTITY_BUDGET_CHARS = 800    # ~200 tokens
 _CANONICAL_BUDGET_CHARS = 2400  # ~600 tokens — N entity pages

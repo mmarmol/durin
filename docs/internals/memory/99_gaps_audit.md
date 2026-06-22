@@ -4,14 +4,14 @@ version: 0.1
 status: actionable backlog
 last_updated: 2026-05-27
 audience: humans + LLMs working through remediation
-purpose: One-stop list of gaps identified between docs/architecture/memory/ corpus (00-09) and actual durin code + prior docs. To be remediated item-by-item; this doc is the checklist.
+purpose: One-stop list of gaps identified between docs/internals/memory/ corpus (00-09) and actual durin code + prior docs. To be remediated item-by-item; this doc is the checklist.
 ---
 
 # Memory corpus — gaps audit (working doc)
 
 > **⚠️ Superseded (2026-06).** This pre-migration doc-vs-code gap list is kept for
 > history. Those gaps were closed by the entity-centric migration + the C doc-rewrite
-> pass. For how the system works **now**, read `00`-`08` (memory) + `docs/architecture/skills/`.
+> pass. For how the system works **now**, read `00`-`08` (memory) + `docs/internals/skills/`.
 
 Audit performed 2026-05-27 against `/Users/marcelo/git_personal/durin/durin/` (code) and `/Users/marcelo/git_personal/durin/docs/*.md` (prior docs, especially 18, 20, 25, 28). This doc lists every gap that warrants remediation, prioritized by severity. Each item is an actionable unit — discuss, decide, apply, mark done.
 

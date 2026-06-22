@@ -9,7 +9,7 @@ related: 01_data_and_entities.md
 
 # Memory system — architectural overview
 
-This document is the **entry point to the specification corpus**. It defines the global design, the guiding principles, the layered diagram, the glossary, and the index of all other documents. Each module of the system lives in a dedicated doc inside this folder (`docs/architecture/memory/`).
+This document is the **entry point to the specification corpus**. It defines the global design, the guiding principles, the layered diagram, the glossary, and the index of all other documents. Each module of the system lives in a dedicated doc inside this folder (`docs/internals/memory/`).
 
 **How to read this corpus:** start here. Then go to the doc covering the module you need to understand or modify. Each doc is the source of truth for its scope; no fact should be duplicated across docs (only referenced via `[[link]]`).
 
@@ -199,7 +199,7 @@ the specific module where the work landed.
 
 ## 8. Document index
 
-The following documents live in `docs/architecture/memory/` and are the detailed specification of the system. Each is the source of truth for its scope.
+The following documents live in `docs/internals/memory/` and are the detailed specification of the system. Each is the source of truth for its scope.
 
 | # | Document | Scope |
 |---|---|---|

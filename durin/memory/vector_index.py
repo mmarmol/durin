@@ -177,7 +177,7 @@ class VectorIndex:
     ) -> None:
         """Index a consolidated entity page (``memory/entities/<type>/<slug>.md``).
 
-        Per ``docs/architecture/memory/02_indexing.md`` §4.2 (Phase 0.1 finding),
+        Per ``docs/internals/memory/02_indexing.md`` §4.2 (Phase 0.1 finding),
         the embedded text omits the ``<type>:`` prefix (which Phase 0.1
         measured at cosine 0.517 against ``durin``, vs 0.755 for
         ``durin``/``durin-agent`` — the prefix introduces token noise).
@@ -582,7 +582,7 @@ class VectorIndex:
         wrapped in ``cross_process_lock`` so only one rebuild runs at a
         time. The per-row ``merge_insert`` upsert paths are already
         atomic and are intentionally left outside this lock.
-        See docs/architecture/concurrency.md for lock-ordering invariants.
+        See docs/internals/concurrency.md for lock-ordering invariants.
 
         Audit E9 (2026-05-28) extended this to also walk entity pages.
         Pre-E9, only memory entries (`memory/<class>/*.md`) were walked
@@ -854,7 +854,7 @@ class VectorIndex:
             # briefly stored body here for a latency micro-optimisation,
             # reverted in audit A4 because it duplicated content and
             # opened a drift window between disk edits and LanceDB
-            # reads. See docs/architecture/memory/08_scope_and_discarded.md §2.10.
+            # reads. See docs/internals/memory/08_scope_and_discarded.md §2.10.
         }
 
     _EMBED_BUDGET_CHARS = 1500  # ~375 tokens; e5-small max_seq is 512.
@@ -1061,7 +1061,7 @@ def prune_orphan_rows(workspace: Path) -> list[str]:
     is kept.  Lock ordering: git-worktree (outer, acquired here) > LanceDB
     delete (inner, inside delete_ids).  No path takes a LanceDB lock and then
     git-worktree, so there is no deadlock risk.
-    See docs/architecture/concurrency.md §reset-absent-window.
+    See docs/internals/concurrency.md §reset-absent-window.
     """
     try:
         import lancedb  # type: ignore[import-not-found]

@@ -13,7 +13,7 @@ depends_on: 09_implementation_roadmap.md (spec); 99_phase_progress_review.md (de
 > Phase-1.9 work shipped with the entity-centric migration; the **current** state,
 > remediation record, and remaining items live in
 > [`docs/roadmap.md`](../../roadmap.md). For how the system works **now**, read
-> `00`-`08` (memory) + `docs/architecture/skills/` (skills) — not this list.
+> `00`-`08` (memory) + `docs/internals/skills/` (skills) — not this list.
 
 This document is the **granular list of what remains** after the current state (commit `c820447`). The original plan (`09_implementation_roadmap.md`) is still the **specs** reference, but uses a "deliverables" granularity that hid scope and latent bugs in the autonomous session. This doc applies the format discussed in D5+D6:
 
@@ -344,7 +344,7 @@ Documented here for historical reference. Hooks in `memory_store.execute`, `memo
 ### P8.4 — Documentation lint pass
 
 - **TYPE**: 📄 docs
-- **DoD**: `grep -rn "(pending)" docs/architecture/memory/` returns nothing. All decisions marked with a resolution. Spec↔code discrepancies detected by P5.5 fixed.
+- **DoD**: `grep -rn "(pending)" docs/internals/memory/` returns nothing. All decisions marked with a resolution. Spec↔code discrepancies detected by P5.5 fixed.
 - **LOC**: ~varies (depends on how much doc debt there is).
 
 ---

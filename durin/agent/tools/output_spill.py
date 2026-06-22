@@ -10,7 +10,7 @@ Inspired by OpenCode's ``TOOL_OUTPUT_MAX_CHARS`` (2000-char compaction cap in
 than post-hoc: spill happens at the moment of overflow, not retroactively
 during compaction. This keeps the model's context lean from the start.
 
-See ``docs/architecture/loop.md`` §1.
+See ``docs/internals/loop.md`` §1.
 """
 
 from __future__ import annotations

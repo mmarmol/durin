@@ -1,6 +1,6 @@
 """Indexer state file: `<workspace>/.durin/index/meta.json`.
 
-Per `docs/architecture/memory/02_indexing.md` §2 + §7.2 the file carries the
+Per `docs/internals/memory/02_indexing.md` §2 + §7.2 the file carries the
 indexer's notion of "what does the index correspond to". Today the
 relevant fields are:
 
@@ -15,7 +15,7 @@ relevant fields are:
 - ``previous_models`` (tuple of strings) — audit trail of model
   migrations.
 
-Phase 0 scope (per ``docs/architecture/memory/02_indexing.md`` §7.2
+Phase 0 scope (per ``docs/internals/memory/02_indexing.md`` §7.2
 deliverable 6) is **the field plumbing**. The §7.2 enforcement
 consumer (refuse to operate on mismatch, auto-rebuild if absent)
 lands in a later phase that wires this into the indexer entry point.

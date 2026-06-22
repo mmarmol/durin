@@ -1,7 +1,7 @@
 """Parser for entity pages: `memory/entities/<type>/<slug>.md`.
 
 Each page is a markdown document with a YAML frontmatter header followed
-by a free-form body. Per ``docs/architecture/memory/01_data_and_entities.md`` §3.4 the
+by a free-form body. Per ``docs/internals/memory/01_data_and_entities.md`` §3.4 the
 **minimum required** frontmatter is:
 
     type: <type>             # lowercase [a-z][a-z0-9_]*

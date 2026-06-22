@@ -92,7 +92,7 @@ _PARAMETERS = tool_parameters_schema(
     ),
     required=["query"],
     description=(
-        # Canonical text per `docs/architecture/memory/06_prompts_and_instructions.md` §3.1.
+        # Canonical text per `docs/internals/memory/06_prompts_and_instructions.md` §3.1.
         # Synchronisation enforced by `tests/memory/test_tool_description_sync.py`.
         "Search durin's memory for content relevant to your question. "
         "Searches across canonical entity pages, recent observations, "
@@ -203,7 +203,7 @@ class MemorySearchTool(Tool):
 
     @property
     def description(self) -> str:
-        # Canonical text per `docs/architecture/memory/06_prompts_and_instructions.md` §3.1.
+        # Canonical text per `docs/internals/memory/06_prompts_and_instructions.md` §3.1.
         # `Tool.to_schema()` (durin/agent/tools/base.py:258) reads this and
         # emits it as `function.description` in the OpenAI function-calling
         # spec — that's the description the LLM actually reads to decide

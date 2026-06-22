@@ -78,7 +78,7 @@ def get_extract_cursor(jsonl_path: Path) -> int:
     """Return the per-session extract cursor (number of turns already processed).
 
     The cursor is stored as a top-level ``"extract_cursor"`` key in the
-    ``.meta.json`` sidecar (see docs/architecture/concurrency.md #15).
+    ``.meta.json`` sidecar (see docs/internals/concurrency.md #15).
     Falls back to the legacy ``derived.extract_cursor`` location so that
     pre-existing sessions are not re-processed from turn 0.
     """
@@ -107,7 +107,7 @@ def set_extract_cursor(jsonl_path: Path, n: int) -> None:
     The read-modify-write is serialized under the same
     ``cross_process_lock(jsonl_path)`` that ``SessionManager`` uses for that
     session's sidecar, preventing lost-update races (hazard #15-B).
-    See docs/architecture/concurrency.md.
+    See docs/internals/concurrency.md.
     """
     mp = _meta_path(jsonl_path)
     # Use the same lock key that SessionManager uses: cross_process_lock

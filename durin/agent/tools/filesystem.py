@@ -926,7 +926,7 @@ class EditFileTool(_FsTool):
             raw = fp.read_bytes()
             # Capture a content hash of the bytes we are about to edit against.
             # Immediately before writing we re-hash to detect concurrent changes.
-            # See docs/architecture/concurrency.md — optimistic CAS for workspace files.
+            # See docs/internals/concurrency.md — optimistic CAS for workspace files.
             read_hash = _hash_file(str(fp))
             uses_crlf = b"\r\n" in raw
             content = raw.decode("utf-8").replace("\r\n", "\n")
@@ -987,7 +987,7 @@ class EditFileTool(_FsTool):
 
             # Optimistic CAS: re-hash the file immediately before writing.
             # If another process changed it since our read, abort to avoid
-            # a silent lost update. See docs/architecture/concurrency.md.
+            # a silent lost update. See docs/internals/concurrency.md.
             if _hash_file(str(fp)) != read_hash:
                 return (
                     "Error: file changed on disk since it was read — "

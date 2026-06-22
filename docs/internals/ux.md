@@ -377,7 +377,7 @@ The wheel bundles the webui under `durin/web/dist/` via `hatch_build.py`; editab
 2. **github-release** — downloads artifacts and creates a GitHub Release with auto-generated notes. Marked `prerelease: true` when the tag carries an `aN`/`bN`/`rcN`/`devN` suffix (PEP 440).
 3. **pypi-publish** — downloads the same artifacts and publishes them via `pypa/gh-action-pypi-publish` (OIDC trusted publishing — no API tokens stored in the repo). Marked `continue-on-error: true` so a misconfigured PyPI publisher doesn't block the GitHub Release.
 
-Tag → release is the only path. There is no manual upload step. Maintainer instructions live in `docs/RELEASING.md`.
+Tag → release is the only path. There is no manual upload step. Maintainer instructions live in `docs/releasing.md`.
 
 ### CI pipeline
 

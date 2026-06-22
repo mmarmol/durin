@@ -1,6 +1,6 @@
 """Archive helpers for consolidated memory content.
 
-Per `docs/architecture/memory/01_data_and_entities.md` §3.6 + §5.3.
+Per `docs/internals/memory/01_data_and_entities.md` §3.6 + §5.3.
 
 When Dream consolidates an episodic entry into a canonical entity page,
 the original episodic moves to `memory/archive/episodic/<id>.md` (not

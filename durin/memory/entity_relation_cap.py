@@ -1,6 +1,6 @@
 """Per-entity relation cap enforcement (audit B-19, 2026-05-29).
 
-`docs/architecture/memory/01_data_and_entities.md` §4.4 documented soft / hard
+`docs/internals/memory/01_data_and_entities.md` §4.4 documented soft / hard
 relation caps (50 / 200) as intent, but Dream apply never enforced
 them. An entity could legitimately accumulate 500 relations with no
 signal. B-19 ships the brake pedal:

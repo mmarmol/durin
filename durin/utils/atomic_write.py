@@ -13,7 +13,7 @@ Pattern adapted from hermes-agent's memory store (MIT, Nous Research 2025):
 - the original file mode is preserved (``mkstemp`` creates 0o600); new files
   get 0o644.
 
-See docs/architecture/concurrency.md for the cross-process locking design that
+See docs/internals/concurrency.md for the cross-process locking design that
 wraps these helpers.
 """
 

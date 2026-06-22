@@ -197,9 +197,9 @@ installing Obsidian.
 ## Where to find more
 
 - Source: `https://github.com/mmarmol/durin`
-- Memory architecture: `docs/architecture/memory/00_overview.md`
-- Search pipeline: `docs/architecture/memory/03_search_pipeline.md`
-- Data layout (this file's source of truth): `docs/architecture/memory/01_data_and_entities.md`
+- Memory architecture: `docs/internals/memory/00_overview.md`
+- Search pipeline: `docs/internals/memory/03_search_pipeline.md`
+- Data layout (this file's source of truth): `docs/internals/memory/01_data_and_entities.md`
 """
 
 
