@@ -251,8 +251,12 @@ def _is_direct_openai_base(api_base: str | None) -> bool:
     """Return True for direct OpenAI endpoints, not generic OpenAI-compatible gateways."""
     if not api_base:
         return True
-    normalized = api_base.strip().lower().rstrip("/")
-    return "api.openai.com" in normalized and "openrouter" not in normalized
+    raw = api_base.strip()
+    # Compare the parsed host exactly: a substring check would let a look-alike
+    # domain or a path segment (e.g. https://evil.com/api.openai.com,
+    # https://api.openai.com.evil.com) spoof a direct-endpoint match.
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    return (parsed.hostname or "").lower() == "api.openai.com"
 
 
 def _responses_circuit_key(
