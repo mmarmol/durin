@@ -383,6 +383,7 @@
       "fieldMode": "Mode",
       "modeReminder": "Pengingat",
       "modeTask": "Tugas",
+      "modeHelp": "Pengingat: pesan dikirim sebagai pesan singkat alami. Tugas: agen menjalankan pesan dengan semua alat dan menyampaikan hasilnya hanya jika berguna.",
       "fieldPrompt": "Prompt",
       "fieldSchedule": "Jadwal",
       "scheduleKindCron": "Ekspresi cron",
@@ -391,7 +392,10 @@
       "modelDefault": "Gunakan default agen",
       "fieldDeliver": "Kirim notifikasi",
       "fieldChannel": "Saluran",
+      "fieldChannelPlaceholder": "Pilih saluran",
       "fieldTo": "Kepada",
+      "fieldToPlaceholder": "ID chat, nomor telepon, atau @pengguna",
+      "fieldToHelp": "ID tujuan untuk saluran yang dipilih (mis. ID chat, nomor telepon, atau @pengguna — tergantung saluran).",
       "save": "Simpan",
       "cancel": "Batal",
       "runNow": "Jalankan sekarang",
@@ -402,6 +406,8 @@
       "duration": "Durasi",
       "model": "Model",
       "noRuns": "Belum ada eksekusi.",
+      "showMore": "Tampilkan lebih banyak",
+      "showLess": "Tampilkan lebih sedikit",
       "openRun": "Buka",
       "systemJobs": {
         "memory_dream": {

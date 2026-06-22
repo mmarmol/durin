@@ -7,15 +7,17 @@ import { cn } from "@/lib/utils";
 import {
   addCronJob,
   ApiError,
-  fetchModelPicker,
+  listChannels,
   listCronJobs,
   removeCronJob,
   runCronJob,
   toggleCronJob,
   updateCronJob,
+  type ChannelInfo,
   type CronJobRow,
-  type PickerEntry,
 } from "@/lib/api";
+
+import { ModelSelectField } from "@/components/ModelSelectField";
 
 import {
   SettingsGroup,
@@ -85,12 +87,12 @@ function CronForm({
 }) {
   const { t } = useTranslation();
   const [form, setForm] = useState<FormState>(editJob ? jobToForm(editJob) : EMPTY_FORM);
-  const [pickerEntries, setPickerEntries] = useState<PickerEntry[]>([]);
+  const [channels, setChannels] = useState<ChannelInfo[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchModelPicker(token, []).then(setPickerEntries).catch(() => {});
+    listChannels(token).then((ch) => setChannels(ch.filter((c) => c.enabled))).catch(() => {});
   }, [token]);
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
@@ -168,6 +170,7 @@ function CronForm({
           <option value="reminder">{t("settings.cron.modeReminder")}</option>
           <option value="task">{t("settings.cron.modeTask")}</option>
         </select>
+        <p className="mt-1 text-[11px] text-muted-foreground">{t("settings.cron.modeHelp")}</p>
       </div>
 
       {/* Prompt */}
@@ -225,22 +228,8 @@ function CronForm({
 
       {/* Model */}
       <div>
-        <label htmlFor="cron-model" className={labelClass}>
-          {t("settings.cron.fieldModel")}
-        </label>
-        <select
-          id="cron-model"
-          className={selectClass}
-          value={form.model}
-          onChange={(e) => set("model", e.target.value)}
-        >
-          <option value="">{t("settings.cron.modelDefault")}</option>
-          {pickerEntries.map((entry) => (
-            <option key={entry.ref} value={entry.ref}>
-              {entry.name}
-            </option>
-          ))}
-        </select>
+        <label className={labelClass}>{t("settings.cron.fieldModel")}</label>
+        <ModelSelectField value={form.model} onChange={(ref) => set("model", ref)} />
       </div>
 
       {/* Deliver toggle */}
@@ -264,12 +253,19 @@ function CronForm({
             <label htmlFor="cron-channel" className={labelClass}>
               {t("settings.cron.fieldChannel")}
             </label>
-            <input
+            <select
               id="cron-channel"
-              className={inputClass}
+              className={cn(selectClass, "w-full")}
               value={form.channel}
               onChange={(e) => set("channel", e.target.value)}
-            />
+            >
+              <option value="">{t("settings.cron.fieldChannelPlaceholder")}</option>
+              {channels.map((ch) => (
+                <option key={ch.name} value={ch.name}>
+                  {ch.display_name}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <label htmlFor="cron-to" className={labelClass}>
@@ -280,7 +276,11 @@ function CronForm({
               className={inputClass}
               value={form.to}
               onChange={(e) => set("to", e.target.value)}
+              placeholder={t("settings.cron.fieldToPlaceholder")}
             />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              {t("settings.cron.fieldToHelp")}
+            </p>
           </div>
         </div>
       ) : null}
@@ -609,6 +609,8 @@ function CronRow({
   );
 }
 
+const HISTORY_PAGE = 8;
+
 function RunHistory({
   history,
   open,
@@ -623,7 +625,11 @@ function RunHistory({
   onOpenSession?: (sessionKey: string) => void;
 }) {
   const { t } = useTranslation();
-  const runs = history ?? [];
+  const [showAll, setShowAll] = useState(false);
+  // Sort newest-first without mutating the prop.
+  const runs = [...(history ?? [])].sort((a, b) => b.run_at_ms - a.run_at_ms);
+  const visible = showAll ? runs : runs.slice(0, HISTORY_PAGE);
+  const hasMore = runs.length > HISTORY_PAGE;
 
   return (
     <div className="border-t border-border/30 bg-muted/20">
@@ -652,62 +658,73 @@ function RunHistory({
               {t("settings.cron.noRuns")}
             </p>
           ) : (
-            <table className="w-full text-[11px]">
-              <thead>
-                <tr className="text-left text-muted-foreground">
-                  <th className="pb-1 pr-3 font-medium">{t("settings.cron.runAt")}</th>
-                  <th className="pb-1 pr-3 font-medium">{t("settings.cron.status")}</th>
-                  <th className="pb-1 pr-3 font-medium">{t("settings.cron.duration")}</th>
-                  <th className="pb-1 pr-3 font-medium">{t("settings.cron.model")}</th>
-                  <th className="pb-1 font-medium"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {runs.map((run) => (
-                  <tr key={run.run_at_ms} className="border-t border-border/20">
-                    <td className="py-1 pr-3 tabular-nums">
-                      {formatTimestamp(run.run_at_ms, locale)}
-                    </td>
-                    <td className="py-1 pr-3">
-                      <span
-                        className={cn(
-                          "font-medium",
-                          run.status === "ok"
-                            ? "text-emerald-600"
-                            : run.status === "error"
-                              ? "text-destructive"
-                              : "text-muted-foreground",
-                        )}
-                        title={run.error ?? undefined}
-                      >
-                        {run.status}
-                      </span>
-                    </td>
-                    <td className="py-1 pr-3 tabular-nums text-muted-foreground">
-                      {formatDuration(run.duration_ms)}
-                    </td>
-                    <td className="py-1 pr-3 text-muted-foreground">
-                      {run.model ?? "—"}
-                    </td>
-                    <td className="py-1">
-                      {run.session_key ? (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-5 rounded px-1.5 text-[10px]"
-                          title={run.session_key}
-                          aria-label={t("settings.cron.openRun")}
-                          onClick={() => onOpenSession?.(run.session_key!)}
-                        >
-                          <ExternalLink className="mr-0.5 h-2.5 w-2.5" aria-hidden />
-                          {t("settings.cron.openRun")}
-                        </Button>
-                      ) : null}
-                    </td>
+            <>
+              <table className="w-full text-[11px]">
+                <thead>
+                  <tr className="text-left text-muted-foreground">
+                    <th className="pb-1 pr-3 font-medium">{t("settings.cron.runAt")}</th>
+                    <th className="pb-1 pr-3 font-medium">{t("settings.cron.status")}</th>
+                    <th className="pb-1 pr-3 font-medium">{t("settings.cron.duration")}</th>
+                    <th className="pb-1 pr-3 font-medium">{t("settings.cron.model")}</th>
+                    <th className="pb-1 font-medium"></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {visible.map((run) => (
+                    <tr key={run.run_at_ms} className="border-t border-border/20">
+                      <td className="py-1 pr-3 tabular-nums">
+                        {formatTimestamp(run.run_at_ms, locale)}
+                      </td>
+                      <td className="py-1 pr-3">
+                        <span
+                          className={cn(
+                            "font-medium",
+                            run.status === "ok"
+                              ? "text-emerald-600"
+                              : run.status === "error"
+                                ? "text-destructive"
+                                : "text-muted-foreground",
+                          )}
+                          title={run.error ?? undefined}
+                        >
+                          {run.status}
+                        </span>
+                      </td>
+                      <td className="py-1 pr-3 tabular-nums text-muted-foreground">
+                        {formatDuration(run.duration_ms)}
+                      </td>
+                      <td className="py-1 pr-3 text-muted-foreground">
+                        {run.model ?? "—"}
+                      </td>
+                      <td className="py-1">
+                        {run.session_key ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-5 rounded px-1.5 text-[10px]"
+                            title={run.session_key}
+                            aria-label={t("settings.cron.openRun")}
+                            onClick={() => onOpenSession?.(run.session_key!)}
+                          >
+                            <ExternalLink className="mr-0.5 h-2.5 w-2.5" aria-hidden />
+                            {t("settings.cron.openRun")}
+                          </Button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {hasMore ? (
+                <button
+                  type="button"
+                  onClick={() => setShowAll((v) => !v)}
+                  className="mt-1.5 text-[11px] text-muted-foreground hover:text-foreground/80"
+                >
+                  {showAll ? t("settings.cron.showLess") : t("settings.cron.showMore")}
+                </button>
+              ) : null}
+            </>
           )}
         </div>
       ) : null}

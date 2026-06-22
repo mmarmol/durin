@@ -391,6 +391,7 @@
       "fieldMode": "Modo",
       "modeReminder": "Recordatorio",
       "modeTask": "Tarea",
+      "modeHelp": "Recordatorio: el mensaje se entrega como un mensaje natural breve. Tarea: el agente ejecuta el mensaje con todas las herramientas y entrega el resultado solo cuando es útil.",
       "fieldPrompt": "Prompt",
       "fieldSchedule": "Horario",
       "scheduleKindCron": "Expresión cron",
@@ -399,7 +400,10 @@
       "modelDefault": "Usar el predeterminado del agente",
       "fieldDeliver": "Enviar notificación",
       "fieldChannel": "Canal",
+      "fieldChannelPlaceholder": "Selecciona un canal",
       "fieldTo": "Para",
+      "fieldToPlaceholder": "ID de chat, número de teléfono o @usuario",
+      "fieldToHelp": "El ID de destino para el canal elegido (p.ej. un ID de chat, número de teléfono o @usuario — depende del canal).",
       "save": "Guardar",
       "cancel": "Cancelar",
       "history": "Historial de ejecuciones",
@@ -408,6 +412,8 @@
       "duration": "Duración",
       "model": "Modelo",
       "noRuns": "Sin ejecuciones registradas.",
+      "showMore": "Ver más",
+      "showLess": "Ver menos",
       "openRun": "Abrir",
       "systemJobs": {
         "memory_dream": {

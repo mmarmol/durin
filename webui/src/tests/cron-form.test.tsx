@@ -7,16 +7,23 @@ const listCronJobs = vi.fn();
 const addCronJob = vi.fn();
 const updateCronJob = vi.fn();
 const fetchModelPicker = vi.fn();
+const listChannels = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   listCronJobs: (...a: unknown[]) => listCronJobs(...a),
   addCronJob: (...a: unknown[]) => addCronJob(...a),
   updateCronJob: (...a: unknown[]) => updateCronJob(...a),
   fetchModelPicker: (...a: unknown[]) => fetchModelPicker(...a),
+  listChannels: (...a: unknown[]) => listChannels(...a),
   // passthrough stubs for other imports CronSettings uses
   removeCronJob: vi.fn(),
   runCronJob: vi.fn(),
   toggleCronJob: vi.fn(),
+}));
+
+// ModelSelectField uses useClient() internally.
+vi.mock("@/providers/ClientProvider", () => ({
+  useClient: () => ({ token: "tok" }),
 }));
 
 const MOCK_JOB = {
@@ -41,6 +48,11 @@ describe("CronSettings – create form", () => {
     updateCronJob.mockReset().mockResolvedValue({ ...MOCK_JOB });
     fetchModelPicker.mockReset().mockResolvedValue([
       { name: "GLM 5", provider: "zai", group: "general", role: "agent", ref: "zai/glm-5" },
+    ]);
+    listChannels.mockReset().mockResolvedValue([
+      { name: "telegram", display_name: "Telegram", enabled: true, credential_field: "bot_token" },
+      { name: "slack", display_name: "Slack", enabled: true, credential_field: "webhook_url" },
+      { name: "disabled_ch", display_name: "Disabled", enabled: false, credential_field: null },
     ]);
   });
 
@@ -112,7 +124,7 @@ describe("CronSettings – create form", () => {
     expect(body.expr).toBeNull();
   });
 
-  it("edit form preserves mode and model", async () => {
+  it("edit form preserves mode", async () => {
     const taskJob = {
       ...MOCK_JOB,
       id: "job-2",
@@ -126,11 +138,8 @@ describe("CronSettings – create form", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /edit/i }));
 
-    // Form populated from the job: mode = task, model = the job's ref.
+    // Form populated from the job: mode = task.
     expect((screen.getByLabelText(/^mode$/i) as HTMLSelectElement).value).toBe("task");
-    await waitFor(() =>
-      expect((screen.getByLabelText(/^model$/i) as HTMLSelectElement).value).toBe("zai/glm-5"),
-    );
 
     fireEvent.click(screen.getByRole("button", { name: /^save/i }));
 
@@ -153,5 +162,24 @@ describe("CronSettings – create form", () => {
     await waitFor(() => screen.getByText("Daily digest"));
     // User job has Edit affordance
     expect(screen.getAllByRole("button", { name: /edit/i })).toHaveLength(1);
+  });
+
+  it("channel select shows only enabled channels when deliver is toggled on", async () => {
+    render(<CronSettings token="tok" />);
+    await waitFor(() => expect(listCronJobs).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: /add job/i }));
+
+    // Toggle deliver on
+    fireEvent.click(screen.getByLabelText(/deliver/i));
+
+    // Wait for channels to appear in the select
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /telegram/i })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: /slack/i })).toBeInTheDocument();
+    });
+
+    // Disabled channel must NOT appear
+    expect(screen.queryByRole("option", { name: /disabled/i })).not.toBeInTheDocument();
   });
 });

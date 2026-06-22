@@ -391,6 +391,7 @@
       "fieldMode": "Mode",
       "modeReminder": "Reminder",
       "modeTask": "Task",
+      "modeHelp": "Reminder: the message is delivered as a brief natural message. Task: the agent executes the message with full tools and delivers the result only when useful.",
       "fieldPrompt": "Prompt",
       "fieldSchedule": "Schedule",
       "scheduleKindCron": "Cron expression",
@@ -399,7 +400,10 @@
       "modelDefault": "Use agent default",
       "fieldDeliver": "Deliver notification",
       "fieldChannel": "Channel",
+      "fieldChannelPlaceholder": "Select a channel",
       "fieldTo": "To",
+      "fieldToPlaceholder": "Chat ID, phone number, or @user",
+      "fieldToHelp": "The destination ID for the chosen channel (e.g. a chat ID, phone number, or @user — depends on the channel).",
       "save": "Save",
       "cancel": "Cancel",
       "history": "Run history",
@@ -408,6 +412,8 @@
       "duration": "Duration",
       "model": "Model",
       "noRuns": "No runs recorded.",
+      "showMore": "Show more",
+      "showLess": "Show less",
       "openRun": "Open",
       "systemJobs": {
         "memory_dream": {
