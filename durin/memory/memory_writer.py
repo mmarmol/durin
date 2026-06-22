@@ -82,15 +82,19 @@ _MAX_RETRIES = 30
 # equivalent, by design (§2.4).
 _PAGE_TO_FIELD = {"agent_created": "agent", "user_authored": "user"}
 
-# In-process per-repo write lock (hazard #9; see docs/architecture/concurrency.md
-# §"In-process ref-CAS lock (hazard #9)"). dulwich's loose-ref CAS
-# (`refs.set_if_equals`) re-reads and compares the ref under a `GitFile` O_EXCL
-# `.lock`, which serializes *cross-process* writers correctly. But within ONE
-# process the GIL is released during that file I/O, so two threads can both read
-# the same parent sha, both pass the compare, and both write — the second
-# silently overwrites the first's commit, orphaning it and losing that write
-# WITHOUT any error or CAS-retry. We close that gap by serializing the
-# read-apply-CAS critical section of same-process writers to a given repo root.
+# In-process per-repo write lock (in-process ref-CAS thread race — surfaced in R5
+# verification, NOT audit #9/#18; see docs/architecture/concurrency.md
+# §"In-process ref-CAS lock"). The bare loose-ref CAS
+# (`refs.set_if_equals` under a `GitFile` O_EXCL `.lock`) is robust on its own
+# across both processes and threads. The in-process loss comes from the
+# concurrent, UNLOCKED `_fast_forward_working_tree` (`reset --hard`): R5
+# serializes that reset cross-process via `.git-worktree`, but in-process it was
+# not serialized against a peer thread's read-apply-CAS. Mid-reset the ref is
+# transiently stale/absent (`head_sha()` can return None), so a peer reads a
+# stale `base`, commits on it, and its CAS lands — orphaning a concurrent commit
+# and losing that write WITHOUT any error or CAS-retry. We close that gap by
+# serializing the whole read-apply-CAS-reset section of same-process writers to a
+# given repo root.
 #
 # Lock ordering (verified): this RLock is the OUTERMOST memory lock — it is
 # acquired only at the top of `write_entity` / `write_files_cas`, strictly
@@ -324,9 +328,10 @@ def write_entity(
         patch.author = _resolve_author(patch.author)
 
     # Serialize same-process writers to this repo around the whole
-    # read-apply-CAS (hazard #9 — dulwich's loose-ref CAS is not atomic across
-    # in-process threads). Outer lock; the inner `.git-worktree` lock is taken
-    # below inside _commit_dirty_as_user / _fast_forward_working_tree.
+    # read-apply-CAS-reset (in-process thread race — the concurrent unlocked
+    # _fast_forward_working_tree reset transiently corrupts the ref, feeding a
+    # stale base to a peer thread's CAS). Outer lock; the inner `.git-worktree`
+    # lock is taken below inside _commit_dirty_as_user / _fast_forward_working_tree.
     with _root_write_lock(root):
         _commit_dirty_as_user(root)  # N1: preserve any in-progress hand edit first
         for attempt in range(_MAX_RETRIES):
@@ -419,8 +424,8 @@ def write_files_cas(
     _ensure_repo(root)
     msg = message.encode("utf-8") if isinstance(message, str) else message
     # Serialize same-process writers to this repo around the whole
-    # read-apply-CAS (hazard #9 — see write_entity and the registry note above).
-    # Outer lock; `.git-worktree` is taken inside the helpers below (inner).
+    # read-apply-CAS-reset (in-process thread race — see write_entity and the
+    # registry note above). Outer lock; `.git-worktree` is taken inside (inner).
     with _root_write_lock(root):
         _commit_dirty_as_user(root)  # N1: preserve any in-progress hand edit first
         for attempt in range(_MAX_RETRIES):

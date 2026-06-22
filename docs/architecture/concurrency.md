@@ -184,25 +184,36 @@ The canonical lock-path helper is `git_worktree_lock_path(memory_git_root)`
 in `memory_writer.py`; all three sites (two mutation, two prune) use this
 function so the path cannot drift.
 
-## In-process ref-CAS lock (hazard #9)
+## In-process ref-CAS lock (in-process thread race)
+
+> Not one of the original ranked audit hazards — surfaced during R5 verification
+> (the `test_real_concurrency_threads` stress run). Distinct from audit #9
+> (LanceDB rebuild, fixed in Plan 4) and #18 (cross-process git working tree, R5).
 
 `write_entity` and `write_files_cas` move the memory branch ref with
 dulwich's loose-ref compare-and-swap, `refs.set_if_equals(ref, base,
-new_commit)`. That CAS re-reads and compares the ref under a `GitFile`
-`O_EXCL` `.lock` file, which serializes **cross-process** writers correctly
-(a second process either sees the moved ref and its CAS returns False, or
-contends on the lock file).
+new_commit)`, where `base = head_sha(root)`. The CAS itself re-reads and
+compares the ref under a `GitFile` `O_EXCL` `.lock` file and is robust in
+isolation — across both processes and threads (a second writer either sees
+the moved ref and its CAS returns False, or contends on the lock file).
 
-**Hazard (in-process only):** within a *single* process the GIL is released
-during that `GitFile` I/O, so two threads can interleave inside
-`set_if_equals` such that **both read the same parent sha, both pass the
-compare, and both write** — the second commit silently overwrites the first
-on the ref. The first thread's commit becomes unreachable from HEAD
-(orphaned) and its write is lost, **with no exception and no CAS retry** (the
+**Hazard (in-process only):** the loss is NOT the bare CAS — it is the
+concurrent, *unlocked* `_fast_forward_working_tree` (`porcelain.reset(root,
+"hard")`) that each writer runs after a successful CAS. That reset is a
+non-atomic `.git` mutation (R5 serializes it **cross-process** via
+`.git-worktree`, but in-process it was not serialized against another
+thread's read-apply-CAS). While one thread is resetting, a peer thread's
+`base = head_sha(root)` reads a **stale or transiently-absent ref**
+(`head_sha()` was observed returning `None` mid-reset). The peer then builds
+and commits on that stale base and its `set_if_equals(ref, stale_base, …)`
+lands against the transient ref state — so two commits share one parent and
+the earlier winner is orphaned, **with no exception and no CAS retry** (the
 losing thread observed `ok=True`). Reproduced deterministically: 32 threads
 each appending a distinct relation to one entity lose ≥1 relation in ~95% of
-20-round trials; instrumentation confirmed one parent sha receiving two
-distinct successful `set_if_equals` moves, the earlier winner orphaned.
+20-round trials; instrumentation confirmed one parent sha receiving multiple
+distinct successful `set_if_equals` moves, the earlier winner orphaned. (A
+faithful read→build→CAS loop with the reset removed shows **zero**
+collisions, isolating the reset as the trigger.)
 
 **Fix (in-process):** a module-level `dict[str, threading.RLock]` in
 `memory_writer.py`, keyed by the resolved repo-root path and guarded by a
@@ -270,10 +281,21 @@ as a normal turn.
   same-`(channel, chat_id)` outbound deltas are now coalesced **only when their
   `_stream_id` matches**, so two concurrent streams sharing a chat (Telegram
   forum topics) no longer bleed text across edit bubbles.
+- **Dream/extract `extract_cursor` vs the `.meta.json` sidecar** (audit #15;
+  `durin/memory/extract_runner.py`) — the cursor used to live inside the sidecar
+  `derived` block, which `SessionManager.save()` rebuilds and `write_derived`
+  *replaces*, so every save **deterministically erased** it (re-extracting the
+  session from scratch); and `set_extract_cursor`'s read-modify-write was
+  unlocked, racing the manager's locked sidecar writes. The cursor now lives at a
+  **top-level** `.meta.json` key (which `write_derived` never touches; legacy
+  `derived.extract_cursor` is still read for back-compat) and its RMW runs under
+  `cross_process_lock(jsonl_path)` — the same `.jsonl.lock` the manager holds.
 
-## Residual ledger (accepted)
+## Known residuals (not fixed — disposition is the maintainer's call)
 
-These are deliberately not fixed; each carries a written failure mode.
+These are not addressed; each carries a written failure mode so the trade-off is
+explicit. The "leave it" framing below is a recommendation, **not** a closed
+decision — the maintainer decides which to fix.
 
 1. **No TTL on the held turn lease — not built.** *Failure mode:* an
    alive-but-stuck process holds `<key>.turn.lock` until it exits or crashes
