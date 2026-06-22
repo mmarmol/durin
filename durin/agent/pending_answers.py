@@ -1,13 +1,10 @@
 """In-turn pending-answer registry for the blocking ``ask_user_question``.
 
-V2 of the ask_user contract (docs/internals/ux.md): instead of yielding
-the turn, the tool awaits a Future registered here; the agent loop's inbound
-consumer resolves it with the user's next plain-text message, so the model
-continues the SAME turn with the answer as the tool result.
-
-Process-local by design: a blocked turn cannot survive a restart anyway —
-on any miss (timeout, media reply, restart) the tool falls back to the V1
-yield semantics, which `pending_question` session metadata keeps working.
+The ask_user tool awaits a Future that is resolved by the agent loop when
+the user replies, allowing the same turn to continue with the answer as the
+tool result. A blocked turn cannot survive a restart — on timeout or
+disconnect, the tool falls back to yielding, using session metadata to
+maintain state.
 """
 
 from __future__ import annotations

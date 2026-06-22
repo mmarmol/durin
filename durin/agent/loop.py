@@ -226,11 +226,9 @@ class AgentLoop:
     def _on_iteration(self, iteration: int) -> None:
         """Single callback for per-turn iteration updates.
 
-        Audit F20 (2026-05-28): also pushes the counter into the bound
-        TelemetryLogger so `emit_tool_event` can auto-inject
-        ``iteration`` into every event payload (doc 07 §4.1). Pre-F20
-        the field was declared NotRequired in the TypedDicts but no
-        callsite ever populated it.
+        Also pushes the counter into the bound TelemetryLogger so
+        ``emit_tool_event`` can auto-inject ``iteration`` into every
+        event payload.
         """
         self._current_iteration = iteration
         try:
@@ -425,21 +423,19 @@ class AgentLoop:
         self._current_iteration: int = 0
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
-        # Doc 25 §2.A.1 β.2: session-close trigger hook. The wiring
-        # layer (``cli/commands.py``) sets this when
-        # ``memory.dream.on_session_close`` is enabled — fires the
-        # entity-centric dream once per session-close event (``/new``
+        # Session-close trigger hook. The wiring layer (``cli/commands.py``)
+        # sets this when ``memory.dream.on_session_close`` is enabled — fires
+        # the entity-centric dream once per session-close event (``/new``
         # archives the prior session before starting a fresh one).
         # Independent of ``Consolidator.on_post_compaction``: a user
         # may want post-compaction off (too aggressive) but
         # session-close on (low frequency, safe).
         self.on_session_close: Callable[[str], None] | None = None
 
-        # A11 (2026-05-28) — wire memory background services. Both
-        # default ON; opt-out per `cfg.memory.{file_watcher,
-        # health_check}.enabled`. Failures here are isolated — the
-        # agent loop still functions; only the optional background
-        # work is skipped.
+        # Wire memory background services. Both default ON; opt-out per
+        # ``cfg.memory.{file_watcher,health_check}.enabled``. Failures here
+        # are isolated — the agent loop still functions; only the optional
+        # background work is skipped.
         self._memory_file_watcher: Any | None = None
         self._memory_health_scheduler: Any | None = None
         self._catalog_refresh_scheduler: Any | None = None
@@ -449,7 +445,7 @@ class AgentLoop:
         self._start_mcp_catalog_refresh()
 
     # ------------------------------------------------------------------
-    # A11 — memory background services lifecycle
+    # Memory background services lifecycle
     # ------------------------------------------------------------------
 
     def _start_memory_background_services(self) -> None:
@@ -469,11 +465,11 @@ class AgentLoop:
         if mem_cfg is None:
             return
 
-        # P9 (2026-05-30): write the vault README at workspace root if
-        # missing, plus per-class `_INDEX.md` navigation helpers inside
-        # each `memory/<class>/`. Idempotent + safe — never overwrites.
-        # Files starting with `_` are skipped by `walk_memory()` so the
-        # indices are NOT picked up as memory entries.
+        # Write the vault README at workspace root if missing, plus per-class
+        # `_INDEX.md` navigation helpers inside each `memory/<class>/`.
+        # Idempotent + safe — never overwrites. Files starting with `_` are
+        # skipped by `walk_memory()` so the indices are NOT picked up as
+        # memory entries.
         try:
             from durin.memory.vault_readme import (
                 ensure_class_indices,
@@ -492,7 +488,7 @@ class AgentLoop:
             try:
                 from durin.memory.file_watcher import MemoryFileWatcher
 
-                # N2: pass the embedding model so the watcher re-embeds entity
+                # Pass the embedding model so the watcher re-embeds entity
                 # pages reactively (FTS alone leaves them vector-stale).
                 _emb_model = None
                 try:
@@ -965,7 +961,7 @@ class AgentLoop:
         self._maybe_defer_mcp_tools()
 
     def _maybe_defer_mcp_tools(self) -> None:
-        """P3 (2026-06-10): hide oversized MCP surfaces behind the bridge.
+        """Hide oversized MCP surfaces behind the bridge.
 
         Best-effort — a deferral failure must never block MCP usage;
         the tools just ship un-deferred as before.
@@ -1404,7 +1400,7 @@ class AgentLoop:
         active_session_key = session.key if session else session_key
         file_state_token = bind_file_states(self._file_state_store.for_session(active_session_key))
         telemetry_token = None
-        # A8: optional HTTPS push sink. Default OFF; opt-in via
+        # Optional HTTPS push sink. Default OFF; opt-in via
         # cfg.telemetry.push.enabled. Captured here so the cleanup
         # path can call flush() before the process exits.
         push_sink_for_cleanup = None
@@ -1429,18 +1425,18 @@ class AgentLoop:
                 telemetry_token = bind_telemetry(session_logger)
             except Exception:
                 telemetry_token = None
-        # Sprint B / L3 — agent-mode provider, resolved per iteration so a
-        # mid-run mode switch (via /plan or enter_plan_mode tool) takes
-        # effect at the very next iteration. See docs/internals/loop.md §3.
+        # Agent-mode provider, resolved per iteration so a mid-run mode
+        # switch (via /plan or enter_plan_mode tool) takes effect at the
+        # very next iteration.
         def _mode_provider():
             from durin.agent.agent_mode import get_active_mode
             return get_active_mode(session)
 
-        # OpenClaw-inspired compaction grace window. Exposed to the runner so
-        # the outer LLM wall-clock timeout can extend its deadline once when
-        # consolidation is in flight for this session — the slow call is
-        # likely slow precisely because the consolidator hasn't finished
-        # reshaping the context yet.
+        # Compaction grace window. Exposed to the runner so the outer LLM
+        # wall-clock timeout can extend its deadline once when consolidation
+        # is in flight for this session — the slow call is likely slow
+        # precisely because the consolidator hasn't finished reshaping the
+        # context yet.
         _session_key_for_compact = session.key if session is not None else session_key
         def _is_compacting() -> bool:
             if not _session_key_for_compact:
@@ -1498,9 +1494,9 @@ class AgentLoop:
             ))
         finally:
             reset_file_states(file_state_token)
-            # A8: drain the push sink BEFORE we let the logger go out
-            # of scope. A partial buffer that's never drained loses
-            # those events — flush is best-effort but worth the call.
+            # Drain the push sink BEFORE we let the logger go out of scope.
+            # A partial buffer that's never drained loses those events —
+            # flush is best-effort but worth the call.
             if push_sink_for_cleanup is not None:
                 try:
                     push_sink_for_cleanup.flush()
@@ -1563,10 +1559,10 @@ class AgentLoop:
                 )
                 continue
             effective_key = self._effective_session_key(msg)
-            # Blocking ask_user (V2): a turn may be paused awaiting the
-            # user's answer. A plain-text reply resolves the in-turn waiter
-            # and is consumed here; anything else (commands, media) tells
-            # the waiter to fall back to yield semantics and routes on.
+            # Blocking ask_user: a turn may be paused awaiting the user's
+            # answer. A plain-text reply resolves the in-turn waiter and is
+            # consumed here; anything else (commands, media) tells the waiter
+            # to fall back to yield semantics and routes on.
             if self._maybe_resolve_pending_answer(msg, effective_key):
                 continue
             # If this session already has an active pending queue (i.e. a task
@@ -1823,8 +1819,8 @@ class AgentLoop:
         # waiters to yield semantics instead of letting them ride the timeout.
         pending_answers.set_consumer_active(False)
         pending_answers.reset()
-        # A11: drain memory background services so the watchdog
-        # Observer and health-check thread terminate cleanly.
+        # Drain memory background services so the watchdog Observer and
+        # health-check thread terminate cleanly.
         self._stop_memory_background_services()
         self._stop_catalog_refresh()
         self._stop_mcp_catalog_refresh()
@@ -2418,8 +2414,6 @@ class AgentLoop:
         mid-turn checkpoint does not trigger a ``.jsonl`` rewrite, ``.md``
         regeneration, or FTS re-index.  The volatile key is merged back into
         ``session.metadata`` on load, so recovery readers are unchanged.
-
-        See docs/internals/concurrency.md for the sidecar split design.
         """
         session.metadata[self._RUNTIME_CHECKPOINT_KEY] = payload
         self.sessions.save_runtime_state(session)
@@ -2454,12 +2448,11 @@ class AgentLoop:
         Returns ``None`` when no summary has been persisted yet (fresh
         session or no consolidation rounds have run).
 
-        A10 (2026-05-28): the summary primarily lives at
-        ``memory/session_summary/<sanitized_key>.md`` (single source
-        of truth). For backward compatibility with pre-A10 sessions
-        whose metadata still carries the legacy ``_last_summary``
-        dict, we fall through to that path when the markdown isn't
-        there yet (the next compaction migrates it).
+        Session summaries are stored in
+        ``memory/session_summary/<sanitized_key>.md`` as the single source
+        of truth. For backward compatibility, we check the legacy
+        ``_last_summary`` metadata when the markdown file doesn't exist yet;
+        the next compaction migrates it.
         """
         from durin.memory.session_summary_store import get_session_summary
 
@@ -2471,7 +2464,7 @@ class AgentLoop:
             text = md_text
             last_active = md_last_active.isoformat() if md_last_active else None
         else:
-            # Legacy fallback: pre-A10 metadata. Gets migrated next compaction.
+            # Legacy fallback: metadata from sessions before the markdown store. Gets migrated next compaction.
             meta = session.metadata.get("_last_summary")
             if isinstance(meta, dict):
                 cand = meta.get("text")
@@ -2583,8 +2576,6 @@ class AgentLoop:
         and reloads the session from disk before processing, mirroring
         _dispatch's serialization semantics.  On TimeoutError the turn is
         skipped with a warning; the cron caller is never raised to.
-
-        See docs/internals/concurrency.md.
         """
         await self._connect_mcp()
         msg = InboundMessage(
