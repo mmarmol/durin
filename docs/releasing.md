@@ -1,7 +1,7 @@
 # Releasing durin
 
 This is the maintainer manual for cutting a release. End-users want
-[INSTALL.md](INSTALL.md) instead.
+[the install guide](guide/install.md) instead.
 
 The distribution name on PyPI is **`durin-agent`**. The import package
 name stays `durin` and the CLI command is still `durin`.
