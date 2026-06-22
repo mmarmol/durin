@@ -75,3 +75,31 @@ def speakable_transform(text: str, *, labels: SpeakableLabels | None = None) -> 
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+@dataclass
+class SpokenRendition:
+    """Result of separating spoken from displayed text."""
+
+    spoken: str       # what the TTS pronounces
+    displayed: str    # the unchanged full agent text (goes to the thread)
+    summarized: bool  # telemetry: did we summarize?
+    lead_present: bool  # telemetry: was a usable lead found?
+
+
+async def build_spoken_rendition(
+    full_text: str,
+    *,
+    mode: str = "model_led",
+    long_threshold_words: int = 60,
+    summarizer=None,
+    pointer: str = "The full answer is on screen.",
+    labels: SpeakableLabels | None = None,
+) -> SpokenRendition:
+    speakable = speakable_transform(full_text, labels=labels)
+    if mode == "verbatim" or len(speakable.split()) <= long_threshold_words:
+        return SpokenRendition(
+            spoken=speakable, displayed=full_text, summarized=False, lead_present=False
+        )
+    # Long, summarizing modes are implemented in Tasks 3-4.
+    raise NotImplementedError(mode)

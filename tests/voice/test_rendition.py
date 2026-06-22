@@ -40,3 +40,25 @@ def test_transform_localized_labels():
     labels = SpeakableLabels(code_block="código en pantalla")
     out = speakable_transform("```\nx\n```", labels=labels)
     assert "código en pantalla" in out
+
+
+import pytest
+
+from durin.voice.rendition import SpokenRendition, build_spoken_rendition
+
+
+@pytest.mark.asyncio
+async def test_short_answer_spoken_verbatim_cleaned():
+    r = await build_spoken_rendition("Just a quick `foo()` answer.")
+    assert isinstance(r, SpokenRendition)
+    assert r.summarized is False
+    assert r.spoken == "Just a quick foo() answer."
+    assert r.displayed == "Just a quick `foo()` answer."  # unchanged
+
+
+@pytest.mark.asyncio
+async def test_verbatim_mode_speaks_full_even_when_long():
+    long_text = " ".join(["word"] * 100)
+    r = await build_spoken_rendition(long_text, mode="verbatim", long_threshold_words=60)
+    assert r.summarized is False
+    assert r.spoken == long_text
