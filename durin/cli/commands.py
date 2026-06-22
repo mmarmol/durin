@@ -1372,6 +1372,7 @@ def _run_gateway(
             _absorb = config.memory.dream.auto_absorb
             _discover = config.memory.dream.discover_enabled
             _skill_signals = config.memory.dream.skill_signals_enabled
+            _dream_error: Exception | None = None
             try:
                 ex = await _asyncio.to_thread(
                     run_extract_pass, workspace, model=model,
@@ -1401,8 +1402,9 @@ def _run_gateway(
                     len(rf.get("kept_separate", [])), rf.get("duration_ms", 0),
                     ao.get("selected", 0), ao.get("tokens", 0), ao.get("duration_ms", 0),
                 )
-            except Exception:
+            except Exception as _dream_exc:
                 logger.exception("memory_dream cron failed")
+                _dream_error = _dream_exc
 
             try:
                 from durin.agent.skill_curation import curate_catalog
@@ -1443,6 +1445,13 @@ def _run_gateway(
                 )
             except Exception:
                 logger.exception("cron run-session reaper (non-fatal) failed")
+
+            if _dream_error is not None:
+                # Surface the failure so _execute_job records status="error"
+                # (not a false "ok") — the consolidation passes did not complete.
+                raise RuntimeError(
+                    f"memory_dream consolidation failed: {_dream_error}"
+                ) from _dream_error
             return None
 
         from durin.cron.prompting import build_cron_turn_prompt

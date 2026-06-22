@@ -884,23 +884,60 @@ class CronService:
         return job
 
     async def run_job(self, job_id: str, force: bool = False) -> bool:
-        """Manually run a job without disturbing the service's running state."""
+        """Manually run a job without disturbing the service's running state.
+
+        Mirrors ``_on_timer``'s lock discipline: ``self._lock`` is acquired only
+        to load + select the job, released before ``_execute_job``, then
+        re-acquired to re-apply the run-state deltas onto a freshly-reloaded
+        store.  Holding the lock across the (possibly minutes-long) execution
+        would block every other cron-store reader — and, because a concurrent
+        ``list`` opens a second CronService whose FileLock points at the same
+        path, trip filelock's cross-instance deadlock guard.
+        See docs/architecture/concurrency.md.
+        """
         was_running = self._running
         self._running = True
         try:
             with self._lock:
                 store = self._load_store()
-                for job in store.jobs:
-                    if job.id == job_id:
-                        if not force and not job.enabled:
-                            return False
-                        if job.id in self._executing:
-                            # Already running — refuse rather than overlap.
-                            return False
-                        await self._execute_job(job)
-                        self._save_store()
-                        return True
-            return False
+                job = next((j for j in store.jobs if j.id == job_id), None)
+                if job is None:
+                    return False
+                if not force and not job.enabled:
+                    return False
+                if job.id in self._executing:
+                    # Already running — refuse rather than overlap.
+                    return False
+
+            # Execute OUTSIDE the lock (see docstring): a long job must not
+            # block concurrent cron-store readers or deadlock a fresh instance.
+            await self._execute_job(job)
+
+            with self._lock:
+                # Reload from disk so external writes during the execution
+                # window are not clobbered, then re-apply only the run-state
+                # deltas — the same merge _on_timer performs.
+                self._load_store()
+                if self._store:
+                    if job.schedule.kind == "at" and job.delete_after_run:
+                        self._store.jobs = [
+                            j for j in self._store.jobs if j.id != job.id
+                        ]
+                    else:
+                        fresh = next(
+                            (j for j in self._store.jobs if j.id == job.id), None
+                        )
+                        if fresh is not None:
+                            fresh.state.last_status = job.state.last_status
+                            fresh.state.last_error = job.state.last_error
+                            fresh.state.last_run_at_ms = job.state.last_run_at_ms
+                            fresh.state.run_history = job.state.run_history
+                            fresh.state.next_run_at_ms = job.state.next_run_at_ms
+                            fresh.updated_at_ms = job.updated_at_ms
+                            if job.schedule.kind == "at" and not job.enabled:
+                                fresh.enabled = False
+                    self._save_store()
+            return True
         finally:
             self._running = was_running
             if was_running:

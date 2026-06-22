@@ -86,7 +86,7 @@ def _job_to_dict(job: Any, *, cron_scheduler: Any | None = None) -> dict[str, An
                 and cron_scheduler.is_executing(job.id)
             ),
         },
-        "run_history": [] if is_system else [
+        "run_history": [
             {
                 "run_at_ms": r.run_at_ms,
                 "status": r.status,

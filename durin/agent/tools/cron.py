@@ -44,6 +44,17 @@ _CRON_PARAMETERS = tool_parameters_schema(
         description="Whether to deliver the execution result to the user channel (default true). For update, accepted to toggle.",
         default=True,
     ),
+    mode=StringSchema(
+        "Optional job mode (default 'reminder'). 'reminder' = the message is delivered to the user "
+        "as a brief natural message. 'task' = the message is a task the agent executes with full "
+        "tools, delivering the result only if it produced something useful. For update, providing "
+        "it changes the mode.",
+        enum=["reminder", "task"],
+    ),
+    model=StringSchema(
+        "Optional per-job model preset/ref to run the job with (omit to use the agent's default "
+        "model). For update, providing it changes the model."
+    ),
     job_id=StringSchema("REQUIRED when action='remove' or action='update'. Job ID to operate on (obtain via action='list')."),
     required=["action"],
     description=(
@@ -147,12 +158,14 @@ class CronTool(Tool, ContextAware):
         at: str | None = None,
         job_id: str | None = None,
         deliver: bool = True,
+        mode: str | None = None,
+        model: str | None = None,
         **kwargs: Any,
     ) -> str:
         if action == "add":
             if self._in_cron_context.get():
                 return "Error: cannot schedule new jobs from within a cron job execution"
-            return self._add_job(name, message, every_seconds, cron_expr, tz, at, deliver)
+            return self._add_job(name, message, every_seconds, cron_expr, tz, at, deliver, mode, model)
         elif action == "list":
             return self._list_jobs()
         elif action == "remove":
@@ -161,7 +174,7 @@ class CronTool(Tool, ContextAware):
             if self._in_cron_context.get():
                 return "Error: cannot edit jobs from within a cron job execution"
             return self._update_job(
-                job_id, name, message, every_seconds, cron_expr, tz, at, deliver,
+                job_id, name, message, every_seconds, cron_expr, tz, at, deliver, mode, model,
             )
         return f"Unknown action: {action}"
 
@@ -174,6 +187,8 @@ class CronTool(Tool, ContextAware):
         tz: str | None,
         at: str | None,
         deliver: bool = True,
+        mode: str | None = None,
+        model: str | None = None,
     ) -> str:
         if not message:
             return (
@@ -227,6 +242,8 @@ class CronTool(Tool, ContextAware):
             delete_after_run=delete_after,
             channel_meta=self._metadata.get() or {},
             session_key=self._session_key.get() or None,
+            mode=mode or "reminder",
+            model=model,
         )
         return f"Created job '{job.name}' (id: {job.id})"
 
@@ -295,6 +312,8 @@ class CronTool(Tool, ContextAware):
         tz: str | None,
         at: str | None,
         deliver: bool | None,
+        mode: str | None = None,
+        model: str | None = None,
     ) -> str:
         if not job_id:
             return "Error: job_id is required for update"
@@ -378,6 +397,8 @@ class CronTool(Tool, ContextAware):
             or msg_change is not None
             or (name is not None and name.strip())
             or (deliver is False)
+            or (mode is not None)
+            or (model is not None)
         )
         if not any_change_real:
             return (
@@ -397,6 +418,10 @@ class CronTool(Tool, ContextAware):
             kwargs["deliver"] = False
         if delete_after is not None:
             kwargs["delete_after_run"] = delete_after
+        if mode is not None:
+            kwargs["mode"] = mode
+        if model is not None:
+            kwargs["model"] = model
 
         result = self._cron.update_job(job_id, **kwargs)
         if result == "not_found":
