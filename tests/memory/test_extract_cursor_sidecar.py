@@ -101,59 +101,119 @@ def test_cursor_does_not_wipe_last_summary(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # (B) RACE — cursor and derived keys must not be lost under concurrency
 # ---------------------------------------------------------------------------
+#
+# Lost-update anatomy (hazard #15-B):
+#
+#   set_extract_cursor:  READ .meta.json → patch extract_cursor → WRITE whole file
+#   save_runtime_state:  READ .meta.json → patch derived block → WRITE whole file
+#
+# Without a shared lock both workers can read a stale snapshot BEFORE the
+# other's write lands, then both commit their own snapshot — erasing the
+# other's update.  The classic example:
+#
+#   T1  cursor-worker reads file  (no checkpoint present)
+#   T2  checkpoint-worker writes  (checkpoint now in file)
+#   T3  cursor-worker writes its stale snapshot  ← erases checkpoint!
+#
+# The key probe: after the checkpoint worker writes, it reads the file back
+# immediately.  Without the lock, a concurrent cursor-write that started
+# with a stale snapshot can land BETWEEN the checkpoint's write and its
+# read-back, erasing the checkpoint the read-back then misses.  We count
+# every such "checkpoint just written but already gone" event in a shared
+# counter; any count > 0 is a proven lost-update.  With the lock, the
+# counter stays at 0 because the cursor-worker's entire RMW is serialised
+# against the checkpoint-worker's RMW — neither can read a snapshot that
+# the other has already committed.
 
 
-def _worker_set_cursor(jsonl_path: str, n_iters: int) -> None:
-    """Child process: set cursor repeatedly."""
+def _worker_set_cursor_tight(jsonl_path: str, n_iters: int, stop: "multiprocessing.Value") -> None:  # type: ignore[type-arg]
+    """Child process: set cursor in a tight loop without any sleep."""
     p = Path(jsonl_path)
     for i in range(n_iters):
+        if stop.value:
+            break
         set_extract_cursor(p, i + 1)
-        time.sleep(0.0005)
 
 
-def _worker_save_derived(workspace: str, session_key: str, n_iters: int) -> None:
-    """Child process: save_runtime_state() repeatedly with a derived sentinel."""
+def _worker_checkpoint_and_verify(
+    workspace: str,
+    session_key: str,
+    n_iters: int,
+    clobber_count: "multiprocessing.Value",  # type: ignore[type-arg]
+    stop: "multiprocessing.Value",  # type: ignore[type-arg]
+) -> None:
+    """Child process: write a checkpoint, then immediately verify it survived.
+
+    Each iteration:
+    1. Write runtime_checkpoint via save_runtime_state().
+    2. Re-read .meta.json directly.
+    3. If runtime_checkpoint is absent from ``derived``, a cursor-only write
+       landed between step 1 and step 2 and clobbered it.  Increment
+       clobber_count.
+    """
     from durin.session.manager import SessionManager
+    from durin.session.session_meta import meta_path_for, read_derived
 
     mgr = SessionManager(Path(workspace))
+    sessions_dir = Path(workspace) / "sessions"
+
     for i in range(n_iters):
+        if stop.value:
+            break
+        # Write checkpoint
         session = mgr.reload(session_key)
-        session.metadata["runtime_checkpoint"] = {"iteration": i}
+        sentinel = {"iteration": i}
+        session.metadata["runtime_checkpoint"] = sentinel
         mgr.save_runtime_state(session)
-        time.sleep(0.0005)
+
+        # Immediately read the sidecar back — without the lock a cursor
+        # write that started with a pre-checkpoint snapshot can land here,
+        # wiping the checkpoint we just wrote.
+        derived = read_derived(meta_path_for(session_key, sessions_dir))
+        if "runtime_checkpoint" not in derived:
+            with clobber_count.get_lock():
+                clobber_count.value += 1
+            stop.value = 1  # one clobber is enough evidence; stop early
 
 
 def test_concurrent_cursor_and_save_no_lost_update(tmp_path: Path) -> None:
-    """Concurrent set_extract_cursor and save_runtime_state must not drop each other."""
+    """Concurrent set_extract_cursor and save_runtime_state must not clobber each other.
+
+    This test is load-bearing: it detects the actual lost-update by having the
+    checkpoint worker verify its write immediately after committing it.  Without
+    the cross_process_lock in set_extract_cursor the clobber counter will be > 0
+    in the vast majority of runs; with the lock it stays at 0.
+    """
+    ctx = multiprocessing.get_context("spawn")
+
     mgr = SessionManager(tmp_path)
     session = mgr.get_or_create("test:race")
-    mgr.save(session)  # create the .jsonl so _load finds it after invalidate
+    mgr.save(session)
     jsonl_path = mgr._get_session_path(session.key)
 
-    N = 20
-    p1 = multiprocessing.Process(
-        target=_worker_set_cursor, args=(str(jsonl_path), N)
+    N = 200
+    clobber_count = ctx.Value("i", 0)
+    stop = ctx.Value("i", 0)
+
+    p1 = ctx.Process(
+        target=_worker_set_cursor_tight,
+        args=(str(jsonl_path), N, stop),
     )
-    p2 = multiprocessing.Process(
-        target=_worker_save_derived, args=(str(tmp_path), session.key, N)
+    p2 = ctx.Process(
+        target=_worker_checkpoint_and_verify,
+        args=(str(tmp_path), session.key, N, clobber_count, stop),
     )
     p1.start()
     p2.start()
-    p1.join(timeout=15)
-    p2.join(timeout=15)
-    assert p1.exitcode == 0, "cursor worker crashed"
-    assert p2.exitcode == 0, "save worker crashed"
+    p1.join(timeout=30)
+    p2.join(timeout=30)
+    assert p1.exitcode == 0, f"cursor worker crashed (exit {p1.exitcode})"
+    assert p2.exitcode == 0, f"checkpoint worker crashed (exit {p2.exitcode})"
 
-    # After both finish, the sidecar must have BOTH a cursor > 0 AND the
-    # runtime_checkpoint key (derived block). Neither writer should have
-    # clobbered the other's last write.
-    cursor = get_extract_cursor(jsonl_path)
-    assert cursor > 0, f"cursor lost after concurrent writes (got {cursor})"
-
-    mgr.invalidate(session.key)
-    reloaded = mgr.get_or_create(session.key)
-    assert "runtime_checkpoint" in reloaded.metadata, (
-        "runtime_checkpoint lost after concurrent writes"
+    assert clobber_count.value == 0, (
+        f"lost-update detected: checkpoint was erased {clobber_count.value} time(s) "
+        "by a concurrent cursor-only write — cross_process_lock is not protecting "
+        "the .meta.json read-modify-write correctly"
     )
 
 
