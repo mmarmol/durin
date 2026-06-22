@@ -461,6 +461,8 @@ class WebSocketChannel(BaseChannel):
         self.config: WebSocketConfig = config
         # chat_id -> connections subscribed to it (fan-out target).
         self._subs: dict[str, set[Any]] = {}
+        # chat_id -> VoiceSession (conversational voice mode state).
+        self._voice: dict[str, Any] = {}
         # connection -> chat_ids it is subscribed to (O(1) cleanup on disconnect).
         self._conn_chats: dict[Any, set[str]] = {}
         # connection -> default chat_id for legacy frames that omit routing.
@@ -536,6 +538,11 @@ class WebSocketChannel(BaseChannel):
             subs.discard(connection)
             if not subs:
                 self._subs.pop(cid, None)
+        for cid in list(self._voice):
+            if not self._subs.get(cid):
+                sess = self._voice.pop(cid, None)
+                if sess is not None:
+                    sess.cancel_speak()
         self._conn_default.pop(connection, None)
 
     async def _maybe_push_active_goal_state(self, chat_id: str) -> None:
@@ -1332,6 +1339,23 @@ class WebSocketChannel(BaseChannel):
             self._attach(connection, f"audit:{name}")
             await self._run_skill_audit(connection, name)
             return
+        if t == "voice_start":
+            cid = envelope.get("chat_id")
+            if not _is_valid_chat_id(cid):
+                await self._send_event(connection, "error", detail="invalid chat_id")
+                return
+            from durin.voice.session import VoiceSession
+
+            self._voice[cid] = VoiceSession(chat_id=cid)
+            await self.send_voice_state(cid, "listening")
+            return
+        if t == "voice_stop":
+            cid = envelope.get("chat_id")
+            sess = self._voice.pop(cid, None)
+            if sess is not None:
+                sess.cancel_speak()
+            await self.send_voice_state(cid, "idle")
+            return
         await self._send_event(connection, "error", detail=f"unknown type: {t!r}")
 
     async def _handle_secret_store_envelope(
@@ -1415,6 +1439,9 @@ class WebSocketChannel(BaseChannel):
         if not self._running:
             return
         self._running = False
+        for sess in self._voice.values():
+            sess.cancel_speak()
+        self._voice.clear()
         self._subs.clear()
         self._conn_chats.clear()
         self._conn_default.clear()
@@ -1638,6 +1665,21 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" goal_state ")
+
+    async def send_voice_state(self, chat_id: str, state: str) -> None:
+        """Push the voice-loop state (listening/thinking/speaking/idle) for a chat."""
+        sess = self._voice.get(chat_id)
+        if sess is not None:
+            sess.state = state
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        raw = json.dumps(
+            {"event": "voice_state", "chat_id": chat_id, "state": state},
+            ensure_ascii=False,
+        )
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" voice_state ")
 
     async def send_goal_status(
         self,
