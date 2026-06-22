@@ -12,6 +12,7 @@ is bridged to the field-level author when a patch leaves it None.
 from __future__ import annotations
 
 import random
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -80,6 +81,44 @@ _MAX_RETRIES = 30
 # `dream` is passed explicitly by the dream paths; there is no page-level
 # equivalent, by design (§2.4).
 _PAGE_TO_FIELD = {"agent_created": "agent", "user_authored": "user"}
+
+# In-process per-repo write lock (in-process ref-CAS thread race — surfaced in R5
+# verification, NOT audit #9/#18; see docs/architecture/concurrency.md
+# §"In-process ref-CAS lock"). The bare loose-ref CAS
+# (`refs.set_if_equals` under a `GitFile` O_EXCL `.lock`) is robust on its own
+# across both processes and threads. The in-process loss comes from the
+# concurrent, UNLOCKED `_fast_forward_working_tree` (`reset --hard`): R5
+# serializes that reset cross-process via `.git-worktree`, but in-process it was
+# not serialized against a peer thread's read-apply-CAS. Mid-reset the ref is
+# transiently stale/absent (`head_sha()` can return None), so a peer reads a
+# stale `base`, commits on it, and its CAS lands — orphaning a concurrent commit
+# and losing that write WITHOUT any error or CAS-retry. We close that gap by
+# serializing the whole read-apply-CAS-reset section of same-process writers to a
+# given repo root.
+#
+# Lock ordering (verified): this RLock is the OUTERMOST memory lock — it is
+# acquired only at the top of `write_entity` / `write_files_cas`, strictly
+# BEFORE the `.git-worktree` `cross_process_lock` taken inside
+# `_commit_dirty_as_user` / `_fast_forward_working_tree` (which remains the inner
+# lock). No path takes `.git-worktree` and then this RLock (the only
+# `.git-worktree` holders are the indexer/vector_index prune paths, which never
+# call back into the writers), so there is no opposite-order edge and no
+# deadlock. RLock (reentrant) so the two writers can nest on one thread without
+# self-deadlock. It is in-process only, so it cannot deadlock cross-process.
+_root_write_locks: dict[str, threading.RLock] = {}
+_root_write_locks_guard = threading.Lock()
+
+
+def _root_write_lock(root: Path) -> threading.RLock:
+    """Return the process-wide RLock for memory repo ``root`` (keyed by the
+    resolved path), creating it on first use under a small guard lock."""
+    key = str(Path(root).resolve())
+    with _root_write_locks_guard:
+        lock = _root_write_locks.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _root_write_locks[key] = lock
+        return lock
 
 
 @dataclass
@@ -281,7 +320,6 @@ def write_entity(
     """
     root = Path(workspace) / "memory"
     _ensure_repo(root)
-    _commit_dirty_as_user(root)  # N1: preserve any in-progress hand edit first
     rel = _rel_path(ref)
     type_, _, slug = ref.partition(":")
 
@@ -289,69 +327,76 @@ def write_entity(
     for patch in patches:
         patch.author = _resolve_author(patch.author)
 
-    for attempt in range(_MAX_RETRIES):
-        base = head_sha(root)
-        raw = read_blob_at_head(root, rel)
-        if raw is None:
-            if not create:
-                raise FileNotFoundError(
-                    f"entity {ref} not found (pass create=True to author it)"
+    # Serialize same-process writers to this repo around the whole
+    # read-apply-CAS-reset (in-process thread race — the concurrent unlocked
+    # _fast_forward_working_tree reset transiently corrupts the ref, feeding a
+    # stale base to a peer thread's CAS). Outer lock; the inner `.git-worktree`
+    # lock is taken below inside _commit_dirty_as_user / _fast_forward_working_tree.
+    with _root_write_lock(root):
+        _commit_dirty_as_user(root)  # N1: preserve any in-progress hand edit first
+        for attempt in range(_MAX_RETRIES):
+            base = head_sha(root)
+            raw = read_blob_at_head(root, rel)
+            if raw is None:
+                if not create:
+                    raise FileNotFoundError(
+                        f"entity {ref} not found (pass create=True to author it)"
+                    )
+                page = EntityPage(
+                    type=type_, name=slug, created_at=datetime.now(timezone.utc)
                 )
-            page = EntityPage(
-                type=type_, name=slug, created_at=datetime.now(timezone.utc)
+            else:
+                page = EntityPage.from_text(raw.decode("utf-8")) or EntityPage(
+                    type=type_, name=slug
+                )
+
+            # §2.4: default is agent-managed. memory_writer IS the agent/dream
+            # write path, so every page it writes is agent_created. The user opts
+            # to manage a page (page-level user_authored) via a SEPARATE path
+            # (direct edit / dashboard), which the refine dream then leaves alone.
+            # (Guarding memory_writer from writing an already-user_authored page
+            # is the human-edit phase; here writes are agent/dream by definition.)
+            page.author = "agent_created"
+
+            is_new = raw is None
+            changed = False
+            name_changed = name is not None and page.name != name
+            if name_changed:
+                page.name = name
+                changed = True
+            rel_before = len(page.relations)
+            for p in patches:
+                changed = apply_field_patch(page, p) or changed
+            rel_after = len(page.relations)
+            if not changed and raw is not None:
+                return WriteResult(ref, committed=False, retries=attempt)  # no-op
+
+            page.updated_at = datetime.now(timezone.utc)
+            content = page.to_markdown().encode("utf-8")
+            new_commit = build_commit_with_file(
+                root, base, rel, content,
+                author=b"durin-memory <memory@durin.local>",
+                message=_compose_entity_commit_message(
+                    ref, is_new=is_new, name_changed=name_changed, patches=patches,
+                ),
             )
-        else:
-            page = EntityPage.from_text(raw.decode("utf-8")) or EntityPage(
-                type=type_, name=slug
-            )
-
-        # §2.4: default is agent-managed. memory_writer IS the agent/dream
-        # write path, so every page it writes is agent_created. The user opts
-        # to manage a page (page-level user_authored) via a SEPARATE path
-        # (direct edit / dashboard), which the refine dream then leaves alone.
-        # (Guarding memory_writer from writing an already-user_authored page is
-        # the human-edit phase; here the writes are agent/dream by definition.)
-        page.author = "agent_created"
-
-        is_new = raw is None
-        changed = False
-        name_changed = name is not None and page.name != name
-        if name_changed:
-            page.name = name
-            changed = True
-        rel_before = len(page.relations)
-        for p in patches:
-            changed = apply_field_patch(page, p) or changed
-        rel_after = len(page.relations)
-        if not changed and raw is not None:
-            return WriteResult(ref, committed=False, retries=attempt)  # no-op
-
-        page.updated_at = datetime.now(timezone.utc)
-        content = page.to_markdown().encode("utf-8")
-        new_commit = build_commit_with_file(
-            root, base, rel, content,
-            author=b"durin-memory <memory@durin.local>",
-            message=_compose_entity_commit_message(
-                ref, is_new=is_new, name_changed=name_changed, patches=patches,
-            ),
-        )
-        repo = Repo(str(root))
-        try:
-            ok = repo.refs.set_if_equals(default_ref(repo), base, new_commit)
-        except FileLocked:
-            # dulwich's loose-ref CAS uses an O_EXCL lock file. Under
-            # cross-writer contention it raises instead of returning False —
-            # same recovery: back off and retry the whole read-apply-CAS.
-            ok = False
-        finally:
-            repo.close()
-        if ok:
-            _fast_forward_working_tree(root)
-            _emit_relation_cap(ref, rel_before, rel_after)
-            _refresh_alias_index(root, page, slug)
-            return WriteResult(ref, committed=True, retries=attempt)
-        # CAS failed (mismatch or lock): HEAD may have moved → backoff + retry.
-        time.sleep(random.uniform(0.0, 0.005) * (attempt + 1))
+            repo = Repo(str(root))
+            try:
+                ok = repo.refs.set_if_equals(default_ref(repo), base, new_commit)
+            except FileLocked:
+                # dulwich's loose-ref CAS uses an O_EXCL lock file. Under
+                # cross-writer contention it raises instead of returning False —
+                # same recovery: back off and retry the whole read-apply-CAS.
+                ok = False
+            finally:
+                repo.close()
+            if ok:
+                _fast_forward_working_tree(root)
+                _emit_relation_cap(ref, rel_before, rel_after)
+                _refresh_alias_index(root, page, slug)
+                return WriteResult(ref, committed=True, retries=attempt)
+            # CAS failed (mismatch or lock): HEAD may have moved → backoff+retry.
+            time.sleep(random.uniform(0.0, 0.005) * (attempt + 1))
 
     raise RuntimeError(
         f"write_entity({ref}) exceeded {_MAX_RETRIES} CAS retries (high contention)"
@@ -377,35 +422,39 @@ def write_files_cas(
         return None
     root = Path(workspace) / "memory"
     _ensure_repo(root)
-    _commit_dirty_as_user(root)  # N1: preserve any in-progress hand edit first
     msg = message.encode("utf-8") if isinstance(message, str) else message
-    for attempt in range(_MAX_RETRIES):
-        base = head_sha(root)
-        new_commit = build_commit_with_changes(
-            root, base, changes, author=author, message=msg)
-        repo = Repo(str(root))
-        try:
-            ok = repo.refs.set_if_equals(default_ref(repo), base, new_commit)
-        except FileLocked:
-            ok = False
-        finally:
-            repo.close()
-        if ok:
-            _fast_forward_working_tree(root)
-            # dulwich `reset --hard` does not reliably remove working-tree files
-            # that are absent from the target tree; enforce deletions explicitly
-            # so the working tree matches the commit.
-            for rel_path, content in changes.items():
-                if content is None:
-                    fpath = root / rel_path
-                    try:
-                        fpath.unlink()
-                    except FileNotFoundError:
-                        pass
-                    except OSError:  # pragma: no cover
-                        pass
-            return new_commit.decode("ascii")
-        time.sleep(random.uniform(0.0, 0.005) * (attempt + 1))
+    # Serialize same-process writers to this repo around the whole
+    # read-apply-CAS-reset (in-process thread race — see write_entity and the
+    # registry note above). Outer lock; `.git-worktree` is taken inside (inner).
+    with _root_write_lock(root):
+        _commit_dirty_as_user(root)  # N1: preserve any in-progress hand edit first
+        for attempt in range(_MAX_RETRIES):
+            base = head_sha(root)
+            new_commit = build_commit_with_changes(
+                root, base, changes, author=author, message=msg)
+            repo = Repo(str(root))
+            try:
+                ok = repo.refs.set_if_equals(default_ref(repo), base, new_commit)
+            except FileLocked:
+                ok = False
+            finally:
+                repo.close()
+            if ok:
+                _fast_forward_working_tree(root)
+                # dulwich `reset --hard` does not reliably remove working-tree
+                # files absent from the target tree; enforce deletions explicitly
+                # so the working tree matches the commit.
+                for rel_path, content in changes.items():
+                    if content is None:
+                        fpath = root / rel_path
+                        try:
+                            fpath.unlink()
+                        except FileNotFoundError:
+                            pass
+                        except OSError:  # pragma: no cover
+                            pass
+                return new_commit.decode("ascii")
+            time.sleep(random.uniform(0.0, 0.005) * (attempt + 1))
     raise RuntimeError(
         f"write_files_cas exceeded {_MAX_RETRIES} CAS retries (high contention)"
     )
