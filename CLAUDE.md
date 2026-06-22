@@ -23,9 +23,20 @@ when a skill says to save a plan to `docs/superpowers/plans/...`, save it to
 never get committed; their history (for anything that was previously tracked)
 remains in `git log`.
 
-## Design rationale belongs in `docs/architecture/`, not in code comments to archive
+## Code comments are self-contained — never reference docs
 
-If live code needs to cite *why* it does something, that rationale must live in a
-maintained `docs/architecture/` doc, and the code comment must point there — never
-at a `.workdocs/archive/` file. A code reference reaching into the archive is a
-signal that `docs/architecture/` has a gap; fill the gap, then cite the arch doc.
+Code comments and docstrings must explain *what the code does and why* on their
+own. They must **not** reference any documentation file — no `see docs/...`, no
+`doc 11 §8e`, no section-number cross-refs, and never a `.workdocs/archive/` path.
+Dependencies point one way only: **docs reference code, never code → docs**. A
+doc gets renamed or restructured and a back-reference from code rots silently
+into a dead pointer. If the rationale matters, state it inline in the comment.
+
+## Documentation is part of the change
+
+A change to a subsystem's behavior, public surface, config keys, LLM tools, or
+module layout updates that subsystem's `docs/internals/` doc in the **same PR** —
+a behavior change without its doc update is an incomplete change. Avoid
+drift-prone facts in docs (hard counts, source line-number anchors, "last
+updated" stamps); prefer "generated from X" / "see the route table" so the doc
+does not silently fall out of sync.
