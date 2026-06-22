@@ -96,6 +96,18 @@ def _model_led_lead(speakable: str) -> tuple[str, bool]:
     return lead, lead_present
 
 
+async def _aux_summary(speakable: str, summarizer) -> tuple[str, bool]:
+    if summarizer is None:
+        return _model_led_lead(speakable)  # degrade
+    try:
+        s = await summarizer(speakable)
+        if s and s.strip():
+            return s.strip(), True
+    except Exception as e:  # noqa: BLE001 — degrade rather than fail the turn
+        logger.warning("aux summarizer failed ({}); degrading to lead", e)
+    return _model_led_lead(speakable)
+
+
 async def build_spoken_rendition(
     full_text: str,
     *,
@@ -116,4 +128,10 @@ async def build_spoken_rendition(
         return SpokenRendition(
             spoken=spoken, displayed=full_text, summarized=True, lead_present=lead_present
         )
-    raise NotImplementedError(mode)  # aux_summary handled in Task 4
+    if mode == "aux_summary":
+        summary, ok = await _aux_summary(speakable, summarizer)
+        spoken = f"{summary} {pointer}".strip()
+        return SpokenRendition(
+            spoken=spoken, displayed=full_text, summarized=True, lead_present=ok
+        )
+    raise ValueError(f"Unknown spoken-rendition mode: {mode}")
