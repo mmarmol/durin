@@ -187,7 +187,7 @@ Honest review: only (1) is language-agnostic — and it generates too many false
 
 The downstream consumer (§2.F eager pre-fetch) is itself deferred (doc 08 §4.1) — so even a reliable signal would have no consumer. If a future use case needs this kind of "miss" detection, the right approach is different (e.g. LLM-based classifier in background, explicit user-feedback signals, or post-hoc analysis on bench traces) — not these heuristics.
 
-See `08_scope_and_discarded.md` §2.11 for the full rationale.
+See `design_rationale.md` for the full rationale.
 
 ### 4.7 `memory.recall.decay` (removed 2026-05-30)
 
@@ -575,7 +575,7 @@ These thresholds are guidelines; they should be tuned once we have weeks of prod
 ### 12.2 Retention
 
 - Local file storage at `~/.cache/durin/telemetry/*.jsonl` (per-session, per-day file).
-- Rotation: see `durin/telemetry/retention.py` — `COMPRESSION_AGE_DAYS=30`, `DELETION_AGE_DAYS=90`. Files older than the compression threshold are gzipped in place; archives older than the deletion threshold are removed. Defaults can be raised by editing the constants (configurable retention is `08_scope_and_discarded.md` B5 — deferred until an operator asks).
+- Rotation: see `durin/telemetry/retention.py` — `COMPRESSION_AGE_DAYS=30`, `DELETION_AGE_DAYS=90`. Files older than the compression threshold are gzipped in place; archives older than the deletion threshold are removed. Defaults can be raised by editing the constants (configurable retention is deferred until an operator asks).
 - Retention runs on the health-check tick (P7.2 piggyback). No separate cron.
 
 ### 12.3 Opt-in HTTPS push (audit A8)

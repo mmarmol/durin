@@ -591,7 +591,7 @@ Within a single entity, the extract prompt's `EXISTING ATTRIBUTE KEYS` block
 matches, which prevents `email` → `e-mail` → `correo` drift within that entity.
 Scope is per-entity: drift *between* entities is tolerated; workspace-wide
 attribute-key normalization is a deferred concern (see
-`08_scope_and_discarded.md`). Cross-entity *identity* duplication is the refine
+`design_rationale.md`). Cross-entity *identity* duplication is the refine
 pass's job (§8), not the prompt's.
 
 ---

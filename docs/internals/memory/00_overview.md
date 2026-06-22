@@ -211,7 +211,7 @@ The following documents live in `docs/internals/memory/` and are the detailed sp
 | 05 | `05_dream_cold_path.md` | Four passes (extract/refine/skill/always_on), triggers, two-track model, absorb-judge dedup, config |
 | 06 | `06_prompts_and_instructions.md` | identity.md Memory section, tool descriptions, marker conventions, LLM-facing messages |
 | 07 | `07_telemetry_and_observability.md` | Events, metrics, dashboards, health alarms |
-| 08 | `08_scope_and_discarded.md` | Revised non-goals, lessons from discarded experiments (G3.b), unadopted mechanisms from other systems |
+| — | `design_rationale.md` | Non-goals, discarded approaches, unadopted mechanisms, lessons learned |
 | 09 | `09_implementation_roadmap.md` | Concrete phasing: current state to final state, step by step, with done criteria |
 
 The number and naming may be adjusted as we write. What matters is that each doc has a closed scope and explicit cross-references to related ones.
@@ -222,8 +222,8 @@ The number and naming may be adjusted as we write. What matters is that each doc
 |---|---|
 | **New decision** | Discussion → update the affected module's doc → update this overview if it affects diagram/principles |
 | **Refactor** | Change in the module's primary doc + cross-ref adjustment |
-| **Feature discarded** | Move description to `08_scope_and_discarded.md` with rationale |
-| **Lesson learned** | Add to `08_scope_and_discarded.md` even if no other doc changes |
+| **Feature discarded** | Move description to `design_rationale.md` with rationale |
+| **Lesson learned** | Add to `design_rationale.md` even if no other doc changes |
 
 Each doc has `version` + `last_updated` in frontmatter. Substantive changes bump the version.
 
@@ -235,12 +235,12 @@ These decisions impact multiple modules. Resolutions below; details live in the 
 
 | # | Decision | Resolution | Affects |
 |---|---|---|---|
-| **1** | SQLite structural (counting / analytical queries via JSON_EXTRACT) | **Decided against** (audit B-5, 2026-05-28; doc 08 §2.5). Grep + parse on-the-fly handles MVP scale; FTS5 over rendered frontmatter covers attribute lookups; mainstream systems ship without a structural layer; the LLM agent is the analytical layer when one is needed. The "deferred" wording before B-5 was a soft defer with no observable trigger — upgraded to discarded. | `02_indexing.md`, `08_scope_and_discarded.md` §2.5 |
+| **1** | SQLite structural (counting / analytical queries via JSON_EXTRACT) | **Decided against.** Grep + parse on-the-fly handles MVP scale; FTS5 over rendered frontmatter covers attribute lookups; mainstream systems ship without a structural layer; the LLM agent is the analytical layer when one is needed. | `02_indexing.md`, `design_rationale.md` |
 | **2** | Cross-encoder reranker (top-50 → top-10 with dedicated reranking model, no LLM in hot path) | **In MVP as opt-in, OFF by default.** Multilingual cross-encoders add 300-1500ms latency on CPU, breaking the default search budget; comparable systems (mem0, graphiti) ship reranking opt-in too. Default model when enabled: `BAAI/bge-reranker-base` (~100M, MIT, lower RAM); `jinaai/jina-reranker-v2-base-multilingual` remains a curated alternative the operator can configure. User surface: workspace config + onboarding wizard question + web dashboard toggle. | `03_search_pipeline.md` |
-| **3a** | MMR (Maximal Marginal Relevance — diversity in top-K) | **Not in MVP, deferred.** Original concern was top-K redundancy, but archive of consolidated episodic (§3.6 doc 01) eliminates the primary source of duplication. The remaining concern (corpus chunks from the same long source) is handled differently via a per-source cap in sectioning (§12.4 doc 03). Mainstream systems don't implement MMR either. If post-MVP bench shows residual duplication, the algorithm is standalone and easy to add. | `03_search_pipeline.md`, `08_scope_and_discarded.md` |
+| **3a** | MMR (Maximal Marginal Relevance — diversity in top-K) | **Not in MVP, deferred.** Original concern was top-K redundancy, but archive of consolidated episodic (§3.6 doc 01) eliminates the primary source of duplication. The remaining concern (corpus chunks from the same long source) is handled differently via a per-source cap in sectioning (§12.4 doc 03). Mainstream systems don't implement MMR either. If post-MVP bench shows residual duplication, the algorithm is standalone and easy to add. | `03_search_pipeline.md`, `design_rationale.md` |
 | **3b** | Temporal decay | **Removed 2026-05-30.** Search must not pre-judge recency without the question's context. Every hit carries `valid_from`; the LLM does the temporal reasoning. See doc 03 §10 for the removal rationale (LoCoMo conv-5-q20 chicken case). | `03_search_pipeline.md` §10 |
 | **4** | Explicit versioning of memory | **In MVP via git history, no dedicated tool.** `memory/.git/` already exists. Dream pipeline reads `git log` internally when preparing its prompt (no MCP tool exposure to the agent). Users access via any git CLI today; web UI rendering is post-MVP and lives outside this corpus. | `01_data_and_entities.md`, `05_dream_cold_path.md` |
-| **5** | Active forgetting policies (compress / delete old entries) | **Not in MVP.** Destructive — needs explicit policies for what's deleted, when, recovery. Distinct from #3 (which only affects ranking). Backlog. | `05_dream_cold_path.md`, `08_scope_and_discarded.md` |
+| **5** | Active forgetting policies (compress / delete old entries) | **Not in MVP.** Destructive — needs explicit policies for what's deleted, when, recovery. Distinct from #3 (which only affects ranking). Backlog. | `05_dream_cold_path.md`, `design_rationale.md` |
 
 ### Open
 
