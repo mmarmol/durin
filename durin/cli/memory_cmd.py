@@ -662,7 +662,7 @@ def cmd_stats(
 
     Reads JSONL events from ``~/.cache/durin/telemetry/`` and walks the
     workspace's ``memory/`` tree for ground-truth counters. Used to
-    Measure long-term memory health trends.
+    measure long-term memory health trends.
 
     Filesystem counts are point-in-time (what exists now). Event counts
     are over the requested window. Empty workspace + no telemetry yields
