@@ -1356,6 +1356,41 @@ class WebSocketChannel(BaseChannel):
                 sess.cancel_speak()
             await self.send_voice_state(cid, "idle")
             return
+        if t == "voice_utterance":
+            cid = envelope.get("chat_id")
+            if cid not in self._voice:
+                await self._send_event(connection, "error", detail="voice not started")
+                return
+            raw_media = envelope.get("media")
+            service = getattr(self, "transcription", None)
+            if not isinstance(raw_media, list) or not raw_media or service is None:
+                await self.send_voice_state(cid, "listening")
+                return
+            paths, reason = self._save_envelope_media(raw_media)
+            if reason is not None:
+                await self._send_event(connection, "error", detail=reason)
+                await self.send_voice_state(cid, "listening")
+                return
+            await self.send_voice_state(cid, "transcribing")
+            try:
+                result = await service.transcribe_and_cache(paths[0])
+            except Exception as e:
+                self.logger.warning("voice transcription failed: {}", e)
+                await self.send_voice_state(cid, "listening")
+                return
+            text = (result.text or "").strip()
+            if not text:
+                await self.send_voice_state(cid, "listening")
+                return
+            await self.send_voice_state(cid, "thinking")
+            await self._handle_message(
+                sender_id=client_id,
+                chat_id=cid,
+                content=text,
+                metadata={"voice": True},
+                is_dm=False,
+            )
+            return
         await self._send_event(connection, "error", detail=f"unknown type: {t!r}")
 
     async def _handle_secret_store_envelope(
