@@ -165,24 +165,29 @@ Channel-agnostic. The CLI, TUI, web, Slack, Telegram, Matrix, WhatsApp, DingTalk
 
 ```
 tests/
-├── agent/          # Loop, runner, context, hooks, modes, capability bridges
-├── agent/tools/    # Per-tool tests
+├── agent/          # Loop, runner, context, hooks, modes, capability bridges, per-tool tests
 ├── api/            # HTTP/SSE/WebSocket
-├── bus/            # Message bus
 ├── channels/       # Channel adapters
 ├── cli/            # CLI rendering + TUI pilot tests
 ├── command/        # Commands (/plan, /build, /mode, ...)
 ├── config/         # Schema and loader
 ├── cron/           # Cron service + cron tool update action
 ├── integration/    # End-to-end: phase 6 memory outcomes, etc.
+├── logs/           # Gateway log capture
 ├── memory/         # Memory subsystem (schema, dream, vector, ranker, absorption, T1 wiring E2E)
+├── pairing/        # Device pairing
 ├── providers/      # Provider adapters + capabilities resolver + snapshot
+├── scripts/        # Repo scripts
+├── security/       # Skill/MCP security scan
+├── service/        # Service core + ASGI
 ├── session/        # Session lifecycle, goal state, todo_state, session_meta
-├── skills/         # Skill loading + disable_model_invocation gating
-└── telemetry/      # Generic logger + schema catalog + cache.usage event
+├── telemetry/      # Generic logger + schema catalog + cache.usage event
+├── tools/          # Shared tool helpers
+└── utils/          # Shared helpers
 ```
 
-Current: **~5660 tests** (Python, `def test_` count) + **~140** (webui).
+Current: **~7100 Python tests** (`grep -rhoE '^\s*(async )?def test_' tests`) across 680+ files,
+plus **~340 webui cases** (`vitest`). Re-derive before quoting — these counts drift every PR.
 
 **Instance isolation:** an autouse `conftest` fixture runs every test in a
 throwaway `DURIN_HOME` (a per-test temp dir), so the suite never touches

@@ -314,6 +314,7 @@ you can sanity-check before committing.
 | Path | Removed by default? | Flag to keep |
 |---|---|---|
 | `~/.durin/config.json` | yes | `--keep-config` |
+| `~/.durin/config.json.bak` | yes | `--keep-config` |
 | `~/.durin/pairing.json` | yes | `--keep-config` |
 | `~/.durin/workspace/` | yes | `--keep-workspace` |
 | `~/.durin/sessions/` | yes | — |
@@ -322,14 +323,18 @@ you can sanity-check before committing.
 | `~/.durin/media/` | yes | — |
 | `~/.durin/bridge/` | yes | — |
 | `~/.durin/webui/` | yes | — |
+| `~/.durin/logs/` | yes | — |
 | `~/.cache/durin/telemetry/` | yes | `--keep-cache` |
 | `~/.cache/durin/models/` | yes | `--keep-cache` |
 | `~/.cache/durin/archive/` | yes | `--keep-cache` |
+| `~/.durin/models/stt/` | **no** (STT model cache, not enumerated) | — |
 | `<workspace>/.durin/{plans,spills,tool-results}/` | only if `--workspace <path>` is passed | — |
 
 Per-workspace scratch (`<workspace>/.durin/...`) is **not** removed
 automatically — many users keep their workspace under a project repo and
 don't want durin to touch it. Pass `--workspace <path>` to opt-in.
+The STT model cache (`~/.durin/models/stt/`) is also left in place and can
+be deleted manually if you want to reclaim disk space.
 
 ---
 
