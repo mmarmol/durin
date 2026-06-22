@@ -2,9 +2,10 @@
 
 ## Working / process docs go in `.workdocs/`, never in tracked `docs/`
 
-`docs/` holds **published, maintained** documentation only:
-`architecture/`, `INSTALL.md`, `RELEASING.md`, `roadmap.md`, `bitacora.md`,
-`backlog.md`. Do not commit working or process artifacts there.
+`docs/` holds **published, maintained** documentation only: a `README.md` overview,
+`guide/` (user docs: install, configuration, channels, providers), `internals/`
+(how-it-works architecture, per subsystem), plus `roadmap.md`, `releasing.md`, and
+`contributing.md`. Do not commit working or process artifacts there.
 
 Write working/process artifacts under the gitignored `.workdocs/` directory:
 
