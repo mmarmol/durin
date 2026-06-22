@@ -1,16 +1,12 @@
-"""Tool output spill helper — Sprint A / T4.
+"""Tool output spill helper.
 
 When a tool produces output larger than its budget, spill the FULL content
 to a file under ``<workspace>/.durin/spills/`` and return a truncated version
 that references it. The model can recover anything it actually needs via
 ``read_file(path=<spill_path>)`` without contaminating context with the rest.
 
-Inspired by OpenCode's ``TOOL_OUTPUT_MAX_CHARS`` (2000-char compaction cap in
-``packages/opencode/src/session/compaction.ts``), adapted to be LIVE rather
-than post-hoc: spill happens at the moment of overflow, not retroactively
-during compaction. This keeps the model's context lean from the start.
-
-See ``docs/internals/loop.md`` §1.
+Spill happens at the moment of overflow (LIVE), not retroactively during
+compaction. This keeps the model's context lean from the start.
 """
 
 from __future__ import annotations

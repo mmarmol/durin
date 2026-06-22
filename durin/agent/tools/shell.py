@@ -128,7 +128,7 @@ class ExecTool(Tool):
             r">\s*/dev/sd",                  # write to disk
             r"\b(shutdown|reboot|poweroff)\b",  # system power
             r":\(\)\s*\{.*\};\s*:",          # fork bomb
-            # Block writes to durin internal state files (#2989).
+            # Block writes to durin internal state files.
             # history.jsonl / .dream_cursor are managed by append_history();
             # direct writes corrupt the cursor format and crash /dream.
             r">>?\s*\S*(?:history\.jsonl|\.dream_cursor)",            # > / >> redirect
@@ -149,7 +149,7 @@ class ExecTool(Tool):
     _MAX_TIMEOUT = 600
     _MAX_OUTPUT = 10_000
 
-    # Kernel device files safe as stdio redirect targets (#3599).
+    # Kernel device files are safe as stdio redirect targets.
     _BENIGN_DEVICE_PATHS: frozenset[str] = frozenset({
         "/dev/null",
         "/dev/zero",
@@ -205,10 +205,9 @@ class ExecTool(Tool):
         cwd = working_dir or self.working_dir or os.getcwd()
 
         # Prevent an LLM-supplied working_dir from escaping the configured
-        # workspace when restrict_to_workspace is enabled (#2826). Without
-        # this, a caller can pass working_dir="/etc" and then all absolute
-        # paths under /etc would pass the _guard_command check that anchors
-        # on cwd.
+        # workspace when restrict_to_workspace is enabled. Without this
+        # check, a caller could pass working_dir="/etc" and bypass the
+        # cwd-anchored guard.
         if self.restrict_to_workspace and self.working_dir:
             try:
                 requested = Path(cwd).expanduser().resolve()
@@ -374,7 +373,6 @@ class ExecTool(Tool):
 
         These are injected into the subprocess env so scripts can read
         them — the agent issues the command but never sees the values.
-        See ``docs/11_secrets_design.md`` §6.
         """
         try:
             from durin.security.secrets import get_secret_store

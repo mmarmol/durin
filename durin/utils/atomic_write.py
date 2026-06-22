@@ -13,8 +13,8 @@ Pattern adapted from hermes-agent's memory store (MIT, Nous Research 2025):
 - the original file mode is preserved (``mkstemp`` creates 0o600); new files
   get 0o644.
 
-See docs/internals/concurrency.md for the cross-process locking design that
-wraps these helpers.
+Cross-process locking that wraps these helpers is handled by the file-lock
+helpers in ``durin/utils/file_lock.py``.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Tool result middleware validation (OpenClaw-inspired Tier 1).
+"""Tool result middleware validation: enforces size and format constraints.
 
 Provider-level caps protect against the *aggregate* size of a tool result
 (``max_tool_result_chars`` + disk spillover via :func:`maybe_persist_tool_result`).
@@ -34,8 +34,8 @@ from __future__ import annotations
 
 from typing import Any
 
-# Aligned with OpenClaw's "100KB details / 5MB image" pattern. Audio cap is
-# a durin addition for ``interpret_audio``-style tool results.
+# Caps: 100KB details / 5MB image. Audio cap is a durin addition for
+# ``interpret_audio``-style tool results.
 MAX_BLOCK_TEXT_CHARS = 100_000
 MAX_IMAGE_BLOCK_BYTES = 5 * 1024 * 1024
 MAX_AUDIO_BLOCK_BYTES = 10 * 1024 * 1024

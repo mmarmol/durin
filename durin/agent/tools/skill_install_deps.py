@@ -1,10 +1,10 @@
-"""skill_install_deps tool — P6 #1. Install a skill's DECLARED dependencies, only
+"""skill_install_deps tool — Install a skill's DECLARED dependencies, only
 after explicit user approval. The default call is a DRY RUN that lists the exact
 commands; ``confirm=true`` runs them. Each command is executed through durin's single
 exec gate (ExecTool) — same allow/deny patterns, sandbox, and logging as any shell
 command — not a side-channel subprocess. Policy `skills.install_policy`: 'never' =
 report only; 'approve' = dry-run→confirm (default); 'auto' = run without confirm.
-Only specs the §8.C scanner rated safe are runnable; 'download' kind and sudo are
+Only specs the security scanner rated safe are runnable; 'download' kind and sudo are
 excluded — privileged commands are flagged `needs_privileges` for the user."""
 from __future__ import annotations
 

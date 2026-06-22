@@ -1,6 +1,6 @@
 """`durin memory` subcommand: drill-down + introspection on entity pages.
 
-Phase 4 per ``docs/19_implementation_plan.md`` §6. Wraps :class:`GitRepo`
+Wraps :class:`GitRepo`
 over ``memory/.git/`` so the user can navigate the entity-centric memory
 without invoking git directly. The drill-down operation (``expand``)
 traverses sources, related entities, and prior versions to surface why
@@ -189,10 +189,9 @@ def cmd_dream(
     entity pages via the memory writer (git-committed).
     """
     workspace = _workspace_root()
-    # New model (§8e): the manual dream runs the extract pass (sessions →
-    # entity attributes) + the refine pass (dedup), replacing the legacy
-    # episodic-entry consolidation. The
-    # `entity` filter is not used by the new passes.
+    # The manual dream runs the extract pass (sessions → entity attributes)
+    # + the refine pass (dedup). The `entity` filter is not used by the
+    # new passes.
     from durin.memory.always_on_dream import run_always_on_pass
     from durin.memory.dream_passes import (
         run_derived_from_pass,
@@ -377,9 +376,9 @@ def cmd_revert(
     doctor`` warns when it's missing).
 
     When the target commit was an auto-absorb (``Reason: auto`` trailer)
-    a :class:`MemoryAbsorbRevertedEvent` is emitted so doc 25 §2.E
-    aggregator can track the regret rate — the only real-world signal
-    for tuning ``memory.dream.auto_absorb.confidence_threshold``.
+    a :class:`MemoryAbsorbRevertedEvent` is emitted so the regret-rate
+    aggregator can track merges — the only real-world signal for tuning
+    ``memory.dream.auto_absorb.confidence_threshold``.
     """
     import subprocess
 
@@ -450,8 +449,8 @@ def cmd_revert(
     if result.stdout.strip():
         console.print(f"[dim]{result.stdout.strip()}[/dim]")
 
-    # §2.D + glm peer review C5: emit reverted event ONLY for auto-absorb
-    # targets (manual consolidations don't need the regret signal).
+    # Emit reverted event ONLY for auto-absorb targets (manual
+    # consolidations don't need the regret signal).
     if is_auto_absorb:
         canonical = (target.trailers.get("Into") or [""])[0].strip()
         absorbed = (target.trailers.get("Absorbed") or [""])[0].strip()
@@ -663,7 +662,7 @@ def cmd_stats(
 
     Reads JSONL events from ``~/.cache/durin/telemetry/`` and walks the
     workspace's ``memory/`` tree for ground-truth counters. Used to
-    measure the gates for the T2 horizon items (see doc 25 §2.E).
+    Measure long-term memory health trends.
 
     Filesystem counts are point-in-time (what exists now). Event counts
     are over the requested window. Empty workspace + no telemetry yields
@@ -693,7 +692,7 @@ def cmd_stats(
     fs_table.add_column("Value", justify="right")
     fs_table.add_row("Episodic entries on disk", str(stats.episodic_entries_on_disk))
     fs_table.add_row(
-        "  tagged with entities (gate §2.A)",
+        "  tagged with entities",
         str(stats.episodic_entries_tagged),
     )
     fs_table.add_row("Entity pages on disk", str(stats.entity_pages_on_disk))
@@ -743,7 +742,7 @@ def cmd_stats(
     write_table.add_column("Value", justify="right")
     write_table.add_row("Store writes (successful)", str(stats.store_total))
     write_table.add_row(
-        "Store blocked as near-duplicate (gate §2.D)",
+        "Store blocked as near-duplicate",
         str(stats.store_blocked_near_duplicate),
     )
     write_table.add_row("Ingest events", str(stats.ingest_total))

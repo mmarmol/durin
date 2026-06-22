@@ -279,7 +279,7 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
         A direct ``load_config() → edit → save_config()`` sequence that is
         **not** routed through :func:`mutate_config` remains
         last-writer-wins across processes.  This is an accepted residual
-        (matches hermes).  See ``docs/internals/concurrency.md``.
+        last-writer-wins across processes is an accepted residual for this path.
     """
     path = config_path or get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -311,8 +311,7 @@ def mutate_config(
     Use this entry point for any write that must not lose a concurrent
     process's edit to a disjoint section.  A direct
     ``load_config() → edit → save_config()`` outside this helper remains
-    last-writer-wins — an accepted residual.  See
-    ``docs/internals/concurrency.md``.
+    last-writer-wins — an accepted residual.
 
     Example::
 
@@ -586,7 +585,7 @@ def _migrate_config(data: dict) -> dict:
             tools.pop("mySet", None)
 
     # Move memory.skillImport → skills.security and memory.skillsHotTier →
-    # agents.defaults.skillsHotTier (spec 2026-06-03 §9 — skills config reorg).
+    # agents.defaults.skillsHotTier (skills config migration).
     # Handles both camelCase (as persisted) and snake_case keys.
     memory = data.get("memory", {})
     for legacy in ("skillImport", "skill_import"):

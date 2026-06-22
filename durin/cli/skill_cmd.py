@@ -2,7 +2,7 @@
 
 Subcommands:
 
-- ``durin skill audit <name|path>`` — run the §8.C security scan on an
+- ``durin skill audit <name|path>`` — run the security scan on an
   existing skill: the format lint (:func:`validate_skill`) plus the
   deterministic security scan (:func:`scan_skill`), rendering a verdict
   (safe/caution/dangerous) and a table of findings.
@@ -150,7 +150,7 @@ def _verdict_cell(verdict: str) -> str:
 
 @skill_app.command("list")
 def list_skills() -> None:
-    """List active skills with their §8.C verdict.
+    """List active skills with their security verdict.
 
     Renders the Skills-Surface inventory (name, source, mode, verdict) for the
     skills available in the current workspace.

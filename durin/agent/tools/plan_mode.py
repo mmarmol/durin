@@ -1,4 +1,4 @@
-"""Plan mode tools — Sprint B / L3 (docs/internals/loop.md §3).
+"""Plan mode tools.
 
 Two LLM-callable tools that work with the agent-mode system in
 ``durin/agent/agent_mode.py``:
@@ -20,21 +20,15 @@ Two LLM-callable tools that work with the agent-mode system in
 
 Design notes (file-based plan storage):
 
-The original Sprint B used the ``plan`` argument as the message body of the
-tool result, with no disk persistence. That MVP traded daily-driver
-ergonomics for ~3h of implementation simplicity (see logbook entry "Plan
-storage redesign — May 2026" for the post-mortem). File-based gives:
+Plans are stored as markdown files on disk, enabling persistence, multi-turn
+editing, and independent verification. This trade-off prioritizes durability
+and auditability over in-memory simplicity. File-based gives:
 
 - Persistence across context compaction
 - Edit-before-approve via any editor (plan is a normal markdown file)
 - Multi-turn refinement (model can read & re-write the file)
 - Post-mortem review (``ls .durin/plans/`` shows history)
 - Token efficiency (plan lives on disk, not in message history)
-
-The naming mirrors Claude Code / OpenClaude so the model recognizes the
-pattern from its training. Differences from Claude Code: (a) ``/build`` is
-the approval gesture instead of a UI permission dialog, and (b) the plan
-file path is returned in the tool result rather than being implicit.
 """
 
 from __future__ import annotations

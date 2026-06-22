@@ -43,9 +43,7 @@ def _skill_uri_to_path(uri: str) -> str:
     return uri
 
 
-# E11 (2026-05-28): `_load_cursors_from_entities_dir` moved to
-# `durin.memory.entity_ranker` next to its consumer
-# `rank_with_entities`. The v2 pipeline now calls it directly.
+# Cursors are loaded by entity_ranker in the search pipeline directly.
 
 _PARAMETERS = tool_parameters_schema(
     query=StringSchema(
@@ -58,8 +56,7 @@ _PARAMETERS = tool_parameters_schema(
     scope=StringSchema(
         "Where to search. 'all' (default) covers both undreamed sources and "
         "dreamed memory entries. 'archive' walks `memory/archive/` on demand "
-        "for recovery / diagnostic queries against consolidated content "
-        "(audit F1, doc 01 §3.6).",
+        "for recovery / diagnostic queries against consolidated content.",
         enum=["all", "dreamed", "undreamed", "archive"],
     ),
     level=StringSchema(
@@ -92,7 +89,6 @@ _PARAMETERS = tool_parameters_schema(
     ),
     required=["query"],
     description=(
-        # Canonical text per `docs/internals/memory/06_prompts_and_instructions.md` §3.1.
         # Synchronisation enforced by `tests/memory/test_tool_description_sync.py`.
         "Search durin's memory for content relevant to your question. "
         "Searches across canonical entity pages, recent observations, "
@@ -167,28 +163,26 @@ class MemorySearchTool(Tool):
         self._vector_index: Optional[VectorIndex] = None
         self._vector_index_attempted = False
         self._app_config = app_config
-        # P4b (2026-06-10): the LLM only reads `sectioned_rendered` —
-        # the tool description teaches the marker format and nothing
-        # else — so shipping the raw `results` dicts to the model pays
-        # for every hit twice. `create()` (the agent tool path) drops
+        # The LLM only reads `sectioned_rendered` — the tool description
+        # teaches the marker format — so shipping the raw `results` dicts
+        # pays for every hit twice. `create()` (the agent tool path) drops
         # them; programmatic callers (graph_api / webui, bench scripts)
         # keep the structured array via this default.
         self._include_raw_results = include_raw_results
-        # P4 (2026-06-10): hot-layer dedup only makes sense when the
-        # CALLER's system prompt actually carries the hot layer, so it
-        # is opt-in: `create()` (the agent tool path) enables it for
-        # the core scope. Direct constructions — graph_api / webui
-        # search, subagents, ad-hoc scripts — face callers with no hot
-        # layer in front of them and must see every hit.
+        # Hot-layer dedup only makes sense when the caller's system prompt
+        # actually carries the hot layer, so it is opt-in: `create()` (the
+        # agent tool path) enables it for the core scope. Direct
+        # constructions — graph_api / webui search, subagents, ad-hoc
+        # scripts — face callers with no hot layer and must see every hit.
         self._context_dedup = context_dedup
-        # Per doc 25 §2.C: alias index is shared process-wide via
-        # durin.memory.aliases_cache, so the refine pass and
-        # EntityAbsorption see updates as soon as we (or they) call
-        # refresh_for / remove on it. No per-instance state needed.
-        # Schema-version freshness check (doc 10 P2.2): on first
-        # construction per process per workspace, ensure the FTS
-        # index matches the code's CURRENT_SCHEMA_VERSION; auto-
-        # rebuild if not. The helper is idempotent.
+        # Alias index is shared process-wide via durin.memory.aliases_cache,
+        # so the refine pass and EntityAbsorption see updates as soon as we
+        # (or they) call refresh_for / remove on it. No per-instance state
+        # needed.
+        # Schema-version freshness check: on first construction per process
+        # per workspace, ensure the FTS index matches the code's
+        # CURRENT_SCHEMA_VERSION; auto-rebuild if not. The helper is
+        # idempotent.
         try:
             from durin.memory.indexer import ensure_index_fresh
             ensure_index_fresh(self._workspace, embedding_model=self._embedding_model)
@@ -203,14 +197,11 @@ class MemorySearchTool(Tool):
 
     @property
     def description(self) -> str:
-        # Canonical text per `docs/internals/memory/06_prompts_and_instructions.md` §3.1.
         # `Tool.to_schema()` (durin/agent/tools/base.py:258) reads this and
         # emits it as `function.description` in the OpenAI function-calling
         # spec — that's the description the LLM actually reads to decide
         # whether to call the tool. Synchronisation enforced by
-        # `tests/memory/test_tool_description_sync.py`. Audit B1 (2026-05-28)
-        # caught that the prior short text here diverged from the canonical
-        # doc; the long form below now matches doc 06 §3.1 verbatim.
+        # `tests/memory/test_tool_description_sync.py`.
         return _PARAMETERS["description"]
 
     def _build_cross_encoder(self):
@@ -321,7 +312,7 @@ class MemorySearchTool(Tool):
         return self._vector_index
 
     def _get_alias_index(self) -> Optional[AliasIndex]:
-        """Resolve the workspace-shared AliasIndex (doc 25 §2.C).
+        """Resolve the workspace-shared AliasIndex.
 
         Built lazily on first call across the whole process via
         :func:`durin.memory.aliases_cache.get_shared_alias_index`;
@@ -374,24 +365,22 @@ class MemorySearchTool(Tool):
         if kinds not in ("all", "skill", "fact"):
             return {"error": f"invalid kinds {kinds!r}"}
 
-        # F2 (audit third pass, 2026-05-28): archive is intentionally
-        # not indexed (vector/lexical/grep over memory/ exclude
-        # `memory/archive/**`). The `scope='archive'` surface is a
-        # separate on-demand walk for recovery / diagnostic queries.
-        # No re-ranking, no entity-aware — substring match over
+        # Archive is intentionally not indexed (vector/lexical/grep over
+        # memory/ exclude `memory/archive/**`). The `scope='archive'`
+        # surface is a separate on-demand walk for recovery / diagnostic
+        # queries. No re-ranking, no entity-aware — substring match over
         # headline + summary + body of each archived `.md`.
         if scope == "archive":
             return self._run_archive_scope(query, limit=limit)
 
-        # v2 pipeline (Phase 5 d1): delegate the whole search to
-        # `run_search_pipeline` — query router + lexical FTS + vector +
-        # cross-source RRF + entity-aware rerank + grep fallback +
-        # sectioning + per-source cap. Doc 03 (full pipeline).
+        # Delegate the whole search to `run_search_pipeline` — query
+        # router + lexical FTS + vector + cross-source RRF + entity-aware
+        # rerank + grep fallback + sectioning + per-source cap.
         from durin.memory.search_pipeline import run_search_pipeline
 
         vi = self._get_vector_index() if scope in ("dreamed", "all") else None
 
-        # Cross-encoder rerank is opt-in via config (doc 03 §9). When
+        # Cross-encoder rerank is opt-in via config. When
         # enabled, build a reranker lazily and pass it through. The
         # pipeline gracefully no-ops if the model fails to load.
         cross_encoder = self._build_cross_encoder()
@@ -406,11 +395,9 @@ class MemorySearchTool(Tool):
             if ce_cfg is not None:
                 ce_top_n = int(getattr(ce_cfg, "top_n", 10) or 10)
 
-        # G1 (audit fourth pass, 2026-05-28): operator-configured
-        # per-source cap for the sectioning step. Default is None →
-        # `run_search_pipeline` falls back to
-        # `DEFAULT_MAX_PER_SOURCE` so existing workspaces are
-        # unchanged.
+        # Operator-configured per-source cap for the sectioning step.
+        # Default is None → `run_search_pipeline` falls back to
+        # `DEFAULT_MAX_PER_SOURCE` so existing workspaces are unchanged.
         max_per_source: int | None = None
         if self._app_config is not None:
             try:
@@ -472,7 +459,7 @@ class MemorySearchTool(Tool):
                 if h.type in ("session_summary", "corpus")
             ]
 
-        # M1 (2026-06-03): read-side gate for `memory.index_skills=False`.
+        # Read-side gate for `memory.index_skills=False`.
         # The write-side gates stop NEW skills from being indexed, but a
         # skill indexed earlier (while the flag was True) leaves FTS/vector
         # rows that the search arms still read — and drift repair does not
@@ -493,17 +480,16 @@ class MemorySearchTool(Tool):
             hits = [h for h in hits if h.type != "skill"]
 
         # Convert :class:`SectionedHit` rows into the legacy `Result`
-        # shape expected by the agent (carries `to_dict`). F4 (third
-        # pass, 2026-05-28): the LLM-facing block rendering moved to
-        # `sectioned_output.render_sectioned` so the per-source cap
-        # (doc 03 §12.4) and section intros (§12) actually activate.
+        # shape expected by the agent (carries `to_dict`). The LLM-facing
+        # block rendering goes via `sectioned_output.render_sectioned`
+        # so the per-source cap and section intros actually activate.
         results: list[Result] = []
         for h in hits:
             r = self._sectioned_to_result(h, level=level)
             if r is not None:
                 results.append(r)
 
-        # F4: apply per-source cap + render sectioned output.
+        # Apply per-source cap + render sectioned output.
         from durin.memory.sectioned_output import (
             SectionedHit,
             apply_per_source_cap,
@@ -532,11 +518,11 @@ class MemorySearchTool(Tool):
         ]
         capped_hits = apply_per_source_cap(enriched_hits)
 
-        # P4 (2026-06-10): hits whose rendered content is already
-        # visible in the caller's hot layer collapse to pointer lines.
-        # Containment-checked per ref — a hit carrying body beyond the
-        # prefix excerpt passes through whole. Disabled for subagents
-        # (their prompt has no hot layer; see __init__).
+        # Hits whose rendered content is already visible in the caller's
+        # hot layer collapse to pointer lines. Containment-checked per
+        # ref — a hit carrying body beyond the prefix excerpt passes
+        # through whole. Disabled for subagents (their prompt has no
+        # hot layer; see __init__).
         in_context_hits: list[SectionedHit] = []
         if self._context_dedup:
             from durin.memory.context_dedup import split_in_context
@@ -573,9 +559,8 @@ class MemorySearchTool(Tool):
         if ai is not None and extract_query_entities(query, ai):
             ranking = "entity_aware"
 
-        # E1: expand payload to match doc 07 §4.1 — all diagnostic
-        # fields are already computed above; this is a payload
-        # change, not new instrumentation.
+        # All diagnostic fields are already computed above; this is a
+        # payload change, not new instrumentation.
         total_candidates = (
             pipeline_result.vector_count + pipeline_result.lexical_count
         )
@@ -622,9 +607,9 @@ class MemorySearchTool(Tool):
             response["already_in_context"] = [
                 h.uri for h in in_context_hits
             ]
-        # P5.2: surface degraded-run info when the pipeline recovered
-        # from a source failure. Omitted on clean runs to keep the
-        # response shape minimal.
+        # Surface degraded-run info when the pipeline recovered from a
+        # source failure. Omitted on clean runs to keep the response
+        # shape minimal.
         if pipeline_result.recovered_from:
             response["recovered_from"] = list(pipeline_result.recovered_from)
             response["recovery_duration_ms"] = (
@@ -635,12 +620,11 @@ class MemorySearchTool(Tool):
     def _run_archive_scope(
         self, query: str, *, limit: int,
     ) -> dict[str, Any]:
-        """F2 (audit third pass, 2026-05-28): on-demand walk of
-        `memory/archive/**` for `scope='archive'` queries.
+        """On-demand walk of `memory/archive/**` for `scope='archive'` queries.
 
-        Archive is intentionally not indexed (doc 01 §3.6). This path
-        loads each archived `.md`, substring-matches the query against
-        headline + summary + body, and returns up to `limit` hits.
+        Archive is intentionally not indexed. This path loads each
+        archived `.md`, substring-matches the query against headline +
+        summary + body, and returns up to `limit` hits.
 
         No vector / lexical / cross-encoder — recovery surface,
         not the hot path. The shape mirrors the normal response so the
@@ -689,12 +673,8 @@ class MemorySearchTool(Tool):
             # Determine class_name from the archive subpath:
             # archive/episodic/...  → episodic
             # archive/entities/...  → entity_page
-            # G6 (audit fourth pass, 2026-05-28): emit the relative
-            # path under `memory/` as the URI so the agent can drill
-            # archive hits directly. Pre-G6 the URI was
-            # `front.uri or path.stem` — a bare id with no path
-            # prefix that drill could not resolve, so the agent had
-            # no way to fetch the full body of an archive hit.
+            # Emit the relative path under `memory/` as the URI so the
+            # agent can drill archive hits directly via the drill tool.
             try:
                 rel_path = path.relative_to(self._workspace).as_posix()
             except ValueError:
@@ -748,10 +728,10 @@ class MemorySearchTool(Tool):
                 "keywords": None,
             },
         )
-        # F4: archive path also uses sectioned rendering for parity
-        # with the main path. Map each Result to a SectionedHit and
-        # call render_sectioned. Per-source cap rarely triggers on
-        # archive but applying it keeps the path uniform.
+        # Archive path also uses sectioned rendering for parity with
+        # the main path. Map each Result to a SectionedHit and call
+        # render_sectioned. Per-source cap rarely triggers on archive
+        # but applying it keeps the two paths uniform.
         from durin.memory.sectioned_output import (
             SectionedHit,
             apply_per_source_cap,
@@ -779,11 +759,10 @@ class MemorySearchTool(Tool):
             )
             for r in hits
         ]
-        # G1 (audit fourth pass, 2026-05-28): honour the operator-
-        # configured cap on the archive path too. In practice every
-        # archived hit has `ingest_id=None` so the cap keys off `uri`
-        # and rarely triggers, but threading the config keeps the two
-        # paths uniform.
+        # Honour the operator-configured cap on the archive path too.
+        # In practice every archived hit has `ingest_id=None` so the
+        # cap keys off `uri` and rarely triggers, but threading the
+        # config keeps the two paths uniform.
         archive_cap: int | None = None
         if self._app_config is not None:
             try:
@@ -822,7 +801,7 @@ class MemorySearchTool(Tool):
         - Loads the body from disk on `level=cold` (the search pipeline
           carries snippet only).
         - Maps `entity` → `class_name='entity_page'` to preserve the
-          §2.H rendering contract (canonical vs fragment markers).
+          canonical vs fragment marker rendering contract.
         """
         # Derive the legacy class_name + uri + source shape.
         hit_path = hit.path or ""
@@ -876,10 +855,10 @@ class MemorySearchTool(Tool):
             source = "memory"
 
         entities = (hit.uri,) if class_name == "entity_page" else ()
-        # P2.5: prefer the body the search pipeline already carries
-        # (populated from the LanceDB row). Falls back to disk read
-        # via `_enrich_body` only when the vector index didn't have
-        # the row (e.g. grep-only path).
+        # Prefer the body the search pipeline already carries (populated
+        # from the LanceDB row). Falls back to disk read via
+        # `_enrich_body` only when the vector index didn't have the row
+        # (e.g. grep-only path).
         carried_body = getattr(hit, "body", "") or ""
         result = Result(
             source=source,

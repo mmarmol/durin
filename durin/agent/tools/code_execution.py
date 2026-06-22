@@ -9,7 +9,7 @@ aggregate, print a summary) — one tool result instead of 30.
 Design adapted from hermes-agent's code_execution_tool (MIT, Nous Research
 2025), simplified for durin: the agent loop is asyncio-native, so the RPC
 server is an ``asyncio.start_unix_server`` on the same loop (no background
-thread, no sync→async bridge). Local-only v1; see docs/internals/loop.md.
+thread, no sync→async bridge). Local-only v1.
 
 Security model: the child gets a curated env (HOME/LANG/TERM/PYTHONUNBUFFERED
 + PYTHONPATH for the stub — NO ambient secrets), the RPC server enforces the

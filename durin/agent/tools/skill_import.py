@@ -1,4 +1,4 @@
-"""skill_import tool — import a skill from any source through the §8.C floor.
+"""skill_import tool — import a skill from any source through the security floor.
 
 Auto-discovered into the agent's ``core`` toolset (like ``skill_audit``).
 Source-agnostic: a local path, a direct ``https://…/SKILL.md``, or
@@ -7,8 +7,8 @@ Source-agnostic: a local path, a direct ``https://…/SKILL.md``, or
 - ``resolve``  — list the skill candidates a source points at (a repo may hold
   many; the agent disambiguates).
 - ``fetch``    — download ONE candidate into ``.durin/import-quarantine/`` and
-  run the §8.C scan. If the source resolves to many, returns the candidate list
-  to pick from instead.
+  run the security scan. If the source resolves to many, returns the candidate
+  list to pick from instead.
 - ``install``  — install a quarantined skill THROUGH THE GATE: ``confirm`` is
   required when it carries code / is caution / is out-of-allowlist; ``override``
   is required when the verdict is dangerous. The refusal is enforced in
@@ -62,7 +62,7 @@ _PARAMETERS = tool_parameters_schema(
     ),
     description=(
         "Import a skill from any source (local path, URL, github:owner/repo) "
-        "through the §8.C security floor: resolve -> fetch (quarantine+scan) -> "
+        "through the security floor: resolve -> fetch (quarantine+scan) -> "
         "install (gated by verdict) / reject."
     ),
 )
@@ -70,7 +70,7 @@ _PARAMETERS = tool_parameters_schema(
 
 @tool_parameters(_PARAMETERS)
 class SkillImportTool(Tool, ContextAware):
-    """skill_import tool — §6.B import over the §8.C floor."""
+    """skill_import tool — import through the security floor."""
 
     def __init__(self, workspace: str | Path, allowlist: list[str] | None = None,
                  caps: tuple[int, int, int] | None = None,

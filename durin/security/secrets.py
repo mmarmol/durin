@@ -240,7 +240,7 @@ class SecretStore:
 
         The load→mutate→save is performed inside ``cross_process_lock`` so
         concurrent callers from different processes cannot lose each other's
-        writes. See docs/internals/concurrency.md.
+        writes.
         """
         if not is_valid_secret_name(name):
             raise SecretError(
@@ -265,7 +265,7 @@ class SecretStore:
 
         The load→mutate→save is performed inside ``cross_process_lock`` so
         concurrent callers from different processes cannot lose each other's
-        writes. See docs/internals/concurrency.md.
+        writes.
         """
         with cross_process_lock(self._path):
             self.load()
@@ -292,7 +292,7 @@ class SecretStore:
 
         The load→mutate→save is performed inside ``cross_process_lock`` so
         concurrent callers from different processes cannot lose each other's
-        writes. See docs/internals/concurrency.md.
+        writes.
         """
         with cross_process_lock(self._path):
             self.load()
@@ -309,7 +309,7 @@ class SecretStore:
         Returns True when the tag was added, False when it was already present,
         and None when the secret is unknown. The read-compute-write is entirely
         inside ``cross_process_lock`` so concurrent grants from different
-        processes both survive. See docs/internals/concurrency.md.
+        processes both survive.
         """
         with cross_process_lock(self._path):
             self.load()
@@ -328,7 +328,7 @@ class SecretStore:
         Returns True when the tag was removed, False when it was not present,
         and None when the secret is unknown. The read-compute-write is entirely
         inside ``cross_process_lock`` so concurrent revokes from different
-        processes both survive. See docs/internals/concurrency.md.
+        processes both survive.
         """
         with cross_process_lock(self._path):
             self.load()

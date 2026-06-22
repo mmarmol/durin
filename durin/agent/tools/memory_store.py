@@ -104,7 +104,6 @@ _PARAMETERS = tool_parameters_schema(
     ),
     required=["content"],
     description=(
-        # Canonical text per `docs/internals/memory/06_prompts_and_instructions.md` §3.2.
         "Persist an observation to memory. Use this when you learn a fact "
         "the user is likely to need again — preferences, decisions, facts "
         "about people/projects/ tasks, etc.\n\n"
@@ -142,11 +141,11 @@ class MemoryStoreTool(Tool):
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
-        # §8a: removed from the agent toolset in the new memory model. Facts
-        # about a thing go through `memory_upsert_entity`; documents through
-        # `memory_ingest`; interactions stay in the session for the dream to
-        # distil. The `store_memory` FUNCTION stays for internal callers
-        # (compaction summaries, ingest chunks).
+        # Removed from the agent toolset. Facts about entities now use
+        # `memory_upsert_entity`; documents use `memory_ingest`; session
+        # interactions stay local for the dream to distill. The internal
+        # `store_memory` function is retained for compaction summaries
+        # and ingest pipelines.
         return False
 
     def __init__(
@@ -161,10 +160,9 @@ class MemoryStoreTool(Tool):
         # Lazily constructed once on first use; None means "disabled".
         self._vector_index: Optional[VectorIndex] = None
         self._vector_index_attempted = False
-        # Retained for constructor compatibility only. They fed the per-entity
-        # threshold dream trigger, which was removed (§8e — the daily extract/
-        # refine passes consolidate now); memory_store itself is disabled in the
-        # new model.
+        # Retained for backward compatibility. These parameters previously
+        # controlled per-entity extraction thresholds, which are now managed
+        # by the daily extract/refine passes.
         self._dream_config = dream_config
         self._app_config = app_config
 
@@ -174,10 +172,6 @@ class MemoryStoreTool(Tool):
 
     @property
     def description(self) -> str:
-        # Canonical text per `docs/internals/memory/06_prompts_and_instructions.md` §3.2.
-        # Reads via `Tool.to_schema()` → `function.description` in the
-        # OpenAI spec — what the LLM sees. Audit B1 (2026-05-28) caught
-        # the prior short text drifted from the canonical doc.
         return _PARAMETERS["description"]
 
     @classmethod
@@ -231,7 +225,7 @@ class MemoryStoreTool(Tool):
     #   distance 0.10 ≈ cosine 0.95   (this threshold)
     #   distance 0.05 ≈ cosine 0.975
     #   distance 0.20 ≈ cosine 0.90
-    # Matches OpenClaw's 0.95 cosine dedup convention (doc 22 N3 + G1).
+    # distance 0.10 ≈ cosine 0.95 dedup threshold.
     _DEDUP_DISTANCE_THRESHOLD = 0.10
 
     async def execute(self, **kwargs: Any) -> Any:
@@ -254,7 +248,7 @@ class MemoryStoreTool(Tool):
         entities = kwargs.get("entities") or []
         force = bool(kwargs.get("force", False))
 
-        # Vector index dedup pre-check (per doc 23 T1.7 + OpenClaw N3).
+        # Vector index dedup pre-check.
         # Compute the embedding ONCE and reuse for both the dedup search
         # AND the post-write upsert (G5: avoid double-embedding cost).
         vi = self._get_vector_index()
@@ -343,7 +337,7 @@ class MemoryStoreTool(Tool):
             except Exception as exc:
                 logger.warning("vector upsert failed for %s: %s", result["id"], exc)
 
-        # Re-index FTS5 synchronously (doc 02 §6.2). Best-effort: a
+        # Re-index FTS5 synchronously. Best-effort: a
         # failure here logs + continues so the markdown write still
         # succeeds. Reindex from the file path so the indexer derives
         # the BM25 text via the canonical text-composition rule.
@@ -356,6 +350,6 @@ class MemoryStoreTool(Tool):
                 result["id"], exc,
             )
 
-        # §8e: the per-entity threshold dream trigger is
-        # removed — the daily extract/refine passes handle consolidation.
+        # Per-entity threshold dream trigger is removed —
+        # the daily extract/refine passes handle consolidation.
         return result
