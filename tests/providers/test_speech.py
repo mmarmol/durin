@@ -1,5 +1,8 @@
 import io
+import sys
+import types
 import wave
+import wave as _wave
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -40,3 +43,52 @@ async def test_openai_speech_no_key_returns_empty(monkeypatch):
     out = await prov.synthesize("hola")
     assert out.data == b""
     assert out.sample_rate == 0
+
+
+@pytest.fixture
+def fake_supertonic(monkeypatch):
+    """Inject a fake `supertonic` module whose save_audio writes a real WAV."""
+
+    class _FakeTTS:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def get_voice_style(self, voice_name):
+            return {"name": voice_name}
+
+        def synthesize(self, text, voice_style=None):
+            return ("frames", None)
+
+        def save_audio(self, wav, path):
+            with _wave.open(path, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(22050)
+                w.writeframes(b"\x00\x00" * 100)
+
+    mod = types.ModuleType("supertonic")
+    mod.TTS = _FakeTTS
+    monkeypatch.setitem(sys.modules, "supertonic", mod)
+    return _FakeTTS
+
+
+@pytest.mark.asyncio
+async def test_local_supertonic_synthesizes(fake_supertonic):
+    from durin.providers.speech import LocalSupertonicProvider
+
+    prov = LocalSupertonicProvider(voice="F4")
+    out = await prov.synthesize("hola mundo")
+    assert out.format == "wav"
+    assert out.sample_rate == 22050
+    assert len(out.data) > 44  # WAV header + frames
+
+
+@pytest.mark.asyncio
+async def test_local_supertonic_missing_extra(monkeypatch):
+    from durin.providers.speech import LocalSupertonicProvider
+
+    # Setting the module to None makes `import supertonic` raise ImportError.
+    monkeypatch.setitem(sys.modules, "supertonic", None)
+    prov = LocalSupertonicProvider()
+    with pytest.raises(RuntimeError, match=r"\[tts\] extra"):
+        await prov.synthesize("hi")
