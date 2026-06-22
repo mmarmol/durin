@@ -65,6 +65,8 @@ vi.mock("@/lib/durin-client", () => {
     onRuntimeModelUpdate = () => () => {};
     onError = () => () => {};
     onChat = () => () => {};
+    onVoiceState = () => () => {};
+    onVoiceAudio = () => () => {};
     sendMessage = vi.fn();
     newChat = vi.fn();
     attach = vi.fn();
@@ -453,5 +455,12 @@ describe("App layout", () => {
     expect(within(sidebar).getByRole("button", { name: "Settings" })).toBeInTheDocument();
 
     expect(within(sidebar).getByText("Existing chat")).toBeInTheDocument();
+  });
+
+  it("docks the voice orb in the shell across views", async () => {
+    render(<App />);
+    await screen.findByText(/durin/i);
+    // VoiceDock waits for the config fetch before rendering the orb, so await it.
+    expect(await screen.findByRole("button", { name: /voice|start voice/i })).toBeInTheDocument();
   });
 });

@@ -7,6 +7,7 @@ import { SkillsView } from "@/components/SkillsView";
 import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
+import { VoiceDock } from "@/components/voice/VoiceDock";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 
 import { useSessions } from "@/hooks/useSessions";
@@ -575,6 +576,8 @@ function Shell({
           </div>
         )}
       </main>
+
+      <VoiceDock chatId={activeSession?.chatId ?? client.defaultChatId} />
 
       <DeleteConfirm
         open={!!pendingDelete}
