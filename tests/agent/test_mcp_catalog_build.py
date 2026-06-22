@@ -325,6 +325,125 @@ def test_pagination_gives_up_after_attempts():
     assert call_count == 4, f"Expected 4 attempts (default), got {call_count}"
 
 
+# ---------------------------------------------------------------------------
+# HTTP-error retry (rate limits / 5xx) — the GraphQL enrichment path
+# ---------------------------------------------------------------------------
+
+def _http_error(status: int, headers: dict | None = None):
+    import httpx
+
+    req = httpx.Request("POST", "https://api.github.com/graphql")
+    resp = httpx.Response(status, headers=headers or {}, request=req)
+    return httpx.HTTPStatusError(f"HTTP {status}", request=req, response=resp)
+
+
+def test_with_retry_retries_5xx_then_succeeds():
+    """A transient HTTP 502 is retried; the call eventually succeeds."""
+    from durin.agent.mcp_catalog_build import _with_retry
+
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise _http_error(502)
+        return {"ok": True}
+
+    slept: list[float] = []
+    out = _with_retry(fn, sleep=slept.append)
+    assert out == {"ok": True}
+    assert calls["n"] == 3
+    assert len(slept) == 2  # backoff before each retry
+
+
+def test_with_retry_honors_retry_after_on_429():
+    """HTTP 429 with Retry-After is retried after exactly that many seconds."""
+    from durin.agent.mcp_catalog_build import _with_retry
+
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _http_error(429, {"Retry-After": "7"})
+        return "ok"
+
+    slept: list[float] = []
+    out = _with_retry(fn, sleep=slept.append)
+    assert out == "ok"
+    assert slept == [7.0]
+
+
+def test_with_retry_retries_secondary_rate_limit_403():
+    """A secondary-rate-limit 403 (x-ratelimit-remaining: 0) is retried."""
+    from durin.agent.mcp_catalog_build import _with_retry
+
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _http_error(403, {"x-ratelimit-remaining": "0", "Retry-After": "3"})
+        return "ok"
+
+    slept: list[float] = []
+    out = _with_retry(fn, sleep=slept.append)
+    assert out == "ok"
+    assert calls["n"] == 2
+    assert slept == [3.0]
+
+
+def test_with_retry_does_not_retry_auth_403():
+    """A plain 403 (no rate-limit signal) is a hard auth error — not retried."""
+    import pytest
+
+    from durin.agent.mcp_catalog_build import _with_retry
+
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        raise _http_error(403)  # no Retry-After / x-ratelimit-remaining
+
+    with pytest.raises(Exception):  # noqa: B017 — httpx.HTTPStatusError
+        _with_retry(fn, sleep=lambda _: None)
+    assert calls["n"] == 1
+
+
+def test_with_retry_does_not_retry_404():
+    """A non-retryable 4xx (404) re-raises immediately."""
+    import pytest
+
+    from durin.agent.mcp_catalog_build import _with_retry
+
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        raise _http_error(404)
+
+    with pytest.raises(Exception):  # noqa: B017 — httpx.HTTPStatusError
+        _with_retry(fn, sleep=lambda _: None)
+    assert calls["n"] == 1
+
+
+def test_with_retry_gives_up_on_persistent_5xx():
+    """Persistent 503 exhausts all attempts and re-raises."""
+    import pytest
+
+    from durin.agent.mcp_catalog_build import _with_retry
+
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        raise _http_error(503)
+
+    with pytest.raises(Exception):  # noqa: B017 — httpx.HTTPStatusError
+        _with_retry(fn, sleep=lambda _: None)
+    assert calls["n"] == 4  # default attempts
+
+
 def test_min_resolved_fraction_guard():
     """build_catalog raises ValueError when stars resolution is below the threshold."""
     # fetch_repo_meta returns stars=None for all repos — simulates a failed GraphQL batch
