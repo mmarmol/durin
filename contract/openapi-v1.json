@@ -3711,6 +3711,11 @@
       "SkillsImportCommand": {
         "additionalProperties": false,
         "properties": {
+          "replace": {
+            "default": false,
+            "title": "Replace",
+            "type": "boolean"
+          },
           "source": {
             "title": "Source",
             "type": "string"

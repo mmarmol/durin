@@ -145,6 +145,16 @@ the session logger. `PushSink` buffers events and POSTs batches to the
 configured URL when the buffer hits `batch_size` (default 10). Failed POSTs
 restore the batch into the buffer for the next drain.
 
+At the end of each turn the dispatch loop emits a `turn.latency` breakdown:
+`total_ms` split into `llm_ms` (provider round-trips, accumulated in the runner
+and handed to the loop via `_pending_llm_ms`), `tools_ms` (summed `tool_events`
+durations), and `local_ms` (everything else — context build, memory, sanitize,
+consolidation, save/respond), plus per-state-machine `states` durations. It
+answers "where did the turn's wall-clock go: the model, tools, or local
+processing?". It is logged via `get_session_logger` directly, because the
+per-run `bind_telemetry` binding is already reset by the time the breakdown is
+computed.
+
 Retention runs inside the memory health-check tick: `run_retention` scans
 `~/.cache/durin/telemetry/`, gzip-compresses `.jsonl` files older than 30 days,
 and deletes `.jsonl.gz` files older than 90 days. These thresholds

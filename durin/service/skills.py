@@ -142,6 +142,9 @@ class SkillModeCommand(Command):
 
 class SkillsImportCommand(Command):
     source: str
+    # Re-import an already-installed skill, overwriting it. Without this the
+    # import short-circuits with ``already_installed`` so the UI can offer it.
+    replace: bool = False
 
 
 class SkillApproveCommand(Command):
@@ -429,7 +432,7 @@ class SkillsService:
         principal.require(Scope.SKILLS_WRITE)
         from durin.agent import skills_store as ss
 
-        status, payload = ss.web_import_fetch(self._workspace, cmd.source)
+        status, payload = ss.web_import_fetch(self._workspace, cmd.source, replace=cmd.replace)
         return _skills_result(status, payload)
 
     @route(

@@ -73,12 +73,22 @@ def _load_index() -> dict[str, list[ModelInfo]]:
 
 
 def provider_models(provider: str, *, access_token: str | None = None) -> list[ModelInfo]:
-    """Catalog models for *provider*. ``openai_codex`` is not in models.dev — it
-    comes from the live codex model list (slugs only, no capability metadata)."""
+    """Catalog models for *provider*.
+
+    ``openai_codex`` is not in models.dev — its slugs come from the live codex
+    model list. Codex serves the same underlying OpenAI models, so each slug
+    inherits the capability metadata (context window, output limit, feature
+    flags) of the matching ``openai`` catalog entry when one exists; a slug
+    with no openai match keeps a bare id rather than being dropped.
+    """
     if provider in ("openai_codex", "openai-codex"):
         from durin.providers.codex_models import list_codex_models
 
-        return [ModelInfo(id=s) for s in list_codex_models(access_token)]
+        openai_caps = {mi.id: mi for mi in _load_index().get("openai", ())}
+        return [
+            openai_caps.get(slug) or ModelInfo(id=slug)
+            for slug in list_codex_models(access_token)
+        ]
     return list(_load_index().get(provider, ()))
 
 

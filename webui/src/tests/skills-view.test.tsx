@@ -213,7 +213,7 @@ describe("SkillsView security surface", () => {
     await user.type(input, "github:owner/repo");
     await user.click(screen.getByRole("button", { name: "Import" }));
 
-    expect(api.importSource).toHaveBeenCalledWith("tok", "github:owner/repo");
+    expect(api.importSource).toHaveBeenCalledWith("tok", "github:owner/repo", "", false);
   });
 
   it("searches the registry and a hit's Import reuses the import-by-source flow", async () => {
@@ -259,7 +259,48 @@ describe("SkillsView security surface", () => {
       .closest("div.flex.items-start") as HTMLElement;
     await user.click(within(hitRow).getByRole("button", { name: "Import" }));
 
-    expect(api.importSource).toHaveBeenCalledWith("tok", "github:acme/pdf-tools");
+    expect(api.importSource).toHaveBeenCalledWith("tok", "github:acme/pdf-tools", "", false);
+  });
+
+  it("flags an installed hit and re-installs (replace=true) instead of plain import", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.searchSkills).mockResolvedValue({
+      hits: [
+        {
+          name: "pdf-tools",
+          ref: "github:acme/pdf-tools",
+          registry: "acme",
+          description: "Work with PDFs",
+          signals: {},
+          installed: true,
+        },
+      ],
+    });
+    vi.mocked(api.importSource).mockResolvedValue({
+      installed: "pdf-tools", verdict: "safe", needs: "allow", commit: "abc", findings: [],
+    });
+
+    const user = userEvent.setup();
+    render(wrap(<SkillsView />));
+    await screen.findByText("clean");
+
+    await user.click(screen.getByRole("button", { name: /add skill/i }));
+    const box = await screen.findByPlaceholderText(/Search the registry/i);
+    await user.type(box, "pdf");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    // the installed hit shows the badge and a Re-install action (not Import)
+    expect(await screen.findByText("Installed")).toBeInTheDocument();
+    const hitRow = screen
+      .getByText("github:acme/pdf-tools")
+      .closest("div.flex.items-start") as HTMLElement;
+    await user.click(within(hitRow).getByRole("button", { name: "Re-install" }));
+
+    // re-install passes replace=true so the backend overwrites the installed copy
+    expect(api.importSource).toHaveBeenCalledWith("tok", "github:acme/pdf-tools", "", true);
   });
 
   it("defaults to relevance (server order) and re-sorts by installs on demand", async () => {
@@ -395,7 +436,7 @@ describe("SkillsView security surface", () => {
 
     // Import uses the existing import path
     await user.click(screen.getByRole("button", { name: "Import" }));
-    expect(api.importSource).toHaveBeenCalledWith("tok", "github:o/alpha");
+    expect(api.importSource).toHaveBeenCalledWith("tok", "github:o/alpha", "", false);
 
     // Back restores the results list
     await user.click(await screen.findByRole("button", { name: /back to results/i }));

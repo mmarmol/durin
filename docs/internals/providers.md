@@ -123,7 +123,11 @@ fields, layering in any per-model parameter overrides declared under the active 
 `models` dict and cross-referencing the capability snapshot for token bounds. The result
 is a `ModelPresetConfig` — a frozen bundle of `model`, `provider`, `max_tokens`,
 `context_window_tokens`, `temperature`, `reasoning_effort`, and
-`preemptive_compact_ratio`.
+`preemptive_compact_ratio`. The per-(provider, model) catalog lookup
+(`catalog_model_caps`, `durin/providers/provider_catalog.py`) supplies the token
+bounds when no explicit override exists; `openai_codex` is not in the catalog, so
+each codex slug inherits the matching `openai` entry's caps (window / output
+limit) — resolution no longer skips the catalog for codex.
 
 ### 4.2 Provider matching
 

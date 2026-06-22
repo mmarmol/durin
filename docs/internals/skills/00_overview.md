@@ -46,6 +46,12 @@ The import gate (`decide_action` in `durin/agent/skills_import.py`) is enforced
 in code, never in prompt: dangerous sources are blocked, code-carrying or
 cautioned sources require human confirmation, and only safe allowlisted sources
 auto-proceed. The gate runs again at install, even if an earlier scan said safe.
+The webui import finishes the job for an `allow` verdict (auto-install rather
+than parking in quarantine) and short-circuits an already-installed skill before
+the costly fetch. First-party **builtins** (`source == "builtin"`) are exempt
+from the inventory scan — they ship vetted, so carrying scripts never flags them
+caution/insecure; a *forked* builtin lives in the workspace and is scanned like
+any other.
 
 **Three retrieval tiers match context cost to need.** Always-tier (`always:
 true`) injects the full SKILL.md body into the stable system prompt every turn —
