@@ -477,7 +477,34 @@ def build_gateway_http_app(
             payload = channel.bootstrap(peer=request.client, headers=request.headers)
         except DomainError as exc:
             return _problem_response(exc)
-        return JSONResponse(payload)
+        # Transport concern: lift the opaque session token (set by the channel on
+        # a fresh secret sign-in) out of the JSON body into an httpOnly cookie so
+        # it is never readable by client JS / never stored in localStorage.
+        session_cookie = payload.pop("_session_cookie", None)
+        max_age = payload.pop("_session_cookie_max_age", None)
+        response = JSONResponse(payload)
+        if session_cookie:
+            response.set_cookie(
+                "durin_session",
+                session_cookie,
+                max_age=int(max_age) if max_age else None,
+                httponly=True,
+                samesite="strict",
+                secure=request.url.scheme == "https",
+                path="/",
+            )
+        return response
+
+    # -- /webui/signout -----------------------------------------------------
+
+    async def signout_handler(request: Request) -> Response:
+        try:
+            channel.revoke_session(headers=request.headers)
+        except DomainError as exc:
+            return _problem_response(exc)
+        response = JSONResponse({"ok": True})
+        response.delete_cookie("durin_session", path="/")
+        return response
 
     # -- /api/media/{sig}/{payload} -----------------------------------------
 
@@ -593,6 +620,8 @@ def build_gateway_http_app(
         *api_app.routes,
         # /webui/bootstrap — token mint.
         Route("/webui/bootstrap", bootstrap_handler, methods=["GET"]),
+        # /webui/signout — revoke session token + clear cookie.
+        Route("/webui/signout", signout_handler, methods=["POST"]),
         # /api/media/{sig}/{payload} — signed media.
         Route(
             "/api/media/{sig}/{payload}",

@@ -70,6 +70,10 @@ class WebSocketConfig(Base):
       minted by ``GET /webui/bootstrap`` are also accepted.
     - ``token_issue_secret``: If non-empty, ``GET /webui/bootstrap`` must present the secret via
       ``Authorization: Bearer <secret>`` or ``X-Durin-Auth: <secret>`` (the reverse-proxy deployment path).
+      On success the gateway sets an ``httpOnly`` ``durin_session`` cookie holding an opaque session
+      token; later bootstraps (reloads) are re-authorized by that cookie, so the webui never stores the
+      secret client-side. ``POST /webui/signout`` revokes the session token and clears the cookie.
+    - ``webui_session_ttl_s``: Lifetime of the ``durin_session`` cookie/token (default 7 days).
     - ``websocket_requires_token``: If True, the handshake must include a valid token (static or issued and not expired).
     - Each connection has its own session: a unique ``chat_id`` maps to the agent session internally.
     - ``media`` field in outbound messages contains local filesystem paths; remote clients need a
@@ -83,6 +87,7 @@ class WebSocketConfig(Base):
     token: str = ""
     token_issue_secret: str = ""
     token_ttl_s: int = Field(default=300, ge=30, le=86_400)
+    webui_session_ttl_s: int = Field(default=604_800, ge=300, le=2_592_000)
     websocket_requires_token: bool = True
     allow_from: list[str] = Field(default_factory=lambda: ["*"])
     streaming: bool = True
@@ -370,6 +375,25 @@ def _issue_route_secret_matches(headers: Any, configured_secret: str) -> bool:
     return hmac.compare_digest(header_token.strip(), configured_secret)
 
 
+_SESSION_COOKIE = "durin_session"
+
+
+def _session_cookie_value(headers: Any) -> str | None:
+    """Extract the ``durin_session`` cookie value from a request's headers."""
+    raw = headers.get("Cookie") or headers.get("cookie")
+    if not raw:
+        return None
+    from http.cookies import CookieError, SimpleCookie
+
+    try:
+        jar: SimpleCookie = SimpleCookie()
+        jar.load(raw)
+    except CookieError:
+        return None
+    morsel = jar.get(_SESSION_COOKIE)
+    return morsel.value if morsel else None
+
+
 class ConnectionAdapter:
     """Transport-agnostic seam around a single WebSocket connection.
 
@@ -614,8 +638,12 @@ class WebSocketChannel(BaseChannel):
         - the issued-token pool is capped to bound runaway growth.
         """
         secret = self.config.token_issue_secret.strip() or self.config.token.strip()
+        authorized_via_secret = False
         if secret:
-            if not _issue_route_secret_matches(headers, secret):
+            if _issue_route_secret_matches(headers, secret):
+                authorized_via_secret = True
+            elif not self._session_cookie_valid(headers):
+                # Neither the setup secret nor a valid session cookie — reject.
                 raise UnauthenticatedError("invalid bootstrap secret")
         elif not _peer_is_loopback(peer):
             raise ForbiddenError("bootstrap is localhost-only")
@@ -637,7 +665,7 @@ class WebSocketChannel(BaseChannel):
             token = f"nbwt_{secrets.token_urlsafe(32)}"
         # The WS handshake consumes a single-use token from _issued_tokens.
         self._issued_tokens[token] = time.monotonic() + float(self.config.token_ttl_s)
-        return {
+        payload: dict[str, Any] = {
             "token": token,
             "ws_path": self._expected_path(),
             "expires_in": self.config.token_ttl_s,
@@ -650,6 +678,66 @@ class WebSocketChannel(BaseChannel):
             # type into (bootstrap auto-mints for localhost).
             "requires_secret": bool(secret),
         }
+        # On a fresh secret sign-in (not a cookie re-auth), hand the HTTP adapter
+        # an opaque session token to set as an httpOnly cookie. Subsequent
+        # bootstraps re-authorize via that cookie, so the secret is never stored
+        # client-side. Keys are stripped from the JSON body by the adapter.
+        if authorized_via_secret:
+            session_token = self._issue_session_token()
+            if session_token:
+                payload["_session_cookie"] = session_token
+                payload["_session_cookie_max_age"] = int(self.config.webui_session_ttl_s)
+        return payload
+
+    # -- webui session cookie (httpOnly, opaque, revocable) -----------------
+
+    _SESSION_LABEL = "webui-session"
+
+    def _session_token_store(self) -> Any:
+        """The persisted API-token store backing webui session cookies, or None."""
+        auth_svc = self._services.get("auth")
+        return getattr(auth_svc, "_store", None) if auth_svc is not None else None
+
+    def _session_cookie_valid(self, headers: Any) -> bool:
+        """True if the request carries a live ``durin_session`` cookie that maps
+        to a non-expired session token in the store."""
+        value = _session_cookie_value(headers)
+        if not value:
+            return False
+        store = self._session_token_store()
+        if store is None:
+            return False
+        entry = store.resolve(value)
+        return bool(
+            entry
+            and entry.get("label") == self._SESSION_LABEL
+            and Scope.ADMIN.value in (entry.get("scopes") or [])
+        )
+
+    def _issue_session_token(self) -> str | None:
+        """Mint a fresh opaque session token (None if no store is available)."""
+        store = self._session_token_store()
+        if store is None:
+            return None
+        _, token = store.issue(
+            [Scope.ADMIN.value],
+            label=self._SESSION_LABEL,
+            ttl_s=float(self.config.webui_session_ttl_s),
+        )
+        return token
+
+    def revoke_session(self, *, headers: Any) -> None:
+        """Revoke the session token named by the request's ``durin_session``
+        cookie (best-effort; a missing/unknown cookie is a no-op)."""
+        value = _session_cookie_value(headers)
+        if not value:
+            return
+        store = self._session_token_store()
+        if store is None:
+            return
+        entry = store.resolve(value)
+        if entry and entry.get("label") == self._SESSION_LABEL:
+            store.revoke(entry["token_id"])
 
     async def _run_skill_audit(self, connection: Any, name: str) -> None:
         """Stream an on-demand LLM audit of a skill (quarantined OR active):

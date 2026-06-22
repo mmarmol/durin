@@ -13,13 +13,7 @@ import { useSessions } from "@/hooks/useSessions";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
 import { setApiReauthHandler } from "@/lib/api";
-import {
-  clearSavedSecret,
-  deriveWsUrl,
-  fetchBootstrap,
-  loadSavedSecret,
-  saveSecret,
-} from "@/lib/bootstrap";
+import { deriveWsUrl, fetchBootstrap, signout } from "@/lib/bootstrap";
 import { DurinClient } from "@/lib/durin-client";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
 import type { ChatSummary } from "@/lib/types";
@@ -122,15 +116,17 @@ export default function App() {
       (async () => {
         setState({ status: "loading" });
         try {
+          // Secret only on the initial sign-in; the gateway then sets the
+          // httpOnly session cookie. Reloads/reconnects pass no secret and are
+          // re-authorized by that cookie — nothing is stored client-side.
           const boot = await fetchBootstrap("", secret);
           if (cancelled) return;
-          if (secret) saveSecret(secret);
           const url = deriveWsUrl(boot.ws_path, boot.token);
           const client = new DurinClient({
             url,
             onReauth: async () => {
               try {
-                const refreshed = await fetchBootstrap("", secret);
+                const refreshed = await fetchBootstrap("", "");
                 return deriveWsUrl(refreshed.ws_path, refreshed.token);
               } catch {
                 return null;
@@ -164,8 +160,9 @@ export default function App() {
   );
 
   useEffect(() => {
-    const saved = loadSavedSecret();
-    return bootstrapWithSecret(saved);
+    // No secret on load: the httpOnly session cookie (if present) re-authorizes,
+    // and localhost-only deploys auto-mint. A 401 falls through to the auth form.
+    return bootstrapWithSecret("");
   }, [bootstrapWithSecret]);
 
   // Recover REST calls after a gateway restart: a restart wipes the
@@ -174,7 +171,7 @@ export default function App() {
   useEffect(() => {
     setApiReauthHandler(async () => {
       try {
-        const boot = await fetchBootstrap("", loadSavedSecret());
+        const boot = await fetchBootstrap("", "");
         setState((s) => (s.status === "ready" ? { ...s, token: boot.token } : s));
         return boot.token;
       } catch {
@@ -236,7 +233,7 @@ export default function App() {
     if (state.status === "ready") {
       state.client.close();
     }
-    clearSavedSecret();
+    void signout();
     setState({ status: "auth" });
   };
 
