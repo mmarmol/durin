@@ -1,438 +1,332 @@
-# Concurrency architecture
-
-## Governing invariant
-
-Session files (`.jsonl`, `.meta.json`, `.md`) are the source of truth.
-SQLite (`fts.sqlite`) and LanceDB are derived indexes only and are never
-authoritative for session content. This is a deliberate divergence from
-hermes-agent, which moved sessions into SQLite.
-
-Rationale: session files are bounded (`FILE_MAX_MESSAGES=2000`, ~2.5 MB
-ceiling), so there is no scale forcing-function. Doc-native storage
-preserves grep/cat/git/recover operability and one-truth conceptual
-integrity.
-
-## Problem fixed (Phase A)
-
-Durin runs as multiple OS processes over a single shared `DURIN_HOME`:
-the gateway daemon, `durin agent --tui` (with its own in-process
-`AgentLoop`), and cron. Previously each process held a
-never-invalidated in-memory `SessionManager` cache and `save()` did a
-lockless whole-file rewrite. This caused cross-process clobber and
-split-brain: the TUI and webui could show divergent session chains for
-the same key.
-
-## Mechanism
-
-### `durin/utils/file_lock.py` — `cross_process_lock(target, *, timeout)`
-
-Reentrant (thread-local guard) cross-process advisory `flock` on
-`<target>.lock`. Extracted and generalized from
-`durin/channels/msteams.py:_refs_file_lock`. Falls back to a
-`threading.Lock` on platforms without `fcntl`/`msvcrt`. The reentrancy
-guard is per-thread; it does **not** cross `asyncio.to_thread`
-boundaries.
-
-### `durin/session/manager.py` — `reload(key)` and `save()`
-
-`reload(key)` drops the in-memory cache entry and re-reads from disk
-(load-per-turn semantics). `save()` wraps its entire write unit —
-`.jsonl` append, `.meta.json` update, `.md` regen, FTS reindex — in
-`cross_process_lock(session_path)`, serializing all whole-file writes
-across processes.
-
-### `durin/session/turn_lease.py` — `session_turn_lease(session_path, *, timeout=600)`
-
-Async context manager that acquires the cross-process lock for the whole
-RESTORE..SAVE span of one turn. The blocking `flock` is acquired off the
-event loop via `asyncio.to_thread` so the loop is not blocked during
-contention. The lock is held on `<key>.turn.lock` (a file distinct from
-save()'s `<key>.jsonl.lock`; see lock-ordering below). Wired in
-`durin/agent/loop.py` `_dispatch` after the in-process `asyncio.Lock`
-(fast path). On acquire-timeout it publishes a clear "session busy in
-another window" message rather than dropping the turn silently.
-
-### `durin/config/loader.py` — `save_config` and `mutate_config`
-
-`save_config` wraps its entire write — the multi-file split-layout set plus
-stale-file unlink — in `cross_process_lock(config_path)`.  This serializes
-concurrent writers and makes the split-layout write atomic as a SET relative
-to other lock holders, so a reader under the lock never sees a torn
-cross-section state.
-
-`mutate_config(mutator)` is the lost-update-safe read-modify-write entry
-point: it acquires the lock, reloads the config from disk, calls *mutator*,
-saves, and returns the updated config.  Because `cross_process_lock` is
-reentrant (thread-local guard), the inner `save_config` re-taking the lock
-is safe.
-
-**Residual:** a direct `load_config() → edit → save_config()` not routed
-through `mutate_config` remains last-writer-wins across processes.  This
-matches hermes and is an accepted trade-off; callers are migrated
-opportunistically.
-
-### `durin/cron/service.py` — `CronService` mutators
-
-`CronService` keeps `jobs.json` consistent across processes (gateway
-scheduler + `durin cron` CLI) via `self._lock = FileLock(<cron_dir>.lock)`.
-
-Every mutator that performs a `_load_store → mutate → _save_store`
-read-modify-write now wraps that sequence in `with self._lock:`.  Without
-the lock, two concurrent adders both load the old snapshot, each append one
-job, and the second writer clobbers the first — producing a lost-update.
-
-`filelock.FileLock` is reentrant *within a process* when the same instance
-re-acquires (lock count increments).  `_append_action` and `_merge_action`
-already use `with self._lock:`; a mutator that calls them while holding the
-lock does not deadlock.
-
-**Cross-instance caveat:** a second `FileLock` *instance* on the same path
-acquired on the same thread does NOT reentrantly succeed — a blocking acquire
-deadlocks (hangs); this is why `_on_timer` releases `self._lock` before
-executing jobs (a job callback may build a second `CronService` instance).
-The execution window (after load, before execute) is therefore not serialised
-at the file level. To stop the post-execution save from clobbering external
-edits made during that window, `_on_timer` now **reloads `jobs.json` under the
-final lock and re-applies only the run-state deltas** (`last_status`,
-`last_error`, `last_run_at_ms`, `run_history`, `next_run_at_ms`, `updated_at_ms`,
-plus one-shot disable/removal) onto the freshly-loaded store, matched by job id;
-an executed job removed externally during the window is not resurrected. So a
-concurrent `add_job`/`remove_job`/`enable_job`/`update_job` on *other* jobs
-survives. (See "Residual ledger" for the bounded same-job-schedule-edit case.)
-
-**Read-only path:** `list_jobs`, `get_job`, and `status` call `_load_store`
-without the lock.  They are last-reader-wins, which is acceptable for
-display/scheduling reads.
-
-### `durin/cli/gateway_daemon.py` — `acquire_gateway_singleton()`
-
-Holds `flock(LOCK_EX|LOCK_NB)` on `DURIN_HOME/gateway.lock`. The OS
-releases the lock automatically if the gateway crashes, replacing the
-previous PID-file + `os.kill(pid, 0)` TOCTOU check. `gateway.pid` is
-kept for human-readable status only.
-
-## Lock-ordering invariant
-
-Within a single turn the acquisition order is fixed and must not be
-reversed:
-
-1. In-process `asyncio.Lock` (fast path — no syscall, no I/O)
-2. Turn lease on `<key>.turn.lock` — acquired on a worker thread via
-   `asyncio.to_thread`
-3. *(turn body executes)*
-4. `save()` lock on `<key>.jsonl.lock` — acquired on the event-loop
-   thread inside `save()`
-
-The turn lease (step 2) and the save lock (step 4) use **separate lock
-files** by design. The thread-local reentrancy guard in
-`cross_process_lock` does not cross the `asyncio.to_thread` boundary:
-if both used the same file, `save()` — running on the event-loop thread
-— would deadlock against the turn lease still held by the worker thread.
-Because the three flock files are always distinct and always acquired in
-the same order, there is no opposite-order acquisition and no deadlock
-risk.
-
-## Memory git-worktree lock (sub-hazard A + B)
-
-`_commit_dirty_as_user` and `_fast_forward_working_tree` in
-`durin/memory/memory_writer.py` both mutate the git working tree and
-`.git/index` via dulwich porcelain. Under concurrent durin processes
-(gateway, TUI, cron) sharing one `DURIN_HOME` these mutations could
-interleave; dulwich's `_transition_to_file` is non-atomic
-(unlink-then-recreate).
-
-Both methods acquire `cross_process_lock(<memory_git_root>/.git-worktree)`
-around the dulwich call. Because `cross_process_lock` is reentrant
-per-thread, the common call sequence
-`_commit_dirty_as_user → (CAS) → _fast_forward_working_tree` re-enters
-the lock safely on the same thread.
-
-### Sub-hazard A — concurrent commit + reset corrupt .git/index
-
-The lock serializes `add+commit` and `reset --hard` so they cannot
-interleave and leave `.git/index` in a torn state.
-
-### Sub-hazard B — reset absent-file window {#reset-absent-window}
-
-`reset --hard` (`dulwich porcelain.reset`) internally calls
-`_transition_to_file` which unlinks the file and then recreates it. During
-this window a concurrent reader that calls `path.is_file()` observes
-`False` and may permanently prune the FTS / vector row for a file that is
-still valid.
-
-**Fix:** The two prune paths that act on an absent-file observation both
-acquire the same `.git-worktree` lock before committing to a prune:
-
-- `durin/memory/indexer.py` `reindex_one_file`: when `not md_path.is_file()`
-  in the watcher, the code acquires `.git-worktree` and re-checks
-  `md_path.is_file()`.  If present on re-check, the reset completed and the
-  prune is skipped.  If still absent, the deletion is genuine.
-- `durin/memory/vector_index.py` `prune_orphan_rows`: the initial scan
-  collects rows whose `path` column resolves to an absent file, then acquires
-  `.git-worktree` and re-checks each candidate.  Only still-absent rows are
-  deleted.
-
-**Lock ordering:** `.git-worktree` is the **outermost** memory lock.  The
-prune paths take `.git-worktree` THEN perform the FTS/LanceDB row deletes —
-which take no cross-process lock of their own (SQLite WAL + `busy_timeout` for
-FTS; plain row ops for LanceDB), so they cannot create an opposite-order edge.
-No path takes an FTS/Lance lock and then `.git-worktree`, so there is no
-opposite-order acquisition and no deadlock risk.  The mutation path takes
-`.git-worktree` then dulwich only (no FTS/Lance held during the reset).
-
-The canonical lock-path helper is `git_worktree_lock_path(memory_git_root)`
-in `memory_writer.py`; all three sites (two mutation, two prune) use this
-function so the path cannot drift.
-
-## In-process ref-CAS lock (in-process thread race)
-
-> Not one of the original ranked audit hazards — surfaced during R5 verification
-> (the `test_real_concurrency_threads` stress run). Distinct from audit #9
-> (LanceDB rebuild, fixed in Plan 4) and #18 (cross-process git working tree, R5).
-
-`write_entity` and `write_files_cas` move the memory branch ref with
-dulwich's loose-ref compare-and-swap, `refs.set_if_equals(ref, base,
-new_commit)`, where `base = head_sha(root)`. The CAS itself re-reads and
-compares the ref under a `GitFile` `O_EXCL` `.lock` file and is robust in
-isolation — across both processes and threads (a second writer either sees
-the moved ref and its CAS returns False, or contends on the lock file).
-
-**Hazard (in-process only):** the loss is NOT the bare CAS — it is the
-concurrent, *unlocked* `_fast_forward_working_tree` (`porcelain.reset(root,
-"hard")`) that each writer runs after a successful CAS. That reset is a
-non-atomic `.git` mutation (R5 serializes it **cross-process** via
-`.git-worktree`, but in-process it was not serialized against another
-thread's read-apply-CAS). While one thread is resetting, a peer thread's
-`base = head_sha(root)` reads a **stale or transiently-absent ref**
-(`head_sha()` was observed returning `None` mid-reset). The peer then builds
-and commits on that stale base and its `set_if_equals(ref, stale_base, …)`
-lands against the transient ref state — so two commits share one parent and
-the earlier winner is orphaned, **with no exception and no CAS retry** (the
-losing thread observed `ok=True`). Reproduced deterministically: 32 threads
-each appending a distinct relation to one entity lose ≥1 relation in ~95% of
-20-round trials; instrumentation confirmed one parent sha receiving multiple
-distinct successful `set_if_equals` moves, the earlier winner orphaned. (A
-faithful read→build→CAS loop with the reset removed shows **zero**
-collisions, isolating the reset as the trigger.)
-
-**Fix (in-process):** a module-level `dict[str, threading.RLock]` in
-`memory_writer.py`, keyed by the resolved repo-root path and guarded by a
-small dict lock (`_root_write_lock`), serializes same-process writers around
-the entire read-apply-CAS critical section of both `write_entity` and
-`write_files_cas`. `RLock` (reentrant) so the two writers can nest on one
-thread without self-deadlock. Cross-process writers are unaffected — they run
-in different processes and still serialize on the git ref-CAS.
-
-**Lock ordering:** this in-process `RLock` is the **outermost** memory lock —
-acquired only at the top of the two writers, strictly before the
-`.git-worktree` `cross_process_lock` taken inside `_commit_dirty_as_user` /
-`_fast_forward_working_tree` (which remains inner). The only `.git-worktree`
-holders are the indexer/vector_index prune paths, which never call back into
-`write_entity` / `write_files_cas`, so no path takes `.git-worktree` and then
-this `RLock`: there is no opposite-order edge and no deadlock. Being
-in-process only, the `RLock` cannot deadlock cross-process.
-
-The load-bearing regression is
-`tests/memory/test_memory_writer.py::test_concurrency_threads_stress_no_lost_write`
-(60 rounds × 32 threads): it fails reliably without the lock and passes
-deterministically with it.
-
-## Out-of-turn / direct savers (resolved)
-
-The three savers that previously wrote a session file without holding the turn
-lease — and could therefore clobber a concurrent turn's whole-file write — now
-acquire `session_turn_lease(<session_path>)` and **reload under the lease before
-saving** (so they write fresh disk state, never a stale in-memory copy):
-
-- **HTTP rename** (`durin/service/sessions.py`) — acquires the lease with a
-  short `timeout=30.0`; on `TimeoutError` it raises `ConflictError` ("session
-  is busy, rename not applied") with no partial write, rather than clobbering.
-- **`process_direct`** (`durin/agent/loop.py`) — the cron / HTTP-API
-  / SDK / CLI direct-message entrypoint. Wrapped in the lease (default 600s).
-  On `TimeoutError` it returns the same `_SESSION_BUSY_NOTICE` that `_dispatch`
-  publishes (so API/SDK/CLI callers get a meaningful busy message, not an empty
-  response) and processes nothing — a cron fire simply retries next
-  schedule; no user turn is half-written or duplicated.
-- **Webui background title generation** (`durin/utils/webui_titles.py`, scheduled
-  from `_schedule_background`) — the LLM title call runs **outside** any lease;
-  only the subsequent reload + set-title + `save()` is taken under the lease, so
-  the next turn is never blocked behind a multi-second model call.
-
-The lock-ordering invariant is preserved: each saver takes `<key>.turn.lock`
-(worker thread) then `save()`'s `<key>.jsonl.lock` (event loop) — the same order
-as a normal turn.
-
-## Other resolved residuals
-
-- **`SecretStore` scope edits** (`durin/security/secrets.py`) — `grant`/`revoke`
-  previously did an unlocked `load → set_scope → save`. The whole
-  read-compute-write now runs inside `cross_process_lock(self._path)` via
-  `grant_consumer_locked`/`revoke_consumer_locked` (and `set_scope_locked` for a
-  pre-computed full scope), mirroring `put`/`remove`. The in-memory `set_scope`
-  remains for non-persisting callers (documented as such).
-- **`edit_file`** (`durin/agent/tools/filesystem.py`) — the read→edit→write
-  sequence was a silent lost-update window. It now captures the read content
-  hash and **re-hashes immediately before `atomic_write_bytes`**, aborting with a
-  clear "file changed on disk — re-read and retry" error if the on-disk content
-  changed in the window (optimistic CAS; no `.lock` siblings in the user
-  workspace). `write_file` is an unconditional overwrite (documented
-  last-writer-wins) and is intentionally unchanged.
-- **Stream-delta coalescing** (`durin/channels/manager.py`) — consecutive
-  same-`(channel, chat_id)` outbound deltas are now coalesced **only when their
-  `_stream_id` matches**, so two concurrent streams sharing a chat (Telegram
-  forum topics) no longer bleed text across edit bubbles.
-- **Dream/extract `extract_cursor` vs the `.meta.json` sidecar** (audit #15;
-  `durin/memory/extract_runner.py`) — the cursor used to live inside the sidecar
-  `derived` block, which `SessionManager.save()` rebuilds and `write_derived`
-  *replaces*, so every save **deterministically erased** it (re-extracting the
-  session from scratch); and `set_extract_cursor`'s read-modify-write was
-  unlocked, racing the manager's locked sidecar writes. The cursor now lives at a
-  **top-level** `.meta.json` key (which `write_derived` never touches; legacy
-  `derived.extract_cursor` is still read for back-compat) and its RMW runs under
-  `cross_process_lock(jsonl_path)` — the same `.jsonl.lock` the manager holds.
-
-## Known residuals (decided — not pending work, not technical debt)
-
-Every correctness/data-loss hazard is fixed. **No lockless cross-process
-whole-file RMW remains** — every store of that class is now serialized. Each
-item below is a deliberate decision, not deferred work: it self-recovers, is
-external to durin, or is a measured trade-off where durin stays stable. None
-is a latent unlocked RMW.
-
-1. **No TTL on the held turn lease — decided not to build.** *Failure mode:* an
-   alive-but-stuck process holds `<key>.turn.lock` until it exits or crashes
-   (the OS releases the flock on crash); meanwhile a new turn on that session
-   gets a retriable "session busy in another window" message after the 600s
-   acquire timeout — **not data loss**, and self-resolving when the process
-   ends. *Why not built:* a steal-after-TTL table (hermes `compression_locks`
-   style) would let a waiter seize the lease from a slow-but-alive holder and
-   re-introduce the very clobber the lease prevents — a turn is not idempotent
-   the way compression is. Building it would be net-negative.
-
-2. **`oauth/<provider>.json` token writes — external, out of scope.** Owned by
-   the `oauth-cli-kit` `FileTokenStorage`; durin performs no read-modify-write of
-   these files, so there is nothing durin-side to lock. *Failure mode:* two
-   processes refreshing the same provider token concurrently → last-writer-wins,
-   but both write the same refreshed token, so it is non-destructive and rare
-   (refresh fires ~once per token lifetime). Not a durin residual.
-
-3. **Sessions Phase-B append-only — decided not to do (current design is final).**
-   After Phase B (mid-turn checkpoints → sidecar), a turn-end `save()` does one
-   whole-file `.jsonl` rewrite + one `.md` regen. *Failure mode:* none for
-   correctness — purely write amplification of ~one bounded rewrite per turn
-   (≤~2.5 MB ceiling), and durin is stable at that cost. Finishing append-only
-   would save ~2× on that single write (marginal) while touching core session
-   truth (consolidation boundary + partial-append crash recovery) — the perf gain
-   does not justify the risk. (A measured `.jsonl`-rewrite latency problem would
-   be the trigger to reopen; that is a condition, not a backlog item.)
-
-4. **Cron same-job schedule edit during the execution window — self-healing.** If
-   an external writer changes the *schedule* of the *same* job currently
-   executing, the post-execution reload-merge re-applies that job's run-state
-   delta including a `next_run_at_ms` computed from the *old* schedule. *Failure
-   mode:* the job fires once on the old cadence, then self-heals on the next
-   execution (which recomputes from the current schedule). Bounded, single-cycle;
-   edits to *other* jobs are unaffected.
-
-5. **In-memory, self-healing (no file RMW) — accepted as-is.** **#14** `_subs`
-   snapshot and **#19** `ToolRegistry`: the mutators have no `await` between read
-   and mutate, so they are atomic under single-thread asyncio; only a transient
-   snapshot-staleness across an `await` remains (a missed in-flight streaming
-   frame / a one-turn incomplete MCP tool set), self-healing on the next frame /
-   registry rebuild. Neither is a persisted-file RMW.
-
-**Fixed in the final round:** **#13** tool-result stale content — the spill now
-writes the current payload authoritatively (`maybe_persist_tool_result`), so a
-reused filename can no longer serve stale bytes; the bucket-cleanup `rmtree` only
-removes already-stale (>7d / over-cap) peer buckets and is benign/self-healing,
-left as-is. **#16** deletion-tombstone RMW — `_mutate_deleted` in
-`durin/memory/deletion.py` wraps every `.deleted.json` RMW
-(`clear_delete_tombstone`, `delete_entity`, `delete_reference`) under
-`cross_process_lock(_deleted_path)`; the `.deleted.json.lock` is acquired and
-released *before* `write_entity` takes the in-process RLock / `.git-worktree`
-lock (no nesting, no deadlock).
-
-(Audit items **#10**, **#12**, **#13**, **#16**, **#18** are now fixed — see the
-resolved sections above — as is the in-process ref-CAS thread race.)
-
-## SQLite helpers (FTS5 / derived indexes)
-
-`durin/utils/sqlite_util.py` provides two primitives used wherever durin opens a
-SQLite database that may have concurrent cross-process writers (currently the FTS5
-index at `<workspace>/.durin/index/fts.sqlite`):
-
-**`connect(path, *, read_only=False, busy_timeout_ms=5000)`**
-
-Opens *path* with `check_same_thread=False` and `isolation_level=None`.  For
-read-write connections it sets WAL journal mode (with a DELETE-journal fallback for
-NFS/SMB/FUSE filesystems that reject WAL locking), `PRAGMA busy_timeout`, and
-`PRAGMA synchronous=NORMAL`.  When `read_only=True` the database is opened via a
-`file:?mode=ro` URI — no write lock is ever taken and the WAL/journal/busy
-pragmas are skipped (a read-only connection cannot set them and does not need to).
-
-**`execute_write(conn, fn, *, attempts=15)`**
-
-Runs `fn(conn)` inside `BEGIN IMMEDIATE … COMMIT`.  `BEGIN IMMEDIATE` acquires the
-write lock at transaction start, so no other writer can interleave.  On
-`SQLITE_BUSY` / "locked" errors it rolls back, sleeps 20–150 ms with random jitter,
-and retries up to *attempts* times.  Any other `OperationalError` is re-raised
-immediately.
-
-Together these two primitives ensure that concurrent cross-process writers (gateway,
-TUI `AgentLoop`, cron) do not drop FTS5 rows due to unretried
-`SQLITE_BUSY` errors.
-
-## Per-turn provider snapshot (hazard #8)
-
-The gateway runs a single shared `AgentRunner` instance.
-`AgentLoop._apply_provider_snapshot` (`durin/agent/loop.py`) calls
-`runner.provider = new_provider` on each session's `/model` swap or
-per-turn provider refresh.  Because multiple sessions share the same runner,
-a concurrent swap can mutate `self.provider` while another session's turn is
-mid-flight inside `run()` — causing that in-flight turn to call the wrong
-provider (wrong model, auth, or endpoint), producing "model not found" errors
-or routing responses to the wrong backend.
-
-**Fix:** `AgentRunSpec` carries an optional `provider: LLMProvider | None`
-field (per-turn snapshot).  `AgentRunner.run()` resolves
-`provider = spec.provider or self.provider` once at entry and passes that
-local reference into every method that makes a model call
-(`_request_model`, `_request_finalization_retry`, `_mid_turn_precheck`,
-`_snip_history`).  `self.provider` is unchanged — it remains the shared
-default and the fallback for callers that do not set `spec.provider`.
-
-`AgentLoop` sets `spec.provider` in `_dispatch` immediately after
-`_apply_provider_snapshot` so the snapshot is always the provider that was
-active at the moment the turn was dispatched.
-
-`SubagentManager._run_subagent` (`durin/agent/subagent.py`) applies the same
-fix: it captures `self.runner.provider` immediately before building the
-`AgentRunSpec` and passes it as `provider=`.  `SubagentManager.set_provider`
-mutates `self.runner.provider` on each session's `/model` swap; without this
-capture, a concurrent swap could change the provider mid-flight inside a
-background subagent turn.
-
-## AliasIndex in-process staleness (hazard #17)
-
-`AliasIndex` is built lazily once per process via
-`aliases_cache.get_shared_alias_index(memory_root)` and then mutated
-incrementally.  All three runtime consumers (memory search, refine pass,
-entity absorption) share the same in-memory instance.
-
-**Hazard:** `write_entity` commits a new or updated entity page to git
-but previously did NOT call `AliasIndex.refresh_for` on the shared
-instance — a freshly written entity was invisible to entity-aware ranking
-until the process restarted.
-
-**Fix (in-process):** `memory_writer._refresh_alias_index` is called
-after every successful `write_entity` CAS commit.  It calls
-`AliasIndex.refresh_for(page, slug)` (incremental — not a full rebuild)
-on the already-cached index.  The guard `_cache.get(memory_root) is None`
-skips the call when the index has not been built yet in this process, so
-entity writes before the first search query impose no build cost.
-
-**Cross-process divergence** (a second process' AliasIndex missing the
-write) is a known accepted residual: cross-process consumers rebuild the
-index on process start from the git-committed pages, so the divergence
-self-heals on restart.  No cross-process lock or invalidation is needed
-for this path.
+# Concurrency
+
+## 1. Purpose
+
+durin runs as several independent OS processes that share one `DURIN_HOME`
+directory: the gateway daemon, the Textual TUI (which embeds its own
+[agent loop](loop.md)), and the [cron](cron.md) scheduler. Any of them can be
+writing the same session, the same config file, or the same memory entity at the
+same instant. There is no central database server arbitrating those writes — the
+files on disk are the shared state.
+
+This document describes how durin keeps that shared state consistent: the
+invariant that decides what is authoritative, the locks that serialize the
+writes that touch it, and the lock-ordering rule that keeps those locks from
+deadlocking each other.
+
+## 2. Mental model
+
+Three ideas explain every coordination decision in the codebase.
+
+**Files are the source of truth; indexes are derived.** Session transcripts
+(`sessions/<key>.jsonl` + `<key>.meta.json` + `<key>.md`) and memory markdown
+(`memory/**/*.md`) are authoritative. The FTS5 SQLite index (`fts.sqlite`) and
+the LanceDB vector table are *derived* projections that accelerate search. A
+write must make the file correct; the index can always be rebuilt from the
+files. This is what lets writers coordinate over the files alone — they never
+have to keep a database schema consistent with the transcript, because the
+transcript *is* the database.
+
+**Disjoint critical sections get independent lock files.** durin does not have
+one global lock. Each kind of write that must be serialized gets its own lock
+file scoped to exactly what it protects: a turn lease per session, a save lock
+per session, a config lock, two cron locks, and a memory working-tree lock. Two
+processes editing two different sessions never contend; two processes editing
+the *same* session serialize on that session's locks. The primitive underneath
+is `cross_process_lock` in `durin/utils/file_lock.py` — an advisory `flock()`
+that the OS releases automatically if the holding process dies.
+
+**Load-per-turn, then save under lock.** A long-lived process must not trust its
+in-memory copy of a session, because another process may have appended to it.
+So at the start of each turn the loop calls `SessionManager.reload()`, which
+drops the cache and re-reads from disk; the turn body runs; `save()` then writes
+the result back under the session save lock. Reading fresh and writing under a
+lock is what prevents a stale in-memory view from clobbering a peer's write.
+
+## 3. Diagram
+
+The lock domains and how the three processes use them. Each domain is an
+independent lock file protecting a disjoint critical section. The dashed edges
+show the strict acquisition order — it forms a directed acyclic graph, so no two
+locks can be waited on in opposite orders and there is no deadlock cycle.
+
+```mermaid
+flowchart TB
+    subgraph procs["Processes sharing one DURIN_HOME"]
+        GW["gateway daemon"]
+        TUI["TUI agent loop"]
+        CRON["cron scheduler"]
+    end
+
+    subgraph domains["Lock domains (independent files)"]
+        TURN["session turn lease<br/>&lt;key&gt;.turn.lock"]
+        SAVE["session save lock<br/>&lt;key&gt;.jsonl.lock"]
+        CFG["config lock<br/>config.json.lock"]
+        TICK["cron tick lock<br/>.tick.lock"]
+        CACTION["cron store lock<br/>action.jsonl-dir .lock"]
+        GWT["memory working tree<br/>.git-worktree.lock"]
+    end
+
+    GW --> TURN
+    GW --> CFG
+    GW --> TICK
+    GW --> GWT
+    TUI --> TURN
+    TUI --> CFG
+    CRON --> TURN
+    CRON --> TICK
+    CRON --> CACTION
+    CRON --> GWT
+
+    TURN -.acquire order.-> SAVE
+    GWT -.acquire order.-> FTS["FTS5 / LanceDB indexes"]
+
+    classDef dom fill:#1f2933,stroke:#52606d,color:#e4e7eb;
+    class TURN,SAVE,CFG,TICK,CACTION,GWT dom;
+```
+
+Two more orderings are in-process, so they do not appear as files but are part of
+the same acyclic rule:
+
+- An in-process `asyncio.Lock` per session is acquired **before** the turn lease,
+  so same-process turns on one session never even reach the cross-process lock
+  concurrently.
+- An in-process `threading.RLock` per memory repo is acquired **before** the
+  `.git-worktree` lock, making it the outermost memory lock.
+
+Putting the full order in one line, from outermost to innermost:
+
+> `asyncio.Lock` (session) → `.turn.lock` → `.jsonl.lock`, and separately
+> memory `RLock` → `.git-worktree` → FTS5/LanceDB.
+
+No path acquires these in the reverse direction, so the graph has no cycle.
+
+## 4. How it works
+
+### The turn path
+
+A turn is the whole `RESTORE..SAVE` span of handling one inbound message. The
+[agent loop](loop.md) serializes it like this:
+
+1. **In-process gate first.** `_dispatch` acquires a per-session
+   `asyncio.Lock` from `self._session_locks`. This is fast and does no I/O; it
+   guarantees that within one process, two turns on the same session run one at a
+   time.
+
+2. **Cross-process turn lease.** Still inside that lock, the loop enters
+   `session_turn_lease(session_path)`
+   (`durin/session/turn_lease.py`). The lease acquires
+   `cross_process_lock(<key>.turn.lock)` — but via `asyncio.to_thread`, so the
+   blocking `flock()` runs on a worker thread and the event loop keeps serving
+   other sessions while it waits. The acquire timeout is generous (600 s,
+   because tool-heavy turns routinely run for minutes). On timeout the loop
+   catches `TimeoutError` and publishes a clear "session is busy in another
+   window" message instead of dropping the turn silently.
+
+3. **Load-per-turn.** Under the lease, the loop calls
+   `SessionManager.reload(key)`, which pops the cache entry and re-reads the
+   `.jsonl` and `.meta.json` from disk. Every turn therefore starts from the
+   freshest on-disk state, even if a peer process appended turns since.
+
+4. **Turn body.** The runner executes LLM iterations and tools. **No file lock
+   is held across an LLM call** — the turn lease is the only cross-process lock
+   held here, and it exists precisely so a peer waits rather than racing.
+
+5. **Save under the save lock.** At turn end, `SessionManager.save()` acquires
+   `cross_process_lock(<key>.jsonl)` — note the *different* lock file,
+   `<key>.jsonl.lock`, distinct from the turn lease's `<key>.turn.lock`. Under
+   it, the write is one atomic unit: write a temp file, `os.replace()` it over
+   the `.jsonl`, mirror derived metadata into the `.meta.json` sidecar,
+   regenerate the navigable `<key>.md` view, and incrementally FTS-index the new
+   turns. If anything fails the temp file is removed and the original is intact.
+
+6. **Release.** The lease releases in the loop's `finally`; the save lock
+   releases when `save()` returns. If the process dies mid-turn, the OS releases
+   both `flock()` locks automatically.
+
+The turn lease and the save lock are deliberately **separate files**. `save()`
+runs on the event-loop thread, while the lease was acquired on a worker thread
+via `asyncio.to_thread`. The reentrancy guard in `cross_process_lock`
+(`_held_set`, a `threading.local`) is per-thread and does **not** cross that
+thread boundary — so if both used one file, `save()` would try to re-acquire a
+lock held by a different thread and deadlock. Two files sidestep the problem
+entirely.
+
+Within a single thread the reentrancy guard *does* help: `save()` can be called
+from inside another already-locked section on the same thread and the guard lets
+it pass through without a second syscall.
+
+All writers that touch a session outside the normal turn path acquire the same
+lease and reload before saving: the HTTP session-rename handler, cron's direct
+message handler, and the background webui title-generation save. None of them
+can clobber a concurrent turn, because they queue behind its lease.
+
+The session's `extract_cursor` (used by [dream](memory/05_dream_cold_path.md))
+lives at a **top-level** key in `.meta.json`, not inside the `derived` block
+that `save()` rebuilds, and its read-modify-write runs under the same
+`.jsonl.lock`. That keeps a cursor advance from being erased by a concurrent
+session save.
+
+### Config writes
+
+Config lives as a split-file layout (`config.json.d/agents.json`, `providers.json`,
+…) with a marker `config.json`. `save_config()` wraps the *entire* multi-file
+write — every per-topic file plus the stale-file cleanup — in
+`cross_process_lock(config_path)`, so a concurrent reader under the same lock
+never sees a half-written cross-section.
+
+For read-modify-write, `mutate_config(mutator)` is the safe entry point: it takes
+the config lock, reloads from disk under it, applies the mutator, and saves
+(the inner `save_config` re-takes the same lock reentrantly on the same thread).
+A direct `load_config() → edit → save_config()` that is *not* routed through
+`mutate_config` is last-writer-wins across processes — an accepted trade-off for
+that convenience path, not a coordinated write.
+
+### Cron
+
+The cron scheduler uses two **separate** `FileLock` instances on two different
+paths, and the distinction is load-bearing:
+
+- `_tick_lock` (`.tick.lock`) guards at-most-once execution. `_on_timer`
+  acquires it **non-blocking**; if another scheduler process is already ticking,
+  this one skips the tick rather than queueing. It is held for the *whole* tick
+  so a peer cannot pick up the same due job during the execution window.
+- `_lock` (the cron store lock) serializes the load/save read-modify-write of
+  `jobs.json` for every mutator (add, remove, enable, update).
+
+The non-obvious part: `_on_timer` **releases `_lock` before running a job**, then
+re-acquires it afterward to merge run-state deltas onto a freshly reloaded store.
+This is required because `FileLock` is reentrant within a single instance on the
+same thread but does **not** reenter across instances on the same path — if a job
+callback constructed a second `CronService` and called a mutator, that mutator
+would try to take `_lock` on a second instance pointing at the same file and
+deadlock. Releasing before the (possibly minutes-long) job both avoids that and
+keeps the store readable while the job runs. Due jobs have their `next_run`
+advanced and saved *before* the lock is released, which is the at-most-once
+guard: a racing scheduler reloads the already-advanced value and finds nothing
+due.
+
+Each cron run also executes as an isolated session (`cron:<id>:run:<ts>`) and
+acquires the session turn lease through the shared turn path, so a cron job and
+an interactive turn on the same key cannot run at once.
+
+### Memory writes
+
+A memory write (`write_entity` / `write_files_cas` in
+`durin/memory/memory_writer.py`) edits the git-backed memory repo with two
+nested locks:
+
+1. **In-process `RLock` (outermost).** `_root_write_lock(root)` returns a
+   process-wide `threading.RLock` keyed by the resolved repo path. The writer
+   holds it across the entire read-apply-compare-and-swap-reset section. This
+   serializes same-process writer *threads*: without it, one thread's working-tree
+   reset (`reset --hard`) transiently makes the git ref stale, a peer thread reads
+   that stale base, commits on it, and its compare-and-swap lands — silently
+   orphaning the other write. It is an `RLock` so the two writer functions can
+   nest on one thread, and being in-process it can never deadlock cross-process.
+
+2. **`.git-worktree` lock (inner).** `cross_process_lock(git_worktree_lock_path(root))`
+   serializes the working-tree mutation across processes. The actual ref update is
+   a content-addressed `refs.set_if_equals` compare-and-swap that retries on
+   conflict, so the durable commit is safe on its own; this lock guards the
+   `reset --hard` that fast-forwards the working tree afterward.
+
+The same `.git-worktree` lock is taken by the prune paths in the indexer and the
+vector index. A `reset --hard` briefly removes and rewrites working-tree files,
+which a concurrent indexer could misread as a genuine deletion. So the prune
+paths acquire `.git-worktree` and then **re-check `is_file()` under the lock**: if
+the file is present the reset has completed and the prune is skipped; if it is
+genuinely absent the orphan row is removed. The in-process `RLock` is always
+acquired before `.git-worktree`, and the prune paths only ever take
+`.git-worktree` (never calling back into the writers), so there is no
+opposite-order edge.
+
+### The SQLite index
+
+The FTS5 index (`fts.sqlite`) is the one place durin opens a SQLite database with
+concurrent cross-process writers, so it gets dedicated helpers in
+`durin/utils/sqlite_util.py`:
+
+- `connect()` opens in WAL mode (falling back to DELETE journaling on
+  network filesystems that reject WAL), sets a `busy_timeout`, and uses
+  `check_same_thread=False`.
+- `execute_write()` runs each mutation inside `BEGIN IMMEDIATE … COMMIT`, which
+  takes the write lock at transaction start so writers cannot interleave, and
+  retries with jitter on `SQLITE_BUSY`.
+
+These apply **only** to the derived SQLite index. Sessions and config are plain
+`.jsonl`/`.json` files coordinated by `cross_process_lock`, not by SQLite
+transactions.
+
+### Provider snapshots
+
+The gateway runs a single shared runner, and `/model` on one session mutates
+`self.provider` for the whole process. To keep that from changing a different
+session's model mid-turn, each turn captures a **per-turn provider snapshot**:
+`_dispatch` resolves the effective provider once and passes it as the `provider`
+field of `AgentRunSpec`. The runner pins `spec.provider or self.provider` at the
+top of the run, so a concurrent swap on another session cannot alter a turn
+already in flight. See [providers](providers.md) for how snapshots are resolved.
+
+## 5. Key types & entry points
+
+| Symbol | File | Role |
+|---|---|---|
+| `cross_process_lock` | `durin/utils/file_lock.py` | Reentrant cross-process advisory `flock` on `<target>.lock`; in-process `threading.Lock` fallback where `fcntl`/`msvcrt` are unavailable. |
+| `_held_set` (thread-local) | `durin/utils/file_lock.py` | Per-thread set of held lock paths enabling same-thread reentrancy; does **not** cross `asyncio.to_thread`, which is why the turn lease and save lock use separate files. |
+| `session_turn_lease` | `durin/session/turn_lease.py` | Async context manager holding `<key>.turn.lock` for a whole turn (600 s acquire timeout) via `asyncio.to_thread`; wraps interactive turns and all out-of-turn savers. |
+| `SessionManager.reload` / `.save` | `durin/session/manager.py` | `reload` drops the cache and re-reads (load-per-turn); `save` does the atomic `.jsonl`/`.meta.json`/`.md` + FTS write under `cross_process_lock(<key>.jsonl)`. |
+| `save_config` / `mutate_config` | `durin/config/loader.py` | `save_config` wraps the split-layout write in the config lock; `mutate_config` is the lost-update-safe read-modify-write entry point. |
+| `CronService._lock` / `_tick_lock` | `durin/cron/service.py` | Two independent `FileLock` instances: store read-modify-write serialization, and non-blocking at-most-once tick guard. |
+| `git_worktree_lock_path` | `durin/memory/memory_writer.py` | Canonical `.git-worktree` lock target shared by writers and the indexer/vector prune paths. |
+| `_root_write_lock` (RLock dict) | `durin/memory/memory_writer.py` | In-process per-repo `threading.RLock`; outermost memory lock around the whole read-apply-CAS-reset section. |
+| `sqlite_util.connect` / `execute_write` | `durin/utils/sqlite_util.py` | WAL + `busy_timeout` connection and `BEGIN IMMEDIATE` + retry write wrapper, for the derived FTS5 index only. |
+
+## 6. Configuration & surfaces
+
+Concurrency coordination is structural, not configured — there are no knobs to
+turn locking on or off. A few related fields:
+
+- **Per-turn provider snapshot** — `agents.defaults.model` / `agents.defaults.provider`
+  feed the snapshot carried in `AgentRunSpec` so concurrent provider swaps do not
+  reach an in-flight turn (see [providers](providers.md)).
+- **Cron schedule** — each job's `schedule` (`kind`, `expr`, `tz`, `at_ms`,
+  `every_ms`) and `payload` are stored in `jobs.json`, mutated under the cron
+  store lock (see [cron](cron.md)).
+- **Memory** — `memory.enabled` gates whether the memory writer runs at all (see
+  [memory](memory/00_overview.md)).
+
+**Surfaces.** The locks are invisible to users; their effects are not. The
+gateway, TUI, and webui all operate over the same `DURIN_HOME`, so a session open
+in two windows surfaces the "session is busy in another window" notice when a
+second turn tries to start before the first releases its lease. Cron runs and the
+API session-rename endpoint participate in the same turn-lease discipline.
+
+**Out of scope by design.** OAuth provider token files (`oauth/<provider>.json`)
+are written by the external provider SDK without `cross_process_lock`; refreshes
+are last-writer-wins, which is acceptable for short-lived tokens that the next
+request simply re-reads. The in-memory alias index in memory is rebuilt per
+process at boot and is intentionally not shared across processes — each process
+reconstructs it from the markdown, which is the authoritative source. These are
+accepted trade-offs, not coordinated critical sections.
+
+## 7. Curated rationale
+
+durin keeps sessions and memory as plain files rather than moving them into a
+database, even though a database would arbitrate concurrent writes for free. The
+reason is the source-of-truth invariant: session transcripts are bounded (a few
+thousand messages), so there is no scaling pressure forcing a database, and
+keeping the truth in files preserves the ability to `grep`, `cat`, `git`, and
+hand-recover state. The cost of that choice is that durin has to do its own
+cross-process coordination — which is exactly what this subsystem is.
+
+The recurring shape of every fix here is the same: serialize the narrowest thing
+that can race, on its own lock file, in a fixed order. Independent lock files
+keep unrelated work parallel; the fixed order keeps the locks from deadlocking;
+the advisory `flock()` keeps a crashed process from wedging the system, because
+the OS drops its locks. The two-file split between the turn lease and the save
+lock, and the two-instance split between cron's tick lock and store lock, both
+exist for the same underlying reason: a lock that is reentrant within a thread or
+an instance is *not* reentrant across the thread or instance boundary that those
+code paths actually cross, so the safe design is to give each boundary its own
+lock rather than rely on reentrancy that does not hold.

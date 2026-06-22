@@ -1,430 +1,400 @@
-# Skills — as-built architecture overview
+# Skills — architecture overview
 
-> **What this is.** The single as-built reference for durin's skills subsystem: what
-> it does *today*, how the pieces fit, and where each lives in code. Companion:
-> [`01_format_and_interop.md`](01_format_and_interop.md) (the SKILL.md format contract).
->
-> Citations are **file + symbol** (stable across edits); grep the symbol to land on it.
-
----
-
-## 1. The model: a skill is a versioned plugin
-
-A skill is a directory `skills/<name>/` whose `SKILL.md` carries open-standard
-frontmatter ([agentskills.io](https://agentskills.io)) plus a durin namespace
-(`metadata.durin.*`). Skills can bundle `scripts/`, `references/`, `assets/`.
-
-Two locations:
-- **Builtin** — shipped with durin (`durin/agent/skills.py::BUILTIN_SKILLS_DIR`). The
-  stable seed; never re-curated/forked until copied into the workspace.
-- **Workspace** — `<workspace>/skills/`, a **git subtree** managed by
-  `durin/utils/gitstore.py::GitStore`. This is where created/imported/evolving skills live.
-
-**Every mutation goes through one chokepoint** — `durin/agent/skills_store.py` — and
-**every mutation is a git commit** (`GitStore.auto_commit`). So a skill's full history
-(create → edits → fuse) is in git: rollback = `git revert`, "why" = the commit message,
-and **the original (as-imported / as-created) is the first commit** — never lost,
-always diffable (`git diff <import-commit>..HEAD`). There is no separate `original/`
-copy; git *is* that layer.
-
-### Frontmatter durin reads (`metadata.durin.*`)
-
-| Field | Meaning | Read in |
-|---|---|---|
-| `mode` | `manual` (user-owned, hand-edited) or `auto` (dream-evolved). Default by origin: builtin→auto, user→manual. | `skills_store.py::read_mode` |
-| `provenance` | `{source, content_hash, verdict, created_at, …}` — where it came from + the gate decision at install. | stamped in `skills_import.py::install_imported_skill`, `skills_store.py::dream_create_skill` |
-| `always: true` | **Force the full SKILL.md body into the system prompt every turn** ("Active Skills"). Max incentive to use. | `skills.py::get_always_skills`, `context.py` |
-| `disable_model_invocation: true` | Hide from the model's catalog (still loadable by code). | `skills.py::build_skills_summary` |
-| `requires.{bins,env}` | Availability gate: a skill is "unavailable" if a required CLI/env is missing. | `skills.py::_check_requirements` |
-
-Top-level frontmatter (name, description, `install`, `platforms`, …) is the open
-standard — see `01_format_and_interop.md`.
+> Single as-built reference for durin's skills subsystem: what it does today,
+> how the pieces fit, and where each lives in code. For the SKILL.md format
+> contract, see [`01_format_and_interop.md`](01_format_and_interop.md).
+> Citations are **file + symbol** (grep-stable).
 
 ---
 
-## 2. Lifecycle (the whole arc)
+## 1. Purpose
 
+A skill is a markdown plugin that teaches durin how to perform a class of
+tasks — installed once, refined over time, surfaced to the agent precisely
+when it is needed. The subsystem manages the full lifecycle: authoring new
+skills from session experience, importing verified skills from external
+registries, curating and evolving skills based on live usage feedback, and
+retiring skills that are no longer needed. Three properties define it:
+
+- **Git-backed versioning.** Every skill lives in a git-tracked directory
+  (`workspace/skills/<name>/`). Every mutation — create, edit, import, fuse —
+  is a committed diff. History is an audit trail; rollback is `git revert`.
+- **Single mutation chokepoint.** All writes go through
+  `durin/agent/skills_store.py`. External sources (import, discovery,
+  dream-create) pass through an explicit validate + scan + gate pipeline before
+  any commit is made.
+- **Three-tier retrieval.** Skills reach the agent via always-injection (full
+  body, every turn), a usage-ranked hot-tier (names and descriptions), or
+  on-demand FTS and vector search — matched to context window cost versus
+  coverage needs.
+
+---
+
+## 2. Mental model
+
+**Skills are versioned markdown plugins with two homes.** Builtins ship with
+the durin package (`durin/skills/`; managed as `BUILTIN_SKILLS_DIR`). The
+workspace git subtree (`workspace/skills/`) is the mutable layer: user-created,
+imported, and dream-evolved skills live here. A workspace skill of the same name
+shadows its builtin counterpart. Removing the workspace copy restores the
+builtin.
+
+**One chokepoint enforces the gate.** `durin/agent/skills_store.py` is the
+single write path for every origin — the in-loop agent tool, the daily dream
+pass, import, and curation all converge on the same commit machinery.
+The import gate (`decide_action` in `durin/agent/skills_import.py`) is enforced
+in code, never in prompt: dangerous sources are blocked, code-carrying or
+cautioned sources require human confirmation, and only safe allowlisted sources
+auto-proceed. The gate runs again at install, even if an earlier scan said safe.
+
+**Three retrieval tiers match context cost to need.** Always-tier (`always:
+true`) injects the full SKILL.md body into the stable system prompt every turn —
+high cost, maximum incentive. The hot-tier lists names and descriptions for the
+usage-ranked working set, letting the agent pull full bodies on demand. The
+searchable tier indexes every skill as a memory class (FTS and vector) reachable
+via `memory_search(kind=skill)` — zero marginal cost until queried.
+
+---
+
+## 3. Diagram
+
+```mermaid
+flowchart TD
+    subgraph Source["Source paths"]
+        U["In-loop agent\nskill_write / skill_edit"]
+        D["Dream skill-extract pass\nrun_skill_extract_pass"]
+        I["Registry discovery\nskill_search → skill_import"]
+        M["Manual import\nskills_import.py"]
+    end
+
+    subgraph Gate["Validation and gating"]
+        RC["resolve_candidates\nfetch into quarantine"]
+        VS["validate_skill\nscan_skill → ScanReport"]
+        DA["decide_action\ndangerous→block\ncode/caution/unknown→confirm\nsafe+allowlisted→allow"]
+        II["install_imported_skill\nre-scan + enforce gate in code\nstamp provenance"]
+    end
+
+    subgraph Storage["Workspace git subtree"]
+        SK["workspace/skills/name/\nSKILL.md + assets\nGitStore auto_commit\nAttribution trailers"]
+        QU["import-quarantine/\n.durin/import-quarantine/"]
+        OB[".observations.jsonl\ngap / correction / improvement"]
+    end
+
+    subgraph Evolve["Mutation and curation"]
+        CC["curate_catalog\ndaily delta: evolve / fuse / retire / principle"]
+        FW["fork_on_write\ncopy builtin into workspace before edit"]
+        DR["check_upstream_drift\nre-fetch + re-scan → evolve via judge"]
+    end
+
+    subgraph Retrieval["Retrieval tiers"]
+        AT["Always-tier\nfull body in stable prompt\nget_always_skills"]
+        HT["Hot-tier\nnames + desc working-set\ncompute_working_set"]
+        SR["Searchable\nFTS + vector via SkillPage\nmemory_search kind=skill"]
+    end
+
+    subgraph Remove["Removal"]
+        RM["remove_skill\nworkspace dir deleted + commit"]
+        RV["revert-to-builtin\nworkspace fork deleted → builtin reappears"]
+    end
+
+    U --> SK
+    D --> SK
+    I --> RC
+    M --> RC
+    RC --> QU
+    QU --> VS
+    VS --> DA
+    DA -->|allow| II
+    DA -->|confirm| II
+    II --> SK
+    SK -->|auto/workspace| CC
+    SK --> FW
+    FW --> SK
+    CC --> DR
+    DR --> SK
+    SK --> AT
+    SK --> HT
+    SK --> SR
+    OB -->|evidence| CC
+    SK -->|mode=auto| RM
+    SK -->|builtin fork| RV
 ```
-                 ┌──────────── create (own experience) ──────────┐
- user/agent ──►  │  in-loop: skill_write / skill_edit            │
-                 │  dream skill-extract pass: mine sessions →     │──► skills/<name>/  ──► retrieval
- registries ──►  │    skill_write (recurring procedure)          │     (git subtree)      (hot-tier +
-                 │  import (§6.B) → §8.C gate → install           │         │               searchable)
-                 │  acquire-on-gap (§6.C): search → safe seed     │         │
-                 └───────────────────────────────────────────────┘         │
-                                                                            ▼
-                                  memory_dream cron, curate_catalog pass: curate (evolve/fuse) + drift (§8.D)
-```
-
-Six capabilities: **create · import · discover ·
-acquire · evolve · remove**. The first five converge on the same versioned `adapted` skill
-in the git subtree; **remove** (§3a) is their inverse — the only mutation that takes a skill
-out of the workspace.
 
 ---
 
-## 3. Creation
+## 4. How it works
 
-**In-loop (the agent, mid-session).** Core tools `skill_write` (new) and `skill_edit`
-(bounded edit; a `manual` skill needs `confirm=true`, a builtin forks into the workspace
-first). Both route through `skills_store.py` (provenance + commit). The in-session
-prompt (`templates/agent/skills_section.md`) also drives **acquire-on-gap** — see §5.
+### Create
 
-**The skill-extract pass (autonomous).** `durin/memory/dream_passes.py::run_skill_extract_pass`
-→ `_skill_extract_async` is the skills arm of the daily `memory_dream` cron (§6). Its input
-(`_skill_extract_messages`) is the most recent **sessions** (`max_sessions`, default 3 —
-`_recent_sessions_text`, capped at ~12k chars) **plus the OPEN `new:*` gap observations**
-(§6a) rendered as a `LOGGED GAPS` block — distilled, pre-named skill candidates the agent
-flagged while working, so extraction can run even on a day with no sessions. It runs a
-sub-agent (`durin/agent/runner.py::AgentRunner`, `max_iterations=8`) whose system prompt
-(`_SKILL_EXTRACT_PROMPT`) asks it to author a skill **only when a reusable, recurring
-multi-step procedure appears**, reusing/extending an existing skill rather than duplicating
-it, complying with the active cross-cutting principles (§6a), and using a gap's working
-name **verbatim** — after the run, `_resolve_gap_observations` marks any gap whose name
-materialized as APPLIED. The sub-agent is given a minimal toolset — `ReadFileTool`,
-`EditFileTool`, and `SkillWriteTool` (NO registry/acquire tools). When it calls `skill_write`
-the write routes through `skills_store.py::dream_create_skill` (provenance `source=dream`,
-`mode=auto`, committed). On a quiet day with no sessions and no gaps the pass returns early
-(`reason="no_sessions"`) and never calls the LLM.
+Two paths produce new skills:
 
-This is the **create** path. See §6 for the single `memory_dream` cron and its passes.
+**In-loop agent.** The `skill_write` core tool calls
+`skills_store.dream_create_skill`, which stamps provenance frontmatter
+(`source`, `created_at`, `content_hash`), initializes the `SKILL.md`, and
+calls `GitStore.auto_commit` with Attribution trailers (Actor, Session, Agent).
+`skill_edit` (bounded update) forks a builtin into the workspace via
+`fork_on_write` before applying the diff, so the builtin package is never
+touched. Both paths call `_sync_index` to update FTS and vector after the
+commit.
 
-### 3a. Removal (remove / revert-to-builtin)
+**Dream skill-extract pass.** `durin/memory/dream_passes.py::run_skill_extract_pass`
+runs a sub-agent (`AgentRunner`, `max_iterations=8`) over recent sessions plus
+any logged `new:*` gap observations. When the sub-agent finds a recurring
+multi-step procedure it calls `skill_write` — the same tool as the in-loop
+agent, routing through the same chokepoint. The pass returns early without an
+LLM call when there are no sessions and no gap observations.
 
-The inverse of import — `skills_store.py::remove_skill`, the mirror of
-`install_imported_skill`. Like every mutation it routes through the one chokepoint and is a
-git commit, so a removal is recoverable from history. It **only ever** operates on the
-workspace dir (`<workspace>/skills/<name>/`); the package builtins (`durin/skills/`) are
-never touched. `skills_store.py::removable_action` classifies the target into three cases —
-the single source of truth surfaced as `removable` on each inventory row
-(`skills_surface.py::skills_inventory`) so the web panel and CLI offer the right action:
+### Import
 
-| Case | Condition | `removable` | Effect |
+All external sources (registry hits, GitHub refs, HTTPS URLs, local paths) share
+one pipeline in `durin/agent/skills_import.py`:
+
+1. `resolve_candidates(source)` resolves the ref to one or more candidates.
+2. `fetch_candidate` downloads into `.durin/import-quarantine/<name>/` (zip-slip
+   safe, SSRF-safe, file size and count capped by `skills.security` limits).
+3. `validate_skill` checks the agentskills.io format (name, description, code
+   detection via `iter_code_files`).
+4. `scan_skill` (`durin/security/skill_scan.py`) runs a deterministic static
+   scan: body regex rules (prompt injection, hidden instructions, sensitive
+   paths, secrets, unicode bidi) plus an AST behavioral pass on bundled Python
+   scripts (shell exec, dynamic eval, reverse shell patterns). Returns a
+   `ScanReport` with `findings` and a `verdict` of `safe`, `caution`, or
+   `dangerous`.
+5. `decide_action(source, verdict=..., carries_code=..., allowlist=...)` applies
+   the trust-times-verdict gate: `dangerous` → block; `carries_code` OR
+   `caution` OR source not in allowlist → confirm; safe + allowlisted → allow.
+6. `install_imported_skill` re-runs the scan on the quarantined copy (fresh, in
+   case of tampering since the initial scan), enforces the gate a second time in
+   code, stamps `metadata.durin.provenance`, and calls `GitStore.auto_commit`.
+   `_sync_index` updates the search indices.
+
+The optional LLM judge (`durin/security/skill_judge.py`,
+`skills.security.llm_judge.trigger`, default `off`) adds a semantic layer after
+the static scan for paraphrased or non-English injection patterns. It is
+opt-in; the static scan is always the primary gate.
+
+### Discover
+
+`durin/agent/skill_registry.py` provides a `SkillRegistry` protocol and two
+adapters: `SkillsShRegistry` (queries `skills.sh/api/search`) and
+`ClawHubRegistry` (queries clawhub's ranked `/api/v1/search?q=` endpoint — not
+its recency list). `search_registries` queries both adapters in parallel
+(SSRF-safe), deduplicates by ref, and round-robin interleaves results using a
+stable `crc32` tiebreak so no registry permanently owns the top slot.
+
+A preview call (`describe` endpoint / `web_skill_describe`) reads only the
+SKILL.md body from the remote source — it never installs or executes anything
+and degrades gracefully on network errors. This lets users inspect a skill
+before routing it through the import gate.
+
+### Evolve
+
+`durin/agent/skill_curation.py::curate_catalog` runs as the final step of the
+daily dream cron. It reviews only the change-gated delta: `mode="auto"` AND
+`source="workspace"` skills that `needs_curation` (body changed since last
+pass), plus any auto workspace skill with an OPEN observation even if its body
+is unchanged. An LLM judge proposes `evolve` (surgical edit), `fuse` (merge
+near-duplicates via `dream_fuse_skills`), `retire` (delete via `remove_skill`,
+git-recoverable), `principle` (add a cross-cutting rule), or `retire_principle`
+actions. The judge receives OPEN observations as evidence and DECLINED history
+to prevent re-proposing rejected changes. Imported skills are `mode=manual` and
+are not auto-curated.
+
+**Observation queue.** `durin/agent/skill_observations.py` persists live
+feedback from the `skill_observe` core tool (`correction`, `gap`,
+`improvement`, `simplify` kinds) to `skills/.observations.jsonl` inside the
+git subtree. Edits via `skill_edit` on auto skills auto-log an improvement
+observation. A hindsight pass during the dream extract
+(`discover_skill_signals` in `durin/agent/skill_signals.py`) scans the
+**tail** of post-cursor session turns (tail-windowed, not head, so corrections
+at the end of long sessions are not missed). Observations accumulate with
+dedup-by-count; `count >= 2` is the recurrence signal that licenses curation
+action.
+
+**Cross-cutting principles** are promoted by the curation judge into
+`skills/.principles.jsonl` (capped at 12 entries). They are injected into both
+the curation prompt and the skill-extract prompt so new and evolved skills are
+born compliant.
+
+**Upstream drift.** `durin/agent/skill_drift.py::check_upstream_drift` is
+wired into `curate_catalog`. For a skill whose `provenance.source` is a real
+repo, it re-fetches + re-scans; if the content changed and the gate says allow,
+the upstream body is fed to the curation judge to merge via `evolve` while
+preserving local edits. Confirm or block sources are left for human review.
+
+### Remove
+
+`skills_store.removable_action` classifies the target:
+
+| Case | Condition | Action | Effect |
 |---|---|---|---|
-| Imported / dream / fused | workspace dir exists, no builtin of same name | `remove` | skill disappears |
-| Forked builtin | workspace dir exists + a builtin of the same name | `revert` | workspace copy deleted → shipped builtin reappears |
-| Builtin (pure) | no workspace dir | `null` | refused — the package must not be touched |
+| Created / imported / dream | workspace dir, no builtin of same name | `remove` | dir deleted, git commit, `_unsync_index` |
+| Forked builtin | workspace dir exists and builtin of same name exists | `revert` | workspace copy deleted, git commit, `_unsync_index` |
+| Pure builtin | no workspace dir | `null` | refused — package is not touched |
 
-**Index side effect.** Both cases call `_unsync_index` (FTS row dropped by uri, vector row
-by id). This is correct for *revert* too: only workspace skills are indexed
-(`walk_skills` / `reindex_one_skill` are workspace-only — builtins are never in the search
-index), so dropping the fork's row restores the builtin's pre-fork (un-indexed) state. No
-builtin re-index is needed. This matches the uniform `_unsync_index` in `dream_fuse_skills`.
+On revert, `_unsync_index` is correct: workspace skills are the only ones
+indexed (builtins are never indexed), so dropping the fork's FTS and vector
+rows restores the builtin's pre-fork un-indexed state. No re-index of the
+builtin is needed.
 
-**Surfaces (no agent tool — by design).** Removal is a destructive admin action, so it is
-*not* exposed as an LLM-callable tool. It is reachable from: the web panel
-(`GET /api/skills/{name}/remove` → `web_skill_remove`; a button in the skill detail pane with
-an inline confirmation), the CLI (`durin skill remove <name> [--yes]`), and the chat command
-(`/skills remove <name>`). Every path appends a `.durin/import-audit.log` entry
-(`action="remove"`, `result=remove|revert`).
+Removal is not exposed as an LLM-callable tool — it is an admin action
+reachable from the web panel, the CLI (`durin skill remove <name>`), and the
+chat command (`/skills remove <name>`).
 
----
+### Retrieve
 
-## 4. Discovery & acquisition (§6.A discovery, §6.C acquire-on-gap)
+`durin/agent/skills.py::SkillsLoader` loads skills for context assembly:
 
-**Registries / search.** `durin/agent/skill_registry.py` defines `SkillSearchHit`, the
-`SkillRegistry` protocol, and two adapters: `SkillsShRegistry` (skills.sh → github-backed
-refs `github:owner/repo/skill`) and `ClawHubRegistry` (clawhub → `clawhub:slug`, its own
-versioned zip store). ClawHub search hits the **ranked** `GET /api/v1/search?q=` endpoint —
-*not* `GET /api/v1/skills`, which is a recency LIST that silently ignores its query (calling
-it returns the same recently-updated skills for every search). `search_registries` queries
-adapters in parallel (SSRF-safe), dedupes by ref, round-robin interleaves (rank-fair across
-sources — the lead source rotates per query via a stable `crc32`, so no registry permanently
-owns the top slot), floats allowlisted refs first. The web UI surfaces this merged order as
-its default **relevance** sort, so a registry that reports no install count (clawhub) is not
-buried under install-ranked skills.sh hits; each result line carries a source tag (icon +
-registry name). `build_adapters` wires skills.sh + clawhub, **both enabled by default**
-(github-taps/well-known/lobehub are roadmap). Exposed as the `skill_search` core tool, plus
-CLI (`durin skill search`) and web. skills.sh hits carry **no** synthetic description in
-search results (the search API returns none) — the real one is fetched on preview.
+1. **Always-tier.** `get_always_skills()` returns skills with `always: true`
+   in frontmatter. `load_skills_for_context(names)` injects full SKILL.md
+   bodies (without frontmatter) into the stable system prompt every turn.
+   `disable_model_invocation` skills are excluded from the visible catalog but
+   the always-tier is not filtered by the visible catalog — it is a stable
+   injection that bypasses hot-tier and searchable logic.
 
-**Preview / detail (`describe`).** `skills_store.py::web_skill_describe`
-(`GET /api/v1/skills/describe?ref=`) is a read-only peek used by the web UI before import:
-it resolves the ref like import does, reads just that one SKILL.md (github/https via raw
-URL; clawhub via the registry's `GET /api/v1/skills/{slug}/file?path=SKILL.md` raw-file
-endpoint), and returns its full `description` (≤1024 chars), `body` (the markdown after the
-frontmatter), `platforms`, and declared `requires` (bins/env). It never executes or writes anything and degrades to empty
-fields on any failure. The webui renders this as a per-result detail view (description +
-rendered body + requirements) so the user can decide before importing into quarantine; the
-§8.C verdict still appears in the triage pane after import.
+2. **Hot-tier.** `durin/agent/skill_usage.py::compute_working_set` aggregates
+   `skill_calls` from session sidecars — read events (`read_file` on a
+   `SKILL.md`) and edit events (`skill_edit`) — to produce a usage-ranked set
+   of names. The set is split into a `frequent` slice (top N by call count over
+   a 7-day window) and a `recent` slice (top N over 24 hours), deduped and
+   filled with remaining candidates. Sizes are controlled by
+   `agents.defaults.skills_hot_tier`. The hot tier injects names + descriptions
+   into `templates/agent/skills_section.md`; the agent fetches full bodies via
+   `read_file` on demand.
 
-**Acquire-on-gap (§6.C)** — durin's own initiative to acquire a skill when it lacks one.
-Search is the seed; the gate (§7) is enforced. Both paths (spec
-`2026-06-03-skill-acquire-on-gap-design.md`) are BUILT + live-verified:
-- **Path A — in-session, interactive.** Prompt guidance in `skills_section.md`: when
-  local skill search (`memory_search kind=skill`) misses on a recurring/non-trivial
-  workflow, `skill_search` the registries; to reuse a hit, `skill_import(action=fetch)`
-  (runs the §8.C gate); if clean → `skill_write`; if risky → present candidates to the
-  user via `ask_user_question`. A human approves anything risky.
-- **Path B — autonomous, safe-only.** The daily `memory_dream` **skill-extract pass**
-  hosts it: `dream_passes.py::_build_skill_extract_tools` hand-registers `skill_search`
-  + `skill_acquire_seed` alongside the authoring tools, and `_SKILL_EXTRACT_PROMPT`
-  drives the flow — `skill_search` a candidate → `skill_acquire_seed` its ref → adapt +
-  `skill_write`, else author from scratch. The seed gate is in code:
-  `skill_acquire_seed.py::SkillAcquireSeedTool` (`_scopes={"dream"}`, so it never loads
-  into the in-loop core agent) → `skill_acquire.py::acquire_safe_seed`, which **rejects a
-  non-allowlisted ref without a download** (fast), fetches + statically scans allowlisted
-  refs (**LLM judge never used** — `judge_trigger="off"`), and returns a seed **only if
-  `decide_action == "allow"`** (risk enforced in code). With the default empty allowlist
-  nothing auto-seeds → the dream authors from scratch (conservative). **Live-verified
-  2026-06-06:** a real skill-extract run called `skill_search → skill_acquire_seed →
-  skill_write`. (History: Path B first shipped in the 2h Dream's phase-2; the
-  entity-centric migration deleted that host and orphaned `skill_acquire_seed` until it
-  was re-homed here.)
+3. **Searchable.** `durin/memory/skill_page.py::SkillPage` is the memory class
+   for skills: it wraps the SKILL.md frontmatter and body for FTS and vector
+   indexing. When `memory.index_skills` is on (default), every workspace skill
+   is reachable via `memory_search(kind=skill)`. `disable_model_invocation`
+   skills are indexed but excluded from searchable results the model sees.
+
+### Sweep and quarantine
+
+`durin/agent/skill_lifecycle.py::sweep_unverified_skills` runs at
+`ContextBuilder.__init__` and on surface calls. It relocates any workspace skill
+that arrived without `metadata.durin.provenance` (a registry CLI or manual file
+drop) to `.durin/import-quarantine/`, prepends an `unverified_origin` finding
+to the scan report, and makes it inert for the agent. Approve re-gates through
+`install_imported_skill`; reject deletes.
 
 ---
 
-## 5. Import & security floor (§6.B + §8.C)
+## 5. Key types and entry points
 
-`durin/agent/skills_import.py` + `durin/security/skill_scan.py` + `skill_resolve.py`
-implement a uniform, source-agnostic import that **everything** (manual import, discovery
-install, acquire-on-gap, drift) funnels through:
-
-```
-resolve_candidates(source)        # github: / clawhub: / https:// / local → candidate(s)
-  → fetch_candidate(...)          # download into .durin/import-quarantine/<name>/ (size/file caps, zip-slip safe)
-  → validate_skill + scan_skill   # §8.C STATIC scan: regex on body + install specs + carries_code; verdict safe|caution|dangerous
-  → decide_action(...)            # the gate (below)
-  → install_imported_skill(...)   # re-scans fresh, enforces the gate IN CODE, stamps provenance, commits
-```
-
-**The §8.C gate — `decide_action(source, *, verdict, carries_code, allowlist)`:**
-- `verdict == dangerous` → **block** (needs explicit override).
-- `carries_code` OR `verdict == caution` OR source **not allowlisted** → **confirm**
-  (needs confirmation).
-- else (safe + no code + allowlisted) → **allow**.
-
-So with the default **empty allowlist**, every external skill needs confirmation — durin
-is conservative by construction. The `allowlist` (user config) only loosens the *source*
-check; the code/dangerous gates have no opt-out. An optional LLM judge
-(`skills.security.llm_judge.trigger`, default `off`) can add a semantic layer on top of
-the static scan; it is opt-in.
-
-**Static scan internals (`skill_scan.py` + `skill_ast.py`).** Bundled Python scripts also
-get a stdlib-AST behavioral pass that flags dynamic-execution call shapes. `compile` is
-rated **caution**, not dangerous: it produces a code object but does not execute —
-execution needs a subsequent `exec`/`eval`, which is flagged dangerous on its own (so
-`exec(compile(...))` stays dangerous). This keeps pure syntax-checkers / linters (e.g.
-`skill-creator/scripts/quick_validate.py`) from tripping the gate as false positives.
-
-**Quarantine & lifecycle.** Fetched skills land in `.durin/import-quarantine/` until the
-gate passes; `reject_quarantined` discards. `durin/agent/skill_lifecycle.py::sweep_unverified_skills`
-("Part C") relocates any workspace skill that reached `skills/` **without** durin
-provenance (a registry CLI, a manual drop) back to quarantine — inert for the agent,
-surfaced for the human. It runs at `ContextBuilder.__init__` and in the surfaces, so an
-ungated skill can't be used before the agent even starts.
-
----
-
-## 6. The dream (how skills work in the background)
-
-durin has **one dream cron** — `memory_dream` (`durin/cli/commands.py`, the `on_cron_job`
-handler's `memory_dream` branch; registered as a system job with schedule `memory.dream.cron`,
-default `0 3 * * *`). It also fires on two reactive triggers (`post_compaction`,
-`on_session_close`) that run the extract pass only. The daily cron runs its passes **in
-order** — `run_extract_pass` (sessions → entity attributes) → `run_skill_extract_pass`
-(sessions → skills) → `run_refine_pass` (entity dedup) → `run_always_on_pass` (distill the
-always-on pin) → `curate_catalog` (skill evolution). Two of those passes touch skills:
-
-| Pass | What it does for skills | Code |
+| Symbol | File | Role |
 |---|---|---|
-| **skill-extract** | **CREATES** skills: mines the most recent sessions; a sub-agent calls `skill_write` when a recurring multi-step procedure appears (provenance `source=dream`, `mode=auto`, committed). See §3. | `dream_passes.py::run_skill_extract_pass` → `dream_create_skill` |
-| **curate_catalog** | **EVOLVES** skills: reviews the change-gated delta, applies `evolve`/`fuse`/`retire`. Appended as the dream's last step. | `cli/commands.py` (memory_dream branch) → `skill_curation.py::curate_catalog` |
-
-(The `extract` / `refine` / `always_on` passes are entity-memory consolidation, documented
-in the memory architecture docs; they don't touch skills.)
-
-**Evolution — `curate_catalog`.** Reviews **only** the change-gated delta:
-`mode=="auto"` AND `source=="workspace"` skills (dream-created + forks; never pristine
-builtins) that `needs_curation` (body changed since last pass) — **plus** any auto
-workspace skill with an OPEN observation (§6a), even if its body is unchanged. An LLM
-judge proposes `evolve` (surgical old/new on the local body), `fuse` (merge
-near-duplicates), `retire` (delete a fully-obsolete skill via `remove_skill`,
-git-recoverable — the only path to drop a skill from the catalog vs. evolving its
-body toward empty), `principle`, or `retire_principle` actions; applied via
-`skills_store.py` / `skill_observations.py` (committed). Budget-capped per day with
-carry-over — it **never "reviews everything,"** only the delta. Imported skills are
-`mode=manual` and are **not** auto-curated.
-
-### 6a. Observation queue & cross-cutting principles (the evidence channel)
-
-The task-observer pattern, adopted 2026-06-10 — capture live feedback about
-skills the moment it occurs, queue it with states, and let the daily curation
-judge consume it as evidence (the cheap alternative to GEPA-style measured
-optimization, which needs an eval harness and per-run budget). This section is
-the as-built reference. Code: `durin/agent/skill_observations.py`.
-
-**Capture (in-loop, live).** The `skill_observe` core tool logs feedback the moment it
-occurs — `kind`: `correction` (user corrected output produced under a skill), `gap` (no
-skill covers a recurring procedure; `skill="new:<working-name>"`), `improvement`, or
-`simplify` (a rule/section is dead weight). The structural trigger is a per-turn block in
-`templates/agent/identity.md` ("Skill observations") — the tool description alone is a
-weak signal. **Log, don't act:** nothing mutates a skill in-session.
-
-In addition to the agent's voluntary calls, an `improvement` observation is logged
-**automatically** whenever the `skill_edit` *tool* applies an edit to an `auto` skill in
-the loop (`tools/skill_edit.py`): a direct edit is itself an improvement signal, so it
-feeds the queue without depending on the agent also remembering to call `skill_observe`.
-Curation edits (`apply_skill_edit` with `actor="curation"`) do not go through the tool, so
-they are not re-logged; manual-mode edits only return a proposed diff (not applied) and so
-log nothing.
-
-**Capture (hindsight, at dream time).** Because the agent rarely calls `skill_observe`
-mid-task (judging whether a correction *generalizes* is hard in the moment), the queue is
-also fed in hindsight: stage 3 of the extract dream (`skill_signals_enabled`, default ON)
-runs `discover_skill_signals` (`durin/agent/skill_signals.py`) over each session's
-post-cursor turns — the same turns the entity `discover_entities` stage uses, but
-**tail-windowed** (`turns[-12000:]`, not head): a correction lands at the END of an
-interaction, so the most recent turns matter (live-verified — head-truncation missed
-corrections in a long session). A focused
-LLM call detects `correction`/`gap` signals (attributed via the turn-indexed
-`skill_calls`, `skill_usage.py`) and logs them as observations. This is the skill
-analogue of memory's `discover_entities`: the agent creates by initiative, the dream
-discovers in hindsight. Detection only — `count`/recurrence still gates what curation
-acts on; `memory.dream.skill_signals` telemetry measures precision.
-
-**Store.** `<workspace>/skills/.observations.jsonl` in the skills GitStore (every change
-committed). Write-time dedup: a near-same issue for the same skill bumps `count` /
-`last_seen` instead of appending — `count >= 2` is the recurrence signal. States:
-`OPEN → APPLIED | DECLINED` (set by curation dispositions). APPLIED records get one
-pass of visibility, then `archive_resolved` moves them to
-`.observations.archive.jsonl` at the start of the next pass; DECLINED records stay in
-the active file as the judge's memory against re-proposing rejected changes.
-
-**Consumption (curation).** The judge receives OPEN observations for the skills under
-review (plus `skill:"all"` records) and the compact DECLINED history, with instructions:
-recurring (`count>=2`) records license `evolve`; one-offs stay `keep` unless trivially
-safe; `simplify` licenses removal. It answers every shown record with a disposition
-(`applied`/`declined`/`keep`) → `apply_dispositions`. Observations on `manual` skills or
-pristine builtins stay OPEN untouched (manual = user-owned; builtins join the evolving
-set only once forked). `new:*` records never reach curation — they are skill-extract
-input (§3).
-
-**Principles.** A generalizable lesson (typically a recurring `skill:"all"` observation)
-can be promoted by the judge via a `principle` action into
-`<workspace>/skills/.principles.jsonl` (capped at `PRINCIPLES_CAP=12`;
-`retire_principle` frees slots). Active principles are injected as a compliance
-checklist into BOTH the curation prompt (non-compliant skills get evolved) and the
-skill-extract prompt (new skills are born compliant).
-
-**Telemetry.** The cron summary line logs `obs_applied/obs_declined/obs_kept/obs_open` +
-`principles` per run (`cli/commands.py`); the skill-extract pass emits `gaps_closed`.
-
-**Drift → evolution (§8.D) — `skill_drift.py::check_upstream_drift`.** Wired into
-`curate_catalog`: for a skill whose `provenance.source` is a real repo, re-resolve +
-re-fetch + §8.C-scan; if the content changed and the gate says `allow`, the upstream body
-is fed to the curation judge to **incorporate via `evolve`** (never overwrites local
-edits); `confirm`/`block` → left for human review. With the default empty allowlist, all
-drift → human (conservative).
+| `SkillsStore` functions (`_store`) | `durin/agent/skills_store.py` | Single write chokepoint for all skill mutations. Provides `dream_create_skill`, `install_imported_skill`, `remove_skill`, `fork_on_write`, `mark_curated`, `needs_curation`. All writes call `GitStore.auto_commit` with `Attribution` trailers. |
+| `Attribution` | `durin/agent/skills_store.py` | Actor, Session, Agent trailers stamped on every skill git commit. |
+| `SkillsLoader` | `durin/agent/skills.py` | Loads skills from workspace (shadows builtins). `list_skills`, `load_skill`, `get_always_skills`, `build_skills_summary`, `load_skills_for_context`. |
+| `decide_action` | `durin/agent/skills_import.py` | Trust-times-verdict gate: dangerous → block; carries_code / caution / not-allowlisted → confirm; else allow. Enforced in code at install. |
+| `scan_skill` / `ScanReport` | `durin/security/skill_scan.py` | Deterministic static scan: body regex rules + AST behavioral pass. Returns `findings` and `verdict` (safe / caution / dangerous). |
+| `SkillRegistry` protocol + adapters | `durin/agent/skill_registry.py` | Protocol: `search(query, limit)` → list of `SkillSearchHit`. Two adapters: `SkillsShRegistry` (skills.sh) and `ClawHubRegistry` (clawhub). `search_registries` queries both in parallel with round-robin interleave. |
+| `SkillCandidate` / `resolve_candidates` / `fetch_candidate` | `durin/agent/skill_resolve.py` + `durin/agent/skills_import.py` | Resolve a source ref to candidates, fetch into quarantine (zip-slip safe, SSRF-safe, size-capped), validate SKILL.md format. |
+| `validate_skill` | `durin/agent/skills_import.py` | Checks agentskills.io format (name, description, code detection). Returns `ValidationReport` with `carries_code`. |
+| `skill_observe` / observation queue | `durin/agent/skill_observations.py` | Task-observer pattern. In-session feedback: `correction`, `gap`, `improvement`, `simplify`. Store: `skills/.observations.jsonl`. States: OPEN → APPLIED / DECLINED. Principles: `skills/.principles.jsonl` (cap 12). |
+| `curate_catalog` | `durin/agent/skill_curation.py` | Daily delta-curation over `mode="auto"` workspace skills. LLM judge proposes evolve / fuse / retire / principle. Change-gated: never scales with full catalog size. |
+| `SkillPage` | `durin/memory/skill_page.py` | Memory class for skills. Wraps SKILL.md frontmatter and body for FTS and vector indexing. Enables `memory_search(kind=skill)`. |
+| `run_skill_extract_pass` | `durin/memory/dream_passes.py` | Daily dream pass: sub-agent mines recent sessions and gap observations, calls `skill_write` for recurring procedures. Agentic (uses `AgentRunner`). |
+| `sweep_unverified_skills` | `durin/agent/skill_lifecycle.py` | Relocates no-provenance workspace skills to quarantine, prepends `unverified_origin` finding. Runs at ContextBuilder init and on surfaces. |
+| `compute_working_set` | `durin/agent/skill_usage.py` | Hot-tier sizing: frequent (7-day window) + recent (24-hour window) skill calls from session sidecars. Returns list of skill names. |
+| `get_always_skills` / `load_skills_for_context` | `durin/agent/skills.py` | Always-tier retrieval: filter for `always: true`, inject full bodies into stable prompt. |
+| `skills_inventory` / web routes | `durin/agent/skills_surface.py` | Read model for CLI and web. Augments skill list with verdict and findings, removable action, review overrides, requirements resolution. No mutations. |
+| `check_upstream_drift` | `durin/agent/skill_drift.py` | Re-fetches and re-scans a skill's source repo. If changed and gate allows, feeds upstream body to curation judge for surgical evolve. |
 
 ---
 
-## 7. Retrieval & surfacing (how skills reach the model)
+## 6. Configuration and surfaces
 
-Three tiers, all in `durin/agent/context.py` + `skills.py`:
-1. **`# Active Skills` — forced full-body injection.** Skills flagged `always: true` have
-   their entire SKILL.md injected into the stable system prompt every turn
-   (`skills.py::get_always_skills` + `load_skills_for_context`). Heaviest, most-incentivized.
-2. **Hot-tier catalog — name+desc+path.** The most-used working set (`skill_usage.py::compute_working_set`,
-   config `agents.defaults.skills_hot_tier`) is listed (one line each) in the
-   always-rendered `templates/agent/skills_section.md`; the agent reads full bodies on
-   demand via `read_file`. Excludes the `always` set and `disable_model_invocation` skills.
-3. **Searchable catalog — the rest.** Skills are indexed as a memory class
-   (`memory.index_skills`, default on; `durin/memory/skill_page.py::SkillPage`, FTS + vector)
-   and found via `memory_search kind=skill`. `skills_section.md` instructs the agent to
-   search before concluding no skill exists.
+### Configuration keys (`durin/config/schema.py`)
 
-`durin/agent/skills_surface.py` exposes the inventory (+ verdict/findings) and the
-quarantine to CLI/web; usage signal (`skill_usage.py`) drives the hot-tier (it does **not**
-drive curation — that's deliberate).
-
-**Active-skill review overrides ("Revisada").** A flagged *active* skill can be cleared by
-a user or the LLM judge without mutating the package (builtins are read-only).
-`durin/security/skill_reviews.py` stores reviews in `.durin/skill-reviews.json`, keyed by a
-content hash **and** the set of acked finding fingerprints: a review is valid only while
-the content is unchanged AND no new finding appeared — either a content edit or a
-newly-detected finding (e.g. a scanner upgrade) re-opens it. `skills_inventory` surfaces a
-`review` block; the deterministic verdict/findings are **preserved, not mutated**, and the
-webui shows a "Revisada" chip in place of the verdict badge. Two paths clear a skill: the
-websocket judge (`_run_skill_audit` on an active skill → `skills_store.record_review_from_judge`,
-recorded only when the judge does **not** confirm dangerous) and an explicit user override
-(`POST /api/v1/skills/{name}/review` → `web_skill_review_user`); `DELETE …/review`
-(`web_skill_unreview`) re-opens it.
-
----
-
-## 8. Runtime dependency install (P6 #1)
-
-A skill can declare OS/package dependencies (`metadata.<vendor>.install: [{kind, …}]`).
-Historically info-only (policy `never`). P6 #1
-adds an **approved executor**:
-- `skills_import.py::runnable_install_specs` turns *safe* specs into shell commands
-  (brew/apt/pip/cargo/npm/go/uv), **dropping** any spec the §8.C scanner flagged
-  `dangerous`, **excluding** the `download` kind, and flagging `needs_privileges` (apt).
-- `durin/agent/tools/skill_install_deps.py` (core tool) is **dry-run by default**: it
-  lists the commands; `confirm=true` runs them. Governed by `skills.install_policy`
-  (`never` | `approve` | `auto`, default `approve`). It **runs each command through
-  durin's single exec gate `ExecTool`** (allow/deny patterns + sandbox + logging) — not a
-  side-channel subprocess — mirroring hermes's one-gate model. Sudo is never injected;
-  privileged commands are surfaced for the user. (P6 #2 = run a skill's bundled *scripts*
-  through the tool gate; #3 = per-skill FS/net sandbox — both pending, see `docs/roadmap.md`.)
-
----
-
-## 9. Agent tools (inventory)
-
-| Tool | Scope | Purpose |
+| Key | Default | Meaning |
 |---|---|---|
-| `skill_write` | core | Create a new skill (→ `dream_create_skill`). Also hand-registered into the dream's skill-extract sub-agent (§3). |
-| `skill_edit` | core | Bounded edit of an existing skill (mode-gated; forks builtins). |
-| `skill_search` | core | Search registries; returns hits + refs (never installs). |
-| `skill_import` | core | Import from a source through the §8.C gate (fetch→scan→gate→install). |
-| `skill_audit` | core | Run the §8.C scan on a skill; verdict + findings. |
-| `skills_list` | core | List available + quarantined skills. |
-| `skill_install_deps` | core | Install a skill's declared deps (dry-run→confirm, policy, via ExecTool). |
-| `skill_observe` | core | Log live skill feedback (correction/gap/improvement/simplify) to the observation queue (§6a). Log, don't act. |
-| `skill_acquire_seed` | **`dream`** (skill-extract pass) | Gated per-ref seed retrieval for autonomous acquisition (returns risk-free seeds only). `_scopes={"dream"}` keeps it out of the in-loop core agent; hand-registered in the daily skill-extract pass (`_build_skill_extract_tools`) — see §4 Path B. |
+| `skills.security.allowlist` | `DEFAULT_SKILL_ALLOWLIST` (first-party orgs) | Source-ref prefixes that skip the source-confirmation step. Code and dangerous gates have no opt-out. |
+| `skills.security.github_token_secret` | `""` | Name of the durin secret holding a GitHub API token for authenticated fetches. |
+| `skills.security.max_files` | 100 | Per-fetch file count cap. |
+| `skills.security.max_total_bytes` | 3 MB | Per-fetch total size cap. |
+| `skills.security.max_file_bytes` | 1 MB | Per-file size cap. |
+| `skills.security.llm_judge.trigger` | `"off"` | When to run the semantic LLM judge: `off` (never auto), `uncertain` (when already cautioned), `always`. |
+| `skills.discovery.registries` | skills.sh + clawhub enabled | List of `SkillRegistryConfig` entries. Both adapters enabled by default. |
+| `skills.discovery.search_limit` | 10 | Max hits returned per registry search. |
+| `skills.install_policy` | `"approve"` | Governs `skill_install_deps`: `never` (report only), `approve` (dry-run then confirm), `auto` (run without per-call confirm). All policies execute through ExecTool. |
+| `memory.index_skills` | `true` | Index workspace skills as a searchable memory class (FTS + vector). |
+| `agents.defaults.skills_hot_tier.enabled` | `true` | Enable the usage-ranked hot-tier. False restores full-catalog injection. |
+| `agents.defaults.skills_hot_tier.frequent` | 30 | Top N skills by call count over the frequent window. |
+| `agents.defaults.skills_hot_tier.recent` | 15 | Top N skills by call count over the recent window. |
+| `agents.defaults.skills_hot_tier.frequent_window_hours` | 168 (7 days) | Window for the frequent slice. |
+| `agents.defaults.skills_hot_tier.recent_window_hours` | 24 | Window for the recent slice. |
+| `agents.defaults.disabled_skills` | `[]` | Skill names excluded from loading entirely. |
+| `memory.dream.cron` | `"0 3 * * *"` | Schedule for the daily dream cron (all five passes + curate_catalog). |
+| `memory.dream.max_seconds_per_run` | 600 | Hard wall-clock cap per extract pass (yields after current session; cursor resumes on next trigger). |
+| `memory.dream.skill_signals_enabled` | `true` | Run `discover_skill_signals` over post-cursor session turns during the extract pass. |
 
-Tools default to `core` scope (auto-loaded into the in-loop agent) unless they declare
-`_scopes` (`durin/agent/tools/loader.py::ToolLoader.load`). `skill_acquire_seed` declares
-`{"dream"}`, but `ToolLoader.load` is only ever called with `scope="core"` (in-loop) or
-`scope="subagent"`, so that tool is currently unreachable — the in-session agent uses the
-raw `skill_search` / `skill_import` + `ask_user_question` (a human approves risky candidates)
-instead, and the dream's skill-extract sub-agent gets only Read/Edit/`skill_write` (§3).
+### CLI surfaces
+
+| Command | What it does |
+|---|---|
+| `durin skill list` | List available and quarantined skills with verdict and availability. |
+| `durin skill search <query>` | Search configured registries; returns ranked hits with ref and source. |
+| `durin skill import <ref>` | Import a skill through the full validate + scan + gate pipeline. |
+| `durin skill remove <name>` | Remove or revert-to-builtin (admin action; not an agent tool). |
+| `durin memory dream` | Run all five dream passes manually (extract → derived_from → skill_extract → refine → always_on) plus curate_catalog. |
+
+### Agent tools (in-loop, `scope="core"`)
+
+| Tool | Purpose |
+|---|---|
+| `skill_write` | Create a new skill (routes to `dream_create_skill`). Also registered in the dream's skill-extract sub-agent. |
+| `skill_edit` | Bounded edit (mode-gated; forks builtins). |
+| `skill_search` | Search registries; returns hits and refs. Never installs. |
+| `skill_import` | Import from a source through the gate. |
+| `skill_audit` | Run the static scan on an installed skill. |
+| `skills_list` | List available and quarantined skills. |
+| `skill_install_deps` | Install a skill's declared dependencies (dry-run by default; governed by `install_policy`; executes via ExecTool). |
+| `skill_observe` | Log live skill feedback to the observation queue. Logs only — no skill is mutated in-session. |
+
+`skill_acquire_seed` declares `_scopes={"dream"}` but is unreachable to the
+in-loop agent because `ToolLoader.load` is only called with `scope="core"` or
+`scope="subagent"`. The in-loop acquire-on-gap path uses `skill_search` +
+`skill_import` + `ask_user_question` instead. The daily skill-extract pass
+registers `skill_acquire_seed` directly — it is not loaded via `ToolLoader`.
+
+### Web and API surfaces
+
+`durin/agent/skills_surface.py` exposes the read model (inventory, quarantine,
+verdict, review overrides) to the web panel and CLI. Web routes:
+`GET /api/skills` (inventory), `GET .../describe` (preview before import),
+`POST .../review` (user override for a flagged active skill),
+`DELETE .../review` (reopen review). Removal routes trigger `remove_skill` or
+revert-to-builtin.
 
 ---
 
-## 10. Config (`skills.*`, `config/schema.py`)
+## 7. Curated rationale
 
-- `skills.security` — `allowlist` (trusted source prefixes), `github_token_secret`, size
-  caps, `llm_judge` (trigger off|uncertain|always, default off).
-- `skills.discovery` — `registries` (skills.sh, clawhub), `search_limit`.
-- `skills.install_policy` — `never` | `approve` | `auto` (default `approve`) for P6 #1.
-- `agents.defaults.skills_hot_tier` — hot-tier sizing (recent/frequent windows).
-- `memory.dream` — the single `memory_dream` cron (`cron`, default `0 3 * * *`;
-  `post_compaction`/`on_session_close` reactive triggers; `max_seconds_per_run`) that runs
-  the skill-extract pass and carries `curate_catalog`.
-- `memory.index_skills` — whether skills are indexed as a searchable memory class (default on).
+**Single chokepoint over multiple paths.** Create, import, dream-create, and
+curation all converge on `skills_store.py` and `GitStore.auto_commit`. This
+keeps the git history coherent — every skill's provenance is a commit message
+with attribution trailers — and makes the security gate a single code path
+rather than a per-caller responsibility.
 
----
+**Git is the original copy.** There is no separate `original/` directory. The
+first commit of an imported or created skill is its canonical original. Rollback
+and diff are native git operations. This avoids a second storage layer and keeps
+recovery human-readable.
 
-## 11. Status (built / deferred / discarded)
+**Gate is in code, not prompt.** `decide_action` is a pure function called in
+`install_imported_skill`. The LLM judge is an optional additive layer; the
+deterministic rules (dangerous block, code/caution confirm) cannot be overridden
+by a prompt or a model output. This reflects the principle that security floors
+should not depend on model cooperation.
 
-**Built & live-verified:** versioning + modes (E1) · dream skill-extract authoring
-(E2 Part A; `run_skill_extract_pass`) · daily catalog curation `curate_catalog` (E2 Part B) ·
-interop standard (§8.B) · import + §8.C security floor (§6.B/§8.C) · discovery/registries (§6.A) ·
-upstream drift→evolution (§8.D) · unverified-origin sweep (Part C) · retrieval: searchable
-memory class + hot-tier (Spec-2) · acquire-on-gap **Paths A + B** (in-session + autonomous
-skill-extract, §6.C; Path B re-homed + live-verified 2026-06-06) · runtime install
-executor (P6 #1) · observation queue + cross-cutting principles (§6a, task-observer
-pattern, 2026-06-10) · removal: remove / revert-to-builtin (§3a; web + CLI + chat, no
-agent tool, 2026-06-11).
+**Delta-only curation.** `curate_catalog` reviews only skills whose body changed
+since the last pass or that have open observations. This means curation cost
+is proportional to activity, not catalog size — a stable catalog costs nothing
+to run, and a busy day's edits are reviewed without a full re-scan.
 
-**Pending (active):** P6 #2 (run bundled skill *scripts* through the tool gate) · P6 #3 (per-skill FS/net sandbox) ·
-extra discovery adapters (github-taps / well-known / lobehub). See `docs/roadmap.md`.
-
-**Discarded (decided against):**
-adapt-to-native-tools / GEPA-SkillOpt optimizer (no value over `curate_catalog` +
-usage signal too sparse for personal skills) · a separate `original/` layer (git already
-provides it) · per-registry `registry`/`registry_id` version provenance (update detection
-stays content-addressed).
+**Retrieval tiers match cost to context.** Always-injection is reserved for
+skills that are genuinely load-bearing every turn. The hot-tier reduces prompt
+size on the stable prefix (cache-friendly). The searchable tier is zero-cost
+until the agent queries it. The three tiers together let a large skill library
+coexist with a bounded context window.

@@ -1,16 +1,125 @@
 # durin documentation
 
-durin is an open-source AI agent harness: a local daemon that drives Claude (and other LLMs) through long-running tasks, with persistent memory, skill management, and a web UI.
+## What durin is
 
-## Guides (users and operators)
+durin is a personal-assistant **agent harness**: a local daemon that drives an
+LLM (Claude, GLM, local llama.cpp models, and others) through long-running,
+multi-turn work. It is more than a memory store — it bundles four things into one
+runtime:
 
-- [Installation](guide/install.md)
+- **Memory** — persistent, cross-session knowledge kept as markdown that the
+  agent can search without an LLM in the hot path.
+- **Context** — a layered system prompt (stable + per-session + volatile) that
+  feeds the model the right history, skills, and pinned facts each turn.
+- **Adaptation** — runtime model/provider switching, permission-as-data agent
+  modes (plan / build / explore), and MCP servers connected on demand.
+- **Self-learning** — a cold-path *dream* that consolidates conversations into
+  an entity graph and curated skills, plus *cron* for scheduled work.
 
-## Internals (contributors and curious readers)
+Every chat surface — terminal CLI, the Textual TUI, the web dashboard, and chat
+channels like Telegram, Discord, Slack, Email, and a raw WebSocket — funnels
+through the same internal message bus and the same agent loop. Channels differ
+only in their I/O; the agent's behaviour is identical regardless of where the
+message came from.
 
-- [Architecture overview](internals/README.md)
+## Where to go next
 
-## Project
+durin's documentation is split by audience.
 
-- [Releasing](releasing.md)
-- [Roadmap](roadmap.md)
+### Guides — for users and operators
+
+How to install, configure, and run durin.
+
+- [Installation](guide/install.md) — install, the onboarding wizard, optional
+  extras (memory, local models, audio), and running the gateway.
+
+Configuration keys, channel setup, and provider/model selection are documented
+inline by the onboarding wizard (`durin onboard`) and `durin config`, and in the
+relevant internals docs below.
+
+### Internals — for contributors and curious readers
+
+How durin works, subsystem by subsystem.
+
+- [Internals overview](internals/README.md) — the architecture index, the
+  source-of-truth invariant, and a link to every component doc.
+
+Direct jumps to the most-read component docs:
+
+- [Agent loop](internals/loop.md) — the per-turn state machine and runner.
+- [Memory](internals/memory/00_overview.md) — entity-centric memory and search.
+- [Skills](internals/skills/00_overview.md) — skill authoring, vetting, surfacing.
+- [Channels & message bus](internals/channels.md) — how surfaces reach the loop.
+- [Cron](internals/cron.md) — scheduled work (reminders and agent tasks).
+
+### Project
+
+- [Releasing](releasing.md) — how releases are cut.
+- [Roadmap](roadmap.md) — direction, and what durin is deliberately not doing.
+
+## The whole system at a glance
+
+A message enters through a surface, crosses the message bus, runs through the
+agent loop and runner, touches tools / MCP servers / memory / skills, and returns
+the same way. **Cron** and **dream** are cold-path side-services: they do not sit
+on the request path, but they read and write sessions and memory in the
+background.
+
+```mermaid
+flowchart TB
+    subgraph surfaces["Surfaces"]
+        CLI["CLI"]
+        TUI["Textual TUI"]
+        WEB["Web dashboard"]
+        CH["Chat channels<br/>Telegram / Discord / Slack<br/>Email / WebSocket"]
+    end
+
+    subgraph core["Agent core"]
+        BUSIN["MessageBus.inbound<br/>(async queue)"]
+        LOOP["AgentLoop<br/>per-turn state machine<br/>RESTORE to RESPOND"]
+        RUNNER["AgentRunner<br/>LLM + tool iterations"]
+        BUSOUT["MessageBus.outbound<br/>(async queue)"]
+    end
+
+    subgraph capabilities["Capabilities"]
+        TOOLS["ToolRegistry<br/>(filesystem, shell, web, ...)"]
+        MCP["MCP servers<br/>(connected on demand)"]
+        MEM["Memory<br/>(markdown + indexes)"]
+        SKILLS["Skills<br/>(versioned markdown)"]
+    end
+
+    subgraph cold["Cold-path side-services"]
+        CRON["Cron<br/>(reminders + agent tasks)"]
+        DREAM["Dream<br/>(five consolidation passes)"]
+    end
+
+    SESS["sessions/&lt;key&gt;.jsonl<br/>(append-only transcripts)"]
+
+    CLI --> BUSIN
+    TUI --> BUSIN
+    WEB --> BUSIN
+    CH --> BUSIN
+
+    BUSIN --> LOOP
+    LOOP --> RUNNER
+    RUNNER --> TOOLS
+    RUNNER --> MCP
+    RUNNER --> MEM
+    LOOP --> SKILLS
+    LOOP --> SESS
+
+    LOOP --> BUSOUT
+    BUSOUT --> CLI
+    BUSOUT --> TUI
+    BUSOUT --> WEB
+    BUSOUT --> CH
+
+    CRON -.injects turns.-> BUSIN
+    DREAM -.reads.-> SESS
+    DREAM -.writes.-> MEM
+    CRON -.per-run sessions.-> SESS
+```
+
+The agent core is channel-agnostic: the only contract between a surface and the
+loop is an `InboundMessage` on the bus and an `OutboundMessage` back. To follow
+any single arc in depth, start from the [internals overview](internals/README.md).

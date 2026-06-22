@@ -1,384 +1,324 @@
-# arch / ux — CLI, TUI, secrets, design system, lifecycle commands
+# UX subsystem — unified I/O layer
 
-> The user-facing surfaces: interactive CLI, Textual TUI, secrets
-> handling, design tokens, and the install/upgrade/uninstall lifecycle.
+## 1 Purpose
 
-## Channel architecture
+The UX subsystem is the unified I/O layer that sits between humans and the
+agent core. It covers:
+
+- **Three interactive surfaces** (CLI, TUI, WebUI) plus **broadcast channels**
+  (Slack, Telegram, Matrix, WhatsApp, and others) that all funnel input into
+  the same `MessageBus` and receive output from it.
+- **Config and secrets**: the split-file config layout under
+  `~/.durin/config.json.d/` and the separate secret store at
+  `~/.durin/secrets.json` (plaintext, mode 0600), each accessed through
+  atomic primitives to prevent concurrent-process corruption.
+- **Design system**: the token-driven palette that keeps CLI, TUI, and WebUI
+  visually consistent.
+- **Lifecycle commands**: the operator-facing tools for onboarding, configuring,
+  upgrading, and uninstalling durin.
+
+## 2 Mental model
+
+**Three interactive surfaces + channels, one bus.** Every surface — interactive
+CLI, Textual TUI, WebUI over WebSocket, and external channels like Slack or
+Telegram — publishes `InboundMessage` objects into the `MessageBus` and
+consumes `OutboundMessage` objects from it. `AgentLoop` and `AgentRunner`
+process messages without any awareness of which surface sent them. Agent
+behavior is uniform; only rendering differs.
+
+**Config and secrets are separate concerns.** Config is a split-file layout
+on disk (`~/.durin/config.json.d/*.json`), validated and loaded through
+`load_config`, written through `save_config` / `mutate_config` under a
+cross-process lock. Secrets live in a distinct plaintext-0600 file
+(`~/.durin/secrets.json`), never in the config tree, and are resolved lazily
+at the point of use via `resolve_secret`. Both stores use atomic write
+primitives to prevent partial reads on concurrent access.
+
+**Design tokens and lifecycle commands are orthogonal to the agent.** The
+two-axis token system (palette × mode) governs the visual surfaces but has no
+effect on agent behavior. Lifecycle commands (`durin onboard`, `durin config`,
+`durin upgrade`, etc.) operate on the installation state, not on live sessions.
+
+## 3 Diagram
 
 ```mermaid
-flowchart LR
+flowchart TD
     subgraph surfaces["User-facing surfaces"]
-        CLI["Interactive CLI<br/>(prompt_toolkit)"]
-        TUI["Textual TUI"]
-        WEB["WebUI<br/>(websocket)"]
-        SLK["Slack / Telegram /<br/>Matrix / WhatsApp / etc."]
+        CLI["Interactive CLI\n(prompt_toolkit)"]
+        TUI["Textual TUI\n(durin agent --tui)"]
+        WEB["WebUI\n(WebSocket channel)"]
+        EXT["External channels\n(Slack / Telegram / Matrix / etc.)"]
     end
 
-    subgraph core["Shared core"]
-        BUS["MessageBus"]
-        LOOP["AgentLoop"]
-        RUN["AgentRunner"]
+    subgraph bus_core["Shared core"]
+        BUS["MessageBus\n(inbound / outbound queues)"]
+        LOOP["AgentLoop\n(CommandRouter + state machine)"]
+        RUN["AgentRunner\n(LLM iterations + tools)"]
     end
 
-    CLI -->|InboundMessage| BUS
-    TUI -->|InboundMessage| BUS
+    subgraph orthogonal["Orthogonal subsystems"]
+        CFG["Config system\nload_config / mutate_config / save_config\n~/.durin/config.json.d/"]
+        SEC["SecretStore\n~/.durin/secrets.json (0600)\nresolve_secret / SecretRedactor"]
+        DES["Design system\ndesign/tokens.css + durin/cli/theme.py\npalette x mode (ithildin/forge/mithril)"]
+        LIF["Lifecycle commands\nonboard / config / upgrade / uninstall / doctor"]
+        PAI["Pairing store\n~/.durin/pairing.json\ngenerate_code / approve_code / revoke"]
+    end
+
+    CLI -->|"InboundMessage\n(_wants_stream=True)"| BUS
+    TUI -->|"InboundMessage\n(_wants_stream=True)"| BUS
     WEB -->|InboundMessage| BUS
-    SLK -->|InboundMessage| BUS
+    EXT -->|InboundMessage| BUS
 
     BUS --> LOOP --> RUN
     RUN -->|OutboundMessage| BUS
 
-    BUS --> CLI
-    BUS --> TUI
-    BUS --> WEB
-    BUS --> SLK
+    BUS -->|metadata flags route rendering| CLI
+    BUS -->|metadata flags route rendering| TUI
+    BUS -->|metadata flags route rendering| WEB
+    BUS -->|fallback text| EXT
+
+    CFG -.->|"load / mutate / save"| LOOP
+    SEC -.->|"resolve_secret at use\nSecretRedactor on tool results"| RUN
+    PAI -.->|"is_approved gate on inbound"| EXT
+    DES -.->|"palette + mode"| CLI
+    DES -.->|"palette + mode"| TUI
+    DES -.->|"palette + mode"| WEB
 ```
 
-Every surface funnels through the same `MessageBus` + `AgentLoop`. Agent behaviour is identical across channels; only the I/O layer differs. Drag-and-drop (CLI/TUI), slash-command palettes, and per-channel autocomplete are the surface-specific bits.
+## 4 How it works
 
-### User-facing tool payloads: the channel renders, the model never re-presents
+### Input pipeline
 
-Interactive and presentational tools (`ask_user_question`, `request_secret`,
-`exit_plan_mode`, `todo_write`) follow a payload-canonical contract
-(`durin/agent/user_payloads.py`):
+User input at any surface is sanitized and published as an `InboundMessage`:
 
-- **The structured payload is the only user-facing copy.** Tool *arguments*
-  carry the display content (question + options, plan markdown, todo items);
-  they ride the existing `tool_events` frames to every surface. Tool *results*
-  are model-directed bookkeeping and explicitly forbid re-stating the content
-  in prose — relying on the model to re-present was refuted as a weak signal
-  (see the 2026-06-10 tool-rendering audit).
-- **Rich channels render widgets from the payload.** `RICH_PAYLOAD_CHANNELS =
-  {"websocket", "cli"}`: the webui hoists these events out of the activity
-  cluster as first-class blocks (`webui/src/lib/tool-display.ts` →
-  `ToolBlocks.tsx`: question panel with option chips, secure secret prompt,
-  todo checklist, plan card with an Approve-`/build` action); the TUI renders
-  them in `ToolCallBubble` (clickable option rows, masked secret prompt, plan
-  and checklist bodies built from arguments).
-- **Dumb channels get a serialized fallback at turn end.** Tools register
-  pending payloads in session metadata (`pending_question`,
-  `pending_secret_request`, `pending_plan_review`);
-  `AgentLoop._maybe_publish_interaction_fallback` publishes them as plain
-  outbound messages for any channel outside the rich set (numbered options,
-  `durin secret set` instruction, truncated plan + `/build` hint).
-- **Lifecycle:** the user's next inbound message clears `pending_question` and
-  `pending_secret_request` (loop user-append); `/build` clears
-  `pending_plan_review` (`cmd_build`). Pending question + agent mode also ride
-  the `goal_state` WS frame so the webui composer can show an
-  awaiting-answer strip and a plan-mode badge.
-- **Blocking ask_user (V2):** by default (`agents.defaults.ask_user_blocking`),
-  `ask_user_question` does not yield — it awaits the user's next plain-text
-  message *inside the same turn* via the `durin/agent/pending_answers.py`
-  registry; the loop's inbound consumer resolves the waiter and the answer
-  returns as the tool result, so the model continues without a turn boundary.
-  Degradation to V1 yield semantics is automatic on: answer timeout
-  (`ask_user_answer_timeout_s`), media-bearing replies (routed as a normal
-  message), no live loop consumer (single-message mode), and non-interactive
-  sessions (`cron:`/`system:`). Slash commands are never consumed
-  as answers; `/stop` cancels the blocked turn (priority dispatch precedes the
-  interception). Channel note: `ChannelManager` always forwards tool_hint
-  frames to payload-rendering channels (`send_tool_hints` only gates chat-text
-  hints) so the question panel renders *while* the tool blocks; the plain
-  interactive CLI prints interactive payloads from the same frames.
-- **Replay parity:** the webui transcript persists merged `tool_events`
-  (schema v4, `durin/utils/webui_transcript.py:merge_tool_events`), so hoisted
-  blocks survive reload; blocks render in answered/read-only state once a
-  later user message exists.
+1. **Surrogate sanitization** (CLI/TUI on Windows): lone surrogate code points
+   from console input are repaired or replaced by `_sanitize_surrogates` before
+   anything else sees the text.
+2. **Drag-and-drop pre-processing** (CLI/TUI): `durin/cli/dragdrop.py` scans
+   the input for absolute file paths. Image and audio files (`.png`, `.jpg`,
+   `.gif`, `.webp`, `.bmp`, `.svg`, `.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`,
+   `.opus`) are copied to `<workspace>/.media/<sha>.<ext>` (idempotent by
+   content hash) and surfaced via `InboundMessage.media`. Document paths (text,
+   Markdown, PDF) are left in the text so the agent's `read_file` tool can
+   resolve them directly. Dragged audio may be transcribed to text before the
+   message is published; on success the audio path is dropped from `media`.
+3. **Bus publish**: the CLI and TUI set `metadata={"_wants_stream": True}` so
+   the loop wires up streaming callbacks for that turn.
 
-The webui display class per tool (`hoist` / `chip` / `trace`) lives in
-`webui/src/lib/tool-display.ts`; lifecycle confirmations (spawn, cron,
-message, sleep, goal events, memory writes, skill imports) render as compact
-chips, and plumbing tools stay inside the collapsible activity cluster.
+### Command routing
 
----
+`AgentLoop` calls `CommandRouter.is_priority` first. Priority commands (`/stop`,
+`/restart`, `/status`) are dispatched outside the session lock — they can
+interrupt an active turn. All other slash commands match exact or longest-prefix
+tiers inside the lock; non-commands enter the agent path.
 
-## 1. Interactive CLI (daily driver)
+### Agent execution
 
-The interactive CLI lives in `durin/cli/`. It routes input through the same `MessageBus` that all channels (Slack, Telegram, etc.) use, so agent behaviour is identical between channels. The CLI-specific ergonomics that make it usable as a daily driver:
+`AgentRunner` iterates LLM calls and tool batches. During execution:
 
-### 1.1 Slash commands
+- **Streaming**: text delta chunks are published as `OutboundMessage` with
+  `metadata["_stream_delta"] = True`; the final chunk carries `_stream_end`.
+- **Tool events**: structured `tool_events` frames (start / end / result) flow
+  to every subscriber; rich channels hoist certain tool payloads as first-class
+  widgets.
+- **Special interactive tools** (`ask_user_question`, `request_secret`,
+  `exit_plan_mode`, `todo_write`) follow a payload-canonical contract: the tool
+  *arguments* carry all display content; the tool *result* is model-directed
+  bookkeeping. Rich channels (`RICH_PAYLOAD_CHANNELS = {"websocket", "cli"}`)
+  render the structured payload directly (question panel with option chips,
+  masked secret prompt, plan card, todo checklist). All other channels receive
+  a serialized plain-text fallback at turn end from
+  `AgentLoop._maybe_publish_interaction_fallback`.
+- **Blocking ask_user**: when `agents.defaults.ask_user_blocking` is true
+  (the default), `ask_user_question` awaits the user's next plain-text reply
+  *inside the same turn* via the `durin/agent/pending_answers.py` future
+  registry. The loop's inbound consumer resolves the future; the answer returns
+  as the tool result and the model continues without a turn boundary. On answer
+  timeout, media reply, absent loop consumer, or non-interactive session
+  (`cron:`/`system:` prefixes), the tool degrades to yield semantics: it
+  returns early and the next user message carries the answer.
+- **Secret redaction**: `SecretRedactor` processes every tool result before it
+  reaches the model or is spilled to disk. Two layers: value-based (exact stored
+  secret values become `«redacted:NAME»`) and pattern-based (credential-shaped
+  strings — vendor prefixes `sk-`/`ghp_`/`AKIA`, JWTs, PEM blocks,
+  `KEY=value` fields — become `«redacted»`).
 
-`durin/command/builtin.py` registers the canonical set on `CommandRouter`. The handler returns an `OutboundMessage`; the CLI loop renders it.
+### Outbound routing
 
-| Command | Purpose |
+Metadata flags on `OutboundMessage` route behavior at each surface:
+
+| Flag | Effect |
 |---|---|
-| `/new` | Stop current task, start a fresh conversation. |
-| `/stop`, `/restart`, `/status` | Process control + diagnostics. |
-| `/model [preset]` | Show or switch the active model preset. |
-| `/history [n]` | Print last N persisted messages. |
-| `/goal <task>` | Mark a long-running goal. |
-| `/plan`, `/build`, `/mode` | Agent-mode (plan / build / explore) control. |
-| `/dream`, `/dream-log`, `/dream-restore` | Manual memory consolidation + history. |
-| `/pairing` | Multi-device pairing flow. |
-| `/sessions [filter]` | List saved sessions, sorted by `updated_at`. |
-| `/resume <key>` | Switch the active chat to another session in-place (no restart). |
-| `/compact [hint]` | Manually consolidate the unconsolidated tail. |
-| `/copy` | Copy last assistant message to clipboard. |
-| `/name <name>` | Set / show session display name. |
-| `/hotkeys`, `/help`, `/quit` (alias `exit` / `:q`) | Discoverability. |
+| `_stream_delta` | Append text to the active assistant bubble / stream buffer |
+| `_stream_end` | Close / finalize the current streaming bubble |
+| `_streamed` | End-of-turn marker; no visible side-effect |
+| `_switch_chat_id` | In-place session switch; `run_interactive` / `DurinApp` updates `cli_chat_id` |
+| `_pairing_code` | Channel-level pairing code delivery (external channels only) |
+| `_progress` | Progress note; not rendered as a full message in WebSocket channel |
+| `_turn_end` | Carries latency and goal-state; triggers WS `turn_end` frame |
+| `render_as="text"` | Render as a plain system bubble instead of an assistant bubble |
 
-### 1.2 Editor ergonomics
+### Config flow
 
-`durin/cli/commands.py:_init_prompt_session` builds the `PromptSession` with three optional capabilities, each gated by what the caller passes:
+`load_config()` detects the layout (split directory or legacy monolith) and
+returns a validated `Config`. On a legacy monolith it auto-migrates once:
+splits per-topic files into `~/.durin/config.json.d/`, backs up the original
+as `config.json.legacy`, and rewrites `config.json` as a one-line marker
+`{"_layout": "split"}`. The section set is derived from the serialized config
+(every non-default top-level key) so newly added sections are never silently
+dropped.
 
-- `workspace` → `FileReferenceCompleter`. Type `@` after whitespace to fuzzy-substring-match workspace files. Cached walk (max 1000 files) with sensible excludes (`.git`, `__pycache__`, `.venv`, `node_modules`, `.durin`, …).
-- `presets_getter` → `ModelPresetCompleter` plus a Ctrl+L key binding that pre-fills the buffer with `/model ` to start a picker flow.
-- `footer_getter` → `bottom_toolbar`-driven persistent footer (`durin/cli/footer.py`). On every redraw renders `session · model (preset) · ~tokens/window (%) · mem:N vec✓|✗`. Failures in the getter are swallowed so the prompt never blocks.
+`save_config()` writes only non-default fields (`exclude_defaults=True`) back
+to the split directory. `mutate_config()` performs an atomic
+load-modify-save under `cross_process_lock` so concurrent processes serialize.
 
-### 1.3 Drag-and-drop
+### Secrets flow
 
-`durin/cli/dragdrop.py` pre-processes user input before bus publish:
+`SecretStore` loads and persists `~/.durin/secrets.json` (mode 0600) under
+`cross_process_lock`. Config consumers hold `${secret:NAME}` references;
+`resolve_secret()` turns them into plaintext at the point of use — the value
+never re-enters the `Config` object, logs, or telemetry. The `ExecTool`
+injects execution-scoped secrets into subprocess environments via
+`collect_for(consumer)` so scripts access credentials without the agent ever
+seeing the values. After any in-process write the store is reloaded and the
+redactor is rebuilt so the next tool result immediately picks up the new secret.
 
-1. Scan for absolute paths in the typed text (bash-style escaped spaces handled, `~` expansion supported).
-2. For each existing file:
-   - **Image** (`.png`/`.jpg`/`.gif`/`.webp`/`.bmp`/`.svg`) or **audio** (`.mp3`/`.wav`/`.m4a`/`.flac`/`.ogg`/`.opus`) → copy to `<workspace>/.media/<sha>.<ext>` (idempotent by content hash), replace the path in the text, surface the workspace-relative path via `InboundMessage.media`.
-   - **Document** (markdown / text / pdf) → leave the path untouched so the agent's `read_file` tool can resolve it directly.
-3. Unsupported extensions, non-existent paths, and directories are left as-is.
+### Pairing flow
 
-### 1.4 Session switching mechanism
+External channels gate unrecognized DM senders. When a new sender contacts a
+channel, `BaseChannel._handle_message` checks `is_approved(channel, sender_id)`.
+If the sender is not in `pairing.json` and there is no `allowFrom` match, the
+channel generates a time-limited pairing code (`generate_code`, 10-minute TTL)
+and sends it back as a formatted message. The account owner then issues one of
+these commands to approve or manage access:
 
-`/resume <key>` returns an `OutboundMessage` whose metadata carries `_switch_chat_id`. `run_interactive`'s `_consume_outbound` watches for that key and updates `cli_chat_id` via `nonlocal`. The next `bus.publish_inbound` uses the new key — no process restart needed. The persistent footer sees the change on its next redraw.
-
----
-
-## 2. Textual TUI (opt-in)
-
-Second interactive surface lives under `durin/cli/tui/`. Runs on top of the same `MessageBus` and `AgentLoop` as the legacy CLI; only the I/O layer differs. Launched via `durin agent --tui`.
-
-### 2.1 Layout
-
-```
-┌─ HeaderBar ────────────────────────────────────────────────────┐
-│ durin · <workspace> · <model> (<preset>)                       │
-├────────────────────────────────────────────────────────────────┤
-│                                                                │
-│  ChatView (scrollable, mouse-friendly)                         │
-│    MessageBubble role=user      "the user message"             │
-│    MessageBubble role=assistant "streamed assistant reply"     │
-│    MessageBubble role=tool      "tool call result"             │
-│    MessageBubble role=system    "command / system note"        │
-│                                                                │
-├────────────────────────────────────────────────────────────────┤
-│ InputArea  (suggester: /commands  and  @files)                 │
-├────────────────────────────────────────────────────────────────┤
-│ FooterBar  session · model · ~tokens/window (%) · mem · vec   │
-└────────────────────────────────────────────────────────────────┘
-```
-
-Each piece is a separate widget in `durin/cli/tui/widgets/`. Widget CSS lives next to the widget; app-level CSS in `durin/cli/tui/durin.tcss`.
-
-### 2.2 Bus integration
-
-`DurinApp.on_mount` spawns two background tasks:
-
-- `agent_loop.run()` — inbound dispatcher.
-- `_consume_outbound` — drains `bus.consume_outbound()`, maps metadata flags to widget operations:
-
-| metadata flag | effect |
+| Subcommand | Effect |
 |---|---|
-| `_stream_delta` | append to the open assistant bubble |
-| `_stream_end` | close the assistant bubble |
-| `_streamed` | end-of-turn marker (no UI side-effect) |
-| `_switch_chat_id` | mutate `cli_chat_id` + refresh footer / header |
-| `render_as="text"` | render as a system bubble |
-| (other) | render as an assistant bubble |
+| `/pairing list` | Show pending codes with their expiry |
+| `/pairing approve <code>` | Approve the sender; adds them to `pairing.json` |
+| `/pairing deny <code>` | Discard a pending code without approving |
+| `/pairing revoke <user_id>` | Remove an approved sender from the current channel |
+| `/pairing revoke <channel> <user_id>` | Remove an approved sender from a specific channel |
 
-User submission goes through the same pipeline as the legacy CLI: surrogate-sanitize → drag-and-drop pre-processor → publish `InboundMessage(_wants_stream=True, media=[...])`.
+These subcommands are handled by `handle_pairing_command` in `durin/pairing/store.py`.
+The store uses a module-level `threading.Lock` plus `cross_process_lock` so
+operations are safe from both async channel handlers and sync CLI contexts.
 
-### 2.3 Editor ergonomics (parity with CLI)
+## 5 Key types and entry points
 
-- `SlashCommandSuggester` — `/` prefix surfaces a known command (palette source: `BUILTIN_COMMAND_SPECS`).
-- `AtFileSuggester` — `@<prefix>` matches workspace files (same exclude rules as `FileReferenceCompleter`).
-- `MultiModeSuggester` — dispatcher between the two.
-- Drag-and-drop pre-processor reuses `durin.cli.dragdrop.process_dragged_paths`.
-
-### 2.4 Key bindings
-
-| Binding | Action |
-|---|---|
-| `Ctrl+Q` / `Ctrl+D` | quit |
-| `Escape` | abort: calls `agent_loop._cancel_active_tasks` and clears the open assistant bubble |
-| `Ctrl+T` | toggle dark/light theme |
-| `Ctrl+L` | open the model picker modal (`open_model_picker` pushes `ModelPickerScreen`) |
-
-### 2.5 TUI Pilot harness
-
-`durin/cli/tui/probe.py` adds `screen_text()` — plain-text capture of what the Textual TUI actually paints (via compositor strips) — plus `type_text()` / `run_step()` scripted-input helpers. `scripts/tui_smoke.py` wraps them into a CLI so the TUI can be driven headlessly and *seen* without a real terminal. `tests/cli/tui/` asserts on the rendered output through the same path.
-
----
-
-## 3. Per-channel slash-command UX
-
-Mode dispatch (`/plan`, `/build`, `/mode`) works in every channel. Native autocomplete varies:
-
-| Channel | Status today | Improvement room |
+| Symbol | File | Role |
 |---|---|---|
-| **CLI** | Dispatch works. | Add a `prompt_toolkit` completer reading `builtin_command_palette()`. |
-| **WebUI** | Full autocomplete via `<SlashCommandPalette>` wired to `/api/commands` — `/plan`, `/build`, `/mode` appear automatically. | Optional visual badge in the composer header when `mode != build`. |
-| **Telegram** | Dispatch works. Native `/` menu only lists commands explicitly registered via `BotCommand(...)` in `channels/telegram.py`. | Add `BotCommand("plan"/"build"/"mode", …)`. |
-| **Slack / Matrix / WhatsApp / DingTalk / MoChat** | Dispatch works. Slash commands appear as plain messages, no native autocomplete (each channel's API differs). | Per-channel registration optional; dispatch already works. |
+| `MessageBus` | `durin/bus/queue.py` | Two `asyncio.Queue`s (inbound / outbound); pure async decoupler between surfaces and agent |
+| `InboundMessage` / `OutboundMessage` | `durin/bus/events.py` | Message envelope: `channel`, `chat_id`, `content`, `media`, `metadata` (routing flags); `InboundMessage.session_key` property derives the session key |
+| `AgentLoop` | `durin/agent/loop.py` | Per-turn state machine and command dispatcher; polls `bus.inbound`, routes to `CommandRouter` or agent; publishes `bus.outbound` |
+| `AgentRunner` | `durin/agent/runner.py` | LLM iteration core: tool batches, streaming, redaction, context governance |
+| `CommandRouter` | `durin/command/router.py` | Three-tier dispatch (priority / exact / longest-prefix); `is_priority()` gates lock-free commands |
+| `BuiltinCommandSpec` / `cmd_*` | `durin/command/builtin.py` | Slash-command metadata (`BUILTIN_COMMAND_SPECS` tuple) and async handlers for `/new`, `/stop`, `/restart`, `/status`, `/model`, `/effort`, `/history`, `/goal`, `/help`, `/plan`, `/build`, `/mode`, `/sessions`, `/resume`, `/compact`, `/copy`, `/name`, `/hotkeys`, `/memory`, `/skills`, `/remember`, `/forget`, `/sources`, `/audit`, `/why`, `/version` |
+| `DurinApp` | `durin/cli/tui/app.py` | Textual TUI app; `on_mount` spawns `agent_loop.run()` and `_consume_outbound`; maps metadata flags to widget operations |
+| `run_interactive` | `durin/cli/commands.py` | Interactive CLI loop: `PromptSession`, surrogate-sanitize, drag-drop pre-process, bus publish, `_consume_outbound` render |
+| `Config` | `durin/config/schema.py` | Pydantic `BaseSettings` root: `agents`, `providers`, `channels`, `tools`, `memory`, `gateway`, `api`, `telemetry`, `appearance`, `model_presets`, `skills`, etc. |
+| `load_config` / `save_config` / `mutate_config` | `durin/config/loader.py` | Config I/O: layout-transparent (split or legacy monolith); atomic cross-process write; auto-migration to split on first use |
+| `SecretStore` | `durin/security/secrets.py` | Plaintext-0600 JSON store; `SecretEntry` has `name`, `value`, `service`, `account`, `scope`, `origin`, `created_at` |
+| `resolve_secret` / `SecretRedactor` | `durin/security/secrets.py` | `resolve_secret()` dereferences `${secret:NAME}` at use; `SecretRedactor` applies value-based + pattern-based redaction on tool results |
+| `handle_pairing_command` | `durin/pairing/store.py` | Pure function executing `/pairing` subcommands (list / approve / deny / revoke); `generate_code` / `approve_code` / `revoke` manage `~/.durin/pairing.json` under `threading.Lock` + `cross_process_lock` |
+| `ask_user_question` / `request_secret` / `exit_plan_mode` / `todo_write` | `durin/agent/tools/ask_user.py`, `durin/agent/tools/secrets.py`, `durin/agent/tools/plan_mode.py`, `durin/agent/tools/todos.py` | Interactive tools; payload-canonical contract (arguments carry display content); rich channels render widgets, dumb channels get serialized fallback |
+| `pending_answers` | `durin/agent/pending_answers.py` | Per-session `asyncio.Future` registry for blocking `ask_user_question`; `can_block()` gates in-turn blocking by checking consumer activity and session prefix |
+| `RICH_PAYLOAD_CHANNELS` | `durin/agent/user_payloads.py` | Set of channel names that render structured tool payloads natively: `{"websocket", "cli"}` |
+| `theme.py` / `tokens.css` | `durin/cli/theme.py` / `design/tokens.css` | Six Textual themes (ithildin/forge/mithril × light/dark) mirroring the CSS token values; a test pins the two together so they cannot drift |
+| `process_dragged_paths` | `durin/cli/dragdrop.py` | Scans input for absolute file paths; copies media to `<workspace>/.media/<sha>.<ext>`; returns `(cleaned_text, media_list)` |
 
----
+## 6 Configuration and surfaces
 
-## 4. Secrets subsystem
+### Launch surfaces
 
-API keys are no longer stored inline in `config.json`. The store is `~/.durin/secrets.json` (mode `0600`, outside the config tree). Each entry has two axes — `service` (classification, non-unique) and `scope` (consumer authorization) — plus account/description/origin.
+| Surface | How to start |
+|---|---|
+| Interactive CLI | `durin agent` |
+| Textual TUI | `durin agent --tui` |
+| WebUI (gateway) | `durin gateway` — serves WebSocket channel + SPA on `gateway.host:gateway.port` |
 
-**At-rest threat model — isolation, not encryption.** The store is plaintext on a `0600` file, deliberately *not* encrypted. A passphrase-encrypted store would buy little: `$HOME` is already user-readable and the agent needs the value in clear to use it, so encryption-at-rest is theatre unless backed by an OS keyring or an external manager (see §4.3). What actually moves the needle is the value living **only** in the store and in the env of the one subprocess that needs it — never in `config.*`, the model context, or the chat. The same posture is used by hermes (`~/.hermes/.env`, 0600) and openclaw (`~/.openclaw/*.json`, 0600); neither encrypts at rest either.
+### Key config keys
 
-Config fields hold a `${secret:NAME}` reference; `resolve_secret()` turns it into plaintext lazily at the point of use, so the value never re-enters the `Config` object, logs, or telemetry. Wired into `Config.get_api_key()` and the provider factory.
+**Channels**
 
-`durin secret` manages the store; `durin secret migrate` moves pre-existing plaintext provider keys in. The onboard wizard writes new keys straight to the store as references.
-
-Resolution is wired into providers, the web-search tool, and channel construction — secrets work everywhere config expects a credential.
-
-**Phase 2 — redaction + exec injection**: before any tool result reaches the model the agent runner redacts it through `SecretRedactor`, two layers — **value-based** (exact stored values → `«redacted:NAME»`) and **pattern-based** (credential-*shaped* strings → `«redacted»`: vendor prefixes `sk-`/`ghp_`/`AKIA`/…, JWTs, PEM blocks, and `KEY=value`/JSON secret fields). The pattern layer (`_apply_patterns` in `security/secrets.py`) catches credentials the store does not know — notably ambient values surfaced via `exec.allowed_env_keys`. `exec` output is redacted **before** it is spilled to `<ws>/.durin/spills/` (the `redact=` hook in `output_spill.py`), so secret values never land on disk. `ExecTool` injects `exec`-scoped secrets into the subprocess env so scripts use them without the agent ever seeing the values.
-
-**Agent tools** (`agent/tools/secrets.py`): `list_secrets` lets the agent discover available credentials (metadata only); `request_secret` declares one the agent needs. `durin doctor` flags dangling `${secret:}` references.
-
-### 4.1 Interactive `request_secret`
-
-```mermaid
-sequenceDiagram
-    participant LLM
-    participant Tool as request_secret tool
-    participant UI as TUI / WebUI
-    participant User
-    participant WS as Websocket / Modal
-    participant Store as SecretStore
-
-    LLM->>Tool: call request_secret(name, service, scope)
-    Tool->>UI: render masked panel
-    UI->>User: prompt for secret value
-    User->>UI: types masked value
-    UI->>WS: secret_store frame (value)
-    WS->>Store: write secrets.json (0600)
-    Store-->>WS: ack
-    WS-->>UI: stored ok
-    Tool-->>LLM: metadata note {name, service, scope}<br/>(never the value)
-```
-
-When the agent calls `request_secret`, the TUI and web render a purpose-built panel (not the generic tool block) so the user can supply the value **without it ever entering the conversation**. The rule is two transport channels:
-
-- **Agent channel** — the `request_secret` tool call, and afterwards a metadata-only "stored" note. Never the value.
-- **Secret channel** — a masked input → client code → `SecretStore`. Only the value, and it stops at the store.
-
-The web sends the value over the authenticated **websocket** as a `secret_store` frame (never a URL query — a GET query string leaks into history, proxies and logs); the gateway writes the store and replies with an ack. The TUI opens a masked `ModalScreen` and writes `SecretStore` directly. After a successful store the agent receives a metadata note (`name` / `service` / `scope`) so it knows the secret is available — as `$NAME` to `exec` — but is never told the value.
-
-### 4.2 Managing stored secrets
-
-Three write surfaces, all landing in the one `SecretStore`:
-
-- **CLI** — `durin secret set / list / show / rm / grant / revoke / migrate` (`durin/cli/secret_cmd.py:39-196`); the value is typed at a hidden prompt. As a separate process the CLI just `save()`s — the next `durin` invocation loads it fresh, so no in-process reload is needed.
-- **Web Settings** — the config view renders each `${secret:NAME}` reference as a `SecretRefRow` (`webui/src/components/settings/ConfigSettings.tsx:123`). *Rotate* opens a masked dialog that writes the new value over the same `secret_store` websocket frame as `request_secret`, never a query string (`ConfigSettings.tsx:154`). `GET /api/secrets` lists entries (metadata only — `_handle_secrets_list` never returns a value, `durin/channels/websocket.py:1287`); `/api/secrets/delete` removes one (`websocket.py:1313`).
-- **TUI** — the masked `SecretPromptScreen` modal (`durin/cli/tui/screens/secret_prompt.py`), shared with the `request_secret` flow above.
-
-Every **in-process** writer — `store_secret` (provider keys / onboard wizard), the `secret_store` envelope, and the TUI modal — calls `get_secret_store(reload=True)` after saving (`durin/security/secrets.py:350`, `websocket.py:2438`, `secret_prompt.py:112`), so resolution and redaction see a freshly stored secret on the very next use: `build_redactor()` rebuilds from the reloaded store (`secrets.py:408`). The CLI path does not reload — it is a separate process.
-
-### 4.3 Future: third-party password managers
-
-The store is intentionally one thin mechanism — the value always lives in `secrets.json`. A natural future extension, modelled on openclaw's `SecretRef {source, provider, id}` indirection, would let a `${secret:NAME}` reference resolve from an **external manager** instead of the local store: a `source` of `exec` (run `op read`, `pass show`, `security find-generic-password`, or a Vault client) or `file` (read a path managed elsewhere). Operators already running 1Password, `pass`, gopass, the macOS Keychain, or HashiCorp Vault could then keep the value out of durin's own files entirely, while the plaintext-`0600` store stays the zero-config default. It would be a user-configurable opt-in, not a replacement — and is **not implemented today**.
-
----
-
-## 5. Design system
-
-Durin's three visual surfaces share one palette system. Source of truth: `design/DESIGN.md` (the 9-section spec) + `design/tokens.css` (the token values). Two axes — palette (`ithildin` default, `forge`, `mithril`) × mode (`light`/`dark`), six token sets.
-
-- **Web** — `webui/src/globals.css` carries all six sets, generated from `theme.py` by `scripts/gen_webui_tokens.py`. `useTheme` applies the `data-palette` attribute + `.dark` class; a selector lives in Settings.
-- **TUI** — `durin/cli/theme.py` mirrors `tokens.css` and builds six Textual themes. `Ctrl+T` toggles light/dark, `/theme` picks the palette; `COLORFGBG` auto-detects the mode at boot.
-- **Wizard** — borrows the accent for every `questionary` prompt; it prints onto the terminal so it never owns the background.
-
-`config.appearance` (palette + mode) is the shared, persisted choice. `tests/cli/test_theme_tokens.py` pins `theme.py` to `tokens.css` so the Python mirror cannot drift from the CSS.
-
-One-shot CLI commands (`status`, `doctor`, `config`) are intentionally **not** themed — they use rich's defaults; the system governs the surfaces you inhabit.
-
----
-
-## 6. Lifecycle commands
-
-`durin` ships dedicated commands for install/configure/upgrade/uninstall so the operator never has to hand-edit JSON or guess where state lives.
-
-| Command | Module | What it does |
+| Key | Default | Effect |
 |---|---|---|
-| `durin onboard [--wizard]` | `durin/cli/commands.py` (`onboard`) | Creates `~/.durin/config.json` + workspace; `--wizard` runs the questionary form. |
-| `durin status` | same | High-level: paths, model, which providers are configured. |
-| `durin config path \| show \| get \| set \| edit` | `durin/cli/config_cmd.py` | Read/write single keys via dotted paths. Secrets masked by default. |
-| `durin upgrade [--check\|--migrate-only\|--ref]` | `durin/cli/upgrade.py` | Detects editable vs wheel install; pulls + reinstalls + replays config migration. |
-| `durin uninstall [--purge --keep-* --workspace]` | `durin/cli/uninstall.py` | Enumerates state under `~/.durin` + `~/.cache/durin`, prompts, deletes. `--purge` self-uninstalls in a subprocess. |
-| `durin doctor [--ping --fix --json]` | `durin/cli/doctor.py` | Runs a battery of small checks and exits non-zero on any `fail`. See [observability.md](observability.md). |
-| `durin oauth login/logout`, `durin channels login/status` | `durin/cli/commands.py` | OAuth + channel-specific auth (kept separate because not single-key edits). |
-| `durin memory <subcommand>` | `durin/cli/memory_cmd.py` | Memory consolidation + drill-down + absorption. See [memory/00_overview.md](memory/00_overview.md). |
+| `channels.send_progress` | `true` | Stream agent text progress to the channel |
+| `channels.send_tool_hints` | `false` | Stream tool-call hint messages to the channel |
+| `channels.show_reasoning` | `true` | Surface model reasoning when the channel implements it |
+| `channels.send_max_retries` | `3` | Max outbound delivery attempts (initial send included) |
+| `channels.transcription_provider` | `"groq"` | Voice transcription backend (`"groq"` or `"openai"`) |
+| `channels.transcription_language` | `null` | Optional ISO-639-1 hint for audio transcription |
 
-### Config edit pipeline
+**Appearance**
 
-`durin config set <dotted.path> <value>` runs:
+| Key | Default | Effect |
+|---|---|---|
+| `appearance.palette` | `"ithildin"` | Color palette: `ithildin` / `forge` / `mithril` |
+| `appearance.mode` | `"auto"` | Light/dark mode: `auto` (detects `COLORFGBG` or browser `prefers-color-scheme`) / `light` / `dark` |
 
-1. Read raw JSON from disk.
-2. Validate via `Config.model_validate(...)`, then re-dump with `by_alias=True` to canonicalize alias form (camelCase). Guarantees one set of keys (avoids parallel `apiKey: null` + `api_key: "sk-…"` pollution that pydantic's alias-first resolution would silently drop).
-3. Normalize the user's dotted path (snake_case → camelCase per segment) so `providers.zhipu.api_key` lands at `providers.zhipu.apiKey`.
-4. Apply the mutation, re-validate the whole tree. On `ValidationError`, leave the file untouched and print the pydantic message.
-5. Save through `durin.config.loader.save_config`, which re-runs `_apply_ssrf_whitelist` and any pending schema migrations.
+**Agent interaction**
 
-### State paths the uninstaller knows about
+| Key | Default | Effect |
+|---|---|---|
+| `agents.defaults.ask_user_blocking` | `true` | Enable in-turn blocking ask_user (awaits answer inside the same turn without a turn boundary) |
+| `agents.defaults.ask_user_answer_timeout_s` | `300` | Seconds before blocking ask_user falls back to yield semantics |
 
-Grouped by `--keep-*` flag:
+**Gateway**
 
-- **`--keep-config`**: `~/.durin/config.json`, `~/.durin/config.json.bak`, `~/.durin/pairing.json`
-- **`--keep-workspace`**: `~/.durin/workspace/`
-- **`--keep-cache`**: `~/.cache/durin/{telemetry,models,archive}/`
-- Always cleaned (no opt-out flag): `~/.durin/{sessions,history,cron,media,bridge,webui,logs}/`
-- Only when `--workspace <path>` is passed: `<path>/.durin/{plans,spills,tool-results}/`
+| Key | Default | Effect |
+|---|---|---|
+| `gateway.host` | `"127.0.0.1"` | Bind address for the gateway server |
+| `gateway.port` | `18790` | Port for the gateway server |
+| `gateway.daemon` | `false` | Run gateway detached (PID file + log file) |
+| `gateway.webui_enabled` | `true` | Auto-enable WebSocket channel so the embedded WebUI is served |
 
-The plan table renders absolute paths + recursive byte counts before prompting, so the user sees the blast radius before consenting.
+**Other**
 
-### Install-mode detection
+| Key | Default | Effect |
+|---|---|---|
+| `model_presets` | `{}` | Named `ModelPresetConfig` entries; `/model <preset>` switches at runtime |
+| `agents.defaults.unified_session` | `false` | Share one session across all channels |
 
-`durin upgrade` inspects `Path(durin.__file__).parent.parent`. If that path contains a `pyproject.toml`, the install is treated as **editable**: `git pull --ff-only` (optionally preceded by `git checkout <ref>`) followed by `pip install -e .`. Otherwise (running from `site-packages/`), it's a **wheel** install and we run `pip install --upgrade durin`. `--check` prints the detected mode + version and exits without touching pip. `--migrate-only` skips the package step entirely and just re-saves the config through the load/validate/dump pipeline, picking up any new schema defaults.
+### Filesystem paths
 
----
+| Path | Contents |
+|---|---|
+| `~/.durin/config.json` | One-line marker `{"_layout": "split"}` after migration |
+| `~/.durin/config.json.d/*.json` | Per-topic config files (one per non-default top-level section) |
+| `~/.durin/config.json.legacy` | Backup of the pre-split monolith (written once, not updated) |
+| `~/.durin/secrets.json` | Plaintext secret store, mode 0600 |
+| `~/.durin/pairing.json` | Approved senders + pending pairing codes per channel |
+| `<workspace>/.media/` | Workspace-local copies of dragged/dropped media files |
 
-## 7. Config layout — split files
+## 7 Curated rationale
 
-The config lives as **per-topic files** under `~/.durin/config.json.d/` rather than one monolithic `config.json`:
+**One bus for all surfaces.** Every surface routing through the same
+`MessageBus` means a new channel (say, a Discord adapter) gets the full agent
+behavior for free — slash-command routing, interactive tool payloads, streaming,
+session management — without touching agent code. The only surface-specific work
+is rendering.
 
-```
-~/.durin/
-    config.json          # 1-line marker: {"_layout": "split"}
-    config.json.d/       # one file per non-default top-level section
-        agents.json  memory.json    skills.json   providers.json
-        channels.json  tools.json   telemetry.json  api.json  …
-    config.json.legacy   # backup of the pre-split monolith
-```
+**Payload-canonical interactive tools.** Encoding the display content in tool
+*arguments* rather than having the model re-present it in prose creates a
+reliable rendering contract. The channel sees the structured payload and renders
+it as a native widget; the model never gets a chance to misstate the question or
+reformat the plan. For channels that cannot render widgets, the serialized
+fallback reproduces the same content from the stored session metadata rather
+than re-asking the model.
 
-- **Migration is automatic**: the first `load_config` on a legacy monolith splits it, backs the original up as `config.json.legacy`, and rewrites `config.json` as a marker. See `durin/config/loader.py`.
-- **The section set is derived, not hardcoded**: every non-default top-level `Config` section gets its own file, derived from the serialized config. A newly added section participates automatically — there is no list to keep in sync. (A hardcoded list previously dropped `telemetry` / `appearance` / `skills` on save, each added after the list was frozen.)
-- **`save_config` writes only non-defaults** (`exclude_defaults=True`) then prunes noise: empty provider sections and disabled channels that match their shipped default are dropped. *Enabled* channels keep their full attribute set so every editable field stays discoverable.
-- `read_persisted_config()` is the layout-agnostic reader used by tooling + tests.
+**Config split-layout.** Keeping one JSON file per top-level section means a
+diff to `channels.json` does not touch `providers.json`. The section set is
+derived from the serialized config at write time so newly added top-level fields
+are never silently dropped by a hardcoded list.
 
----
+**Secrets isolated from config.** A `${secret:NAME}` reference in config is
+inert on disk and inert in the `Config` object. The value only materializes at
+the moment a provider or tool calls `resolve_secret()`, and it goes straight to
+the consumer without touching any persisted path. This means accidentally
+committing or sharing `config.json` leaks only a reference, not the credential.
 
-## 8. Distribution
-
-The PyPI distribution is **`durin-agent`** (the bare `durin` name was already taken by an unrelated robot-control project). The import package stays `durin` and the CLI command stays `durin`; only the `pip install` / `pipx install` argument changes.
-
-Two artifacts ship per release, both produced by `python -m build`:
-
-- `durin_agent-<version>.tar.gz` — source distribution
-- `durin_agent-<version>-py3-none-any.whl` — pure-Python wheel
-
-The wheel bundles the webui under `durin/web/dist/` via `hatch_build.py`; editable installs skip this hook since `cd webui && bun run dev` is the dev loop.
-
-### Release pipeline
-
-`.github/workflows/release.yml` fires on tags matching `v[0-9]+.[0-9]+.[0-9]+*`. The workflow:
-
-1. **build** — checks out the repo, installs Python 3.11 + Node 20 (npm), asserts the tag matches `pyproject.toml`'s version, runs `python -m build`, uploads artifacts.
-2. **github-release** — downloads artifacts and creates a GitHub Release with auto-generated notes. Marked `prerelease: true` when the tag carries an `aN`/`bN`/`rcN`/`devN` suffix (PEP 440).
-3. **pypi-publish** — downloads the same artifacts and publishes them via `pypa/gh-action-pypi-publish` (OIDC trusted publishing — no API tokens stored in the repo). Marked `continue-on-error: true` so a misconfigured PyPI publisher doesn't block the GitHub Release.
-
-Tag → release is the only path. There is no manual upload step. Maintainer instructions live in `docs/releasing.md`.
-
-### CI pipeline
-
-`.github/workflows/ci.yml` runs on every PR and every push to `main`. It installs durin with `[dev]` + lightweight extras and runs the full `pytest` suite with `--maxfail=5`.
+**Pairing as a channel-level gate.** Unrecognized DMs never reach the agent.
+`BaseChannel._handle_message` checks `is_approved` before publishing to the bus
+and sends a pairing code reply instead of an error — so the channel appears
+responsive to the new user and the owner can approve them at leisure.

@@ -327,7 +327,71 @@ Several items were marked "deferred until X surfaces" where X had no telemetry a
 
 ---
 
-## 6. Cross-references
+## 6. Design choices and why
+
+A handful of structural decisions shape the whole subsystem. These are the
+"why" behind the mechanisms described in the other internals docs.
+
+### Why two-track memory
+
+durin keeps two disjoint memory tracks: an **entity track** (canonical pages the
+agent authors and Dream consolidates) and a **fragment track** (raw episodic
+facts from `/remember` and session-close summaries, never consolidated). The
+split exists because the two have different owners and different trust. Fragments
+are raw user material — a fact the user explicitly wrote, or a verbatim summary
+of a conversation. They are not candidates for graduation into structured entity
+pages, and folding them in would let Dream silently rewrite something the user
+asserted by hand. Dream builds entities from **sessions** (the transcript)
+instead, which keeps the raw track immutable and recoverable while still letting
+the entity graph grow. Both tracks remain fully searchable from write time;
+keeping them separate is about provenance and ownership, not about recall.
+
+### Why auto-absorb defaults OFF
+
+Merging two entity pages is a high-blast-radius, lossy-feeling operation: it
+deletes one page (to archive), rewrites another, and is only as good as an LLM's
+identity judgement. A wrong merge ("two people named Marcelo are the same
+person") corrupts the graph in a way that is annoying to notice and to undo. So
+the refine pass ships with `auto_absorb.enabled = false`: by default it surfaces
+duplicate candidates on demand (`durin memory absorb-suggest`) and lets the
+operator merge deliberately (`durin memory absorb`), with the merge always
+reversible via `git revert`. An operator who has tuned the confidence threshold
+and trusts the judge can flip auto-merge on per workspace. The default is
+conservative on purpose — a destructive default is the wrong trade when the
+manual path is one command away.
+
+### Why per-field author precedence
+
+Entity attributes can be written by three sources — the user (by hand or via a
+tool), Dream (extraction), and the agent (casual writes). Without a precedence
+rule, the most recent write wins, which means a re-run of the extract pass could
+silently overwrite a fact the user set deliberately. durin instead resolves every
+field by author precedence (user > dream > agent): a user-set attribute is never
+clobbered by extraction, and an extraction is never clobbered by a casual agent
+write. This is precisely what makes the extract pass safe to re-run idempotently
+— it can re-derive the same attributes from the same turns as often as it likes
+without regression. The one deliberate exception is a discovered entity's display
+**name**, which is last-writer-wins: a guessed name should yield immediately to
+any later explicit correction rather than being pinned by precedence.
+
+### Why markdown-first with derived indexes
+
+The single source of truth for all memory is the markdown files on disk; the
+vector index (LanceDB) and the lexical index (FTS5) are **derived** and
+reconstructible at any time (`durin memory reindex`). This inverts the common
+pattern where the database is authoritative and files are an export. The reason
+is durability and trust: a markdown file is human-readable, diff-able,
+git-versioned, and editable by hand, while an index is an acceleration layer that
+can be rebuilt if it drifts or corrupts. It also keeps the invariant simple —
+when an index and the markdown disagree, the markdown wins, always. Storing
+anything authoritative only in an index (for example the full body inside a
+LanceDB row) is rejected for the same reason: it would make a disposable cache
+co-authoritative with the source, and an optimisation that breaks that principle
+has to be justified by measurement, not intuition.
+
+---
+
+## 7. Cross-references
 
 - Architectural decisions per module: each module's decisions table (§10 or §14 or §16).
 - Cross-corpus decisions: `00_overview.md` §10.

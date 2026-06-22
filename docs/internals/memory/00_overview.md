@@ -1,247 +1,391 @@
+# Memory subsystem — overview
+
+## 1. Purpose
+
+The memory subsystem gives durin persistent, cross-session recall without requiring
+an LLM in the hot-path retrieval loop. Every piece of knowledge lives in editable
+markdown files under `memory/`; the vector and lexical indices that accelerate
+search are derived from those files and can be fully reconstructed at any time.
+
+Two coexisting tracks run through the same workspace:
+
+- **Entity pages** — typed, consolidated knowledge the agent authors via
+  `memory_upsert_entity` and the extract dream continuously enriches from session
+  conversations. Stored at `memory/entities/<type>/<slug>.md`.
+- **Raw fragments** — episodic notes, stable facts, corpus chunks, and session
+  summaries. Appended and surfaced by search; never automatically folded into
+  entity pages.
+
+A cold-path Dream process (daily cron or reactive hook) runs five sequential
+passes — extract, derived_from, skill-extract, refine, always_on — that grow the
+entity graph, link knowledge to source documents, mine reusable skills, deduplicate
+near-duplicate entities, and curate guidance pins. Crucially, Dream never blocks
+the agent; all user turns see the most recent completed pass.
+
 ---
-title: Memory system — architectural overview
-version: 0.1-draft
-status: current — describes the shipped system (P11 era, 2026-05-30)
-last_updated: 2026-05-27
-audience: humans and LLMs implementing or modifying this system
-related: 01_data_and_entities.md
+
+## 2. Mental model
+
+**Markdown-first durability.** All knowledge lives in `.md` files. The LanceDB
+vector table and the FTS5 SQLite database are indices — derived artifacts that can
+be deleted and rebuilt without losing any information. The files are the source of
+truth; the indices are a speed layer on top.
+
+**Layered search with no LLM in the hot path.** A query passes through four stages:
+(1) query analysis routes to the right lexical table; (2) vector search and lexical
+search run in parallel; (3) Reciprocal Rank Fusion merges the two result lists; (4)
+entity-aware rerank boosts hits matching query entities, and an optional cross-encoder
+reranks the top-50 to a final top-10. Every stage is deterministic. The LLM receives
+the structured, sectioned results and does the reasoning.
+
+**Cold-path dream consolidation.** The extract pass reads every session with unprocessed
+turns (tracked by a per-session cursor in `session.meta.json`) and discovers or enriches
+entity pages. The refine pass finds alias-overlap pairs and, when auto-absorb is enabled,
+merges duplicates. The always_on pass curates which guidance entities are pinned into every
+prompt within a token budget. All dream writes go through `memory_writer.write_entity`,
+which uses dulwich git plumbing and a compare-and-swap lock to prevent lost updates under
+concurrent writers.
+
 ---
 
-# Memory system — architectural overview
+## 3. Architecture diagram
 
-This document is the **entry point to the specification corpus**. It defines the global design, the guiding principles, the layered diagram, the glossary, and the index of all other documents. Each module of the system lives in a dedicated doc inside this folder (`docs/internals/memory/`).
+```mermaid
+flowchart TD
+    subgraph STORAGE["Storage — source of truth"]
+        direction TB
+        MD_ENTITIES["memory/entities/&lt;type&gt;/&lt;slug&gt;.md\nEntity pages (typed, canonical)"]
+        MD_FRAGS["memory/episodic/ stable/ corpus/\npending/ session_summary/\nRaw fragments"]
+        SESSIONS["sessions/&lt;key&gt;.jsonl\nRaw session transcripts"]
+        INGESTED["ingested/&lt;id&gt;/\nSource document chunks"]
+        ARCHIVE["memory/archive/&lt;class&gt;/&lt;id&gt;.md\nAbsorbed entities (recoverable)"]
+    end
 
-**How to read this corpus:** start here. Then go to the doc covering the module you need to understand or modify. Each doc is the source of truth for its scope; no fact should be duplicated across docs (only referenced via `[[link]]`).
+    subgraph INDICES["Derived indices — reconstructible"]
+        direction TB
+        LANCE["LanceDB — memory_entries table\nVector 384-dim E5 embeddings\n(entity, episodic, stable, corpus, session_summary, skill)"]
+        FTS["FTS5 SQLite — fts.sqlite\nmemory_fts (porter unicode61)\nmemory_fts_trigram (CJK)\n+ fts_meta bookkeeping\nPer-turn session rows"]
+    end
 
-> **Heads-up — two memory tracks (within this one subsystem).** This corpus describes the **entity-centric** memory subsystem. It holds two coexisting tracks: **(1) entity pages** — consolidated knowledge the agent authors (`memory_upsert_entity`) and the extract dream enriches from sessions; and **(2) raw fragments** — episodic/stable entries (`/remember` facts, session summaries) surfaced by recency, never folded into pages. The single `memory_dream` cron runs four passes (extract / refine / skill / always_on). The legacy `dream` consolidator that maintained `MEMORY.md` / `USER.md` was **removed** (the agent's identity now lives in the static `SOUL.md` bootstrap file + the pinned principal entity). See `05_dream_cold_path.md::§0`.
+    subgraph SEARCH["Search pipeline — hot path, no LLM"]
+        QANALYSIS["Query analysis\nNFC normalise · CJK detect\nentity-ref extract · auto-keywords"]
+        VEC["Vector search L2\nLanceDB top-50"]
+        LEX["Lexical search\nRoute: UNICODE61 / TRIGRAM / LIKE\nFTS5 top-50"]
+        RRF["RRF fusion\nw_vector=1.0 · w_lexical=0.7\ngrep-verify · session prior ×0.85"]
+        ERERANK["Entity-aware rerank\nBoost hits matching query entities"]
+        CE["Cross-encoder rerank\ntop-50 → top-10\n(opt-in, ~100M-param model)"]
+        SECTION["Sectioning\nCANONICAL · FRAGMENT · SESSION · INGESTED\nper-source cap for corpus"]
+    end
+
+    subgraph WRITE["Write pipeline — cold path"]
+        AGENT_WRITE["Agent: memory_upsert_entity\nor /remember"]
+        MW["memory_writer.write_entity\ndulwich CAS · FieldPatch precedence\nuser > dream > agent"]
+        UPSERT["VectorIndex.upsert\nFTSIndex.reindex_one_file"]
+    end
+
+    subgraph DREAM["Dream — five passes, cron + reactive"]
+        D_EXTRACT["1. Extract\nper-session cursor · entity discovery\n(agent upserts + mention-based)"]
+        D_DERIVED["2. derived_from\nlink entities to ingested docs"]
+        D_SKILL["3. Skill-extract\nagentic sub-agent · skill_write"]
+        D_REFINE["4. Refine\nalias-overlap · absorb-judge · EntityAbsorption"]
+        D_ALWAYS["5. always_on\nrank feedback entities · token budget\npinned context every turn"]
+    end
+
+    AGENT_WRITE --> MW
+    MW --> MD_ENTITIES
+    MW --> UPSERT
+    UPSERT --> LANCE
+    UPSERT --> FTS
+
+    MD_ENTITIES --> LANCE
+    MD_FRAGS --> LANCE
+    SESSIONS --> FTS
+    INGESTED --> MD_FRAGS
+
+    LANCE --> VEC
+    FTS --> LEX
+
+    QANALYSIS --> VEC
+    QANALYSIS --> LEX
+    VEC --> RRF
+    LEX --> RRF
+    RRF --> ERERANK
+    ERERANK --> CE
+    CE --> SECTION
+
+    SESSIONS --> D_EXTRACT
+    D_EXTRACT -->|"memory_writer CAS"| MD_ENTITIES
+    D_EXTRACT --> D_DERIVED
+    D_DERIVED --> D_SKILL
+    D_SKILL --> D_REFINE
+    D_REFINE -->|"absorb"| ARCHIVE
+    D_REFINE --> D_ALWAYS
+
+    style STORAGE fill:#1a1a2e,color:#e0e0e0
+    style INDICES fill:#162032,color:#e0e0e0
+    style SEARCH fill:#16213e,color:#e0e0e0
+    style WRITE fill:#0f3460,color:#e0e0e0
+    style DREAM fill:#1a2a1a,color:#e0e0e0
+```
 
 ---
 
-## 1. Goals
+## 4. How it works
 
-The durin memory system must allow the agent to:
+### Storage workspace layout
 
-1. **Remember across sessions.** Information learned in one conversation is available in the next, regardless of elapsed time.
-2. **Distinguish evidence from synthesis.** Raw conversations, ingested documents, atomic observations, and canonical knowledge are different things with different roles.
-3. **Find relevant information fast.** Hot path (each user turn) responds in milliseconds without external LLM calls for retrieval.
-4. **Maintain coherence at low operational cost.** Consolidation, deduplication, and archival run on the cold path (Dream) without blocking the user.
-5. **Be hand-editable.** Markdown as source of truth — the user can inspect and modify any data without specialized tools.
-6. **Be recoverable.** Indices (vector, lexical, structural) are derived. Deleting them does not destroy memory.
-7. **Be generalist.** The data model serves coders, sales, support, students, makers, personal assistance — not a single domain.
+Everything lives under a single workspace directory (default `~/.durin/`):
 
-## 2. Non-goals
+```
+<workspace>/
+├── sessions/               raw session transcripts (.jsonl per session)
+├── ingested/<id>/          source document chunks and metadata
+├── memory/
+│   ├── entities/<type>/    typed entity pages (one .md per entity)
+│   ├── episodic/           atomic observations
+│   ├── stable/             durable notes and stable facts
+│   ├── corpus/             chunks extracted from ingested documents
+│   ├── session_summary/    one .md per session (first-class indexed class)
+│   ├── pending/            intake buffer — never indexed
+│   └── archive/            absorbed or retired entries (not searched by default)
+└── .durin/index/
+    ├── lance/              LanceDB vector table (memory_entries)
+    ├── fts.sqlite          FTS5 lexical index
+    └── meta.json           IndexMeta (CURRENT_SCHEMA_VERSION = 7)
+```
 
-Scope boundaries:
+The `pending` class is an intake buffer; the indexer and walker skip it entirely.
+`archive/` is excluded from all default search paths and is only visited when
+`include_archive=True` is explicitly passed.
 
-1. **Not a classical knowledge graph** with SPARQL/RDF. The graph is built on markdown + indices, not on a triple store.
-2. **Not a reasoning system.** It provides retrieval and structure; reasoning is the final LLM's job.
-3. **Not multi-tenant.** Single-workspace per installation. Multiple users can interact with the agent via channels (Telegram, Discord, Slack, etc.); memory is **shared across all interacting users** — no per-user isolation. Each user (including the installation owner) is modeled as a `person:<name>` entity.
-4. **No LLM in hot path** (search, retrieval, ranking). LLMs are used only on the cold path (Dream, ingestion).
-5. **Not a replacement for the context window.** The final LLM remains the synthesizer; memory provides material.
-6. **No history rewriting.** Raw sessions are immutable; the system synthesizes on top but does not modify the evidence.
+### Indexing
 
-## 3. Guiding principles
+The vector index (`VectorIndex`, backed by LanceDB) holds one row per memory
+artifact with fields: `id`, `class_name`, `summary`, `headline`, `vector`
+(384-dim or 1024-dim E5 embeddings), `valid_from`, `entities`, `path`,
+`body_length`. All record types — entity pages, fragment entries, session
+summaries, and skills — share this table. L2 distance is used for search;
+E5 models produce normalized vectors so L2 and cosine are equivalent.
 
-All design decisions rest on these principles. Any decision violating one requires explicit justification.
+The lexical index (`FTSIndex`, backed by FTS5 in SQLite) contains two virtual
+tables:
+- `memory_fts` — porter + unicode61 tokenizer with diacritic removal; handles
+  Latin, Cyrillic, Arabic, and other whitespace-separated scripts.
+- `memory_fts_trigram` — trigram tokenizer; handles CJK and substring queries.
 
-| # | Principle | Implication |
+Session turns are indexed one row per turn (uri `sessions/<key>.md#turn-N`),
+so BM25 scores are not diluted by transcript length. Sessions are never
+vector-indexed; `session_summary/` entries cover the semantic layer.
+
+Schema version 7 (`CURRENT_SCHEMA_VERSION` in `durin/memory/index_meta.py`)
+added Porter stemming to `memory_fts`. A schema version mismatch triggers an
+automatic rebuild on startup.
+
+### Search pipeline
+
+1. **Query analysis** (`query_router.py`): NFC-normalize, count CJK characters,
+   extract entity refs, detect identifier tokens (URLs, emails, UUIDs, file paths).
+   Route: CJK ≥ 3 chars and all tokens ≥ 3 chars → TRIGRAM; CJK present with short
+   tokens → LIKE_SUBSTRING fallback; otherwise → UNICODE61.
+
+2. **Parallel retrieval**: vector search embeds the query with the `query: ` E5
+   prefix and fetches the top-50 nearest rows by L2. Lexical search runs the routed
+   FTS5 query against the appropriate table and also returns up to 50 hits.
+
+3. **RRF fusion** (`rrf_fusion.py`): merge by reciprocal rank with weights
+   `w_vector = 1.0`, `w_lexical = 0.7` (boosted to 2.5 when `keywords` are
+   supplied), `w_grep = 0.3`. A session-type prior multiplies raw session turn
+   scores by 0.85 so curated entries lead at comparable evidence.
+
+4. **Entity-aware rerank** (`entity_ranker.py`): boost fused hits whose `entities`
+   field overlaps with entity refs extracted from the query.
+
+5. **Cross-encoder rerank** (opt-in, `cross_encoder.py`): a ~100M-param
+   sentence-transformer model (`BAAI/bge-reranker-base` by default) rescores the
+   top-50 and keeps top-10. Disabled by default because the model download must not
+   happen implicitly in CI environments; the onboarding wizard recommends enabling it
+   for production deployments.
+
+6. **Sectioning** (`sectioned_output.py`): group results into four sections —
+   CANONICAL (entity pages), FRAGMENT (episodic + stable + corpus), SESSION (session
+   turns + summaries), INGESTED (source artifact chunks). A per-source cap (default 3)
+   prevents a single long ingested document from monopolizing the top-K.
+
+### Write pipeline
+
+Agent and user writes both go through `memory_writer.write_entity`:
+
+1. Read the entity page at HEAD via dulwich plumbing (no working-tree checkout).
+2. Apply `FieldPatch` objects in precedence order: `user` > `dream` > `agent`.
+   A field authored by the user is never overwritten by a dream pass.
+3. Build and commit via `refs.set_if_equals` (compare-and-swap). Retry up to 30
+   times on conflict; an in-process `RLock` serializes same-repo writes to reduce
+   contention.
+4. Fast-forward the working tree so file-based readers (Obsidian, the webui) see
+   the latest content.
+5. After a successful commit, `VectorIndex.upsert` and `FTSIndex.reindex_one_file`
+   update both indices incrementally.
+
+The `pending` class bypasses this path; it is a raw buffer that the indexer skips.
+
+### Dream cold-path (five passes)
+
+The `memory_dream` cron (default `0 3 * * *`) runs five sequential passes. Reactive
+triggers (session compaction, session close) run only the extract pass, throttled by
+`ReactiveDreamGate`.
+
+1. **Extract** (`dream_passes.run_extract_pass`): iterate sessions ordered by name.
+   For each session with turns beyond the stored `extract_cursor`, scan tool calls
+   for `memory_upsert_entity` references (Stage 1), call an LLM to extract typed
+   attributes, and write via `memory_writer`. Optionally (Stage 2, `discover_enabled`),
+   discover entirely new entities from conversation mentions. Advance the cursor after
+   each session batch.
+
+2. **derived_from** (`dream_passes.run_derived_from_pass`): link entities to the
+   ingested documents they were distilled from, for sessions where the write-time
+   link is absent. Catch-and-repair pass; skips sessions with no ingested references.
+
+3. **Skill-extract** (`dream_passes.run_skill_extract_pass`): an agentic sub-agent
+   (spins `AgentRunner`) mines recent sessions and logged skill gaps for reusable
+   procedures, then calls `skill_write` to author or update skills.
+
+4. **Refine** (`dream_passes.run_refine_pass` → `refine_dream.run_refine`): find
+   entity pairs sharing aliases via `AliasIndex`, skip cross-type / tombstoned /
+   user-managed / quarantined pairs, judge survivors via `absorb_judge.judge_pair`
+   (LLM returning same / different / unclear + confidence), and merge on
+   `same + confidence ≥ threshold` via `EntityAbsorption.absorb`. Disabled by default
+   (`memory.dream.auto_absorb.enabled = false`); manual `durin memory absorb` is
+   always available.
+
+5. **always_on** (`always_on_dream.run_always_on_pass`): gather stance, practice, and
+   feedback entity pages, rank them via an LLM judge that drops contradictions, fit the
+   ranked list within `always_on_token_budget` tokens, and flip `always_on` flags.
+   Only the flag changes; no entities are ever deleted by this pass. The principal
+   resolver injects always_on entities into the pinned context on every agent turn.
+
+---
+
+## 5. Key types and entry points
+
+| Symbol | File | Role |
 |---|---|---|
-| **P1** | Markdown is source of truth | All knowledge lives in editable `.md` files. Indices are reconstructible derived artifacts. |
-| **P2** | Hot path has no LLM | Search and ranking are deterministic. LLMs only in consolidation/ingestion (cold path). |
-| **P3** | Separated layers, clear responsibilities | Evidence (sessions/ingested) ≠ atomic facts (episodic/stable) ≠ synthesis (entities). |
-| **P4** | Generalist data model | Free attributes + relations. No closed catalog. Cleanup at write-time (Dream sees existing schema). |
-| **P5** | Relations are first-class only if they carry information | Pure mentions are not materialized. The vector index covers them. |
-| **P6** | Structure communicates better than instructions | Markers (CANONICAL/FRAGMENT) and timestamps. NOT "trust this" instructions in the prompt. |
-| **P7** | Reversible decisions | Archive instead of delete. Provenance is always traceable. |
-| **P8** | Fix causes, not symptoms | If retrieval fails, fix the index or the model — don't add patches (lesson from the G3.b experiment). |
+| `EntityPage` | `durin/memory/entity_page.py` | Parsed representation of `memory/entities/<type>/<slug>.md`. Frontmatter: `type`, `name`, `aliases`, `attributes`, `relations`, `derived_from`, `author`, `created_at`, `updated_at`. Lenient on read; strict validation on `save()`. |
+| `MemoryEntry` | `durin/memory/schema.py` | Pydantic model for fragment entries (`episodic`, `stable`, `corpus`, `session_summary`). Fields: `id`, `headline`, `summary`, `source_refs`, `related`, `entities`, `author`, `valid_from`, `body`. Validates entity refs as strict `<type>:<value>`. |
+| `VectorIndex` | `durin/memory/vector_index.py` | LanceDB wrapper at `<workspace>/.durin/index/lance/`. Table `memory_entries`. Incremental `upsert` and full `rebuild_from_workspace`. L2 distance search. |
+| `FTSIndex` | `durin/memory/fts_index.py` | SQLite FTS5 at `<workspace>/.durin/index/fts.sqlite`. Two virtual tables (`memory_fts` porter-unicode61, `memory_fts_trigram`) plus `fts_meta` bookkeeping. |
+| `FastembedProvider` | `durin/memory/embedding.py` | ONNX embedding provider. Default `intfloat/multilingual-e5-small` (384-dim, 100+ languages). Lazy load; applies `passage:` / `query:` E5 prefix automatically. |
+| `AliasIndex` | `durin/memory/aliases_index.py` | In-memory map `{alias_string → [entity_ref, …]}`. Rebuilt from `memory/entities/` on boot (sub-second). No disk persistence. `RLock` for thread-safe mutations during dream refresh. |
+| `RoutingDecision` | `durin/memory/query_router.py` | Output of `decide_lexical_route`: `normalized_query`, `route` (UNICODE61 / TRIGRAM / LIKE_SUBSTRING), `cjk_chars`, `keywords`, `auto_keywords`. Pure deterministic function. |
+| `EntityAbsorption` | `durin/memory/absorption.py` | Detects merge candidates (shared aliases) and absorbs: canonical receives merged content, loser moved to `memory/archive/entities/<type>/<slug>.md` with `archived_into` frontmatter. |
+| `memory_writer.write_entity` | `durin/memory/memory_writer.py` | Single entity write path: read at HEAD → apply `FieldPatch` objects by precedence → dulwich plumbing commit → CAS via `refs.set_if_equals` → retry on conflict → fast-forward working tree. |
+| `IndexMeta` | `durin/memory/index_meta.py` | Frozen dataclass persisted at `<workspace>/.durin/index/meta.json`. Tracks `schema_version` (currently 7), `embedding_model_id`, `last_full_rebuild`, `previous_models`. Schema mismatch triggers auto-rebuild. |
+| `SectionedHit` | `durin/memory/sectioned_output.py` | Result wrapper carrying `uri`, `type`, `path`, `score`, `ts`, `snippet`, `summary`, `entities`. Grouped into CANONICAL / FRAGMENT / SESSION / INGESTED sections by the renderer. |
+| `run_extract_for_session` | `durin/memory/extract_runner.py` | Per-session extract orchestrator: loads session JSONL, reads `extract_cursor` from `session.meta.json`, processes new turns, calls `extract_entity` + `discover_entities`, advances cursor. |
+| `ReactiveDreamGate` | `durin/memory/dream_passes.py` | In-process lock + throttle for reactive extract triggers. `try_begin` is non-blocking; returns skip reason (`"locked"` / `"throttled"`) or empty string when the caller may proceed. |
 
-## 4. Layered diagram
+For deeper coverage of individual subsystems, see the sibling docs:
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                       AGENT LLM (hot path)                        │
-│                                                                   │
-│   Receives structured results, decides, responds to user          │
-└────────────────────────────┬─────────────────────────────────────┘
-                             │
-                             │ tool calls
-                             ▼
-┌──────────────────────────────────────────────────────────────────┐
-│   AGENT TOOLS  (memory_search, memory_upsert_entity,             │
-│                 memory_ingest, memory_drill, memory_forget)      │
-│                                                                   │
-│   Adapter layer between LLM and engines. Sectioned results with   │
-│   structural markers.                                             │
-└────────────────────────────┬─────────────────────────────────────┘
-                             │
-                ┌────────────┴────────────┐
-                ▼                          ▼
-┌────────────────────────┐   ┌────────────────────────────────────┐
-│  SEARCH PIPELINE       │   │  WRITE PIPELINE                     │
-│  (hot path, no LLM)    │   │  (cold path, Dream + LLM)           │
-│                        │   │                                     │
-│  intent router         │   │  triggers (cron / reactive / manual)│
-│  ↓                     │   │  ↓                                  │
-│  vector + BM25         │   │  Dream: 4 passes (LLM)              │
-│  ↓                     │   │  ↓                                  │
-│  weighted merge        │   │  entity dedup / absorb-judge        │
-│  ↓                     │   │  ↓                                  │
-│  entity-aware rerank   │   │  apply (CAS write + reindex)        │
-│  ↓                     │   │                                     │
-│  cross-encoder rerank  │   │                                     │
-└──────────┬─────────────┘   └────────────────┬────────────────────┘
-           │                                   │
-           ▼                                   ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                    DERIVED INDICES                                │
-│                                                                   │
-│   LanceDB (vector)  │  FTS5 / SQLite (lexical BM25)                │
-│                                                                   │
-│   (Structural SQLite — decided against, see §10 #1)               │
-│                                                                   │
-│   All reconstructible from the layer below.                       │
-└────────────────────────────┬─────────────────────────────────────┘
-                             │
-                             ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                 SOURCE OF TRUTH (disk, markdown)                  │
-│                                                                   │
-│   sessions/         (raw conversations, immutable)                │
-│   ingested/         (raw documents, immutable)                    │
-│   memory/                                                         │
-│     corpus/         (chunks from ingested + snapshots)            │
-│     episodic/       (atomic observations)                         │
-│     stable/         (stable notes)                                │
-│     pending/        (buffer)                                      │
-│     archive/        (consolidated, recoverable)                   │
-│     entities/       (typed canonical synthesis)                   │
-└──────────────────────────────────────────────────────────────────┘
-```
+- [01_data_and_entities.md](01_data_and_entities.md) — workspace layout, entity page format, fragment classes, provenance, archiving
+- [02_indexing.md](02_indexing.md) — LanceDB table schema, FTS5 tables, incremental vs. full rebuild, schema version lifecycle
+- [03_search_pipeline.md](03_search_pipeline.md) — query analysis, RRF weights, entity-aware rerank, cross-encoder, sectioning
+- [04_agent_tools.md](04_agent_tools.md) — `memory_search`, `memory_upsert_entity`, `memory_ingest`, `memory_drill`, `memory_forget`
+- [05_dream_cold_path.md](05_dream_cold_path.md) — five passes in depth, cursor mechanics, absorb-judge, always_on
+- [06_prompts_and_instructions.md](06_prompts_and_instructions.md) — LLM-facing tool descriptions, result markers, identity context injection
+- [07_telemetry_and_observability.md](07_telemetry_and_observability.md) — telemetry events, health check, webui dashboards
+- [design_rationale.md](design_rationale.md) — decisions not taken and why
 
-## 5. Main flows
+---
 
-### 5.1 Read path (hot, every user turn)
+## 6. Configuration and surfaces
 
-```
-1. User sends a message
-2. Agent decides to call memory_search(query, [keywords])
-3. memory_search runs:
-   a. Intent router classifies the query (semantic, structural, mixed)
-   b. Vector search in LanceDB
-   c. BM25 search in FTS5
-   d. Weighted merge → top-K candidates
-   e. Entity-aware reranking (RRF)
-   f. (Future) Cross-encoder reranks top-50 → top-10
-   g. Sectioned output: results grouped under CANONICAL / FRAGMENT / SESSION / INGESTED markers
-4. Agent receives structured results, synthesizes the response
-```
+### Core config keys (`memory.*` in `durin/config/schema.py`)
 
-### 5.2 Write path (cold, async)
-
-```
-Track 1 — entity pages (consolidated knowledge):
-1. Agent calls memory_upsert_entity (name/aliases/relations/body as prose)
-   → memory_writer.write_entity: git-CAS field patch to memory/entities/<type>/<slug>.md
-2. The file change re-derives the indices (file watcher → FTS5 + vector, N2)
-3. The extract dream (cron/reactive) reads new SESSION turns → extracts typed
-   attributes onto the entity page (precedence user > dream > agent)
-4. The refine dream (cron, opt-in auto_absorb) dedups alias-overlap entities
-   via the absorb-judge LLM
-
-Track 2 — raw fragments (NOT consolidated):
-1. /remember (or memory_ingest for whole documents) writes memory/{episodic|
-   stable}/<id>.md (references for ingested docs); indexed for search
-2. Surfaced by recency in the hot layer + search; never folded into a page,
-   never auto-archived (manual memory_forget only)
-```
-
-## 6. Glossary
-
-| Term | Definition |
-|---|---|
-| **Source of truth (SoT)** | The canonical data from which everything else is derived. In durin, the `.md` files. |
-| **Hot path** | Operations per user turn. Latency-critical. No LLM. |
-| **Cold path** | Deferred operations (Dream, ingestion). LLM permitted. |
-| **Entity** | Typed synthesis with identity (`person:marcelo`, `bug:auth_leak`). Lives in `memory/entities/<type>/<slug>.md`. |
-| **Attribute** | Primitive fact about an entity (`email: x@y.com`). Free-form dict, no closed catalog. |
-| **Relation** | Connection to another entity (`spouse → person:susana`). List of objects. First-class only if it carries info. |
-| **Provenance** | Traceability: which entry created/updated each attribute/relation. |
-| **Episodic** | Short atomic observation. Raw material for Dream. |
-| **Canonical** | Marker for consolidated entity pages. Indicates "stable" info. |
-| **Fragment** | Marker for post-cursor episodic (recent, not yet consolidated). |
-| **Dream** | Cold path that consolidates episodic into entity pages. |
-| **Cursor** | Per-entity timestamp up to which Dream has processed. |
-| **Hot layer** | Injection of canonical pages + recent fragments into the LLM's prompt before tool calls. |
-| **Index** | Derived structure (LanceDB, FTS5, SQLite) that accelerates retrieval. Reconstructible. |
-| **Owner** | The person who installed the agent. Modeled as a `person:<name>` entity like any other user — there is no special "owner" record. The distinction (if any) lives in channels/auth config, not in memory. |
-| **Interlocutor** | Any user who interacts with the agent via a channel. The owner is one interlocutor among many; all are modeled the same way in memory. |
-
-## 7. Current state vs final state (snapshot)
-
-This section will be replaced by a detailed roadmap once all modules are specified. For now, a general picture:
-
-Audit E24 (2026-05-28) rebuilt this snapshot — most rows had been
-stale since Phase 1.9 / Phase 3 shipped. Per-row pointers go to
-the specific module where the work landed.
-
-| Component | Current state | Notes |
+| Key | Default | Effect |
 |---|---|---|
-| **Data types** | 5 classes (`stable`, `episodic`, `corpus`, `pending`, `session_summary`) + `entity_page` (separate model) | `MEMORY_CLASSES` in `durin/memory/paths.py`. `session_summary` was added in audit A10 (was 4 classes before). |
-| **Vector index** | LanceDB + intfloat/multilingual-e5-small (default since 2026-05-30; replaced MiniLM-L12) with v2.a embedding text for entity pages (name + aliases + rendered_frontmatter + body) | Shipped audit E9 (2026-05-28). Schema v4. E5-family prefix (`passage: ` / `query: `) applied automatically by FastembedProvider. |
-| **Lexical** | FTS5 BM25 (`unicode61` + `trigram` + `like_substring` for short CJK) | Shipped Phase 3. Auto-detection of identifier tokens (P3.3) boosts lexical weight on URL/email/UUID/file-path queries (audit E14). |
-| **Fusion** | Cross-source RRF over per-source rank lists | Shipped Phase 3 (`durin/memory/rrf_fusion.py`). Score-scale invariant. |
-| **Reranking** | Entity-aware RRF (default ON) + cross-encoder (opt-in, default OFF) | Cross-encoder opt-in via `memory.search.cross_encoder.enabled`. Pre/post-cursor logic in entity_ranker restored audit E11. MMR deferred. |
-| **Recency handling** | The LLM does it. Every hit carries `valid_from`; the agent reasons about which fact is current given the question's intent. Search does not pre-filter by age. | Implicit decay was removed 2026-05-30 after the LoCoMo conv-5-q20 chicken case showed it perjudicates factual atemporal queries. Rationale in doc 03 §10. |
-| **Versioning / audit** | Git history exists; webui surfaces it via memory dashboards (Phase 4 dashboards shipped) | Dream uses git log internally; operators access via any git CLI or webui. |
-| **Tools** | `query` + `keywords` + `scope` + `level` + `limit` + sectioned results | Shipped Phase 5 d1. `limit` exposed audit A3. |
-| **Dream** | The `memory_dream` cron runs four passes: **extract** (session turns → entity attributes via `memory_writer` CAS), **refine** (alias-overlap dedup via the absorb-judge, opt-in `auto_absorb`), **skill** (sessions → reusable skills), **always_on** (curate the pinned guidance within a token budget). Reactive triggers (post_compaction / session_close) run extract only. | Shipped. Auto-absorb skips user-authored entity pages (audit E19); fragments are not consolidated (two-track model). |
-| **Sessions** | Session summaries are a first-class memory class (`session_summary`) indexed by FTS5 + LanceDB | Shipped audit A10 (2026-05-28). `Consolidator._persist_last_summary` writes `memory/session_summary/<key>.md`. |
+| `memory.enabled` | `true` | Gates vector retrieval. When false, memory tools still work via grep-level recall but no embedding model is loaded. |
+| `memory.owner` | `null` | Workspace owner entity ref (e.g. `person:marcelo`). Resolves the principal for pinned context; falls back to `person:anonymous`. |
+| `memory.index_skills` | `true` | Includes `skills/<name>/SKILL.md` in the FTS and vector walk as the `skill` memory class. |
+| `memory.embedding.model` | `intfloat/multilingual-e5-small` | E5 embedding model. Changing the model triggers a full vector rebuild on next startup. |
+| `memory.embedding.provider` | `fastembed` | Embedding backend (currently only `fastembed`; future HTTP providers planned). |
+| `memory.search.cross_encoder.enabled` | `false` | Enable the cross-encoder rerank step (downloads ~100 MB model on first use). |
+| `memory.search.cross_encoder.model` | `BAAI/bge-reranker-base` | Sentence-transformer model for reranking. |
+| `memory.search.sectioning.max_per_source` | `3` | Maximum corpus hits per `ingest_id` in the sectioned output. |
+| `memory.file_watcher.enabled` | `true` | Reactive re-indexing when `.md` files under `memory/` are modified outside the agent (vim, git merge). |
+| `memory.health_check.enabled` | `true` | Periodic consistency probe between the markdown source and the derived indices. |
+| `memory.health_check.interval_seconds` | `3600` | How often the health check probe runs. |
+| `memory.dream.enabled` | `true` | Master switch for cron and reactive dream triggers. Manual `durin memory dream` always works. |
+| `memory.dream.cron` | `0 3 * * *` | Schedule for the daily five-pass dream run. |
+| `memory.dream.post_compaction` | `true` | Run extract pass after a session is compacted. |
+| `memory.dream.on_session_close` | `true` | Run extract pass when a session closes. |
+| `memory.dream.discover_enabled` | `true` | Enable Stage 2 mention-based entity discovery in the extract pass. |
+| `memory.dream.skill_signals_enabled` | `true` | Detect skill corrections and gaps in session turns during extract (feeds daily curation). |
+| `memory.dream.min_seconds_between_runs` | `300` | Throttle window for reactive triggers; 0 disables. |
+| `memory.dream.max_seconds_per_run` | `600` | Hard wall-clock cap per extract pass; 0 = unbounded. |
+| `memory.dream.always_on_token_budget` | `1500` | Token ceiling for always-on pinned guidance; 0 disables the pin. |
+| `memory.dream.auto_absorb.enabled` | `false` | Enable automatic entity merging by the refine pass. Off by default; use `durin memory absorb-suggest` and `durin memory absorb` for manual control. |
+| `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM judge confidence floor (0–100) for auto-merge. |
+| `memory.dream.auto_absorb.min_age_hours` | `24` | Quarantine newly created/edited entities from auto-merge. |
 
-## 8. Document index
+### Principal resolution keys
 
-The following documents live in `docs/internals/memory/` and are the detailed specification of the system. Each is the source of truth for its scope.
-
-| # | Document | Scope |
+| Key | Default | Effect |
 |---|---|---|
-| 00 | `00_overview.md` (this) | Overview, principles, diagram, glossary, index |
-| 01 | `01_data_and_entities.md` | Data types, schemas, lifecycle, entity model (attributes + relations + provenance), naming, paths |
-| 02 | `02_indexing.md` | LanceDB vector index, FTS5 lexical, SQLite structural (if applicable), re-derivation, file watcher |
-| 03 | `03_search_pipeline.md` | Intent router, vector search, BM25, weighted merge, entity-aware ranker, cross-encoder |
-| 04 | `04_agent_tools.md` | memory_search, memory_upsert_entity, memory_ingest, memory_drill, memory_forget, result sectioning, markers |
-| 05 | `05_dream_cold_path.md` | Four passes (extract/refine/skill/always_on), triggers, two-track model, absorb-judge dedup, config |
-| 06 | `06_prompts_and_instructions.md` | identity.md Memory section, tool descriptions, marker conventions, LLM-facing messages |
-| 07 | `07_telemetry_and_observability.md` | Events, metrics, dashboards, health alarms |
-| — | `design_rationale.md` | Non-goals, discarded approaches, unadopted mechanisms, lessons learned |
-| 09 | `09_implementation_roadmap.md` | Concrete phasing: current state to final state, step by step, with done criteria |
+| `principal_channel_map` | `{}` | Map of `channel_id → person:<name>` for resolving the interacting person entity per channel. |
+| `principal_owner` | `null` | Fallback owner entity ref when the channel map has no entry. |
 
-The number and naming may be adjusted as we write. What matters is that each doc has a closed scope and explicit cross-references to related ones.
+### CLI surfaces
 
-## 9. How this corpus is modified
+```
+durin memory search <query>         run a search (same pipeline as memory_search tool)
+durin memory dream [--passes ...]   run all five dream passes manually
+durin memory reindex                rebuild all indices from markdown
+durin memory absorb-suggest         show alias-overlap candidates for manual review
+durin memory absorb <ref> <into>    manually merge two entity pages
+durin memory history <entity-ref>   show git history for an entity page
+durin memory revert <sha>           revert an entity write via git revert
+durin memory stats                  show index sizes and entry counts
+```
 
-| Change type | Process |
-|---|---|
-| **New decision** | Discussion → update the affected module's doc → update this overview if it affects diagram/principles |
-| **Refactor** | Change in the module's primary doc + cross-ref adjustment |
-| **Feature discarded** | Move description to `design_rationale.md` with rationale |
-| **Lesson learned** | Add to `design_rationale.md` even if no other doc changes |
+### Agent tools
 
-Each doc has `version` + `last_updated` in frontmatter. Substantive changes bump the version.
+The agent accesses memory through six tools (see [04_agent_tools.md](04_agent_tools.md) for signatures and parameters):
 
-## 10. Cross-corpus decisions
+- `memory_search` — query the search pipeline
+- `memory_upsert_entity` — create or update an entity page
+- `memory_ingest` — ingest a document into corpus chunks
+- `memory_drill` — fetch the full body of a specific memory entry
+- `memory_forget` — soft-delete a memory entry (sets a tombstone; `archive` not delete)
+- `memory_store` — write a raw fragment (episodic, stable, or corpus class)
 
-These decisions impact multiple modules. Resolutions below; details live in the affected docs.
+---
 
-### Resolved (2026-05-27)
+## 7. Curated rationale
 
-| # | Decision | Resolution | Affects |
-|---|---|---|---|
-| **1** | SQLite structural (counting / analytical queries via JSON_EXTRACT) | **Decided against.** Grep + parse on-the-fly handles MVP scale; FTS5 over rendered frontmatter covers attribute lookups; mainstream systems ship without a structural layer; the LLM agent is the analytical layer when one is needed. | `02_indexing.md`, `design_rationale.md` |
-| **2** | Cross-encoder reranker (top-50 → top-10 with dedicated reranking model, no LLM in hot path) | **In MVP as opt-in, OFF by default.** Multilingual cross-encoders add 300-1500ms latency on CPU, breaking the default search budget; comparable systems (mem0, graphiti) ship reranking opt-in too. Default model when enabled: `BAAI/bge-reranker-base` (~100M, MIT, lower RAM); `jinaai/jina-reranker-v2-base-multilingual` remains a curated alternative the operator can configure. User surface: workspace config + onboarding wizard question + web dashboard toggle. | `03_search_pipeline.md` |
-| **3a** | MMR (Maximal Marginal Relevance — diversity in top-K) | **Not in MVP, deferred.** Original concern was top-K redundancy, but archive of consolidated episodic (§3.6 doc 01) eliminates the primary source of duplication. The remaining concern (corpus chunks from the same long source) is handled differently via a per-source cap in sectioning (§12.4 doc 03). Mainstream systems don't implement MMR either. If post-MVP bench shows residual duplication, the algorithm is standalone and easy to add. | `03_search_pipeline.md`, `design_rationale.md` |
-| **3b** | Temporal decay | **Removed 2026-05-30.** Search must not pre-judge recency without the question's context. Every hit carries `valid_from`; the LLM does the temporal reasoning. See doc 03 §10 for the removal rationale (LoCoMo conv-5-q20 chicken case). | `03_search_pipeline.md` §10 |
-| **4** | Explicit versioning of memory | **In MVP via git history, no dedicated tool.** `memory/.git/` already exists. Dream pipeline reads `git log` internally when preparing its prompt (no MCP tool exposure to the agent). Users access via any git CLI today; web UI rendering is post-MVP and lives outside this corpus. | `01_data_and_entities.md`, `05_dream_cold_path.md` |
-| **5** | Active forgetting policies (compress / delete old entries) | **Not in MVP.** Destructive — needs explicit policies for what's deleted, when, recovery. Distinct from #3 (which only affects ranking). Backlog. | `05_dream_cold_path.md`, `design_rationale.md` |
+**Markdown as source of truth.** Indices are fast, but markdown files are durable. A
+corrupted LanceDB table is rebuilt with `durin memory reindex`. A file edited with vim
+is picked up by the file watcher. This also makes the memory store portable — it is just
+a directory of text files that any tool can read.
 
-### Open
+**No LLM in hot-path search.** Retrieval latency must be predictable regardless of
+external API availability or cost. The cross-encoder reranker (a local ONNX model) is the
+closest thing to inference in the search pipeline, and even it is optional. LLMs appear
+only in the cold path (dream consolidation, ingestion) where latency is not per-user-turn.
 
-None at the corpus level currently. Module-specific open decisions are listed in each doc's `Open decisions` section.
+**Temporal decay was removed.** The search pipeline no longer applies any recency
+weighting. Every hit carries a `valid_from` field; the agent reasons about which
+information is current given the question's intent. Pre-filtering by age without
+knowing the question's temporal context produced incorrect results on factual,
+atemporal queries.
+
+**Five passes, not one monolithic consolidation.** Each dream pass has a bounded,
+independent scope. Extract is idempotent (per-session cursors). Derived_from is a
+catch-and-repair pass that runs after extract. Skill-extract is the only agentic pass
+(spins its own runner). Refine is opt-in and conservative. Always_on only flips flags.
+This separation means a failure in one pass does not abort the others, and each pass can
+be triggered independently or inspected in isolation.
+
+**Per-field authorship precedence.** Entity attributes carry an author tag
+(`user_authored` or `agent_created`). A field authored by a human is never
+overwritten by a dream pass — only agent-created or untagged fields are updated.
+This prevents dream consolidation from silently overriding corrections the user made
+by hand.

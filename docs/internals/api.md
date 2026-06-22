@@ -1,335 +1,321 @@
-# arch / api — service core, ASGI gateway, OpenAPI contract, auth
+# API platform — service gateway, OpenAPI contract, scoped auth
 
-> The HTTP surface: a transport-agnostic service core whose `@route`-decorated
-> methods are collected into one table that drives both the pydantic-derived
-> OpenAPI contract and the unified Starlette/uvicorn gateway. One server on the
-> websocket port serves the WS chat endpoint, the generic `/api/v1` HTTP API,
-> signed media/session reads, and the SPA. Auth is a persisted, hashed, scoped
-> token store.
->
-> See [loop.md](loop.md) for the agent loop the WS endpoint feeds,
-> [observability.md](observability.md) for the gateway daemon lifecycle.
+> Related: [loop.md](loop.md) (agent loop the WS endpoint feeds),
+> [observability.md](observability.md) (gateway daemon lifecycle),
+> [mcp.md](mcp.md) (MCP server management exposed through this layer).
 
 ---
 
-## 1. Transport-agnostic service core
+## 1. Purpose
 
-`durin/service/` holds eleven domain services. Each method takes a validated
-input DTO plus a `Principal` and returns a result DTO — `(Command|Query, Principal) -> Result` —
-or raises a typed `DomainError`. Nothing under `durin/service/` imports
-HTTP/WS; adapters map `DomainError.code` to their own status vocabulary.
+The API platform is the HTTP and WebSocket front door for durin. It exposes a
+set of domain services — managing sessions, memory, secrets, skills, cron jobs,
+MCP servers, config, OAuth, and auth tokens — through a single unified
+Starlette/uvicorn ASGI gateway. The same gateway also serves the WebSocket chat
+endpoint, signed media reads, and the built SPA.
 
-### DTO bases and the error hierarchy
-
-`durin/service/types.py`:
-
-| Type | Role | Config |
-|---|---|---|
-| `ServiceModel` (`types.py`) | Base for every DTO | `alias_generator=to_camel`, `populate_by_name=True` — accepts snake_case Python names AND camelCase wire aliases off one model |
-| `Command` (`types.py`) | Mutating input | `extra="forbid"` — an unknown field is a validation error, not a silent drop |
-| `Query` (`types.py`) | Read-only input | `extra="forbid"` |
-| `Result` (`types.py`) | Return value | extras allowed — built in code, stays forward-compatible |
-
-`DomainError` (`types.py`) carries a class-level `code` and a `details`
-dict. The subclasses and their HTTP mapping (the map itself lives in the
-adapter, `asgi.py`):
-
-| Error | `code` | HTTP |
-|---|---|---|
-| `UnauthenticatedError` | `unauthenticated` | 401 |
-| `ForbiddenError` | `forbidden` | 403 |
-| `NotFoundError` | `not_found` | 404 |
-| `ConflictError` | `conflict` | 409 |
-| `ValidationFailedError` | `validation_failed` | 422 |
-| `UnavailableError` | `unavailable` | 503 |
-
-`ValidationFailedError` is named to avoid colliding with
-`pydantic.ValidationError`, which the adapter also handles (→ 422). Any
-unmapped `code` falls through to 500.
-
-### Principal and scopes
-
-`durin/service/principal.py`. `Principal` is a frozen dataclass —
-`subject`, `scopes: frozenset[str]`, `kind` (`"local" | "remote"`). Two
-constructors: `Principal.local()` (in-process TUI/cron — full authority via
-`Scope.ADMIN`, no token) and `Principal.remote(subject, scopes)` (token-derived).
-`principal.require(scope)` raises `ForbiddenError` when the scope is absent;
-`Scope.ADMIN` short-circuits every check (`principal.py`).
-
-`Scope` (`principal.py`) is the single authorization vocabulary, named
-`<domain>:<read|write>` — `settings`, `secrets`, `skills`, `cron`, `sessions`,
-`config`, `memory`, `mcp`, `system`, plus `admin`. The route table references these
-same values. Unused scopes are removed rather than left speculative, so chat has
-no scope — chat flows through the WS endpoint, not `/api/v1`.
-
-### The route table
-
-`durin/service/registry.py`. The `@route` decorator (`registry.py`) stashes
-a frozen `RouteSpec` (`registry.py`) on the method under `__route_spec__`
-and returns the method **unchanged** — so it stays a plain awaitable the TUI
-calls directly with `Principal.local()`. `RouteSpec` carries `verb`, `path`,
-`scope` (a `Scope` value or `None`), `request_model`, `response_model`,
-`summary`.
-
-`ServiceRegistry.register(name, service)` (`registry.py`) walks the
-instance's attributes, collects every `@route` method into a `BoundRoute`
-(spec + service name + handler), and raises `ValueError` on a duplicate
-service name or duplicate `(verb, path)` — wiring bugs fail loudly at startup.
-`registry.routes` returns them in registration order.
-
-Two builders consume the registry:
-
-- `durin/service/wiring.py::build_service_registry` — the **functional**
-  registry, wired to real `config` / `session_manager` / `cron_service` / `bus`.
-  Registers all twelve services (`wiring.py`). Shared by the gateway front
-  door and (historically) the WS channel so both serve the same service set.
-  The `mcp` service additionally receives an optional `mcp_runtime` (an
-  `McpRuntime` over the gateway's live `AgentLoop`); the front door passes one,
-  the catalog/TUI leave it `None` (config-only status).
-- `durin/service/catalog.py::build_catalog_registry` — a **deps-less** registry
-  for spec-reading only (the OpenAPI generator). Services are instantiated with
-  inert `None`/stub deps because no method is ever called through it
-  (`catalog.py`). `SERVICE_CLASSES` (`catalog.py`) is the canonical list.
-
-### Representative services
-
-A service is a plain class; methods carry `@route` and call `principal.require()`
-first. Patterns worth noting:
-
-- **secrets** (`service/secrets.py`) — `GET`/`POST`/`DELETE /api/v1/secrets`.
-  Values never leave the store; results carry a masked `value_hint`. The sync
-  `store_entry` (`secrets.py`) is the single write path shared by the HTTP
-  route, the WS frame handler, and the TUI secret prompt — in-process callers
-  are not forced onto the event loop to write a credential.
-- **sessions** (`service/sessions.py`) — list/messages/webui-thread/delete/rename.
-  Returns **unsigned** data; HMAC media-URL signing is an adapter concern the
-  service must not perform (it needs the channel's per-process `_media_secret`).
-  `webui_thread` (`sessions.py`) validates the key + enforces scope, then
-  returns a sentinel — the adapter builds the real payload with the signing
-  callback.
-- **memory** (`service/memory.py`) — thin wrapper over `durin.memory.graph_api`.
-  Built with a `workspace_resolver` callable (re-evaluated per call) rather
-  than a captured path. `forget` returns a success-only `ForgetResult`
-  (`memory.py`); the failure outcomes (protected/not_found/invalid) are
-  raised as DomainErrors so they render as problem+json like every other 4xx.
-- **mcp** (`service/mcp.py`) — manage MCP servers under `/api/v1/mcp/servers`
-  (`GET` list/detail, `POST` add, `PATCH` update, `DELETE` remove, `POST`
-  `…/enable`|`…/disable`, `POST` `…/oauth/login`|`…/oauth/logout`). CRUD mutates
-  `tools.mcp_servers` via `save_config`; **live status** is overlaid from the
-  injected `McpRuntime` (`durin/agent/mcp_runtime.py`), which reads the gateway
-  `AgentLoop`'s persistent connections — `connected` / `connecting` / `failed`
-  (with the connect error) / `needs_auth` / `disabled` (`derive_status`,
-  `mcp.py`). `enable`/`disable` persist the server-level `enabled` flag **and**
-  connect/disconnect the live connection at runtime (`AgentLoop.connect_mcp_server`
-  / `disconnect_mcp_server`). `oauth/login` runs the SDK handshake from the
-  gateway and returns the authorization URL for the webui to open
-  (`durin/agent/tools/mcp_oauth_web.py`); the loopback callback captures the
-  redirect on localhost (a remote gateway is out of scope).
-
-The full service set: `secrets`, `cron`, `sessions`, `settings`, `config`,
-`skills`, `memory`, `mcp`, `health`, `commands`, `oauth`, `auth`.
+The design goal is **transport-agnostic services**: service methods know nothing
+about HTTP or WebSocket. They accept validated Pydantic DTOs plus an identity
+object (`Principal`) and return a result DTO or raise a typed error. HTTP
+status codes, headers, and wire formatting are the adapter's concern. This lets
+the TUI call service methods in-process with zero overhead while the HTTP
+adapter and the OpenAPI generator both read the same metadata from each method's
+`@route` decorator.
 
 ---
 
-## 2. The pydantic-derived OpenAPI contract
+## 2. Mental model
+
+**Transport-agnostic domain services.** Twelve service classes live in
+`durin/service/`. Each public method is decorated with `@route`, which stashes a
+frozen `RouteSpec` on the method and returns it unchanged — the method stays a
+plain awaitable. Nothing in `durin/service/` imports HTTP or WebSocket; adapters
+map `DomainError` codes to their own status vocabulary. The TUI calls these
+methods directly with `Principal.local()`.
+
+**Single route registry feeds both the contract and the router.** At startup,
+`ServiceRegistry.register()` walks each service instance's attributes, collects
+`RouteSpec` objects into `BoundRoute` records, and rejects duplicate
+`(verb, path)` pairs at wiring time. Two registry flavors exist: a deps-less
+*catalog* registry (for OpenAPI generation and spec tooling) and a
+dependency-wired *functional* registry (for the gateway). The generator and the
+Starlette router read the same `registry.routes` list — adding a `@route` method
+automatically extends the contract and the HTTP surface.
+
+**Persisted, scoped, hashed token store.** Authentication uses
+`ApiTokenStore` — a file-backed store that persists salted SHA-256 hashes, never
+plaintext tokens. Tokens carry explicit scope grants (e.g.
+`sessions:read`, `mcp:write`, `admin`). The store survives process restarts and
+is shared between the gateway daemon and the CLI, so a token issued in one
+context is valid in the other without any in-memory state.
+
+---
+
+## 3. Diagram
 
 ```mermaid
-flowchart LR
-    R["@route table<br/>(catalog registry)"] --> G["scripts/gen_openapi.py<br/>build_openapi()"]
-    M["request/response<br/>pydantic models"] --> G
-    G --> C["contract/openapi-v1.json<br/>(OpenAPI 3.1)"]
-    C --> TS["webui/src/lib/api-types.ts<br/>(openapi-typescript)"]
+flowchart TD
+    subgraph services["durin/service/ — 12 domain services"]
+        S1["SecretsService"]
+        S2["SessionsService"]
+        S3["McpService"]
+        S4["CronService"]
+        S5["MemoryService / SkillsService / ..."]
+        S6["AuthService / OAuthService / HealthService"]
+    end
+
+    route["@route decorator\nattaches RouteSpec to method\n(verb, path, scope, models)"]
+
+    services -->|each @route method| route
+
+    route --> catalog["build_catalog_registry()\ndeps-less, spec-reading only"]
+    route --> functional["build_service_registry()\nreal deps wired"]
+
+    catalog --> gen["scripts/gen_openapi.py\nbuild_openapi()"]
+    gen --> contract["contract/openapi-v1.json\nOpenAPI 3.1 — never hand-edited"]
+    contract --> ts["webui/src/lib/api-types.ts\nopenapi-typescript"]
+
+    functional --> apiapp["build_api_app()\nStarlette routes for /api/v1/*"]
+    functional --> gwapp["build_gateway_http_app()\nfull HTTP+WS surface"]
+
+    gwapp -->|WebSocketRoute| ws["WebSocket chat\nStarletteConnectionAdapter\n→ WebSocketChannel._run_connection"]
+    gwapp -->|signed reads| signed["GET /api/v1/sessions/{key}/messages\nGET /api/v1/sessions/{key}/webui-thread\nchannel._augment_media_urls"]
+    gwapp -->|/api/v1/*| apiapp
+    gwapp --> bootstrap["GET /webui/bootstrap\nmints admin token"]
+    gwapp --> media["GET /api/media/{sig}/{payload}\nHMAC-signed media fetch"]
+    gwapp --> spa["Mount / → _SpaStaticFiles\nSPA with index.html fallback"]
+
+    subgraph auth["Auth flow"]
+        hdr["Authorization: Bearer token"]
+        resolve["resolve_principal_from_headers()"]
+        store["ApiTokenStore\nsalt+SHA-256 hash\n~/.durin/api_tokens.json"]
+        principal["Principal\nsubject + scopes frozenset + kind"]
+        hdr --> resolve
+        resolve -->|"auth.resolve()"| store
+        store --> principal
+        resolve -->|"static_token match"| principal
+    end
+
+    apiapp --> auth
+
+    subgraph reqflow["Request flow (per route)"]
+        params["path + query / JSON body\nmerged, path params win"]
+        model["request_model(**params)\nValidationError → 422 problem+json"]
+        require["principal.require(scope)\nForbiddenError → 403"]
+        handler["service method\nResult or DomainError"]
+        resp["200 JSON\nor DomainError → RFC 9457 problem+json"]
+        params --> model --> require --> handler --> resp
+    end
+
+    apiapp --> reqflow
 ```
 
-`scripts/gen_openapi.py` is the **only** source of `contract/openapi-v1.json`
-— never hand-edited. `build_openapi` (`gen_openapi.py`) walks
-`build_catalog_registry().routes`: each route becomes a path/verb operation
-carrying `summary`, an `operationId` of `{service}_{method}`, an
-`x-required-scope` extension (when scoped), and `requestBody` / `responses`
-`$ref`s. `_collect_schemas` (`gen_openapi.py`) calls each model's
-`model_json_schema`, hoists pydantic's `$defs` sub-models into
-`components/schemas`, and leaves only `$ref` pointers behind. Output is sorted
-JSON for a stable diff.
+---
 
-Today: **64 operations across 55 paths, 103 schemas** (GET/POST/DELETE).
+## 4. How it works
 
-**Drift gate.** `python scripts/gen_openapi.py --check` (`gen_openapi.py`)
-re-derives the document and exits 1 if it differs from the committed file —
-so a service-model change that isn't regenerated fails CI. **TypeScript
-types** are generated from the committed contract via
-`npm run gen:api-types` → `openapi-typescript ../contract/openapi-v1.json -o
-src/lib/api-types.ts` (`webui/package.json`). The contract is the single
-seam between the Python services and the TS client types.
+### Startup wiring
+
+The gateway controller (`durin/cli/commands.py`) calls
+`build_service_registry()` with real dependencies — `config`, `session_manager`,
+`cron_service`, `bus`, and an optional live `McpRuntime` from the running
+`AgentLoop`. It then calls `build_gateway_http_app(channel, registry, ...)` and
+runs `uvicorn.Server(...).serve()` as one task in the gateway's asyncio event
+loop. WS and HTTP share the same port.
+
+### Request lifecycle
+
+1. **Routing.** `build_gateway_http_app` assembles a Starlette route list in
+   priority order: the WebSocket upgrade route first (so the WS handshake isn't
+   swallowed by an HTTP catch-all), then the signed session-read routes, then the
+   generic `/api/v1/*` routes from `build_api_app`, then the bootstrap and media
+   handlers, and finally the SPA static mount. Starlette matches in list order;
+   the first match wins.
+
+2. **Auth.** `resolve_principal_from_headers()` extracts the `Authorization:
+   Bearer` token and calls `auth.resolve(token)`. This re-hashes the candidate
+   against every stored salt+hash pair using `hmac.compare_digest` (timing-safe).
+   On a match it returns a `Principal.remote(subject, scopes)` with the stored
+   scope grants. If no stored token matches but the token equals the configured
+   `static_token` (plaintext bootstrap credential), it returns
+   `Principal.remote("static", {ADMIN})`. Missing or invalid tokens return `None`,
+   which the handler maps to a 401 problem+json response.
+
+3. **Input construction.** For GET routes, the handler merges query-string
+   parameters (multi-value via `.getlist`) with URL path parameters, path params
+   winning on collision, and constructs the `request_model`. For
+   POST/DELETE/PATCH routes, the JSON body (absent or empty body treated as `{}`)
+   is merged with path params the same way. A Pydantic `ValidationError` during
+   model construction returns a 422 problem+json immediately.
+
+4. **Scope enforcement.** The service method itself calls
+   `principal.require(scope)`, which raises `ForbiddenError` when the principal's
+   `scopes` frozenset does not contain the required value and does not contain
+   `Scope.ADMIN` (which implies every scope). `Principal.local()` — used by the
+   TUI and cron — holds `{ADMIN}` and therefore passes every check.
+
+5. **Execution and response.** The handler awaits the service method. A returned
+   `Result` is serialized with `result.model_dump()` and returned as a 200 JSON
+   response. A raised `DomainError` is mapped by `_problem_response()` to an RFC
+   9457 `application/problem+json` body: `type: urn:durin:error:<code>`, `title`,
+   `status`, `detail`, and an optional `details` extension member carrying
+   structured domain payload (e.g. the approval gate's `{refused, verdict,
+   message}`). `RequestIdMiddleware` stamps `X-Request-Id` on every response.
+
+### Signed media reads
+
+The `GET /api/v1/sessions/{key}/messages` and
+`GET /api/v1/sessions/{key}/webui-thread` routes are registered ahead of the
+generic `/api/v1` routes because they need the channel's per-process
+`_media_secret` to sign media URLs — an adapter concern the generic handler
+cannot fulfill. Both routes call the service first (scope check, data fetch), then
+call `channel._augment_media_urls()` or `build_webui_thread_response()` to
+rewrite raw on-disk paths to HMAC-signed `/api/media/{sig}/{payload}` URLs. The
+service never touches media URLs.
+
+### WebSocket chat
+
+The WebSocket route calls `chat_ws_endpoint`, which authenticates via
+`channel._ws_auth_ok(query)` and rejects with code 1008 before calling
+`websocket.accept()`. An accepted connection is wrapped in
+`StarletteConnectionAdapter` — a thin adapter satisfying the same
+`ConnectionAdapter` interface as the raw `websockets`-backed channel — and handed
+to `channel._run_connection()`. The chat path is read from
+`channel._expected_path()` at factory time, not hardcoded.
+
+### OpenAPI contract
+
+`scripts/gen_openapi.py` walks `build_catalog_registry().routes`. For each
+`BoundRoute` it emits a path/verb operation with `summary`,
+`operationId: {service}_{method}`, `x-required-scope` (when scoped), and
+`requestBody` / `responses` `$ref`s. `_collect_schemas()` calls each model's
+`model_json_schema()`, hoists Pydantic's `$defs` sub-models into
+`components/schemas`, and strips nested `$defs` so the document contains only
+top-level `$ref` pointers. Output is sorted JSON for a stable diff.
+
+The committed file `contract/openapi-v1.json` is the **only source of truth** and
+is never hand-edited. Run `python scripts/gen_openapi.py` (with
+`PYTHONPATH=<worktree>` when running from a git worktree) to regenerate; run with
+`--check` to verify — CI fails if the committed contract is out of date relative
+to the route table. TypeScript types are generated from the contract via
+`bun run gen:api-types` → `openapi-typescript`.
+
+The current contract covers 89 operations (46 GET, 31 POST, 10 DELETE, 2 PATCH)
+across 74 paths, with 146 schemas in `components/schemas`. These numbers are
+derived directly from the route table; they change automatically when service
+methods are added or removed.
+
+### Token minting
+
+`GET /webui/bootstrap` calls `channel.bootstrap(peer, headers)`, which checks
+the peer IP (localhost-only unless a `token_issue_secret` header matches the
+configured secret) and mints an `admin`-scoped token through
+`ApiTokenStore.issue()`. The response includes `{token, ws_path, expires_in,
+model_name, requires_secret}`. The token is stored as a salted SHA-256 hash;
+the plaintext is shown once and never persisted.
+
+The `ApiTokenStore` also generates and persists a 32-byte HMAC secret for media
+URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
+`api_tokens.json` file so signed URLs survive gateway restarts.
 
 ---
 
-## 3. Unified Starlette/uvicorn ASGI gateway
+## 5. Key types and entry points
 
-`durin/api/asgi.py`. One uvicorn server on the **websocket port** serves the
-whole HTTP+WS surface. `build_gateway_http_app` (`asgi.py`) composes it;
-the controller (`durin/cli/commands.py`) builds the dependency-wired
-registry, calls the factory, and runs `uvicorn.Server(...).serve()` as one
-task in the gateway's event loop.
-
-### What the gateway app assembles
-
-`build_gateway_http_app` builds this route list (Starlette matches in list
-order, first match wins — order is load-bearing), `asgi.py`:
-
-| # | Route | Handler | Notes |
-|---|---|---|---|
-| 1 | `WebSocketRoute` at the channel's WS path | `chat_ws_endpoint` | Precedes HTTP so the upgrade isn't swallowed |
-| 2 | `GET /api/v1/sessions/{key}/messages` | `v1_session_messages` | Calls the service, then signs media URLs |
-| 3 | `GET /api/v1/sessions/{key}/webui-thread` | `v1_webui_thread` | Validates via service, builds payload with signing callback |
-| 4 | `*api_app.routes` | `build_api_app` output | The generic `/api/v1` surface (below) |
-| 5 | `GET /webui/bootstrap` | `bootstrap_handler` | Token-minting surface (§5) |
-| 6 | `GET /api/media/{sig}/{payload}` | `media_handler` | Signed media fetch |
-| 7 | `Mount("/", _SpaStaticFiles)` | SPA assets | Only when a built dist dir exists |
-
-Routes 2–3 are registered **ahead of** the generic `/api/v1/sessions/*` routes
-because media/transcript signing needs the channel's per-process
-`_media_secret` — an adapter concern the generic handler cannot do. The WS
-endpoint authenticates before `accept()` and closes with 1008 on reject
-(`asgi.py`); `StarletteConnectionAdapter` (`asgi.py`) satisfies the same
-interface as the channel's `ConnectionAdapter`, so `WebSocketChannel._run_connection`
-works unchanged. `_SpaStaticFiles` (`asgi.py`) serves `index.html` on a
-404 for SPA history-mode routing.
-
-### The generic `/api/v1` surface — `build_api_app`
-
-`build_api_app` (`asgi.py`) turns the route table into Starlette `Route`s:
-
-- A hardcoded unauthenticated `GET /api/v1/health` liveness probe
-  (`asgi.py`, distinct from `HealthService`, which serves
-  `/api/v1/extras/*` and `/api/v1/logs`).
-- One `Route` per **read** route — `_is_read_route` (`asgi.py`): GET whose
-  scope ends in `:read` or is `None`.
-- One `Route` per **write** route — `_is_write_route` (`asgi.py`): any
-  non-GET verb.
-
-**Route-ordering invariant.** `_route_order` (`asgi.py`) sorts routes so a
-literal path segment is matched before a `{param}` at the same position: each
-`{param}` segment maps to the high sentinel `￿`, sorting it after every
-literal — "most specific first". Without it, GET `/skills/{name}` would shadow
-literals like `/skills/search`, `/skills/quarantine` (the registry collects
-methods in alphabetical attribute order).
-
-**Read handler** (`_build_handler`, `asgi.py`): resolves the principal
-(401 if missing); merges query params (multi-value via `.getlist`) with path
-params (path wins); constructs `request_model` (422 on `ValidationError` via
-`_build_422`); awaits the handler (`DomainError` → problem+json); serializes.
-
-**Write handler** (`_build_write_handler`, `asgi.py`): same shape but the
-input is `await request.json()` (absent/empty body → `{}`) merged with path
-params (path wins). Used for POST/DELETE/PATCH.
-
-`_result_response` (`asgi.py`) serializes `result.model_dump()` at status
-200 — a returned `Result` is always a success. Every non-2xx outcome is raised
-as a `DomainError` (the skills approval gate → `ConflictError` 409, forget of a
-protected entry → `ForbiddenError` 403) and rendered as problem+json by
-`_problem_response`, with any domain payload echoed in the `details` member, so
-the API has ONE error format for every 4xx/5xx.
-
-### Wire-shape conventions
-
-- **Input is camelCase-or-snake_case**: `ServiceModel` accepts both
-  (`populate_by_name=True`), so the TS client sends camelCase and the request
-  model parses it.
-- **Output is `model_dump()` with no `by_alias`** — so responses come out in
-  the model's **snake_case** field names. (The camelCase alias generator
-  governs *input* aliasing; serialization defaults to field names.)
-
-### Error mapping — RFC 9457
-
-`_problem_response` (`asgi.py`) maps a `DomainError` to an
-`application/problem+json` body:
-
-```json
-{ "type": "urn:durin:error:<code>", "title": "...", "status": <int>, "detail": "<message>" }
-```
-
-`_build_422` does the same for a pydantic `ValidationError`, with
-`detail = exc.errors()`. `RequestIdMiddleware` (`asgi.py`) stamps
-`X-Request-Id` on every response (echoing an inbound one or minting a UUID).
-
-### Auth resolution
-
-`resolve_principal_from_headers` (`asgi.py`) is the gateway's auth seam:
-
-1. `Authorization: Bearer <token>` → `auth.resolve(token)` (persisted store).
-2. Else, if the token equals a non-empty `static_token` → `Principal.remote("static", {ADMIN})`.
-3. Else `None` → the handler returns 401.
-
-The `static_token` is the websocket channel's configured `token`
-(`commands.py`). The legacy in-memory dual-accept and query-param token
-live only in the WS channel's own handshake path, not here.
-
----
-
-## 4. Persisted scoped auth
-
-`durin/security/api_tokens.py::ApiTokenStore` — file-backed at
-`~/.durin/api_tokens.json`. Each token stores a **per-token salt + SHA-256
-hash** (`_hash_token`, `api_tokens.py`); the plaintext (`nbwt_<urlsafe>`)
-is returned once at `issue` and never persisted. `resolve` (`api_tokens.py`)
-re-hashes the candidate with the stored salt and compares with
-`hmac.compare_digest`, skips expired entries, and stamps `last_used_at`.
-
-| Concern | Mechanism |
-|---|---|
-| TTL | `issue(ttl_s=…)` sets `expires_at`; `resolve` rejects expired |
-| Purge | `_purge_expired` (`api_tokens.py`) drops expired on every `issue` |
-| Cap | `_enforce_cap` (`api_tokens.py`) keeps ≤ `_MAX_TOKENS` (10 000), evicting oldest |
-| Atomic writes | `_write_text_atomic` (`api_tokens.py`) — crash-safe |
-| Thread-safety | module-level `threading.Lock` wraps every op |
-| Media secret | `get_or_create_media_secret` (`api_tokens.py`) stores the 32-byte HMAC media secret (base64) in the same file, so signed media URLs survive a restart |
-
-`durin/service/auth.py::AuthService` wraps the store. `issue_token` /
-`list_tokens` / `revoke_token` are scoped routes under `/api/v1/auth/tokens`
-(`system:write` / `system:read`); `list_tokens` and the store's `list_tokens`
-never return hashes or salts. `resolve(plaintext)` (`auth.py`) is **not** a
-route — the gateway calls it to build a `Principal.remote` from the stored
-scopes before dispatching.
-
-**Token-minting surface.** `GET /webui/bootstrap` (`bootstrap_handler` →
-`channel.bootstrap`, `durin/channels/websocket.py`) mints an
-`admin`-scoped token through the persisted store (`auth_svc._store.issue`,
-`durin/channels/websocket.py`) and
-returns `{token, ws_path, expires_in, model_name, requires_secret}`. Access is
-gated: when a `token_issue_secret` or static `token` is configured the request
-header must match it (works behind a reverse proxy); otherwise it is
-localhost-only.
-
-**CLI.** `durin auth token {list,issue,revoke}` (`durin/cli/auth_cmd.py`) is a
-thin sync CLI over `ApiTokenStore`, no gateway required. `issue` validates
-scopes against the `Scope` enum and prints the plaintext once.
-
----
-
-## 5. How the three clients consume it
-
-| Client | Transport | How |
+| Symbol | File | Role |
 |---|---|---|
-| **webui** | same-origin `/api/v1` over HTTP | `webui/src/lib/api.ts` |
-| **TUI** | in-process method calls + `MessageBus` for chat | direct `Service().method()` |
-| **CLI** | direct store/service calls | e.g. `durin auth token` |
-
-**webui** (`webui/src/lib/api.ts`). A `request<T>` wrapper (`api.ts`) adds
-`Authorization: Bearer <token>` and `credentials: "same-origin"`, and on a 401
-mints a fresh token (the gateway restarted) and retries once. `post`/`del`
-(`api.ts`, `:68`) send `Content-Type: application/json` with a
-`JSON.stringify(body)` — mutations are POST/DELETE with a JSON body (no more
-GET-with-query). Every call targets `${base}/api/v1/...`; types come from the
-generated `api-types.ts`.
-
-**TUI** calls service methods directly — `@route` left them plain callables, so
-e.g. the secret prompt invokes `SecretsService().store_entry(...)`
-(`durin/cli/tui/screens/secret_prompt.py`) with no HTTP and no adapter
-indirection; chat still flows through the `MessageBus` / `AgentLoop`.
-
-**CLI** uses the same building blocks directly (the auth CLI operates on
-`ApiTokenStore`; other commands call services or the config loader).
+| `ServiceRegistry` | `durin/service/registry.py` | Container for service instances and the collected `BoundRoute` list; rejects duplicate names and duplicate `(verb, path)` at registration time |
+| `RouteSpec` | `durin/service/registry.py` | Frozen dataclass: `verb`, `path`, `scope`, `request_model`, `response_model`, `summary` — single source for OpenAPI generation and Starlette routing |
+| `BoundRoute` | `durin/service/registry.py` | `RouteSpec` + `service_name` + handler callable; iterated by the ASGI adapter and the generator |
+| `route` | `durin/service/registry.py` | Decorator that attaches a `RouteSpec` under `__route_spec__` and returns the method unchanged |
+| `Principal` | `durin/service/principal.py` | Frozen dataclass: `subject`, `scopes: frozenset[str]`, `kind`; `Principal.local()` → `{ADMIN}`, `Principal.remote(subject, scopes)` → token-derived |
+| `Scope` | `durin/service/principal.py` | String enum of permission values: `admin` plus `<domain>:<read\|write>` pairs (settings, secrets, skills, cron, sessions, config, memory, mcp, system) |
+| `ServiceModel` / `Command` / `Query` / `Result` | `durin/service/types.py` | Pydantic DTO bases: camelCase wire aliases via `to_camel`; `Command`/`Query` forbid extra fields, `Result` allows them |
+| `DomainError` + subclasses | `durin/service/types.py` | Transport-agnostic error hierarchy: `UnauthenticatedError` (401), `ForbiddenError` (403), `NotFoundError` (404), `ConflictError` (409), `ValidationFailedError` (422), `TooManyRequestsError` (429), `UnavailableError` (503) |
+| `build_service_registry` | `durin/service/wiring.py` | Factory for the functional registry: wires all 12 services to real `config`, `session_manager`, `cron_service`, `bus`, optional `mcp_runtime` |
+| `SERVICE_CLASSES` / `build_catalog_registry` | `durin/service/catalog.py` | Canonical list of the 12 HTTP-exposed service classes; deps-less registry factory for spec tooling and OpenAPI generation |
+| `build_api_app` | `durin/api/asgi.py` | Starlette app for `/api/v1/*`: one `Route` per read (`_build_handler`) and write (`_build_write_handler`) route, ordered literals-before-params |
+| `build_gateway_http_app` | `durin/api/asgi.py` | Full gateway app: assembles WS, signed reads, `/api/v1/*`, bootstrap, media, and SPA routes in priority order |
+| `resolve_principal_from_headers` | `durin/api/asgi.py` | Extracts and verifies a bearer token; returns `Principal` or `None` |
+| `StarletteConnectionAdapter` | `durin/api/asgi.py` | Wraps a Starlette `WebSocket` to satisfy the same `ConnectionAdapter` interface used by the `websockets` transport |
+| `ApiTokenStore` | `durin/security/api_tokens.py` | File-backed token store (`~/.durin/api_tokens.json`): salted SHA-256 hashes, TTL/expiry, cap+purge, crash-safe atomic writes, 32-byte media HMAC secret |
+| `gen_openapi.py` | `scripts/gen_openapi.py` | Reads catalog registry routes and Pydantic models; generates `contract/openapi-v1.json` (OpenAPI 3.1); `--check` flag for CI drift detection |
 
 ---
 
-## Last updated: 2026-06-16 (as-built for the API platform; branch `worktree-api-platform`)
+## 6. Configuration and surfaces
+
+### Configuration keys
+
+| Key | Description |
+|---|---|
+| `auth.static_token` | Plaintext bearer token granting `ADMIN` access; accepted by `resolve_principal_from_headers` as a fallback when no stored token matches |
+| `auth.token_issue_secret` | Header value required to mint tokens via `/webui/bootstrap` when the request is not from localhost (enables reverse-proxy deployments) |
+| `auth.require_secret_to_mint_tokens` | When true, bootstrap always requires the `token_issue_secret` header; when false, localhost requests can mint tokens without it |
+| `tools.mcp_servers` | List of MCP server configs; `McpService.update` (PATCH) and other MCP routes mutate this via `save_config` |
+| Gateway host/port | Set via the `--port` flag or config; uvicorn runs in the agent event loop; WS and HTTP share the same port |
+
+`TranscriptionService` exists in the codebase but is not HTTP-exposed (it
+carries no `@route` decorator on any method). Its configuration
+(`TranscriptionConfig`) is not part of the API surface.
+
+### HTTP surface (`/api/v1/*`)
+
+The route table is the authoritative source; the current operation set spans
+secrets, cron, sessions, settings, config, skills, memory, MCP servers, health,
+commands, OAuth flows, and auth tokens. Verbs in use: GET, POST, DELETE, and
+PATCH (used by `McpService.update` and `CronService` for partial updates).
+
+All mutations are POST/DELETE/PATCH with a JSON body; there are no
+GET-with-query mutations. Responses use snake_case field names
+(`model_dump()` without alias); inputs accept both camelCase and snake_case
+(`populate_by_name=True`).
+
+Every error response is RFC 9457 `application/problem+json` with
+`type: urn:durin:error:<code>`.
+
+### Special routes outside `/api/v1`
+
+| Route | Description |
+|---|---|
+| `GET /webui/bootstrap` | Mints an admin-scoped token; gated by peer IP or `token_issue_secret` header |
+| `GET /api/media/{sig}/{payload}` | HMAC-signed media fetch; signature verified against the per-process media secret |
+| WebSocket at `channel._expected_path()` | Chat endpoint; auth via query-param token before `accept()`; backed by `StarletteConnectionAdapter` |
+| `Mount /` | SPA static files with `index.html` fallback for history-mode routing |
+
+### CLI and in-process surfaces
+
+- **`durin auth token {list,issue,revoke}`** — operates directly on
+  `ApiTokenStore`, no gateway required; `issue` validates scopes against the
+  `Scope` enum.
+- **TUI** — calls service methods in-process via `Principal.local()` with
+  `{ADMIN}` authority; chat flows through the `MessageBus` / `AgentLoop`.
+- **TypeScript webui** — `webui/src/lib/api.ts` adds the bearer token header on
+  every request and retries once with a fresh bootstrap token on a 401.
+
+---
+
+## 7. Rationale
+
+The `@route` decorator was chosen over a separate route-registration call to
+keep routing metadata co-located with the method it describes. The method-as-plain-callable property means the TUI pays no adapter overhead and tests can
+call service methods directly with `Principal.local()`.
+
+Two registry flavors (catalog and functional) exist so the OpenAPI generator can
+import service classes and enumerate their routes without needing live
+dependencies like a running session manager or cron scheduler. The catalog
+instantiates services with inert stubs; the functional registry receives real
+objects at gateway startup.
+
+The service layer returns `Result` (never raises on success) so the ASGI adapter
+has one unconditional success path (200 + `model_dump()`) and one error path
+(problem+json). There is no `(ok, err)` union type or optional return — the
+distinction between a missing resource and a permission error is always a raised
+`DomainError` subclass, not a caller-inspected flag.
+
+Media URL signing is intentionally excluded from service methods. The media HMAC
+secret is per-process and lives in the `WebSocketChannel`; if the service signed
+URLs, it would need a reference to the channel, inverting the dependency
+direction. Instead, the two session-read routes in `build_gateway_http_app` call
+the service for the scope check and data fetch, then hand the result to the
+channel for signing before returning the response.
