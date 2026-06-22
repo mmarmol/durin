@@ -401,11 +401,13 @@ def maybe_persist_tool_result(
     except Exception:
         logger.exception("Failed to clean stale tool result buckets in {}", root)
     path = bucket / f"{safe_filename(tool_call_id)}.{suffix}"
-    if not path.exists():
-        if suffix == "json" and isinstance(content, list):
-            _write_text_atomic(path, json.dumps(content, ensure_ascii=False, indent=2))
-        else:
-            _write_text_atomic(path, text_payload)
+    # Always write unconditionally: the current call's content is authoritative.
+    # Skipping when the file exists leaves stale bytes when tool_call_id is reused
+    # (e.g. the positional tool_0 fallback in runner.py). See docs/architecture/concurrency.md.
+    if suffix == "json" and isinstance(content, list):
+        _write_text_atomic(path, json.dumps(content, ensure_ascii=False, indent=2))
+    else:
+        _write_text_atomic(path, text_payload)
 
     preview = text_payload[:_TOOL_RESULT_PREVIEW_CHARS]
     return _render_tool_result_reference(
