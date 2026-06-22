@@ -32,10 +32,12 @@ How to install, configure, and run durin.
 
 - [Installation](guide/install.md) — install, the onboarding wizard, optional
   extras (memory, local models, audio), and running the gateway.
-
-Configuration keys, channel setup, and provider/model selection are documented
-inline by the onboarding wizard (`durin onboard`) and `durin config`, and in the
-relevant internals docs below.
+- [Configuration](guide/configuration.md) — every config key, its default, and
+  what it does.
+- [Channels](guide/channels.md) — connecting Telegram, Slack, Discord, email, and
+  the other chat surfaces.
+- [Providers & models](guide/providers.md) — choosing LLM providers and models,
+  API keys, and aux-model presets.
 
 ### Internals — for contributors and curious readers
 
@@ -54,6 +56,7 @@ Direct jumps to the most-read component docs:
 
 ### Project
 
+- [Contributing](contributing.md) — dev setup, running tests, and the PR workflow.
 - [Releasing](releasing.md) — how releases are cut.
 - [Roadmap](roadmap.md) — direction, and what durin is deliberately not doing.
 

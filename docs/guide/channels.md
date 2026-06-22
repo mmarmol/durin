@@ -34,8 +34,8 @@ Per-channel sections can override `send_progress`, `send_tool_hints`, and
 > `transcription_language` in `[channels]` or a per-channel table are
 > _per-channel overrides_. The global transcription backend — including the
 > primary `provider` (default `"local"`) and its engine settings — is
-> configured under the top-level `[transcription]` section. See
-> [docs/guide/transcription.md](transcription.md) for the full reference.
+> configured under the top-level `[transcription]` section. See the
+> [configuration reference](configuration.md) for the full key list.
 
 ---
 
