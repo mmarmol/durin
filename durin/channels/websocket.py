@@ -61,6 +61,11 @@ def _normalize_config_path(path: str) -> str:
     return _strip_trailing_slash(path)
 
 
+def _voice_preview_sample(language: str | None) -> str:
+    lang = (language or "en")[:2].lower()
+    return {"es": "Hola, soy durin.", "en": "Hi, I am durin."}.get(lang, "Hi, I am durin.")
+
+
 class WebSocketConfig(Base):
     """WebSocket server channel configuration.
 
@@ -1462,6 +1467,26 @@ class WebSocketChannel(BaseChannel):
                 return
             sess.cancel_speak()
             sess.speak_task = asyncio.create_task(self._speak(cid, text, full=True))
+            return
+        if t == "voice_preview":
+            svc = getattr(self, "speech_synthesis", None)
+            if svc is None:
+                await self._send_event(connection, "voice_preview_audio", error="tts_unavailable")
+                return
+            voice = envelope.get("voice")
+            language = envelope.get("language")
+            sample = envelope.get("text") or _voice_preview_sample(language)
+            try:
+                audio = await svc.synthesize(sample, voice=voice, language=language)
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning("voice preview failed: {}", e)
+                await self._send_event(connection, "voice_preview_audio", error="synthesis_failed")
+                return
+            url = self._write_and_sign_audio(audio) if audio.data else None
+            if url is None:
+                await self._send_event(connection, "voice_preview_audio", error="synthesis_failed")
+                return
+            await self._send_event(connection, "voice_preview_audio", url=url, mime="audio/wav")
             return
         await self._send_event(connection, "error", detail=f"unknown type: {t!r}")
 

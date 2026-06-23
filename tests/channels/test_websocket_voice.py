@@ -243,3 +243,45 @@ def test_manager_injects_speech_synthesis_and_voice_config():
     assert "SpeechSynthesisService" in src
     assert "speech_synthesis" in src
     assert "voice_config" in src
+
+
+@pytest.mark.asyncio
+async def test_voice_preview_synthesizes_and_returns_signed_url(tmp_path, monkeypatch):
+    monkeypatch.setattr("durin.channels.websocket.get_media_dir", lambda ch=None: tmp_path)
+    ch = _voice_channel()
+    ch._media_secret = b"test-secret"
+    conn = _FakeConn()
+
+    captured = {}
+
+    class FakeTTS:
+        async def synthesize(self, text, *, voice=None, language=None):
+            captured["voice"] = voice
+            captured["language"] = language
+            captured["text"] = text
+            return SpeechAudio(_wav_bytes(), 22050)
+
+    ch.speech_synthesis = FakeTTS()
+    await ch._dispatch_envelope(conn, "client1", {
+        "type": "voice_preview", "voice": "F4", "language": "es",
+    })
+    events = [json.loads(r) for r in conn.sent]
+    audio = [e for e in events if e.get("event") == "voice_preview_audio"]
+    assert audio and audio[0]["url"].startswith("/api/media/")
+    assert audio[0]["mime"] == "audio/wav"
+    assert captured["voice"] == "F4"
+    assert captured["language"] == "es"
+    assert captured["text"]  # a non-empty sample was synthesized
+
+
+@pytest.mark.asyncio
+async def test_voice_preview_without_tts_returns_unavailable():
+    ch = _voice_channel()
+    ch.speech_synthesis = None
+    conn = _FakeConn()
+    await ch._dispatch_envelope(conn, "client1", {
+        "type": "voice_preview", "voice": "F4", "language": "es",
+    })
+    events = [json.loads(r) for r in conn.sent]
+    audio = [e for e in events if e.get("event") == "voice_preview_audio"]
+    assert audio and audio[0].get("error") == "tts_unavailable"
