@@ -112,6 +112,25 @@ class SetDefaultPersonaResult(Result):
 
 
 # ---------------------------------------------------------------------------
+# Persona test DTOs
+# ---------------------------------------------------------------------------
+
+_TEST_PROMPT = "Reply with a brief one-sentence greeting in your own voice."
+
+
+class PersonaTestCommand(Command):
+    model: str | None = None
+    soul: str | None = None
+
+
+class PersonaTestResult(Result):
+    ok: bool
+    reply: str | None = None
+    error: str | None = None
+    model: str | None = None
+
+
+# ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
 
@@ -264,3 +283,50 @@ class PersonasService:
 
         mutate_config(_m)
         return SetDefaultPersonaResult(default=cmd.name)
+
+    @route(
+        "POST",
+        "/api/v1/personas/test",
+        scope=Scope.CONFIG_READ.value,
+        request_model=PersonaTestCommand,
+        response_model=PersonaTestResult,
+        summary="Live round-trip: run the chosen SOUL + model with a short prompt",
+    )
+    async def test_persona(self, cmd: PersonaTestCommand, principal: Principal) -> PersonaTestResult:
+        principal.require(Scope.CONFIG_READ)
+        from durin.command.builtin import adhoc_preset_config
+        from durin.providers.factory import make_provider
+
+        cfg = load_config(get_config_path())
+        ref = (cmd.model or "").strip()
+        try:
+            parts = ref.split()
+            if len(parts) == 2:
+                preset = adhoc_preset_config(cfg, parts[0], parts[1])
+            else:
+                preset = cfg.resolve_preset(ref or None)
+        except Exception as e:  # noqa: BLE001
+            return PersonaTestResult(ok=False, error=f"Could not resolve model {ref or 'default'!r}: {e}")
+
+        soul_body = self._store().read(cmd.soul) if cmd.soul else ""
+        messages = (
+            [{"role": "system", "content": soul_body}] if soul_body else []
+        ) + [{"role": "user", "content": _TEST_PROMPT}]
+
+        try:
+            provider = make_provider(cfg, preset=preset)
+            resp = await provider.chat_with_retry(
+                messages=messages,
+                tools=None,
+                model=preset.model,
+                max_tokens=256,
+                temperature=0.2,
+                retry_mode="standard",
+            )
+        except Exception as e:  # noqa: BLE001
+            return PersonaTestResult(ok=False, error=f"{type(e).__name__}: {e}", model=preset.model)
+
+        content = getattr(resp, "content", None)
+        if not content:
+            return PersonaTestResult(ok=False, error="Model returned an empty response.", model=preset.model)
+        return PersonaTestResult(ok=True, reply=content[:2000], model=preset.model)

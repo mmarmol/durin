@@ -2804,6 +2804,86 @@
         "title": "PersonaListResult",
         "type": "object"
       },
+      "PersonaTestCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "soul": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Soul"
+          }
+        },
+        "title": "PersonaTestCommand",
+        "type": "object"
+      },
+      "PersonaTestResult": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "reply": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reply"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "PersonaTestResult",
+        "type": "object"
+      },
       "PersonaUpsertCommand": {
         "additionalProperties": false,
         "properties": {
@@ -5800,6 +5880,35 @@
         },
         "summary": "Set (or clear) the global default persona",
         "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/personas/test": {
+      "post": {
+        "operationId": "personas_test_persona",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonaTestCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonaTestResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Live round-trip: run the chosen SOUL + model with a short prompt",
+        "x-required-scope": "config:read"
       }
     },
     "/api/v1/providers/model": {

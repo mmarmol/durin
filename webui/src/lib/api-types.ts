@@ -781,6 +781,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/personas/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Live round-trip: run the chosen SOUL + model with a short prompt */
+        post: operations["personas_test_persona"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/providers/model": {
         parameters: {
             query?: never;
@@ -2618,6 +2635,39 @@ export interface components {
             default: string | null;
             /** Personas */
             personas: components["schemas"]["PersonaItem"][];
+        };
+        /** PersonaTestCommand */
+        PersonaTestCommand: {
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
+            /**
+             * Soul
+             * @default null
+             */
+            soul: string | null;
+        };
+        /** PersonaTestResult */
+        PersonaTestResult: {
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
+            /** Ok */
+            ok: boolean;
+            /**
+             * Reply
+             * @default null
+             */
+            reply: string | null;
         };
         /** PersonaUpsertCommand */
         PersonaUpsertCommand: {
@@ -4596,6 +4646,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetDefaultPersonaResult"];
+                };
+            };
+        };
+    };
+    personas_test_persona: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PersonaTestCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonaTestResult"];
                 };
             };
         };
