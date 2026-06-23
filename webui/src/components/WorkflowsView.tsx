@@ -5,10 +5,11 @@ import {
   Handle,
   Position,
   ReactFlow,
+  type Connection,
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Loader2, Workflow as WorkflowIcon } from "lucide-react";
+import { Loader2, Plus, Trash2, Workflow as WorkflowIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -62,7 +63,7 @@ function NodeCard({ data, selected }: NodeProps) {
     >
       <Handle type="target" position={Position.Left} />
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-        {node.kind}
+        {node.kind}{isStart ? " · start" : ""}
       </div>
       <div className="text-sm font-medium">{node.id}</div>
       <div className="text-xs text-muted-foreground">{nodeSummary(node)}</div>
@@ -81,6 +82,7 @@ const nodeTypes = {
 const MODES = ["build", "plan", "explore"];
 const CONTEXTS = ["own", "shared"];
 const TOOLS = ["none", "default"];
+const selectCls = "h-8 w-full rounded-md border border-border bg-background px-2 text-sm";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -91,15 +93,45 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function NodeConfigPanel({
-  node,
+function TargetSelect({
+  value,
+  options,
   onChange,
 }: {
-  node: WorkflowNodeDef;
-  onChange: (patch: Partial<WorkflowNodeDef>) => void;
+  value: string | null | undefined;
+  options: string[];
+  onChange: (v: string | null) => void;
 }) {
-  const selectCls =
-    "h-8 rounded-md border border-border bg-background px-2 text-sm";
+  return (
+    <select
+      className={selectCls}
+      value={value ?? ""}
+      onChange={(e) => onChange(e.target.value || null)}
+    >
+      <option value="">(end)</option>
+      {options.map((o) => (
+        <option key={o} value={o}>{o}</option>
+      ))}
+    </select>
+  );
+}
+
+function NodeConfigPanel({
+  node,
+  nodeIds,
+  isStart,
+  onChange,
+  onMakeStart,
+  onDelete,
+}: {
+  node: WorkflowNodeDef;
+  nodeIds: string[];
+  isStart: boolean;
+  onChange: (patch: Partial<WorkflowNodeDef>) => void;
+  onMakeStart: () => void;
+  onDelete: () => void;
+}) {
+  const others = nodeIds.filter((id) => id !== node.id);
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
@@ -107,56 +139,48 @@ function NodeConfigPanel({
           {node.kind}
         </span>
         <span className="text-sm font-medium">{node.id}</span>
+        {!isStart && (
+          <button
+            type="button"
+            className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+            onClick={onMakeStart}
+          >
+            set as start
+          </button>
+        )}
       </div>
 
       {node.kind === "work" && (
         <>
           <Field label="work mode">
-            <select
-              className={selectCls}
-              value={(node.mode as string) ?? "build"}
-              onChange={(e) => onChange({ mode: e.target.value })}
-            >
-              {MODES.map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
+            <select className={selectCls} value={(node.mode as string) ?? "build"}
+              onChange={(e) => onChange({ mode: e.target.value })}>
+              {MODES.map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
           </Field>
           <Field label="model">
-            <Input
-              value={(node.model as string) ?? ""}
-              placeholder="default"
-              onChange={(e) => onChange({ model: e.target.value || undefined })}
-            />
+            <Input value={(node.model as string) ?? ""} placeholder="default"
+              onChange={(e) => onChange({ model: e.target.value || undefined })} />
           </Field>
           <Field label="context">
-            <select
-              className={selectCls}
-              value={(node.context as string) ?? "own"}
-              onChange={(e) => onChange({ context: e.target.value })}
-            >
-              {CONTEXTS.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
+            <select className={selectCls} value={(node.context as string) ?? "own"}
+              onChange={(e) => onChange({ context: e.target.value })}>
+              {CONTEXTS.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
           </Field>
           <Field label="tools">
-            <select
-              className={selectCls}
-              value={(node.tools as string) ?? "none"}
-              onChange={(e) => onChange({ tools: e.target.value })}
-            >
-              {TOOLS.map((t) => (
-                <option key={t} value={t}>{t}</option>
-              ))}
+            <select className={selectCls} value={(node.tools as string) ?? "none"}
+              onChange={(e) => onChange({ tools: e.target.value })}>
+              {TOOLS.map((tl) => <option key={tl} value={tl}>{tl}</option>)}
             </select>
           </Field>
           <Field label="prompt">
-            <Textarea
-              rows={6}
-              value={(node.prompt as string) ?? ""}
-              onChange={(e) => onChange({ prompt: e.target.value })}
-            />
+            <Textarea rows={5} value={(node.prompt as string) ?? ""}
+              onChange={(e) => onChange({ prompt: e.target.value })} />
+          </Field>
+          <Field label="next">
+            <TargetSelect value={node.next as string} options={others}
+              onChange={(v) => onChange({ next: v })} />
           </Field>
         </>
       )}
@@ -164,38 +188,40 @@ function NodeConfigPanel({
       {node.kind === "decision" && (
         <>
           <Field label={node.command ? "command" : "criteria"}>
-            <Textarea
-              rows={4}
+            <Textarea rows={3}
               value={(node.criteria as string) || (node.command as string) || ""}
-              onChange={(e) =>
-                onChange(
-                  node.command
-                    ? { command: e.target.value }
-                    : { criteria: e.target.value },
-                )
-              }
-            />
+              onChange={(e) => onChange(node.command ? { command: e.target.value } : { criteria: e.target.value })} />
           </Field>
-          {node.criteria !== undefined && node.criteria !== "" && (
-            <Field label="judge model">
-              <Input
-                value={(node.judge_model as string) ?? ""}
-                placeholder="default"
-                onChange={(e) => onChange({ judge_model: e.target.value || undefined })}
-              />
-            </Field>
-          )}
+          <Field label="on pass">
+            <TargetSelect value={node.on_pass as string} options={others}
+              onChange={(v) => onChange({ on_pass: v })} />
+          </Field>
+          <Field label="on fail">
+            <TargetSelect value={node.on_fail as string} options={others}
+              onChange={(v) => onChange({ on_fail: v })} />
+          </Field>
         </>
       )}
 
       {(node.kind === "parallel" || node.kind === "subworkflow") && (
-        <div className="text-xs text-muted-foreground">
-          {node.kind} node — structure editing comes later.
-        </div>
+        <Field label="next">
+          <TargetSelect value={node.next as string} options={others}
+            onChange={(v) => onChange({ next: v })} />
+        </Field>
       )}
+
+      <button
+        type="button"
+        className="mt-1 flex items-center gap-1.5 self-start text-xs text-destructive hover:underline"
+        onClick={onDelete}
+      >
+        <Trash2 className="h-3.5 w-3.5" /> delete node
+      </button>
     </div>
   );
 }
+
+let _idSeq = 0;
 
 export function WorkflowsView() {
   const { t } = useTranslation();
@@ -247,23 +273,77 @@ export function WorkflowsView() {
     [def],
   );
 
+  const mutate = useCallback((fn: (d: WorkflowDef) => WorkflowDef) => {
+    setDef((d) => (d ? fn(d) : d));
+    setDirty(true);
+    setNotice(null);
+  }, []);
+
   const updateNode = useCallback(
     (patch: Partial<WorkflowNodeDef>) => {
       if (!selectedNodeId) return;
-      setDef((d) =>
-        d
-          ? {
-              ...d,
-              nodes: d.nodes.map((n) =>
-                n.id === selectedNodeId ? { ...n, ...patch } : n,
-              ),
-            }
-          : d,
-      );
-      setDirty(true);
-      setNotice(null);
+      mutate((d) => ({
+        ...d,
+        nodes: d.nodes.map((n) => (n.id === selectedNodeId ? { ...n, ...patch } : n)),
+      }));
     },
-    [selectedNodeId],
+    [selectedNodeId, mutate],
+  );
+
+  const addNode = useCallback(
+    (kind: "work" | "decision") => {
+      const id = `${kind}-${++_idSeq}`;
+      const node: WorkflowNodeDef =
+        kind === "work"
+          ? { id, kind: "work", mode: "build", prompt: "", next: null }
+          : { id, kind: "decision", criteria: "", on_pass: null, on_fail: null };
+      mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
+      setSelectedNodeId(id);
+    },
+    [mutate],
+  );
+
+  const deleteNode = useCallback(
+    (id: string) => {
+      mutate((d) => {
+        const nodes = d.nodes
+          .filter((n) => n.id !== id)
+          .map((n) => ({
+            ...n,
+            next: n.next === id ? null : n.next,
+            on_pass: n.on_pass === id ? null : n.on_pass,
+            on_fail: n.on_fail === id ? null : n.on_fail,
+            branches: Array.isArray(n.branches)
+              ? n.branches.filter((b) => b !== id)
+              : n.branches,
+          }));
+        const start = d.start === id ? (nodes[0]?.id ?? "") : d.start;
+        return { ...d, nodes, start };
+      });
+      setSelectedNodeId(null);
+    },
+    [mutate],
+  );
+
+  const onConnect = useCallback(
+    (c: Connection) => {
+      if (!c.source || !c.target) return;
+      mutate((d) => ({
+        ...d,
+        nodes: d.nodes.map((n) => {
+          if (n.id !== c.source) return n;
+          if (n.kind === "decision") {
+            return n.on_pass ? { ...n, on_fail: c.target } : { ...n, on_pass: c.target };
+          }
+          if (n.kind === "parallel") {
+            const b = Array.isArray(n.branches) ? n.branches : [];
+            return { ...n, branches: [...new Set([...b, c.target!])] };
+          }
+          return { ...n, next: c.target };
+        }),
+      }));
+    },
+    [mutate],
   );
 
   const onSave = useCallback(async () => {
@@ -281,6 +361,7 @@ export function WorkflowsView() {
     }
   }, [selected, def, token, t]);
 
+  const nodeIds = def?.nodes.map((n) => n.id) ?? [];
   const selectedNode = def?.nodes.find((n) => n.id === selectedNodeId) ?? null;
 
   return (
@@ -295,36 +376,37 @@ export function WorkflowsView() {
             <Loader2 className="h-4 w-4 animate-spin" /> {t("workflows.loading")}
           </div>
         ) : names.length === 0 ? (
-          <div className="p-2 text-sm text-muted-foreground">
-            {t("workflows.empty")}
-          </div>
+          <div className="p-2 text-sm text-muted-foreground">{t("workflows.empty")}</div>
         ) : (
           names.map((n) => (
-            <button
-              key={n}
-              type="button"
-              onClick={() => setSelected(n)}
+            <button key={n} type="button" onClick={() => setSelected(n)}
               className={cn(
                 "block w-full truncate rounded px-2 py-1 text-left text-sm hover:bg-accent",
                 selected === n && "bg-accent font-medium",
-              )}
-            >
+              )}>
               {n}
             </button>
           ))
         )}
       </aside>
 
-      <div className="relative flex h-full flex-1">
+      <div className="flex h-full flex-1">
         <div className="relative h-full flex-1">
-          {error && (
-            <div className="absolute left-2 top-2 z-10 rounded bg-destructive/10 px-2 py-1 text-sm text-destructive">
-              {error}
-            </div>
-          )}
-          {notice && (
-            <div className="absolute left-2 top-2 z-10 rounded bg-emerald-500/10 px-2 py-1 text-sm text-emerald-600">
-              {notice}
+          {def && (
+            <div className="absolute left-2 top-2 z-10 flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => addNode("work")}>
+                <Plus className="h-3.5 w-3.5" /> work
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => addNode("decision")}>
+                <Plus className="h-3.5 w-3.5" /> decision
+              </Button>
+              {dirty && (
+                <Button size="sm" onClick={onSave} disabled={saving}>
+                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("workflows.save")}
+                </Button>
+              )}
+              {notice && <span className="text-sm text-emerald-600">{notice}</span>}
+              {error && <span className="text-sm text-destructive">{error}</span>}
             </div>
           )}
           {def ? (
@@ -334,7 +416,7 @@ export function WorkflowsView() {
               nodeTypes={nodeTypes}
               fitView
               nodesDraggable={false}
-              nodesConnectable={false}
+              onConnect={onConnect}
               onNodeClick={(_, node) => setSelectedNodeId(node.id)}
               onPaneClick={() => setSelectedNodeId(null)}
               proOptions={{ hideAttribution: true }}
@@ -352,22 +434,15 @@ export function WorkflowsView() {
         </div>
 
         {selectedNode && (
-          <aside className="flex w-72 shrink-0 flex-col gap-3 overflow-y-auto border-l p-3">
-            <NodeConfigPanel node={selectedNode} onChange={updateNode} />
-            <div className="mt-auto flex items-center gap-2 border-t pt-3">
-              <Button size="sm" onClick={onSave} disabled={!dirty || saving}>
-                {saving ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  t("workflows.save")
-                )}
-              </Button>
-              {dirty && (
-                <span className="text-xs text-muted-foreground">
-                  {t("workflows.unsaved")}
-                </span>
-              )}
-            </div>
+          <aside className="w-72 shrink-0 overflow-y-auto border-l p-3">
+            <NodeConfigPanel
+              node={selectedNode}
+              nodeIds={nodeIds}
+              isStart={def?.start === selectedNode.id}
+              onChange={updateNode}
+              onMakeStart={() => mutate((d) => ({ ...d, start: selectedNode.id }))}
+              onDelete={() => deleteNode(selectedNode.id)}
+            />
           </aside>
         )}
       </div>
