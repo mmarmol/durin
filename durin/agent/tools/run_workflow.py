@@ -120,7 +120,6 @@ class RunWorkflowTool(Tool, ContextAware):
         engine = WorkflowEngine(
             node_runner=node_runner,
             command_cwd=self._workspace,
-            judge_runner=judge_runner,
             subworkflow_runner=subworkflow_runner,
             workspace=self._workspace,
             pick_runner=judge_runner.pick,

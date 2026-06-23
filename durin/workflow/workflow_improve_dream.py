@@ -22,17 +22,17 @@ from loguru import logger
 from durin.workflow import run_log
 from durin.workflow.diagnostics import compute_diagnostics
 from durin.workflow.loader import WorkflowError, load_workflow, workflows_dir
-from durin.workflow.spec import DecisionNode, WorkNode
+from durin.workflow.spec import WorkNode
 from durin.workflow.version_store import history_for_dream
 
 _SYSTEM = (
     "You improve a user's agent workflow. You are shown the workflow definition (JSON), "
     "a diagnostic of where it recurringly struggles across recent runs, and the recent "
     "change history with the reasons prior edits were made. Propose exactly ONE small "
-    "edit that would reduce the recurring trouble: either rewrite a work node's 'prompt' "
-    "or a decision node's 'criteria'. Do NOT add or remove nodes or edges. Do NOT "
-    "re-propose an edit the history shows was already tried. Reply with ONLY a JSON "
-    "object: {\"target_id\": \"<node id>\", \"field\": \"prompt\"|\"criteria\", "
+    "edit that would reduce the recurring trouble: rewrite any node's 'prompt' (both "
+    "work nodes and routing nodes use 'prompt' as their editable field). Do NOT add or "
+    "remove nodes or edges. Do NOT re-propose an edit the history shows was already tried. "
+    "Reply with ONLY a JSON object: {\"target_id\": \"<node id>\", \"field\": \"prompt\", "
     "\"current\": \"<current text>\", \"proposed\": \"<new text>\", \"reason\": \"<why>\"}."
 )
 
@@ -81,9 +81,7 @@ def _valid_proposal(proposal: dict, wf) -> tuple[str, str, str] | None:
     if not target or target not in wf.nodes or not proposed:
         return None
     node = wf.nodes[target]
-    ok = (field == "prompt" and isinstance(node, WorkNode)) or (
-        field == "criteria" and isinstance(node, DecisionNode)
-    )
+    ok = field == "prompt" and isinstance(node, WorkNode)
     if not ok:
         return None   # structural / mismatched field / unknown target → rejected
     if proposed.strip() == (getattr(node, field, "") or "").strip():

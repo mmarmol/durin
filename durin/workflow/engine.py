@@ -23,7 +23,6 @@ from typing import Callable
 
 from durin.workflow import workspace_fork
 from durin.workflow.condition import CommandOutcome, run_command
-from durin.workflow.judge import JudgeVerdict
 from durin.workflow.result import NodeRun, WorkflowResult
 from durin.workflow.spec import ParallelNode, SubworkflowNode, WorkNode, Workflow
 from durin.workflow.verdict import parse_verdict
@@ -54,7 +53,7 @@ NodeRunner = Callable[[NodeRunRequest], NodeRunResponse]
 
 
 class WorkflowConfigError(RuntimeError):
-    """The workflow is wired wrong (e.g. a judgment node but no judge runner). A
+    """The workflow is wired wrong (e.g. a subworkflow node but no subworkflow runner). A
     programmer/config error — it fails fast rather than being swallowed as a run abort."""
 
 
@@ -66,7 +65,6 @@ class WorkflowEngine:
         run_id_factory: Callable[[], str] | None = None,
         command_runner: Callable[..., CommandOutcome] = run_command,
         command_cwd: str | None = None,
-        judge_runner: Callable[[str, str, "str | None"], JudgeVerdict] | None = None,
         subworkflow_runner: Callable[..., str] | None = None,
         workspace: str | None = None,
         pick_runner: Callable[[str, list[str], "str | None"], int] | None = None,
@@ -75,7 +73,6 @@ class WorkflowEngine:
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex[:12])
         self._command_runner = command_runner
         self._command_cwd = command_cwd
-        self._judge_runner = judge_runner
         self._subworkflow_runner = subworkflow_runner
         # The real workspace (writing-parallel forks/applies here) and a runner that
         # picks the winning branch for 'choose' reconciliation. Both optional: a

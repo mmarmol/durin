@@ -8,11 +8,13 @@ from durin.workflow.loader import workflows_dir
 from durin.workflow.result import NodeRun, WorkflowResult
 from durin.workflow.workflow_improve_dream import run_workflow_improve_pass
 
+# Node 'g' uses a routing WorkNode with on_pass/on_fail (back-compat: kind="decision" parses
+# to WorkNode; prompt is the editable field after criteria was folded into prompt).
 _WF = {
     "name": "wf", "start": "a", "improvement_mode": "manual",
     "nodes": [
         {"id": "a", "kind": "work", "prompt": "do it", "next": "g"},
-        {"id": "g", "kind": "decision", "criteria": "is it good?", "on_pass": None, "on_fail": "a"},
+        {"id": "g", "kind": "work", "prompt": "is it good?", "on_pass": None, "on_fail": "a"},
     ],
 }
 
@@ -86,10 +88,25 @@ def test_structural_proposal_is_rejected(tmp_path):
 def test_field_node_type_mismatch_is_rejected(tmp_path):
     _write_wf(tmp_path)
     _seed_runs(tmp_path, n=2)
-    # 'criteria' on a work node, or 'prompt' on a decision node -> rejected
+    # 'criteria' is no longer a valid field for any node (all nodes use 'prompt') -> rejected
     invoke = _fake_invoke({"target_id": "a", "field": "criteria", "proposed": "x", "reason": "y"})
     summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
     assert summary["proposals"] == 0
+
+
+def test_routing_node_prompt_is_editable(tmp_path):
+    _write_wf(tmp_path)
+    _seed_runs(tmp_path, n=2)
+    # a routing WorkNode's prompt is the editable field
+    invoke = _fake_invoke({
+        "target_id": "g", "field": "prompt", "current": "is it good?",
+        "proposed": "does the output fully address the task?", "reason": "more precise",
+    })
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary == {"workflows": 1, "proposals": 1}
+    recs = wr.open_recommendations(tmp_path, "wf")
+    assert len(recs) == 1
+    assert recs[0]["target_id"] == "g" and recs[0]["field"] == "prompt"
 
 
 def test_no_op_proposal_is_rejected(tmp_path):

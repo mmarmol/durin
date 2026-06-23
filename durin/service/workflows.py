@@ -203,7 +203,7 @@ class WorkflowsService:
         judge = AgentJudgeRunner(runner, default_model=provider.get_default_model())
         ws = str(self._workspace)
         engine = WorkflowEngine(
-            node_runner=node_runner, command_cwd=ws, judge_runner=judge,
+            node_runner=node_runner, command_cwd=ws,
             subworkflow_runner=SubworkflowRunner(ws, node_runner, judge),
             workspace=ws, pick_runner=judge.pick)
         result = await asyncio.to_thread(engine.run, workflow, cmd.task)
