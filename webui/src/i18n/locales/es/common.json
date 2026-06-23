@@ -669,9 +669,8 @@
       },
       "spoken": {
         "longRepliesTitle": "Respuestas largas",
-        "longRepliesDesc": "Qué dice la voz cuando una respuesta es larga. Liderado por el modelo: el agente dice un resumen breve y el texto completo queda en pantalla. Modelo auxiliar: un modelo aparte resume. Leer respuesta completa: dice todo.",
-        "modelLed": "Resumen del modelo",
-        "auxSummary": "Resumen del modelo auxiliar",
+        "longRepliesDesc": "Qué dice la voz cuando una respuesta es larga. \"Apertura + resto en pantalla\" dice la primera parte y deja el texto completo en pantalla; \"Leer respuesta completa\" dice todo.",
+        "modelLed": "Apertura + resto en pantalla",
         "verbatim": "Leer respuesta completa"
       },
       "preview": {

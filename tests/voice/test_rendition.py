@@ -82,39 +82,3 @@ async def test_model_led_degrades_when_lead_is_a_described_block():
     r = await build_spoken_rendition(text, mode="model_led", long_threshold_words=2)
     assert "line\nline" not in r.spoken
     assert r.spoken.endswith("The full answer is on screen.")
-
-
-@pytest.mark.asyncio
-async def test_aux_summary_uses_injected_summarizer():
-    async def fake_summarizer(text):
-        return "A concise summary."
-
-    long_text = " ".join(["word"] * 100)
-    r = await build_spoken_rendition(
-        long_text, mode="aux_summary", long_threshold_words=60, summarizer=fake_summarizer
-    )
-    assert r.summarized is True
-    assert r.lead_present is True
-    assert r.spoken == "A concise summary. The full answer is on screen."
-
-
-@pytest.mark.asyncio
-async def test_aux_summary_degrades_without_summarizer():
-    long_text = "Lead prose sentence here.\n\n" + " ".join(["word"] * 100)
-    r = await build_spoken_rendition(
-        long_text, mode="aux_summary", long_threshold_words=60, summarizer=None
-    )
-    assert r.spoken.startswith("Lead prose sentence here.")
-    assert r.spoken.endswith("The full answer is on screen.")
-
-
-@pytest.mark.asyncio
-async def test_aux_summary_degrades_on_summarizer_error():
-    async def boom(text):
-        raise RuntimeError("aux down")
-
-    long_text = "Lead prose sentence here.\n\n" + " ".join(["word"] * 100)
-    r = await build_spoken_rendition(
-        long_text, mode="aux_summary", long_threshold_words=60, summarizer=boom
-    )
-    assert r.spoken.startswith("Lead prose sentence here.")

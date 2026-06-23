@@ -106,7 +106,6 @@ const TTS_PROVIDERS: ReadonlyArray<{ value: string; labelKey: string }> = [
 const TTS_VOICES = ["F1", "F2", "F3", "F4", "F5", "M1", "M2", "M3", "M4", "M5"] as const;
 const SPOKEN_MODES: ReadonlyArray<{ value: string; labelKey: string }> = [
   { value: "model_led", labelKey: "settings.voice.spoken.modelLed" },
-  { value: "aux_summary", labelKey: "settings.voice.spoken.auxSummary" },
   { value: "verbatim", labelKey: "settings.voice.spoken.verbatim" },
 ];
 

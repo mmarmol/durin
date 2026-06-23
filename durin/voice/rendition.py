@@ -10,8 +10,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from loguru import logger
-
 
 @dataclass(frozen=True)
 class SpeakableLabels:
@@ -96,24 +94,11 @@ def _model_led_lead(speakable: str) -> tuple[str, bool]:
     return lead, lead_present
 
 
-async def _aux_summary(speakable: str, summarizer) -> tuple[str, bool]:
-    if summarizer is None:
-        return _model_led_lead(speakable)  # degrade
-    try:
-        s = await summarizer(speakable)
-        if s and s.strip():
-            return s.strip(), True
-    except Exception as e:  # noqa: BLE001 — degrade rather than fail the turn
-        logger.warning("aux summarizer failed ({}); degrading to lead", e)
-    return _model_led_lead(speakable)
-
-
 async def build_spoken_rendition(
     full_text: str,
     *,
     mode: str = "model_led",
     long_threshold_words: int = 60,
-    summarizer=None,
     pointer: str = "The full answer is on screen.",
     labels: SpeakableLabels | None = None,
 ) -> SpokenRendition:
@@ -127,11 +112,5 @@ async def build_spoken_rendition(
         spoken = f"{lead} {pointer}".strip()
         return SpokenRendition(
             spoken=spoken, displayed=full_text, summarized=True, lead_present=lead_present
-        )
-    if mode == "aux_summary":
-        summary, ok = await _aux_summary(speakable, summarizer)
-        spoken = f"{summary} {pointer}".strip()
-        return SpokenRendition(
-            spoken=spoken, displayed=full_text, summarized=True, lead_present=ok
         )
     raise ValueError(f"Unknown spoken-rendition mode: {mode}")

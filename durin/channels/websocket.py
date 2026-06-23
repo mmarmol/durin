@@ -983,7 +983,6 @@ class WebSocketChannel(BaseChannel):
                     text,
                     mode=sr.mode,
                     long_threshold_words=sr.long_threshold_words,
-                    summarizer=None,  # aux_summary wiring deferred; degrades to lead
                     pointer=sr.pointer,
                 )
                 spoken = rendition.spoken

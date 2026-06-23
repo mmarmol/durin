@@ -38,12 +38,12 @@ def test_multiword_nested_key_roundtrips() -> None:
         p1, p2 = _isolated(cfg)
         with p1, p2:
             set_res = runner.invoke(
-                app, ["config", "set", "voice.spoken_render.mode", "aux_summary"]
+                app, ["config", "set", "voice.spoken_render.mode", "verbatim"]
             )
             assert set_res.exit_code == 0, set_res.output
             get_res = runner.invoke(app, ["config", "get", "voice.spoken_render.mode"])
             assert get_res.exit_code == 0, get_res.output
-            assert "aux_summary" in get_res.output
+            assert "verbatim" in get_res.output
             assert "No such key" not in get_res.output
 
 
@@ -93,13 +93,13 @@ def test_legacy_camelcase_config_loads_and_resaves_snake(tmp_path) -> None:
     p.write_text(
         json.dumps(
             {
-                "voice": {"spokenRender": {"mode": "aux_summary"}, "bargeIn": False},
+                "voice": {"spokenRender": {"mode": "verbatim"}, "bargeIn": False},
                 "transcription": {"cacheTranscripts": False},
             }
         )
     )
     cfg = load_config(p)
-    assert cfg.voice.spoken_render.mode == "aux_summary"
+    assert cfg.voice.spoken_render.mode == "verbatim"
     assert cfg.voice.barge_in is False
     assert cfg.transcription.cache_transcripts is False
     save_config(cfg, p)

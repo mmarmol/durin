@@ -142,10 +142,19 @@ class TtsConfig(Base):
 class SpokenRenderConfig(Base):
     """How long replies are rendered for speech (spoken != displayed)."""
 
-    mode: Literal["model_led", "aux_summary", "verbatim"] = "model_led"
-    summarizer_model: str | None = None   # None = main model (aux_summary only)
+    mode: Literal["model_led", "verbatim"] = "model_led"
     long_threshold_words: int = Field(default=60, ge=1)
     pointer: str = "The full answer is on screen."
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_mode(cls, data: Any) -> Any:
+        # An earlier build offered an "aux_summary" mode that was never wired
+        # and always degraded to "model_led". Coerce any value persisted by that
+        # build so existing configs keep loading with identical behavior.
+        if isinstance(data, dict) and data.get("mode") == "aux_summary":
+            data = {**data, "mode": "model_led"}
+        return data
 
 
 class VoiceConfig(Base):

@@ -669,9 +669,8 @@
       },
       "spoken": {
         "longRepliesTitle": "Long replies",
-        "longRepliesDesc": "What the voice speaks when a reply is long. Model-led: the agent speaks a short summary, full text stays on screen. Aux-model: a separate model summarizes. Read full reply: speaks everything.",
-        "modelLed": "Model-led summary",
-        "auxSummary": "Aux-model summary",
+        "longRepliesDesc": "What the voice speaks when a reply is long. \"Opening + rest on screen\" speaks the first part and keeps the full text on screen; \"Read full reply\" speaks everything.",
+        "modelLed": "Opening + rest on screen",
         "verbatim": "Read full reply"
       },
       "preview": {
