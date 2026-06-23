@@ -281,6 +281,7 @@ class SubagentManager:
             status.phase = "done"
             status.stop_reason = result.stop_reason
             status.ended_at = time.monotonic()
+            self._persist_subagent_session(task_id, sess_key, result, label)
 
             if result.stop_reason == "tool_error":
                 status.tool_events = list(result.tool_events)
@@ -310,6 +311,33 @@ class SubagentManager:
             status.final_content = f"Error: {e}"
             logger.exception("Subagent [{}] failed", task_id)
             await self._announce_result(task_id, label, task, f"Error: {e}", origin, "error", origin_message_id)
+
+    def _persist_subagent_session(
+        self, task_id: str, parent_key: str | None, result, label: str
+    ) -> None:
+        """Persist a finished subagent's conversation as its own session,
+        linked to the parent so the work is navigable, searchable, and not
+        lost when the in-memory status LRU evicts it.
+
+        No-op when no SessionManager is wired or there is no parent key.
+        """
+        if self._sessions is None or not parent_key:
+            return
+        try:
+            from durin.session.lineage import build_lineage, root_of
+            from durin.session.manager import Session
+
+            parent_meta = self._sessions.get_or_create(parent_key).metadata
+            root = root_of(parent_meta, default=parent_key)
+            session = Session(key=f"subagent:{task_id}", messages=list(result.messages))
+            session.metadata.update(build_lineage(
+                parent_session_id=parent_key, root_id=root,
+                origin_type="subagent", origin_id=task_id,
+            ))
+            session.metadata["title"] = f"subagent: {label}"
+            self._sessions.save(session)
+        except Exception:
+            logger.exception("Subagent [{}] session persist failed", task_id)
 
     async def _announce_result(
         self,
