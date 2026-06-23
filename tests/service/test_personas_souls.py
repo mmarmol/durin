@@ -40,14 +40,21 @@ def test_delete(tmp_path):
 
 
 def test_invalid_slug_rejected(tmp_path):
-    from durin.service.types import DomainError
+    from durin.service.types import ValidationFailedError
     svc = _svc(tmp_path)
-    with pytest.raises(DomainError):
+    with pytest.raises(ValidationFailedError):
         asyncio.run(svc.upsert_soul(SoulUpsertCommand(slug="../evil", body="x"), _principal()))
 
 
 def test_delete_default_rejected(tmp_path):
-    from durin.service.types import DomainError
+    from durin.service.types import ForbiddenError
     svc = _svc(tmp_path)
-    with pytest.raises(DomainError):
+    with pytest.raises(ForbiddenError):
         asyncio.run(svc.delete_soul(SoulDeleteCommand(slug="default"), _principal()))
+
+
+def test_delete_invalid_slug_rejected(tmp_path):
+    from durin.service.types import ValidationFailedError
+    svc = _svc(tmp_path)
+    with pytest.raises(ValidationFailedError):
+        asyncio.run(svc.delete_soul(SoulDeleteCommand(slug="../evil"), _principal()))

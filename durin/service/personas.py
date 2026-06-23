@@ -113,8 +113,12 @@ class PersonasService:
     )
     async def delete_soul(self, cmd: SoulDeleteCommand, principal: Principal) -> SoulDeleteResult:
         principal.require(Scope.CONFIG_WRITE)
+        store = self._store()
         try:
-            self._store().delete(cmd.slug)
+            store.delete(cmd.slug)
         except ValueError as e:
-            raise ForbiddenError(str(e)) from e
+            msg = str(e)
+            if "invalid soul slug" in msg:
+                raise ValidationFailedError(msg) from e
+            raise ForbiddenError(msg) from e
         return SoulDeleteResult(ok=True)
