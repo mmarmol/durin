@@ -74,12 +74,14 @@ def test_decision_pass_continues():
             {"id": "b", "kind": "work", "next": None},
         ],
     })
-    eng, _ = _engine({"a": "out-a", "b": "out-b"}, [True])
+    eng, calls = _engine({"a": "out-a", "b": "out-b"}, [True])
     res = eng.run(wf, "t")
     assert res.status == "completed"
     assert [r.node_id for r in res.runs] == ["a", "gate", "b"]
     gate_run = [r for r in res.runs if r.node_id == "gate"][0]
     assert gate_run.passed is True
+    b_call = [c for c in calls if c.node.id == "b"][0]
+    assert b_call.upstream_output == "out-a"
 
 
 def test_decision_fail_loops_back_then_passes():
@@ -129,3 +131,18 @@ def test_shared_vs_own_context():
     # b — being 'own' — must NOT receive it.
     assert a_call.shared_context == []
     assert b_call.shared_context == []   # own node: isolated from the shared buffer
+
+
+def test_shared_buffer_accumulates_across_shared_nodes():
+    wf = parse_workflow({
+        "name": "d", "start": "a",
+        "nodes": [
+            {"id": "a", "kind": "work", "context": "shared", "next": "b"},
+            {"id": "b", "kind": "work", "context": "shared", "next": None},
+        ],
+    })
+    eng, calls = _engine({"a": "out-a", "b": "out-b"}, [])
+    eng.run(wf, "t")
+    b_call = [c for c in calls if c.node.id == "b"][0]
+    # b is the second shared node: it must receive a's appended message
+    assert b_call.shared_context == [{"role": "assistant", "content": "out-a"}]
