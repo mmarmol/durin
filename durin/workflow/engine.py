@@ -3,9 +3,11 @@
 Walks a parsed Workflow from its start node, following edges. A work node runs via
 the injected ``node_runner`` and its output passes along the edge to the next node;
 a 'shared'-context node also reads/extends a running shared-context buffer, while an
-'own'-context node is isolated (it sees only the upstream output). A decision node
-evaluates its command and routes to on_pass / on_fail. A per-node visit cap guards
-against infinite loop-backs. The run returns a typed WorkflowResult.
+'own'-context node is isolated (it sees only the upstream output). A routing node
+(one with on_pass/on_fail set) derives a pass/fail verdict from its own output (agent
+nodes: first-line PASS/FAIL from parse_verdict; command nodes: exit code) and follows
+the appropriate edge. A per-node visit cap guards against infinite loop-backs. The run
+returns a typed WorkflowResult.
 
 The graph logic is decoupled from real LLM execution: ``node_runner`` is injectable
 so this engine is fully unit-testable with a mock. The default runner that wraps
@@ -23,7 +25,8 @@ from durin.workflow import workspace_fork
 from durin.workflow.condition import CommandOutcome, run_command
 from durin.workflow.judge import JudgeVerdict
 from durin.workflow.result import NodeRun, WorkflowResult
-from durin.workflow.spec import DecisionNode, ParallelNode, SubworkflowNode, WorkNode, Workflow
+from durin.workflow.spec import ParallelNode, SubworkflowNode, WorkNode, Workflow
+from durin.workflow.verdict import parse_verdict
 
 
 @dataclass
@@ -130,20 +133,39 @@ class WorkflowEngine:
                     iteration=iteration,
                     root_session_key=root_session_key,
                 )
-                resp = self._node_runner(req)
-                runs.append(
-                    NodeRun(
-                        node_id=node.id,
-                        iteration=iteration,
-                        output=resp.output,
-                        session_key=resp.session_key,
-                    )
-                )
-                if node.context == "shared":
-                    shared_context.extend(resp.messages)
-                upstream_output = resp.output
-                final_output = resp.output
-                current = node.next
+
+                if node.is_command:
+                    # Command body: run the shell command; verdict is the exit code.
+                    outcome = self._command_runner(node.command, cwd=self._command_cwd)
+                    output = outcome.output
+                    passed = outcome.passed
+                    runs.append(NodeRun(node_id=node.id, iteration=iteration,
+                                        output=output, session_key=None,
+                                        passed=passed if node.routes else None))
+                else:
+                    # Agent body: run a full agent turn; verdict (if routing) comes
+                    # from the first non-empty line of the agent's own output.
+                    resp = self._node_runner(req)
+                    output = resp.output
+                    passed = parse_verdict(output) if node.routes else None
+                    runs.append(NodeRun(node_id=node.id, iteration=iteration,
+                                        output=output, session_key=resp.session_key,
+                                        passed=passed))
+                    if node.context == "shared":
+                        shared_context.extend(resp.messages)
+
+                if node.routes:
+                    if not passed:
+                        # Thread reviewer feedback into upstream so the producer sees it.
+                        prior = upstream_output or ""
+                        upstream_output = (
+                            f"{prior}\n\nReviewer feedback (address this):\n{output}"
+                        )
+                    current = node.on_pass if passed else node.on_fail
+                else:
+                    upstream_output = output
+                    final_output = output
+                    current = node.next
 
             elif isinstance(node, SubworkflowNode):
                 if self._subworkflow_runner is None:
@@ -169,32 +191,6 @@ class WorkflowEngine:
                 final_output = merged
                 current = node.next
 
-            elif isinstance(node, DecisionNode):
-                if node.criteria:
-                    if self._judge_runner is None:
-                        raise WorkflowConfigError(
-                            f"node {node.id!r} needs a judge but the engine has no judge_runner"
-                        )
-                    verdict = self._judge_runner(node.criteria, upstream_output or "", node.judge_model)
-                    passed = verdict.passed
-                    runs.append(NodeRun(node_id=node.id, iteration=iteration,
-                                        output=verdict.feedback, passed=passed))
-                    if not passed:
-                        # thread the reviewer feedback to the producer it loops back to
-                        prior = upstream_output or ""
-                        upstream_output = f"{prior}\n\nReviewer feedback (address this):\n{verdict.feedback}"
-                    current = node.on_pass if passed else node.on_fail
-                else:
-                    outcome = self._command_runner(node.command, cwd=self._command_cwd)
-                    runs.append(
-                        NodeRun(
-                            node_id=node.id,
-                            iteration=iteration,
-                            output=outcome.output,
-                            passed=outcome.passed,
-                        )
-                    )
-                    current = node.on_pass if outcome.passed else node.on_fail
 
         return WorkflowResult(
             status="completed", final_output=final_output, runs=runs, run_id=run_id

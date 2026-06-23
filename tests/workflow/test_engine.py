@@ -177,65 +177,65 @@ def test_shared_buffer_accumulates_across_shared_nodes():
     assert b_call.shared_context == [{"role": "assistant", "content": "out-a"}]
 
 
-def test_judgment_decision_passes():
-    from durin.workflow.judge import JudgeVerdict
-    wf = parse_workflow({"name": "d", "start": "a", "nodes": [
-        {"id": "a", "kind": "work", "next": "g"},
-        {"id": "g", "kind": "decision", "criteria": "ok?", "on_pass": None, "on_fail": "a"},
+def test_agent_routing_node_routes_on_its_own_verdict():
+    """A routing work node (with on_pass/on_fail) runs as an agent and routes on its
+    own PASS/FAIL output — no external judge runner needed."""
+    seq = []
+
+    def runner(req):
+        seq.append(req.node.id)
+        if req.node.id == "gate":
+            # fail on first visit, pass on second
+            output = "PASS\nok" if seq.count("gate") > 1 else "FAIL\nfix it"
+            return NodeRunResponse(output=output)
+        return NodeRunResponse(output={"prod": "draft v1", "done": "done-out"}[req.node.id])
+
+    wf = parse_workflow({"name": "w", "start": "prod", "nodes": [
+        {"id": "prod", "kind": "work", "next": "gate"},
+        {"id": "gate", "kind": "work", "prompt": "good?", "on_pass": "done", "on_fail": "prod"},
+        {"id": "done", "kind": "work", "next": None},
     ]})
-    judged = []
-
-    def judge_runner(criteria, output, model):
-        judged.append((criteria, output, model))
-        return JudgeVerdict(passed=True, feedback="PASS looks good")
-
-    def node_runner(req):
-        return NodeRunResponse(output="the work", session_key=None, messages=[])
-
-    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1", judge_runner=judge_runner)
-    res = eng.run(wf, "t")
+    res = WorkflowEngine(runner).run(wf, "task")
     assert res.status == "completed"
-    assert judged and judged[0][0] == "ok?" and judged[0][1] == "the work"
-    g_run = [r for r in res.runs if r.node_id == "g"][0]
-    assert g_run.passed is True
+    assert seq == ["prod", "gate", "prod", "gate", "done"]   # looped once on FAIL
 
 
-def test_judgment_fail_loops_back_with_feedback():
-    from durin.workflow.judge import JudgeVerdict
-    wf = parse_workflow({"name": "d", "start": "a", "max_visits": 3, "nodes": [
-        {"id": "a", "kind": "work", "next": "g"},
-        {"id": "g", "kind": "decision", "criteria": "ok?", "on_pass": None, "on_fail": "a"},
-    ]})
-    verdicts = iter([JudgeVerdict(passed=False, feedback="FAIL: add validation"),
-                     JudgeVerdict(passed=True, feedback="PASS")])
+def test_agent_routing_node_fail_threads_feedback():
+    """On FAIL, the routing node's output is threaded into the upstream for the next run."""
     seen_inputs = []
 
-    def judge_runner(criteria, output, model):
-        return next(verdicts)
+    def runner(req):
+        if req.node.id == "prod":
+            seen_inputs.append(req.upstream_output)
+            return NodeRunResponse(output="attempt")
+        # gate: fail first, then pass
+        output = "FAIL\nneed more detail" if seen_inputs and seen_inputs[-1] is None else "PASS"
+        return NodeRunResponse(output=output)
 
-    def node_runner(req):
-        seen_inputs.append(req.upstream_output)
-        return NodeRunResponse(output="attempt", session_key=None, messages=[])
-
-    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1", judge_runner=judge_runner)
-    res = eng.run(wf, "t")
-    assert res.status == "completed"
-    # the second run of 'a' (the loop-back) saw the reviewer feedback in its input
-    assert any(inp and "add validation" in inp for inp in seen_inputs)
-
-
-def test_criteria_node_without_judge_runner_raises():
-    wf = parse_workflow({"name": "d", "start": "a", "nodes": [
-        {"id": "a", "kind": "work", "next": "g"},
-        {"id": "g", "kind": "decision", "criteria": "ok?", "on_pass": None, "on_fail": "a"},
+    wf = parse_workflow({"name": "w", "start": "prod", "max_visits": 3, "nodes": [
+        {"id": "prod", "kind": "work", "next": "gate"},
+        {"id": "gate", "kind": "work", "prompt": "eval", "on_pass": None, "on_fail": "prod"},
     ]})
+    WorkflowEngine(runner).run(wf, "t")
+    # second run of 'prod' must have received reviewer feedback in its upstream_output
+    assert any(inp and "need more detail" in inp for inp in seen_inputs)
 
-    def node_runner(req):
-        return NodeRunResponse(output="x", session_key=None, messages=[])
 
-    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")  # no judge_runner
-    with pytest.raises(RuntimeError, match="judge"):
-        eng.run(wf, "t")
+def test_command_routing_node_routes_on_exit_code():
+    """A command routing node (is_command=True) routes on the command's exit code."""
+    def runner(req):
+        return NodeRunResponse(output="built")
+
+    def cmd(command, cwd=None):
+        return CommandOutcome(passed=True, output="ok", exit_code=0)
+
+    wf = parse_workflow({"name": "w", "start": "prod", "nodes": [
+        {"id": "prod", "kind": "work", "next": "gate"},
+        {"id": "gate", "kind": "decision", "command": "true", "on_pass": "done", "on_fail": "prod"},
+        {"id": "done", "kind": "work"},
+    ]})
+    res = WorkflowEngine(runner, command_runner=cmd).run(wf, "t")
+    assert res.status == "completed"
 
 
 def test_subworkflow_node_runs_and_threads_output():
@@ -277,7 +277,6 @@ def test_subworkflow_node_without_runner_raises():
         return NodeRunResponse(output="x", session_key=None, messages=[])
 
     eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")
-    import pytest
     with pytest.raises(RuntimeError, match="subworkflow"):
         eng.run(wf, "t")
 
