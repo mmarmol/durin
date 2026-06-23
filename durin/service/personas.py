@@ -308,9 +308,14 @@ class PersonasService:
         except Exception as e:  # noqa: BLE001
             return PersonaTestResult(ok=False, error=f"Could not resolve model {ref or 'default'!r}: {e}")
 
-        soul_body = self._store().read(cmd.soul) if cmd.soul else ""
+        system = ""
+        if cmd.soul:
+            try:
+                system = self._store().read(cmd.soul) or ""
+            except ValueError:
+                system = ""
         messages = (
-            [{"role": "system", "content": soul_body}] if soul_body else []
+            [{"role": "system", "content": system}] if system else []
         ) + [{"role": "user", "content": _TEST_PROMPT}]
 
         try:
@@ -326,6 +331,8 @@ class PersonasService:
         except Exception as e:  # noqa: BLE001
             return PersonaTestResult(ok=False, error=f"{type(e).__name__}: {e}", model=preset.model)
 
+        if getattr(resp, "finish_reason", None) == "error":
+            return PersonaTestResult(ok=False, error=(getattr(resp, "content", None) or "Provider error."), model=preset.model)
         content = getattr(resp, "content", None)
         if not content:
             return PersonaTestResult(ok=False, error="Model returned an empty response.", model=preset.model)
