@@ -53,6 +53,20 @@ function computeDepths(def: WorkflowDef): Record<string, number> {
   return depth;
 }
 
+// A node "routes" when it has on_pass or on_fail set, regardless of kind.
+// This means both legacy kind:"decision" nodes and new kind:"work" nodes with
+// routing fields render identically (pass/fail edges + decision ring/handles).
+function nodeRoutes(n: WorkflowNodeDef): boolean {
+  return n.on_pass != null || n.on_fail != null;
+}
+
+// Resolve the React Flow node type: routing nodes always render as "decision"
+// so NodeCard shows the decision ring regardless of the stored kind.
+function resolveNodeType(n: WorkflowNodeDef): string {
+  if (nodeRoutes(n)) return "decision";
+  return n.kind;
+}
+
 export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[] } {
   const byId = new Map(def.nodes.map((n) => [n.id, n]));
   const depth = computeDepths(def);
@@ -63,7 +77,7 @@ export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[]
     const row = (rowByCol[col] = (rowByCol[col] ?? 0) + 1) - 1;
     return {
       id: n.id,
-      type: n.kind,
+      type: resolveNodeType(n),
       position: { x: col * COL, y: row * ROW },
       data: { node: n, isStart: n.id === def.start } satisfies FlowNodeData,
     };
@@ -76,7 +90,8 @@ export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[]
     }
   };
   for (const n of def.nodes) {
-    if (n.kind === "decision") {
+    if (nodeRoutes(n)) {
+      // Routing node (kind:"work" with on_pass/on_fail OR legacy kind:"decision")
       add(n.id, n.on_pass, "pass");
       add(n.id, n.on_fail, "fail");
     } else if (n.kind === "parallel") {

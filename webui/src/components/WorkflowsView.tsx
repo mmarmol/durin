@@ -141,7 +141,21 @@ function NodeConfigPanel({
   onMakeStart: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation();
   const others = nodeIds.filter((id) => id !== node.id);
+  // A node routes when on_pass or on_fail is set (regardless of kind).
+  const routes = node.on_pass != null || node.on_fail != null;
+  // A gate node has a command field present.
+  const hasCommand = node.command != null;
+
+  function toggleRoutes(on: boolean) {
+    if (on) {
+      onChange({ on_pass: null, on_fail: null, next: undefined });
+    } else {
+      onChange({ on_pass: undefined, on_fail: undefined, next: null });
+    }
+  }
+
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
@@ -160,56 +174,71 @@ function NodeConfigPanel({
         )}
       </div>
 
-      {node.kind === "work" && (
+      {(node.kind === "work" || node.kind === "decision") && (
         <>
-          <Field label="work mode">
-            <select className={selectCls} value={(node.mode as string) ?? "build"}
-              onChange={(e) => onChange({ mode: e.target.value })}>
-              {MODES.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-          </Field>
-          <Field label="model">
-            <Input value={(node.model as string) ?? ""} placeholder="default"
-              onChange={(e) => onChange({ model: e.target.value || undefined })} />
-          </Field>
-          <Field label="context">
-            <select className={selectCls} value={(node.context as string) ?? "own"}
-              onChange={(e) => onChange({ context: e.target.value })}>
-              {CONTEXTS.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </Field>
-          <Field label="tools">
-            <select className={selectCls} value={(node.tools as string) ?? "none"}
-              onChange={(e) => onChange({ tools: e.target.value })}>
-              {TOOLS.map((tl) => <option key={tl} value={tl}>{tl}</option>)}
-            </select>
-          </Field>
-          <Field label="prompt">
-            <Textarea rows={5} value={(node.prompt as string) ?? ""}
-              onChange={(e) => onChange({ prompt: e.target.value })} />
-          </Field>
-          <Field label="next">
-            <TargetSelect value={node.next as string} options={others}
-              onChange={(v) => onChange({ next: v })} />
-          </Field>
-        </>
-      )}
+          {hasCommand ? (
+            <Field label={t("workflows.command")}>
+              <Textarea rows={3} value={(node.command as string) ?? ""}
+                onChange={(e) => onChange({ command: e.target.value })} />
+            </Field>
+          ) : (
+            <>
+              <Field label="work mode">
+                <select className={selectCls} value={(node.mode as string) ?? "build"}
+                  onChange={(e) => onChange({ mode: e.target.value })}>
+                  {MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </Field>
+              <Field label="model">
+                <Input value={(node.model as string) ?? ""} placeholder="default"
+                  onChange={(e) => onChange({ model: e.target.value || undefined })} />
+              </Field>
+              <Field label="context">
+                <select className={selectCls} value={(node.context as string) ?? "own"}
+                  onChange={(e) => onChange({ context: e.target.value })}>
+                  {CONTEXTS.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </Field>
+              <Field label="tools">
+                <select className={selectCls} value={(node.tools as string) ?? "none"}
+                  onChange={(e) => onChange({ tools: e.target.value })}>
+                  {TOOLS.map((tl) => <option key={tl} value={tl}>{tl}</option>)}
+                </select>
+              </Field>
+              <Field label="prompt">
+                <Textarea rows={5} value={(node.prompt as string) ?? ""}
+                  onChange={(e) => onChange({ prompt: e.target.value })} />
+              </Field>
+            </>
+          )}
 
-      {node.kind === "decision" && (
-        <>
-          <Field label={node.command ? "command" : "criteria"}>
-            <Textarea rows={3}
-              value={(node.criteria as string) || (node.command as string) || ""}
-              onChange={(e) => onChange(node.command ? { command: e.target.value } : { criteria: e.target.value })} />
-          </Field>
-          <Field label="on pass">
-            <TargetSelect value={node.on_pass as string} options={others}
-              onChange={(v) => onChange({ on_pass: v })} />
-          </Field>
-          <Field label="on fail">
-            <TargetSelect value={node.on_fail as string} options={others}
-              onChange={(v) => onChange({ on_fail: v })} />
-          </Field>
+          {/* Routing toggle: when on, show on_pass/on_fail; when off, show next */}
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={routes}
+              onChange={(e) => toggleRoutes(e.target.checked)}
+            />
+            <span className="text-muted-foreground">{t("workflows.routes")}</span>
+          </label>
+
+          {routes ? (
+            <>
+              <Field label={t("workflows.onPass")}>
+                <TargetSelect value={node.on_pass as string | null} options={others}
+                  onChange={(v) => onChange({ on_pass: v })} />
+              </Field>
+              <Field label={t("workflows.onFail")}>
+                <TargetSelect value={node.on_fail as string | null} options={others}
+                  onChange={(v) => onChange({ on_fail: v })} />
+              </Field>
+            </>
+          ) : (
+            <Field label="next">
+              <TargetSelect value={node.next as string} options={others}
+                onChange={(v) => onChange({ next: v })} />
+            </Field>
+          )}
         </>
       )}
 
@@ -307,12 +336,24 @@ export function WorkflowsView() {
   );
 
   const addNode = useCallback(
-    (kind: "work" | "decision") => {
-      const id = `${kind}-${++_idSeq}`;
-      const node: WorkflowNodeDef =
-        kind === "work"
-          ? { id, kind: "work", mode: "build", prompt: "", next: null }
-          : { id, kind: "decision", criteria: "", on_pass: null, on_fail: null };
+    (preset: "work" | "decision" | "gate") => {
+      const id = `${preset}-${++_idSeq}`;
+      let node: WorkflowNodeDef;
+      if (preset === "work") {
+        node = { id, kind: "work", mode: "build", prompt: "", next: null };
+      } else if (preset === "decision") {
+        node = {
+          id,
+          kind: "work",
+          mode: "explore",
+          prompt: "Evaluate the previous output. End your reply with PASS or FAIL.",
+          on_pass: null,
+          on_fail: null,
+        };
+      } else {
+        // gate: command body that routes
+        node = { id, kind: "work", command: "", on_pass: null, on_fail: null };
+      }
       mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
       setSelectedNodeId(id);
     },
@@ -376,7 +417,9 @@ export function WorkflowsView() {
         ...d,
         nodes: d.nodes.map((n) => {
           if (n.id !== c.source) return n;
-          if (n.kind === "decision") {
+          // A node with on_pass/on_fail (routing node) — fill the empty slot first.
+          const isRouting = n.on_pass != null || n.on_fail != null;
+          if (n.kind === "decision" || isRouting) {
             return n.on_pass ? { ...n, on_fail: c.target } : { ...n, on_pass: c.target };
           }
           if (n.kind === "parallel") {
@@ -525,10 +568,13 @@ export function WorkflowsView() {
             {def && (
               <div className="absolute left-2 top-2 z-10 flex items-center gap-2">
                 <Button size="sm" variant="outline" onClick={() => addNode("work")}>
-                  <Plus className="h-3.5 w-3.5" /> work
+                  <Plus className="h-3.5 w-3.5" /> {t("workflows.presetWork")}
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => addNode("decision")}>
-                  <Plus className="h-3.5 w-3.5" /> decision
+                  <Plus className="h-3.5 w-3.5" /> {t("workflows.presetDecision")}
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => addNode("gate")}>
+                  <Plus className="h-3.5 w-3.5" /> {t("workflows.presetGate")}
                 </Button>
                 {dirty && (
                   <Button size="sm" onClick={onSave} disabled={saving}>

@@ -709,7 +709,14 @@
     "run": "Run",
     "status": "Status",
     "taskPlaceholder": "Task to run through this workflow…",
-    "recApplied": "Recommendation applied."
+    "recApplied": "Recommendation applied.",
+    "routes": "routes (pass/fail)",
+    "onPass": "on pass",
+    "onFail": "on fail",
+    "command": "command",
+    "presetWork": "work",
+    "presetDecision": "decision",
+    "presetGate": "gate"
   },
   "skills": {
     "view": "View",

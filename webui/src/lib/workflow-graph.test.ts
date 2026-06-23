@@ -57,4 +57,72 @@ describe("workflowToFlow", () => {
     });
     expect(edges).toHaveLength(0);
   });
+
+  it("a kind:work node with on_pass/on_fail produces two labelled pass/fail edges", () => {
+    const { edges } = workflowToFlow({
+      name: "r",
+      start: "prod",
+      nodes: [
+        { id: "prod", kind: "work", next: "gate" },
+        { id: "gate", kind: "work", on_pass: "done", on_fail: "prod" },
+        { id: "done", kind: "work" },
+      ],
+    });
+    const pass = edges.find((e) => e.source === "gate" && e.target === "done");
+    const fail = edges.find((e) => e.source === "gate" && e.target === "prod");
+    expect(pass?.label).toBe("pass");
+    expect(fail?.label).toBe("fail");
+    // must NOT also emit a next edge from gate
+    expect(edges.filter((e) => e.source === "gate")).toHaveLength(2);
+  });
+
+  it("a kind:work node with only next produces one edge (no pass/fail)", () => {
+    const { edges } = workflowToFlow({
+      name: "s",
+      start: "a",
+      nodes: [
+        { id: "a", kind: "work", next: "b" },
+        { id: "b", kind: "work" },
+      ],
+    });
+    const fromA = edges.filter((e) => e.source === "a");
+    expect(fromA).toHaveLength(1);
+    expect(fromA[0].label).toBeUndefined();
+  });
+
+  it("a legacy kind:decision node still renders with pass/fail edges", () => {
+    const { edges } = workflowToFlow({
+      name: "legacy",
+      start: "prod",
+      nodes: [
+        { id: "prod", kind: "work", next: "gate" },
+        { id: "gate", kind: "decision", on_pass: "done", on_fail: "prod" },
+        { id: "done", kind: "work" },
+      ],
+    });
+    expect(edges.find((e) => e.source === "gate" && e.label === "pass")?.target).toBe("done");
+    expect(edges.find((e) => e.source === "gate" && e.label === "fail")?.target).toBe("prod");
+  });
+
+  it("a routing kind:work node type is 'decision' so NodeCard shows the decision ring", () => {
+    const { nodes } = workflowToFlow({
+      name: "ring",
+      start: "gate",
+      nodes: [
+        { id: "gate", kind: "work", on_pass: "done", on_fail: "gate" },
+        { id: "done", kind: "work" },
+      ],
+    });
+    const gate = nodes.find((n) => n.id === "gate")!;
+    expect(gate.type).toBe("decision");
+  });
+
+  it("a non-routing kind:work node type stays 'work'", () => {
+    const { nodes } = workflowToFlow({
+      name: "plain",
+      start: "a",
+      nodes: [{ id: "a", kind: "work", next: null }],
+    });
+    expect(nodes[0].type).toBe("work");
+  });
 });
