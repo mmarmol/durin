@@ -12,12 +12,15 @@ exactly like a subagent session. Persistence is best-effort.
 from __future__ import annotations
 
 import asyncio
-from typing import Callable
 
 from loguru import logger
 
 from durin.agent.runner import AgentRunner, AgentRunSpec
+from durin.agent.tools.context import ToolContext
+from durin.agent.tools.file_state import FileStates
+from durin.agent.tools.loader import ToolLoader
 from durin.agent.tools.registry import ToolRegistry
+from durin.config.schema import ToolsConfig
 from durin.session.lineage import build_lineage, root_of
 from durin.session.manager import Session, SessionManager
 from durin.workflow.engine import NodeRunRequest, NodeRunResponse
@@ -32,14 +35,29 @@ class AgentNodeRunner:
         default_model: str,
         max_iterations: int = 50,
         max_tool_result_chars: int = 16000,
-        tools_factory: Callable[[], ToolRegistry] | None = None,
+        tools_config: ToolsConfig | None = None,
     ) -> None:
         self.runner = runner
         self.sessions = sessions
         self.default_model = default_model
         self.max_iterations = max_iterations
         self.max_tool_result_chars = max_tool_result_chars
-        self._tools_factory = tools_factory or ToolRegistry
+        self._tools_config = tools_config or ToolsConfig()
+
+    def _build_tools(self, node) -> ToolRegistry:
+        """Build the node's tool registry. 'none' → empty; 'default' → the
+        standard tool set, loaded the same way a subagent's tools are."""
+        registry = ToolRegistry()
+        if getattr(node, "tools", "none") != "default":
+            return registry
+        ctx = ToolContext(
+            config=self._tools_config,
+            workspace=str(self.sessions.workspace.resolve()),
+            file_state_store=FileStates(),
+            scope="subagent",
+        )
+        ToolLoader().load(ctx, registry, scope="subagent")
+        return registry
 
     def __call__(self, req: NodeRunRequest) -> NodeRunResponse:
         messages: list[dict] = [{"role": "system", "content": req.node.prompt}]
@@ -51,7 +69,7 @@ class AgentNodeRunner:
 
         result = asyncio.run(self.runner.run(AgentRunSpec(
             initial_messages=messages,
-            tools=self._tools_factory(),
+            tools=self._build_tools(req.node),
             model=req.node.model or self.default_model,
             max_iterations=self.max_iterations,
             max_tool_result_chars=self.max_tool_result_chars,

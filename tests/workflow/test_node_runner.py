@@ -86,3 +86,33 @@ def test_persist_failure_is_best_effort(tmp_path):
         resp = nr(req)
     assert resp.output == "done"      # output still returned despite persist failure
     assert resp.session_key is None   # best-effort: persist failed -> no session key
+
+
+def test_default_tools_node_gets_real_tools(tmp_path):
+    from durin.workflow.spec import WorkNode
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(final_content="ok", messages=[])
+    nr = _runner(sessions, fake)
+    req = NodeRunRequest(
+        node=WorkNode(id="a", tools="default", next=None),
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    nr(req)
+    spec = nr.runner.run.call_args.args[0]
+    assert spec.tools.has("read_file")    # default tool set is wired in
+
+
+def test_none_tools_node_gets_empty_registry(tmp_path):
+    from durin.workflow.spec import WorkNode
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(final_content="ok", messages=[])
+    nr = _runner(sessions, fake)
+    req = NodeRunRequest(
+        node=WorkNode(id="a", next=None),   # tools defaults to "none"
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    nr(req)
+    spec = nr.runner.run.call_args.args[0]
+    assert not spec.tools.has("read_file")   # no tools for a 'none' node
