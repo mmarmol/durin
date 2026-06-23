@@ -104,7 +104,9 @@ class AgentNodeRunner:
         """Register the live MCP tools of the selected servers into this node's
         registry (by reference, wrapped for cross-loop execution). Reuses the
         gateway's existing connections — no per-node reconnection."""
-        if not servers or self._live_tool_registry is None:
+        # Without a real owner loop there is nowhere to marshal MCP calls to, so the
+        # wrapped tool would fail at call time — skip MCP rather than hand out broken tools.
+        if not servers or self._live_tool_registry is None or self._main_loop is None:
             return
         for server in servers:
             prefix = f"mcp_{server}_"

@@ -50,6 +50,11 @@ class NodeRunResponse:
 NodeRunner = Callable[[NodeRunRequest], NodeRunResponse]
 
 
+class WorkflowConfigError(RuntimeError):
+    """The workflow is wired wrong (e.g. a judgment node but no judge runner). A
+    programmer/config error — it fails fast rather than being swallowed as a run abort."""
+
+
 class WorkflowEngine:
     def __init__(
         self,
@@ -78,8 +83,26 @@ class WorkflowEngine:
     def run(
         self, workflow: Workflow, task: str, *, root_session_key: str | None = None
     ) -> WorkflowResult:
+        """Run the workflow. A node-execution failure (provider/MCP/tool error) does not
+        propagate — it ends the run as a typed ``aborted`` result carrying the partial
+        per-node trace, so the run is still recorded for diagnostics. A wiring/config
+        error (a node needing a runner the engine wasn't given) fails fast."""
         run_id = self._run_id_factory()
         runs: list[NodeRun] = []
+        try:
+            return self._walk(workflow, task, run_id, runs, root_session_key=root_session_key)
+        except WorkflowConfigError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a node failure becomes a typed aborted result
+            return WorkflowResult(
+                status="aborted", final_output=f"workflow error: {exc}",
+                runs=runs, run_id=run_id,
+            )
+
+    def _walk(
+        self, workflow: Workflow, task: str, run_id: str, runs: list[NodeRun],
+        *, root_session_key: str | None = None,
+    ) -> WorkflowResult:
         shared_context: list[dict] = []
         visits: dict[str, int] = {}
         upstream_output: str | None = None
@@ -124,7 +147,7 @@ class WorkflowEngine:
 
             elif isinstance(node, SubworkflowNode):
                 if self._subworkflow_runner is None:
-                    raise RuntimeError(
+                    raise WorkflowConfigError(
                         f"node {node.id!r} is a subworkflow but the engine has no subworkflow_runner"
                     )
                 output = self._subworkflow_runner(node.workflow, upstream_output or task, root_session_key)
@@ -149,7 +172,7 @@ class WorkflowEngine:
             elif isinstance(node, DecisionNode):
                 if node.criteria:
                     if self._judge_runner is None:
-                        raise RuntimeError(
+                        raise WorkflowConfigError(
                             f"node {node.id!r} needs a judge but the engine has no judge_runner"
                         )
                     verdict = self._judge_runner(node.criteria, upstream_output or "", node.judge_model)

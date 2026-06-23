@@ -15,6 +15,7 @@ import json
 import time
 from pathlib import Path
 
+from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 from durin.workflow.run_log import runs_root
 
@@ -54,7 +55,7 @@ def log_recommendation(
     rid = _rec_id(target_id, field, proposed)
     path = _path(workspace, name)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with cross_process_lock(path.with_suffix(".lock")):
+    with cross_process_lock(path.with_suffix("")):
         records = _read(path)
         existing = next((r for r in records if r.get("id") == rid), None)
         if existing is not None:
@@ -68,7 +69,7 @@ def log_recommendation(
                 "status": "open", "count": 1, "run_ids": run_ids or [],
                 "created_at": time.time(),
             })
-        path.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+        atomic_write_text(path, "\n".join(json.dumps(r) for r in records) + "\n")
     return rid
 
 
@@ -88,7 +89,7 @@ def apply_recommendation(workspace: str | Path, name: str, rec_id: str) -> dict:
     from durin.workflow.version_store import WorkflowVersionStore
 
     path = _path(workspace, name)
-    with cross_process_lock(path.with_suffix(".lock")):
+    with cross_process_lock(path.with_suffix("")):
         records = _read(path)
         rec = next((r for r in records if r.get("id") == rec_id and r.get("status") == "open"), None)
         if rec is None:
@@ -102,10 +103,12 @@ def apply_recommendation(workspace: str | Path, name: str, rec_id: str) -> dict:
         if node is None:
             return {"ok": False, "error": f"node {rec['target_id']!r} no longer exists in {name!r}"}
         node[rec["field"]] = rec["proposed"]
-        wf_path.write_text(_json.dumps(data, indent=2), encoding="utf-8")
+        # Atomic write so a concurrent version snapshot (git add -A under its own lock)
+        # can only ever see the whole old or whole new file, never a torn one.
+        atomic_write_text(wf_path, _json.dumps(data, indent=2))
         WorkflowVersionStore(workflows_dir(workspace)).commit_edit(
             name, f"apply recommendation {rec_id}: {rec.get('reason', '')}"
         )
         rec["status"] = "applied"
-        path.write_text("\n".join(_json.dumps(r) for r in records) + "\n", encoding="utf-8")
+        atomic_write_text(path, "\n".join(_json.dumps(r) for r in records) + "\n")
     return {"ok": True, "target_id": rec["target_id"], "field": rec["field"]}

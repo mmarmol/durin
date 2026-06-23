@@ -92,6 +92,16 @@ def test_field_node_type_mismatch_is_rejected(tmp_path):
     assert summary["proposals"] == 0
 
 
+def test_no_op_proposal_is_rejected(tmp_path):
+    _write_wf(tmp_path)
+    _seed_runs(tmp_path, n=2)
+    # the model proposes text identical to the node's current prompt — a no-op
+    invoke = _fake_invoke({"target_id": "a", "field": "prompt", "proposed": "do it", "reason": "x"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["proposals"] == 0          # nothing changes -> not queued
+    assert wr.open_recommendations(tmp_path, "wf") == []
+
+
 def test_one_off_trouble_below_floor_proposes_nothing(tmp_path):
     _write_wf(tmp_path)
     _seed_runs(tmp_path, n=1)   # single run -> below recurrence floor

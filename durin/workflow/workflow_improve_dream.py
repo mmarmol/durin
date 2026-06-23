@@ -47,6 +47,11 @@ def _manual_workflows(workspace):
             continue   # a malformed definition must not break the pass
         if wf.improvement_mode == "manual":
             out.append((f.stem, wf))
+        elif wf.improvement_mode == "auto":
+            logger.info(
+                "workflow {!r} is improvement_mode=auto; auto-apply not yet implemented, skipping",
+                f.stem,
+            )
     return out
 
 
@@ -76,11 +81,14 @@ def _valid_proposal(proposal: dict, wf) -> tuple[str, str, str] | None:
     if not target or target not in wf.nodes or not proposed:
         return None
     node = wf.nodes[target]
-    if field == "prompt" and isinstance(node, WorkNode):
-        return target, "prompt", proposed
-    if field == "criteria" and isinstance(node, DecisionNode):
-        return target, "criteria", proposed
-    return None   # structural / mismatched field / unknown target → rejected
+    ok = (field == "prompt" and isinstance(node, WorkNode)) or (
+        field == "criteria" and isinstance(node, DecisionNode)
+    )
+    if not ok:
+        return None   # structural / mismatched field / unknown target → rejected
+    if proposed.strip() == (getattr(node, field, "") or "").strip():
+        return None   # no-op: the proposed text equals the current text → don't queue it
+    return target, field, proposed
 
 
 def _build_prompt(name, wf_json: str, diag, history) -> str:

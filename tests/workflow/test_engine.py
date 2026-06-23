@@ -380,6 +380,24 @@ def test_parallel_union_conflict_aborts_and_applies_nothing(tmp_path):
     assert not (tmp_path / "same.txt").exists()   # nothing applied when there is a conflict
 
 
+def test_node_exception_aborts_with_partial_trace():
+    wf = parse_workflow({"name": "d", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "next": "b"},
+        {"id": "b", "kind": "work", "next": None},
+    ]})
+
+    def node_runner(req):
+        if req.node.id == "b":
+            raise RuntimeError("provider exploded")
+        return NodeRunResponse(output="out-a", session_key=None, messages=[])
+
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")
+    res = eng.run(wf, "t")
+    assert res.status == "aborted"                  # does not propagate the raise
+    assert "provider exploded" in res.final_output
+    assert [r.node_id for r in res.runs] == ["a"]   # partial trace: 'a' ran before 'b' failed
+
+
 def test_parallel_choose_without_pick_runner_aborts(tmp_path):
     def node_runner(req):
         return NodeRunResponse(output="o", session_key=None, messages=[])

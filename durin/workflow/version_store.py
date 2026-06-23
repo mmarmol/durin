@@ -28,9 +28,9 @@ class WorkflowVersionStore:
         self._repo = GitRepo(
             self.dir, default_author="durin-workflow", default_email="workflow@durin.local"
         )
-        # Lock file lives beside the workflows dir, not inside it, so it never lands
-        # in a snapshot.
-        self._lock = self.dir.parent / ".workflow-version.lock"
+        # Lock target lives beside the workflows dir, not inside it, so the lock file
+        # never lands in a snapshot. cross_process_lock appends ".lock" to this target.
+        self._lock = self.dir.parent / ".workflow-version"
 
     def snapshot(self, reason: str) -> str | None:
         """Commit the current workflow definitions if they changed.
