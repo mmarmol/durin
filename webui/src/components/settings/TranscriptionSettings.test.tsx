@@ -1,6 +1,8 @@
 // webui/src/components/settings/TranscriptionSettings.test.tsx
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { ClientProvider } from "@/providers/ClientProvider";
+import type { DurinClient } from "@/lib/durin-client";
 import { TranscriptionSettings } from "./TranscriptionSettings";
 
 vi.mock("@/lib/api", () => ({
@@ -16,9 +18,22 @@ vi.mock("@/lib/api", () => ({
   getExtraStatus: vi.fn(async () => ({ present: true, extra: "stt", label: "stt" })),
 }));
 
+const fakeClient = {
+  onVoicePreviewAudio: () => () => {},
+  sendVoicePreview: () => {},
+} as unknown as DurinClient;
+
+function renderPane() {
+  return render(
+    <ClientProvider client={fakeClient} token="tok">
+      <TranscriptionSettings token="tok" />
+    </ClientProvider>,
+  );
+}
+
 describe("Voice settings pane", () => {
   it("renders the text-to-speech section", async () => {
-    render(<TranscriptionSettings token="tok" />);
+    renderPane();
     await waitFor(() => expect(screen.getByText(/text-to-speech/i)).toBeInTheDocument());
     expect(screen.getByText(/spoken rendition/i)).toBeInTheDocument();
   });

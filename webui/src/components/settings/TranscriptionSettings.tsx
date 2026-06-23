@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getConfig, getExtraStatus, setConfigValue, type ExtraStatus } from "@/lib/api";
+import { useClient } from "@/providers/ClientProvider";
 import { ExtraInstallPrompt } from "./ExtraInstallPrompt";
 import {
   SettingsGroup,
@@ -42,6 +43,7 @@ interface TranscriptionState {
   ttsProvider: string;
   ttsVoice: string;
   ttsLanguage: string;
+  ttsOpenaiApiKey: string;
   voiceEnabled: boolean;
   bargeIn: boolean;
   spokenMode: string;
@@ -52,6 +54,7 @@ function readState(config: Record<string, unknown> | null): TranscriptionState {
   const t = (config?.transcription as TranscriptionConfigShape | undefined) ?? {};
   const tts = (config?.tts as Record<string, unknown> | undefined) ?? {};
   const ttsLocal = (tts.local as Record<string, unknown> | undefined) ?? {};
+  const ttsOpenai = (tts.openai as Record<string, unknown> | undefined) ?? {};
   const voice = (config?.voice as Record<string, unknown> | undefined) ?? {};
   const sr = (voice.spoken_render as Record<string, unknown> | undefined) ?? {};
   return {
@@ -69,6 +72,7 @@ function readState(config: Record<string, unknown> | null): TranscriptionState {
     ttsProvider: (tts.provider as string) ?? "local",
     ttsVoice: (ttsLocal.voice as string) ?? "F4",
     ttsLanguage: (tts.language as string) ?? "",
+    ttsOpenaiApiKey: (ttsOpenai.api_key as string) ?? "",
     voiceEnabled: typeof voice.enabled === "boolean" ? voice.enabled : true,
     bargeIn: typeof voice.barge_in === "boolean" ? voice.barge_in : true,
     spokenMode: (sr.mode as string) ?? "model_led",
@@ -115,11 +119,15 @@ const SPOKEN_MODES = [
 
 export function TranscriptionSettings({ token }: { token: string }) {
   const { t } = useTranslation();
+  const { client } = useClient();
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [savingPath, setSavingPath] = useState<string | null>(null);
   const [sttStatus, setSttStatus] = useState<ExtraStatus | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -179,6 +187,49 @@ export function TranscriptionSettings({ token }: { token: string }) {
       }
     },
     [token],
+  );
+
+  useEffect(
+    () => () => {
+      if (previewTimer.current) clearTimeout(previewTimer.current);
+    },
+    [],
+  );
+
+  const handlePreview = useCallback(
+    (voice: string, language: string) => {
+      setPreviewError(null);
+      setPreviewing(true);
+      let unsub: (() => void) | null = null;
+      const finish = () => {
+        if (previewTimer.current) {
+          clearTimeout(previewTimer.current);
+          previewTimer.current = null;
+        }
+        unsub?.();
+        unsub = null;
+        setPreviewing(false);
+      };
+      unsub = client.onVoicePreviewAudio((url, error) => {
+        if (url) {
+          void (async () => {
+            try {
+              await new Audio(url).play();
+            } catch {
+              // autoplay can reject; the user still got the synthesized sample
+            }
+          })();
+        } else {
+          setPreviewError(
+            error === "tts_unavailable" ? "Install [tts] to preview" : "Preview failed",
+          );
+        }
+        finish();
+      });
+      previewTimer.current = setTimeout(finish, 8000);
+      client.sendVoicePreview(voice, language || null);
+    },
+    [client],
   );
 
   if (loading) {
@@ -275,6 +326,19 @@ export function TranscriptionSettings({ token }: { token: string }) {
                   </Button>
                 )}
               </SettingsRow>
+              {pendingExtra && pendingExtra.feature === "stt" ? (
+                <ExtraInstallPrompt
+                  token={token}
+                  feature={pendingExtra.feature}
+                  status={pendingExtra.status}
+                  onCancel={() => setPendingExtra(null)}
+                  onDone={(restarting) => {
+                    const after = pendingExtra.after;
+                    setPendingExtra(null);
+                    if (!restarting) after();
+                  }}
+                />
+              ) : null}
             </>
           ) : null}
 
@@ -399,14 +463,28 @@ export function TranscriptionSettings({ token }: { token: string }) {
             {state.ttsProvider === "local" ? (
               <>
                 <SettingsRow title="Voice" description="Supertonic preset voice.">
-                  <select
-                    value={state.ttsVoice}
-                    onChange={(e) => void onSave("tts.local.voice", e.target.value)}
-                    disabled={savingPath === "tts.local.voice"}
-                    className="h-8 rounded-full border bg-background px-3 text-[13px]"
-                  >
-                    {TTS_VOICES.map((v) => (<option key={v} value={v}>{v}</option>))}
-                  </select>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={state.ttsVoice}
+                      onChange={(e) => void onSave("tts.local.voice", e.target.value)}
+                      disabled={savingPath === "tts.local.voice"}
+                      className="h-8 rounded-full border bg-background px-3 text-[13px]"
+                    >
+                      {TTS_VOICES.map((v) => (<option key={v} value={v}>{v}</option>))}
+                    </select>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="rounded-full"
+                      disabled={previewing}
+                      onClick={() => handlePreview(state.ttsVoice, state.ttsLanguage)}
+                    >
+                      {previewing ? "Playing…" : "Test"}
+                    </Button>
+                    {previewError ? (
+                      <span className="text-[12px] text-muted-foreground">{previewError}</span>
+                    ) : null}
+                  </div>
                 </SettingsRow>
                 <SettingsRow
                   title="Local TTS (Supertonic)"
@@ -416,6 +494,34 @@ export function TranscriptionSettings({ token }: { token: string }) {
                           onClick={() => void ensureThen("tts", () => void load())}>
                     Install [tts]
                   </Button>
+                </SettingsRow>
+                {pendingExtra && pendingExtra.feature === "tts" ? (
+                  <ExtraInstallPrompt
+                    token={token}
+                    feature={pendingExtra.feature}
+                    status={pendingExtra.status}
+                    onCancel={() => setPendingExtra(null)}
+                    onDone={(restarting) => {
+                      const after = pendingExtra.after;
+                      setPendingExtra(null);
+                      if (!restarting) after();
+                    }}
+                  />
+                ) : null}
+              </>
+            ) : null}
+            {state.ttsProvider === "openai" ? (
+              <>
+                <SettingsRow title="Model" description="gpt-4o-mini-tts" />
+                <SettingsRow
+                  title="OpenAI API key"
+                  description="Empty = uses the OPENAI_API_KEY env var."
+                >
+                  <ApiKeyInput
+                    value={state.ttsOpenaiApiKey}
+                    disabled={savingPath === "tts.openai.api_key"}
+                    onSave={(v) => void onSave("tts.openai.api_key", v)}
+                  />
                 </SettingsRow>
               </>
             ) : null}
@@ -454,7 +560,10 @@ export function TranscriptionSettings({ token }: { token: string }) {
         <section>
           <SettingsSectionTitle>Spoken rendition</SettingsSectionTitle>
           <SettingsGroup>
-            <SettingsRow title="Long replies" description="What the voice speaks when a reply is long.">
+            <SettingsRow
+              title="Long replies"
+              description="What the voice speaks when a reply is long. Model-led: the agent speaks a short summary, full text stays on screen. Aux-model: a separate model summarizes. Read full reply: speaks everything."
+            >
               <select
                 value={state.spokenMode}
                 onChange={(e) => void onSave("voice.spoken_render.mode", e.target.value)}
@@ -466,20 +575,6 @@ export function TranscriptionSettings({ token }: { token: string }) {
             </SettingsRow>
           </SettingsGroup>
         </section>
-
-      {pendingExtra ? (
-        <ExtraInstallPrompt
-          token={token}
-          feature={pendingExtra.feature}
-          status={pendingExtra.status}
-          onCancel={() => setPendingExtra(null)}
-          onDone={(restarting) => {
-            const after = pendingExtra.after;
-            setPendingExtra(null);
-            if (!restarting) after();
-          }}
-        />
-      ) : null}
     </div>
   );
 }
