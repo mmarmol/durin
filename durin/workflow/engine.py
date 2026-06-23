@@ -21,7 +21,7 @@ from typing import Callable
 from durin.workflow.condition import CommandOutcome, run_command
 from durin.workflow.judge import JudgeVerdict
 from durin.workflow.result import NodeRun, WorkflowResult
-from durin.workflow.spec import DecisionNode, WorkNode, Workflow
+from durin.workflow.spec import DecisionNode, SubworkflowNode, WorkNode, Workflow
 
 
 @dataclass
@@ -53,11 +53,13 @@ class WorkflowEngine:
         run_id_factory: Callable[[], str] | None = None,
         command_runner: Callable[..., CommandOutcome] = run_command,
         judge_runner: Callable[[str, str, "str | None"], JudgeVerdict] | None = None,
+        subworkflow_runner: Callable[[str, str], str] | None = None,
     ) -> None:
         self._node_runner = node_runner
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex[:12])
         self._command_runner = command_runner
         self._judge_runner = judge_runner
+        self._subworkflow_runner = subworkflow_runner
 
     def run(
         self, workflow: Workflow, task: str, *, root_session_key: str | None = None
@@ -104,6 +106,17 @@ class WorkflowEngine:
                     shared_context.extend(resp.messages)
                 upstream_output = resp.output
                 final_output = resp.output
+                current = node.next
+
+            elif isinstance(node, SubworkflowNode):
+                if self._subworkflow_runner is None:
+                    raise RuntimeError(
+                        f"node {node.id!r} is a subworkflow but the engine has no subworkflow_runner"
+                    )
+                output = self._subworkflow_runner(node.workflow, upstream_output or task)
+                runs.append(NodeRun(node_id=node.id, iteration=iteration, output=output))
+                upstream_output = output
+                final_output = output
                 current = node.next
 
             elif isinstance(node, DecisionNode):

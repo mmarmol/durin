@@ -209,3 +209,45 @@ def test_criteria_node_without_judge_runner_raises():
     eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")  # no judge_runner
     with pytest.raises(RuntimeError, match="judge"):
         eng.run(wf, "t")
+
+
+def test_subworkflow_node_runs_and_threads_output():
+    from durin.workflow.spec import parse_workflow as _pw
+    wf = _pw({"name": "d", "start": "sub", "nodes": [
+        {"id": "sub", "kind": "subworkflow", "workflow": "child", "next": "after"},
+        {"id": "after", "kind": "work", "next": None},
+    ]})
+    calls = []
+
+    def subworkflow_runner(name, task):
+        calls.append((name, task))
+        return "child-output"
+
+    seen = []
+
+    def node_runner(req):
+        seen.append(req.upstream_output)
+        return NodeRunResponse(output="after-out", session_key=None, messages=[])
+
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1",
+                         subworkflow_runner=subworkflow_runner)
+    res = eng.run(wf, "the task")
+    assert res.status == "completed"
+    assert calls == [("child", "the task")]
+    # the work node after the subworkflow saw the child's output as upstream
+    assert "child-output" in seen
+
+
+def test_subworkflow_node_without_runner_raises():
+    from durin.workflow.spec import parse_workflow as _pw
+    wf = _pw({"name": "d", "start": "sub", "nodes": [
+        {"id": "sub", "kind": "subworkflow", "workflow": "child", "next": None},
+    ]})
+
+    def node_runner(req):
+        return NodeRunResponse(output="x", session_key=None, messages=[])
+
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")
+    import pytest
+    with pytest.raises(RuntimeError, match="subworkflow"):
+        eng.run(wf, "t")
