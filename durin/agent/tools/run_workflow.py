@@ -79,6 +79,7 @@ class RunWorkflowTool(Tool):
         from durin.workflow.judge import AgentJudgeRunner
         from durin.workflow.loader import WorkflowNotFound, load_workflow
         from durin.workflow.node_runner import AgentNodeRunner
+        from durin.workflow.subworkflow import SubworkflowRunner
 
         try:
             workflow = load_workflow(self._workspace, name)
@@ -93,6 +94,11 @@ class RunWorkflowTool(Tool):
             tools_config=self._app_config.tools,
         )
         judge_runner = AgentJudgeRunner(runner, default_model=provider.get_default_model())
-        engine = WorkflowEngine(node_runner=node_runner, judge_runner=judge_runner)
+        subworkflow_runner = SubworkflowRunner(self._workspace, node_runner, judge_runner)
+        engine = WorkflowEngine(
+            node_runner=node_runner,
+            judge_runner=judge_runner,
+            subworkflow_runner=subworkflow_runner,
+        )
         result = await asyncio.to_thread(engine.run, workflow, task)
         return _format_result(result)

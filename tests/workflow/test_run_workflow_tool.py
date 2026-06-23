@@ -107,3 +107,25 @@ async def test_judgment_workflow_runs_end_to_end(tmp_path):
         out = await tool.execute(name="reviewed", task="do it")
     assert "completed" in out.lower()
     assert "review" in out
+
+
+@pytest.mark.asyncio
+async def test_subworkflow_runs_end_to_end(tmp_path):
+    from durin.agent.runner import AgentRunResult
+    _write_workflow(tmp_path, "child", {
+        "name": "child", "start": "c",
+        "nodes": [{"id": "c", "kind": "work", "next": None}],
+    })
+    _write_workflow(tmp_path, "parent", {
+        "name": "parent", "start": "callchild",
+        "nodes": [{"id": "callchild", "kind": "subworkflow", "workflow": "child", "next": None}],
+    })
+    tool = _tool(tmp_path)
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "test-model"
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.agent.runner.AgentRunner.run",
+               AsyncMock(return_value=AgentRunResult(final_content="child did it", messages=[]))):
+        out = await tool.execute(name="parent", task="go")
+    assert "completed" in out.lower()
+    assert "callchild" in out
