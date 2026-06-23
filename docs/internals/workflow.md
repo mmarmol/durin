@@ -154,10 +154,12 @@ End-to-end for a single `run_workflow` call:
   `diagnostics.py`), shows a model the definition + that diagnostic + the change history
   (so it never re-proposes a reverted edit), and proposes one scoped edit (a node
   `prompt` or a gate `criteria`; structural edits rejected). In **manual** mode the
-  proposal is recorded as a recommendation (`workflow_recommendations.py`) for the user
-  to apply — the anti-Goodhart anchor is the human. **auto** mode (apply directly, gated
-  by an external validation signal so it can't win by loosening gates) is the next slice;
-  the seam is in place.
+  proposal is recorded as a recommendation (`workflow_recommendations.py`); the user
+  reviews and applies it via the `durin workflow` CLI (`recommendations` lists open
+  ones, `apply <name> <id>` writes the proposed text into the node, versions the edit
+  with its reason, and marks it applied) — the anti-Goodhart anchor is the human.
+  **auto** mode (apply directly, gated by an external validation signal so it can't win
+  by loosening gates) is the next slice; the apply step + seam are in place.
 - **Current scope.** This subsystem is built incrementally. Today: sequential execution
   with **concurrent parallel** branches — read-only, or **writing** with `choose` /
   `union` reconciliation (private copy per branch + content-aware conflict detection);
