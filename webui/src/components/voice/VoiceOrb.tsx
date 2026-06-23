@@ -1,4 +1,4 @@
-import { useId } from "react";
+import "./orb.css";
 
 export type OrbState =
   | "idle"
@@ -8,11 +8,14 @@ export type OrbState =
   | "speaking"
   | "error";
 
-/** The ithildin orb: a glowing, gently morphing sphere that reads its state at a
- *  glance and swells with live audio. A radial gradient gives the 3D sphere; a
- *  blurred halo gives the glow; a turbulence displacement gives the liquid edge
- *  (calm when idle, livelier while listening/speaking). The state word lives in
- *  VoiceDock. Pass onClick to render as a button, omit it for a bare glyph. */
+/** The ithildin voice orb: a solid, glowing accent sphere (visible on any
+ *  background) with a bright light that sweeps around its edge
+ *  (Apple-Intelligence-style) and a soft glow halo. One chromatic only —
+ *  durin's restraint — so everything is the brand accent (hsl(var(--primary)),
+ *  or --destructive on error) plus white specular light. The sweep quickens by
+ *  state (idle → speaking); the sphere swells + the halo brightens with live
+ *  audio while listening/speaking. Honors prefers-reduced-motion (orb.css).
+ *  Pass onClick for a button, omit it for a bare glyph in a larger control. */
 export function VoiceOrb({
   state,
   amplitude,
@@ -26,92 +29,97 @@ export function VoiceOrb({
   label: string;
   onClick?: () => void;
 }) {
-  const raw = useId();
-  const uid = raw.replace(/:/g, "");
-  const reduced =
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-  const reactive = state === "listening" || state === "speaking";
   const a = Math.min(1, Math.max(0, amplitude));
-  const c = size / 2;
-  // durin's tokens are HSL triples consumed as hsl(var(--x)); --primary is the
-  // palette's brand color (ithildin cyan / forge amber / mithril slate). A bare
-  // var(--accent) here is both the wrong token (a near-white surface tint) AND
-  // invalid as a color (no hsl() wrapper) — which is why the old orb fell back
-  // to the dark text color and looked like a flat dot.
-  const accent = state === "error" ? "hsl(var(--destructive))" : "hsl(var(--primary))";
+  const reactive = state === "listening" || state === "speaking";
+  const tok = state === "error" ? "--destructive" : "--primary";
 
-  // Live audio swells the whole orb + brightens the halo.
-  const scale = reactive ? 1 + a * 0.16 : 1;
-  const haloO = (state === "idle" ? 0.22 : 0.4) + (reactive ? a * 0.45 : 0);
-  // Liquid edge: bigger displacement + faster boil when active; near-still idle.
-  const morph = state === "idle" ? size * 0.045 : size * 0.09 + (reactive ? a * size * 0.05 : 0);
-  const boil = state === "speaking" ? "2.4s" : state === "listening" ? "3.2s" : "7s";
+  const spinDur =
+    state === "speaking" ? "2.2s"
+    : state === "transcribing" ? "1.4s"
+    : state === "thinking" ? "3s"
+    : state === "listening" ? "4.4s"
+    : "8s";
 
-  const orbR = size * 0.3;
-  const haloR = size * 0.42;
+  // Live audio swells the sphere and brightens the glow.
+  const scale = reactive ? 1 + a * 0.14 : 1;
+  const haloOpacity = (state === "idle" ? 0.55 : 0.8) + (reactive ? a * 0.2 : 0);
+  const sweepOpacity = state === "idle" ? 0.7 : 0.95;
 
-  const glyph = (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={label} style={{ color: accent }}>
-      <defs>
-        <radialGradient id={`fill-${uid}`} cx="40%" cy="36%" r="68%">
-          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.9" />
-          <stop offset="38%" stopColor="currentColor" stopOpacity="0.95" />
-          <stop offset="100%" stopColor="currentColor" stopOpacity="0.35" />
-        </radialGradient>
-        <radialGradient id={`halo-${uid}`} cx="50%" cy="50%" r="50%">
-          <stop offset="55%" stopColor="currentColor" stopOpacity="0.5" />
-          <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
-        </radialGradient>
-        <filter id={`glow-${uid}`} x="-60%" y="-60%" width="220%" height="220%">
-          <feGaussianBlur stdDeviation={size * 0.05} />
-        </filter>
-        <filter id={`morph-${uid}`} x="-40%" y="-40%" width="180%" height="180%">
-          <feTurbulence type="fractalNoise" baseFrequency="0.018" numOctaves="2" seed="4" result="n">
-            {!reduced && (
-              <animate attributeName="baseFrequency" values="0.014;0.024;0.014" dur={boil} repeatCount="indefinite" />
-            )}
-          </feTurbulence>
-          <feDisplacementMap in="SourceGraphic" in2="n" scale={reduced ? 0 : morph} />
-        </filter>
-      </defs>
+  // A solid, glossy sphere of the accent — bright off-center highlight so it
+  // reads as a lit object, not a flat disc.
+  const sphere =
+    `radial-gradient(circle at 36% 32%,` +
+    ` hsl(0 0% 100% / 0.95) 0%,` +
+    ` hsl(var(${tok})) 42%,` +
+    ` hsl(var(${tok}) / 0.92) 76%,` +
+    ` hsl(var(${tok}) / 0.7) 100%)`;
+  // A bright arc that, masked to the rim and rotated, travels around the edge.
+  const sweep =
+    `conic-gradient(from 0deg,` +
+    ` transparent 0deg,` +
+    ` hsl(var(${tok}) / 0.6) 60deg,` +
+    ` hsl(0 0% 100% / 0.95) 96deg,` +
+    ` hsl(var(${tok}) / 0.6) 132deg,` +
+    ` transparent 200deg,` +
+    ` transparent 360deg)`;
+  const ringMask = "radial-gradient(circle, transparent 60%, #000 73%)";
 
-      {/* glow halo */}
-      <g transform={`translate(${c} ${c}) scale(${scale})`}>
-        <circle r={haloR} fill={`url(#halo-${uid})`} opacity={haloO} filter={`url(#glow-${uid})`} />
-      </g>
-
-      {/* morphing sphere */}
-      <g transform={`translate(${c} ${c}) scale(${scale})`} filter={`url(#morph-${uid})`}>
-        <circle r={orbR} fill={`url(#fill-${uid})`} opacity={state === "idle" ? 0.82 : 1}>
-          {!reduced && state === "idle" && (
-            <animate attributeName="r" values={`${orbR};${orbR * 1.06};${orbR}`} dur="4.5s" repeatCount="indefinite" />
-          )}
-        </circle>
-      </g>
-
-      {/* thinking: a slow orbiting highlight (no audio to react to) */}
-      {state === "thinking" && !reduced && (
-        <g transform={`translate(${c} ${c})`}>
-          <circle cx={orbR * 0.6} cy={0} r={size * 0.05} fill="#ffffff" opacity="0.7">
-            <animateTransform attributeName="transform" type="rotate" from="0 0 0" to="360 0 0" dur="2.4s" repeatCount="indefinite" />
-          </circle>
-        </g>
+  const inner = (extra: Record<string, unknown>) => (
+    <div style={{ position: "relative", width: size, height: size, lineHeight: 0 }} {...extra}>
+      {/* soft glow halo */}
+      <div
+        style={{
+          position: "absolute",
+          inset: -size * 0.12,
+          borderRadius: "50%",
+          background: `radial-gradient(circle, hsl(var(${tok}) / 0.55), transparent 68%)`,
+          filter: `blur(${size * 0.08}px)`,
+          opacity: haloOpacity,
+          transform: `scale(${scale})`,
+        }}
+      />
+      {/* solid sphere */}
+      <div
+        style={{
+          position: "absolute",
+          inset: size * 0.12,
+          borderRadius: "50%",
+          background: sphere,
+          boxShadow: `0 0 ${size * 0.18}px hsl(var(${tok}) / 0.5)`,
+          transform: `scale(${scale})`,
+        }}
+      />
+      {/* edge sweep (the travelling light) */}
+      <div
+        className="durin-orb-rim"
+        style={{
+          position: "absolute",
+          inset: size * 0.06,
+          borderRadius: "50%",
+          background: sweep,
+          opacity: sweepOpacity,
+          mixBlendMode: "screen",
+          WebkitMaskImage: ringMask,
+          maskImage: ringMask,
+          animationDuration: spinDur,
+        }}
+      />
+      {/* idle: a gentle breathing wash so it feels alive at rest */}
+      {state === "idle" && (
+        <div
+          className="durin-orb-breathe"
+          style={{
+            position: "absolute",
+            inset: size * 0.12,
+            borderRadius: "50%",
+            background: `radial-gradient(circle, hsl(0 0% 100% / 0.5), transparent 60%)`,
+          }}
+        />
       )}
-
-      {/* speaking: an expanding ripple */}
-      {state === "speaking" && !reduced && (
-        <circle cx={c} cy={c} r={orbR} fill="none" stroke="currentColor" strokeWidth="1" opacity="0.5">
-          <animate attributeName="r" values={`${orbR};${haloR * 1.15}`} dur="1.6s" repeatCount="indefinite" />
-          <animate attributeName="opacity" values="0.5;0" dur="1.6s" repeatCount="indefinite" />
-        </circle>
-      )}
-    </svg>
+    </div>
   );
 
-  if (!onClick) return glyph;
+  if (!onClick) return inner({ role: "img", "aria-label": label, "data-state": state });
   return (
     <button
       type="button"
@@ -120,7 +128,7 @@ export function VoiceOrb({
       onClick={onClick}
       style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", lineHeight: 0 }}
     >
-      {glyph}
+      {inner({})}
     </button>
   );
 }
