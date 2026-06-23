@@ -298,8 +298,43 @@ class ChannelManager:
 
         self._notify_restart_done_if_needed()
 
+        # Pre-load STT/TTS engines in the background so the first transcription /
+        # voice synth doesn't pay the model load (and first-install download)
+        # inline. Parked so the loop keeps a strong ref; never blocks startup.
+        warm = asyncio.create_task(self._warmup_speech())
+        self._background_tasks.add(warm)
+        warm.add_done_callback(self._background_tasks.discard)
+
         # Wait for all to complete (they should run forever)
         await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _warmup_speech(self) -> None:
+        """Warm the shared STT/TTS services at startup if their local extra is
+        installed and the subsystem is enabled. Skipped silently when the extra
+        is absent (the install prompts still surface at use-time); cloud
+        providers warm to a no-op. Failures are logged, never fatal."""
+        from durin.extras import _module_present
+
+        async def _warm(svc, cfg, module: str, label: str) -> None:
+            if svc is None or not getattr(cfg, "enabled", False):
+                return
+            # Only a local engine needs its extra present; cloud providers no-op.
+            if getattr(cfg, "provider", None) == "local" and not _module_present(module):
+                return
+            try:
+                await svc.warmup()
+                logger.info("{} engine warmed", label)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("{} warmup skipped: {}", label, e)
+
+        await _warm(
+            getattr(self, "transcription", None),
+            self.config.transcription, "sherpa_onnx", "Transcription",
+        )
+        await _warm(
+            getattr(self, "speech_synthesis", None),
+            self.config.tts, "supertonic", "Speech synthesis",
+        )
 
     def _notify_restart_done_if_needed(self) -> None:
         """Send restart completion message when runtime env markers are present."""

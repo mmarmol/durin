@@ -56,6 +56,13 @@ class SpeechSynthesisService:
             return SpeechAudio(b"", 0)
         return await self._get().synthesize(text, voice=voice, language=language)
 
+    async def warmup(self) -> None:
+        """Build the provider + pre-load its engine so the first synth at
+        use-time is instant. No-op when disabled."""
+        if not self.enabled:
+            return
+        await self._get().warmup()
+
     @classmethod
     def from_config(cls, config: Any) -> "SpeechSynthesisService":
         """Build the service from a :class:`TtsConfig`."""

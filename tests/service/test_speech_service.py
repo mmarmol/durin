@@ -9,10 +9,14 @@ class _Stub(SpeechSynthesisProvider):
     def __init__(self, data=b"AUDIO"):
         self._data = data
         self.calls = 0
+        self.warmed = 0
 
     async def synthesize(self, text, *, voice=None, language=None):
         self.calls += 1
         return SpeechAudio(self._data, 22050)
+
+    async def warmup(self):
+        self.warmed += 1
 
 
 @pytest.mark.asyncio
@@ -38,6 +42,23 @@ async def test_service_blank_text_returns_empty():
     out = await svc.synthesize("   ")
     assert out.data == b""
     assert stub.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_service_warmup_delegates_to_provider():
+    stub = _Stub()
+    svc = SpeechSynthesisService(provider_factory=lambda: stub)
+    await svc.warmup()
+    assert stub.warmed == 1
+    assert stub.calls == 0  # warmup must not synthesize
+
+
+@pytest.mark.asyncio
+async def test_service_warmup_noop_when_disabled():
+    stub = _Stub()
+    svc = SpeechSynthesisService(provider_factory=lambda: stub, enabled=False)
+    await svc.warmup()
+    assert stub.warmed == 0
 
 
 def test_from_config_local_builds_local_provider():

@@ -51,6 +51,14 @@ class SpeechSynthesisProvider:
     ) -> SpeechAudio:  # pragma: no cover
         raise NotImplementedError
 
+    async def warmup(self) -> None:
+        """Pre-load any local model/engine so the first synth is instant.
+
+        No-op by default — cloud backends have nothing to warm. Local backends
+        override this to build their engine (and download the model) ahead of
+        first use."""
+        return None
+
 
 class OpenAISpeechProvider(SpeechSynthesisProvider):
     """Cloud TTS via OpenAI's ``/v1/audio/speech`` (WAV output)."""
@@ -126,6 +134,11 @@ class LocalSupertonicProvider(SpeechSynthesisProvider):
                 ) from e
             self._tts = await asyncio.to_thread(lambda: TTS(auto_download=True))
             return self._tts
+
+    async def warmup(self) -> None:
+        """Build the Supertonic engine (and self-download its ~260 MB model on
+        first install) now, so the first synth at use-time is instant."""
+        await self._ensure()
 
     async def synthesize(
         self, text: str, *, voice: str | None = None, language: str | None = None
