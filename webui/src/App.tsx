@@ -4,6 +4,7 @@ import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { Sidebar } from "@/components/Sidebar";
 import { MemoryGraphView } from "@/components/MemoryGraphView";
 import { SkillsView } from "@/components/SkillsView";
+import { WorkflowsView } from "@/components/WorkflowsView";
 import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
@@ -40,7 +41,7 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "durin-webui.sidebar";
 const RESTART_STARTED_KEY = "durin-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
-type ShellView = "chat" | "settings" | "memory_graph" | "skills";
+type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows";
 
 function AuthForm({
   failed,
@@ -389,6 +390,11 @@ function Shell({
     setMobileSidebarOpen(false);
   }, []);
 
+  const onOpenWorkflows = useCallback(() => {
+    setView("workflows");
+    setMobileSidebarOpen(false);
+  }, []);
+
   const onBackToChat = useCallback(() => {
     setView("chat");
     setMobileSidebarOpen(false);
@@ -498,6 +504,8 @@ function Shell({
     memoryGraphActive: view === "memory_graph",
     onOpenSkills,
     skillsActive: view === "skills",
+    onOpenWorkflows,
+    workflowsActive: view === "workflows",
   };
   const showMainSidebar = view !== "settings";
 
@@ -599,12 +607,18 @@ function Shell({
             }} />
           </div>
         )}
+        {view === "workflows" && (
+          <div className="absolute inset-0 flex flex-col">
+            <WorkflowsView />
+          </div>
+        )}
       </main>
 
       <VoiceDock
         chatId={activeSession?.chatId ?? null}
         chatTitle={activeSession?.title ?? activeSession?.preview ?? null}
         onEnsureChat={ensureVoiceChat}
+        hideWhenIdle={view !== "chat"}
       />
 
       <DeleteConfirm

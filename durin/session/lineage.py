@@ -15,8 +15,8 @@ from typing import Any
 
 PARENT_SESSION_ID = "parent_session_id"
 ROOT_ID = "root_id"
-ORIGIN_TYPE = "origin_type"   # "subagent" | "workflow_stage" | ...
-ORIGIN_ID = "origin_id"       # the spawning task / stage id
+ORIGIN_TYPE = "origin_type"   # "subagent" | "workflow_node" | ...
+ORIGIN_ID = "origin_id"       # the spawning task / node id
 
 
 def build_lineage(

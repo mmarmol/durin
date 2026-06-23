@@ -43,6 +43,8 @@ class Scope(str, Enum):
     MEMORY_WRITE = "memory:write"
     MCP_READ = "mcp:read"
     MCP_WRITE = "mcp:write"
+    WORKFLOWS_READ = "workflows:read"
+    WORKFLOWS_WRITE = "workflows:write"
     SYSTEM_READ = "system:read"
     SYSTEM_WRITE = "system:write"
 
