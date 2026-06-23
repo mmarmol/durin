@@ -46,7 +46,19 @@ const KIND_RING: Record<string, string> = {
   subworkflow: "border-sky-400/70",
 };
 
+function isRouting(node: WorkflowNodeDef): boolean {
+  return node.on_pass != null || node.on_fail != null;
+}
+
+// A routing node always presents as a decision (amber ring + "decision" badge)
+// regardless of its stored kind, so a new kind:"work"+routing node matches a
+// legacy kind:"decision" node and the pass/fail edges it draws.
+function displayKind(node: WorkflowNodeDef): string {
+  return isRouting(node) ? "decision" : node.kind;
+}
+
 function nodeSummary(node: WorkflowNodeDef): string {
+  if (isRouting(node)) return node.command != null ? "command" : "judge";
   switch (node.kind) {
     case "work":
       return `${(node.mode as string) ?? "build"} · ${(node.model as string) ?? "default"}`;
@@ -63,17 +75,18 @@ function nodeSummary(node: WorkflowNodeDef): string {
 
 function NodeCard({ data, selected }: NodeProps) {
   const { node, isStart } = data as unknown as FlowNodeData;
+  const kind = displayKind(node);
   return (
     <div
       className={cn(
         "min-w-[150px] rounded-md border bg-background px-3 py-2",
-        KIND_RING[node.kind] ?? "border-border",
+        KIND_RING[kind] ?? "border-border",
         (isStart || selected) && "ring-2 ring-primary",
       )}
     >
       <Handle type="target" position={Position.Left} />
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-        {node.kind}{isStart ? " · start" : ""}
+        {kind}{isStart ? " · start" : ""}
       </div>
       <div className="text-sm font-medium">{node.id}</div>
       <div className="text-xs text-muted-foreground">{nodeSummary(node)}</div>
@@ -160,7 +173,7 @@ function NodeConfigPanel({
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase">
-          {node.kind}
+          {displayKind(node)}
         </span>
         <span className="text-sm font-medium">{node.id}</span>
         {!isStart && (
