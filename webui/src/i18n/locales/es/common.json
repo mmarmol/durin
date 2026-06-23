@@ -675,7 +675,8 @@
       },
       "preview": {
         "installToPreview": "Instala [tts] para la vista previa",
-        "failed": "Falló la vista previa"
+        "failed": "Falló la vista previa",
+        "preparing": "La voz se está preparando (puede estar descargando el modelo); reintenta en un momento."
       },
       "apiKey": {
         "hide": "ocultar",

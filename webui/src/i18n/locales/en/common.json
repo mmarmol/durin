@@ -675,7 +675,8 @@
       },
       "preview": {
         "installToPreview": "Install [tts] to preview",
-        "failed": "Preview failed"
+        "failed": "Preview failed",
+        "preparing": "Still preparing the voice (the model may be downloading) — try again in a moment."
       },
       "apiKey": {
         "hide": "hide",

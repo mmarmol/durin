@@ -221,7 +221,14 @@ export function TranscriptionSettings({ token }: { token: string }) {
         }
         finish();
       });
-      previewTimer.current = setTimeout(finish, 8000);
+      // The first synth after installing [tts] downloads the ~260 MB Supertonic
+      // model, which can exceed a short timeout — and the gateway normally warms
+      // it at startup anyway. Wait generously and, if it still hasn't arrived,
+      // show a "preparing" hint instead of silently resetting (which looked broken).
+      previewTimer.current = setTimeout(() => {
+        setPreviewError(t("settings.voice.preview.preparing"));
+        finish();
+      }, 30000);
       client.sendVoicePreview(voice, language || null);
     },
     [client, t],
