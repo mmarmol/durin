@@ -682,6 +682,17 @@
       "apiKey": {
         "hide": "ocultar",
         "show": "mostrar"
+      },
+      "orb": {
+        "idle": "Toca para hablar",
+        "listening": "Escuchando…",
+        "transcribing": "Transcribiendo…",
+        "thinking": "Pensando…",
+        "speaking": "Hablando…",
+        "error": "Error de voz",
+        "start": "Iniciar modo voz",
+        "stop": "Detener voz",
+        "bargeHint": "Habla para interrumpir"
       }
     }
   },

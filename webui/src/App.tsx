@@ -351,6 +351,14 @@ function Shell({
     }
   }, [createChat]);
 
+  // Voice always runs on a real, focused chat: reuse the active one, else
+  // create + focus a new chat so the spoken conversation is visible (never a
+  // hidden default session).
+  const ensureVoiceChat = useCallback(
+    async () => (activeSession ? activeSession.chatId : await onCreateChat()),
+    [activeSession, onCreateChat],
+  );
+
   const onNewChat = useCallback(() => {
     setActiveKey(null);
     setView("chat");
@@ -593,7 +601,11 @@ function Shell({
         )}
       </main>
 
-      <VoiceDock chatId={activeSession?.chatId ?? client.defaultChatId} />
+      <VoiceDock
+        chatId={activeSession?.chatId ?? null}
+        chatTitle={activeSession?.title ?? activeSession?.preview ?? null}
+        onEnsureChat={ensureVoiceChat}
+      />
 
       <DeleteConfirm
         open={!!pendingDelete}
