@@ -149,6 +149,10 @@ End-to-end for a single `run_workflow` call:
   `tools: "default"` receives the user's configured tool set; `tools: "none"` (the
   default) runs the node without tools. A node may also name `skills` (injected into
   its prompt) and `mcps` (a subset of the configured MCP servers, reused live).
+- **Management API:** `WorkflowsService` (`durin/service/workflows.py`) exposes
+  list / load / save / delete over HTTP at `/api/v1/workflows[/{name}]` (save validates
+  via `parse_workflow` and writes atomically under the lock). This is the surface the
+  webui visual editor uses; it's in the OpenAPI contract.
 - **Lineage:** node sessions reuse the lineage metadata on the open session document
   (`durin/session/lineage.py`), so no schema migration is involved.
 - **Self-improvement** (per-workflow `improvement_mode`: `off` default / `manual` /

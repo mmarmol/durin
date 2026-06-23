@@ -43,6 +43,7 @@ def build_service_registry(
     from durin.service.sessions import SessionsService
     from durin.service.settings import SettingsService
     from durin.service.skills import SkillsService
+    from durin.service.workflows import WorkflowsService
 
     def _workspace() -> Path:
         # Mirror WebSocketChannel._endpoint_workspace: a --workspace override
@@ -71,4 +72,5 @@ def build_service_registry(
     registry.register("commands", CommandsService())
     registry.register("oauth", OAuthService())
     registry.register("auth", AuthService(ApiTokenStore()))
+    registry.register("workflows", WorkflowsService(workspace=_workspace()))
     return registry

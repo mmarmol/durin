@@ -1277,6 +1277,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List all workflow names. */
+        get: operations["workflows_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Load one workflow definition (the raw JSON). */
+        get: operations["workflows_get"];
+        put?: never;
+        /** Create or update a workflow definition. */
+        post: operations["workflows_save"];
+        /** Delete a workflow definition. */
+        delete: operations["workflows_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3042,6 +3078,54 @@ export interface components {
             data: {
                 [key: string]: unknown;
             };
+        };
+        /** WorkflowDeleteCommand */
+        WorkflowDeleteCommand: {
+            /** Name */
+            name: string;
+        };
+        /** WorkflowDeleteResult */
+        WorkflowDeleteResult: {
+            /** Deleted */
+            deleted: boolean;
+        };
+        /** WorkflowGetQuery */
+        WorkflowGetQuery: {
+            /** Name */
+            name: string;
+        };
+        /** WorkflowGetResult */
+        WorkflowGetResult: {
+            /** Definition */
+            definition: {
+                [key: string]: unknown;
+            };
+            /** Name */
+            name: string;
+        };
+        /** WorkflowSaveCommand */
+        WorkflowSaveCommand: {
+            /** Definition */
+            definition: {
+                [key: string]: unknown;
+            };
+            /** Name */
+            name: string;
+        };
+        /** WorkflowSaveResult */
+        WorkflowSaveResult: {
+            /** Name */
+            name: string;
+        };
+        /**
+         * WorkflowsListQuery
+         * @description No inputs — lists every workflow name in the workspace.
+         */
+        WorkflowsListQuery: Record<string, never>;
+        /** WorkflowsListResult */
+        WorkflowsListResult: {
+            /** Workflows */
+            workflows: string[];
         };
     };
     responses: never;
@@ -5184,6 +5268,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SkillsResult"];
+                };
+            };
+        };
+    };
+    workflows_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowsListQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowsListResult"];
+                };
+            };
+        };
+    };
+    workflows_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowGetQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowGetResult"];
+                };
+            };
+        };
+    };
+    workflows_save: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowSaveCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowSaveResult"];
+                };
+            };
+        };
+    };
+    workflows_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowDeleteCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowDeleteResult"];
                 };
             };
         };
