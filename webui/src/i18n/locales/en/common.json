@@ -581,6 +581,12 @@
       }
     }
   },
+  "workflows": {
+    "title": "Workflows",
+    "loading": "Loading…",
+    "empty": "No workflows yet.",
+    "selectPrompt": "Select a workflow to view its graph."
+  },
   "skills": {
     "view": "View",
     "remove": "Remove",

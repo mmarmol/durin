@@ -178,6 +178,56 @@ export async function fetchSettings(
   return request<SettingsPayload>(`${base}/api/v1/settings`, token);
 }
 
+// --- Workflows (visual editor) ---
+
+export async function listWorkflows(
+  token: string,
+  base: string = "",
+): Promise<string[]> {
+  const body = await request<{ workflows: string[] }>(
+    `${base}/api/v1/workflows`,
+    token,
+  );
+  return body.workflows;
+}
+
+export async function getWorkflow(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<Record<string, unknown>> {
+  const body = await request<{ name: string; definition: Record<string, unknown> }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}`,
+    token,
+  );
+  return body.definition;
+}
+
+export async function saveWorkflow(
+  token: string,
+  name: string,
+  definition: unknown,
+  base: string = "",
+): Promise<void> {
+  await post<{ name: string }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}`,
+    token,
+    { definition },
+  );
+}
+
+export async function deleteWorkflow(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<void> {
+  await del<{ deleted: boolean }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}`,
+    token,
+    {},
+  );
+}
+
 export async function listSlashCommands(
   token: string,
   base: string = "",

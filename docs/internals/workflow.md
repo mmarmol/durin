@@ -176,10 +176,12 @@ End-to-end for a single `run_workflow` call:
   by **shell command or agent judgment** (with feedback-threaded loop-back);
   **sub-workflow** composition (depth-capped); runs **anchored to the invoking
   session**; **git-versioned definitions** (each run snapshots them); and **dream-driven
-  self-improvement in manual mode** (recommendations from recurring run diagnostics). Not
-  yet built — see [roadmap.md](../roadmap.md) for direction — auto-mode self-improvement
-  (apply + validation anchor), auto-merge of conflicting parallel writes, per-node custom
-  persona, and a visual editor.
+  self-improvement in manual mode** (recommendations from recurring run diagnostics); and
+  a **webui Workflows pane** that renders a workflow as a node graph (React Flow). Not yet
+  built — see [roadmap.md](../roadmap.md) for direction — visual *editing* (the pane is
+  read-only so far; editing/saving the graph is in progress), auto-mode self-improvement
+  (apply + validation anchor), auto-merge of conflicting parallel writes, and per-node
+  custom persona.
 - **Security.** Definitions are local files the user authored, so running their
   commands and tools is equivalent to the user running them directly; importing remote
   or third-party definitions is not supported in this scope (see [security.md](security.md)).
