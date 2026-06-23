@@ -129,3 +129,25 @@ async def test_subworkflow_runs_end_to_end(tmp_path):
         out = await tool.execute(name="parent", task="go")
     assert "completed" in out.lower()
     assert "callchild" in out
+
+
+@pytest.mark.asyncio
+async def test_run_anchors_node_sessions_to_invoking_session(tmp_path):
+    from unittest.mock import AsyncMock
+    from durin.agent.runner import AgentRunResult
+    from durin.agent.tools.context import RequestContext
+    _write_workflow(tmp_path, "w", {"name": "w", "start": "a",
+                                    "nodes": [{"id": "a", "kind": "work", "next": None}]})
+    sessions = SessionManager(workspace=tmp_path)
+    app_config = SimpleNamespace(resolve_default_preset=lambda: object(), tools=ToolsConfig())
+    ctx = SimpleNamespace(workspace=str(tmp_path), sessions=sessions, app_config=app_config)
+    tool = RunWorkflowTool.create(ctx)
+    tool.set_context(RequestContext(channel="websocket", chat_id="abc", session_key="websocket:abc"))
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "m"
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.agent.runner.AgentRunner.run",
+               AsyncMock(return_value=AgentRunResult(final_content="x", messages=[{"role": "assistant", "content": "x"}]))):
+        await tool.execute(name="w", task="t")
+    kids = sessions.children_of("websocket:abc")
+    assert kids and kids[0]["origin_type"] == "workflow_node"

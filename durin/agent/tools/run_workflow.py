@@ -11,9 +11,11 @@ runs in a worker thread with no active loop, which is valid.
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
+from durin.agent.tools.context import ContextAware, RequestContext
 
 _PARAMETERS = {
     "type": "object",
@@ -44,13 +46,17 @@ def _format_result(result: Any) -> str:
 
 
 @tool_parameters(_PARAMETERS)
-class RunWorkflowTool(Tool):
+class RunWorkflowTool(Tool, ContextAware):
     """Run a user-defined workflow (a flow graph of nodes) on a task."""
 
     def __init__(self, workspace: str, sessions: Any, app_config: Any) -> None:
         self._workspace = workspace
         self._sessions = sessions
         self._app_config = app_config
+        self._session_key: ContextVar[str | None] = ContextVar("run_workflow_session_key", default=None)
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._session_key.set(ctx.session_key)
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
@@ -100,5 +106,6 @@ class RunWorkflowTool(Tool):
             judge_runner=judge_runner,
             subworkflow_runner=subworkflow_runner,
         )
-        result = await asyncio.to_thread(engine.run, workflow, task)
+        root_session_key = self._session_key.get()
+        result = await asyncio.to_thread(engine.run, workflow, task, root_session_key=root_session_key)
         return _format_result(result)
