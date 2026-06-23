@@ -1,5 +1,7 @@
 """Tests for the sequential flow-graph engine (graph logic, mocked node runner)."""
 
+import pytest
+
 from durin.workflow.condition import CommandOutcome
 from durin.workflow.engine import NodeRunRequest, NodeRunResponse, WorkflowEngine
 from durin.workflow.spec import parse_workflow
@@ -148,7 +150,7 @@ def test_shared_buffer_accumulates_across_shared_nodes():
     assert b_call.shared_context == [{"role": "assistant", "content": "out-a"}]
 
 
-def test_judgment_decision_passes(monkeypatch):
+def test_judgment_decision_passes():
     from durin.workflow.judge import JudgeVerdict
     wf = parse_workflow({"name": "d", "start": "a", "nodes": [
         {"id": "a", "kind": "work", "next": "g"},
@@ -193,3 +195,17 @@ def test_judgment_fail_loops_back_with_feedback():
     assert res.status == "completed"
     # the second run of 'a' (the loop-back) saw the reviewer feedback in its input
     assert any(inp and "add validation" in inp for inp in seen_inputs)
+
+
+def test_criteria_node_without_judge_runner_raises():
+    wf = parse_workflow({"name": "d", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "next": "g"},
+        {"id": "g", "kind": "decision", "criteria": "ok?", "on_pass": None, "on_fail": "a"},
+    ]})
+
+    def node_runner(req):
+        return NodeRunResponse(output="x", session_key=None, messages=[])
+
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")  # no judge_runner
+    with pytest.raises(RuntimeError, match="judge"):
+        eng.run(wf, "t")
