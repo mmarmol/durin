@@ -118,6 +118,7 @@ export function TranscriptionSettings({ token }: { token: string }) {
   const [error, setError] = useState<string | null>(null);
   const [savingPath, setSavingPath] = useState<string | null>(null);
   const [sttStatus, setSttStatus] = useState<ExtraStatus | null>(null);
+  const [ttsStatus, setTtsStatus] = useState<ExtraStatus | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -126,12 +127,14 @@ export function TranscriptionSettings({ token }: { token: string }) {
     setLoading(true);
     setError(null);
     try {
-      const [snap, st] = await Promise.all([
+      const [snap, st, ttsSt] = await Promise.all([
         getConfig(token),
         getExtraStatus(token, "stt"),
+        getExtraStatus(token, "tts"),
       ]);
       setConfig(snap.config as Record<string, unknown>);
       setSttStatus(st);
+      setTtsStatus(ttsSt);
     } catch {
       setError(t("settings.voice.loadError"));
     } finally {
@@ -508,12 +511,22 @@ export function TranscriptionSettings({ token }: { token: string }) {
                 </SettingsRow>
                 <SettingsRow
                   title={t("settings.voice.tts.localInstallTitle")}
-                  description={t("settings.voice.tts.localInstallDesc")}
+                  description={
+                    ttsStatus?.present
+                      ? t("settings.voice.tts.localInstalledDesc")
+                      : t("settings.voice.tts.localInstallDesc")
+                  }
                 >
-                  <Button size="sm" variant="outline" className="rounded-full"
-                          onClick={() => void ensureThen("tts", () => void load())}>
-                    {t("settings.voice.install.tts")}
-                  </Button>
+                  {ttsStatus?.present ? (
+                    <span className="text-[12px] text-emerald-600 dark:text-emerald-400">
+                      {t("settings.voice.localStt.installedBadge")}
+                    </span>
+                  ) : (
+                    <Button size="sm" variant="outline" className="rounded-full"
+                            onClick={() => void ensureThen("tts", () => void load())}>
+                      {t("settings.voice.install.tts")}
+                    </Button>
+                  )}
                 </SettingsRow>
                 {pendingExtra && pendingExtra.feature === "tts" ? (
                   <ExtraInstallPrompt

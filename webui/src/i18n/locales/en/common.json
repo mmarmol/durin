@@ -658,7 +658,8 @@
         "localInstallDesc": "Adds the [tts] extra for on-device speech synthesis.",
         "modelTitle": "Model",
         "openaiKeyTitle": "OpenAI API key",
-        "openaiKeyDesc": "Empty = uses the OPENAI_API_KEY env var."
+        "openaiKeyDesc": "Empty = uses the OPENAI_API_KEY env var.",
+        "localInstalledDesc": "✓ Supertonic is installed. On-device speech synthesis ready."
       },
       "conv": {
         "handsFreeTitle": "Hands-free voice",

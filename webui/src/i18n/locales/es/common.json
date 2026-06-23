@@ -658,7 +658,8 @@
         "localInstallDesc": "Agrega el extra [tts] para síntesis de voz en el dispositivo.",
         "modelTitle": "Modelo",
         "openaiKeyTitle": "API key de OpenAI",
-        "openaiKeyDesc": "Vacío = usa la variable de entorno OPENAI_API_KEY."
+        "openaiKeyDesc": "Vacío = usa la variable de entorno OPENAI_API_KEY.",
+        "localInstalledDesc": "✓ Supertonic está instalado. Síntesis de voz en el dispositivo lista."
       },
       "conv": {
         "handsFreeTitle": "Voz manos libres",

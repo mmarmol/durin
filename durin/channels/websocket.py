@@ -964,6 +964,11 @@ class WebSocketChannel(BaseChannel):
     async def _speak(self, chat_id: str, text: str, *, full: bool = False) -> None:
         svc = getattr(self, "speech_synthesis", None)
         if svc is None or chat_id not in self._voice:
+            self.logger.info(
+                "voice: _speak skipped chat={} has_svc={} svc_enabled={} active_voice={}",
+                chat_id, svc is not None, getattr(svc, "enabled", None),
+                chat_id in self._voice,
+            )
             return
         cfg = getattr(self, "voice_config", None)
         sr = cfg.spoken_render if cfg is not None else None
@@ -984,6 +989,10 @@ class WebSocketChannel(BaseChannel):
                 spoken = rendition.spoken
             audio = await svc.synthesize(spoken)
             url = self._write_and_sign_audio(audio)
+            self.logger.info(
+                "voice: _speak chat={} full={} spoken_len={} audio_bytes={} sent={}",
+                chat_id, full, len(spoken), len(audio.data), url is not None,
+            )
             if url is not None:
                 await self._send_voice_audio(chat_id, url, mime="audio/wav")
         except asyncio.CancelledError:
@@ -1692,15 +1701,23 @@ class WebSocketChannel(BaseChannel):
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" ")
         # Voice mode: synthesize the spoken rendition for the FINAL reply only.
-        if (
+        final_reply = bool(
             msg.content
             and not msg.metadata.get("_tool_hint")
             and not msg.metadata.get("_progress")
-            and msg.chat_id in self._voice
-        ):
+        )
+        if final_reply and msg.chat_id in self._voice:
             sess = self._voice[msg.chat_id]
             sess.cancel_speak()
             sess.speak_task = asyncio.create_task(self._speak(msg.chat_id, msg.content))
+        elif final_reply and self._voice:
+            # A voice session is active but this reply's chat_id isn't one of them —
+            # the agent answered on a different chat than the orb is listening on
+            # (the class of bug behind "voice replies only in text").
+            self.logger.info(
+                "voice: final reply NOT spoken — reply chat={} not in active voice {}",
+                msg.chat_id, list(self._voice.keys()),
+            )
 
     async def send_reasoning_delta(
         self,
