@@ -38,6 +38,8 @@ class DecisionNode:
     command: str = ""
     on_pass: str | None = None           # next node on pass; None = end
     on_fail: str | None = None           # next node on fail (e.g. loop back)
+    criteria: str = ""                   # judgment condition: a reviewer evaluates against this
+    judge_model: str | None = None       # optional model for the judge (None = default)
     kind: Literal["decision"] = "decision"
 
 
@@ -84,9 +86,17 @@ def _build_node(raw: dict[str, Any]) -> Node:
             tools=tools,
         )
     if kind == "decision":
+        command = raw.get("command", "")
+        criteria = raw.get("criteria", "")
+        if bool(command) == bool(criteria):
+            raise WorkflowError(
+                f"node {node_id!r}: a decision node needs exactly one of 'command' or 'criteria'"
+            )
         return DecisionNode(
             id=node_id,
-            command=raw.get("command", ""),
+            command=command,
+            criteria=criteria,
+            judge_model=raw.get("judge_model"),
             on_pass=raw.get("on_pass"),
             on_fail=raw.get("on_fail"),
         )

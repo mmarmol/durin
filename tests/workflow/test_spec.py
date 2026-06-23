@@ -123,3 +123,30 @@ def test_non_string_model_raises():
     with pytest.raises(WorkflowError, match="model"):
         parse_workflow({"name": "d", "start": "a",
                         "nodes": [{"id": "a", "kind": "work", "model": 123}]})
+
+
+def test_decision_node_parses_criteria_and_judge_model():
+    wf = parse_workflow({"name": "d", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "next": "g"},
+        {"id": "g", "kind": "decision", "criteria": "Is it correct?",
+         "judge_model": "deep", "on_pass": None, "on_fail": "a"},
+    ]})
+    g = wf.nodes["g"]
+    assert g.criteria == "Is it correct?"
+    assert g.judge_model == "deep"
+    assert g.command == ""
+
+
+def test_decision_with_both_command_and_criteria_raises():
+    with pytest.raises(WorkflowError, match="exactly one"):
+        parse_workflow({"name": "d", "start": "g", "nodes": [
+            {"id": "g", "kind": "decision", "command": "true",
+             "criteria": "ok?", "on_pass": None, "on_fail": None},
+        ]})
+
+
+def test_decision_with_neither_command_nor_criteria_raises():
+    with pytest.raises(WorkflowError, match="exactly one"):
+        parse_workflow({"name": "d", "start": "g", "nodes": [
+            {"id": "g", "kind": "decision", "on_pass": None, "on_fail": None},
+        ]})
