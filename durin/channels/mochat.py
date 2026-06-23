@@ -264,7 +264,7 @@ class MochatChannel(BaseChannel):
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:
-        return MochatConfig().model_dump(by_alias=True)
+        return MochatConfig().model_dump(by_alias=False)
 
     def __init__(self, config: Any, bus: MessageBus):
         if isinstance(config, dict):

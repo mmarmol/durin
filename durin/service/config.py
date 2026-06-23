@@ -248,12 +248,12 @@ class ConfigService:
 
         raw = load_raw_config(get_config_path())
         try:
-            effective = validate_dict(raw).model_dump(mode="json", by_alias=True)
+            effective = validate_dict(raw).model_dump(mode="json", by_alias=False)
         except Exception:  # noqa: BLE001
             effective = raw
         return ConfigGetResult(
             config=mask_secrets(effective),
-            json_schema=Config.model_json_schema(by_alias=True),
+            json_schema=Config.model_json_schema(by_alias=False),
         )
 
     @route(
@@ -279,7 +279,7 @@ class ConfigService:
         path = get_config_path()
         try:
             canonical = validate_dict(load_raw_config(path)).model_dump(
-                mode="json", by_alias=True
+                mode="json", by_alias=False
             )
         except Exception as e:  # noqa: BLE001
             raise ValidationFailedError(f"on-disk config is invalid: {e}") from e
@@ -293,7 +293,7 @@ class ConfigService:
         save_config(config, path)
         return ConfigSetResult(
             ok=True,
-            config=mask_secrets(config.model_dump(mode="json", by_alias=True)),
+            config=mask_secrets(config.model_dump(mode="json", by_alias=False)),
         )
 
     @route(
@@ -378,7 +378,7 @@ class ConfigService:
         )
         save_config(cfg, path)
         return ConfigSetResult(
-            ok=True, config=mask_secrets(cfg.model_dump(mode="json", by_alias=True))
+            ok=True, config=mask_secrets(cfg.model_dump(mode="json", by_alias=False))
         )
 
     @route(
@@ -403,7 +403,7 @@ class ConfigService:
             pc.models.pop(cmd.model, None)
             save_config(cfg, path)
         return ConfigSetResult(
-            ok=True, config=mask_secrets(cfg.model_dump(mode="json", by_alias=True))
+            ok=True, config=mask_secrets(cfg.model_dump(mode="json", by_alias=False))
         )
 
     @route(

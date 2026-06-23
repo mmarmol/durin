@@ -134,7 +134,7 @@ def test_default_config_includes_safe_bind_and_streaming() -> None:
     assert defaults["enabled"] is False
     assert defaults["host"] == "127.0.0.1"
     assert defaults["streaming"] is True
-    assert defaults["allowFrom"] == ["*"]
+    assert defaults["allow_from"] == ["*"]
 
 
 def test_issue_route_secret_matches_bearer_and_header() -> None:

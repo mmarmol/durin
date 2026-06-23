@@ -70,7 +70,7 @@ class SlackChannel(BaseChannel):
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:
-        return SlackConfig().model_dump(by_alias=True)
+        return SlackConfig().model_dump(by_alias=False)
 
     _THREAD_CONTEXT_CACHE_LIMIT = 10_000
 

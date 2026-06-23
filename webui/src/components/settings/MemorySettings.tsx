@@ -42,23 +42,23 @@ interface CrossEncoderState {
 }
 
 interface MemoryConfigShape {
-  // /api/config returns the on-disk alias shape (camelCase). The
-  // setConfigValue *paths* keep using snake_case because the backend's
-  // `_normalize_dotted_path` camelCases each segment before writing.
+  // /api/config returns the canonical snake_case shape. The
+  // setConfigValue *paths* also use snake_case, normalized by the
+  // backend's `_normalize_dotted_path` before writing.
   search?: {
-    crossEncoder?: Partial<CrossEncoderState>;
+    cross_encoder?: Partial<CrossEncoderState>;
   };
   // memory.dream — the extract/refine/skill passes' triggers (§8e).
   dream?: {
     enabled?: boolean;
     cron?: string;
-    postCompaction?: boolean;
-    onSessionClose?: boolean;
-    discoverEnabled?: boolean;
-    minSecondsBetweenRuns?: number;
-    maxSecondsPerRun?: number;
-    alwaysOnTokenBudget?: number;
-    autoAbsorb?: { enabled?: boolean; confidenceThreshold?: number; minAgeHours?: number };
+    post_compaction?: boolean;
+    on_session_close?: boolean;
+    discover_enabled?: boolean;
+    min_seconds_between_runs?: number;
+    max_seconds_per_run?: number;
+    always_on_token_budget?: number;
+    auto_absorb?: { enabled?: boolean; confidence_threshold?: number; min_age_hours?: number };
   };
 }
 
@@ -78,7 +78,7 @@ interface DreamState {
 
 function readCrossEncoder(config: Record<string, unknown> | null): CrossEncoderState {
   const memory = config?.memory as MemoryConfigShape | undefined;
-  const ce = memory?.search?.crossEncoder ?? {};
+  const ce = memory?.search?.cross_encoder ?? {};
   return {
     enabled: typeof ce.enabled === "boolean" ? ce.enabled : false,
     model: typeof ce.model === "string" && ce.model ? ce.model : DEFAULT_CROSS_ENCODER_MODEL,
@@ -91,21 +91,21 @@ function readDream(config: Record<string, unknown> | null): DreamState {
   return {
     enabled: typeof d.enabled === "boolean" ? d.enabled : true,
     cron: typeof d.cron === "string" && d.cron ? d.cron : "0 3 * * *",
-    postCompaction: typeof d.postCompaction === "boolean" ? d.postCompaction : true,
-    onSessionClose: typeof d.onSessionClose === "boolean" ? d.onSessionClose : true,
-    discover: typeof d.discoverEnabled === "boolean" ? d.discoverEnabled : true,
+    postCompaction: typeof d.post_compaction === "boolean" ? d.post_compaction : true,
+    onSessionClose: typeof d.on_session_close === "boolean" ? d.on_session_close : true,
+    discover: typeof d.discover_enabled === "boolean" ? d.discover_enabled : true,
     minSecondsBetweenRuns:
-      typeof d.minSecondsBetweenRuns === "number" ? d.minSecondsBetweenRuns : 300,
+      typeof d.min_seconds_between_runs === "number" ? d.min_seconds_between_runs : 300,
     maxSecondsPerRun:
-      typeof d.maxSecondsPerRun === "number" ? d.maxSecondsPerRun : 600,
+      typeof d.max_seconds_per_run === "number" ? d.max_seconds_per_run : 600,
     alwaysOnTokenBudget:
-      typeof d.alwaysOnTokenBudget === "number" ? d.alwaysOnTokenBudget : 1500,
+      typeof d.always_on_token_budget === "number" ? d.always_on_token_budget : 1500,
     autoAbsorb:
-      typeof d.autoAbsorb?.enabled === "boolean" ? d.autoAbsorb.enabled : false,
+      typeof d.auto_absorb?.enabled === "boolean" ? d.auto_absorb.enabled : false,
     autoAbsorbConfidence:
-      typeof d.autoAbsorb?.confidenceThreshold === "number" ? d.autoAbsorb.confidenceThreshold : 95,
+      typeof d.auto_absorb?.confidence_threshold === "number" ? d.auto_absorb.confidence_threshold : 95,
     autoAbsorbMinAgeHours:
-      typeof d.autoAbsorb?.minAgeHours === "number" ? d.autoAbsorb.minAgeHours : 24,
+      typeof d.auto_absorb?.min_age_hours === "number" ? d.auto_absorb.min_age_hours : 24,
   };
 }
 

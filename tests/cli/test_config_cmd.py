@@ -156,18 +156,20 @@ def test_validate_dict_rejects_invalid_schema() -> None:
         validate_dict({"agents": {"defaults": {"max_tokens": "not-a-number"}}})
 
 
-def test_normalize_dotted_path_camelizes_snake_segments() -> None:
-    assert _normalize_dotted_path("providers.zhipu.api_key") == "providers.zhipu.apiKey"
-    assert _normalize_dotted_path("agents.defaults.max_tokens") == "agents.defaults.maxTokens"
-    assert _normalize_dotted_path("model_presets.fast.model") == "modelPresets.fast.model"
-    # Pure camelCase / single segments pass through.
+def test_normalize_dotted_path_snakes_camel_segments() -> None:
+    # camelCase input is normalized to the snake_case canonical form.
+    assert _normalize_dotted_path("providers.zhipu.apiKey") == "providers.zhipu.api_key"
+    assert _normalize_dotted_path("agents.defaults.maxTokens") == "agents.defaults.max_tokens"
+    assert _normalize_dotted_path("modelPresets.fast.model") == "model_presets.fast.model"
+    # snake_case / single segments pass through unchanged.
+    assert _normalize_dotted_path("providers.zhipu.api_key") == "providers.zhipu.api_key"
     assert _normalize_dotted_path("agents.defaults.model") == "agents.defaults.model"
     # Numeric indices are preserved.
-    assert _normalize_dotted_path("agents.fallback_models.0") == "agents.fallbackModels.0"
+    assert _normalize_dotted_path("agents.fallbackModels.0") == "agents.fallback_models.0"
 
 
 def test_cli_config_set_api_key_via_snake_path(tmp_path: Path) -> None:
-    """Setting providers.<vendor>.api_key (snake_case) must persist as apiKey."""
+    """Setting providers.<vendor>.api_key persists as snake_case on disk."""
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(
         json.dumps(Config().model_dump(mode="json", by_alias=True), indent=2),
@@ -178,9 +180,9 @@ def test_cli_config_set_api_key_via_snake_path(tmp_path: Path) -> None:
         result = runner.invoke(app, ["config", "set", "providers.zhipu.api_key", "sk-secret"])
     assert result.exit_code == 0, result.output
     data = json.loads(cfg_path.read_text())
-    assert data["providers"]["zhipu"]["apiKey"] == "sk-secret"
-    # And no parallel snake_case key got planted.
-    assert "api_key" not in data["providers"]["zhipu"]
+    assert data["providers"]["zhipu"]["api_key"] == "sk-secret"
+    # And no parallel camelCase key got planted.
+    assert "apiKey" not in data["providers"]["zhipu"]
 
 
 # ---------------------------------------------------------------------------

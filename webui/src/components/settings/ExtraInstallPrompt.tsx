@@ -50,7 +50,7 @@ export function ExtraInstallPrompt({
       <p>
         {t("settings.extras.willInstall", {
           extra: status.extra,
-          size: status.approx_size,
+          size: status.approx_size.replace(/^~/, ""),
         })}
       </p>
       {status.needs_restart ? (

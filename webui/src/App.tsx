@@ -7,6 +7,7 @@ import { SkillsView } from "@/components/SkillsView";
 import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
+import { VoiceDock } from "@/components/voice/VoiceDock";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 
 import { useSessions } from "@/hooks/useSessions";
@@ -169,14 +170,30 @@ export default function App() {
   // in-memory token pool, so the cached token 401s. On a 401, `request`
   // calls this to mint a fresh token and retry — no page reload needed.
   useEffect(() => {
-    setApiReauthHandler(async () => {
-      try {
-        const boot = await fetchBootstrap("", "");
-        setState((s) => (s.status === "ready" ? { ...s, token: boot.token } : s));
-        return boot.token;
-      } catch {
+    // Dedupe concurrent 401s into a single in-flight bootstrap, and retry it
+    // with backoff so a call that 401s *during* a gateway restart recovers once
+    // the gateway is back (a few seconds) rather than erroring until a reload.
+    let inFlight: Promise<string | null> | null = null;
+    setApiReauthHandler(() => {
+      if (inFlight) return inFlight;
+      inFlight = (async () => {
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try {
+            const boot = await fetchBootstrap("", "");
+            setState((s) => (s.status === "ready" ? { ...s, token: boot.token } : s));
+            return boot.token;
+          } catch {
+            if (attempt < 4) {
+              await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+            }
+          }
+        }
         return null;
-      }
+      })();
+      void inFlight.finally(() => {
+        inFlight = null;
+      });
+      return inFlight;
     });
     return () => setApiReauthHandler(null);
   }, []);
@@ -333,6 +350,14 @@ function Shell({
       return null;
     }
   }, [createChat]);
+
+  // Voice always runs on a real, focused chat: reuse the active one, else
+  // create + focus a new chat so the spoken conversation is visible (never a
+  // hidden default session).
+  const ensureVoiceChat = useCallback(
+    async () => (activeSession ? activeSession.chatId : await onCreateChat()),
+    [activeSession, onCreateChat],
+  );
 
   const onNewChat = useCallback(() => {
     setActiveKey(null);
@@ -575,6 +600,12 @@ function Shell({
           </div>
         )}
       </main>
+
+      <VoiceDock
+        chatId={activeSession?.chatId ?? null}
+        chatTitle={activeSession?.title ?? activeSession?.preview ?? null}
+        onEnsureChat={ensureVoiceChat}
+      />
 
       <DeleteConfirm
         open={!!pendingDelete}

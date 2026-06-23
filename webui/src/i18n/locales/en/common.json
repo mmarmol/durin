@@ -72,7 +72,7 @@
       "web-search": "Web search",
       "channels": "Channels",
       "memory": "Memory",
-      "transcription": "Audio transcription",
+      "transcription": "Voice",
       "skills-security": "Skills security",
       "cron": "Cron",
       "logs": "Logs",
@@ -578,6 +578,120 @@
         "verified": "Verified",
         "seeMore": "Show {{count}} less-popular results",
         "lessPopular": "Less popular"
+      }
+    },
+    "voice": {
+      "intro": "When you attach or record audio, durin transcribes it to text before it reaches the agent. The default is local STT via sherpa-onnx (offline). Switch to a cloud provider or any OpenAI-compatible HTTP server as needed.",
+      "loadError": "Could not load voice settings.",
+      "saveError": "Could not save the change.",
+      "section": {
+        "provider": "Provider",
+        "behavior": "Behavior",
+        "tts": "Text-to-speech",
+        "conversational": "Conversational mode",
+        "spokenRendition": "Spoken rendition"
+      },
+      "providerTitle": "Transcription provider",
+      "providerDesc": "Local STT needs the [stt] extra; cloud providers need an API key.",
+      "provider": {
+        "local": "Local STT (sherpa-onnx)",
+        "groq": "Groq",
+        "openai": "OpenAI",
+        "http": "HTTP server"
+      },
+      "engineTitle": "Engine",
+      "engine": {
+        "parakeet": "Parakeet TDT v3",
+        "sensevoice": "SenseVoice"
+      },
+      "engineDesc": {
+        "parakeet": "Parakeet TDT v3 — 25 European languages incl. Spanish / English, fastest. For Japanese / Chinese, use SenseVoice or a cloud provider.",
+        "sensevoice": "SenseVoice — optimized for Chinese, Japanese, Korean, Cantonese, and English."
+      },
+      "localStt": {
+        "title": "Local STT (sherpa-onnx)",
+        "installedDesc": "✓ sherpa-onnx is installed. Fast local transcription ready.",
+        "missingDesc": "Not installed — local transcription won't work until you add [stt].",
+        "installedBadge": "installed"
+      },
+      "install": {
+        "stt": "Install [stt]",
+        "tts": "Install [tts]"
+      },
+      "groqKey": {
+        "title": "Groq API key",
+        "desc": "From console.groq.com (free tier available)."
+      },
+      "openaiKey": {
+        "title": "OpenAI API key",
+        "desc": "From platform.openai.com."
+      },
+      "http": {
+        "baseUrlTitle": "Server base URL",
+        "baseUrlDesc": "e.g. http://localhost:8080/v1 (whisper.cpp, mlx-asr, vLLM)",
+        "modelTitle": "Server model name",
+        "modelDesc": "Model id the server exposes (optional).",
+        "keyTitle": "Server API key",
+        "keyDesc": "Only if the server requires auth."
+      },
+      "enabledTitle": "Enabled",
+      "enabledDesc": "Master switch — when off, audio is never transcribed.",
+      "modeTitle": "Mode",
+      "modeDesc": "Auto inserts text you can edit; Preview requires explicit accept; Off attaches raw audio.",
+      "mode": {
+        "auto": "Auto",
+        "preview": "Preview",
+        "off": "Off"
+      },
+      "languageHintTitle": "Language hint",
+      "languageHintDesc": "ISO-639-1 code (es, en, ja, zh…). Empty = auto-detect.",
+      "tts": {
+        "providerTitle": "TTS provider",
+        "providerDesc": "Voice output engine for conversational mode.",
+        "providerLocal": "Local Supertonic (offline)",
+        "providerOpenai": "OpenAI (cloud)",
+        "voiceTitle": "Voice",
+        "voiceDesc": "Supertonic preset voice.",
+        "test": "Test",
+        "playing": "Playing…",
+        "localInstallTitle": "Local TTS (Supertonic)",
+        "localInstallDesc": "Adds the [tts] extra for on-device speech synthesis.",
+        "modelTitle": "Model",
+        "openaiKeyTitle": "OpenAI API key",
+        "openaiKeyDesc": "Empty = uses the OPENAI_API_KEY env var.",
+        "localInstalledDesc": "✓ Supertonic is installed. On-device speech synthesis ready."
+      },
+      "conv": {
+        "handsFreeTitle": "Hands-free voice",
+        "handsFreeDesc": "The floating orb listens, thinks and speaks.",
+        "bargeInTitle": "Barge-in",
+        "bargeInDesc": "Interrupt the agent by speaking over it."
+      },
+      "spoken": {
+        "longRepliesTitle": "Long replies",
+        "longRepliesDesc": "What the voice speaks when a reply is long. \"Opening + rest on screen\" speaks the first part and keeps the full text on screen; \"Read full reply\" speaks everything.",
+        "modelLed": "Opening + rest on screen",
+        "verbatim": "Read full reply"
+      },
+      "preview": {
+        "installToPreview": "Install [tts] to preview",
+        "failed": "Preview failed",
+        "preparing": "Still preparing the voice (the model may be downloading) — try again in a moment."
+      },
+      "apiKey": {
+        "hide": "hide",
+        "show": "show"
+      },
+      "orb": {
+        "idle": "Tap to talk",
+        "listening": "Listening…",
+        "transcribing": "Transcribing…",
+        "thinking": "Thinking…",
+        "speaking": "Speaking…",
+        "error": "Voice error",
+        "start": "Start voice mode",
+        "stop": "Stop voice",
+        "bargeHint": "Speak to interrupt"
       }
     }
   },

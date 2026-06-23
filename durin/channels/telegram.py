@@ -278,7 +278,7 @@ class TelegramChannel(BaseChannel):
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:
-        return TelegramConfig().model_dump(by_alias=True)
+        return TelegramConfig().model_dump(by_alias=False)
 
     def __init__(self, config: Any, bus: MessageBus):
         if isinstance(config, dict):

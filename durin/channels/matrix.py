@@ -207,7 +207,7 @@ class MatrixChannel(BaseChannel):
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:
-        return MatrixConfig().model_dump(by_alias=True)
+        return MatrixConfig().model_dump(by_alias=False)
 
     def __init__(
         self,

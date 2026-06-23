@@ -536,7 +536,9 @@ async def test_connect_mcp_servers_logs_stdio_pollution_hint(
         yield  # pragma: no cover
 
     monkeypatch.setattr(sys.modules["mcp.client.stdio"], "stdio_client", _broken_stdio_client)
-    monkeypatch.setattr("durin.agent.tools.mcp.logger.exception", _error)
+    # start() catches the stdio error and returns False (no active exception), so
+    # the failure is logged via logger.error — not logger.exception.
+    monkeypatch.setattr("durin.agent.tools.mcp.logger.error", _error)
 
     registry = ToolRegistry()
     stacks = await connect_mcp_servers({"gh": MCPServerConfig(command="github-mcp")}, registry)

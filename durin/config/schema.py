@@ -113,6 +113,61 @@ class TranscriptionConfig(Base):
     cache_transcripts: bool = True
 
 
+class TtsLocalConfig(Base):
+    """Local on-CPU TTS via Supertonic (ONNX, self-downloading)."""
+
+    engine: Literal["supertonic"] = "supertonic"
+    voice: str = "F4"   # F1-F5 / M1-M5 (proven default F4)
+    model_dir: str | None = None   # None = supertonic auto-downloads (~260 MB)
+    quality: Literal["normal", "high"] = "normal"   # normal = 8 steps, high = 20
+
+
+class TtsConfig(Base):
+    """Global text-to-speech settings. Sibling of TranscriptionConfig.
+
+    The webui presents this together with `transcription` under one "Voice"
+    pane, but the two stay separate flat config blocks (back-compat).
+    """
+
+    enabled: bool = True
+    provider: Literal["local", "openai"] = "local"
+    language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$")
+    fallback: Literal["none", "openai"] = "none"   # net-new local→cloud fallback
+    local: TtsLocalConfig = Field(default_factory=TtsLocalConfig)
+    openai: TranscriptionProviderKeysConfig = Field(
+        default_factory=TranscriptionProviderKeysConfig
+    )
+
+
+class SpokenRenderConfig(Base):
+    """How long replies are rendered for speech (spoken != displayed)."""
+
+    mode: Literal["model_led", "verbatim"] = "model_led"
+    long_threshold_words: int = Field(default=60, ge=1)
+    pointer: str = "The full answer is on screen."
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_mode(cls, data: Any) -> Any:
+        # An earlier build offered an "aux_summary" mode that was never wired
+        # and always degraded to "model_led". Coerce any value persisted by that
+        # build so existing configs keep loading with identical behavior.
+        if isinstance(data, dict) and data.get("mode") == "aux_summary":
+            data = {**data, "mode": "model_led"}
+        return data
+
+
+class VoiceConfig(Base):
+    """Hands-free conversational voice mode (the gateway loop)."""
+
+    enabled: bool = True
+    barge_in: bool = True
+    vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)   # browser VAD (relayed)
+    end_of_turn_silence_ms: int = Field(default=700, ge=100)    # browser VAD (relayed)
+    idle_timeout_s: int = Field(default=300, ge=0)              # 0 = no auto-exit
+    spoken_render: SpokenRenderConfig = Field(default_factory=SpokenRenderConfig)
+
+
 class MemoryEmbeddingConfig(Base):
     """Embedding model configuration for the memory subsystem (Phase 2).
 
@@ -1098,6 +1153,8 @@ class Config(BaseSettings):
     appearance: AppearanceConfig = Field(default_factory=AppearanceConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
+    tts: TtsConfig = Field(default_factory=TtsConfig)
+    voice: VoiceConfig = Field(default_factory=VoiceConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
