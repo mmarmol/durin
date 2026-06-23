@@ -699,7 +699,10 @@
     "title": "Workflows",
     "loading": "Loading…",
     "empty": "No workflows yet.",
-    "selectPrompt": "Select a workflow to view its graph."
+    "selectPrompt": "Select a workflow to view its graph.",
+    "save": "Save",
+    "saved": "Saved.",
+    "unsaved": "Unsaved changes"
   },
   "skills": {
     "view": "View",
