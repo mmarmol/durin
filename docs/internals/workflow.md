@@ -34,13 +34,16 @@ with lineage (`origin_type="workflow_node"`). The node's output passes along the
 as the next node's input. A `shared`-context node reads and extends a running
 conversation buffer; an `own`-context node is isolated and receives only the upstream
 output. For a decision node the engine evaluates the condition — either a shell
-command (`durin/workflow/condition.py`, pass iff it exits 0) or an agent **judgment**
+command (`durin/workflow/condition.py`, pass iff it exits 0, run in the workflow's
+workspace so it can see files the work nodes wrote) or an agent **judgment**
 (`durin/workflow/judge.py`, a reviewer agent on a fresh context evaluates the upstream
 output against the node's `criteria`) — and routes to `on_pass` or `on_fail`; on a
 judgment fail the reviewer's feedback is threaded into the loop-back so the producer
 re-runs knowing what to fix. A node can also be a **sub-workflow**
 (`durin/workflow/subworkflow.py`): it runs another named workflow as a nested run
-(reusing the same node and judge runners, bounded by a depth cap) and uses its output.
+(reusing the same node and judge runners, bounded by a depth cap) and uses its output;
+the nested run carries the same root session key, so its node sessions anchor to the
+invoking conversation too.
 A **parallel** node runs a set of work-node branches concurrently and merges their text
 outputs into the next node's input — these are read/analysis branches; writing-in-parallel
 (which needs an isolated write space per branch plus a reconcile step) is a separate later

@@ -53,12 +53,14 @@ class WorkflowEngine:
         *,
         run_id_factory: Callable[[], str] | None = None,
         command_runner: Callable[..., CommandOutcome] = run_command,
+        command_cwd: str | None = None,
         judge_runner: Callable[[str, str, "str | None"], JudgeVerdict] | None = None,
-        subworkflow_runner: Callable[[str, str], str] | None = None,
+        subworkflow_runner: Callable[..., str] | None = None,
     ) -> None:
         self._node_runner = node_runner
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex[:12])
         self._command_runner = command_runner
+        self._command_cwd = command_cwd
         self._judge_runner = judge_runner
         self._subworkflow_runner = subworkflow_runner
 
@@ -114,7 +116,7 @@ class WorkflowEngine:
                     raise RuntimeError(
                         f"node {node.id!r} is a subworkflow but the engine has no subworkflow_runner"
                     )
-                output = self._subworkflow_runner(node.workflow, upstream_output or task)
+                output = self._subworkflow_runner(node.workflow, upstream_output or task, root_session_key)
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=output))
                 upstream_output = output
                 final_output = output
@@ -156,7 +158,7 @@ class WorkflowEngine:
                         upstream_output = f"{prior}\n\nReviewer feedback (address this):\n{verdict.feedback}"
                     current = node.on_pass if passed else node.on_fail
                 else:
-                    outcome = self._command_runner(node.command, cwd=None)
+                    outcome = self._command_runner(node.command, cwd=self._command_cwd)
                     runs.append(
                         NodeRun(
                             node_id=node.id,

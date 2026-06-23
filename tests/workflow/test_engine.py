@@ -103,6 +103,31 @@ def test_decision_fail_loops_back_then_passes():
     assert [r.iteration for r in a_runs] == [1, 2]
 
 
+def test_command_decision_runs_in_configured_cwd():
+    wf = parse_workflow({
+        "name": "d", "start": "a",
+        "nodes": [
+            {"id": "a", "kind": "work", "next": "gate"},
+            {"id": "gate", "kind": "decision", "command": "x", "on_pass": None, "on_fail": "a"},
+        ],
+    })
+    seen_cwd = []
+
+    def node_runner(req):
+        return NodeRunResponse(output="out", session_key=None, messages=[])
+
+    def command_runner(command, *, cwd=None, timeout=30):
+        seen_cwd.append(cwd)
+        return CommandOutcome(passed=True, exit_code=0, output="")
+
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1",
+                         command_runner=command_runner, command_cwd="/ws")
+    eng.run(wf, "t")
+    # the command gate runs in the workflow's workspace, not the engine's process cwd,
+    # so a command can see files the work nodes wrote.
+    assert seen_cwd == ["/ws"]
+
+
 def test_max_visits_aborts_infinite_loop():
     wf = parse_workflow({
         "name": "d", "start": "a", "max_visits": 2,
@@ -219,8 +244,8 @@ def test_subworkflow_node_runs_and_threads_output():
     ]})
     calls = []
 
-    def subworkflow_runner(name, task):
-        calls.append((name, task))
+    def subworkflow_runner(name, task, root_session_key=None):
+        calls.append((name, task, root_session_key))
         return "child-output"
 
     seen = []
@@ -231,9 +256,11 @@ def test_subworkflow_node_runs_and_threads_output():
 
     eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1",
                          subworkflow_runner=subworkflow_runner)
-    res = eng.run(wf, "the task")
+    res = eng.run(wf, "the task", root_session_key="conv:1")
     assert res.status == "completed"
-    assert calls == [("child", "the task")]
+    # the sub-workflow is invoked with the run's root session key, so its nested
+    # node sessions anchor to the invoking conversation (no orphan subtrees).
+    assert calls == [("child", "the task", "conv:1")]
     # the work node after the subworkflow saw the child's output as upstream
     assert "child-output" in seen
 

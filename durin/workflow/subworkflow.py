@@ -33,7 +33,7 @@ class SubworkflowRunner:
         self.max_depth = max_depth
         self._depth = _depth
 
-    def __call__(self, name: str, task: str) -> str:
+    def __call__(self, name: str, task: str, root_session_key: str | None = None) -> str:
         if self._depth >= self.max_depth:
             return f"Error: sub-workflow nesting exceeded max depth {self.max_depth}"
         try:
@@ -46,8 +46,11 @@ class SubworkflowRunner:
         )
         engine = WorkflowEngine(
             node_runner=self.node_runner,
+            command_cwd=str(self.workspace),
             judge_runner=self.judge_runner,
             subworkflow_runner=nested,
         )
-        result = engine.run(workflow, task)
+        # Anchor the sub-workflow's node sessions to the invoking conversation too,
+        # so nested work is navigable under it (no orphan subtrees).
+        result = engine.run(workflow, task, root_session_key=root_session_key)
         return result.final_output or ""
