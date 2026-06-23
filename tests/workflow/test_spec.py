@@ -87,3 +87,21 @@ def test_duplicate_node_id_raises():
     with pytest.raises(WorkflowError, match="duplicate"):
         parse_workflow({"name": "d", "start": "a", "nodes": [
             {"id": "a", "kind": "work"}, {"id": "a", "kind": "work"}]})
+
+
+def test_work_node_tools_default_is_none():
+    wf = parse_workflow({"name": "d", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work"}]})
+    assert wf.nodes["a"].tools == "none"
+
+
+def test_work_node_parses_tools_default_value():
+    wf = parse_workflow({"name": "d", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "tools": "default"}]})
+    assert wf.nodes["a"].tools == "default"
+
+
+def test_invalid_tools_raises():
+    with pytest.raises(WorkflowError, match="tools"):
+        parse_workflow({"name": "d", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "tools": "everything"}]})

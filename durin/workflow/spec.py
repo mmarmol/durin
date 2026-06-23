@@ -26,6 +26,7 @@ class WorkNode:
     context: Literal["own", "shared"] = "own"
     prompt: str = ""                      # the node's system/role framing
     next: str | None = None              # next node id; None = end
+    tools: Literal["none", "default"] = "none"   # "default" = standard tool set
     kind: Literal["work"] = "work"
 
 
@@ -64,12 +65,18 @@ def _build_node(raw: dict[str, Any]) -> Node:
             raise WorkflowError(
                 f"node {node_id!r}: context must be 'own' or 'shared', got {context!r}"
             )
+        tools = raw.get("tools", "none")
+        if tools not in ("none", "default"):
+            raise WorkflowError(
+                f"node {node_id!r}: tools must be 'none' or 'default', got {tools!r}"
+            )
         return WorkNode(
             id=node_id,
             model=raw.get("model"),
             context=context,
             prompt=raw.get("prompt", ""),
             next=raw.get("next"),
+            tools=tools,
         )
     if kind == "decision":
         return DecisionNode(
