@@ -23,9 +23,9 @@ interface TranscriptionConfigShape {
   provider?: Provider;
   language?: string | null;
   local?: { engine?: LocalEngine };
-  http?: { baseUrl?: string | null; apiKey?: string | null; model?: string | null };
-  openai?: { apiKey?: string | null; apiBase?: string | null };
-  groq?: { apiKey?: string | null; apiBase?: string | null };
+  http?: { base_url?: string | null; api_key?: string | null; model?: string | null };
+  openai?: { api_key?: string | null; api_base?: string | null };
+  groq?: { api_key?: string | null; api_base?: string | null };
 }
 
 interface TranscriptionState {
@@ -63,11 +63,11 @@ function readState(config: Record<string, unknown> | null): TranscriptionState {
     provider: t.provider ?? "local",
     language: typeof t.language === "string" ? t.language : "",
     localEngine: t.local?.engine ?? "parakeet",
-    httpBaseUrl: t.http?.baseUrl ?? "",
-    httpApiKey: t.http?.apiKey ?? "",
+    httpBaseUrl: t.http?.base_url ?? "",
+    httpApiKey: t.http?.api_key ?? "",
     httpModel: t.http?.model ?? "",
-    openaiApiKey: t.openai?.apiKey ?? "",
-    groqApiKey: t.groq?.apiKey ?? "",
+    openaiApiKey: t.openai?.api_key ?? "",
+    groqApiKey: t.groq?.api_key ?? "",
     ttsEnabled: typeof tts.enabled === "boolean" ? tts.enabled : true,
     ttsProvider: (tts.provider as string) ?? "local",
     ttsVoice: (ttsLocal.voice as string) ?? "F4",
