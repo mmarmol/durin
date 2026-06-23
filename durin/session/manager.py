@@ -867,3 +867,43 @@ class SessionManager:
                 continue
 
         return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)
+
+    def children_of(self, parent_session_id: str) -> list[dict[str, Any]]:
+        """Session info for every persisted session whose lineage parent is
+        *parent_session_id*.
+
+        Globs the sessions dir and reads only the line-0 metadata header
+        (cheap), so it works from a cold cache. Used to navigate from a
+        session to the branch sessions it spawned — subagents today,
+        workflow stages later. Lineage keys live on line 0 (identity
+        metadata), so no full-file load is needed.
+        """
+        from durin.session.lineage import (
+            ORIGIN_ID,
+            ORIGIN_TYPE,
+            PARENT_SESSION_ID,
+        )
+
+        out: list[dict[str, Any]] = []
+        for path in self.sessions_dir.glob("*.jsonl"):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    first_line = f.readline().strip()
+                if not first_line:
+                    continue
+                data = json.loads(first_line)
+                if data.get("_type") != "metadata":
+                    continue
+                meta = data.get("metadata") or {}
+                if meta.get(PARENT_SESSION_ID) != parent_session_id:
+                    continue
+                out.append({
+                    "key": data.get("key") or path.stem.replace("_", ":", 1),
+                    "origin_type": meta.get(ORIGIN_TYPE),
+                    "origin_id": meta.get(ORIGIN_ID),
+                    "created_at": data.get("created_at"),
+                    "path": str(path),
+                })
+            except Exception:
+                continue
+        return sorted(out, key=lambda x: x.get("created_at") or "")
