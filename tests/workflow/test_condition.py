@@ -31,4 +31,4 @@ def test_runs_in_cwd(tmp_path):
 def test_timeout_fails_without_raising():
     out = run_command("sleep 5", timeout=1)
     assert out.passed is False
-    assert out.exit_code != 0
+    assert out.exit_code == 124
