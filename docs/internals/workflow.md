@@ -33,10 +33,16 @@ the node's conversation as a session keyed `workflow:<run_id>:<node_id>:<iterati
 with lineage (`origin_type="workflow_node"`). The node's output passes along the edge
 as the next node's input. A `shared`-context node reads and extends a running
 conversation buffer; an `own`-context node is isolated and receives only the upstream
-output. For a decision node the engine evaluates the condition — in the current scope
-a shell command (`durin/workflow/condition.py`), passing iff it exits 0 — and routes
-to `on_pass` or `on_fail`. A per-node visit count bounds loop-backs: exceeding
-`max_visits` ends the run with status `max_visits` instead of looping forever.
+output. For a decision node the engine evaluates the condition — either a shell
+command (`durin/workflow/condition.py`, pass iff it exits 0) or an agent **judgment**
+(`durin/workflow/judge.py`, a reviewer agent on a fresh context evaluates the upstream
+output against the node's `criteria`) — and routes to `on_pass` or `on_fail`; on a
+judgment fail the reviewer's feedback is threaded into the loop-back so the producer
+re-runs knowing what to fix. A node can also be a **sub-workflow**
+(`durin/workflow/subworkflow.py`): it runs another named workflow as a nested run
+(reusing the same node and judge runners, bounded by a depth cap) and uses its output.
+A per-node visit count bounds loop-backs: exceeding `max_visits` ends the run with
+status `max_visits` instead of looping forever.
 
 **The engine is decoupled from the LLM and runs loop-safe.** The graph walk depends
 only on an injected `NodeRunner` callable, so it is fully unit-testable with a mock.
@@ -77,13 +83,15 @@ End-to-end for a single `run_workflow` call:
    file returns an error string (it does not raise).
 2. **Wire.** It resolves the user's default model preset
    (`DurinConfig.resolve_default_preset`), builds the provider (`make_provider`), and
-   wires `AgentRunner` → `AgentNodeRunner` (passing the user's real `cfg.tools` so a
-   node's tool set matches the rest of the agent) → `WorkflowEngine`.
+   wires `AgentRunner` → `AgentNodeRunner` (passing the user's real `cfg.tools`), an
+   `AgentJudgeRunner` (for judgment decision nodes), and a `SubworkflowRunner` (for
+   sub-workflow nodes) into the `WorkflowEngine`.
 3. **Run.** The engine runs under `asyncio.to_thread`. It walks the graph: a work node
    runs an agent turn and persists a lineage'd node session; its output threads to the
-   next node; a decision node runs its command and routes; a failed gate loops back,
-   re-running the target node as the next iteration (a sibling node session), capped by
-   `max_visits`.
+   next node; a decision node routes on its command's exit code or a reviewer's
+   judgment (threading the reviewer feedback into the loop-back on fail); a sub-workflow
+   node runs a nested workflow; a failed gate loops back, re-running the target node as
+   the next iteration (a sibling node session), capped by `max_visits`.
 4. **Return.** The run produces a typed `WorkflowResult` (status + final output +
    per-node trace), which the tool formats into a short summary for the agent. The
    node sessions persist on disk, so the run's work is navigable, searchable, and
@@ -94,8 +102,10 @@ End-to-end for a single `run_workflow` call:
 
 | Symbol | File | Role |
 |---|---|---|
-| `Workflow`, `WorkNode`, `DecisionNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator. |
+| `Workflow`, `WorkNode`, `DecisionNode`, `SubworkflowNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator. |
 | `run_command`, `CommandOutcome` | `durin/workflow/condition.py` | The shell-exit-code condition a decision node routes on. |
+| `JudgeVerdict`, `AgentJudgeRunner` | `durin/workflow/judge.py` | The reviewer agent that returns a pass/fail verdict + feedback for a judgment decision node. |
+| `SubworkflowRunner` | `durin/workflow/subworkflow.py` | Runs a named workflow as a nested run (depth-capped) for a sub-workflow node. |
 | `WorkflowEngine` | `durin/workflow/engine.py` | The sequential graph executor: routing, loop-back with a visit cap, own/shared context, output threading. |
 | `AgentNodeRunner` | `durin/workflow/node_runner.py` | The default node runner: one real `AgentRunner` turn per work node, persisted as a lineage'd node session. |
 | `load_workflow` | `durin/workflow/loader.py` | Load and parse a workflow by name from the workspace. |
@@ -112,11 +122,12 @@ End-to-end for a single `run_workflow` call:
 - **Lineage:** node sessions reuse the lineage metadata on the open session document
   (`durin/session/lineage.py`), so no schema migration is involved.
 - **Current scope.** This subsystem is built incrementally. Today: sequential
-  execution, shell-command decision conditions, and per-node model / context / tools.
-  Not yet built — see [roadmap.md](../roadmap.md) for direction — parallel
-  fan-out/fan-in, sub-workflows, judgment (LLM-evaluated) decision nodes, per-node
-  skills / MCPs / persona, anchoring a run to the invoking session, a visual editor,
-  and internal-git versioning of definitions.
+  execution; per-node model / context / tools; decision conditions by **shell command
+  or agent judgment** (with feedback-threaded loop-back); and **sub-workflow**
+  composition (depth-capped). Not yet built — see [roadmap.md](../roadmap.md) for
+  direction — parallel fan-out/fan-in, per-node skills / MCPs / persona, anchoring a
+  run to the invoking session, a visual editor, internal-git versioning of definitions,
+  and dream-driven self-improvement of workflows.
 - **Security.** Definitions are local files the user authored, so running their
   commands and tools is equivalent to the user running them directly; importing remote
   or third-party definitions is not supported in this scope (see [security.md](security.md)).
