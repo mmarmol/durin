@@ -78,7 +78,7 @@ async def test_nested_subagent_inherits_root(tmp_path):
 
 @pytest.mark.asyncio
 async def test_no_persist_without_session_manager(tmp_path):
-    # When SubagentManager has no SessionManager, it must not raise.
+    # Branch: self._sessions is None — must not raise, nothing persisted.
     sm = _manager(tmp_path, sessions=None)
     origin = {"channel": "cli", "chat_id": "direct", "session_key": None}
     status = SubagentStatus(
@@ -89,3 +89,22 @@ async def test_no_persist_without_session_manager(tmp_path):
     with patch.object(sm.runner, "run", AsyncMock(return_value=fake)), \
          patch.object(sm, "_announce_result", AsyncMock()):
         await sm._run_subagent("t2", "t", "x", origin, status)  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_no_persist_without_parent_key(tmp_path):
+    # Branch: not parent_key — real SessionManager is wired, but session_key=None
+    # fires the second guard. No subagent session must be written to disk.
+    sessions = SessionManager(workspace=tmp_path)
+    sm = _manager(tmp_path, sessions=sessions)
+    origin = {"channel": "cli", "chat_id": "direct", "session_key": None}
+    status = SubagentStatus(
+        task_id="t2", label="x", task_description="t",
+        started_at=time.monotonic(), session_key=None,
+    )
+    fake = AgentRunResult(final_content="ok", messages=[{"role": "assistant", "content": "ok"}])
+    with patch.object(sm.runner, "run", AsyncMock(return_value=fake)), \
+         patch.object(sm, "_announce_result", AsyncMock()):
+        await sm._run_subagent("t2", "t", "x", origin, status)
+
+    assert not sessions._get_session_path("subagent:t2").exists()
