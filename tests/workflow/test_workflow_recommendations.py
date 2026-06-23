@@ -35,3 +35,32 @@ def test_recommendation_carries_the_proposal_fields(tmp_path):
 
 def test_no_recommendations_is_empty(tmp_path):
     assert wr.open_recommendations(tmp_path, "nope") == []
+
+
+def test_apply_recommendation_edits_node_versions_and_marks_applied(tmp_path):
+    import json
+    from durin.workflow.loader import workflows_dir
+    from durin.workflow.version_store import history_for_dream
+
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True)
+    (d / "wf.json").write_text(json.dumps({
+        "name": "wf", "start": "a",
+        "nodes": [{"id": "a", "kind": "work", "prompt": "old prompt", "next": None}],
+    }))
+    rid = wr.log_recommendation(tmp_path, "wf", target_id="a", field="prompt",
+                                current="old prompt", proposed="new, sharper prompt", reason="a loops")
+    res = wr.apply_recommendation(tmp_path, "wf", rid)
+    assert res["ok"] and res["target_id"] == "a"
+
+    data = json.loads((d / "wf.json").read_text())
+    assert next(n for n in data["nodes"] if n["id"] == "a")["prompt"] == "new, sharper prompt"
+    assert wr.open_recommendations(tmp_path, "wf") == []            # no longer open
+    assert any("apply recommendation" in h["reason"] for h in history_for_dream(tmp_path, "wf"))
+
+
+def test_apply_unknown_recommendation_errors(tmp_path):
+    from durin.workflow.loader import workflows_dir
+    workflows_dir(tmp_path).mkdir(parents=True)
+    res = wr.apply_recommendation(tmp_path, "wf", "nope")
+    assert not res["ok"] and "no open recommendation" in res["error"]

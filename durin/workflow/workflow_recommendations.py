@@ -75,3 +75,37 @@ def log_recommendation(
 def open_recommendations(workspace: str | Path, name: str) -> list[dict]:
     """Recommendations awaiting the user's review (status == 'open')."""
     return [r for r in _read(_path(workspace, name)) if r.get("status") == "open"]
+
+
+def apply_recommendation(workspace: str | Path, name: str, rec_id: str) -> dict:
+    """Apply an open recommendation: write its proposed text into the workflow node's
+    field, commit the edit (with the reason as a trailer), and mark it applied. This is
+    the manual-mode apply path — and the same edit+commit step auto mode will reuse.
+    Returns ``{"ok": bool, ...}``."""
+    import json as _json
+
+    from durin.workflow.loader import workflows_dir
+    from durin.workflow.version_store import WorkflowVersionStore
+
+    path = _path(workspace, name)
+    with cross_process_lock(path.with_suffix(".lock")):
+        records = _read(path)
+        rec = next((r for r in records if r.get("id") == rec_id and r.get("status") == "open"), None)
+        if rec is None:
+            return {"ok": False, "error": f"no open recommendation {rec_id!r} for {name!r}"}
+        wf_path = workflows_dir(workspace) / f"{name}.json"
+        try:
+            data = _json.loads(wf_path.read_text(encoding="utf-8"))
+        except (OSError, _json.JSONDecodeError) as exc:
+            return {"ok": False, "error": f"cannot read workflow {name!r}: {exc}"}
+        node = next((n for n in data.get("nodes", []) if n.get("id") == rec["target_id"]), None)
+        if node is None:
+            return {"ok": False, "error": f"node {rec['target_id']!r} no longer exists in {name!r}"}
+        node[rec["field"]] = rec["proposed"]
+        wf_path.write_text(_json.dumps(data, indent=2), encoding="utf-8")
+        WorkflowVersionStore(workflows_dir(workspace)).commit_edit(
+            name, f"apply recommendation {rec_id}: {rec.get('reason', '')}"
+        )
+        rec["status"] = "applied"
+        path.write_text("\n".join(_json.dumps(r) for r in records) + "\n", encoding="utf-8")
+    return {"ok": True, "target_id": rec["target_id"], "field": rec["field"]}

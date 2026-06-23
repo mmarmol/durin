@@ -2739,6 +2739,10 @@ from durin.cli.skill_cmd import skill_app as _skill_app  # noqa: E402
 
 app.add_typer(_skill_app, name="skill")
 
+from durin.cli.workflow_cmd import workflow_app as _workflow_app  # noqa: E402
+
+app.add_typer(_workflow_app, name="workflow")
+
 from durin.cli.auth_cmd import auth_app as _auth_app  # noqa: E402
 
 app.add_typer(_auth_app, name="auth")
