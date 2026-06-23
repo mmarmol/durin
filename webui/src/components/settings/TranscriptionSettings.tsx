@@ -38,10 +38,22 @@ interface TranscriptionState {
   httpModel: string;
   openaiApiKey: string;
   groqApiKey: string;
+  ttsEnabled: boolean;
+  ttsProvider: string;
+  ttsVoice: string;
+  ttsLanguage: string;
+  voiceEnabled: boolean;
+  bargeIn: boolean;
+  spokenMode: string;
+  spokenThreshold: number;
 }
 
 function readState(config: Record<string, unknown> | null): TranscriptionState {
   const t = (config?.transcription as TranscriptionConfigShape | undefined) ?? {};
+  const tts = (config?.tts as Record<string, unknown> | undefined) ?? {};
+  const ttsLocal = (tts.local as Record<string, unknown> | undefined) ?? {};
+  const voice = (config?.voice as Record<string, unknown> | undefined) ?? {};
+  const sr = (voice.spoken_render as Record<string, unknown> | undefined) ?? {};
   return {
     enabled: typeof t.enabled === "boolean" ? t.enabled : true,
     mode: t.mode ?? "auto",
@@ -53,6 +65,14 @@ function readState(config: Record<string, unknown> | null): TranscriptionState {
     httpModel: t.http?.model ?? "",
     openaiApiKey: t.openai?.apiKey ?? "",
     groqApiKey: t.groq?.apiKey ?? "",
+    ttsEnabled: typeof tts.enabled === "boolean" ? tts.enabled : true,
+    ttsProvider: (tts.provider as string) ?? "local",
+    ttsVoice: (ttsLocal.voice as string) ?? "F4",
+    ttsLanguage: (tts.language as string) ?? "",
+    voiceEnabled: typeof voice.enabled === "boolean" ? voice.enabled : true,
+    bargeIn: typeof voice.barge_in === "boolean" ? voice.barge_in : true,
+    spokenMode: (sr.mode as string) ?? "model_led",
+    spokenThreshold: typeof sr.long_threshold_words === "number" ? sr.long_threshold_words : 60,
   };
 }
 
@@ -81,6 +101,17 @@ const LOCAL_ENGINES: ReadonlyArray<{ value: LocalEngine; label: string; hint: st
     hint: "Chinese / Japanese / Korean / Cantonese / English",
   },
 ];
+
+const TTS_PROVIDERS = [
+  { value: "local", label: "Local Supertonic (offline)" },
+  { value: "openai", label: "OpenAI (cloud)" },
+] as const;
+const TTS_VOICES = ["F1", "F2", "F3", "F4", "F5", "M1", "M2", "M3", "M4", "M5"] as const;
+const SPOKEN_MODES = [
+  { value: "model_led", label: "Model-led summary" },
+  { value: "aux_summary", label: "Aux-model summary" },
+  { value: "verbatim", label: "Read full reply" },
+] as const;
 
 export function TranscriptionSettings({ token }: { token: string }) {
   const { t } = useTranslation();
@@ -351,6 +382,87 @@ export function TranscriptionSettings({ token }: { token: string }) {
           </SettingsRow>
         </SettingsGroup>
       </section>
+
+        <section>
+          <SettingsSectionTitle>Text-to-speech</SettingsSectionTitle>
+          <SettingsGroup>
+            <SettingsRow title="TTS provider" description="Voice output engine for conversational mode.">
+              <select
+                value={state.ttsProvider}
+                onChange={(e) => void onSave("tts.provider", e.target.value)}
+                disabled={savingPath === "tts.provider"}
+                className="h-8 rounded-full border bg-background px-3 text-[13px]"
+              >
+                {TTS_PROVIDERS.map((p) => (<option key={p.value} value={p.value}>{p.label}</option>))}
+              </select>
+            </SettingsRow>
+            {state.ttsProvider === "local" ? (
+              <>
+                <SettingsRow title="Voice" description="Supertonic preset voice.">
+                  <select
+                    value={state.ttsVoice}
+                    onChange={(e) => void onSave("tts.local.voice", e.target.value)}
+                    disabled={savingPath === "tts.local.voice"}
+                    className="h-8 rounded-full border bg-background px-3 text-[13px]"
+                  >
+                    {TTS_VOICES.map((v) => (<option key={v} value={v}>{v}</option>))}
+                  </select>
+                </SettingsRow>
+                <SettingsRow
+                  title="Local TTS (Supertonic)"
+                  description="Adds the [tts] extra for on-device speech synthesis."
+                >
+                  <Button size="sm" variant="outline" className="rounded-full"
+                          onClick={() => void ensureThen("tts", () => void load())}>
+                    Install [tts]
+                  </Button>
+                </SettingsRow>
+              </>
+            ) : null}
+            <SettingsRow title="Language" description="ISO-639-1 code (es, en…). Empty = auto.">
+              <TextRow
+                value={state.ttsLanguage}
+                placeholder="es"
+                disabled={savingPath === "tts.language"}
+                onSave={(v) => void onSave("tts.language", v)}
+              />
+            </SettingsRow>
+          </SettingsGroup>
+        </section>
+
+        <section>
+          <SettingsSectionTitle>Conversational mode</SettingsSectionTitle>
+          <SettingsGroup>
+            <SettingsRow title="Hands-free voice" description="The floating orb listens, thinks and speaks.">
+              <Button size="sm" variant="outline" className="rounded-full"
+                      onClick={() => void onSave("voice.enabled", !state.voiceEnabled)}>
+                {state.voiceEnabled ? t("settings.config.on") : t("settings.config.off")}
+              </Button>
+            </SettingsRow>
+            <SettingsRow title="Barge-in" description="Interrupt the agent by speaking over it.">
+              <Button size="sm" variant="outline" className="rounded-full"
+                      onClick={() => void onSave("voice.barge_in", !state.bargeIn)}>
+                {state.bargeIn ? t("settings.config.on") : t("settings.config.off")}
+              </Button>
+            </SettingsRow>
+          </SettingsGroup>
+        </section>
+
+        <section>
+          <SettingsSectionTitle>Spoken rendition</SettingsSectionTitle>
+          <SettingsGroup>
+            <SettingsRow title="Long replies" description="What the voice speaks when a reply is long.">
+              <select
+                value={state.spokenMode}
+                onChange={(e) => void onSave("voice.spoken_render.mode", e.target.value)}
+                disabled={savingPath === "voice.spoken_render.mode"}
+                className="h-8 rounded-full border bg-background px-3 text-[13px]"
+              >
+                {SPOKEN_MODES.map((m) => (<option key={m.value} value={m.value}>{m.label}</option>))}
+              </select>
+            </SettingsRow>
+          </SettingsGroup>
+        </section>
 
       {pendingExtra ? (
         <ExtraInstallPrompt
