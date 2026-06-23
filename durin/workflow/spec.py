@@ -167,9 +167,15 @@ def _build_node(raw: dict[str, Any]) -> Node:
             raise WorkflowError(
                 f"node {node_id!r}: a decision node needs exactly one of 'command' or 'criteria'"
             )
-        model = raw.get("model") or raw.get("judge_model")
+        model = raw.get("model")
+        if model is None:                       # map judge_model only when model is unset
+            model = raw.get("judge_model")
         on_pass = raw.get("on_pass")
         on_fail = raw.get("on_fail")
+        if raw.get("next") is not None and (on_pass is not None or on_fail is not None):
+            raise WorkflowError(
+                f"node {node_id!r}: 'next' and routing ('on_pass'/'on_fail') are mutually exclusive"
+            )
         # Routing agent nodes default to explore mode (read-only) for independence.
         mode = raw.get("mode", "explore") if not command else raw.get("mode", "build")
         return WorkNode(

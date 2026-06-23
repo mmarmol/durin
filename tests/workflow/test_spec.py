@@ -288,6 +288,14 @@ def test_a_node_cannot_have_both_next_and_routing():
         ]})
 
 
+def test_legacy_decision_cannot_have_both_next_and_routing():
+    with pytest.raises(WorkflowError):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "decision", "criteria": "ok?", "next": "b", "on_pass": "b"},
+            {"id": "b", "kind": "work"},
+        ]})
+
+
 def test_parses_subworkflow_node():
     from durin.workflow.spec import SubworkflowNode
     wf = parse_workflow({"name": "d", "start": "sub", "nodes": [
