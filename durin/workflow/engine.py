@@ -180,7 +180,10 @@ class WorkflowEngine:
                     current = node.on_pass if passed else node.on_fail
                 else:
                     upstream_output = output
-                    upstream_artifact_dir = out_dir   # mirrors upstream_output
+                    # Mirrors upstream_output. A command node has out_dir=None (it is not a
+                    # file producer), so it nils the chain for the next node — consistent
+                    # with it also replacing the text output with its stdout.
+                    upstream_artifact_dir = out_dir
                     final_output = output
                     current = node.next
 
