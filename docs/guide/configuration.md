@@ -76,8 +76,11 @@ disk.
 | `durin config edit` | Open config in `$EDITOR`; restore on validation failure |
 | `durin config import ~/.durin_backup` | Import a config and migrate plaintext secrets |
 
-Keys accept both `snake_case` and `camelCase` notation in `set`/`get`; the
-on-disk file uses camelCase for nested fields.
+**Casing.** `snake_case` is the canonical form everywhere — the on-disk config,
+the HTTP/WS API, and the webui all use `snake_case` (matching the Python field
+names). Input is case-tolerant: `set`/`get` and the loader accept both
+`snake_case` and `camelCase`, so a legacy camelCase config still loads and is
+rewritten to `snake_case` on the next save. Output is always `snake_case`.
 
 ---
 
@@ -625,16 +628,16 @@ Or define a named preset and activate it:
 
 ```json
 {
-  "modelPresets": {
+  "model_presets": {
     "fast": {
       "model": "claude-haiku-3-5",
       "provider": "anthropic",
-      "maxTokens": 4096
+      "max_tokens": 4096
     }
   },
   "agents": {
     "defaults": {
-      "modelPreset": "fast"
+      "model_preset": "fast"
     }
   }
 }
