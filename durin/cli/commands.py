@@ -528,29 +528,6 @@ def _stdin_is_interactive() -> bool:
         return False
 
 
-def _prefetch_speech_models(extras: list[str], config_path: Path) -> None:
-    """After onboarding installs the speech extras, download their models now
-    so the first transcription / spoken reply is instant rather than stalling
-    on a one-time download. Runs in a fresh interpreter (``python -m durin``)
-    because the just-injected libraries are not importable in this process."""
-    speech = sorted({"stt", "tts"} & set(extras))
-    if not speech:
-        return
-    import subprocess
-
-    console.print(
-        f"[dim]Fetching the speech model(s) for {', '.join(speech)} so the "
-        "first use is instant (this can take a minute)…[/dim]"
-    )
-    rc = subprocess.run(
-        [sys.executable, "-m", "durin", "voice", "warmup", "--config", str(config_path)],
-    ).returncode
-    if rc != 0:
-        console.print(
-            "[yellow]Model fetch didn't finish; it will download on first use.[/yellow]"
-        )
-
-
 @app.command()
 def onboard(
     section: str | None = typer.Argument(
@@ -716,10 +693,9 @@ def onboard(
                 if typer.confirm("Install them now?", default=True):
                     rc = install_missing_extras(missing, assume_yes=True)
                     if rc == 0:
-                        console.print("[green]✓[/green] Extras installed.")
-                        _prefetch_speech_models(missing, config_path)
                         console.print(
-                            "[dim]Restart durin to pick up the new extras.[/dim]"
+                            "[green]✓[/green] Extras installed — "
+                            "restart durin to pick them up."
                         )
                     else:
                         console.print(
@@ -2735,52 +2711,6 @@ def _login_github_copilot() -> None:
     except Exception as e:
         console.print(f"[red]Authentication error: {e}[/red]")
         raise typer.Exit(1) from None
-
-
-voice_app = typer.Typer(help="Voice (speech) engine tools.")
-app.add_typer(voice_app, name="voice")
-
-
-@voice_app.command("warmup")
-def voice_warmup(
-    config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
-) -> None:
-    """Pre-build the local speech engines, downloading their models if needed,
-    so the first transcription / spoken reply is instant instead of stalling on
-    a one-time download.
-
-    Warms whatever the current config enables with a local provider; cloud
-    providers and uninstalled engines are skipped. Safe to re-run — models are
-    cached. Onboarding runs this for you after installing the speech extras.
-    """
-    import asyncio
-
-    from durin.config.loader import get_config_path, load_config
-    from durin.service.speech import SpeechSynthesisService
-    from durin.service.transcription import TranscriptionService
-    from durin.voice.warmup import warm_speech_services
-
-    config_path = Path(config).expanduser().resolve() if config else get_config_path()
-    cfg = load_config(config_path)
-    transcription = TranscriptionService.from_config(cfg.transcription)
-    speech = SpeechSynthesisService.from_config(cfg.tts)
-
-    console.print("[dim]Preparing speech engines (downloading models if needed)…[/dim]")
-    results = asyncio.run(
-        warm_speech_services(transcription, cfg.transcription, speech, cfg.tts)
-    )
-    if not results:
-        console.print("[dim]Nothing to warm (no local speech engine enabled).[/dim]")
-        return
-    failed = False
-    for label, ok, err in results:
-        if ok:
-            console.print(f"[green]✓[/green] {label} ready.")
-        else:
-            failed = True
-            console.print(f"[yellow]{label} could not be prepared: {err}[/yellow]")
-    if failed:
-        raise typer.Exit(1)
 
 
 # Register lifecycle / diagnostic commands last so they sort below the

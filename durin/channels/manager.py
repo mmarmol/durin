@@ -317,19 +317,28 @@ class ChannelManager:
         installed and the subsystem is enabled. Skipped silently when the extra
         is absent (the install prompts still surface at use-time); cloud
         providers warm to a no-op. Failures are logged, never fatal."""
-        from durin.voice.warmup import warm_speech_services
+        from durin.extras import _module_present
 
-        results = await warm_speech_services(
-            getattr(self, "transcription", None),
-            getattr(self.config, "transcription", None),
-            getattr(self, "speech_synthesis", None),
-            getattr(self.config, "tts", None),
-        )
-        for label, ok, err in results:
-            if ok:
+        async def _warm(svc, cfg, module: str, label: str) -> None:
+            if svc is None or not getattr(cfg, "enabled", False):
+                return
+            # Only a local engine needs its extra present; cloud providers no-op.
+            if getattr(cfg, "provider", None) == "local" and not _module_present(module):
+                return
+            try:
+                await svc.warmup()
                 logger.info("{} engine warmed", label)
-            else:
-                logger.warning("{} warmup skipped: {}", label, err)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("{} warmup skipped: {}", label, e)
+
+        await _warm(
+            getattr(self, "transcription", None),
+            getattr(self.config, "transcription", None), "sherpa_onnx", "Transcription",
+        )
+        await _warm(
+            getattr(self, "speech_synthesis", None),
+            getattr(self.config, "tts", None), "supertonic", "Speech synthesis",
+        )
 
     def _notify_restart_done_if_needed(self) -> None:
         """Send restart completion message when runtime env markers are present."""
