@@ -1004,7 +1004,7 @@ export async function listSouls(
 
 export async function saveSoul(
   token: string,
-  body: { slug: string; body: string },
+  body: components["schemas"]["SoulUpsertCommand"],
   base: string = "",
 ): Promise<SoulItem> {
   const res = await post<{ soul: SoulItem }>(`${base}/api/v1/souls`, token, body);
@@ -1031,7 +1031,7 @@ export async function listPersonas(
 
 export async function savePersona(
   token: string,
-  body: { name: string; soul: string; model: string | null; description: string | null },
+  body: components["schemas"]["PersonaUpsertCommand"],
   base: string = "",
 ): Promise<PersonaItem> {
   const res = await post<{ persona: PersonaItem }>(`${base}/api/v1/personas`, token, body);

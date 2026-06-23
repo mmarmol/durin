@@ -104,6 +104,12 @@ describe("personas API helpers", () => {
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+        body: JSON.stringify({
+          name: "assistant",
+          soul: "default",
+          model: null,
+          description: null,
+        }),
       }),
     );
     expect(result).toEqual(MOCK_PERSONA);
