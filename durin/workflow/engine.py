@@ -19,6 +19,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable
 
+from durin.workflow import workspace_fork
 from durin.workflow.condition import CommandOutcome, run_command
 from durin.workflow.judge import JudgeVerdict
 from durin.workflow.result import NodeRun, WorkflowResult
@@ -34,6 +35,9 @@ class NodeRunRequest:
     run_id: str
     iteration: int
     root_session_key: str | None
+    # When set, the node's file tools operate here (a private branch copy) instead of
+    # the shared workspace — used by writing-in-parallel so branches don't collide.
+    workspace_override: str | None = None
 
 
 @dataclass
@@ -56,6 +60,8 @@ class WorkflowEngine:
         command_cwd: str | None = None,
         judge_runner: Callable[[str, str, "str | None"], JudgeVerdict] | None = None,
         subworkflow_runner: Callable[..., str] | None = None,
+        workspace: str | None = None,
+        pick_runner: Callable[[str, list[str], "str | None"], int] | None = None,
     ) -> None:
         self._node_runner = node_runner
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex[:12])
@@ -63,6 +69,11 @@ class WorkflowEngine:
         self._command_cwd = command_cwd
         self._judge_runner = judge_runner
         self._subworkflow_runner = subworkflow_runner
+        # The real workspace (writing-parallel forks/applies here) and a runner that
+        # picks the winning branch for 'choose' reconciliation. Both optional: a
+        # read-only engine needs neither.
+        self._workspace = workspace
+        self._pick_runner = pick_runner
 
     def run(
         self, workflow: Workflow, task: str, *, root_session_key: str | None = None
@@ -123,21 +134,14 @@ class WorkflowEngine:
                 current = node.next
 
             elif isinstance(node, ParallelNode):
-                # Run each branch concurrently. Branches are read/analysis work, so
-                # their outputs don't collide; each already runs as its own session.
-                parallel_input = upstream_output
-                def _run_branch(branch_id: str) -> tuple[str, str]:
-                    branch = workflow.nodes[branch_id]
-                    resp = self._node_runner(NodeRunRequest(
-                        node=branch, task=task, upstream_output=parallel_input,
-                        shared_context=[], run_id=run_id, iteration=iteration,
-                        root_session_key=root_session_key,
-                    ))
-                    return branch_id, resp.output
-                with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(node.branches))) as ex:
-                    branch_results = list(ex.map(_run_branch, node.branches))
-                merged = "\n\n".join(f"[{bid}]\n{out}" for bid, out in branch_results)
+                merged, abort = self._run_parallel(
+                    workflow, node, task, run_id, iteration, root_session_key, upstream_output
+                )
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=merged))
+                if abort is not None:
+                    return WorkflowResult(
+                        status="aborted", final_output=abort, runs=runs, run_id=run_id
+                    )
                 upstream_output = merged
                 final_output = merged
                 current = node.next
@@ -172,3 +176,67 @@ class WorkflowEngine:
         return WorkflowResult(
             status="completed", final_output=final_output, runs=runs, run_id=run_id
         )
+
+    def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key, workspace_override):
+        return self._node_runner(NodeRunRequest(
+            node=branch, task=task, upstream_output=upstream, shared_context=[],
+            run_id=run_id, iteration=iteration, root_session_key=root_key,
+            workspace_override=workspace_override,
+        ))
+
+    def _run_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream):
+        """Run a parallel node's branches concurrently and reconcile their writes.
+
+        Returns ``(merged_output, abort_message)``; ``abort_message`` is None on
+        success or a string when the run must abort (e.g. a union conflict, or a
+        misconfiguration). 'read' branches run against the shared workspace (no writes
+        applied); 'choose'/'union' branches each run against a private copy and their
+        file changes are reconciled back.
+        """
+        branches = node.branches
+        workers = max(1, len(branches))
+
+        if node.reconcile == "read":
+            def _run(bid):
+                resp = self._run_one_branch(
+                    workflow.nodes[bid], task, upstream, run_id, iteration, root_key, None)
+                return bid, resp.output
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+                results = list(ex.map(_run, branches))
+            return "\n\n".join(f"[{bid}]\n{out}" for bid, out in results), None
+
+        if self._workspace is None:
+            return "", f"parallel node {node.id!r}: reconcile={node.reconcile!r} needs a workspace"
+
+        base = workspace_fork.snapshot(self._workspace)
+        forks: list = []
+
+        def _run(bid):
+            fork_dir = workspace_fork.fork(self._workspace)
+            forks.append(fork_dir)
+            resp = self._run_one_branch(
+                workflow.nodes[bid], task, upstream, run_id, iteration, root_key, str(fork_dir))
+            return bid, resp.output, workspace_fork.diff(base, fork_dir)
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+                results = list(ex.map(_run, branches))
+            if node.reconcile == "choose":
+                if self._pick_runner is None:
+                    return "", f"parallel node {node.id!r}: 'choose' needs a pick_runner"
+                idx = self._pick_runner(node.criteria, [out for _, out, _ in results], node.judge_model)
+                idx = idx if isinstance(idx, int) and 0 <= idx < len(results) else 0
+                bid, out, cs = results[idx]
+                workspace_fork.apply(cs, self._workspace)
+                return f"[chosen: {bid}]\n{out}", None
+            # union: apply every branch unless two touched the same path
+            changesets = [cs for _, _, cs in results]
+            conflict = workspace_fork.conflicts(changesets)
+            if conflict:
+                return "", f"parallel node {node.id!r}: union conflict on {sorted(conflict)}"
+            for cs in changesets:
+                workspace_fork.apply(cs, self._workspace)
+            return "\n\n".join(f"[{bid}]\n{out}" for bid, out, _ in results), None
+        finally:
+            for fork_dir in forks:
+                workspace_fork.cleanup(fork_dir)

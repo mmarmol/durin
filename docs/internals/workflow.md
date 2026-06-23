@@ -51,10 +51,14 @@ re-runs knowing what to fix. A node can also be a **sub-workflow**
 the nested run carries the same root session key, so its node sessions anchor to the
 invoking conversation too.
 A **parallel** node runs a set of work-node branches concurrently and merges their text
-outputs into the next node's input — these are read/analysis branches; writing-in-parallel
-(which needs an isolated write space per branch plus a reconcile step) is a separate later
-concern. A per-node visit count bounds loop-backs: exceeding `max_visits` ends the run with
-status `max_visits` instead of looping forever.
+outputs into the next node's input. Its `reconcile` mode decides how branch *writes*
+come back together (`durin/workflow/workspace_fork.py`): `read` = read/analysis
+branches, no writes applied; `choose` = each branch writes in a private copy of the
+workspace and a judge picks one to apply, discarding the rest; `union` = apply every
+branch's writes, aborting on a genuine conflict (two branches wrote *different* content
+to the same path — identical incidental files reconcile cleanly). A per-node visit count
+bounds loop-backs: exceeding `max_visits` ends the run with status `max_visits` instead
+of looping forever.
 
 **The engine is decoupled from the LLM and runs loop-safe.** The graph walk depends
 only on an injected `NodeRunner` callable, so it is fully unit-testable with a mock.
@@ -116,7 +120,8 @@ End-to-end for a single `run_workflow` call:
 |---|---|---|
 | `Workflow`, `WorkNode`, `DecisionNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator. |
 | `run_command`, `CommandOutcome` | `durin/workflow/condition.py` | The shell-exit-code condition a decision node routes on. |
-| `JudgeVerdict`, `AgentJudgeRunner` | `durin/workflow/judge.py` | The reviewer agent that returns a pass/fail verdict + feedback for a judgment decision node. |
+| `JudgeVerdict`, `AgentJudgeRunner` | `durin/workflow/judge.py` | The reviewer agent: a pass/fail verdict + feedback for a judgment decision node, and `pick` to choose the best of N branch outputs. |
+| `fork`, `diff`, `conflicts`, `apply` | `durin/workflow/workspace_fork.py` | Per-branch workspace isolation + reconciliation (choose/union) for writing-in-parallel. |
 | `SubworkflowRunner` | `durin/workflow/subworkflow.py` | Runs a named workflow as a nested run (depth-capped) for a sub-workflow node. |
 | `WorkflowEngine` | `durin/workflow/engine.py` | The graph executor: routing, loop-back with a visit cap, own/shared context, output threading, and concurrent parallel branches. |
 | `AgentNodeRunner` | `durin/workflow/node_runner.py` | The default node runner: one real `AgentRunner` turn per work node, persisted as a lineage'd node session. |
@@ -135,13 +140,14 @@ End-to-end for a single `run_workflow` call:
 - **Lineage:** node sessions reuse the lineage metadata on the open session document
   (`durin/session/lineage.py`), so no schema migration is involved.
 - **Current scope.** This subsystem is built incrementally. Today: sequential execution
-  with **concurrent parallel** branches (read/analysis); per-node model / context /
-  tools / **skills** / **MCP servers**; decision conditions by **shell command or agent
-  judgment** (with feedback-threaded loop-back); **sub-workflow** composition
-  (depth-capped); and runs **anchored to the invoking session**. Not yet built — see
-  [roadmap.md](../roadmap.md) for direction — writing-in-parallel (isolated write space per branch + reconcile),
-  per-node custom persona, a visual editor, internal-git versioning of definitions,
-  and dream-driven self-improvement of workflows.
+  with **concurrent parallel** branches — read-only, or **writing** with `choose` /
+  `union` reconciliation (private copy per branch + content-aware conflict detection);
+  per-node model / context / tools / **skills** / **MCP servers**; decision conditions
+  by **shell command or agent judgment** (with feedback-threaded loop-back);
+  **sub-workflow** composition (depth-capped); and runs **anchored to the invoking
+  session**. Not yet built — see [roadmap.md](../roadmap.md) for direction — auto-merge
+  of conflicting parallel writes, per-node custom persona, a visual editor, internal-git
+  versioning of definitions, and dream-driven self-improvement of workflows.
 - **Security.** Definitions are local files the user authored, so running their
   commands and tools is equivalent to the user running them directly; importing remote
   or third-party definitions is not supported in this scope (see [security.md](security.md)).

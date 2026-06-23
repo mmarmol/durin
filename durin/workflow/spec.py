@@ -57,11 +57,18 @@ class SubworkflowNode:
 
 @dataclass(frozen=True)
 class ParallelNode:
-    """A node that runs a set of work-node branches concurrently and merges their outputs."""
+    """A node that runs a set of work-node branches concurrently and merges their
+    outputs. ``reconcile`` decides how their file writes come back together:
+    'read' = read-only branches (no isolation, no writes applied); 'choose' = each
+    branch writes in its own copy, a judge picks one to apply; 'union' = apply every
+    branch's writes, failing on a same-file conflict."""
 
     id: str
     branches: tuple[str, ...] = ()
     next: str | None = None
+    reconcile: Literal["read", "choose", "union"] = "read"
+    criteria: str = ""                   # for 'choose': how the judge picks the winner
+    judge_model: str | None = None       # optional model for the 'choose' judge
     kind: Literal["parallel"] = "parallel"
 
 
@@ -148,7 +155,20 @@ def _build_node(raw: dict[str, Any]) -> Node:
             raise WorkflowError(
                 f"node {node_id!r}: a parallel node needs a non-empty 'branches' list"
             )
-        return ParallelNode(id=node_id, branches=tuple(branches), next=raw.get("next"))
+        reconcile = raw.get("reconcile", "read")
+        if reconcile not in ("read", "choose", "union"):
+            raise WorkflowError(
+                f"node {node_id!r}: reconcile must be 'read', 'choose' or 'union', got {reconcile!r}"
+            )
+        criteria = raw.get("criteria", "")
+        if reconcile == "choose" and not criteria:
+            raise WorkflowError(
+                f"node {node_id!r}: a 'choose' parallel node needs 'criteria' for the judge"
+            )
+        return ParallelNode(
+            id=node_id, branches=tuple(branches), next=raw.get("next"),
+            reconcile=reconcile, criteria=criteria, judge_model=raw.get("judge_model"),
+        )
     raise WorkflowError(f"node {node_id!r}: unknown kind {kind!r}")
 
 

@@ -11,6 +11,7 @@ full reply is kept as feedback and, on FAIL, threaded back to the producer on lo
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass
 
 from durin.agent.runner import AgentRunner, AgentRunSpec
@@ -22,6 +23,21 @@ _SYSTEM = (
     "on the first line if it does not. After that line, give a brief, concrete reason "
     "(on FAIL, say exactly what to fix)."
 )
+
+_PICK_SYSTEM = (
+    "You are a strict reviewer choosing the single best option. Reply with ONLY the "
+    "index number of the best option (e.g. '2') on the first line, then a brief reason. "
+    "Judge strictly against the criteria."
+)
+
+
+def _parse_index(text: str, n: int) -> int:
+    """First integer in the reply, clamped to a valid option index (default 0)."""
+    m = re.search(r"\d+", text)
+    if not m:
+        return 0
+    i = int(m.group())
+    return i if 0 <= i < n else 0
 
 
 @dataclass
@@ -51,3 +67,22 @@ class AgentJudgeRunner:
         text = (result.final_content or "").strip()
         passed = text.upper().startswith("PASS")
         return JudgeVerdict(passed=passed, feedback=text)
+
+    def pick(self, criteria: str, options: list[str], model: str | None) -> int:
+        """Choose the best of several branch outputs against the criteria; return its
+        index. A fresh reviewer turn (non-equivalent to the producers) decides."""
+        if not options:
+            return 0
+        listing = "\n\n".join(f"[{i}]\n{opt}" for i, opt in enumerate(options))
+        messages = [
+            {"role": "system", "content": _PICK_SYSTEM},
+            {"role": "user", "content": f"Criteria:\n{criteria}\n\nOptions:\n{listing}"},
+        ]
+        result = asyncio.run(self.runner.run(AgentRunSpec(
+            initial_messages=messages,
+            tools=ToolRegistry(),
+            model=model or self.default_model,
+            max_iterations=1,
+            max_tool_result_chars=self.max_tool_result_chars,
+        )))
+        return _parse_index((result.final_content or "").strip(), len(options))

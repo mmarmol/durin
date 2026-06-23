@@ -115,6 +115,8 @@ class RunWorkflowTool(Tool, ContextAware):
             command_cwd=self._workspace,
             judge_runner=judge_runner,
             subworkflow_runner=subworkflow_runner,
+            workspace=self._workspace,
+            pick_runner=judge_runner.pick,
         )
         root_session_key = self._session_key.get()
         result = await asyncio.to_thread(engine.run, workflow, task, root_session_key=root_session_key)

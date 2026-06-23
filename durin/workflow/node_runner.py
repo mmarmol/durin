@@ -83,15 +83,16 @@ class AgentNodeRunner:
         self._live_tool_registry = live_tool_registry
         self._main_loop = main_loop
 
-    def _build_tools(self, node) -> ToolRegistry:
+    def _build_tools(self, node, workspace_override: str | None = None) -> ToolRegistry:
         """Build the node's tool registry: its built-in set ('none'→empty,
         'default'→the standard subagent tool set) plus a scoped subset of the
-        already-connected MCP servers the node selected."""
+        already-connected MCP servers the node selected. ``workspace_override`` points
+        the file tools at a private branch copy (writing-in-parallel)."""
         registry = ToolRegistry()
         if getattr(node, "tools", "none") == "default":
             ctx = ToolContext(
                 config=self._tools_config,
-                workspace=str(self.sessions.workspace.resolve()),
+                workspace=workspace_override or str(self.sessions.workspace.resolve()),
                 file_state_store=FileStates(),
                 scope="subagent",
             )
@@ -135,7 +136,7 @@ class AgentNodeRunner:
 
         result = asyncio.run(self.runner.run(AgentRunSpec(
             initial_messages=messages,
-            tools=self._build_tools(req.node),
+            tools=self._build_tools(req.node, req.workspace_override),
             model=req.node.model or self.default_model,
             max_iterations=self.max_iterations,
             max_tool_result_chars=self.max_tool_result_chars,

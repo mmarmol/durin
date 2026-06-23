@@ -1,5 +1,7 @@
 """Tests for the sequential flow-graph engine (graph logic, mocked node runner)."""
 
+from pathlib import Path
+
 import pytest
 
 from durin.workflow.condition import CommandOutcome
@@ -325,3 +327,63 @@ def test_parallel_branches_get_the_parallel_input():
     eng.run(wf, "t")
     # branch 'a' saw 'pre's output (the input flowing into the parallel node)
     assert seen["a"] == "pre-out"
+
+
+def _writing_wf(reconcile, **extra):
+    nodes = [
+        {"id": "fan", "kind": "parallel", "branches": ["a", "b"],
+         "reconcile": reconcile, "next": None, **extra},
+        {"id": "a", "kind": "work", "tools": "default"},
+        {"id": "b", "kind": "work", "tools": "default"},
+    ]
+    return parse_workflow({"name": "d", "start": "fan", "nodes": nodes})
+
+
+def test_parallel_choose_applies_only_the_winner(tmp_path):
+    # each branch writes the same artifact in its own private copy
+    def node_runner(req):
+        Path(req.workspace_override, "result.txt").write_text(f"from {req.node.id}")
+        return NodeRunResponse(output=f"out-{req.node.id}", session_key=None, messages=[])
+
+    eng = WorkflowEngine(
+        node_runner=node_runner, run_id_factory=lambda: "r1",
+        workspace=str(tmp_path), pick_runner=lambda criteria, options, model: 1,  # pick b
+    )
+    res = eng.run(_writing_wf("choose", criteria="best"), "t")
+    assert res.status == "completed"
+    assert (tmp_path / "result.txt").read_text() == "from b"   # only the winner applied
+    assert "chosen: b" in res.final_output
+
+
+def test_parallel_union_applies_disjoint_branches(tmp_path):
+    def node_runner(req):
+        fname = "x.txt" if req.node.id == "a" else "y.txt"
+        Path(req.workspace_override, fname).write_text(req.node.id)
+        return NodeRunResponse(output=f"out-{req.node.id}", session_key=None, messages=[])
+
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1", workspace=str(tmp_path))
+    res = eng.run(_writing_wf("union"), "t")
+    assert res.status == "completed"
+    assert (tmp_path / "x.txt").read_text() == "a"
+    assert (tmp_path / "y.txt").read_text() == "b"
+
+
+def test_parallel_union_conflict_aborts_and_applies_nothing(tmp_path):
+    def node_runner(req):
+        Path(req.workspace_override, "same.txt").write_text(req.node.id)   # both touch same path
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1", workspace=str(tmp_path))
+    res = eng.run(_writing_wf("union"), "t")
+    assert res.status == "aborted"
+    assert "conflict" in res.final_output and "same.txt" in res.final_output
+    assert not (tmp_path / "same.txt").exists()   # nothing applied when there is a conflict
+
+
+def test_parallel_choose_without_pick_runner_aborts(tmp_path):
+    def node_runner(req):
+        return NodeRunResponse(output="o", session_key=None, messages=[])
+
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1", workspace=str(tmp_path))
+    res = eng.run(_writing_wf("choose", criteria="best"), "t")
+    assert res.status == "aborted"

@@ -75,6 +75,38 @@ def test_work_node_skills_must_be_string_list():
         ]})
 
 
+def test_parallel_reconcile_defaults_to_read():
+    fan = parse_workflow({"name": "d", "start": "fan", "nodes": [
+        {"id": "fan", "kind": "parallel", "branches": ["a"], "next": None},
+        {"id": "a", "kind": "work"},
+    ]}).nodes["fan"]
+    assert fan.reconcile == "read"
+
+
+def test_parallel_choose_requires_criteria():
+    with pytest.raises(WorkflowError, match="needs 'criteria'"):
+        parse_workflow({"name": "d", "start": "fan", "nodes": [
+            {"id": "fan", "kind": "parallel", "branches": ["a"], "reconcile": "choose", "next": None},
+            {"id": "a", "kind": "work"},
+        ]})
+
+
+def test_parallel_invalid_reconcile_raises():
+    with pytest.raises(WorkflowError, match="reconcile must be"):
+        parse_workflow({"name": "d", "start": "fan", "nodes": [
+            {"id": "fan", "kind": "parallel", "branches": ["a"], "reconcile": "merge", "next": None},
+            {"id": "a", "kind": "work"},
+        ]})
+
+
+def test_parallel_union_parses():
+    fan = parse_workflow({"name": "d", "start": "fan", "nodes": [
+        {"id": "fan", "kind": "parallel", "branches": ["a", "b"], "reconcile": "union", "next": None},
+        {"id": "a", "kind": "work"}, {"id": "b", "kind": "work"},
+    ]}).nodes["fan"]
+    assert fan.reconcile == "union"
+
+
 def test_unknown_start_raises():
     with pytest.raises(WorkflowError, match="start"):
         parse_workflow({"name": "d", "start": "missing",

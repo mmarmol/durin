@@ -49,6 +49,8 @@ class SubworkflowRunner:
             command_cwd=str(self.workspace),
             judge_runner=self.judge_runner,
             subworkflow_runner=nested,
+            workspace=str(self.workspace),
+            pick_runner=self.judge_runner.pick if self.judge_runner is not None else None,
         )
         # Anchor the sub-workflow's node sessions to the invoking conversation too,
         # so nested work is navigable under it (no orphan subtrees).
