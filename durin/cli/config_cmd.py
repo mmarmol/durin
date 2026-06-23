@@ -222,7 +222,7 @@ def cmd_get(
     except Exception:  # noqa: BLE001
         data = load_raw_config(path)
     try:
-        value = get_at(data, _normalize_dotted_path(key))
+        value = get_at(data, key)
     except KeyError:
         console.print(f"[red]No such key: {key}[/red]")
         raise typer.Exit(1) from None
