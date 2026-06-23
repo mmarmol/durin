@@ -278,7 +278,7 @@ def test_parallel_runs_all_branches_and_merges():
     assert "out-A" in merged and "out-B" in merged and "out-C" in merged
     # the parallel node recorded a run whose output is the merge
     fan_run = [r for r in res.runs if r.node_id == "fan"][0]
-    assert "out-A" in fan_run.output and "out-C" in fan_run.output
+    assert "out-A" in fan_run.output and "out-B" in fan_run.output and "out-C" in fan_run.output
 
 
 def test_parallel_branches_get_the_parallel_input():
