@@ -182,7 +182,7 @@ class ChannelManager:
                 if shared_transcription is not None:
                     channel.transcription = shared_transcription
                 channel.speech_synthesis = getattr(self, "speech_synthesis", None)
-                channel.voice_config = self.config.voice
+                channel.voice_config = getattr(self.config, "voice", None)
                 channel.send_progress = self._resolve_bool_override(
                     section, "send_progress", self.config.channels.send_progress,
                 )

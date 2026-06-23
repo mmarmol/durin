@@ -594,7 +594,7 @@ class WebSocketChannel(BaseChannel):
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:
-        return WebSocketConfig().model_dump(by_alias=True)
+        return WebSocketConfig().model_dump(by_alias=False)
 
     def _expected_path(self) -> str:
         return _normalize_config_path(self.config.path)

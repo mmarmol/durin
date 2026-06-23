@@ -335,7 +335,7 @@ class DiscordChannel(BaseChannel):
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:
-        return DiscordConfig().model_dump(by_alias=True)
+        return DiscordConfig().model_dump(by_alias=False)
 
     @staticmethod
     def _channel_key(channel_or_id: Any) -> str:
