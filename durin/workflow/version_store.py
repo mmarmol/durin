@@ -21,6 +21,16 @@ from loguru import logger
 from durin.utils.file_lock import cross_process_lock
 from durin.utils.git_repo import GitRepo, NothingToCommitError
 
+# Lock target name, kept beside the workflows dir (not inside it) so the ".lock" file
+# cross_process_lock derives never lands in a versioned snapshot. Shared with the HTTP
+# save/delete path so an editor write and a snapshot commit never interleave.
+VERSION_LOCK_NAME = ".workflow-version"
+
+
+def version_lock_target(workflows_dir: str | Path) -> Path:
+    """The cross-process lock target serializing edits and snapshots of ``workflows_dir``."""
+    return Path(workflows_dir).parent / VERSION_LOCK_NAME
+
 
 class WorkflowVersionStore:
     def __init__(self, workflows_dir: str | Path) -> None:
@@ -28,9 +38,7 @@ class WorkflowVersionStore:
         self._repo = GitRepo(
             self.dir, default_author="durin-workflow", default_email="workflow@durin.local"
         )
-        # Lock target lives beside the workflows dir, not inside it, so the lock file
-        # never lands in a snapshot. cross_process_lock appends ".lock" to this target.
-        self._lock = self.dir.parent / ".workflow-version"
+        self._lock = version_lock_target(self.dir)
 
     def snapshot(self, reason: str) -> str | None:
         """Commit the current workflow definitions if they changed.

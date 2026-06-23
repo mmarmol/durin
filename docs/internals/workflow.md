@@ -149,10 +149,13 @@ End-to-end for a single `run_workflow` call:
   `tools: "default"` receives the user's configured tool set; `tools: "none"` (the
   default) runs the node without tools. A node may also name `skills` (injected into
   its prompt) and `mcps` (a subset of the configured MCP servers, reused live).
-- **Management API:** `WorkflowsService` (`durin/service/workflows.py`) exposes
-  list / load / save / delete over HTTP at `/api/v1/workflows[/{name}]` (save validates
-  via `parse_workflow` and writes atomically under the lock). This is the surface the
-  webui visual editor uses; it's in the OpenAPI contract.
+- **Management API:** `WorkflowsService` (`durin/service/workflows.py`) exposes, over HTTP
+  at `/api/v1/workflows[/{name}]` and in the OpenAPI contract: list / load / save / delete
+  (save validates via `parse_workflow` and writes atomically under the version lock — the
+  same lock target the version store snapshots under, beside the dir, so a write and a
+  snapshot never interleave); **run** (`…/{name}/run` — executes the workflow on a task and
+  returns the per-node trace); and the **recommendations** queue (`…/recommendations`,
+  `…/recommendations/{id}/apply`). This is the surface the webui visual editor uses.
 - **Lineage:** node sessions reuse the lineage metadata on the open session document
   (`durin/session/lineage.py`), so no schema migration is involved.
 - **Self-improvement** (per-workflow `improvement_mode`: `off` default / `manual` /
@@ -163,9 +166,10 @@ End-to-end for a single `run_workflow` call:
   (so it never re-proposes a reverted edit), and proposes one scoped edit (a node
   `prompt` or a gate `criteria`; structural edits rejected). In **manual** mode the
   proposal is recorded as a recommendation (`workflow_recommendations.py`); the user
-  reviews and applies it via the `durin workflow` CLI (`recommendations` lists open
-  ones, `apply <name> <id>` writes the proposed text into the node, versions the edit
-  with its reason, and marks it applied) — the anti-Goodhart anchor is the human.
+  reviews and applies it — from the webui Workflows pane (a recommendations banner with an
+  apply button) or the `durin workflow` CLI (`recommendations` lists open ones,
+  `apply <name> <id>`) — which writes the proposed text into the node, versions the edit
+  with its reason, and marks it applied; the anti-Goodhart anchor is the human.
   **auto** mode (apply directly, gated by an external validation signal so it can't win
   by loosening gates) is the next slice; the apply step + seam are in place.
 - **Current scope.** This subsystem is built incrementally. Today: sequential execution
@@ -175,13 +179,15 @@ End-to-end for a single `run_workflow` call:
   **MCP servers**; decision conditions
   by **shell command or agent judgment** (with feedback-threaded loop-back);
   **sub-workflow** composition (depth-capped); runs **anchored to the invoking
-  session**; **git-versioned definitions** (each run snapshots them); and **dream-driven
+  session**; **git-versioned definitions** (each run snapshots them); **dream-driven
   self-improvement in manual mode** (recommendations from recurring run diagnostics); and
-  a **webui Workflows pane** that renders a workflow as a node graph (React Flow). Not yet
-  built — see [roadmap.md](../roadmap.md) for direction — visual *editing* (the pane is
-  read-only so far; editing/saving the graph is in progress), auto-mode self-improvement
-  (apply + validation anchor), auto-merge of conflicting parallel writes, and per-node
-  custom persona.
+  a **webui Workflows pane** (React Flow, at the same nav level as Memoria/Skills) that
+  renders, **edits, saves, and runs** a workflow — per-node config (mode / model / context
+  / tools / prompt; gate criteria), add/delete nodes and wire edges by dragging, set the
+  start node, run on a task with the per-node trace shown inline, and apply self-improvement
+  recommendations. Not yet built — see [roadmap.md](../roadmap.md) for direction —
+  auto-mode self-improvement (apply + validation anchor), auto-merge of conflicting
+  parallel writes, and per-node custom persona.
 - **Security.** Definitions are local files the user authored, so running their
   commands and tools is equivalent to the user running them directly; importing remote
   or third-party definitions is not supported in this scope (see [security.md](security.md)).

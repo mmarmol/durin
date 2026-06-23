@@ -27,6 +27,7 @@ from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 from durin.workflow.loader import WorkflowNotFound, load_workflow, workflows_dir
 from durin.workflow.spec import WorkflowError, parse_workflow
+from durin.workflow.version_store import version_lock_target
 
 
 class WorkflowsListQuery(Query):
@@ -101,6 +102,12 @@ class WorkflowsService:
     def _dir(self) -> Path:
         return workflows_dir(self._workspace)
 
+    def _lock_target(self) -> Path:
+        # Lock beside the workflows dir on the same target the version store uses, so a
+        # save/delete and a snapshot commit never interleave and no ".lock" artifact lands
+        # inside the versioned dir.
+        return version_lock_target(self._dir())
+
     @route(
         "GET", "/api/v1/workflows",
         scope=Scope.WORKFLOWS_READ.value,
@@ -144,7 +151,7 @@ class WorkflowsService:
             raise ValidationFailedError(f"invalid workflow: {exc}")
         path = self._dir() / f"{cmd.name}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        with cross_process_lock(path):
+        with cross_process_lock(self._lock_target()):
             atomic_write_text(path, json.dumps(cmd.definition, indent=2, ensure_ascii=False))
         return WorkflowSaveResult(name=cmd.name)
 
@@ -159,7 +166,7 @@ class WorkflowsService:
         path = self._dir() / f"{cmd.name}.json"
         if not path.is_file():
             raise NotFoundError(f"workflow {cmd.name!r} not found")
-        with cross_process_lock(path):
+        with cross_process_lock(self._lock_target()):
             path.unlink()
         return WorkflowDeleteResult(deleted=True)
 

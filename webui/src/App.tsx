@@ -618,6 +618,7 @@ function Shell({
         chatId={activeSession?.chatId ?? null}
         chatTitle={activeSession?.title ?? activeSession?.preview ?? null}
         onEnsureChat={ensureVoiceChat}
+        hideWhenIdle={view !== "chat"}
       />
 
       <DeleteConfirm

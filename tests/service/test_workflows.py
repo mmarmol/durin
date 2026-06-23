@@ -34,6 +34,19 @@ async def test_save_list_get_delete_round_trip(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_save_and_delete_leave_no_lock_inside_versioned_dir(tmp_path):
+    # The cross-process lock must live beside the workflows dir, not inside it, or its
+    # ".lock" file would land in a version-store snapshot. Lock on the same target the
+    # version store uses so an editor write and a snapshot commit never interleave.
+    svc, p = _svc(tmp_path), Principal.local()
+    wf_dir = tmp_path / "workflows"
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    await svc.delete(WorkflowDeleteCommand(name="wf"), p)
+    assert list(wf_dir.glob("*.lock")) == []
+    assert (tmp_path / ".workflow-version.lock").exists()  # lock landed beside the dir
+
+
+@pytest.mark.asyncio
 async def test_save_rejects_an_invalid_workflow(tmp_path):
     with pytest.raises(ValidationFailedError):
         # missing start + nodes -> parse_workflow rejects it, so it never lands on disk
