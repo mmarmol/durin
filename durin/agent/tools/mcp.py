@@ -519,16 +519,28 @@ async def connect_mcp_servers(
             ok = await conn.start()
         except Exception as e:  # noqa: BLE001
             hint = _stdio_pollution_hint(e)
-            logger.exception("MCP server '{}': failed to connect: {}", name, hint)
+            # Log the real exception in the message (not just the hint, which is
+            # empty for non-stdio transports); logger.exception adds the traceback.
+            logger.exception(
+                "MCP server '{}': failed to connect: {}",
+                name, f"{e}{hint}".strip() or "connection error",
+            )
             if errors is not None:
                 errors[name] = f"{e}{hint}".strip() or "connection failed"
             continue
         if ok:
             connections[name] = conn
         else:
+            # start() returned False (stored the reason on conn._error) rather
+            # than raising — there is NO active exception here, so logger.error,
+            # not logger.exception (which would log a useless "NoneType: None").
+            # Surface the real reason, not the (empty-for-OAuth) hint.
             err = conn._error
             hint = _stdio_pollution_hint(err) if err is not None else ""
-            logger.exception("MCP server '{}': failed to connect: {}", name, hint)
+            logger.error(
+                "MCP server '{}': failed to connect: {}",
+                name, f"{err}{hint}".strip() if err else "connection failed",
+            )
             if errors is not None:
                 errors[name] = f"{err}{hint}".strip() if err else "connection failed"
             await conn.aclose()
