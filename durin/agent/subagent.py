@@ -12,7 +12,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from durin.agent.hook import AgentHook, AgentHookContext
-from durin.agent.runner import AgentRunner, AgentRunSpec
+from durin.agent.runner import AgentRunner, AgentRunResult, AgentRunSpec
 from durin.agent.tools.context import ToolContext
 from durin.agent.tools.file_state import FileStates
 from durin.agent.tools.loader import ToolLoader
@@ -313,7 +313,7 @@ class SubagentManager:
             await self._announce_result(task_id, label, task, f"Error: {e}", origin, "error", origin_message_id)
 
     def _persist_subagent_session(
-        self, task_id: str, parent_key: str | None, result, label: str
+        self, task_id: str, parent_key: str | None, result: AgentRunResult, label: str
     ) -> None:
         """Persist a finished subagent's conversation as its own session,
         linked to the parent so the work is navigable, searchable, and not
