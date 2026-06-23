@@ -170,14 +170,30 @@ export default function App() {
   // in-memory token pool, so the cached token 401s. On a 401, `request`
   // calls this to mint a fresh token and retry — no page reload needed.
   useEffect(() => {
-    setApiReauthHandler(async () => {
-      try {
-        const boot = await fetchBootstrap("", "");
-        setState((s) => (s.status === "ready" ? { ...s, token: boot.token } : s));
-        return boot.token;
-      } catch {
+    // Dedupe concurrent 401s into a single in-flight bootstrap, and retry it
+    // with backoff so a call that 401s *during* a gateway restart recovers once
+    // the gateway is back (a few seconds) rather than erroring until a reload.
+    let inFlight: Promise<string | null> | null = null;
+    setApiReauthHandler(() => {
+      if (inFlight) return inFlight;
+      inFlight = (async () => {
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try {
+            const boot = await fetchBootstrap("", "");
+            setState((s) => (s.status === "ready" ? { ...s, token: boot.token } : s));
+            return boot.token;
+          } catch {
+            if (attempt < 4) {
+              await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+            }
+          }
+        }
         return null;
-      }
+      })();
+      void inFlight.finally(() => {
+        inFlight = null;
+      });
+      return inFlight;
     });
     return () => setApiReauthHandler(null);
   }, []);

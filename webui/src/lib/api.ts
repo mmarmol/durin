@@ -40,12 +40,16 @@ export function setApiReauthHandler(
   reauthHandler = handler;
 }
 
-async function request<T>(
+/** fetch with Bearer auth + one automatic retry on 401 (after the reauth
+ *  handler mints a fresh token). Returns the raw Response so callers can read
+ *  it however they need — `request` throws on non-2xx, while the skills
+ *  endpoints parse their own 4xx problem+json envelopes. */
+async function fetchWithReauth(
   url: string,
   token: string,
   init?: RequestInit,
   retryOn401 = true,
-): Promise<T> {
+): Promise<Response> {
   const res = await fetch(url, {
     ...(init ?? {}),
     headers: {
@@ -57,9 +61,19 @@ async function request<T>(
   if (res.status === 401 && retryOn401 && reauthHandler) {
     const fresh = await reauthHandler();
     if (fresh && fresh !== token) {
-      return request<T>(url, fresh, init, false);
+      return fetchWithReauth(url, fresh, init, false);
     }
   }
+  return res;
+}
+
+async function request<T>(
+  url: string,
+  token: string,
+  init?: RequestInit,
+  retryOn401 = true,
+): Promise<T> {
+  const res = await fetchWithReauth(url, token, init, retryOn401);
   if (!res.ok) {
     throw new ApiError(res.status, `HTTP ${res.status}`);
   }
@@ -599,13 +613,9 @@ export async function installSkillDeps(
 ): Promise<{ ok?: boolean; results?: Array<{ command: string; success: boolean; output?: string; error?: string }>; error?: string }> {
   const body: Record<string, string> = { name };
   if (bin) body.binName = bin;
-  const res = await fetch(`${base}/api/v1/skills/${encodeURIComponent(name)}/install-deps`, {
+  const res = await fetchWithReauth(`${base}/api/v1/skills/${encodeURIComponent(name)}/install-deps`, token, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   if (res.status >= 500) throw new ApiError(res.status, `HTTP ${res.status}`);
@@ -627,13 +637,9 @@ export async function approveSkill(
   if (opts.install_deps) body.installDeps = true;
   // 2xx carries the result in `data`; a 409 (gate refused) is problem+json with
   // the gate payload under `details`; only 5xx throws.
-  const res = await fetch(`${base}/api/v1/skills/${encodeURIComponent(name)}/approve`, {
+  const res = await fetchWithReauth(`${base}/api/v1/skills/${encodeURIComponent(name)}/approve`, token, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   if (res.status >= 500) throw new ApiError(res.status, `HTTP ${res.status}`);
