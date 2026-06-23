@@ -290,6 +290,11 @@ def _reconcile_extras_from_config(config: Config, extras: set[str]) -> None:
     if transcription is not None and getattr(transcription, "enabled", True) and \
             getattr(transcription, "provider", "local") == "local":
         extras.add("stt")
+    # TTS: local Supertonic needs [tts]; cloud needs only an API key.
+    tts = getattr(config, "tts", None)
+    if tts is not None and getattr(tts, "enabled", True) and \
+            getattr(tts, "provider", "local") == "local":
+        extras.add("tts")
 
 
 def run_wizard(initial_config: Config, *, q: Any | None = None) -> WizardResult:
@@ -636,7 +641,7 @@ _HUB_ROWS: tuple[tuple[str, str], ...] = (
     ("vision-audio", "Vision / audio"),
     ("memory", "Vector memory"),
     ("web", "Web search"),
-    ("transcription", "Audio transcription"),
+    ("transcription", "Voice (transcription + speech)"),
     ("dashboard", "Web dashboard"),
     ("channels", "Chat channels"),
     ("workspace", "Workspace"),
@@ -678,8 +683,11 @@ def _hub_state(key: str, config: Config) -> str:
         return "off"
     if key == "transcription":
         if not getattr(config.transcription, "enabled", True):
-            return "off"
-        return f"on ({config.transcription.provider})"
+            stt = "off"
+        else:
+            stt = config.transcription.provider
+        tts = getattr(getattr(config, "tts", None), "provider", "off")
+        return f"stt: {stt} · tts: {tts}"
     if key == "dashboard":
         return "on" if getattr(config.gateway, "webui_enabled", False) else "off"
     if key == "channels":
@@ -1167,12 +1175,16 @@ def _configure_transcription(
         mic_label = (
             f"TUI mic recording (/voice) — {'ON' if has_voice else 'off'}"
         )
+        tts = getattr(config, "tts", None)
+        tts_provider = getattr(tts, "provider", "local") if tts is not None else "local"
+        tts_label = f"Text-to-speech provider: {tts_provider}"
         pick = q.select(
             f"Audio transcription — {'ON' if on else 'off'}  (provider: {provider}):",
             choices=[
                 toggle,
                 f"Provider: {provider}",
                 mic_label,
+                tts_label,
                 _BACK_CHOICE,
             ],
         ).ask()
@@ -1226,6 +1238,27 @@ def _configure_transcription(
                 extras.discard("voice")
             else:
                 extras.add("voice")
+            continue
+        if pick == tts_label:
+            choice = q.select(
+                "Choose a text-to-speech provider:",
+                choices=[
+                    "Local Supertonic (offline, on-device — [tts] extra)",
+                    "OpenAI (cloud)",
+                    _BACK_CHOICE,
+                ],
+            ).ask()
+            if choice is None or choice == _BACK_CHOICE:
+                continue
+            if choice.startswith("Local"):
+                config.tts.provider = "local"
+                config.tts.enabled = True
+                extras.add("tts")
+            else:
+                config.tts.provider = "openai"
+                config.tts.enabled = True
+                extras.discard("tts")
+            summary.append(f"TTS provider: {config.tts.provider}")
             continue
 
 
