@@ -88,7 +88,8 @@ class RunWorkflowTool(Tool):
         provider = make_provider(self._app_config, preset=preset)
         runner = AgentRunner(provider)
         node_runner = AgentNodeRunner(
-            runner, self._sessions, default_model=provider.get_default_model()
+            runner, self._sessions, default_model=provider.get_default_model(),
+            tools_config=self._app_config.tools,
         )
         engine = WorkflowEngine(node_runner=node_runner)
         result = await asyncio.to_thread(engine.run, workflow, task)
