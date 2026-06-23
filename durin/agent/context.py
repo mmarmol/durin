@@ -103,9 +103,9 @@ class ContextBuilder:
     """Builds the context (system prompt + messages) for the agent."""
 
     # USER.md dropped — the user profile lives in the principal person
-    # entity (pinned context), not a bootstrap file. SOUL.md (personality, user
-    # control) stays.
-    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "TOOLS.md"]
+    # entity (pinned context), not a bootstrap file. SOUL.md is now
+    # persona-driven (rendered as a dedicated soul block, not a bootstrap file).
+    BOOTSTRAP_FILES = ["AGENTS.md", "TOOLS.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
     _MAX_RECENT_HISTORY = 50
     _MAX_HISTORY_CHARS = 32_000  # hard cap on recent history section size
@@ -145,6 +145,7 @@ class ContextBuilder:
         channel: str | None = None,
         session_summary: str | None = None,
         agent_mode_name: str | None = None,
+        active_persona_soul: str | None = None,
     ) -> str:
         """Build the system prompt in 3 cache-friendly tiers.
 
@@ -170,13 +171,23 @@ class ContextBuilder:
         """
         # Reset the per-call breakdown — each layer fills its slot.
         self._last_layer_breakdown = {"stable": {}, "context": {}, "volatile": {}}
-        stable = self._build_stable_layer(channel=channel)
+        stable = self._build_stable_layer(channel=channel, active_persona_soul=active_persona_soul)
         context = self._build_context_layer(agent_mode_name=agent_mode_name)
         volatile = self._build_volatile_layer(session_summary=session_summary)
         return "\n\n---\n\n".join(p for p in (stable, context, volatile) if p)
 
-    def _build_stable_layer(self, *, channel: str | None) -> str:
-        """Identity + bootstrap + skills catalog. Cache-friendly anchor.
+    def _build_operating_floor(self, soul_body: str) -> str:
+        """Always-on execution discipline, independent of the active SOUL.
+
+        Skipped when the active SOUL already embeds its own execution rules
+        (back-compat with a pre-existing SOUL.md that still contains them).
+        """
+        if "## Execution Rules" in (soul_body or ""):
+            return ""
+        return render_template("agent/operating_floor.md")
+
+    def _build_stable_layer(self, *, channel: str | None, active_persona_soul: str | None = None) -> str:
+        """Identity + bootstrap + SOUL + skills catalog. Cache-friendly anchor.
 
         Aside from workspace/runtime info embedded in the identity
         template (path, OS, Python version — all stable per process),
@@ -192,6 +203,17 @@ class ContextBuilder:
         if bootstrap:
             breakdown["bootstrap"] = bootstrap
             parts.append(bootstrap)
+
+        # SOUL — from the active persona, or the workspace default (SOUL.md).
+        soul_body = active_persona_soul if active_persona_soul is not None else self.memory.read_soul()
+        if soul_body:
+            soul_block = f"## SOUL.md\n\n{soul_body}"
+            breakdown["soul"] = soul_block
+            parts.append(soul_block)
+        floor = self._build_operating_floor(soul_body or "")
+        if floor:
+            breakdown["operating_floor"] = floor
+            parts.append(floor)
 
         always_skills = self.skills.get_always_skills()
         if always_skills:
@@ -406,6 +428,7 @@ class ContextBuilder:
         iteration: int | None = None,
         audio_mode: str = "auto",
         supports_audio_input: bool = False,
+        active_persona_soul: str | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         # The task-state anchor groups goal + decision log + todos
@@ -465,6 +488,7 @@ class ContextBuilder:
                     channel=channel,
                     session_summary=session_summary,
                     agent_mode_name=agent_mode_name,
+                    active_persona_soul=active_persona_soul,
                 ),
             },
             *history,
