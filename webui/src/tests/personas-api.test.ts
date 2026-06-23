@@ -8,6 +8,7 @@ import {
   savePersona,
   saveSoul,
   setDefaultPersona,
+  testPersona,
 } from "@/lib/api";
 
 const MOCK_SOUL = { slug: "default", body: "You are a helpful assistant." };
@@ -147,6 +148,45 @@ describe("personas API helpers", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ name: null }),
+      }),
+    );
+  });
+});
+
+describe("testPersona API helper", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, reply: "Hello, I'm your assistant.", model: "openai gpt-4o", error: null }),
+      }),
+    );
+  });
+
+  it("POSTs to /api/v1/personas/test and returns the result", async () => {
+    const result = await testPersona("tok", { model: "openai gpt-4o", soul: "default" });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/personas/test",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+        body: JSON.stringify({ model: "openai gpt-4o", soul: "default" }),
+      }),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.reply).toBe("Hello, I'm your assistant.");
+  });
+
+  it("sends null model and soul when not specified", async () => {
+    await testPersona("tok", { model: null, soul: null });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/personas/test",
+      expect.objectContaining({
+        body: JSON.stringify({ model: null, soul: null }),
       }),
     );
   });

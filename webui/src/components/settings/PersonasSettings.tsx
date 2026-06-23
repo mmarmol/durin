@@ -13,6 +13,7 @@ import {
   savePersona,
   saveSoul,
   setDefaultPersona,
+  testPersona,
   type PersonaItem,
   type SoulItem,
 } from "@/lib/api";
@@ -168,6 +169,8 @@ function SoulForm({
   );
 }
 
+type TestResult = { ok: boolean; reply?: string | null; error?: string | null; model?: string | null };
+
 /** Collapsible create/edit form for a persona: name + model + soul +
  *  description. When editing, the name is locked (it's the identity). */
 function PersonaForm({
@@ -190,6 +193,8 @@ function PersonaForm({
   const [description, setDescription] = useState(editPersona?.description ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<TestResult | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -208,6 +213,32 @@ function PersonaForm({
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await testPersona(token, {
+        model: model.trim() || null,
+        soul: soul || null,
+      });
+      setTestResult(res);
+    } catch (e) {
+      setTestResult({ ok: false, error: errLabel(e) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  // Clear test result when model or soul changes.
+  const handleModelChange = (ref: string) => {
+    setModel(ref);
+    setTestResult(null);
+  };
+  const handleSoulChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSoul(e.target.value);
+    setTestResult(null);
   };
 
   // The default soul is always selectable even if listSouls hasn't loaded
@@ -235,7 +266,7 @@ function PersonaForm({
       </div>
       <div>
         <label className={labelClass}>{t("settings.personas.fieldModel")}</label>
-        <ModelSelectField value={model} onChange={(ref) => setModel(ref)} />
+        <ModelSelectField value={model} onChange={handleModelChange} />
       </div>
       <div>
         <label htmlFor="persona-soul" className={labelClass}>
@@ -245,7 +276,7 @@ function PersonaForm({
           id="persona-soul"
           className={cn(selectClass, "w-full")}
           value={soul}
-          onChange={(e) => setSoul(e.target.value)}
+          onChange={handleSoulChange}
         >
           {soulSlugs.map((slug) => (
             <option key={slug} value={slug}>
@@ -268,14 +299,53 @@ function PersonaForm({
         />
       </div>
       {error ? <p className="text-[12px] text-destructive">{error}</p> : null}
-      <div className="flex items-center justify-end gap-2 pt-1">
-        <Button type="button" size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
-          {t("settings.personas.cancel")}
+
+      {testResult ? (
+        <div
+          className={cn(
+            "rounded-lg border px-3 py-2.5 text-[12px]",
+            testResult.ok
+              ? "border-green-500/20 bg-green-500/5 text-foreground"
+              : "border-destructive/20 bg-destructive/5 text-destructive",
+          )}
+        >
+          <div className="mb-1 font-medium">
+            {testResult.ok ? t("settings.personas.testOk") : t("settings.personas.testError")}
+            {testResult.ok && testResult.model ? (
+              <span className="ml-1.5 font-mono font-normal text-muted-foreground">
+                ({testResult.model})
+              </span>
+            ) : null}
+          </div>
+          <p className="whitespace-pre-wrap leading-relaxed">
+            {testResult.ok ? (testResult.reply ?? "") : (testResult.error ?? "")}
+          </p>
+        </div>
+      ) : null}
+
+      <div className="flex items-center justify-between pt-1">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={testing || saving}
+          onClick={() => void handleTest()}
+          className="text-[12px] text-muted-foreground"
+        >
+          {testing ? (
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+          ) : null}
+          {testing ? t("settings.personas.testing") : t("settings.personas.test")}
         </Button>
-        <Button type="submit" size="sm" disabled={saving}>
-          {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
-          {t("settings.personas.save")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button type="button" size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
+            {t("settings.personas.cancel")}
+          </Button>
+          <Button type="submit" size="sm" disabled={saving}>
+            {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden /> : null}
+            {t("settings.personas.save")}
+          </Button>
+        </div>
       </div>
     </form>
   );
@@ -317,6 +387,14 @@ export function PersonasSettings({ token }: { token: string }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Set of soul slugs referenced by any loaded persona (used to disable delete).
+  const inUseSouls = new Map<string, number>();
+  for (const p of personas ?? []) {
+    if (p.soul) {
+      inUseSouls.set(p.soul, (inUseSouls.get(p.soul) ?? 0) + 1);
+    }
+  }
 
   const removeSoul = async (slug: string) => {
     setBusyId(slug);
@@ -421,6 +499,9 @@ export function PersonasSettings({ token }: { token: string }) {
           ) : (
             souls.map((soul) => {
               const isDefault = soul.slug === DEFAULT_SOUL_SLUG;
+              const useCount = inUseSouls.get(soul.slug) ?? 0;
+              const isInUse = useCount > 0;
+              const deleteDisabled = isDefault || isInUse;
               return (
                 <SettingsRow
                   key={soul.slug}
@@ -431,6 +512,11 @@ export function PersonasSettings({ token }: { token: string }) {
                       {isDefault ? (
                         <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
                           {t("settings.personas.defaultBadge")}
+                        </span>
+                      ) : null}
+                      {isInUse ? (
+                        <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                          {t("settings.personas.inUseBy", { count: useCount })}
                         </span>
                       ) : null}
                     </span>
@@ -451,7 +537,7 @@ export function PersonasSettings({ token }: { token: string }) {
                     <InlineDelete
                       confirming={confirmSoul === soul.slug}
                       busy={busyId === soul.slug}
-                      disabled={isDefault}
+                      disabled={deleteDisabled}
                       onAsk={() => setConfirmSoul(soul.slug)}
                       onConfirm={() => void removeSoul(soul.slug)}
                       onCancel={() => setConfirmSoul(null)}

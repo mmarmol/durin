@@ -455,7 +455,12 @@
       "save": "Save",
       "cancel": "Cancel",
       "delete": "Delete",
-      "confirmDelete": "Delete?"
+      "confirmDelete": "Delete?",
+      "test": "Test",
+      "testing": "Testing…",
+      "testOk": "Voice sample",
+      "testError": "Test failed",
+      "inUseBy": "In use by {{count}} persona(s)"
     },
     "providerModels": {
       "title": "models",

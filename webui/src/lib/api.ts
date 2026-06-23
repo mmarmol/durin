@@ -1054,6 +1054,18 @@ export async function setDefaultPersona(
   await post<{ default: string | null }>(`${base}/api/v1/personas/default`, token, { name });
 }
 
+export async function testPersona(
+  token: string,
+  body: { model: string | null; soul: string | null },
+  base: string = "",
+): Promise<components["schemas"]["PersonaTestResult"]> {
+  return post<components["schemas"]["PersonaTestResult"]>(
+    `${base}/api/v1/personas/test`,
+    token,
+    body,
+  );
+}
+
 export interface ChannelInfo {
   name: string;
   display_name: string;
