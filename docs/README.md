@@ -53,6 +53,7 @@ Direct jumps to the most-read component docs:
 - [Skills](internals/skills/00_overview.md) — skill authoring, vetting, surfacing.
 - [Channels & message bus](internals/channels.md) — how surfaces reach the loop.
 - [Cron](internals/cron.md) — scheduled work (reminders and agent tasks).
+- [Workflow engine](internals/workflow.md) — user-defined flow graphs the agent runs.
 
 ### Project
 
