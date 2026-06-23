@@ -63,6 +63,11 @@ class ToolContext:
     # treat ``None`` the same as a missing section and fall back to grep
     # / disabled behaviour.
     app_config: Any | None = None
+    # The live tool registry (the loop's own ``self.tools``), passed by reference
+    # so tools that compose sub-runs (e.g. ``run_workflow``) can reuse already-
+    # connected MCP tools without reconnecting. Populated only for the core loop;
+    # ``None`` elsewhere.
+    live_tool_registry: Any | None = None
     # Which prompt profile the calling agent runs: "core" (the main
     # loop's full stable tier, pinned memory + hot layer included) or
     # "subagent" (focused prompt WITHOUT the memory prefix — see

@@ -16,10 +16,15 @@ export function VoiceDock({
   chatId,
   chatTitle,
   onEnsureChat,
+  hideWhenIdle = false,
 }: {
   chatId: string | null;
   chatTitle?: string | null;
   onEnsureChat: () => Promise<string | null>;
+  /** Suppress the idle start-orb (e.g. on full-screen editor views where it
+   * would float over the tool's own bottom-right controls). An in-progress
+   * call still shows, so switching views never hides or interrupts it. */
+  hideWhenIdle?: boolean;
 }) {
   const { t } = useTranslation();
   const { client, token } = useClient();
@@ -56,6 +61,7 @@ export function VoiceDock({
   const stateLabel = t(`settings.voice.orb.${state}`);
 
   if (!active) {
+    if (hideWhenIdle) return null;
     return (
       <div className="fixed bottom-4 right-4 z-50">
         <VoiceOrb
