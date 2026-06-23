@@ -175,3 +175,39 @@ def test_subworkflow_edge_target_validated():
         parse_workflow({"name": "d", "start": "sub", "nodes": [
             {"id": "sub", "kind": "subworkflow", "workflow": "x", "next": "ghost"},
         ]})
+
+
+def test_parses_parallel_node():
+    from durin.workflow.spec import ParallelNode
+    wf = parse_workflow({"name": "d", "start": "fan", "nodes": [
+        {"id": "fan", "kind": "parallel", "branches": ["a", "b"], "next": "join"},
+        {"id": "a", "kind": "work"},
+        {"id": "b", "kind": "work"},
+        {"id": "join", "kind": "work", "next": None},
+    ]})
+    n = wf.nodes["fan"]
+    assert isinstance(n, ParallelNode)
+    assert list(n.branches) == ["a", "b"]
+    assert n.next == "join"
+
+
+def test_parallel_without_branches_raises():
+    with pytest.raises(WorkflowError, match="branches"):
+        parse_workflow({"name": "d", "start": "fan", "nodes": [
+            {"id": "fan", "kind": "parallel", "branches": [], "next": None},
+        ]})
+
+
+def test_parallel_branch_must_be_work_node():
+    with pytest.raises(WorkflowError, match="work node"):
+        parse_workflow({"name": "d", "start": "fan", "nodes": [
+            {"id": "fan", "kind": "parallel", "branches": ["g"], "next": None},
+            {"id": "g", "kind": "decision", "command": "true", "on_pass": None, "on_fail": None},
+        ]})
+
+
+def test_parallel_unknown_branch_raises():
+    with pytest.raises(WorkflowError, match="unknown node"):
+        parse_workflow({"name": "d", "start": "fan", "nodes": [
+            {"id": "fan", "kind": "parallel", "branches": ["ghost"], "next": None},
+        ]})

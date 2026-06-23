@@ -53,7 +53,17 @@ class SubworkflowNode:
     kind: Literal["subworkflow"] = "subworkflow"
 
 
-Node = Union[WorkNode, DecisionNode, SubworkflowNode]
+@dataclass(frozen=True)
+class ParallelNode:
+    """A node that runs a set of work-node branches concurrently and merges their outputs."""
+
+    id: str
+    branches: tuple[str, ...] = ()
+    next: str | None = None
+    kind: Literal["parallel"] = "parallel"
+
+
+Node = Union[WorkNode, DecisionNode, SubworkflowNode, ParallelNode]
 
 
 @dataclass(frozen=True)
@@ -117,6 +127,13 @@ def _build_node(raw: dict[str, Any]) -> Node:
                 f"node {node_id!r}: a subworkflow node needs a non-empty 'workflow' name"
             )
         return SubworkflowNode(id=node_id, workflow=workflow, next=raw.get("next"))
+    if kind == "parallel":
+        branches = raw.get("branches", [])
+        if not isinstance(branches, list) or not branches:
+            raise WorkflowError(
+                f"node {node_id!r}: a parallel node needs a non-empty 'branches' list"
+            )
+        return ParallelNode(id=node_id, branches=tuple(branches), next=raw.get("next"))
     raise WorkflowError(f"node {node_id!r}: unknown kind {kind!r}")
 
 
@@ -125,6 +142,8 @@ def _edge_targets(node: Node) -> list[str | None]:
         return [node.next]
     if isinstance(node, SubworkflowNode):
         return [node.next]
+    if isinstance(node, ParallelNode):
+        return [*node.branches, node.next]
     return [node.on_pass, node.on_fail]
 
 
@@ -158,6 +177,14 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
                 raise WorkflowError(
                     f"node {node.id!r} points to unknown node {target!r}"
                 )
+
+    for node in nodes.values():
+        if isinstance(node, ParallelNode):
+            for branch in node.branches:
+                if not isinstance(nodes[branch], WorkNode):
+                    raise WorkflowError(
+                        f"node {node.id!r}: parallel branch {branch!r} must be a work node"
+                    )
 
     max_visits = data.get("max_visits", 3)
     if isinstance(max_visits, bool) or not isinstance(max_visits, int) or max_visits < 1:
