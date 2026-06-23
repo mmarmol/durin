@@ -65,6 +65,8 @@ vi.mock("@/lib/durin-client", () => {
     onRuntimeModelUpdate = () => () => {};
     onError = () => () => {};
     onChat = () => () => {};
+    onVoiceState = () => () => {};
+    onVoiceAudio = () => () => {};
     sendMessage = vi.fn();
     newChat = vi.fn();
     attach = vi.fn();
@@ -453,5 +455,28 @@ describe("App layout", () => {
     expect(within(sidebar).getByRole("button", { name: "Settings" })).toBeInTheDocument();
 
     expect(within(sidebar).getByText("Existing chat")).toBeInTheDocument();
+  });
+
+  it("docks the voice orb in the shell when voice can speak", async () => {
+    // The orb renders only once the config fetch confirms TTS is usable.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/api/v1/config")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              config: { voice: { enabled: true }, tts: { provider: "openai" } },
+              schema: {},
+            }),
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+    render(<App />);
+    await screen.findByText(/durin/i);
+    expect(await screen.findByRole("button", { name: /voice|start voice/i })).toBeInTheDocument();
   });
 });

@@ -195,6 +195,23 @@ export class DurinClient {
     };
   }
 
+  private voiceStateHandlers = new Set<(chatId: string, state: string) => void>();
+  private voiceAudioHandlers = new Set<(chatId: string, url: string, mime: string) => void>();
+  private voicePreviewHandlers = new Set<(url: string | null, error?: string) => void>();
+
+  onVoiceState(handler: (chatId: string, state: string) => void): Unsubscribe {
+    this.voiceStateHandlers.add(handler);
+    return () => this.voiceStateHandlers.delete(handler);
+  }
+  onVoiceAudio(handler: (chatId: string, url: string, mime: string) => void): Unsubscribe {
+    this.voiceAudioHandlers.add(handler);
+    return () => this.voiceAudioHandlers.delete(handler);
+  }
+  onVoicePreviewAudio(handler: (url: string | null, error?: string) => void): Unsubscribe {
+    this.voicePreviewHandlers.add(handler);
+    return () => this.voicePreviewHandlers.delete(handler);
+  }
+
   onSessionUpdate(handler: SessionUpdateHandler): Unsubscribe {
     this.sessionUpdateHandlers.add(handler);
     return () => {
@@ -329,6 +346,17 @@ export class DurinClient {
       webui: true,
     };
     this.queueSend(frame);
+  }
+
+  sendVoiceStart(chatId: string): void { this.knownChats.add(chatId); this.queueSend({ type: "voice_start", chat_id: chatId, webui: true }); }
+  sendVoiceStop(chatId: string): void { this.queueSend({ type: "voice_stop", chat_id: chatId, webui: true }); }
+  sendVoiceUtterance(chatId: string, dataUrl: string): void {
+    this.queueSend({ type: "voice_utterance", chat_id: chatId, media: [{ data_url: dataUrl }], webui: true });
+  }
+  sendVoiceBargeIn(chatId: string): void { this.queueSend({ type: "voice_barge_in", chat_id: chatId, webui: true }); }
+  sendVoiceReadAll(chatId: string, text: string): void { this.queueSend({ type: "voice_read_all", chat_id: chatId, text, webui: true }); }
+  sendVoicePreview(voice: string | null, language: string | null): void {
+    this.queueSend({ type: "voice_preview", voice, language, webui: true });
   }
 
   /**
@@ -501,6 +529,19 @@ export class DurinClient {
           pending.resolve(parsed.transcript ?? "");
         }
       }
+      return;
+    }
+
+    if (parsed.event === "voice_state") {
+      for (const h of this.voiceStateHandlers) h(parsed.chat_id, parsed.state);
+      return;
+    }
+    if (parsed.event === "voice_audio") {
+      for (const h of this.voiceAudioHandlers) h(parsed.chat_id, parsed.url, parsed.mime);
+      return;
+    }
+    if (parsed.event === "voice_preview_audio") {
+      for (const h of this.voicePreviewHandlers) h(parsed.url ?? null, parsed.error);
       return;
     }
 

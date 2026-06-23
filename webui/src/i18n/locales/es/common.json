@@ -72,7 +72,7 @@
       "advanced": "Todos los ajustes",
       "channels": "Canales",
       "memory": "Memoria",
-      "transcription": "Transcripción de audio",
+      "transcription": "Voz",
       "skills-security": "Seguridad de skills",
       "cron": "Cron",
       "logs": "Registros",
@@ -578,6 +578,120 @@
         "verified": "Verificado",
         "seeMore": "Ver {{count}} resultados menos populares",
         "lessPopular": "Menos populares"
+      }
+    },
+    "voice": {
+      "intro": "Cuando adjuntas o grabas audio, durin lo transcribe a texto antes de que llegue al agente. Por defecto usa STT local vía sherpa-onnx (offline). Cambia a un proveedor en la nube o a cualquier servidor HTTP compatible con OpenAI según lo necesites.",
+      "loadError": "No se pudieron cargar los ajustes de voz.",
+      "saveError": "No se pudo guardar el cambio.",
+      "section": {
+        "provider": "Proveedor",
+        "behavior": "Comportamiento",
+        "tts": "Texto a voz",
+        "conversational": "Modo conversacional",
+        "spokenRendition": "Lectura hablada"
+      },
+      "providerTitle": "Proveedor de transcripción",
+      "providerDesc": "El STT local necesita el extra [stt]; los proveedores en la nube necesitan una API key.",
+      "provider": {
+        "local": "STT local (sherpa-onnx)",
+        "groq": "Groq",
+        "openai": "OpenAI",
+        "http": "Servidor HTTP"
+      },
+      "engineTitle": "Motor",
+      "engine": {
+        "parakeet": "Parakeet TDT v3",
+        "sensevoice": "SenseVoice"
+      },
+      "engineDesc": {
+        "parakeet": "Parakeet TDT v3 — 25 idiomas europeos incl. español / inglés, el más rápido. Para japonés / chino, usa SenseVoice o un proveedor en la nube.",
+        "sensevoice": "SenseVoice — optimizado para chino, japonés, coreano, cantonés e inglés."
+      },
+      "localStt": {
+        "title": "STT local (sherpa-onnx)",
+        "installedDesc": "✓ sherpa-onnx está instalado. Transcripción local rápida lista.",
+        "missingDesc": "No instalado — la transcripción local no funcionará hasta que agregues [stt].",
+        "installedBadge": "instalado"
+      },
+      "install": {
+        "stt": "Instalar [stt]",
+        "tts": "Instalar [tts]"
+      },
+      "groqKey": {
+        "title": "API key de Groq",
+        "desc": "Desde console.groq.com (con capa gratuita disponible)."
+      },
+      "openaiKey": {
+        "title": "API key de OpenAI",
+        "desc": "Desde platform.openai.com."
+      },
+      "http": {
+        "baseUrlTitle": "URL base del servidor",
+        "baseUrlDesc": "p. ej. http://localhost:8080/v1 (whisper.cpp, mlx-asr, vLLM)",
+        "modelTitle": "Nombre del modelo del servidor",
+        "modelDesc": "Id del modelo que expone el servidor (opcional).",
+        "keyTitle": "API key del servidor",
+        "keyDesc": "Solo si el servidor requiere autenticación."
+      },
+      "enabledTitle": "Activado",
+      "enabledDesc": "Interruptor maestro — si está apagado, nunca se transcribe el audio.",
+      "modeTitle": "Modo",
+      "modeDesc": "Auto inserta texto que puedes editar; Vista previa requiere aceptación explícita; Off adjunta el audio sin procesar.",
+      "mode": {
+        "auto": "Auto",
+        "preview": "Vista previa",
+        "off": "Off"
+      },
+      "languageHintTitle": "Sugerencia de idioma",
+      "languageHintDesc": "Código ISO-639-1 (es, en, ja, zh…). Vacío = detección automática.",
+      "tts": {
+        "providerTitle": "Proveedor de TTS",
+        "providerDesc": "Motor de salida de voz para el modo conversacional.",
+        "providerLocal": "Supertonic local (offline)",
+        "providerOpenai": "OpenAI (nube)",
+        "voiceTitle": "Voz",
+        "voiceDesc": "Voz preestablecida de Supertonic.",
+        "test": "Probar",
+        "playing": "Reproduciendo…",
+        "localInstallTitle": "TTS local (Supertonic)",
+        "localInstallDesc": "Agrega el extra [tts] para síntesis de voz en el dispositivo.",
+        "modelTitle": "Modelo",
+        "openaiKeyTitle": "API key de OpenAI",
+        "openaiKeyDesc": "Vacío = usa la variable de entorno OPENAI_API_KEY.",
+        "localInstalledDesc": "✓ Supertonic está instalado. Síntesis de voz en el dispositivo lista."
+      },
+      "conv": {
+        "handsFreeTitle": "Voz manos libres",
+        "handsFreeDesc": "El orbe flotante escucha, piensa y habla.",
+        "bargeInTitle": "Interrupción al hablar",
+        "bargeInDesc": "Interrumpe al agente hablando por encima de él."
+      },
+      "spoken": {
+        "longRepliesTitle": "Respuestas largas",
+        "longRepliesDesc": "Qué dice la voz cuando una respuesta es larga. \"Apertura + resto en pantalla\" dice la primera parte y deja el texto completo en pantalla; \"Leer respuesta completa\" dice todo.",
+        "modelLed": "Apertura + resto en pantalla",
+        "verbatim": "Leer respuesta completa"
+      },
+      "preview": {
+        "installToPreview": "Instala [tts] para la vista previa",
+        "failed": "Falló la vista previa",
+        "preparing": "La voz se está preparando (puede estar descargando el modelo); reintenta en un momento."
+      },
+      "apiKey": {
+        "hide": "ocultar",
+        "show": "mostrar"
+      },
+      "orb": {
+        "idle": "Toca para hablar",
+        "listening": "Escuchando…",
+        "transcribing": "Transcribiendo…",
+        "thinking": "Pensando…",
+        "speaking": "Hablando…",
+        "error": "Error de voz",
+        "start": "Iniciar modo voz",
+        "stop": "Detener voz",
+        "bargeHint": "Habla para interrumpir"
       }
     }
   },

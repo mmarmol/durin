@@ -61,6 +61,11 @@ def _normalize_config_path(path: str) -> str:
     return _strip_trailing_slash(path)
 
 
+def _voice_preview_sample(language: str | None) -> str:
+    lang = (language or "en")[:2].lower()
+    return {"es": "Hola, soy durin.", "en": "Hi, I am durin."}.get(lang, "Hi, I am durin.")
+
+
 class WebSocketConfig(Base):
     """WebSocket server channel configuration.
 
@@ -461,6 +466,8 @@ class WebSocketChannel(BaseChannel):
         self.config: WebSocketConfig = config
         # chat_id -> connections subscribed to it (fan-out target).
         self._subs: dict[str, set[Any]] = {}
+        # chat_id -> VoiceSession (conversational voice mode state).
+        self._voice: dict[str, Any] = {}
         # connection -> chat_ids it is subscribed to (O(1) cleanup on disconnect).
         self._conn_chats: dict[Any, set[str]] = {}
         # connection -> default chat_id for legacy frames that omit routing.
@@ -536,6 +543,11 @@ class WebSocketChannel(BaseChannel):
             subs.discard(connection)
             if not subs:
                 self._subs.pop(cid, None)
+        for cid in list(self._voice):
+            if not self._subs.get(cid):
+                sess = self._voice.pop(cid, None)
+                if sess is not None:
+                    sess.cancel_speak()
         self._conn_default.pop(connection, None)
 
     async def _maybe_push_active_goal_state(self, chat_id: str) -> None:
@@ -582,7 +594,7 @@ class WebSocketChannel(BaseChannel):
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:
-        return WebSocketConfig().model_dump(by_alias=True)
+        return WebSocketConfig().model_dump(by_alias=False)
 
     def _expected_path(self) -> str:
         return _normalize_config_path(self.config.path)
@@ -925,6 +937,70 @@ class WebSocketChannel(BaseChannel):
             self._media_secret, payload.encode("ascii"), hashlib.sha256
         ).digest()[:16]
         return f"/api/media/{_b64url_encode(mac)}/{payload}"
+
+    def _write_and_sign_audio(self, audio: Any) -> str | None:
+        if not audio.data:
+            return None
+        media_dir = get_media_dir("websocket")
+        path = media_dir / f"voice-{uuid.uuid4().hex[:12]}.{audio.format}"
+        try:
+            path.write_bytes(audio.data)
+        except OSError as e:
+            self.logger.warning("failed to write voice audio: {}", e)
+            return None
+        return self._sign_media_path(path)
+
+    async def _send_voice_audio(self, chat_id: str, url: str, mime: str) -> None:
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        raw = json.dumps(
+            {"event": "voice_audio", "chat_id": chat_id, "url": url, "mime": mime},
+            ensure_ascii=False,
+        )
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" voice_audio ")
+
+    async def _speak(self, chat_id: str, text: str, *, full: bool = False) -> None:
+        svc = getattr(self, "speech_synthesis", None)
+        if svc is None or chat_id not in self._voice:
+            self.logger.info(
+                "voice: _speak skipped chat={} has_svc={} svc_enabled={} active_voice={}",
+                chat_id, svc is not None, getattr(svc, "enabled", None),
+                chat_id in self._voice,
+            )
+            return
+        cfg = getattr(self, "voice_config", None)
+        sr = cfg.spoken_render if cfg is not None else None
+        try:
+            await self.send_voice_state(chat_id, "speaking")
+            from durin.voice.rendition import build_spoken_rendition, speakable_transform
+
+            if full or sr is None:
+                spoken = speakable_transform(text)
+            else:
+                rendition = await build_spoken_rendition(
+                    text,
+                    mode=sr.mode,
+                    long_threshold_words=sr.long_threshold_words,
+                    pointer=sr.pointer,
+                )
+                spoken = rendition.spoken
+            audio = await svc.synthesize(spoken)
+            url = self._write_and_sign_audio(audio)
+            self.logger.info(
+                "voice: _speak chat={} full={} spoken_len={} audio_bytes={} sent={}",
+                chat_id, full, len(spoken), len(audio.data), url is not None,
+            )
+            if url is not None:
+                await self._send_voice_audio(chat_id, url, mime="audio/wav")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.logger.warning("voice synthesis failed: {}", e)
+        finally:
+            if chat_id in self._voice:
+                await self.send_voice_state(chat_id, "listening")
 
     def _sign_or_stage_media_path(self, path: Path) -> dict[str, str] | None:
         """Return a signed media URL payload for *path*.
@@ -1332,6 +1408,94 @@ class WebSocketChannel(BaseChannel):
             self._attach(connection, f"audit:{name}")
             await self._run_skill_audit(connection, name)
             return
+        if t == "voice_start":
+            cid = envelope.get("chat_id")
+            if not _is_valid_chat_id(cid):
+                await self._send_event(connection, "error", detail="invalid chat_id")
+                return
+            from durin.voice.session import VoiceSession
+
+            self._voice[cid] = VoiceSession(chat_id=cid)
+            await self.send_voice_state(cid, "listening")
+            return
+        if t == "voice_stop":
+            cid = envelope.get("chat_id")
+            sess = self._voice.pop(cid, None)
+            if sess is not None:
+                sess.cancel_speak()
+            await self.send_voice_state(cid, "idle")
+            return
+        if t == "voice_utterance":
+            cid = envelope.get("chat_id")
+            if cid not in self._voice:
+                await self._send_event(connection, "error", detail="voice not started")
+                return
+            raw_media = envelope.get("media")
+            service = getattr(self, "transcription", None)
+            if not isinstance(raw_media, list) or not raw_media or service is None:
+                await self.send_voice_state(cid, "listening")
+                return
+            paths, reason = self._save_envelope_media(raw_media)
+            if reason is not None:
+                await self._send_event(connection, "error", detail=reason)
+                await self.send_voice_state(cid, "listening")
+                return
+            await self.send_voice_state(cid, "transcribing")
+            try:
+                result = await service.transcribe_and_cache(paths[0])
+            except Exception as e:
+                self.logger.warning("voice transcription failed: {}", e)
+                await self.send_voice_state(cid, "listening")
+                return
+            text = (result.text or "").strip()
+            if not text:
+                await self.send_voice_state(cid, "listening")
+                return
+            await self.send_voice_state(cid, "thinking")
+            await self._handle_message(
+                sender_id=client_id,
+                chat_id=cid,
+                content=text,
+                metadata={"voice": True},
+                is_dm=False,
+            )
+            return
+        if t == "voice_barge_in":
+            cid = envelope.get("chat_id")
+            sess = self._voice.get(cid)
+            if sess is not None:
+                sess.cancel_speak()
+                await self.send_voice_state(cid, "listening")
+            return
+        if t == "voice_read_all":
+            cid = envelope.get("chat_id")
+            text = envelope.get("text")
+            sess = self._voice.get(cid)
+            if sess is None or not isinstance(text, str) or not text.strip():
+                return
+            sess.cancel_speak()
+            sess.speak_task = asyncio.create_task(self._speak(cid, text, full=True))
+            return
+        if t == "voice_preview":
+            svc = getattr(self, "speech_synthesis", None)
+            if svc is None:
+                await self._send_event(connection, "voice_preview_audio", error="tts_unavailable")
+                return
+            voice = envelope.get("voice")
+            language = envelope.get("language")
+            sample = envelope.get("text") or _voice_preview_sample(language)
+            try:
+                audio = await svc.synthesize(sample, voice=voice, language=language)
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning("voice preview failed: {}", e)
+                await self._send_event(connection, "voice_preview_audio", error="synthesis_failed")
+                return
+            url = self._write_and_sign_audio(audio) if audio.data else None
+            if url is None:
+                await self._send_event(connection, "voice_preview_audio", error="synthesis_failed")
+                return
+            await self._send_event(connection, "voice_preview_audio", url=url, mime="audio/wav")
+            return
         await self._send_event(connection, "error", detail=f"unknown type: {t!r}")
 
     async def _handle_secret_store_envelope(
@@ -1415,6 +1579,9 @@ class WebSocketChannel(BaseChannel):
         if not self._running:
             return
         self._running = False
+        for sess in self._voice.values():
+            sess.cancel_speak()
+        self._voice.clear()
         self._subs.clear()
         self._conn_chats.clear()
         self._conn_default.clear()
@@ -1532,6 +1699,24 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(payload, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" ")
+        # Voice mode: synthesize the spoken rendition for the FINAL reply only.
+        final_reply = bool(
+            msg.content
+            and not msg.metadata.get("_tool_hint")
+            and not msg.metadata.get("_progress")
+        )
+        if final_reply and msg.chat_id in self._voice:
+            sess = self._voice[msg.chat_id]
+            sess.cancel_speak()
+            sess.speak_task = asyncio.create_task(self._speak(msg.chat_id, msg.content))
+        elif final_reply and self._voice:
+            # A voice session is active but this reply's chat_id isn't one of them —
+            # the agent answered on a different chat than the orb is listening on
+            # (the class of bug behind "voice replies only in text").
+            self.logger.info(
+                "voice: final reply NOT spoken — reply chat={} not in active voice {}",
+                msg.chat_id, list(self._voice.keys()),
+            )
 
     async def send_reasoning_delta(
         self,
@@ -1593,6 +1778,22 @@ class WebSocketChannel(BaseChannel):
         if not conns:
             return
         meta = metadata or {}
+        # Voice mode: the assistant reply reaches the webui as a stream of deltas,
+        # NOT a single send() with content — so accumulate it here and speak the
+        # full text when the stream ends (this is the real reply path; the send()
+        # hook never fires for streamed replies, which is why voice stayed silent).
+        sess = self._voice.get(chat_id)
+        if sess is not None:
+            if meta.get("_stream_end"):
+                spoken_text = sess.take_reply()
+                self.logger.info(
+                    "voice: stream_end chat={} reply_len={}", chat_id, len(spoken_text)
+                )
+                if spoken_text.strip():
+                    sess.cancel_speak()
+                    sess.speak_task = asyncio.create_task(self._speak(chat_id, spoken_text))
+            elif delta:
+                sess.reply_buffer.append(delta)
         if meta.get("_stream_end"):
             body: dict[str, Any] = {"event": "stream_end", "chat_id": chat_id}
         else:
@@ -1638,6 +1839,21 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" goal_state ")
+
+    async def send_voice_state(self, chat_id: str, state: str) -> None:
+        """Push the voice-loop state (listening/thinking/speaking/idle) for a chat."""
+        sess = self._voice.get(chat_id)
+        if sess is not None:
+            sess.state = state
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        raw = json.dumps(
+            {"event": "voice_state", "chat_id": chat_id, "state": state},
+            ensure_ascii=False,
+        )
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" voice_state ")
 
     async def send_goal_status(
         self,

@@ -325,6 +325,9 @@ export type InboundEvent =
        * Content-Length is unknown). */
       total?: number;
     }
+  | { event: "voice_state"; chat_id: string; state: string }
+  | { event: "voice_audio"; chat_id: string; url: string; mime: string }
+  | { event: "voice_preview_audio"; url?: string; mime?: string; error?: string }
   | { event: "error"; chat_id?: string; detail?: string };
 
 /** Base64-encoded image attached to an outbound ``message`` envelope.
@@ -392,7 +395,13 @@ export type Outbound =
       request_id: string;
       chat_id: string;
       media: OutboundMedia[];
-    };
+    }
+  | { type: "voice_start"; chat_id: string; webui: true }
+  | { type: "voice_stop"; chat_id: string; webui: true }
+  | { type: "voice_utterance"; chat_id: string; media: OutboundMedia[]; webui: true }
+  | { type: "voice_barge_in"; chat_id: string; webui: true }
+  | { type: "voice_read_all"; chat_id: string; text: string; webui: true }
+  | { type: "voice_preview"; voice: string | null; language: string | null; webui: true };
 
 // ---------------------------------------------------------------------------
 // MCP server management (snake_case to match the /api/v1 wire shape —

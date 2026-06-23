@@ -285,7 +285,7 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     with cross_process_lock(path):
-        data = config.model_dump(mode="json", by_alias=True, exclude_defaults=True)
+        data = config.model_dump(mode="json", by_alias=False, exclude_defaults=True)
         data = _prune_noise_sections(data)
 
         if _is_split_layout(path):
@@ -500,12 +500,14 @@ def _env_replace(match: re.Match[str]) -> str:
 
 
 def _seed_model_entry(providers: dict, provider_value: str, model: str, src: dict) -> None:
-    """Seed ``providers[<camelKey>].models[model]`` from a legacy param source (a
+    """Seed ``providers[<key>].models[model]`` from a legacy param source (a
     preset or ``agents.defaults``). Additive: never clobbers an existing entry.
 
-    ``provider_value`` is the snake_case registry name (a config *value*), but
-    the persisted providers dict is keyed by the camelCase field alias — so the
-    value is camelCased to find/merge the right block.
+    ``provider_value`` is the snake_case registry name (a config *value*). The
+    persisted providers dict is keyed by that same snake_case name (canonical,
+    post casing-migration); legacy configs not yet resaved may still be keyed by
+    the camelCase alias. We merge into whichever block exists and only create a
+    new block under the canonical snake_case name.
     """
     from pydantic.alias_generators import to_camel
 
@@ -517,21 +519,29 @@ def _seed_model_entry(providers: dict, provider_value: str, model: str, src: dic
 
     entry: dict = {}
     if (v := g("contextWindowTokens", "context_window_tokens")) is not None:
-        entry["contextWindowTokens"] = v
+        entry["context_window_tokens"] = v
     if (v := g("maxTokens", "max_tokens")) is not None:
-        entry["maxTokens"] = v
+        entry["max_tokens"] = v
     if (v := g("temperature")) is not None:
         entry["temperature"] = v
     if (v := g("reasoningEffort", "reasoning_effort")) is not None:
-        entry["reasoningEffort"] = v
+        entry["reasoning_effort"] = v
     if not entry:
         return
-    key = to_camel(provider_value)
-    block = providers.get(key)
-    if block is None:
-        block = providers[key] = {}
-    elif not isinstance(block, dict):
-        return
+    # Find the existing block under either casing. Creating a new block under
+    # the camelCase alias when a snake block already exists would shadow (and
+    # blank out) the real block on validation — e.g. silently dropping the
+    # default provider's api_key. So always create new blocks under snake_case.
+    snake_key = provider_value
+    camel_key = to_camel(provider_value)
+    if isinstance(providers.get(snake_key), dict):
+        block = providers[snake_key]
+    elif isinstance(providers.get(camel_key), dict):
+        block = providers[camel_key]
+    elif snake_key in providers or camel_key in providers:
+        return  # present but not a dict
+    else:
+        block = providers[snake_key] = {}
     models = block.setdefault("models", {})
     if not isinstance(models, dict):
         return

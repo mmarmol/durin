@@ -76,8 +76,11 @@ disk.
 | `durin config edit` | Open config in `$EDITOR`; restore on validation failure |
 | `durin config import ~/.durin_backup` | Import a config and migrate plaintext secrets |
 
-Keys accept both `snake_case` and `camelCase` notation in `set`/`get`; the
-on-disk file uses camelCase for nested fields.
+**Casing.** `snake_case` is the canonical form everywhere — the on-disk config,
+the HTTP/WS API, and the webui all use `snake_case` (matching the Python field
+names). Input is case-tolerant: `set`/`get` and the loader accept both
+`snake_case` and `camelCase`, so a legacy camelCase config still loads and is
+rewritten to `snake_case` on the next save. Output is always `snake_case`.
 
 ---
 
@@ -217,6 +220,61 @@ Global voice transcription settings. Channel-level keys override these per-chann
 |---|---|---|
 | `api_key` | `null` | API key for the provider |
 | `api_base` | `null` | Optional base URL override |
+
+---
+
+### `tts`
+
+Text-to-speech for spoken replies in conversational voice mode. See
+[docs/internals/voice.md](../internals/voice.md) for architecture.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | Master toggle for text-to-speech |
+| `provider` | `local` | Backend: `local` (Supertonic) or `openai` (cloud) |
+| `language` | `null` | ISO-639-1 language hint; `null` = auto |
+| `fallback` | `none` | `openai` to fall through to cloud when local synthesis fails |
+
+**`tts.local`** — on-device TTS via Supertonic (ONNX, self-downloading):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `engine` | `supertonic` | Local engine identifier |
+| `voice` | `F4` | Preset voice: `F1`–`F5` or `M1`–`M5` |
+| `model_dir` | `null` | Model directory; `null` = auto-download (~260 MB) |
+| `quality` | `normal` | `normal` (8 steps) or `high` (20 steps) |
+
+**`tts.openai`** — cloud TTS credentials:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `api_key` | `null` | API key for the provider |
+| `api_base` | `null` | Optional base URL override |
+
+Local TTS needs the `[tts]` extra (`supertonic` + `onnxruntime`); cloud needs only an API key.
+
+---
+
+### `voice`
+
+Hands-free conversational voice mode — the floating orb in the dashboard that
+listens, thinks, and speaks. See [docs/internals/voice.md](../internals/voice.md).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | Master toggle for conversational voice |
+| `barge_in` | `true` | Allow interrupting playback by speaking over it |
+| `vad_threshold` | `0.5` | Browser voice-activity-detection sensitivity (0–1) |
+| `end_of_turn_silence_ms` | `700` | Silence (ms) that ends an utterance |
+| `idle_timeout_s` | `300` | Auto-exit voice after silence; `0` = never |
+
+**`voice.spoken_render`** — what the voice speaks when a reply is long (the spoken text differs from the full text shown on screen):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `mode` | `model_led` | `model_led` (speak the opening, rest stays on screen) or `verbatim` (read everything) |
+| `long_threshold_words` | `60` | Replies at or under this many words are always read in full |
+| `pointer` | "The full answer is on screen." | Sentence appended after the opening in `model_led` mode |
 
 ---
 
@@ -625,16 +683,16 @@ Or define a named preset and activate it:
 
 ```json
 {
-  "modelPresets": {
+  "model_presets": {
     "fast": {
       "model": "claude-haiku-3-5",
       "provider": "anthropic",
-      "maxTokens": 4096
+      "max_tokens": 4096
     }
   },
   "agents": {
     "defaults": {
-      "modelPreset": "fast"
+      "model_preset": "fast"
     }
   }
 }

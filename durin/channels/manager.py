@@ -106,6 +106,10 @@ class ChannelManager:
 
         self.transcription = TranscriptionService.from_config(config.transcription)
 
+        from durin.service.speech import SpeechSynthesisService
+
+        self.speech_synthesis = SpeechSynthesisService.from_config(config.tts)
+
         self._init_channels()
 
     def _ensure_channel_extras(self) -> None:
@@ -177,6 +181,8 @@ class ChannelManager:
                 shared_transcription = getattr(self, "transcription", None)
                 if shared_transcription is not None:
                     channel.transcription = shared_transcription
+                channel.speech_synthesis = getattr(self, "speech_synthesis", None)
+                channel.voice_config = getattr(self.config, "voice", None)
                 channel.send_progress = self._resolve_bool_override(
                     section, "send_progress", self.config.channels.send_progress,
                 )
@@ -292,8 +298,47 @@ class ChannelManager:
 
         self._notify_restart_done_if_needed()
 
+        # Pre-load STT/TTS engines in the background so the first transcription /
+        # voice synth doesn't pay the model load (and first-install download)
+        # inline. Parked so the loop keeps a strong ref; never blocks startup.
+        # ``getattr`` so managers built via ``__new__`` in tests (no __init__,
+        # hence no ``_background_tasks``) still run start_all without crashing.
+        park = getattr(self, "_background_tasks", None)
+        if park is not None:
+            warm = asyncio.create_task(self._warmup_speech())
+            park.add(warm)
+            warm.add_done_callback(park.discard)
+
         # Wait for all to complete (they should run forever)
         await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _warmup_speech(self) -> None:
+        """Warm the shared STT/TTS services at startup if their local extra is
+        installed and the subsystem is enabled. Skipped silently when the extra
+        is absent (the install prompts still surface at use-time); cloud
+        providers warm to a no-op. Failures are logged, never fatal."""
+        from durin.extras import _module_present
+
+        async def _warm(svc, cfg, module: str, label: str) -> None:
+            if svc is None or not getattr(cfg, "enabled", False):
+                return
+            # Only a local engine needs its extra present; cloud providers no-op.
+            if getattr(cfg, "provider", None) == "local" and not _module_present(module):
+                return
+            try:
+                await svc.warmup()
+                logger.info("{} engine warmed", label)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("{} warmup skipped: {}", label, e)
+
+        await _warm(
+            getattr(self, "transcription", None),
+            getattr(self.config, "transcription", None), "sherpa_onnx", "Transcription",
+        )
+        await _warm(
+            getattr(self, "speech_synthesis", None),
+            getattr(self.config, "tts", None), "supertonic", "Speech synthesis",
+        )
 
     def _notify_restart_done_if_needed(self) -> None:
         """Send restart completion message when runtime env markers are present."""

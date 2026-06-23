@@ -285,7 +285,7 @@ class FeishuChannel(BaseChannel):
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:
-        return FeishuConfig().model_dump(by_alias=True)
+        return FeishuConfig().model_dump(by_alias=False)
 
     def __init__(self, config: Any, bus: MessageBus):
         import lark_oapi as lark

@@ -912,7 +912,7 @@ def _configure_channel(config: Config, channel_name: str) -> None:
         display_name,
     )
     if updated_channel is not None:
-        new_dict = updated_channel.model_dump(by_alias=True, exclude_none=True)
+        new_dict = updated_channel.model_dump(by_alias=False, exclude_none=True)
         setattr(config.channels, channel_name, new_dict)
 
 
@@ -1066,7 +1066,7 @@ def _pause() -> None:
 
 def _has_unsaved_changes(original: Config, current: Config) -> bool:
     """Return True when the onboarding session has committed changes."""
-    return original.model_dump(by_alias=True) != current.model_dump(by_alias=True)
+    return original.model_dump(by_alias=False) != current.model_dump(by_alias=False)
 
 
 def _prompt_main_menu_exit(has_unsaved_changes: bool) -> str:

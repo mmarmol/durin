@@ -109,6 +109,13 @@ class TranscriptionService:
             self._provider = self._factory()
         return self._provider
 
+    async def warmup(self) -> None:
+        """Build the provider + pre-load its engine so the first transcription
+        at use-time is instant. No-op when disabled."""
+        if not self.enabled:
+            return
+        await self._get_provider().warmup()
+
     async def transcribe_and_cache(
         self, file_path: str | Path, on_status: Callable | None = None
     ) -> TranscriptResult:

@@ -802,7 +802,7 @@ interface AuxModel {
 
 function readAux(config: Record<string, unknown> | null, kind: string): AuxModel | null {
   const agents = config?.agents as Record<string, unknown> | undefined;
-  const aux = agents?.auxModels as Record<string, unknown> | undefined;
+  const aux = agents?.aux_models as Record<string, unknown> | undefined;
   const entry = aux?.[kind] as Record<string, unknown> | undefined;
   if (!entry || typeof entry.model !== "string") return null;
   return {
@@ -1463,7 +1463,7 @@ function ModelBlockRows({
     async (kind: string, value: AuxModel | null) => {
       setBusy(kind);
       try {
-        setConfig(await setConfigValue(token, `agents.auxModels.${kind}`, value));
+        setConfig(await setConfigValue(token, `agents.aux_models.${kind}`, value));
       } catch {
         // ignore — the row keeps its previous value
       } finally {
