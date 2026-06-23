@@ -238,6 +238,8 @@ class PersonasService:
 
         def _m(c: object) -> None:
             c.personas.pop(cmd.name, None)
+            if c.agents.defaults.persona == cmd.name:
+                c.agents.defaults.persona = None
 
         mutate_config(_m)
         return PersonaDeleteResult(ok=True)

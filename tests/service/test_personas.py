@@ -50,3 +50,15 @@ def test_set_default_valid_null_and_invalid(tmp_path, monkeypatch):
     assert res2.default is None
     with pytest.raises(DomainError):
         asyncio.run(svc.set_default(SetDefaultPersonaCommand(name="ghost"), _principal()))
+
+
+def test_delete_clears_dangling_default(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch)
+    asyncio.run(svc.upsert_persona(PersonaUpsertCommand(name="acme", soul="default"), _principal()))
+    asyncio.run(svc.set_default(SetDefaultPersonaCommand(name="acme"), _principal()))
+    res_before = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
+    assert res_before.default == "acme"
+    asyncio.run(svc.delete_persona(PersonaDeleteCommand(name="acme"), _principal()))
+    res_after = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
+    assert res_after.default is None
+    assert not any(p.name == "acme" for p in res_after.personas)
