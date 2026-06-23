@@ -878,11 +878,11 @@ def test_save_refs_prunes_webchat_and_stale_refs(make_channel):
 def test_msteams_default_config_includes_restart_notify_fields():
     cfg = MSTeamsChannel.default_config()
 
-    assert cfg["validateInboundAuth"] is True
-    assert cfg["refTtlDays"] == msteams_module.MSTEAMS_REF_TTL_DAYS
-    assert cfg["pruneWebChatRefs"] is True
-    assert cfg["pruneNonPersonalRefs"] is True
-    assert cfg["refTouchIntervalS"] == msteams_module.MSTEAMS_REF_TOUCH_INTERVAL_S
-    assert "restartNotifyEnabled" not in cfg
-    assert "restartNotifyPreMessage" not in cfg
-    assert "restartNotifyPostMessage" not in cfg
+    assert cfg["validate_inbound_auth"] is True
+    assert cfg["ref_ttl_days"] == msteams_module.MSTEAMS_REF_TTL_DAYS
+    assert cfg["prune_web_chat_refs"] is True
+    assert cfg["prune_non_personal_refs"] is True
+    assert cfg["ref_touch_interval_s"] == msteams_module.MSTEAMS_REF_TOUCH_INTERVAL_S
+    assert "restart_notify_enabled" not in cfg
+    assert "restart_notify_pre_message" not in cfg
+    assert "restart_notify_post_message" not in cfg
