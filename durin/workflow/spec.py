@@ -26,6 +26,7 @@ class WorkNode:
     context: Literal["own", "shared"] = "own"
     prompt: str = ""                      # the node's system/role framing
     next: str | None = None              # next node id; None = end
+    mode: str = "build"                   # AgentMode name: build (full) / plan / explore / custom — posture + tool access
     tools: Literal["none", "default"] = "none"   # "default" = standard tool set
     skills: tuple[str, ...] = ()          # named skills to inject into this node only
     mcps: tuple[str, ...] = ()            # MCP servers (already configured) whose tools this node may use
@@ -120,12 +121,16 @@ def _build_node(raw: dict[str, Any]) -> Node:
             )
         skills = _str_list(raw.get("skills", []), node_id, "skills")
         mcps = _str_list(raw.get("mcps", []), node_id, "mcps")
+        mode = raw.get("mode", "build")
+        if not isinstance(mode, str) or not mode:
+            raise WorkflowError(f"node {node_id!r}: mode must be a non-empty string, got {mode!r}")
         return WorkNode(
             id=node_id,
             model=model,
             context=context,
             prompt=raw.get("prompt", ""),
             next=raw.get("next"),
+            mode=mode,
             tools=tools,
             skills=skills,
             mcps=mcps,

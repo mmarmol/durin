@@ -64,6 +64,21 @@ def test_work_node_parses_skills_and_mcps():
     assert a.mcps == ("github-mcp-server",)
 
 
+def test_work_node_mode_defaults_build_and_parses():
+    a = parse_workflow({"name": "d", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work"}]}).nodes["a"]
+    assert a.mode == "build"
+    b = parse_workflow({"name": "d", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "mode": "plan"}]}).nodes["a"]
+    assert b.mode == "plan"
+
+
+def test_work_node_mode_must_be_a_string():
+    with pytest.raises(WorkflowError, match="mode must be"):
+        parse_workflow({"name": "d", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "mode": 123}]})
+
+
 def test_work_node_skills_must_be_string_list():
     with pytest.raises(WorkflowError, match="skills must be a list of strings"):
         parse_workflow({"name": "d", "start": "a", "nodes": [

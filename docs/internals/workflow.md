@@ -31,12 +31,16 @@ that the start and every edge target name a real node.
 runs one `AgentRunner` turn with that node's model and tool registry, then persists
 the node's conversation as a session keyed `workflow:<run_id>:<node_id>:<iteration>`
 with lineage (`origin_type="workflow_node"`). A node is configured independently and
-focused by default: besides its model, context and built-in `tools`, it can name the
-**skills** to inject into its own prompt (loaded the same way the main agent loads a
-skill) and the **MCP servers** whose tools it may use — a scoped subset of the
-already-configured servers, reused from the gateway's live connections (no per-node
+focused by default. Its **work mode** is an `AgentMode` (`durin/agent/agent_mode.py`) —
+`build` (default, full access), `plan`/`explore` (read-only), or a registered custom
+mode — that sets the node's posture (a prompt suffix) and filters its tool registry to
+what the mode allows, so a read-only node literally cannot write regardless of what the
+model attempts. Besides the mode, a node carries its model, context and built-in
+`tools`, plus the **skills** to inject into its own prompt (loaded the same way the main
+agent loads a skill) and the **MCP servers** whose tools it may use — a scoped subset of
+the already-configured servers, reused from the gateway's live connections (no per-node
 reconnect; the call is marshalled back to the gateway's event loop, where the MCP
-session lives). Both default empty, so a node sees only what its job needs. The node's output passes along the edge
+session lives). Skills/MCP default empty, so a node sees only what its job needs. The node's output passes along the edge
 as the next node's input. A `shared`-context node reads and extends a running
 conversation buffer; an `own`-context node is isolated and receives only the upstream
 output. For a decision node the engine evaluates the condition — either a shell
@@ -163,7 +167,8 @@ End-to-end for a single `run_workflow` call:
 - **Current scope.** This subsystem is built incrementally. Today: sequential execution
   with **concurrent parallel** branches — read-only, or **writing** with `choose` /
   `union` reconciliation (private copy per branch + content-aware conflict detection);
-  per-node model / context / tools / **skills** / **MCP servers**; decision conditions
+  per-node **work mode** (build/plan/explore) / model / context / tools / **skills** /
+  **MCP servers**; decision conditions
   by **shell command or agent judgment** (with feedback-threaded loop-back);
   **sub-workflow** composition (depth-capped); runs **anchored to the invoking
   session**; **git-versioned definitions** (each run snapshots them); and **dream-driven

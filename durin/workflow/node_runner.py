@@ -98,7 +98,20 @@ class AgentNodeRunner:
             )
             ToolLoader().load(ctx, registry, scope="subagent")
         self._add_mcp_tools(registry, getattr(node, "mcps", ()))
-        return registry
+        return self._apply_mode(node, registry)
+
+    def _apply_mode(self, node, registry: ToolRegistry) -> ToolRegistry:
+        """Restrict the registry to what the node's work mode (AgentMode) allows — e.g.
+        a 'plan'/'explore' node is read-only, 'build' (default) keeps everything."""
+        from durin.agent.agent_mode import get_mode
+        mode = get_mode(getattr(node, "mode", "build"))
+        if mode.allowed is None and not mode.denied:
+            return registry   # build / unrestricted — no filtering
+        filtered = ToolRegistry()
+        for name in registry.tool_names:
+            if mode.is_tool_allowed(name):
+                filtered.register(registry.get(name))
+        return filtered
 
     def _add_mcp_tools(self, registry: ToolRegistry, servers) -> None:
         """Register the live MCP tools of the selected servers into this node's
@@ -129,6 +142,12 @@ class AgentNodeRunner:
         skills_text = self._load_skills(getattr(req.node, "skills", ()))
         if skills_text:
             system = f"{system}\n\n# Skills\n\n{skills_text}" if system else f"# Skills\n\n{skills_text}"
+        # The node's work mode (AgentMode) appends its posture to the prompt so the model
+        # adopts the right stance (e.g. read-only in plan/explore).
+        from durin.agent.agent_mode import get_mode
+        suffix = get_mode(getattr(req.node, "mode", "build")).prompt_suffix
+        if suffix:
+            system = f"{system}{suffix}" if system else suffix.lstrip()
         messages: list[dict] = [{"role": "system", "content": system}]
         messages.extend(req.shared_context)
         user = req.task

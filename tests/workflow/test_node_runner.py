@@ -157,6 +157,42 @@ def test_none_tools_node_gets_empty_registry(tmp_path):
     assert not spec.tools.has("read_file")   # no tools for a 'none' node
 
 
+def test_plan_mode_makes_a_node_read_only(tmp_path):
+    from durin.workflow.spec import WorkNode
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(final_content="ok", messages=[])
+    nr = _runner(sessions, fake)
+    req = NodeRunRequest(
+        node=WorkNode(id="a", tools="default", mode="plan", next=None),
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    nr(req)
+    spec = nr.runner.run.call_args.args[0]
+    assert spec.tools.has("read_file")          # read tools survive plan mode
+    assert not spec.tools.has("write_file")     # write tools are dropped
+    assert not spec.tools.has("exec")
+    system = [m for m in spec.initial_messages if m["role"] == "system"][0]["content"]
+    assert "PLAN MODE" in system.upper()        # the read-only posture is injected
+
+
+def test_build_mode_keeps_all_tools_and_adds_no_posture(tmp_path):
+    from durin.workflow.spec import WorkNode
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(final_content="ok", messages=[])
+    nr = _runner(sessions, fake)
+    req = NodeRunRequest(
+        node=WorkNode(id="a", tools="default", prompt="do it", next=None),  # mode defaults to build
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    nr(req)
+    spec = nr.runner.run.call_args.args[0]
+    assert spec.tools.has("read_file") and spec.tools.has("write_file")     # build = full set
+    system = [m for m in spec.initial_messages if m["role"] == "system"][0]["content"]
+    assert system == "do it"                    # build adds no posture suffix
+
+
 class _FakeMcpTool(Tool):
     _plugin_discoverable = False
 
