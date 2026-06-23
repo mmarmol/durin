@@ -69,11 +69,15 @@ def _extra_specs(extra: str) -> list[str]:
     """Package specs for durin-agent's <extra>, from installed metadata.
 
     Avoids duplicating pyproject pins. A requirement line looks like
-    ``sentence-transformers>=3.0,<6.0; extra == "cross-encoder"``.
+    ``sentence-transformers>=3.0,<6.0; extra == "cross-encoder"``. The marker's
+    quote style depends on the build backend — hatchling emits single quotes
+    (``extra == 'tts'``), setuptools double — so match either, else the specs
+    come back empty and the auto-installer silently no-ops ("No auto-installer").
     """
+    needles = (f'extra == "{extra}"', f"extra == '{extra}'")
     specs: list[str] = []
     for req in importlib.metadata.requires("durin-agent") or []:
-        if f'extra == "{extra}"' in req:
+        if any(n in req for n in needles):
             specs.append(req.split(";", 1)[0].strip())
     return specs
 

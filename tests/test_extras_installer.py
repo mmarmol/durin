@@ -33,3 +33,26 @@ def test_installer_returns_none_when_nothing_available(monkeypatch):
     monkeypatch.setattr(extras, "_find_pipx", lambda: None)
     monkeypatch.setattr(extras, "_pipx_app_name", lambda: None)
     assert extras._installer_cmd(["x"]) is None
+
+
+def test_extra_specs_matches_single_quote_marker(monkeypatch):
+    """Regression: hatchling emits ``extra == 'tts'`` (single quotes); the
+    matcher previously only accepted double quotes, so specs came back EMPTY and
+    ``_installer_cmd([])`` returned None → the [tts] install failed with
+    'No auto-installer available' even though pip/uv/pipx were all available."""
+    reqs = [
+        "supertonic>=1.3; extra == 'tts'",
+        "onnxruntime<2.0.0,>=1.17; extra == 'tts'",
+        "other-pkg>=1.0; extra == 'memory'",
+    ]
+    monkeypatch.setattr(extras.importlib.metadata, "requires", lambda pkg: reqs)
+    assert extras._extra_specs("tts") == ["supertonic>=1.3", "onnxruntime<2.0.0,>=1.17"]
+
+
+def test_extra_specs_matches_double_quote_marker(monkeypatch):
+    """setuptools-style double-quote markers must still match."""
+    monkeypatch.setattr(
+        extras.importlib.metadata, "requires",
+        lambda pkg: ['supertonic>=1.3; extra == "tts"'],
+    )
+    assert extras._extra_specs("tts") == ["supertonic>=1.3"]
