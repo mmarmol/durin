@@ -18,7 +18,7 @@ RECURRENCE_FLOOR = 2
 class Diagnostics:
     total_runs: int = 0
     loop_backs: dict[str, int] = field(default_factory=dict)   # node_id -> #runs it ran >1×
-    gate_fails: dict[str, int] = field(default_factory=dict)   # decision id -> #runs it failed
+    gate_fails: dict[str, int] = field(default_factory=dict)   # routing node id -> #runs its verdict failed
     max_visits_aborts: int = 0
 
     def candidates(self, floor: int = RECURRENCE_FLOOR) -> set[str]:
@@ -41,7 +41,7 @@ def compute_diagnostics(records: list[dict]) -> Diagnostics:
             if nid is None:
                 continue
             max_iter[nid] = max(max_iter.get(nid, 0), r.get("iteration", 1))
-            if r.get("passed") is False:   # decision node that routed to on_fail
+            if r.get("passed") is False:   # a routing node whose verdict routed to on_fail
                 failed_gates.add(nid)
         for nid, mi in max_iter.items():
             if mi > 1:                     # the node ran more than once → a loop-back
