@@ -249,6 +249,8 @@ export function WorkflowsView() {
   const [task, setTask] = useState("");
   const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState<WorkflowRunResult | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -316,6 +318,34 @@ export function WorkflowsView() {
     },
     [mutate],
   );
+
+  const createWorkflow = useCallback(async () => {
+    const name = newName.trim();
+    if (!name) return;
+    if (names.includes(name)) {
+      setError(t("workflows.nameExists"));
+      return;
+    }
+    // Minimal valid graph: one work node, which is also the start. The user edits from there.
+    const fresh: WorkflowDef = {
+      name,
+      start: "start",
+      nodes: [{ id: "start", kind: "work", mode: "build", prompt: "", next: null }],
+    };
+    setSaving(true);
+    setError(null);
+    try {
+      await saveWorkflow(token, name, fresh);
+      setNames((ns) => Array.from(new Set([...ns, name])).sort());
+      setCreating(false);
+      setNewName("");
+      setSelected(name); // the [selected] effect loads it and renders the canvas
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [newName, names, token, t]);
 
   const deleteNode = useCallback(
     (id: string) => {
@@ -421,8 +451,40 @@ export function WorkflowsView() {
       <aside className="w-56 shrink-0 overflow-y-auto border-r p-2">
         <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium">
           <WorkflowIcon className="h-4 w-4" aria-hidden />
-          {t("workflows.title")}
+          <span className="flex-1">{t("workflows.title")}</span>
+          <button
+            type="button"
+            onClick={() => {
+              setCreating((c) => !c);
+              setNewName("");
+              setError(null);
+            }}
+            className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            title={t("workflows.new")}
+            aria-label={t("workflows.new")}
+          >
+            <Plus className="h-4 w-4" />
+          </button>
         </div>
+        {creating && (
+          <div className="px-2 pb-1">
+            <Input
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder={t("workflows.newPlaceholder")}
+              disabled={saving}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void createWorkflow();
+                if (e.key === "Escape") {
+                  setCreating(false);
+                  setNewName("");
+                }
+              }}
+              className="h-8 text-sm"
+            />
+          </div>
+        )}
         {loading ? (
           <div className="flex items-center gap-2 p-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" /> {t("workflows.loading")}
