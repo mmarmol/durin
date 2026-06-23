@@ -274,11 +274,15 @@ def discover_entities(
             result = write_entity(
                 workspace, ref, patches, create=True, name=prop["name"])
             written = ref
-        # Keep the index current so a later proposal in this same pass resolves
-        # against what we just wrote (within-run self-dedup).
+        # Best-effort: keep the index current so a later proposal in this same
+        # pass resolves against what we just wrote. A failed re-read is harmless
+        # — the next call's build() rebuilds the index from disk.
         type_, _, slug = written.partition(":")
-        page = EntityPage.from_file(
-            Path(workspace) / "memory" / "entities" / type_ / f"{slug}.md")
+        try:
+            page = EntityPage.from_file(
+                Path(workspace) / "memory" / "entities" / type_ / f"{slug}.md")
+        except OSError:
+            page = None
         if page is not None:
             index.refresh_for(page, slug)
         out.append({"ref": written, "committed": result.committed})
