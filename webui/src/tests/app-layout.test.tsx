@@ -457,10 +457,26 @@ describe("App layout", () => {
     expect(within(sidebar).getByText("Existing chat")).toBeInTheDocument();
   });
 
-  it("docks the voice orb in the shell across views", async () => {
+  it("docks the voice orb in the shell when voice can speak", async () => {
+    // The orb renders only once the config fetch confirms TTS is usable.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/api/v1/config")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              config: { voice: { enabled: true }, tts: { provider: "openai" } },
+              schema: {},
+            }),
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
     render(<App />);
     await screen.findByText(/durin/i);
-    // VoiceDock waits for the config fetch before rendering the orb, so await it.
     expect(await screen.findByRole("button", { name: /voice|start voice/i })).toBeInTheDocument();
   });
 });
