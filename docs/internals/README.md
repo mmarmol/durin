@@ -163,7 +163,7 @@ End-to-end flow for a single inbound message:
 
 | Component | Document | Role |
 |---|---|---|
-| Agent loop | [loop.md](loop.md) | Per-turn state machine, runner guards, hooks, agent modes, session persistence, provider switching. |
+| Agent loop | [loop.md](loop.md) | Per-turn state machine, runner guards, hooks, agent modes, session persistence, provider switching, personas and SOUL library. |
 | Tools | [tools.md](tools.md) | Tool registry, built-in tools, schemas, result budgets and spill, sandbox boundaries. |
 | MCP client | [mcp.md](mcp.md) | Connecting Model Context Protocol servers, exposing their tools, discovery and OAuth. |
 | Cron | [cron.md](cron.md) | Scheduled work: reminders and agent tasks, per-run isolated sessions, run history. |

@@ -286,6 +286,80 @@ the progress hook in a `CompositeHook`
 ([`durin/agent/hook.py`](../../durin/agent/hook.py)), which fans out to each hook
 with per-hook error isolation so a faulty hook cannot crash the turn.
 
+### Personas & SOULs
+
+#### SOUL library
+
+A *SOUL* is a personality document that replaces the default `SOUL.md` in the
+system prompt. `SoulStore` (`durin/souls/store.py`) is the file-backed library:
+the `default` soul maps to the workspace-root `SOUL.md` (kept there for
+backward compatibility and git-tracking); every other soul lives under
+`workspace/souls/<slug>.md`. Souls are plain markdown — readable and editable
+without any tooling.
+
+On a fresh workspace, three example souls are pre-seeded under `workspace/souls/`
+(`researcher`, `engineer`, `tutor`). They give built-in personas something to
+reference and serve as templates for user-defined souls.
+
+#### Persona records
+
+A *persona* pairs a soul with an optional model. `PersonaConfig` in
+`durin/config/schema.py` has three fields: `soul` (a `SoulStore` slug; omit to
+use `"default"`), `model` (a model picker ref — a preset name or
+`"provider model"` string — or `None` to inherit the global default model), and
+`description` (free text shown in `/persona` listings).
+
+Personas live in two places:
+
+- **User config** — a `personas` map in `config.yml`, structurally identical to
+  `model_presets`. User-config entries take precedence when names collide.
+- **Built-ins** — code-defined entries in `durin/personas/builtin.py`
+  (`researcher`, `engineer`, `tutor`). Always available without any user config.
+
+`Config.resolve_persona(name)` tries user config first, then built-ins, and
+returns `None` when the name is unknown (the caller falls back to the default
+SOUL and default model). `Config.persona_names()` returns the union of both
+sets.
+
+Example user config:
+
+```yaml
+personas:
+  acme:
+    soul: researcher
+    model: fast        # a named preset
+    description: "Research mode for Acme project"
+```
+
+#### Selection and precedence
+
+The active persona for a turn is resolved once in `_state_build` by
+`resolve_active_persona_name` (`durin/personas/resolve.py`):
+
+1. **Per-conversation** — `session.metadata["persona"]`, set by `/persona
+   <name>` and cleared by `/persona default`.
+2. **Global default** — `agents.defaults.persona` in config (applies to every
+   new conversation until overridden).
+3. **No persona** — default `SOUL.md` and global default model, unchanged from
+   pre-persona behavior.
+
+The resolved persona's soul body replaces the default SOUL in the stable system-
+prompt layer (via `ContextBuilder`). Its model ref is passed to the existing
+per-turn model-override path alongside any explicit `/model` or cron per-job
+model; the most-specific reference wins (`ctx.model_preset_override or
+ctx.persona_model_ref`) — an explicit `/model` switch always overrides the
+persona's model.
+
+#### Operating floor
+
+durin's execution rules — tool-use discipline, planning hygiene, and operational
+posture — live in `durin/templates/agent/operating_floor.md` and are injected
+into the stable system-prompt layer by `ContextBuilder._build_operating_floor`
+independent of which SOUL is active. Swapping a SOUL never removes these rules.
+The only exception is backward compatibility: if the active SOUL already contains
+a `## Execution Rules` section (a pre-existing workspace `SOUL.md` with embedded
+rules), the floor injection is skipped to avoid duplication.
+
 ### Agent modes (permission-as-data)
 
 Modes ([`durin/agent/agent_mode.py`](../../durin/agent/agent_mode.py)) are pure
@@ -355,7 +429,12 @@ messages back to the bus and clears the per-session latency entry.
 | `Session` | [`durin/session/manager.py`](../../durin/session/manager.py) | Append-only conversation with metadata and a `last_consolidated` cursor. |
 | `SessionManager` | [`durin/session/manager.py`](../../durin/session/manager.py) | Loads/saves sessions atomically; splits derived/volatile metadata to the sidecar. |
 | `session_turn_lease` | [`durin/session/turn_lease.py`](../../durin/session/turn_lease.py) | Cross-process per-session turn lock held for the whole turn. |
-| `ContextBuilder` | [`durin/agent/context.py`](../../durin/agent/context.py) | Builds the tiered system prompt and the LLM message list. |
+| `ContextBuilder` | [`durin/agent/context.py`](../../durin/agent/context.py) | Builds the tiered system prompt and the LLM message list, including the active SOUL and operating floor. |
+| `SoulStore` | [`durin/souls/store.py`](../../durin/souls/store.py) | File-backed SOUL library: `default` → `SOUL.md`, named souls → `souls/<slug>.md`. |
+| `PersonaConfig` | [`durin/config/schema.py`](../../durin/config/schema.py) | A soul + optional model + description; lives in the `personas` config map or `BUILTIN_PERSONAS`. |
+| `resolve_persona` / `persona_names` | [`durin/config/schema.py`](../../durin/config/schema.py) | Resolver (user config → built-ins) and listing method on `Config`. |
+| `resolve_active_persona_name` | [`durin/personas/resolve.py`](../../durin/personas/resolve.py) | Precedence resolver: per-conversation metadata → global default → None. |
+| `BUILTIN_PERSONAS` | [`durin/personas/builtin.py`](../../durin/personas/builtin.py) | Code-defined personas always available without user config (`researcher`, `engineer`, `tutor`). |
 | `AgentMode` | [`durin/agent/agent_mode.py`](../../durin/agent/agent_mode.py) | Permission-as-data tool filter (build / plan / explore). |
 | `AgentHook` / `CompositeHook` | [`durin/agent/hook.py`](../../durin/agent/hook.py) | Per-iteration lifecycle callbacks with fan-out and error isolation. |
 | `AgentProgressHook` | [`durin/agent/progress_hook.py`](../../durin/agent/progress_hook.py) | The hook wired on every turn (streaming, tool hints, iteration count). |
@@ -379,6 +458,7 @@ Loop-relevant `agents.defaults.*` keys (see
 | `consolidation_ratio` | `0.5` | How far each compaction round reduces the prompt. |
 | `preemptive_compact_ratio` | `0.5` | Fraction of the window that triggers preemptive compaction. |
 | `plan_stall_turns` | `8` | Turns of no todo progress on an executing plan before a "reassess" reminder (`0` disables). |
+| `agents.defaults.persona` | `null` | Default persona name for interactive conversations. Overridden per-conversation via `/persona`. |
 | `context_window_tokens`, `context_block_limit`, `max_tool_result_chars` | — | Token/size budgets used when building and persisting. |
 
 ### Environment knobs
@@ -404,6 +484,8 @@ Read at runtime (mostly in the runner / loop):
   `register_builtin_commands`. Priority (no-lock) commands are `/stop`,
   `/restart`, `/status`. Mode/model controls relevant to the loop include
   `/plan`, `/build`, `/mode`, `/model`, `/effort`, `/new`, `/compact`.
+  `/persona [name]` switches the active persona for the current conversation;
+  `/persona default` reverts to the global default.
 - **Bus** — any channel publishes/consumes through `MessageBus`; the loop is
   channel-agnostic. The CLI/TUI also use `process_direct` for a synchronous
   one-shot turn that mirrors `_dispatch`'s lease-and-reload semantics.
