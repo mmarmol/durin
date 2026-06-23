@@ -419,12 +419,15 @@ export function TranscriptionSettings({ token }: { token: string }) {
                 </SettingsRow>
               </>
             ) : null}
-            <SettingsRow title="Language" description="ISO-639-1 code (es, en…). Empty = auto.">
+            <SettingsRow
+              title="Language hint"
+              description="ISO-639-1 code (es, en, ja, zh…). Empty = auto-detect."
+            >
               <TextRow
                 value={state.ttsLanguage}
-                placeholder="es"
+                placeholder="auto"
                 disabled={savingPath === "tts.language"}
-                onSave={(v) => void onSave("tts.language", v)}
+                onSave={(v) => void onSave("tts.language", v || null)}
               />
             </SettingsRow>
           </SettingsGroup>
