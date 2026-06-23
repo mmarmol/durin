@@ -146,3 +146,50 @@ def test_shared_buffer_accumulates_across_shared_nodes():
     b_call = [c for c in calls if c.node.id == "b"][0]
     # b is the second shared node: it must receive a's appended message
     assert b_call.shared_context == [{"role": "assistant", "content": "out-a"}]
+
+
+def test_judgment_decision_passes(monkeypatch):
+    from durin.workflow.judge import JudgeVerdict
+    wf = parse_workflow({"name": "d", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "next": "g"},
+        {"id": "g", "kind": "decision", "criteria": "ok?", "on_pass": None, "on_fail": "a"},
+    ]})
+    judged = []
+
+    def judge_runner(criteria, output, model):
+        judged.append((criteria, output, model))
+        return JudgeVerdict(passed=True, feedback="PASS looks good")
+
+    def node_runner(req):
+        return NodeRunResponse(output="the work", session_key=None, messages=[])
+
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1", judge_runner=judge_runner)
+    res = eng.run(wf, "t")
+    assert res.status == "completed"
+    assert judged and judged[0][0] == "ok?" and judged[0][1] == "the work"
+    g_run = [r for r in res.runs if r.node_id == "g"][0]
+    assert g_run.passed is True
+
+
+def test_judgment_fail_loops_back_with_feedback():
+    from durin.workflow.judge import JudgeVerdict
+    wf = parse_workflow({"name": "d", "start": "a", "max_visits": 3, "nodes": [
+        {"id": "a", "kind": "work", "next": "g"},
+        {"id": "g", "kind": "decision", "criteria": "ok?", "on_pass": None, "on_fail": "a"},
+    ]})
+    verdicts = iter([JudgeVerdict(passed=False, feedback="FAIL: add validation"),
+                     JudgeVerdict(passed=True, feedback="PASS")])
+    seen_inputs = []
+
+    def judge_runner(criteria, output, model):
+        return next(verdicts)
+
+    def node_runner(req):
+        seen_inputs.append(req.upstream_output)
+        return NodeRunResponse(output="attempt", session_key=None, messages=[])
+
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1", judge_runner=judge_runner)
+    res = eng.run(wf, "t")
+    assert res.status == "completed"
+    # the second run of 'a' (the loop-back) saw the reviewer feedback in its input
+    assert any(inp and "add validation" in inp for inp in seen_inputs)

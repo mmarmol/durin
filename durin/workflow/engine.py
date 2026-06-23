@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from durin.workflow.condition import CommandOutcome, run_command
+from durin.workflow.judge import JudgeVerdict
 from durin.workflow.result import NodeRun, WorkflowResult
 from durin.workflow.spec import DecisionNode, WorkNode, Workflow
 
@@ -51,10 +52,12 @@ class WorkflowEngine:
         *,
         run_id_factory: Callable[[], str] | None = None,
         command_runner: Callable[..., CommandOutcome] = run_command,
+        judge_runner: Callable[[str, str, "str | None"], JudgeVerdict] | None = None,
     ) -> None:
         self._node_runner = node_runner
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex[:12])
         self._command_runner = command_runner
+        self._judge_runner = judge_runner
 
     def run(
         self, workflow: Workflow, task: str, *, root_session_key: str | None = None
@@ -104,16 +107,31 @@ class WorkflowEngine:
                 current = node.next
 
             elif isinstance(node, DecisionNode):
-                outcome = self._command_runner(node.command, cwd=None)
-                runs.append(
-                    NodeRun(
-                        node_id=node.id,
-                        iteration=iteration,
-                        output=outcome.output,
-                        passed=outcome.passed,
+                if node.criteria:
+                    if self._judge_runner is None:
+                        raise RuntimeError(
+                            f"node {node.id!r} needs a judge but the engine has no judge_runner"
+                        )
+                    verdict = self._judge_runner(node.criteria, upstream_output or "", node.judge_model)
+                    passed = verdict.passed
+                    runs.append(NodeRun(node_id=node.id, iteration=iteration,
+                                        output=verdict.feedback, passed=passed))
+                    if not passed:
+                        # thread the reviewer feedback to the producer it loops back to
+                        prior = upstream_output or ""
+                        upstream_output = f"{prior}\n\nReviewer feedback (address this):\n{verdict.feedback}"
+                    current = node.on_pass if passed else node.on_fail
+                else:
+                    outcome = self._command_runner(node.command, cwd=None)
+                    runs.append(
+                        NodeRun(
+                            node_id=node.id,
+                            iteration=iteration,
+                            output=outcome.output,
+                            passed=outcome.passed,
+                        )
                     )
-                )
-                current = node.on_pass if outcome.passed else node.on_fail
+                    current = node.on_pass if outcome.passed else node.on_fail
 
         return WorkflowResult(
             status="completed", final_output=final_output, runs=runs, run_id=run_id
