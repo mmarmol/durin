@@ -350,6 +350,21 @@ model; the most-specific reference wins (`ctx.model_preset_override or
 ctx.persona_model_ref`) — an explicit `/model` switch always overrides the
 persona's model.
 
+#### Surfaces
+
+Souls and personas are manageable through three surfaces:
+
+- **`/persona` slash command** — switches the active persona for the current
+  conversation; `/persona default` reverts.
+- **`agents.defaults.persona` in `config.yml`** — sets the global default persona
+  applied to every new conversation.
+- **Webui Personas settings section** — a SOUL library editor (create, edit,
+  delete named soul files) and a Persona definitions panel (create/update
+  personas with model picker and soul picker, delete user-defined personas, set
+  or clear the global default). Backed by `PersonasService` (`durin/service/personas.py`)
+  via the `/api/v1/souls` and `/api/v1/personas` route groups (see
+  [api.md](api.md)).
+
 #### Operating floor
 
 durin's execution rules — tool-use discipline, planning hygiene, and operational
@@ -485,7 +500,9 @@ Read at runtime (mostly in the runner / loop):
   `/restart`, `/status`. Mode/model controls relevant to the loop include
   `/plan`, `/build`, `/mode`, `/model`, `/effort`, `/new`, `/compact`.
   `/persona [name]` switches the active persona for the current conversation;
-  `/persona default` reverts to the global default.
+  `/persona default` reverts to the global default. Personas and souls are also
+  managed through the webui Personas settings section — see the Surfaces
+  subsection in "Personas & SOULs" above.
 - **Bus** — any channel publishes/consumes through `MessageBus`; the loop is
   channel-agnostic. The CLI/TUI also use `process_direct` for a synchronous
   one-shot turn that mirrors `_dispatch`'s lease-and-reload semantics.

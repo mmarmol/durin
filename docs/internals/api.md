@@ -10,7 +10,7 @@
 
 The API platform is the HTTP and WebSocket front door for durin. It exposes a
 set of domain services — managing sessions, memory, secrets, skills, cron jobs,
-MCP servers, config, OAuth, and auth tokens — through a single unified
+MCP servers, config, OAuth, auth tokens, and personas/souls — through a single unified
 Starlette/uvicorn ASGI gateway. The same gateway also serves the WebSocket chat
 endpoint, signed media reads, and the built SPA.
 
@@ -26,8 +26,8 @@ adapter and the OpenAPI generator both read the same metadata from each method's
 
 ## 2. Mental model
 
-**Transport-agnostic domain services.** Twelve service classes live in
-`durin/service/`. Each public method is decorated with `@route`, which stashes a
+**Transport-agnostic domain services.** Service classes live in
+`durin/service/` (see `SERVICE_CLASSES` in `durin/service/catalog.py`). Each public method is decorated with `@route`, which stashes a
 frozen `RouteSpec` on the method and returns it unchanged — the method stays a
 plain awaitable. Nothing in `durin/service/` imports HTTP or WebSocket; adapters
 map `DomainError` codes to their own status vocabulary. The TUI calls these
@@ -55,12 +55,12 @@ context is valid in the other without any in-memory state.
 
 ```mermaid
 flowchart TD
-    subgraph services["durin/service/ — 12 domain services"]
+    subgraph services["durin/service/ — domain services"]
         S1["SecretsService"]
         S2["SessionsService"]
         S3["McpService"]
         S4["CronService"]
-        S5["MemoryService / SkillsService / ..."]
+        S5["MemoryService / SkillsService / PersonasService / ..."]
         S6["AuthService / OAuthService / HealthService"]
     end
 
@@ -200,10 +200,9 @@ is never hand-edited. Run `python scripts/gen_openapi.py` (with
 to the route table. TypeScript types are generated from the contract via
 `bun run gen:api-types` → `openapi-typescript`.
 
-The current contract covers 89 operations (46 GET, 31 POST, 10 DELETE, 2 PATCH)
-across 74 paths, with 146 schemas in `components/schemas`. These numbers are
-derived directly from the route table; they change automatically when service
-methods are added or removed.
+The contract operation count, path count, and schema count are derived directly
+from the route table and change automatically when service methods are added or
+removed. Run `python scripts/gen_openapi.py` to see the current totals.
 
 ### Token minting
 
@@ -232,8 +231,8 @@ URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
 | `Scope` | `durin/service/principal.py` | String enum of permission values: `admin` plus `<domain>:<read\|write>` pairs (settings, secrets, skills, cron, sessions, config, memory, mcp, system) |
 | `ServiceModel` / `Command` / `Query` / `Result` | `durin/service/types.py` | Pydantic DTO bases: camelCase wire aliases via `to_camel`; `Command`/`Query` forbid extra fields, `Result` allows them |
 | `DomainError` + subclasses | `durin/service/types.py` | Transport-agnostic error hierarchy: `UnauthenticatedError` (401), `ForbiddenError` (403), `NotFoundError` (404), `ConflictError` (409), `ValidationFailedError` (422), `TooManyRequestsError` (429), `UnavailableError` (503) |
-| `build_service_registry` | `durin/service/wiring.py` | Factory for the functional registry: wires all 12 services to real `config`, `session_manager`, `cron_service`, `bus`, optional `mcp_runtime` |
-| `SERVICE_CLASSES` / `build_catalog_registry` | `durin/service/catalog.py` | Canonical list of the 12 HTTP-exposed service classes; deps-less registry factory for spec tooling and OpenAPI generation |
+| `build_service_registry` | `durin/service/wiring.py` | Factory for the functional registry: wires all services to real `config`, `session_manager`, `cron_service`, `bus`, optional `mcp_runtime` |
+| `SERVICE_CLASSES` / `build_catalog_registry` | `durin/service/catalog.py` | Canonical list of HTTP-exposed service classes; deps-less registry factory for spec tooling and OpenAPI generation |
 | `build_api_app` | `durin/api/asgi.py` | Starlette app for `/api/v1/*`: one `Route` per read (`_build_handler`) and write (`_build_write_handler`) route, ordered literals-before-params |
 | `build_gateway_http_app` | `durin/api/asgi.py` | Full gateway app: assembles WS, signed reads, `/api/v1/*`, bootstrap, media, and SPA routes in priority order |
 | `resolve_principal_from_headers` | `durin/api/asgi.py` | Extracts and verifies a bearer token; returns `Principal` or `None` |
@@ -263,7 +262,8 @@ carries no `@route` decorator on any method). Its configuration
 
 The route table is the authoritative source; the current operation set spans
 secrets, cron, sessions, settings, config, skills, memory, MCP servers, health,
-commands, OAuth flows, and auth tokens. Verbs in use: GET, POST, DELETE, and
+commands, OAuth flows, auth tokens, and personas/souls (`/api/v1/souls`,
+`/api/v1/personas`). Verbs in use: GET, POST, DELETE, and
 PATCH (used by `McpService.update` and `CronService` for partial updates).
 
 All mutations are POST/DELETE/PATCH with a JSON body; there are no
