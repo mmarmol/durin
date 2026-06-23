@@ -2,10 +2,11 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from durin.agent.runner import AgentRunResult
 from durin.agent.tools.run_workflow import RunWorkflowTool
 from durin.providers.base import LLMProvider
 from durin.session.manager import SessionManager
@@ -39,7 +40,7 @@ def test_tool_metadata():
 async def test_missing_workflow_returns_error(tmp_path):
     tool = _tool(tmp_path)
     out = await tool.execute(name="ghost", task="t")
-    assert "ghost" in out.lower() or "not" in out.lower()
+    assert "ghost" in out
 
 
 @pytest.mark.asyncio
@@ -57,3 +58,25 @@ async def test_runs_command_only_workflow_end_to_end(tmp_path):
         out = await tool.execute(name="checker", task="check it")
     assert "completed" in out.lower()
     assert "gate" in out
+
+
+@pytest.mark.asyncio
+async def test_work_node_runs_through_to_thread_boundary(tmp_path):
+    # A work node forces the node runner's inner asyncio.run to execute; it must
+    # run inside the asyncio.to_thread worker (no active loop there) to be valid.
+    _write_workflow(tmp_path, "doer", {
+        "name": "doer", "start": "a",
+        "nodes": [{"id": "a", "kind": "work", "prompt": "p", "next": None}],
+    })
+    tool = _tool(tmp_path)
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "test-model"
+    fake_result = AgentRunResult(
+        final_content="did the work",
+        messages=[{"role": "assistant", "content": "did the work"}],
+    )
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.agent.runner.AgentRunner.run", AsyncMock(return_value=fake_result)):
+        out = await tool.execute(name="doer", task="do it")
+    assert "completed" in out.lower()
+    assert "did the work" in out
