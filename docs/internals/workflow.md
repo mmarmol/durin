@@ -122,6 +122,7 @@ End-to-end for a single `run_workflow` call:
 | `run_command`, `CommandOutcome` | `durin/workflow/condition.py` | The shell-exit-code condition a decision node routes on. |
 | `JudgeVerdict`, `AgentJudgeRunner` | `durin/workflow/judge.py` | The reviewer agent: a pass/fail verdict + feedback for a judgment decision node, and `pick` to choose the best of N branch outputs. |
 | `fork`, `diff`, `conflicts`, `apply` | `durin/workflow/workspace_fork.py` | Per-branch workspace isolation + reconciliation (choose/union) for writing-in-parallel. |
+| `WorkflowVersionStore` | `durin/workflow/version_store.py` | Git versioning of workflow definitions: each run snapshots them; `history` reads the timeline. |
 | `SubworkflowRunner` | `durin/workflow/subworkflow.py` | Runs a named workflow as a nested run (depth-capped) for a sub-workflow node. |
 | `WorkflowEngine` | `durin/workflow/engine.py` | The graph executor: routing, loop-back with a visit cap, own/shared context, output threading, and concurrent parallel branches. |
 | `AgentNodeRunner` | `durin/workflow/node_runner.py` | The default node runner: one real `AgentRunner` turn per work node, persisted as a lineage'd node session. |
@@ -131,7 +132,10 @@ End-to-end for a single `run_workflow` call:
 
 ## 6. Configuration & surfaces
 
-- **Definitions** live as JSON under `<workspace>/workflows/<name>.json`.
+- **Definitions** live as JSON under `<workspace>/workflows/<name>.json`. That
+  directory is a small local git repo (`durin/workflow/version_store.py`, via the
+  shared `GitRepo`); every run snapshots the current definitions, so there is a
+  navigable version history of how each workflow changed and which version a run used.
 - **Surface:** the `run_workflow(name, task)` LLM tool — auto-discovered into the
   agent's tool registry at core scope (see [tools.md](tools.md)). A work node with
   `tools: "default"` receives the user's configured tool set; `tools: "none"` (the
@@ -144,10 +148,11 @@ End-to-end for a single `run_workflow` call:
   `union` reconciliation (private copy per branch + content-aware conflict detection);
   per-node model / context / tools / **skills** / **MCP servers**; decision conditions
   by **shell command or agent judgment** (with feedback-threaded loop-back);
-  **sub-workflow** composition (depth-capped); and runs **anchored to the invoking
-  session**. Not yet built — see [roadmap.md](../roadmap.md) for direction — auto-merge
-  of conflicting parallel writes, per-node custom persona, a visual editor, internal-git
-  versioning of definitions, and dream-driven self-improvement of workflows.
+  **sub-workflow** composition (depth-capped); runs **anchored to the invoking
+  session**; and **git-versioned definitions** (each run snapshots them). Not yet built
+  — see [roadmap.md](../roadmap.md) for direction — auto-merge of conflicting parallel
+  writes, per-node custom persona, a visual editor, and dream-driven self-improvement of
+  workflows.
 - **Security.** Definitions are local files the user authored, so running their
   commands and tools is equivalent to the user running them directly; importing remote
   or third-party definitions is not supported in this scope (see [security.md](security.md)).

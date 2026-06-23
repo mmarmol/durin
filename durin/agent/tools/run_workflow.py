@@ -87,14 +87,19 @@ class RunWorkflowTool(Tool, ContextAware):
         from durin.providers.factory import make_provider
         from durin.workflow.engine import WorkflowEngine
         from durin.workflow.judge import AgentJudgeRunner
-        from durin.workflow.loader import WorkflowNotFound, load_workflow
+        from durin.workflow.loader import WorkflowNotFound, load_workflow, workflows_dir
         from durin.workflow.node_runner import AgentNodeRunner
         from durin.workflow.subworkflow import SubworkflowRunner
+        from durin.workflow.version_store import WorkflowVersionStore
 
         try:
             workflow = load_workflow(self._workspace, name)
         except WorkflowNotFound as exc:
             return f"Error: {exc}"
+
+        # Snapshot the current definitions into the workflow version history (captures
+        # any edit since the last run). Best-effort: never blocks the run.
+        WorkflowVersionStore(workflows_dir(self._workspace)).snapshot(f"run {name}")
 
         preset = self._app_config.resolve_default_preset()
         provider = make_provider(self._app_config, preset=preset)
