@@ -90,6 +90,9 @@ def _edge_targets(node: Node) -> list[str | None]:
 def parse_workflow(data: dict[str, Any]) -> Workflow:
     """Parse a workflow definition dict into a validated Workflow."""
     name = data.get("name", "")
+    if not name or not isinstance(name, str):
+        raise WorkflowError("workflow is missing a 'name'")
+
     start = data.get("start")
     raw_nodes = data.get("nodes", [])
     if not isinstance(raw_nodes, list) or not raw_nodes:
@@ -101,6 +104,9 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
         if node.id in nodes:
             raise WorkflowError(f"duplicate node id {node.id!r}")
         nodes[node.id] = node
+
+    if start is None:
+        raise WorkflowError("workflow is missing 'start'")
 
     if start not in nodes:
         raise WorkflowError(f"start node {start!r} is not a defined node")

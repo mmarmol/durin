@@ -71,3 +71,19 @@ def test_invalid_context_raises():
     with pytest.raises(WorkflowError, match="context"):
         parse_workflow({"name": "d", "start": "a",
                         "nodes": [{"id": "a", "kind": "work", "context": "sideways"}]})
+
+
+def test_missing_name_raises():
+    with pytest.raises(WorkflowError, match="name"):
+        parse_workflow({"start": "a", "nodes": [{"id": "a", "kind": "work"}]})
+
+
+def test_missing_start_raises():
+    with pytest.raises(WorkflowError, match="start"):
+        parse_workflow({"name": "d", "nodes": [{"id": "a", "kind": "work"}]})
+
+
+def test_duplicate_node_id_raises():
+    with pytest.raises(WorkflowError, match="duplicate"):
+        parse_workflow({"name": "d", "start": "a", "nodes": [
+            {"id": "a", "kind": "work"}, {"id": "a", "kind": "work"}]})
