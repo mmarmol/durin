@@ -1,10 +1,15 @@
 """The workflow definition: a flow graph of nodes, parsed from a JSON-style dict.
 
-A workflow is NOT a linear pipeline. It is a graph the user draws: work nodes do
-a task and point to a next node; decision nodes route the flow (continue or loop
-back) based on a condition. This slice supports a single objective condition type
-(a shell command; exit 0 = pass). The parsed form is plain dataclasses the engine
-walks deterministically.
+A workflow is NOT a linear pipeline. It is a graph the user draws: nodes do a task
+and optionally route the flow on a pass/fail verdict. A node has either an agent
+body (runs a model turn) or a command body (runs a shell command, exit 0 = pass).
+Routing is opt-in: set on_pass/on_fail to make a node emit a verdict; omit them
+and the node uses a single next edge. The parsed form is plain dataclasses the
+engine walks deterministically.
+
+The ``kind: "decision"`` JSON field is a back-compat alias for a routing WorkNode:
+``criteria`` maps to ``prompt``, ``judge_model`` maps to ``model`` (if model is
+unset). No data migration required.
 """
 
 from __future__ import annotations
@@ -19,31 +24,37 @@ class WorkflowError(ValueError):
 
 @dataclass(frozen=True)
 class WorkNode:
-    """A node that runs an agent turn and produces an output."""
+    """A node that runs an agent turn (or a shell command) and produces an output.
+
+    Routing is optional. When on_pass or on_fail is set the node emits a verdict
+    after executing its body: an agent node's output is parsed for a PASS/FAIL
+    line; a command node uses the exit code (0 = pass). Without routing the node
+    follows next unconditionally.
+    """
 
     id: str
     model: str | None = None              # None = engine default
     context: Literal["own", "shared"] = "own"
-    prompt: str = ""                      # the node's system/role framing
-    next: str | None = None              # next node id; None = end
-    mode: str = "build"                   # AgentMode name: build (full) / plan / explore / custom — posture + tool access
+    prompt: str = ""                      # agent system/role framing (empty = upstream context only)
+    next: str | None = None              # next node id; None = end (mutually exclusive with on_pass/on_fail)
+    mode: str = "build"                   # AgentMode name: build (full) / plan / explore / custom
     tools: Literal["none", "default"] = "none"   # "default" = standard tool set
     skills: tuple[str, ...] = ()          # named skills to inject into this node only
     mcps: tuple[str, ...] = ()            # MCP servers (already configured) whose tools this node may use
+    command: str = ""                     # non-empty => command body; the agent turn is skipped
+    on_pass: str | None = None           # routing: next node on pass/exit-0; set => this node routes
+    on_fail: str | None = None           # routing: next node on fail/non-zero exit
     kind: Literal["work"] = "work"
 
+    @property
+    def routes(self) -> bool:
+        """True when this node emits a pass/fail verdict and branches on it."""
+        return self.on_pass is not None or self.on_fail is not None
 
-@dataclass(frozen=True)
-class DecisionNode:
-    """A node that routes the flow on a command's exit code (0 = pass)."""
-
-    id: str
-    command: str = ""
-    on_pass: str | None = None           # next node on pass; None = end
-    on_fail: str | None = None           # next node on fail (e.g. loop back)
-    criteria: str = ""                   # judgment condition: a reviewer evaluates against this
-    judge_model: str | None = None       # optional model for the judge (None = default)
-    kind: Literal["decision"] = "decision"
+    @property
+    def is_command(self) -> bool:
+        """True when this node runs a shell command rather than an agent turn."""
+        return bool(self.command)
 
 
 @dataclass(frozen=True)
@@ -73,7 +84,7 @@ class ParallelNode:
     kind: Literal["parallel"] = "parallel"
 
 
-Node = Union[WorkNode, DecisionNode, SubworkflowNode, ParallelNode]
+Node = Union[WorkNode, SubworkflowNode, ParallelNode]
 
 
 @dataclass(frozen=True)
@@ -121,7 +132,16 @@ def _build_node(raw: dict[str, Any]) -> Node:
             )
         skills = _str_list(raw.get("skills", []), node_id, "skills")
         mcps = _str_list(raw.get("mcps", []), node_id, "mcps")
-        mode = raw.get("mode", "build")
+        on_pass = raw.get("on_pass")
+        on_fail = raw.get("on_fail")
+        next_node = raw.get("next")
+        if next_node is not None and (on_pass is not None or on_fail is not None):
+            raise WorkflowError(
+                f"node {node_id!r}: 'next' and routing ('on_pass'/'on_fail') are mutually exclusive"
+            )
+        routes = on_pass is not None or on_fail is not None
+        mode_default = "explore" if routes else "build"
+        mode = raw.get("mode", mode_default)
         if not isinstance(mode, str) or not mode:
             raise WorkflowError(f"node {node_id!r}: mode must be a non-empty string, got {mode!r}")
         return WorkNode(
@@ -129,26 +149,42 @@ def _build_node(raw: dict[str, Any]) -> Node:
             model=model,
             context=context,
             prompt=raw.get("prompt", ""),
-            next=raw.get("next"),
+            next=next_node,
             mode=mode,
             tools=tools,
             skills=skills,
             mcps=mcps,
+            command=raw.get("command", ""),
+            on_pass=on_pass,
+            on_fail=on_fail,
         )
     if kind == "decision":
+        # Back-compat alias: kind=decision maps to a routing WorkNode.
+        # 'criteria' maps to 'prompt'; 'judge_model' maps to 'model' when model is unset.
         command = raw.get("command", "")
         criteria = raw.get("criteria", "")
-        if bool(command) == bool(criteria):
+        if command and criteria:
             raise WorkflowError(
                 f"node {node_id!r}: a decision node needs exactly one of 'command' or 'criteria'"
             )
-        return DecisionNode(
+        model = raw.get("model") or raw.get("judge_model")
+        on_pass = raw.get("on_pass")
+        on_fail = raw.get("on_fail")
+        # Routing agent nodes default to explore mode (read-only) for independence.
+        mode = raw.get("mode", "explore") if not command else raw.get("mode", "build")
+        return WorkNode(
             id=node_id,
+            model=model,
+            context=raw.get("context", "own"),
+            prompt=criteria,
+            next=raw.get("next"),
+            mode=mode,
+            tools=raw.get("tools", "none"),
+            skills=_str_list(raw.get("skills", []), node_id, "skills"),
+            mcps=_str_list(raw.get("mcps", []), node_id, "mcps"),
             command=command,
-            criteria=criteria,
-            judge_model=raw.get("judge_model"),
-            on_pass=raw.get("on_pass"),
-            on_fail=raw.get("on_fail"),
+            on_pass=on_pass,
+            on_fail=on_fail,
         )
     if kind == "subworkflow":
         workflow = raw.get("workflow", "")
@@ -182,12 +218,14 @@ def _build_node(raw: dict[str, Any]) -> Node:
 
 def _edge_targets(node: Node) -> list[str | None]:
     if isinstance(node, WorkNode):
+        if node.routes:
+            return [node.on_pass, node.on_fail]
         return [node.next]
     if isinstance(node, SubworkflowNode):
         return [node.next]
     if isinstance(node, ParallelNode):
         return [*node.branches, node.next]
-    return [node.on_pass, node.on_fail]
+    return []  # unreachable with the current Node union
 
 
 def parse_workflow(data: dict[str, Any]) -> Workflow:

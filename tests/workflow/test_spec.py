@@ -3,7 +3,6 @@
 import pytest
 
 from durin.workflow.spec import (
-    DecisionNode,
     WorkNode,
     Workflow,
     WorkflowError,
@@ -32,7 +31,8 @@ def test_parse_valid_workflow():
     assert wf.nodes["build"].model == "fast"
     assert wf.nodes["build"].context == "own"
     assert wf.nodes["build"].next == "check"
-    assert isinstance(wf.nodes["check"], DecisionNode)
+    # kind=decision with a command parses back-compatibly into a routing WorkNode
+    assert isinstance(wf.nodes["check"], WorkNode)
     assert wf.nodes["check"].command == "true"
     assert wf.nodes["check"].on_pass is None
     assert wf.nodes["check"].on_fail == "build"
@@ -213,14 +213,17 @@ def test_non_string_model_raises():
 
 
 def test_decision_node_parses_criteria_and_judge_model():
+    # Legacy back-compat: kind=decision with criteria+judge_model still parses,
+    # now into a routing WorkNode with criteria->prompt and judge_model->model.
     wf = parse_workflow({"name": "d", "start": "a", "nodes": [
         {"id": "a", "kind": "work", "next": "g"},
         {"id": "g", "kind": "decision", "criteria": "Is it correct?",
          "judge_model": "deep", "on_pass": None, "on_fail": "a"},
     ]})
     g = wf.nodes["g"]
-    assert g.criteria == "Is it correct?"
-    assert g.judge_model == "deep"
+    assert isinstance(g, WorkNode)
+    assert g.prompt == "Is it correct?"
+    assert g.model == "deep"
     assert g.command == ""
 
 
@@ -232,10 +235,56 @@ def test_decision_with_both_command_and_criteria_raises():
         ]})
 
 
-def test_decision_with_neither_command_nor_criteria_raises():
-    with pytest.raises(WorkflowError, match="exactly one"):
-        parse_workflow({"name": "d", "start": "g", "nodes": [
-            {"id": "g", "kind": "decision", "on_pass": None, "on_fail": None},
+# test_decision_with_neither_command_nor_criteria: a decision node with neither
+# command nor criteria is now a routing WorkNode with empty prompt — that is valid
+# (the agent will use upstream context). The old "exactly one" rule only applies
+# when BOTH are set. This test is removed.
+
+
+def test_work_node_with_routing_is_a_routing_node():
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "prompt": "judge it", "on_pass": "b", "on_fail": "a"},
+        {"id": "b", "kind": "work"},
+    ]})
+    a = wf.nodes["a"]
+    assert isinstance(a, WorkNode) and a.routes and not a.is_command
+    assert a.on_pass == "b" and a.on_fail == "a"
+
+
+def test_legacy_decision_criteria_maps_to_a_routing_work_node():
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "decision", "criteria": "is it good?", "on_pass": "b", "on_fail": "a"},
+        {"id": "b", "kind": "work"},
+    ]})
+    a = wf.nodes["a"]
+    assert isinstance(a, WorkNode) and a.routes
+    assert a.prompt == "is it good?"        # criteria -> prompt
+    assert a.mode == "explore"              # routing agent nodes default read-only
+
+
+def test_legacy_decision_command_maps_to_a_command_routing_node():
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "decision", "command": "pytest -q", "on_pass": "b", "on_fail": "a"},
+        {"id": "b", "kind": "work"},
+    ]})
+    a = wf.nodes["a"]
+    assert a.is_command and a.command == "pytest -q" and a.routes
+
+
+def test_judge_model_is_accepted_and_dropped():
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "decision", "criteria": "ok?", "judge_model": "x", "on_pass": "b"},
+        {"id": "b", "kind": "work"},
+    ]})
+    assert wf.nodes["a"].model == "x"       # mapped to model since model was unset
+    assert not hasattr(wf.nodes["a"], "judge_model")
+
+
+def test_a_node_cannot_have_both_next_and_routing():
+    with pytest.raises(WorkflowError):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "next": "b", "on_pass": "b"},
+            {"id": "b", "kind": "work"},
         ]})
 
 
@@ -288,8 +337,8 @@ def test_parallel_without_branches_raises():
 def test_parallel_branch_must_be_work_node():
     with pytest.raises(WorkflowError, match="work node"):
         parse_workflow({"name": "d", "start": "fan", "nodes": [
-            {"id": "fan", "kind": "parallel", "branches": ["g"], "next": None},
-            {"id": "g", "kind": "decision", "command": "true", "on_pass": None, "on_fail": None},
+            {"id": "fan", "kind": "parallel", "branches": ["sub"], "next": None},
+            {"id": "sub", "kind": "subworkflow", "workflow": "inner"},
         ]})
 
 
