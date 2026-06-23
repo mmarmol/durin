@@ -1937,9 +1937,6 @@ class AgentLoop:
         history = session.get_history(**_hist_kwargs)
         current_role = "assistant" if is_subagent else "user"
 
-        # System/subagent turns honor the active persona's SOUL (no cron
-        # override applies here → session metadata + global default only).
-        system_persona_soul, _ = self._active_persona(session, None)
         audio_mode, supports_audio = self._audio_build_args()
         messages = self.context.build_messages(
             history=history,
@@ -1955,7 +1952,6 @@ class AgentLoop:
             iteration=0,
             audio_mode=audio_mode,
             supports_audio_input=supports_audio,
-            active_persona_soul=system_persona_soul,
         )
         t_wall = time.time()
         final_content, _, all_msgs, stop_reason, _, tool_events = await self._run_agent_loop(
