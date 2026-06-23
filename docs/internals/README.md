@@ -168,6 +168,7 @@ End-to-end flow for a single inbound message:
 | MCP client | [mcp.md](mcp.md) | Connecting Model Context Protocol servers, exposing their tools, discovery and OAuth. |
 | Cron | [cron.md](cron.md) | Scheduled work: reminders and agent tasks, per-run isolated sessions, run history. |
 | Channels & bus | [channels.md](channels.md) | Chat surfaces, the async message bus, inbound/outbound routing and session keys. |
+| Voice | [voice.md](voice.md) | Conversational speech: gateway voice sessions, the STT→agent→TTS loop, spoken-rendition, the browser thin client. |
 | Providers | [providers.md](providers.md) | LLM provider adapters, model presets, capability resolution, per-turn snapshots. |
 | Memory | [memory/00_overview.md](memory/00_overview.md) | Entity-centric memory: markdown storage, vector + lexical indexes, search pipeline. |
 | Dream | [memory/05_dream_cold_path.md](memory/05_dream_cold_path.md) | The five-pass cold-path consolidation that grows the entity graph and skills. |

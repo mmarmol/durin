@@ -26,7 +26,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it("renders the judge max-severity label translated, not the raw i18n key", async () => {
   vi.mocked(api.getConfig).mockResolvedValue({
-    config: { skills: { security: { llmJudge: { trigger: "off", maxSeverity: "caution" } } } },
+    config: { skills: { security: { llm_judge: { trigger: "off", max_severity: "caution" } } } },
   } as never);
   render(<SkillsSecuritySettings token="tok" />);
   // The label must resolve to its translation (en default), never the raw key.

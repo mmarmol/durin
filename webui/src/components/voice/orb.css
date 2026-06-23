@@ -1,0 +1,32 @@
+@keyframes durin-orb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes durin-orb-breathe {
+  0%,
+  100% {
+    transform: scale(0.82);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+}
+
+.durin-orb-rim {
+  animation: durin-orb-spin linear infinite;
+}
+
+.durin-orb-breathe {
+  animation: durin-orb-breathe ease-in-out 3.6s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .durin-orb-rim,
+  .durin-orb-breathe {
+    animation: none;
+  }
+}

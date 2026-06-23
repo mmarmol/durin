@@ -215,6 +215,14 @@ class TranscriptionProvider:
     async def transcribe(self, file_path: str | Path, on_status=None) -> str:  # pragma: no cover
         raise NotImplementedError
 
+    async def warmup(self) -> None:
+        """Pre-load any local model/engine so the first transcription is instant.
+
+        No-op by default — cloud backends have nothing to warm. Local backends
+        override this to build their recognizer (and download the model) ahead
+        of first use."""
+        return None
+
 
 class LocalSttProvider(TranscriptionProvider):
     """In-process ASR via sherpa-onnx. Engine must be one of {parakeet, sensevoice}.
@@ -300,6 +308,11 @@ class LocalSttProvider(TranscriptionProvider):
             if self._rec is None:
                 await asyncio.to_thread(self._load, cb)
         return self._rec
+
+    async def warmup(self) -> None:
+        """Build the sherpa-onnx recognizer (and download the model on first
+        install) now, so the first transcription at use-time is instant."""
+        await self._ensure_loaded(self.on_status)
 
     async def transcribe(self, file_path, on_status=None) -> str:
         cb = on_status if on_status is not None else self.on_status

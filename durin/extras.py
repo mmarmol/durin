@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ REGISTRY: dict[str, FeatureExtra] = {
     "oauth": FeatureExtra("oauth", "oauth", "oauth_cli_kit", False, "~5 MB", "OAuth providers"),
     "stt": FeatureExtra("stt", "stt", "sherpa_onnx", True, "~30 MB", "Audio transcription (Parakeet/SenseVoice)"),
     "voice": FeatureExtra("voice", "voice", "sounddevice", False, "~5 MB", "Microphone recording"),
+    "tts": FeatureExtra("tts", "tts", "supertonic", True, "~260 MB", "Speech synthesis (Supertonic)"),
 }
 
 _LOCKS: dict[str, threading.Lock] = {}
@@ -67,13 +69,42 @@ def _extra_specs(extra: str) -> list[str]:
     """Package specs for durin-agent's <extra>, from installed metadata.
 
     Avoids duplicating pyproject pins. A requirement line looks like
-    ``sentence-transformers>=3.0,<6.0; extra == "cross-encoder"``.
+    ``sentence-transformers>=3.0,<6.0; extra == "cross-encoder"``. The marker's
+    quote style depends on the build backend — hatchling emits single quotes
+    (``extra == 'tts'``), setuptools double — so match either, else the specs
+    come back empty and the auto-installer silently no-ops ("No auto-installer").
     """
+    needles = (f'extra == "{extra}"', f"extra == '{extra}'")
     specs: list[str] = []
     for req in importlib.metadata.requires("durin-agent") or []:
-        if f'extra == "{extra}"' in req:
+        if any(n in req for n in needles):
             specs.append(req.split(";", 1)[0].strip())
     return specs
+
+
+def _find_pipx() -> str | None:
+    """Locate the ``pipx`` executable, including common install dirs that a
+    daemon's trimmed PATH may omit (Homebrew, ``~/.local/bin``)."""
+    found = shutil.which("pipx")
+    if found:
+        return found
+    for cand in (
+        Path.home() / ".local" / "bin" / "pipx",
+        Path("/opt/homebrew/bin/pipx"),
+        Path("/usr/local/bin/pipx"),
+    ):
+        if cand.exists():
+            return str(cand)
+    return None
+
+
+def _pipx_app_name() -> str | None:
+    """If we're running inside a pipx-managed venv
+    (``<PIPX_HOME>/venvs/<app>``), return ``<app>``; else ``None``."""
+    prefix = Path(sys.prefix).resolve()
+    if prefix.parent.name == "venvs":
+        return prefix.name
+    return None
 
 
 def _installer_cmd(specs: list[str]) -> list[str] | None:
@@ -84,6 +115,12 @@ def _installer_cmd(specs: list[str]) -> list[str] | None:
     uv = shutil.which("uv")
     if uv:
         return [uv, "pip", "install", "--python", sys.executable, *specs]
+    # pipx-installed app: its venv often has no pip/uv. Inject into the app's
+    # own venv so the running interpreter can import the new module.
+    pipx = _find_pipx()
+    app = _pipx_app_name()
+    if pipx and app:
+        return [pipx, "inject", app, *specs]
     return None
 
 
@@ -111,7 +148,8 @@ def ensure_extra(feature: str, *, config) -> EnsureResult:
         if not cmd:
             return EnsureResult(
                 "failed", feature, fe.needs_restart,
-                "No installer (pip or uv) found on PATH.",
+                f"No auto-installer available. Run manually: "
+                f"pipx inject durin-agent durin-agent[{fe.extra}]",
             )
         logger.info("extras: installing %s -> %s", feature, specs)
         try:

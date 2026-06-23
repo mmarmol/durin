@@ -6,3 +6,4 @@ coverage/
 .env
 .env.*
 !.env.example
+public/vad/

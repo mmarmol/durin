@@ -17,32 +17,32 @@ const MB = 1024 * 1024;
 
 interface JudgeShape {
   trigger?: "off" | "uncertain" | "always";
-  maxSeverity?: "caution" | "dangerous";
+  max_severity?: "caution" | "dangerous";
   model?: string;
 }
 interface SkillImportShape {
   allowlist?: string[];
-  githubTokenSecret?: string;
-  maxFiles?: number;
-  maxTotalBytes?: number;
-  maxFileBytes?: number;
-  llmJudge?: JudgeShape;
+  github_token_secret?: string;
+  max_files?: number;
+  max_total_bytes?: number;
+  max_file_bytes?: number;
+  llm_judge?: JudgeShape;
 }
 
 function readSI(config: Record<string, unknown> | null) {
   const skills = config?.skills as { security?: SkillImportShape } | undefined;
   const si = skills?.security ?? {};
-  const j = si.llmJudge ?? {};
+  const j = si.llm_judge ?? {};
   return {
     allowlist: Array.isArray(si.allowlist) ? si.allowlist.filter((x) => typeof x === "string") : [],
-    githubTokenSecret: typeof si.githubTokenSecret === "string" ? si.githubTokenSecret : "",
-    maxFiles: typeof si.maxFiles === "number" ? si.maxFiles : 100,
-    maxTotalBytes: typeof si.maxTotalBytes === "number" ? si.maxTotalBytes : 3 * MB,
-    maxFileBytes: typeof si.maxFileBytes === "number" ? si.maxFileBytes : MB,
+    githubTokenSecret: typeof si.github_token_secret === "string" ? si.github_token_secret : "",
+    maxFiles: typeof si.max_files === "number" ? si.max_files : 100,
+    maxTotalBytes: typeof si.max_total_bytes === "number" ? si.max_total_bytes : 3 * MB,
+    maxFileBytes: typeof si.max_file_bytes === "number" ? si.max_file_bytes : MB,
     judgeTrigger: ["off", "uncertain", "always"].includes(String(j.trigger))
       ? String(j.trigger)
       : "off",
-    judgeMaxSeverity: j.maxSeverity === "dangerous" ? "dangerous" : "caution",
+    judgeMaxSeverity: j.max_severity === "dangerous" ? "dangerous" : "caution",
     judgeModel: typeof j.model === "string" ? j.model : "",
   };
 }
