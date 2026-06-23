@@ -61,12 +61,13 @@ def test_save_config_writes_context_window_tokens_but_not_memory_window(tmp_path
     saved = read_persisted_config(config_path)
     defaults = saved["agents"]["defaults"]
 
-    assert defaults["maxTokens"] == 2222
-    # contextWindowTokens isn't asserted explicitly — `exclude_defaults`
+    assert defaults["max_tokens"] == 2222
+    # context_window_tokens isn't asserted explicitly — `exclude_defaults`
     # drops it when the user-supplied value matches the default.
-    # The original intent (memoryWindow must NOT survive the round-trip)
-    # is what really matters.
+    # The original intent (the legacy memory-window key must NOT survive the
+    # round-trip) is what really matters.
     assert "memoryWindow" not in defaults
+    assert "memory_window" not in defaults
 
 
 def test_onboard_does_not_crash_with_legacy_memory_window(tmp_path, monkeypatch) -> None:
@@ -207,7 +208,7 @@ def test_save_config_rewrites_legacy_my_tool_keys(tmp_path) -> None:
     tools = saved["tools"]
     assert "myEnabled" not in tools
     assert "mySet" not in tools
-    assert tools["my"] == {"enable": False, "allowSet": True}
+    assert tools["my"] == {"enable": False, "allow_set": True}
 
 
 def test_new_my_tool_keys_take_precedence_over_legacy(tmp_path) -> None:

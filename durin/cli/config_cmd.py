@@ -222,7 +222,7 @@ def cmd_get(
     except Exception:  # noqa: BLE001
         data = load_raw_config(path)
     try:
-        value = get_at(data, key)
+        value = get_at(data, _normalize_dotted_path(key))
     except KeyError:
         console.print(f"[red]No such key: {key}[/red]")
         raise typer.Exit(1) from None
@@ -248,11 +248,11 @@ def cmd_set(
     path = get_config_path()
     bootstrapped = not path.exists()
     raw = load_raw_config(path)  # {} when the file is absent
-    # Canonicalize the dict to alias-form (camelCase) before mutating so
-    # we don't end up with parallel snake_case + camelCase keys that
-    # pydantic's alias-first resolution would silently drop.
+    # Canonicalize the dict to snake_case (the on-disk + field-name form)
+    # before mutating, so set_at writes the canonical key and pydantic's
+    # snake field names resolve without parallel camelCase duplicates.
     try:
-        canonical = validate_dict(raw).model_dump(mode="json", by_alias=True)
+        canonical = validate_dict(raw).model_dump(mode="json", by_alias=False)
     except pydantic.ValidationError as e:
         console.print("[red]On-disk config is invalid; refusing to edit.[/red]")
         console.print(str(e))
@@ -271,21 +271,22 @@ def cmd_set(
 
 
 def _normalize_dotted_path(dotted: str) -> str:
-    """Convert each snake_case segment in a dotted path to camelCase.
-
-    The on-disk config is stored in alias form, so a user typing
-    ``providers.zhipu.api_key`` should set ``providers.zhipu.apiKey``.
+    """Normalize each segment of a dotted path to snake_case (the canonical
+    config form). Input is case-tolerant: a user typing
+    ``providers.zhipu.apiKey`` resolves the same as ``providers.zhipu.api_key``.
     Numeric segments (list indices) are passed through.
     """
-    def _camel(seg: str) -> str:
-        if seg.isdigit():
+    def _snake(seg: str) -> str:
+        if seg.isdigit() or "_" in seg:
             return seg
-        if "_" not in seg:
-            return seg
-        head, *rest = seg.split("_")
-        return head + "".join(p[:1].upper() + p[1:] for p in rest)
+        out: list[str] = []
+        for i, ch in enumerate(seg):
+            if ch.isupper() and i > 0:
+                out.append("_")
+            out.append(ch.lower())
+        return "".join(out)
 
-    return ".".join(_camel(s) for s in dotted.split("."))
+    return ".".join(_snake(s) for s in dotted.split("."))
 
 
 @config_app.command("import")

@@ -285,7 +285,7 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     with cross_process_lock(path):
-        data = config.model_dump(mode="json", by_alias=True, exclude_defaults=True)
+        data = config.model_dump(mode="json", by_alias=False, exclude_defaults=True)
         data = _prune_noise_sections(data)
 
         if _is_split_layout(path):

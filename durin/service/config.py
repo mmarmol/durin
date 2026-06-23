@@ -279,7 +279,7 @@ class ConfigService:
         path = get_config_path()
         try:
             canonical = validate_dict(load_raw_config(path)).model_dump(
-                mode="json", by_alias=True
+                mode="json", by_alias=False
             )
         except Exception as e:  # noqa: BLE001
             raise ValidationFailedError(f"on-disk config is invalid: {e}") from e
