@@ -2695,6 +2695,170 @@
         "title": "OAuthStatusResult",
         "type": "object"
       },
+      "PersonaDeleteCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "PersonaDeleteCommand",
+        "type": "object"
+      },
+      "PersonaDeleteResult": {
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "PersonaDeleteResult",
+        "type": "object"
+      },
+      "PersonaItem": {
+        "properties": {
+          "builtin": {
+            "default": false,
+            "title": "Builtin",
+            "type": "boolean"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "soul": {
+            "title": "Soul",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "soul"
+        ],
+        "title": "PersonaItem",
+        "type": "object"
+      },
+      "PersonaListQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 lists all personas (user + built-in) and the default.",
+        "properties": {},
+        "title": "PersonaListQuery",
+        "type": "object"
+      },
+      "PersonaListResult": {
+        "properties": {
+          "default": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default"
+          },
+          "personas": {
+            "items": {
+              "$ref": "#/components/schemas/PersonaItem"
+            },
+            "title": "Personas",
+            "type": "array"
+          }
+        },
+        "required": [
+          "personas"
+        ],
+        "title": "PersonaListResult",
+        "type": "object"
+      },
+      "PersonaUpsertCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "soul": {
+            "default": "default",
+            "title": "Soul",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "PersonaUpsertCommand",
+        "type": "object"
+      },
+      "PersonaUpsertResult": {
+        "properties": {
+          "persona": {
+            "$ref": "#/components/schemas/PersonaItem"
+          }
+        },
+        "required": [
+          "persona"
+        ],
+        "title": "PersonaUpsertResult",
+        "type": "object"
+      },
       "PickerEntryModel": {
         "properties": {
           "group": {
@@ -3260,6 +3424,43 @@
           "sessions"
         ],
         "title": "SessionsListResult",
+        "type": "object"
+      },
+      "SetDefaultPersonaCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          }
+        },
+        "title": "SetDefaultPersonaCommand",
+        "type": "object"
+      },
+      "SetDefaultPersonaResult": {
+        "properties": {
+          "default": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default"
+          }
+        },
+        "title": "SetDefaultPersonaResult",
         "type": "object"
       },
       "SettingsProviderUpdateCommand": {
@@ -5487,6 +5688,118 @@
         },
         "summary": "Return Codex OAuth connection status",
         "x-required-scope": "settings:read"
+      }
+    },
+    "/api/v1/personas": {
+      "delete": {
+        "operationId": "personas_delete_persona",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonaDeleteCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonaDeleteResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Delete a user persona (built-ins cannot be deleted)",
+        "x-required-scope": "config:write"
+      },
+      "get": {
+        "operationId": "personas_list_personas",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonaListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonaListResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List personas (user + built-in) and the default",
+        "x-required-scope": "config:read"
+      },
+      "post": {
+        "operationId": "personas_upsert_persona",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonaUpsertCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonaUpsertResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Create or update a user persona",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/personas/default": {
+      "post": {
+        "operationId": "personas_set_default",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDefaultPersonaCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetDefaultPersonaResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Set (or clear) the global default persona",
+        "x-required-scope": "config:write"
       }
     },
     "/api/v1/providers/model": {
