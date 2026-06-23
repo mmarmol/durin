@@ -355,3 +355,27 @@ def test_parallel_unknown_branch_raises():
         parse_workflow({"name": "d", "start": "fan", "nodes": [
             {"id": "fan", "kind": "parallel", "branches": ["ghost"], "next": None},
         ]})
+
+
+def _wf(nodes, start="a"):
+    return {"name": "w", "start": start, "nodes": nodes}
+
+
+def test_rejects_structurally_identical_producer_and_judge():
+    with pytest.raises(WorkflowError):
+        parse_workflow(_wf([
+            {"id": "p", "kind": "work", "model": "m", "mode": "build", "prompt": "do x", "next": "j"},
+            {"id": "j", "kind": "work", "model": "m", "mode": "build", "prompt": "do x",
+             "on_pass": "done", "on_fail": "p"},
+            {"id": "done", "kind": "work"},
+        ], start="p"))
+
+
+def test_allows_judge_differing_by_model_or_prompt():
+    wf = parse_workflow(_wf([
+        {"id": "p", "kind": "work", "model": "m", "prompt": "do x", "next": "j"},
+        {"id": "j", "kind": "work", "model": "m", "mode": "explore", "prompt": "grade x",
+         "on_pass": "done", "on_fail": "p"},
+        {"id": "done", "kind": "work"},
+    ], start="p"))
+    assert wf.nodes["j"].routes      # differs by prompt+mode -> allowed

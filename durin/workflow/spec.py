@@ -273,6 +273,31 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
                         f"node {node.id!r}: parallel branch {branch!r} must be a work node"
                     )
 
+    # Anti-Goodhart guard: a routing agent node must not be structurally identical
+    # to its producer. If a predecessor P (agent WorkNode, P.id != J.id) shares the
+    # same model, mode, and prompt as routing agent node J, the graph is rejected.
+    # A self-loop (on_fail == J.id) is exempt — we only compare distinct node pairs.
+    # Routing nodes default to mode="explore" while producers default to mode="build",
+    # so this fires only when a user explicitly makes the judge identical to its producer.
+    predecessor_map: dict[str, list[str]] = {n: [] for n in nodes}
+    for src_node in nodes.values():
+        for target in _edge_targets(src_node):
+            if target is not None and target in predecessor_map:
+                predecessor_map[target].append(src_node.id)
+    for j in nodes.values():
+        if not (isinstance(j, WorkNode) and j.routes and not j.is_command):
+            continue
+        for pred_id in predecessor_map[j.id]:
+            if pred_id == j.id:
+                continue
+            p = nodes[pred_id]
+            if isinstance(p, WorkNode) and not p.is_command:
+                if (p.model, p.mode, p.prompt) == (j.model, j.mode, j.prompt):
+                    raise WorkflowError(
+                        f"node {j.id!r}: a routing node must not be structurally identical to its "
+                        f"producer {p.id!r} (vary model, mode, or prompt for an independent verdict)"
+                    )
+
     max_visits = data.get("max_visits", 3)
     if isinstance(max_visits, bool) or not isinstance(max_visits, int) or max_visits < 1:
         raise WorkflowError(f"max_visits must be an int >= 1, got {max_visits!r}")
