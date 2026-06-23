@@ -71,3 +71,18 @@ def test_node_model_overrides_default(tmp_path):
     nr(req)
     spec = nr.runner.run.call_args.args[0]
     assert spec.model == "big-model"
+
+
+def test_persist_failure_is_best_effort(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(final_content="done", messages=[])
+    nr = _runner(sessions, fake)
+    req = NodeRunRequest(
+        node=WorkNode(id="n", prompt="p.", next=None),
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    with patch.object(nr.sessions, "save", side_effect=OSError("disk full")):
+        resp = nr(req)
+    assert resp.output == "done"      # output still returned despite persist failure
+    assert resp.session_key is None   # best-effort: persist failed -> no session key
