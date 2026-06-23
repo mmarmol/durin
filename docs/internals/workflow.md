@@ -41,7 +41,10 @@ judgment fail the reviewer's feedback is threaded into the loop-back so the prod
 re-runs knowing what to fix. A node can also be a **sub-workflow**
 (`durin/workflow/subworkflow.py`): it runs another named workflow as a nested run
 (reusing the same node and judge runners, bounded by a depth cap) and uses its output.
-A per-node visit count bounds loop-backs: exceeding `max_visits` ends the run with
+A **parallel** node runs a set of work-node branches concurrently and merges their text
+outputs into the next node's input — these are read/analysis branches; writing-in-parallel
+(which needs an isolated write space per branch plus a reconcile step) is a separate later
+concern. A per-node visit count bounds loop-backs: exceeding `max_visits` ends the run with
 status `max_visits` instead of looping forever.
 
 **The engine is decoupled from the LLM and runs loop-safe.** The graph walk depends
@@ -102,11 +105,11 @@ End-to-end for a single `run_workflow` call:
 
 | Symbol | File | Role |
 |---|---|---|
-| `Workflow`, `WorkNode`, `DecisionNode`, `SubworkflowNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator. |
+| `Workflow`, `WorkNode`, `DecisionNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator. |
 | `run_command`, `CommandOutcome` | `durin/workflow/condition.py` | The shell-exit-code condition a decision node routes on. |
 | `JudgeVerdict`, `AgentJudgeRunner` | `durin/workflow/judge.py` | The reviewer agent that returns a pass/fail verdict + feedback for a judgment decision node. |
 | `SubworkflowRunner` | `durin/workflow/subworkflow.py` | Runs a named workflow as a nested run (depth-capped) for a sub-workflow node. |
-| `WorkflowEngine` | `durin/workflow/engine.py` | The sequential graph executor: routing, loop-back with a visit cap, own/shared context, output threading. |
+| `WorkflowEngine` | `durin/workflow/engine.py` | The graph executor: routing, loop-back with a visit cap, own/shared context, output threading, and concurrent parallel branches. |
 | `AgentNodeRunner` | `durin/workflow/node_runner.py` | The default node runner: one real `AgentRunner` turn per work node, persisted as a lineage'd node session. |
 | `load_workflow` | `durin/workflow/loader.py` | Load and parse a workflow by name from the workspace. |
 | `WorkflowResult`, `NodeRun` | `durin/workflow/result.py` | The typed run outcome and per-node trace. |
@@ -121,13 +124,14 @@ End-to-end for a single `run_workflow` call:
   default) runs the node without tools.
 - **Lineage:** node sessions reuse the lineage metadata on the open session document
   (`durin/session/lineage.py`), so no schema migration is involved.
-- **Current scope.** This subsystem is built incrementally. Today: sequential
-  execution; per-node model / context / tools; decision conditions by **shell command
-  or agent judgment** (with feedback-threaded loop-back); and **sub-workflow**
-  composition (depth-capped). Not yet built — see [roadmap.md](../roadmap.md) for
-  direction — parallel fan-out/fan-in, per-node skills / MCPs / persona, anchoring a
-  run to the invoking session, a visual editor, internal-git versioning of definitions,
-  and dream-driven self-improvement of workflows.
+- **Current scope.** This subsystem is built incrementally. Today: sequential execution
+  with **concurrent parallel** branches (read/analysis); per-node model / context /
+  tools; decision conditions by **shell command or agent judgment** (with
+  feedback-threaded loop-back); **sub-workflow** composition (depth-capped); and runs
+  **anchored to the invoking session**. Not yet built — see [roadmap.md](../roadmap.md)
+  for direction — writing-in-parallel (isolated write space per branch + reconcile),
+  per-node skills / MCPs / persona, a visual editor, internal-git versioning of
+  definitions, and dream-driven self-improvement of workflows.
 - **Security.** Definitions are local files the user authored, so running their
   commands and tools is equivalent to the user running them directly; importing remote
   or third-party definitions is not supported in this scope (see [security.md](security.md)).
