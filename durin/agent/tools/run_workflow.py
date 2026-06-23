@@ -80,8 +80,9 @@ class RunWorkflowTool(Tool, ContextAware):
     def description(self) -> str:
         return (
             "Run a user-defined workflow on a task. The workflow is a flow graph of "
-            "nodes (defined in <workspace>/workflows/<name>.json); work nodes do the "
-            "work and decision nodes route the flow. Returns a run summary."
+            "nodes (defined in <workspace>/workflows/<name>.json); a node does the work "
+            "and, when it has routing set (on_pass/on_fail), routes the flow on its "
+            "verdict. Returns a run summary."
         )
 
     async def execute(self, name: str, task: str) -> str:  # type: ignore[override]

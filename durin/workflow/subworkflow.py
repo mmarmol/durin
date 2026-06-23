@@ -1,7 +1,7 @@
 """The default sub-workflow runner: run a named workflow as a nested run.
 
 A subworkflow node delegates to this. It loads the named workflow and runs a nested
-WorkflowEngine reusing the same node and judge runners, so nodes inside a sub-workflow
+WorkflowEngine reusing the same node and branch-pick runners, so nodes inside a sub-workflow
 behave exactly as at the top level. A depth counter caps nesting: beyond ``max_depth``
 it returns an error string instead of recursing, which also bounds a cyclic reference
 (a workflow that includes itself). A missing workflow returns an error string rather
