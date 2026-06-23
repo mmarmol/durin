@@ -49,10 +49,11 @@ def _format_result(result: Any) -> str:
 class RunWorkflowTool(Tool, ContextAware):
     """Run a user-defined workflow (a flow graph of nodes) on a task."""
 
-    def __init__(self, workspace: str, sessions: Any, app_config: Any) -> None:
+    def __init__(self, workspace: str, sessions: Any, app_config: Any, live_tool_registry: Any = None) -> None:
         self._workspace = workspace
         self._sessions = sessions
         self._app_config = app_config
+        self._live_tool_registry = live_tool_registry
         self._session_key: ContextVar[str | None] = ContextVar("run_workflow_session_key", default=None)
 
     def set_context(self, ctx: RequestContext) -> None:
@@ -64,7 +65,10 @@ class RunWorkflowTool(Tool, ContextAware):
 
     @classmethod
     def create(cls, ctx: Any) -> "RunWorkflowTool":
-        return cls(workspace=ctx.workspace, sessions=ctx.sessions, app_config=ctx.app_config)
+        return cls(
+            workspace=ctx.workspace, sessions=ctx.sessions, app_config=ctx.app_config,
+            live_tool_registry=getattr(ctx, "live_tool_registry", None),
+        )
 
     @property
     def name(self) -> str:
@@ -95,9 +99,14 @@ class RunWorkflowTool(Tool, ContextAware):
         preset = self._app_config.resolve_default_preset()
         provider = make_provider(self._app_config, preset=preset)
         runner = AgentRunner(provider)
+        # The MCP sessions live on this (the gateway's) event loop; the engine runs
+        # in a worker thread, so node MCP calls are marshalled back here.
+        main_loop = asyncio.get_running_loop()
         node_runner = AgentNodeRunner(
             runner, self._sessions, default_model=provider.get_default_model(),
             tools_config=self._app_config.tools,
+            live_tool_registry=self._live_tool_registry,
+            main_loop=main_loop,
         )
         judge_runner = AgentJudgeRunner(runner, default_model=provider.get_default_model())
         subworkflow_runner = SubworkflowRunner(self._workspace, node_runner, judge_runner)

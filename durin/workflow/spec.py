@@ -27,6 +27,8 @@ class WorkNode:
     prompt: str = ""                      # the node's system/role framing
     next: str | None = None              # next node id; None = end
     tools: Literal["none", "default"] = "none"   # "default" = standard tool set
+    skills: tuple[str, ...] = ()          # named skills to inject into this node only
+    mcps: tuple[str, ...] = ()            # MCP servers (already configured) whose tools this node may use
     kind: Literal["work"] = "work"
 
 
@@ -76,6 +78,15 @@ class Workflow:
     max_visits: int = 3                  # max times a single node may run (loop guard)
 
 
+def _str_list(value: Any, node_id: str, field: str) -> tuple[str, ...]:
+    """Validate an optional list-of-strings node field; default to empty."""
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise WorkflowError(
+            f"node {node_id!r}: {field} must be a list of strings, got {value!r}"
+        )
+    return tuple(value)
+
+
 def _build_node(raw: dict[str, Any]) -> Node:
     node_id = raw.get("id")
     if not isinstance(node_id, str) or not node_id:
@@ -97,6 +108,8 @@ def _build_node(raw: dict[str, Any]) -> Node:
             raise WorkflowError(
                 f"node {node_id!r}: model must be a string or omitted, got {model!r}"
             )
+        skills = _str_list(raw.get("skills", []), node_id, "skills")
+        mcps = _str_list(raw.get("mcps", []), node_id, "mcps")
         return WorkNode(
             id=node_id,
             model=model,
@@ -104,6 +117,8 @@ def _build_node(raw: dict[str, Any]) -> Node:
             prompt=raw.get("prompt", ""),
             next=raw.get("next"),
             tools=tools,
+            skills=skills,
+            mcps=mcps,
         )
     if kind == "decision":
         command = raw.get("command", "")

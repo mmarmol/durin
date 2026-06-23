@@ -867,6 +867,7 @@ class AgentLoop:
             timezone=self.context.timezone or "UTC",
             aux_providers=self._aux_providers,
             app_config=self.app_config,
+            live_tool_registry=self.tools,
         )
         loader = ToolLoader()
         registered = loader.load(ctx, self.tools)

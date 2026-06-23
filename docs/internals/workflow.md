@@ -30,7 +30,13 @@ that the start and every edge target name a real node.
 `NodeRunner` — by default `AgentNodeRunner` (`durin/workflow/node_runner.py`), which
 runs one `AgentRunner` turn with that node's model and tool registry, then persists
 the node's conversation as a session keyed `workflow:<run_id>:<node_id>:<iteration>`
-with lineage (`origin_type="workflow_node"`). The node's output passes along the edge
+with lineage (`origin_type="workflow_node"`). A node is configured independently and
+focused by default: besides its model, context and built-in `tools`, it can name the
+**skills** to inject into its own prompt (loaded the same way the main agent loads a
+skill) and the **MCP servers** whose tools it may use — a scoped subset of the
+already-configured servers, reused from the gateway's live connections (no per-node
+reconnect; the call is marshalled back to the gateway's event loop, where the MCP
+session lives). Both default empty, so a node sees only what its job needs. The node's output passes along the edge
 as the next node's input. A `shared`-context node reads and extends a running
 conversation buffer; an `own`-context node is isolated and receives only the upstream
 output. For a decision node the engine evaluates the condition — either a shell
@@ -124,17 +130,18 @@ End-to-end for a single `run_workflow` call:
 - **Surface:** the `run_workflow(name, task)` LLM tool — auto-discovered into the
   agent's tool registry at core scope (see [tools.md](tools.md)). A work node with
   `tools: "default"` receives the user's configured tool set; `tools: "none"` (the
-  default) runs the node without tools.
+  default) runs the node without tools. A node may also name `skills` (injected into
+  its prompt) and `mcps` (a subset of the configured MCP servers, reused live).
 - **Lineage:** node sessions reuse the lineage metadata on the open session document
   (`durin/session/lineage.py`), so no schema migration is involved.
 - **Current scope.** This subsystem is built incrementally. Today: sequential execution
   with **concurrent parallel** branches (read/analysis); per-node model / context /
-  tools; decision conditions by **shell command or agent judgment** (with
-  feedback-threaded loop-back); **sub-workflow** composition (depth-capped); and runs
-  **anchored to the invoking session**. Not yet built — see [roadmap.md](../roadmap.md)
-  for direction — writing-in-parallel (isolated write space per branch + reconcile),
-  per-node skills / MCPs / persona, a visual editor, internal-git versioning of
-  definitions, and dream-driven self-improvement of workflows.
+  tools / **skills** / **MCP servers**; decision conditions by **shell command or agent
+  judgment** (with feedback-threaded loop-back); **sub-workflow** composition
+  (depth-capped); and runs **anchored to the invoking session**. Not yet built — see
+  [roadmap.md](../roadmap.md) for direction — writing-in-parallel (isolated write space per branch + reconcile),
+  per-node custom persona, a visual editor, internal-git versioning of definitions,
+  and dream-driven self-improvement of workflows.
 - **Security.** Definitions are local files the user authored, so running their
   commands and tools is equivalent to the user running them directly; importing remote
   or third-party definitions is not supported in this scope (see [security.md](security.md)).

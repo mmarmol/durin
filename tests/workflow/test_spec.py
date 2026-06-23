@@ -49,6 +49,32 @@ def test_work_node_defaults():
     assert wf.max_visits == 3     # default loop cap
 
 
+def test_work_node_skills_and_mcps_default_empty():
+    a = parse_workflow({"name": "d", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work"}]}).nodes["a"]
+    assert a.skills == ()
+    assert a.mcps == ()
+
+
+def test_work_node_parses_skills_and_mcps():
+    a = parse_workflow({"name": "d", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "skills": ["pdf-extract"], "mcps": ["github-mcp-server"]},
+    ]}).nodes["a"]
+    assert a.skills == ("pdf-extract",)
+    assert a.mcps == ("github-mcp-server",)
+
+
+def test_work_node_skills_must_be_string_list():
+    with pytest.raises(WorkflowError, match="skills must be a list of strings"):
+        parse_workflow({"name": "d", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "skills": "pdf-extract"},
+        ]})
+    with pytest.raises(WorkflowError, match="mcps must be a list of strings"):
+        parse_workflow({"name": "d", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "mcps": [123]},
+        ]})
+
+
 def test_unknown_start_raises():
     with pytest.raises(WorkflowError, match="start"):
         parse_workflow({"name": "d", "start": "missing",

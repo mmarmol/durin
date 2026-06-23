@@ -3,6 +3,8 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from durin.agent.runner import AgentRunResult
+from durin.agent.tools.base import Tool
+from durin.agent.tools.registry import ToolRegistry
 from durin.providers.base import LLMProvider
 from durin.session import lineage
 from durin.session.manager import Session, SessionManager
@@ -88,6 +90,43 @@ def test_persist_failure_is_best_effort(tmp_path):
     assert resp.session_key is None   # best-effort: persist failed -> no session key
 
 
+def test_named_skills_are_injected_into_the_system_prompt(tmp_path):
+    skill_dir = tmp_path / "skills" / "pdf-extract"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: pdf-extract\n---\nUse pdftotext to pull text from PDFs.\n"
+    )
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(final_content="ok", messages=[])
+    nr = _runner(sessions, fake)
+    req = NodeRunRequest(
+        node=WorkNode(id="a", prompt="Do the task.", next=None, skills=("pdf-extract",)),
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    nr(req)
+    spec = nr.runner.run.call_args.args[0]
+    system = [m for m in spec.initial_messages if m["role"] == "system"][0]["content"]
+    assert "Do the task." in system          # node's own framing preserved
+    assert "pdftotext" in system             # the named skill's body injected
+    assert "pdf-extract" in system           # the skill header (frontmatter stripped)
+
+
+def test_no_skills_leaves_system_prompt_unchanged(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(final_content="ok", messages=[])
+    nr = _runner(sessions, fake)
+    req = NodeRunRequest(
+        node=WorkNode(id="a", prompt="Just this.", next=None),
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    nr(req)
+    spec = nr.runner.run.call_args.args[0]
+    system = [m for m in spec.initial_messages if m["role"] == "system"][0]["content"]
+    assert system == "Just this."
+
+
 def test_default_tools_node_gets_real_tools(tmp_path):
     from durin.workflow.spec import WorkNode
     sessions = SessionManager(workspace=tmp_path)
@@ -116,3 +155,69 @@ def test_none_tools_node_gets_empty_registry(tmp_path):
     nr(req)
     spec = nr.runner.run.call_args.args[0]
     assert not spec.tools.has("read_file")   # no tools for a 'none' node
+
+
+class _FakeMcpTool(Tool):
+    _plugin_discoverable = False
+
+    def __init__(self, name: str) -> None:
+        self._n = name
+
+    @property
+    def name(self):
+        return self._n
+
+    @property
+    def description(self):
+        return "fake mcp tool"
+
+    @property
+    def parameters(self):
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **kwargs):
+        import asyncio
+        return f"ran on loop {id(asyncio.get_running_loop())}"
+
+
+def test_mcp_tools_scoped_to_selected_servers(tmp_path):
+    live = ToolRegistry()
+    live.register(_FakeMcpTool("mcp_github-mcp-server_create_issue"))
+    live.register(_FakeMcpTool("mcp_github-mcp-server_search"))
+    live.register(_FakeMcpTool("mcp_atlassian-mcp-server_create_page"))
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(final_content="ok", messages=[])
+    nr = _runner(sessions, fake)
+    nr._live_tool_registry = live
+    nr._main_loop = object()
+    req = NodeRunRequest(
+        node=WorkNode(id="a", mcps=("github-mcp-server",), next=None),
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    nr(req)
+    names = nr.runner.run.call_args.args[0].tools.tool_names
+    assert "mcp_github-mcp-server_create_issue" in names   # selected server's tools
+    assert "mcp_github-mcp-server_search" in names
+    assert "mcp_atlassian-mcp-server_create_page" not in names   # other server excluded
+
+
+def test_cross_loop_tool_marshals_to_owner_loop():
+    import asyncio
+    import threading
+    from durin.workflow.node_runner import _CrossLoopTool
+
+    owner = asyncio.new_event_loop()
+    threading.Thread(target=owner.run_forever, daemon=True).start()
+    try:
+        adapter = _CrossLoopTool(_FakeMcpTool("mcp_x_y"), owner)
+
+        async def caller():
+            # caller runs on a DIFFERENT loop than `owner`; the inner tool must
+            # nonetheless execute on `owner` (where a real MCP session would live).
+            return await adapter.execute()
+
+        result = asyncio.run(caller())
+        assert f"ran on loop {id(owner)}" in result
+    finally:
+        owner.call_soon_threadsafe(owner.stop)
