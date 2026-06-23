@@ -238,6 +238,36 @@ def test_mcp_tools_scoped_to_selected_servers(tmp_path):
     assert "mcp_atlassian-mcp-server_create_page" not in names   # other server excluded
 
 
+def test_routing_agent_node_gets_a_verdict_instruction(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(final_content="PASS", messages=[])
+    nr = _runner(sessions, fake)
+    req = NodeRunRequest(
+        node=WorkNode(id="g", prompt="is it good?", on_pass="x", on_fail="g"),
+        task="t", upstream_output="work", shared_context=[],
+        run_id="r", iteration=1, root_session_key=None,
+    )
+    nr(req)
+    spec = nr.runner.run.call_args.args[0]
+    system = [m for m in spec.initial_messages if m["role"] == "system"][0]["content"]
+    assert "PASS" in system and "FAIL" in system
+
+
+def test_non_routing_node_does_not_get_verdict_instruction(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(final_content="ok", messages=[])
+    nr = _runner(sessions, fake)
+    req = NodeRunRequest(
+        node=WorkNode(id="b", prompt="do the work", next=None),
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r", iteration=1, root_session_key=None,
+    )
+    nr(req)
+    spec = nr.runner.run.call_args.args[0]
+    system = [m for m in spec.initial_messages if m["role"] == "system"][0]["content"]
+    assert system == "do the work"
+
+
 def test_cross_loop_tool_marshals_to_owner_loop():
     import asyncio
     import threading

@@ -58,6 +58,10 @@ class _CrossLoopTool(Tool):
         return await _asyncio.wrap_future(fut)
 
 
+_VERDICT = ("\n\nAfter your assessment, end your reply with a single final line: "
+            "'PASS' if the work meets the criteria, or 'FAIL' followed by what to fix.")
+
+
 class AgentNodeRunner:
     def __init__(
         self,
@@ -148,6 +152,8 @@ class AgentNodeRunner:
         suffix = get_mode(getattr(req.node, "mode", "build")).prompt_suffix
         if suffix:
             system = f"{system}{suffix}" if system else suffix.lstrip()
+        if getattr(req.node, "routes", False) and not getattr(req.node, "is_command", False):
+            system = f"{system}{_VERDICT}" if system else _VERDICT.lstrip()
         messages: list[dict] = [{"role": "system", "content": system}]
         messages.extend(req.shared_context)
         user = req.task
