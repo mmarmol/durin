@@ -169,6 +169,47 @@ async def test_send_final_reply_speaks_and_emits_voice_audio(tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_streamed_reply_accumulates_and_speaks_on_stream_end(tmp_path, monkeypatch):
+    # The webui assistant reply arrives as a stream of deltas + a stream_end (no
+    # discrete send() carrying the full content), so the spoken text must be
+    # accumulated from the stream and spoken on stream_end. This is the path that
+    # was silent before (the send() hook never saw the streamed reply).
+    monkeypatch.setattr("durin.channels.websocket.get_media_dir", lambda ch=None: tmp_path)
+    ch = _voice_channel()
+    ch._media_secret = b"test-secret"
+    ch._try_append_webui_transcript = lambda *a, **k: None
+    ch.voice_config = VoiceConfig()
+    conn = _FakeConn()
+    ch._subs["c1"] = {conn}
+    sess = VoiceSession(chat_id="c1")
+    ch._voice["c1"] = sess
+
+    spoken: list[str] = []
+
+    class FakeTTS:
+        async def synthesize(self, text, *, voice=None, language=None):
+            spoken.append(text)
+            return SpeechAudio(_wav_bytes(), 22050)
+
+    ch.speech_synthesis = FakeTTS()
+
+    await ch.send_delta("c1", "Hola ", {"_stream_id": 1})
+    await ch.send_delta("c1", "mundo.", {"_stream_id": 1})
+    await ch.send_delta("c1", "", {"_stream_id": 1, "_stream_end": True})
+    for _ in range(20):
+        await asyncio.sleep(0)
+        if any(json.loads(r).get("event") == "voice_audio" for r in conn.sent):
+            break
+
+    # The FULL accumulated reply was synthesized (not just the first delta) and
+    # the audio was emitted; the buffer was drained.
+    assert spoken and "mundo" in spoken[0].lower()
+    assert sess.reply_buffer == []
+    events = [json.loads(r) for r in conn.sent]
+    assert any(e.get("event") == "voice_audio" for e in events)
+
+
+@pytest.mark.asyncio
 async def test_send_skips_speak_for_progress_breadcrumb(tmp_path):
     ch = _voice_channel()
     ch._try_append_webui_transcript = lambda *a, **k: None

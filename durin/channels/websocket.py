@@ -1779,6 +1779,22 @@ class WebSocketChannel(BaseChannel):
         if not conns:
             return
         meta = metadata or {}
+        # Voice mode: the assistant reply reaches the webui as a stream of deltas,
+        # NOT a single send() with content — so accumulate it here and speak the
+        # full text when the stream ends (this is the real reply path; the send()
+        # hook never fires for streamed replies, which is why voice stayed silent).
+        sess = self._voice.get(chat_id)
+        if sess is not None:
+            if meta.get("_stream_end"):
+                spoken_text = sess.take_reply()
+                self.logger.info(
+                    "voice: stream_end chat={} reply_len={}", chat_id, len(spoken_text)
+                )
+                if spoken_text.strip():
+                    sess.cancel_speak()
+                    sess.speak_task = asyncio.create_task(self._speak(chat_id, spoken_text))
+            elif delta:
+                sess.reply_buffer.append(delta)
         if meta.get("_stream_end"):
             body: dict[str, Any] = {"event": "stream_end", "chat_id": chat_id}
         else:
