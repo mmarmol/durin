@@ -301,9 +301,13 @@ class ChannelManager:
         # Pre-load STT/TTS engines in the background so the first transcription /
         # voice synth doesn't pay the model load (and first-install download)
         # inline. Parked so the loop keeps a strong ref; never blocks startup.
-        warm = asyncio.create_task(self._warmup_speech())
-        self._background_tasks.add(warm)
-        warm.add_done_callback(self._background_tasks.discard)
+        # ``getattr`` so managers built via ``__new__`` in tests (no __init__,
+        # hence no ``_background_tasks``) still run start_all without crashing.
+        park = getattr(self, "_background_tasks", None)
+        if park is not None:
+            warm = asyncio.create_task(self._warmup_speech())
+            park.add(warm)
+            warm.add_done_callback(park.discard)
 
         # Wait for all to complete (they should run forever)
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -329,11 +333,11 @@ class ChannelManager:
 
         await _warm(
             getattr(self, "transcription", None),
-            self.config.transcription, "sherpa_onnx", "Transcription",
+            getattr(self.config, "transcription", None), "sherpa_onnx", "Transcription",
         )
         await _warm(
             getattr(self, "speech_synthesis", None),
-            self.config.tts, "supertonic", "Speech synthesis",
+            getattr(self.config, "tts", None), "supertonic", "Speech synthesis",
         )
 
     def _notify_restart_done_if_needed(self) -> None:
