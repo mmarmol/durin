@@ -43,7 +43,17 @@ class DecisionNode:
     kind: Literal["decision"] = "decision"
 
 
-Node = Union[WorkNode, DecisionNode]
+@dataclass(frozen=True)
+class SubworkflowNode:
+    """A node that runs another workflow and uses its output."""
+
+    id: str
+    workflow: str = ""               # name of the workflow to run
+    next: str | None = None          # next node id; None = end
+    kind: Literal["subworkflow"] = "subworkflow"
+
+
+Node = Union[WorkNode, DecisionNode, SubworkflowNode]
 
 
 @dataclass(frozen=True)
@@ -100,11 +110,20 @@ def _build_node(raw: dict[str, Any]) -> Node:
             on_pass=raw.get("on_pass"),
             on_fail=raw.get("on_fail"),
         )
+    if kind == "subworkflow":
+        workflow = raw.get("workflow", "")
+        if not workflow or not isinstance(workflow, str):
+            raise WorkflowError(
+                f"node {node_id!r}: a subworkflow node needs a non-empty 'workflow' name"
+            )
+        return SubworkflowNode(id=node_id, workflow=workflow, next=raw.get("next"))
     raise WorkflowError(f"node {node_id!r}: unknown kind {kind!r}")
 
 
 def _edge_targets(node: Node) -> list[str | None]:
     if isinstance(node, WorkNode):
+        return [node.next]
+    if isinstance(node, SubworkflowNode):
         return [node.next]
     return [node.on_pass, node.on_fail]
 

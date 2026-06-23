@@ -150,3 +150,28 @@ def test_decision_with_neither_command_nor_criteria_raises():
         parse_workflow({"name": "d", "start": "g", "nodes": [
             {"id": "g", "kind": "decision", "on_pass": None, "on_fail": None},
         ]})
+
+
+def test_parses_subworkflow_node():
+    from durin.workflow.spec import SubworkflowNode
+    wf = parse_workflow({"name": "d", "start": "sub", "nodes": [
+        {"id": "sub", "kind": "subworkflow", "workflow": "reviewer", "next": None},
+    ]})
+    n = wf.nodes["sub"]
+    assert isinstance(n, SubworkflowNode)
+    assert n.workflow == "reviewer"
+    assert n.next is None
+
+
+def test_subworkflow_without_workflow_name_raises():
+    with pytest.raises(WorkflowError, match="workflow"):
+        parse_workflow({"name": "d", "start": "sub", "nodes": [
+            {"id": "sub", "kind": "subworkflow", "next": None},
+        ]})
+
+
+def test_subworkflow_edge_target_validated():
+    with pytest.raises(WorkflowError, match="unknown node"):
+        parse_workflow({"name": "d", "start": "sub", "nodes": [
+            {"id": "sub", "kind": "subworkflow", "workflow": "x", "next": "ghost"},
+        ]})
