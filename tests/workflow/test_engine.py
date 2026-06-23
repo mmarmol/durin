@@ -251,3 +251,50 @@ def test_subworkflow_node_without_runner_raises():
     import pytest
     with pytest.raises(RuntimeError, match="subworkflow"):
         eng.run(wf, "t")
+
+
+def test_parallel_runs_all_branches_and_merges():
+    from durin.workflow.spec import parse_workflow as _pw
+    wf = _pw({"name": "d", "start": "fan", "nodes": [
+        {"id": "fan", "kind": "parallel", "branches": ["a", "b", "c"], "next": "join"},
+        {"id": "a", "kind": "work"},
+        {"id": "b", "kind": "work"},
+        {"id": "c", "kind": "work"},
+        {"id": "join", "kind": "work", "next": None},
+    ]})
+    outputs = {"a": "out-A", "b": "out-B", "c": "out-C", "join": "joined"}
+    seen_inputs = []
+
+    def node_runner(req):
+        if req.node.id == "join":
+            seen_inputs.append(req.upstream_output)
+        return NodeRunResponse(output=outputs[req.node.id], session_key=None, messages=[])
+
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")
+    res = eng.run(wf, "the task")
+    assert res.status == "completed"
+    # the join node received the merged output of all three branches
+    merged = seen_inputs[0]
+    assert "out-A" in merged and "out-B" in merged and "out-C" in merged
+    # the parallel node recorded a run whose output is the merge
+    fan_run = [r for r in res.runs if r.node_id == "fan"][0]
+    assert "out-A" in fan_run.output and "out-C" in fan_run.output
+
+
+def test_parallel_branches_get_the_parallel_input():
+    from durin.workflow.spec import parse_workflow as _pw
+    wf = _pw({"name": "d", "start": "pre", "nodes": [
+        {"id": "pre", "kind": "work", "next": "fan"},
+        {"id": "fan", "kind": "parallel", "branches": ["a"], "next": None},
+        {"id": "a", "kind": "work"},
+    ]})
+    seen = {}
+
+    def node_runner(req):
+        seen[req.node.id] = req.upstream_output
+        return NodeRunResponse(output=f"{req.node.id}-out", session_key=None, messages=[])
+
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")
+    eng.run(wf, "t")
+    # branch 'a' saw 'pre's output (the input flowing into the parallel node)
+    assert seen["a"] == "pre-out"

@@ -14,6 +14,7 @@ AgentRunner + persists node sessions is Task 5.
 
 from __future__ import annotations
 
+import concurrent.futures
 import uuid
 from dataclasses import dataclass, field
 from typing import Callable
@@ -21,7 +22,7 @@ from typing import Callable
 from durin.workflow.condition import CommandOutcome, run_command
 from durin.workflow.judge import JudgeVerdict
 from durin.workflow.result import NodeRun, WorkflowResult
-from durin.workflow.spec import DecisionNode, SubworkflowNode, WorkNode, Workflow
+from durin.workflow.spec import DecisionNode, ParallelNode, SubworkflowNode, WorkNode, Workflow
 
 
 @dataclass
@@ -117,6 +118,26 @@ class WorkflowEngine:
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=output))
                 upstream_output = output
                 final_output = output
+                current = node.next
+
+            elif isinstance(node, ParallelNode):
+                # Run each branch concurrently. Branches are read/analysis work, so
+                # their outputs don't collide; each already runs as its own session.
+                parallel_input = upstream_output
+                def _run_branch(branch_id: str) -> tuple[str, str]:
+                    branch = workflow.nodes[branch_id]
+                    resp = self._node_runner(NodeRunRequest(
+                        node=branch, task=task, upstream_output=parallel_input,
+                        shared_context=[], run_id=run_id, iteration=iteration,
+                        root_session_key=root_session_key,
+                    ))
+                    return branch_id, resp.output
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(node.branches))) as ex:
+                    branch_results = list(ex.map(_run_branch, node.branches))
+                merged = "\n\n".join(f"[{bid}]\n{out}" for bid, out in branch_results)
+                runs.append(NodeRun(node_id=node.id, iteration=iteration, output=merged))
+                upstream_output = merged
+                final_output = merged
                 current = node.next
 
             elif isinstance(node, DecisionNode):
