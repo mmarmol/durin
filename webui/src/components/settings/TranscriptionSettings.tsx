@@ -80,42 +80,35 @@ function readState(config: Record<string, unknown> | null): TranscriptionState {
   };
 }
 
-const PROVIDERS: ReadonlyArray<{ value: Provider; label: string; hint: string }> = [
-  { value: "local", label: "Local STT (sherpa-onnx)", hint: "fast local engines, offline, needs [stt] extra" },
-  { value: "groq", label: "Groq", hint: "whisper-large-v3 via Groq API (fast, free tier)" },
-  { value: "openai", label: "OpenAI", hint: "whisper-1 via OpenAI API" },
-  { value: "http", label: "HTTP server", hint: "any OpenAI-compatible /v1/audio/transcriptions" },
+// Option values are config-level identifiers (stay literal); labels resolve via i18n.
+const PROVIDERS: ReadonlyArray<{ value: Provider; labelKey: string }> = [
+  { value: "local", labelKey: "settings.voice.provider.local" },
+  { value: "groq", labelKey: "settings.voice.provider.groq" },
+  { value: "openai", labelKey: "settings.voice.provider.openai" },
+  { value: "http", labelKey: "settings.voice.provider.http" },
 ];
 
-const MODES: ReadonlyArray<{ value: Mode; label: string; hint: string }> = [
-  { value: "auto", label: "Auto", hint: "transcribe and insert text; edit before send" },
-  { value: "preview", label: "Preview", hint: "show transcript; accept before send" },
-  { value: "off", label: "Off", hint: "attach raw audio; no transcription" },
+const MODES: ReadonlyArray<{ value: Mode; labelKey: string }> = [
+  { value: "auto", labelKey: "settings.voice.mode.auto" },
+  { value: "preview", labelKey: "settings.voice.mode.preview" },
+  { value: "off", labelKey: "settings.voice.mode.off" },
 ];
 
-const LOCAL_ENGINES: ReadonlyArray<{ value: LocalEngine; label: string; hint: string }> = [
-  {
-    value: "parakeet",
-    label: "Parakeet TDT v3",
-    hint: "25 European languages incl. Spanish / English — fastest; no Japanese / Chinese",
-  },
-  {
-    value: "sensevoice",
-    label: "SenseVoice",
-    hint: "Chinese / Japanese / Korean / Cantonese / English",
-  },
+const LOCAL_ENGINES: ReadonlyArray<{ value: LocalEngine; labelKey: string }> = [
+  { value: "parakeet", labelKey: "settings.voice.engine.parakeet" },
+  { value: "sensevoice", labelKey: "settings.voice.engine.sensevoice" },
 ];
 
-const TTS_PROVIDERS = [
-  { value: "local", label: "Local Supertonic (offline)" },
-  { value: "openai", label: "OpenAI (cloud)" },
-] as const;
+const TTS_PROVIDERS: ReadonlyArray<{ value: string; labelKey: string }> = [
+  { value: "local", labelKey: "settings.voice.tts.providerLocal" },
+  { value: "openai", labelKey: "settings.voice.tts.providerOpenai" },
+];
 const TTS_VOICES = ["F1", "F2", "F3", "F4", "F5", "M1", "M2", "M3", "M4", "M5"] as const;
-const SPOKEN_MODES = [
-  { value: "model_led", label: "Model-led summary" },
-  { value: "aux_summary", label: "Aux-model summary" },
-  { value: "verbatim", label: "Read full reply" },
-] as const;
+const SPOKEN_MODES: ReadonlyArray<{ value: string; labelKey: string }> = [
+  { value: "model_led", labelKey: "settings.voice.spoken.modelLed" },
+  { value: "aux_summary", labelKey: "settings.voice.spoken.auxSummary" },
+  { value: "verbatim", labelKey: "settings.voice.spoken.verbatim" },
+];
 
 export function TranscriptionSettings({ token }: { token: string }) {
   const { t } = useTranslation();
@@ -140,11 +133,11 @@ export function TranscriptionSettings({ token }: { token: string }) {
       setConfig(snap.config as Record<string, unknown>);
       setSttStatus(st);
     } catch {
-      setError("Could not load transcription settings.");
+      setError(t("settings.voice.loadError"));
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, t]);
 
   useEffect(() => {
     void load();
@@ -158,12 +151,12 @@ export function TranscriptionSettings({ token }: { token: string }) {
         const next = await setConfigValue(token, path, value);
         setConfig(next as Record<string, unknown>);
       } catch {
-        setError(`Could not save ${path}.`);
+        setError(t("settings.voice.saveError"));
       } finally {
         setSavingPath(null);
       }
     },
-    [token],
+    [token, t],
   );
 
   const state = useMemo(() => readState(config), [config]);
@@ -221,7 +214,9 @@ export function TranscriptionSettings({ token }: { token: string }) {
           })();
         } else {
           setPreviewError(
-            error === "tts_unavailable" ? "Install [tts] to preview" : "Preview failed",
+            error === "tts_unavailable"
+              ? t("settings.voice.preview.installToPreview")
+              : t("settings.voice.preview.failed"),
           );
         }
         finish();
@@ -229,7 +224,7 @@ export function TranscriptionSettings({ token }: { token: string }) {
       previewTimer.current = setTimeout(finish, 8000);
       client.sendVoicePreview(voice, language || null);
     },
-    [client],
+    [client, t],
   );
 
   if (loading) {
@@ -244,9 +239,7 @@ export function TranscriptionSettings({ token }: { token: string }) {
   return (
     <div className="space-y-6">
       <p className="px-1 text-[13px] leading-5 text-muted-foreground">
-        When you attach or record audio, durin transcribes it to text before it
-        reaches the agent. The default is local STT via sherpa-onnx (offline).
-        Switch to a cloud provider or any OpenAI-compatible HTTP server as needed.
+        {t("settings.voice.intro")}
       </p>
 
       {error ? (
@@ -256,11 +249,11 @@ export function TranscriptionSettings({ token }: { token: string }) {
       ) : null}
 
       <section>
-        <SettingsSectionTitle>Provider</SettingsSectionTitle>
+        <SettingsSectionTitle>{t("settings.voice.section.provider")}</SettingsSectionTitle>
         <SettingsGroup>
           <SettingsRow
-            title="Transcription provider"
-            description="Local STT needs the [stt] extra; cloud providers need an API key."
+            title={t("settings.voice.providerTitle")}
+            description={t("settings.voice.providerDesc")}
           >
             <select
               value={state.provider}
@@ -270,7 +263,7 @@ export function TranscriptionSettings({ token }: { token: string }) {
             >
               {PROVIDERS.map((p) => (
                 <option key={p.value} value={p.value}>
-                  {p.label}
+                  {t(p.labelKey)}
                 </option>
               ))}
             </select>
@@ -279,11 +272,11 @@ export function TranscriptionSettings({ token }: { token: string }) {
           {state.provider === "local" ? (
             <>
               <SettingsRow
-                title="Engine"
+                title={t("settings.voice.engineTitle")}
                 description={
                   state.localEngine === "parakeet"
-                    ? "Parakeet TDT v3 — 25 European languages incl. Spanish / English, fastest. For Japanese / Chinese, use SenseVoice or a cloud provider."
-                    : "SenseVoice — optimized for Chinese, Japanese, Korean, Cantonese, and English."
+                    ? t("settings.voice.engineDesc.parakeet")
+                    : t("settings.voice.engineDesc.sensevoice")
                 }
               >
                 <select
@@ -296,22 +289,22 @@ export function TranscriptionSettings({ token }: { token: string }) {
                 >
                   {LOCAL_ENGINES.map((eng) => (
                     <option key={eng.value} value={eng.value}>
-                      {eng.label}
+                      {t(eng.labelKey)}
                     </option>
                   ))}
                 </select>
               </SettingsRow>
               <SettingsRow
-                title="Local STT (sherpa-onnx)"
+                title={t("settings.voice.localStt.title")}
                 description={
                   sttStatus?.present
-                    ? "✓ sherpa-onnx is installed. Fast local transcription ready."
-                    : "Not installed — local transcription won't work until you add [stt]."
+                    ? t("settings.voice.localStt.installedDesc")
+                    : t("settings.voice.localStt.missingDesc")
                 }
               >
                 {sttStatus?.present ? (
                   <span className="text-[12px] text-emerald-600 dark:text-emerald-400">
-                    installed
+                    {t("settings.voice.localStt.installedBadge")}
                   </span>
                 ) : (
                   <Button
@@ -322,7 +315,7 @@ export function TranscriptionSettings({ token }: { token: string }) {
                     }
                     className="rounded-full"
                   >
-                    Install [stt]
+                    {t("settings.voice.install.stt")}
                   </Button>
                 )}
               </SettingsRow>
@@ -343,7 +336,10 @@ export function TranscriptionSettings({ token }: { token: string }) {
           ) : null}
 
           {state.provider === "groq" ? (
-            <SettingsRow title="Groq API key" description="From console.groq.com (free tier available).">
+            <SettingsRow
+              title={t("settings.voice.groqKey.title")}
+              description={t("settings.voice.groqKey.desc")}
+            >
               <ApiKeyInput
                 value={state.groqApiKey}
                 disabled={savingPath === "transcription.groq.api_key"}
@@ -353,7 +349,10 @@ export function TranscriptionSettings({ token }: { token: string }) {
           ) : null}
 
           {state.provider === "openai" ? (
-            <SettingsRow title="OpenAI API key" description="From platform.openai.com.">
+            <SettingsRow
+              title={t("settings.voice.openaiKey.title")}
+              description={t("settings.voice.openaiKey.desc")}
+            >
               <ApiKeyInput
                 value={state.openaiApiKey}
                 disabled={savingPath === "transcription.openai.api_key"}
@@ -365,8 +364,8 @@ export function TranscriptionSettings({ token }: { token: string }) {
           {state.provider === "http" ? (
             <>
               <SettingsRow
-                title="Server base URL"
-                description="e.g. http://localhost:8080/v1 (whisper.cpp, mlx-asr, vLLM)"
+                title={t("settings.voice.http.baseUrlTitle")}
+                description={t("settings.voice.http.baseUrlDesc")}
               >
                 <TextRow
                   value={state.httpBaseUrl}
@@ -375,7 +374,10 @@ export function TranscriptionSettings({ token }: { token: string }) {
                   onSave={(v) => void onSave("transcription.http.base_url", v)}
                 />
               </SettingsRow>
-              <SettingsRow title="Server model name" description="Model id the server exposes (optional).">
+              <SettingsRow
+                title={t("settings.voice.http.modelTitle")}
+                description={t("settings.voice.http.modelDesc")}
+              >
                 <TextRow
                   value={state.httpModel}
                   placeholder="whisper-large-v3"
@@ -383,7 +385,10 @@ export function TranscriptionSettings({ token }: { token: string }) {
                   onSave={(v) => void onSave("transcription.http.model", v)}
                 />
               </SettingsRow>
-              <SettingsRow title="Server API key" description="Only if the server requires auth.">
+              <SettingsRow
+                title={t("settings.voice.http.keyTitle")}
+                description={t("settings.voice.http.keyDesc")}
+              >
                 <ApiKeyInput
                   value={state.httpApiKey}
                   disabled={savingPath === "transcription.http.api_key"}
@@ -396,11 +401,11 @@ export function TranscriptionSettings({ token }: { token: string }) {
       </section>
 
       <section>
-        <SettingsSectionTitle>Behavior</SettingsSectionTitle>
+        <SettingsSectionTitle>{t("settings.voice.section.behavior")}</SettingsSectionTitle>
         <SettingsGroup>
           <SettingsRow
-            title="Enabled"
-            description="Master switch — when off, audio is never transcribed."
+            title={t("settings.voice.enabledTitle")}
+            description={t("settings.voice.enabledDesc")}
           >
             <Button
               size="sm"
@@ -415,8 +420,8 @@ export function TranscriptionSettings({ token }: { token: string }) {
             </Button>
           </SettingsRow>
           <SettingsRow
-            title="Mode"
-            description="Auto inserts text you can edit; Preview requires explicit accept; Off attaches raw audio."
+            title={t("settings.voice.modeTitle")}
+            description={t("settings.voice.modeDesc")}
           >
             <select
               value={state.mode}
@@ -426,14 +431,14 @@ export function TranscriptionSettings({ token }: { token: string }) {
             >
               {MODES.map((m) => (
                 <option key={m.value} value={m.value}>
-                  {m.label}
+                  {t(m.labelKey)}
                 </option>
               ))}
             </select>
           </SettingsRow>
           <SettingsRow
-            title="Language hint"
-            description="ISO-639-1 code (es, en, ja, zh…). Empty = auto-detect."
+            title={t("settings.voice.languageHintTitle")}
+            description={t("settings.voice.languageHintDesc")}
           >
             <TextRow
               value={state.language}
@@ -448,21 +453,29 @@ export function TranscriptionSettings({ token }: { token: string }) {
       </section>
 
         <section>
-          <SettingsSectionTitle>Text-to-speech</SettingsSectionTitle>
+          <SettingsSectionTitle>{t("settings.voice.section.tts")}</SettingsSectionTitle>
           <SettingsGroup>
-            <SettingsRow title="TTS provider" description="Voice output engine for conversational mode.">
+            <SettingsRow
+              title={t("settings.voice.tts.providerTitle")}
+              description={t("settings.voice.tts.providerDesc")}
+            >
               <select
                 value={state.ttsProvider}
                 onChange={(e) => void onSave("tts.provider", e.target.value)}
                 disabled={savingPath === "tts.provider"}
                 className="h-8 rounded-full border bg-background px-3 text-[13px]"
               >
-                {TTS_PROVIDERS.map((p) => (<option key={p.value} value={p.value}>{p.label}</option>))}
+                {TTS_PROVIDERS.map((p) => (
+                  <option key={p.value} value={p.value}>{t(p.labelKey)}</option>
+                ))}
               </select>
             </SettingsRow>
             {state.ttsProvider === "local" ? (
               <>
-                <SettingsRow title="Voice" description="Supertonic preset voice.">
+                <SettingsRow
+                  title={t("settings.voice.tts.voiceTitle")}
+                  description={t("settings.voice.tts.voiceDesc")}
+                >
                   <div className="flex items-center gap-2">
                     <select
                       value={state.ttsVoice}
@@ -479,7 +492,7 @@ export function TranscriptionSettings({ token }: { token: string }) {
                       disabled={previewing}
                       onClick={() => handlePreview(state.ttsVoice, state.ttsLanguage)}
                     >
-                      {previewing ? "Playing…" : "Test"}
+                      {previewing ? t("settings.voice.tts.playing") : t("settings.voice.tts.test")}
                     </Button>
                     {previewError ? (
                       <span className="text-[12px] text-muted-foreground">{previewError}</span>
@@ -487,12 +500,12 @@ export function TranscriptionSettings({ token }: { token: string }) {
                   </div>
                 </SettingsRow>
                 <SettingsRow
-                  title="Local TTS (Supertonic)"
-                  description="Adds the [tts] extra for on-device speech synthesis."
+                  title={t("settings.voice.tts.localInstallTitle")}
+                  description={t("settings.voice.tts.localInstallDesc")}
                 >
                   <Button size="sm" variant="outline" className="rounded-full"
                           onClick={() => void ensureThen("tts", () => void load())}>
-                    Install [tts]
+                    {t("settings.voice.install.tts")}
                   </Button>
                 </SettingsRow>
                 {pendingExtra && pendingExtra.feature === "tts" ? (
@@ -512,10 +525,10 @@ export function TranscriptionSettings({ token }: { token: string }) {
             ) : null}
             {state.ttsProvider === "openai" ? (
               <>
-                <SettingsRow title="Model" description="gpt-4o-mini-tts" />
+                <SettingsRow title={t("settings.voice.tts.modelTitle")} description="gpt-4o-mini-tts" />
                 <SettingsRow
-                  title="OpenAI API key"
-                  description="Empty = uses the OPENAI_API_KEY env var."
+                  title={t("settings.voice.tts.openaiKeyTitle")}
+                  description={t("settings.voice.tts.openaiKeyDesc")}
                 >
                   <ApiKeyInput
                     value={state.ttsOpenaiApiKey}
@@ -526,8 +539,8 @@ export function TranscriptionSettings({ token }: { token: string }) {
               </>
             ) : null}
             <SettingsRow
-              title="Language hint"
-              description="ISO-639-1 code (es, en, ja, zh…). Empty = auto-detect."
+              title={t("settings.voice.languageHintTitle")}
+              description={t("settings.voice.languageHintDesc")}
             >
               <TextRow
                 value={state.ttsLanguage}
@@ -540,15 +553,21 @@ export function TranscriptionSettings({ token }: { token: string }) {
         </section>
 
         <section>
-          <SettingsSectionTitle>Conversational mode</SettingsSectionTitle>
+          <SettingsSectionTitle>{t("settings.voice.section.conversational")}</SettingsSectionTitle>
           <SettingsGroup>
-            <SettingsRow title="Hands-free voice" description="The floating orb listens, thinks and speaks.">
+            <SettingsRow
+              title={t("settings.voice.conv.handsFreeTitle")}
+              description={t("settings.voice.conv.handsFreeDesc")}
+            >
               <Button size="sm" variant="outline" className="rounded-full"
                       onClick={() => void onSave("voice.enabled", !state.voiceEnabled)}>
                 {state.voiceEnabled ? t("settings.config.on") : t("settings.config.off")}
               </Button>
             </SettingsRow>
-            <SettingsRow title="Barge-in" description="Interrupt the agent by speaking over it.">
+            <SettingsRow
+              title={t("settings.voice.conv.bargeInTitle")}
+              description={t("settings.voice.conv.bargeInDesc")}
+            >
               <Button size="sm" variant="outline" className="rounded-full"
                       onClick={() => void onSave("voice.barge_in", !state.bargeIn)}>
                 {state.bargeIn ? t("settings.config.on") : t("settings.config.off")}
@@ -558,11 +577,11 @@ export function TranscriptionSettings({ token }: { token: string }) {
         </section>
 
         <section>
-          <SettingsSectionTitle>Spoken rendition</SettingsSectionTitle>
+          <SettingsSectionTitle>{t("settings.voice.section.spokenRendition")}</SettingsSectionTitle>
           <SettingsGroup>
             <SettingsRow
-              title="Long replies"
-              description="What the voice speaks when a reply is long. Model-led: the agent speaks a short summary, full text stays on screen. Aux-model: a separate model summarizes. Read full reply: speaks everything."
+              title={t("settings.voice.spoken.longRepliesTitle")}
+              description={t("settings.voice.spoken.longRepliesDesc")}
             >
               <select
                 value={state.spokenMode}
@@ -570,7 +589,9 @@ export function TranscriptionSettings({ token }: { token: string }) {
                 disabled={savingPath === "voice.spoken_render.mode"}
                 className="h-8 rounded-full border bg-background px-3 text-[13px]"
               >
-                {SPOKEN_MODES.map((m) => (<option key={m.value} value={m.value}>{m.label}</option>))}
+                {SPOKEN_MODES.map((m) => (
+                  <option key={m.value} value={m.value}>{t(m.labelKey)}</option>
+                ))}
               </select>
             </SettingsRow>
           </SettingsGroup>
@@ -588,6 +609,7 @@ function ApiKeyInput({
   disabled: boolean;
   onSave: (v: string) => void;
 }) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useState(value);
   const [visible, setVisible] = useState(false);
   useEffect(() => setDraft(value), [value]);
@@ -611,7 +633,7 @@ function ApiKeyInput({
         onClick={() => setVisible((v) => !v)}
         className="rounded-full"
       >
-        {visible ? "hide" : "show"}
+        {visible ? t("settings.voice.apiKey.hide") : t("settings.voice.apiKey.show")}
       </Button>
       <Button
         size="sm"
@@ -620,7 +642,7 @@ function ApiKeyInput({
         onClick={() => onSave(draft)}
         className="rounded-full"
       >
-        save
+        {t("settings.config.save")}
       </Button>
     </div>
   );
@@ -637,6 +659,7 @@ function TextRow({
   disabled: boolean;
   onSave: (v: string) => void;
 }) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
   const commit = () => {
@@ -661,7 +684,7 @@ function TextRow({
         onClick={commit}
         className="rounded-full"
       >
-        save
+        {t("settings.config.save")}
       </Button>
     </div>
   );
