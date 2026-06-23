@@ -987,6 +987,73 @@ export async function ensureExtra(
   );
 }
 
+// -- souls + personas -------------------------------------------------------
+
+export type SoulItem = components["schemas"]["SoulItem"];
+export type PersonaItem = components["schemas"]["PersonaItem"];
+
+type components = import("./api-types").components;
+
+export async function listSouls(
+  token: string,
+  base: string = "",
+): Promise<SoulItem[]> {
+  const res = await request<{ souls: SoulItem[] }>(`${base}/api/v1/souls`, token);
+  return res.souls;
+}
+
+export async function saveSoul(
+  token: string,
+  body: { slug: string; body: string },
+  base: string = "",
+): Promise<SoulItem> {
+  const res = await post<{ soul: SoulItem }>(`${base}/api/v1/souls`, token, body);
+  return res.soul;
+}
+
+export async function deleteSoul(
+  token: string,
+  slug: string,
+  base: string = "",
+): Promise<void> {
+  await del<{ ok: boolean }>(`${base}/api/v1/souls`, token, { slug });
+}
+
+export async function listPersonas(
+  token: string,
+  base: string = "",
+): Promise<{ personas: PersonaItem[]; default: string | null }> {
+  return request<{ personas: PersonaItem[]; default: string | null }>(
+    `${base}/api/v1/personas`,
+    token,
+  );
+}
+
+export async function savePersona(
+  token: string,
+  body: { name: string; soul: string; model: string | null; description: string | null },
+  base: string = "",
+): Promise<PersonaItem> {
+  const res = await post<{ persona: PersonaItem }>(`${base}/api/v1/personas`, token, body);
+  return res.persona;
+}
+
+export async function deletePersona(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<void> {
+  await del<{ ok: boolean }>(`${base}/api/v1/personas`, token, { name });
+}
+
+export async function setDefaultPersona(
+  token: string,
+  name: string | null,
+  base: string = "",
+): Promise<void> {
+  await post<{ default: string | null }>(`${base}/api/v1/personas/default`, token, { name });
+}
+
 export interface ChannelInfo {
   name: string;
   display_name: string;
