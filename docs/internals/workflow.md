@@ -182,7 +182,8 @@ End-to-end for a single `run_workflow` call:
   session**; **git-versioned definitions** (each run snapshots them); **dream-driven
   self-improvement in manual mode** (recommendations from recurring run diagnostics); and
   a **webui Workflows pane** (React Flow, at the same nav level as Memoria/Skills) that
-  renders, **edits, saves, and runs** a workflow — per-node config (mode / model / context
+  **creates, renders, edits, saves, and runs** a workflow — new workflow from the list
+  header (a minimal one-node graph to edit from), per-node config (mode / model / context
   / tools / prompt; gate criteria), add/delete nodes and wire edges by dragging, set the
   start node, run on a task with the per-node trace shown inline, and apply self-improvement
   recommendations. Not yet built — see [roadmap.md](../roadmap.md) for direction —
