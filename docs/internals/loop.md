@@ -365,6 +365,22 @@ Souls and personas are manageable through three surfaces:
   via the `/api/v1/souls` and `/api/v1/personas` route groups (see
   [api.md](api.md)).
 
+  Two additional behaviors in this surface:
+
+  - **Live model + SOUL test** — the persona form has a "Test" action
+    (`POST /api/v1/personas/test`) that runs the selected soul and model
+    against a fixed short prompt and returns the model's reply. If the provider
+    or model reference is invalid, the response carries an `ok: false` error
+    message instead of raising an HTTP error; the webui shows it inline below
+    the form.
+
+  - **In-use SOUL delete protection** — a soul that is referenced by any
+    persona (user-defined or built-in) cannot be deleted. The backend returns a
+    `409 Conflict` listing which personas hold the reference; the webui disables
+    the delete control for in-use souls and notes the blocking personas. The
+    `default` soul is separately protected from deletion regardless of persona
+    references.
+
 #### Operating floor
 
 durin's execution rules — tool-use discipline, planning hygiene, and operational
