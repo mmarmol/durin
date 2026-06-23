@@ -4,9 +4,10 @@
 
 The workflow engine lets a user define a multi-step process as a **flow graph** and
 run a task through it. Instead of a single agent turn, a task moves through a graph
-of **nodes** the user draws: *work nodes* do a piece of the task (a real agent turn,
-with their own model, tools, and session) and *decision nodes* route the flow —
-continue, branch, or loop back — based on a condition. The graph is a plain JSON
+of **nodes** the user draws. A node does a piece of the task — a real agent turn with
+its own model, tools, and session, or a shell command — and **optionally routes** the
+flow (continue, branch, or loop back) on a pass/fail verdict. Routing is opt-in, not a
+separate node type. The graph is a plain JSON
 document under `<workspace>/workflows/<name>.json`, so it can be authored by a human,
 a UI, or an agent; the agent runs one with the `run_workflow` tool.
 
@@ -19,14 +20,17 @@ node's work is a persisted, searchable session rather than ephemeral state.
 
 **A workflow is a graph of nodes, not a fixed pipeline.** A `Workflow`
 (`durin/workflow/spec.py`) is a set of nodes keyed by id, a `start` node id, and a
-per-node visit cap (`max_visits`). A `WorkNode` carries a model (or the default), a
-context policy (`own` vs `shared` session), a tool set (`none` vs `default`), a
-prompt, and the id of its next node. A `DecisionNode` carries a condition and two
-targets (`on_pass`, `on_fail`); a `None` target ends the run. The parser validates
-that the start and every edge target name a real node.
+per-node visit cap (`max_visits`). There is **one node type** (`WorkNode`): it carries a
+model (or the default), a context policy (`own` vs `shared` session), a tool set (`none`
+vs `default`), a prompt, optional skills/MCP, and either a single `next` edge or — when it
+**routes** — a pair of targets (`on_pass`, `on_fail`). A node whose body is a shell
+`command` runs that instead of an agent turn. A `None` target ends the run. The parser
+validates that the start and every edge target name a real node, and that `next` and
+routing are not both set. (`kind: "decision"` is accepted as a back-compat alias for a
+routing node — `criteria` maps to the node's `prompt`.)
 
-**Work nodes run real agent turns; decision nodes route.** `WorkflowEngine.run`
-(`durin/workflow/engine.py`) walks the graph from `start`. For a work node it calls a
+**A node runs its body, then optionally routes.** `WorkflowEngine.run`
+(`durin/workflow/engine.py`) walks the graph from `start`. For an agent node it calls a
 `NodeRunner` — by default `AgentNodeRunner` (`durin/workflow/node_runner.py`), which
 runs one `AgentRunner` turn with that node's model and tool registry, then persists
 the node's conversation as a session keyed `workflow:<run_id>:<node_id>:<iteration>`
@@ -43,15 +47,20 @@ reconnect; the call is marshalled back to the gateway's event loop, where the MC
 session lives). Skills/MCP default empty, so a node sees only what its job needs. The node's output passes along the edge
 as the next node's input. A `shared`-context node reads and extends a running
 conversation buffer; an `own`-context node is isolated and receives only the upstream
-output. For a decision node the engine evaluates the condition — either a shell
-command (`durin/workflow/condition.py`, pass iff it exits 0, run in the workflow's
-workspace so it can see files the work nodes wrote) or an agent **judgment**
-(`durin/workflow/judge.py`, a reviewer agent on a fresh context evaluates the upstream
-output against the node's `criteria`) — and routes to `on_pass` or `on_fail`; on a
-judgment fail the reviewer's feedback is threaded into the loop-back so the producer
-re-runs knowing what to fix. A node can also be a **sub-workflow**
+output. **When a node routes** (it has `on_pass`/`on_fail`), the engine derives a
+pass/fail verdict from what the node produced: a **command** node passes iff its shell
+command exits 0 (`durin/workflow/condition.py`, run in the workflow's workspace so it
+sees files earlier nodes wrote); an **agent** node ends its own reply with a `PASS`/`FAIL`
+line the engine parses (`durin/workflow/verdict.py`) — so a routing agent node can
+*verify* (read the diff, run the tests) before ruling, not just read text. The engine
+routes to `on_pass` or `on_fail`; on a fail the node's feedback is threaded into the
+loop-back so the producer re-runs knowing what to fix. Routing agent nodes default to
+**explore** (read-only) mode. **Independence is a graph rule, not a node type:** the
+parser rejects a routing agent node that is *structurally identical* (same model, mode,
+and prompt) to the producer feeding it, so a quality verdict comes from a genuinely
+independent reviewer (the anti-Goodhart guard). A node can also be a **sub-workflow**
 (`durin/workflow/subworkflow.py`): it runs another named workflow as a nested run
-(reusing the same node and judge runners, bounded by a depth cap) and uses its output;
+(reusing the same node and branch-pick runners, bounded by a depth cap) and uses its output;
 the nested run carries the same root session key, so its node sessions anchor to the
 invoking conversation too.
 A **parallel** node runs a set of work-node branches concurrently and merges their text
@@ -78,16 +87,16 @@ flowchart TD
     A([run_workflow name task]) --> B[load_workflow\nworkspace/workflows/name.json]
     B --> C[parse_workflow to Workflow]
     C --> D[WorkflowEngine.run\nvia asyncio.to_thread]
-    D --> E{node kind?}
-    E -->|work| F[AgentNodeRunner\nAgentRunner turn\npersist node session]
-    F --> G[output becomes\nnext upstream_output]
+    D --> E[execute node body\nagent turn or shell command]
+    E --> F{node routes?}
+    F -->|no| G[output becomes\nnext upstream_output]
     G --> H{next is None?}
     H -->|no| E
     H -->|yes| Z[WorkflowResult completed]
-    E -->|decision| I[run_command exit code]
+    F -->|yes| I[derive verdict\nexit code / parse PASS-FAIL]
     I --> J{passed?}
     J -->|yes| K[route on_pass]
-    J -->|no| L[route on_fail / loop back]
+    J -->|no| L[route on_fail / loop back\nthread feedback]
     K --> H
     L --> H
     E -->|visits over max_visits| Y[WorkflowResult max_visits]
@@ -104,14 +113,15 @@ End-to-end for a single `run_workflow` call:
 2. **Wire.** It resolves the user's default model preset
    (`DurinConfig.resolve_default_preset`), builds the provider (`make_provider`), and
    wires `AgentRunner` → `AgentNodeRunner` (passing the user's real `cfg.tools`), an
-   `AgentJudgeRunner` (for judgment decision nodes), and a `SubworkflowRunner` (for
-   sub-workflow nodes) into the `WorkflowEngine`.
-3. **Run.** The engine runs under `asyncio.to_thread`. It walks the graph: a work node
-   runs an agent turn and persists a lineage'd node session; its output threads to the
-   next node; a decision node routes on its command's exit code or a reviewer's
-   judgment (threading the reviewer feedback into the loop-back on fail); a sub-workflow
-   node runs a nested workflow; a failed gate loops back, re-running the target node as
-   the next iteration (a sibling node session), capped by `max_visits`.
+   `AgentJudgeRunner` (used only to **pick** a winner for parallel `choose`), and a
+   `SubworkflowRunner` (for sub-workflow nodes) into the `WorkflowEngine`.
+3. **Run.** The engine runs under `asyncio.to_thread`. It walks the graph: a node runs
+   its body (an agent turn — persisting a lineage'd node session — or a shell command)
+   and its output threads to the next node; a **routing** node branches on its command's
+   exit code or the `PASS`/`FAIL` verdict in its own agent output (threading the feedback
+   into the loop-back on fail); a sub-workflow node runs a nested workflow; a failed gate
+   loops back, re-running the target node as the next iteration (a sibling node session),
+   capped by `max_visits`.
 4. **Return.** The run produces a typed `WorkflowResult` (status + final output +
    per-node trace), which the tool formats into a short summary for the agent. The
    node sessions persist on disk, so the run's work is navigable, searchable, and
@@ -122,14 +132,15 @@ End-to-end for a single `run_workflow` call:
 
 | Symbol | File | Role |
 |---|---|---|
-| `Workflow`, `WorkNode`, `DecisionNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator. |
-| `run_command`, `CommandOutcome` | `durin/workflow/condition.py` | The shell-exit-code condition a decision node routes on. |
-| `JudgeVerdict`, `AgentJudgeRunner` | `durin/workflow/judge.py` | The reviewer agent: a pass/fail verdict + feedback for a judgment decision node, and `pick` to choose the best of N branch outputs. |
+| `Workflow`, `WorkNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator (one node type; routing optional; `kind:"decision"` back-compat alias; structural-equivalence guard). |
+| `parse_verdict` | `durin/workflow/verdict.py` | The `PASS`/`FAIL` contract read from a routing agent node's own output (default `FAIL`). |
+| `run_command`, `CommandOutcome` | `durin/workflow/condition.py` | The shell-exit-code condition a command node routes on. |
+| `AgentJudgeRunner` | `durin/workflow/judge.py` | The branch-pick reviewer: `pick` chooses the best of N outputs for a parallel `choose` reconcile. |
 | `fork`, `diff`, `conflicts`, `apply` | `durin/workflow/workspace_fork.py` | Per-branch workspace isolation + reconciliation (choose/union) for writing-in-parallel. |
 | `WorkflowVersionStore` | `durin/workflow/version_store.py` | Git versioning of workflow definitions: each run snapshots them; `history` reads the timeline. |
 | `SubworkflowRunner` | `durin/workflow/subworkflow.py` | Runs a named workflow as a nested run (depth-capped) for a sub-workflow node. |
 | `WorkflowEngine` | `durin/workflow/engine.py` | The graph executor: routing, loop-back with a visit cap, own/shared context, output threading, and concurrent parallel branches. |
-| `AgentNodeRunner` | `durin/workflow/node_runner.py` | The default node runner: one real `AgentRunner` turn per work node, persisted as a lineage'd node session. |
+| `AgentNodeRunner` | `durin/workflow/node_runner.py` | The default node runner: one real `AgentRunner` turn per agent node (adds a verdict instruction when the node routes), persisted as a lineage'd node session. |
 | `load_workflow` | `durin/workflow/loader.py` | Load and parse a workflow by name from the workspace. |
 | `WorkflowResult`, `NodeRun` | `durin/workflow/result.py` | The typed run outcome and per-node trace. |
 | `RunWorkflowTool` | `durin/agent/tools/run_workflow.py` | The `run_workflow` LLM tool (core scope) that loads, runs, summarizes a workflow, and records its run. |
@@ -145,7 +156,7 @@ End-to-end for a single `run_workflow` call:
   shared `GitRepo`); every run snapshots the current definitions, so there is a
   navigable version history of how each workflow changed and which version a run used.
 - **Surface:** the `run_workflow(name, task)` LLM tool — auto-discovered into the
-  agent's tool registry at core scope (see [tools.md](tools.md)). A work node with
+  agent's tool registry at core scope (see [tools.md](tools.md)). A node with
   `tools: "default"` receives the user's configured tool set; `tools: "none"` (the
   default) runs the node without tools. A node may also name `skills` (injected into
   its prompt) and `mcps` (a subset of the configured MCP servers, reused live).
@@ -163,8 +174,8 @@ End-to-end for a single `run_workflow` call:
   dream pass (`run_workflow_improve_pass`, wired into the `memory_dream` cron) reduces
   those to recurring trouble (a node that loops, a gate that keeps failing —
   `diagnostics.py`), shows a model the definition + that diagnostic + the change history
-  (so it never re-proposes a reverted edit), and proposes one scoped edit (a node
-  `prompt` or a gate `criteria`; structural edits rejected). In **manual** mode the
+  (so it never re-proposes a reverted edit), and proposes one scoped edit (a node's
+  `prompt` — which doubles as a routing node's criteria; structural edits rejected). In **manual** mode the
   proposal is recorded as a recommendation (`workflow_recommendations.py`); the user
   reviews and applies it — from the webui Workflows pane (a recommendations banner with an
   apply button) or the `durin workflow` CLI (`recommendations` lists open ones,
@@ -176,17 +187,19 @@ End-to-end for a single `run_workflow` call:
   with **concurrent parallel** branches — read-only, or **writing** with `choose` /
   `union` reconciliation (private copy per branch + content-aware conflict detection);
   per-node **work mode** (build/plan/explore) / model / context / tools / **skills** /
-  **MCP servers**; decision conditions
-  by **shell command or agent judgment** (with feedback-threaded loop-back);
-  **sub-workflow** composition (depth-capped); runs **anchored to the invoking
+  **MCP servers**; **optional routing** — any node can branch on a shell command's exit
+  code or the `PASS`/`FAIL` verdict in its own agent output (feedback-threaded loop-back),
+  with an anti-Goodhart guard that a routing node not be structurally identical to its
+  producer; **sub-workflow** composition (depth-capped); runs **anchored to the invoking
   session**; **git-versioned definitions** (each run snapshots them); **dream-driven
   self-improvement in manual mode** (recommendations from recurring run diagnostics); and
   a **webui Workflows pane** (React Flow, at the same nav level as Memoria/Skills) that
   **creates, renders, edits, saves, and runs** a workflow — new workflow from the list
-  header (a minimal one-node graph to edit from), per-node config (mode / model / context
-  / tools / prompt; gate criteria), add/delete nodes and wire edges by dragging, set the
-  start node, run on a task with the per-node trace shown inline, and apply self-improvement
-  recommendations. Not yet built — see [roadmap.md](../roadmap.md) for direction —
+  header (a minimal one-node graph to edit from), `work`/`decision`/`gate` palette presets
+  (all one node type), per-node config (mode / model / context / tools / prompt) with an
+  optional **routing** toggle (pass/fail targets), add/delete nodes and wire edges by
+  dragging, set the start node, run on a task with the per-node trace shown inline, and
+  apply self-improvement recommendations. Not yet built — see [roadmap.md](../roadmap.md) for direction —
   auto-mode self-improvement (apply + validation anchor), auto-merge of conflicting
   parallel writes, and per-node custom persona.
 - **Security.** Definitions are local files the user authored, so running their
