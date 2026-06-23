@@ -83,6 +83,9 @@ class Workflow:
     start: str
     nodes: dict[str, Node]
     max_visits: int = 3                  # max times a single node may run (loop guard)
+    # dream-driven self-improvement: 'off' = never touched; 'manual' = dream leaves a
+    # recommendation to review; 'auto' = dream applies edits directly (later slice).
+    improvement_mode: Literal["off", "manual", "auto"] = "off"
 
 
 def _str_list(value: Any, node_id: str, field: str) -> tuple[str, ...]:
@@ -224,4 +227,12 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
     max_visits = data.get("max_visits", 3)
     if isinstance(max_visits, bool) or not isinstance(max_visits, int) or max_visits < 1:
         raise WorkflowError(f"max_visits must be an int >= 1, got {max_visits!r}")
-    return Workflow(name=name, start=start, nodes=nodes, max_visits=max_visits)
+
+    mode = data.get("improvement_mode", "off")
+    if mode not in ("off", "manual", "auto"):
+        raise WorkflowError(
+            f"improvement_mode must be 'off', 'manual' or 'auto', got {mode!r}"
+        )
+    return Workflow(
+        name=name, start=start, nodes=nodes, max_visits=max_visits, improvement_mode=mode
+    )

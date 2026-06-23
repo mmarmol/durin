@@ -1360,6 +1360,7 @@ def _run_gateway(
                 run_skill_extract_pass,
             )
             from durin.memory.model_resolve import resolve_memory_model
+            from durin.workflow.workflow_improve_dream import run_workflow_improve_pass
 
             # The daily cron runs the extract pass (sessions → entity attributes),
             # the skill-extract pass (sessions → reusable procedures as skills),
@@ -1387,6 +1388,12 @@ def _run_gateway(
                 ao = await _asyncio.to_thread(
                     run_always_on_pass, workspace, model=model,
                     token_budget=config.memory.dream.always_on_token_budget)
+                # Workflow self-improvement: inert unless a workflow opts into
+                # improvement_mode 'manual'/'auto' (off by default).
+                wi = await _asyncio.to_thread(run_workflow_improve_pass, workspace, model=model)
+                logger.info(
+                    "memory_dream cron: workflow_improve(workflows={} proposals={})",
+                    wi.get("workflows", 0), wi.get("proposals", 0))
                 logger.info(
                     "memory_dream cron: extract(sessions={} entities={} {}ms yielded={}) "
                     "derived_from(links={} sessions={} {}ms) "

@@ -107,6 +107,20 @@ def test_parallel_union_parses():
     assert fan.reconcile == "union"
 
 
+def test_improvement_mode_defaults_off_and_parses():
+    wf = parse_workflow({"name": "d", "start": "a", "nodes": [{"id": "a", "kind": "work"}]})
+    assert wf.improvement_mode == "off"
+    wf2 = parse_workflow({"name": "d", "start": "a", "improvement_mode": "manual",
+                          "nodes": [{"id": "a", "kind": "work"}]})
+    assert wf2.improvement_mode == "manual"
+
+
+def test_invalid_improvement_mode_raises():
+    with pytest.raises(WorkflowError, match="improvement_mode must be"):
+        parse_workflow({"name": "d", "start": "a", "improvement_mode": "yes",
+                        "nodes": [{"id": "a", "kind": "work"}]})
+
+
 def test_unknown_start_raises():
     with pytest.raises(WorkflowError, match="start"):
         parse_workflow({"name": "d", "start": "missing",

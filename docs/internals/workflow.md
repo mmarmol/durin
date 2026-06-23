@@ -128,7 +128,11 @@ End-to-end for a single `run_workflow` call:
 | `AgentNodeRunner` | `durin/workflow/node_runner.py` | The default node runner: one real `AgentRunner` turn per work node, persisted as a lineage'd node session. |
 | `load_workflow` | `durin/workflow/loader.py` | Load and parse a workflow by name from the workspace. |
 | `WorkflowResult`, `NodeRun` | `durin/workflow/result.py` | The typed run outcome and per-node trace. |
-| `RunWorkflowTool` | `durin/agent/tools/run_workflow.py` | The `run_workflow` LLM tool (core scope) that loads, runs, and summarizes a workflow. |
+| `RunWorkflowTool` | `durin/agent/tools/run_workflow.py` | The `run_workflow` LLM tool (core scope) that loads, runs, summarizes a workflow, and records its run. |
+| `write_run`, `read_runs_since` | `durin/workflow/run_log.py` | Per-run diagnostic records (beside `workflows/`), the self-improvement signal source. |
+| `compute_diagnostics` | `durin/workflow/diagnostics.py` | Reduces run records to recurring per-node trouble (loop-backs, gate fails) → improvement candidates. |
+| `run_workflow_improve_pass` | `durin/workflow/workflow_improve_dream.py` | The dream pass: observes manual-mode workflows, proposes one scoped edit, records a recommendation. |
+| `log_recommendation`, `open_recommendations` | `durin/workflow/workflow_recommendations.py` | The per-workflow recommendation queue (manual mode). |
 
 ## 6. Configuration & surfaces
 
@@ -143,16 +147,28 @@ End-to-end for a single `run_workflow` call:
   its prompt) and `mcps` (a subset of the configured MCP servers, reused live).
 - **Lineage:** node sessions reuse the lineage metadata on the open session document
   (`durin/session/lineage.py`), so no schema migration is involved.
+- **Self-improvement** (per-workflow `improvement_mode`: `off` default / `manual` /
+  `auto`). Each run writes a diagnostic record (`run_log.py`, beside `workflows/`). A
+  dream pass (`run_workflow_improve_pass`, wired into the `memory_dream` cron) reduces
+  those to recurring trouble (a node that loops, a gate that keeps failing —
+  `diagnostics.py`), shows a model the definition + that diagnostic + the change history
+  (so it never re-proposes a reverted edit), and proposes one scoped edit (a node
+  `prompt` or a gate `criteria`; structural edits rejected). In **manual** mode the
+  proposal is recorded as a recommendation (`workflow_recommendations.py`) for the user
+  to apply — the anti-Goodhart anchor is the human. **auto** mode (apply directly, gated
+  by an external validation signal so it can't win by loosening gates) is the next slice;
+  the seam is in place.
 - **Current scope.** This subsystem is built incrementally. Today: sequential execution
   with **concurrent parallel** branches — read-only, or **writing** with `choose` /
   `union` reconciliation (private copy per branch + content-aware conflict detection);
   per-node model / context / tools / **skills** / **MCP servers**; decision conditions
   by **shell command or agent judgment** (with feedback-threaded loop-back);
   **sub-workflow** composition (depth-capped); runs **anchored to the invoking
-  session**; and **git-versioned definitions** (each run snapshots them). Not yet built
-  — see [roadmap.md](../roadmap.md) for direction — auto-merge of conflicting parallel
-  writes, per-node custom persona, a visual editor, and dream-driven self-improvement of
-  workflows.
+  session**; **git-versioned definitions** (each run snapshots them); and **dream-driven
+  self-improvement in manual mode** (recommendations from recurring run diagnostics). Not
+  yet built — see [roadmap.md](../roadmap.md) for direction — auto-mode self-improvement
+  (apply + validation anchor), auto-merge of conflicting parallel writes, per-node custom
+  persona, and a visual editor.
 - **Security.** Definitions are local files the user authored, so running their
   commands and tools is equivalent to the user running them directly; importing remote
   or third-party definitions is not supported in this scope (see [security.md](security.md)).

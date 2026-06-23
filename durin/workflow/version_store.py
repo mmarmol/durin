@@ -64,3 +64,47 @@ class WorkflowVersionStore:
         except Exception:  # noqa: BLE001
             logger.exception("workflow version history failed for {}", self.dir)
             return []
+
+    def commit_edit(self, name: str, reason: str, *, actor: str = "dream") -> str | None:
+        """Commit the current ``<name>.json`` with a ``Reason`` trailer (the rationale
+        for an edit) and an ``Actor`` trailer. This is what an applied dream edit uses,
+        so the change history records *why* — and the git-history guard reads it back to
+        avoid re-proposing reverted edits. Best-effort, locked, never raises."""
+        try:
+            with cross_process_lock(self._lock):
+                if not self._repo.is_initialized():
+                    self._repo.init()
+                try:
+                    return self._repo.commit(
+                        subject=f"workflow({name}): edit",
+                        trailers={"Reason": reason, "Actor": actor},
+                        paths=[self.dir / f"{name}.json"],
+                    )
+                except NothingToCommitError:
+                    return None
+        except Exception:  # noqa: BLE001
+            logger.exception("workflow edit commit failed for {}", name)
+            return None
+
+
+def history_for_dream(workspace, name: str, *, limit: int = 10) -> list[dict]:
+    """Shape a workflow's change history for a dream proposal pass: newest-first, each
+    entry the commit's reason plus the diff vs the previous version. Lets dream see
+    what was already tried (and reverted) so it doesn't re-propose it."""
+    from durin.workflow.loader import workflows_dir
+
+    store = WorkflowVersionStore(workflows_dir(workspace))
+    commits = store.history(name, limit=limit)
+    path = workflows_dir(workspace) / f"{name}.json"
+    out: list[dict] = []
+    for i, c in enumerate(commits):
+        raw = c.trailers.get("Reason") if c.trailers else None
+        reason = (raw[0] if isinstance(raw, list) and raw else raw) or "—"
+        diff = ""
+        if i + 1 < len(commits):
+            try:
+                diff = store._repo.diff(from_sha=commits[i + 1].sha, to_sha=c.sha, path=path)
+            except Exception:  # noqa: BLE001
+                diff = ""
+        out.append({"sha": c.sha[:8], "subject": c.subject, "reason": reason, "diff": diff})
+    return out

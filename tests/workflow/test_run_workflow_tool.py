@@ -62,6 +62,29 @@ async def test_runs_command_only_workflow_end_to_end(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_writes_a_diagnostic_record(tmp_path):
+    # Each run persists a per-run record (the dream self-improvement diagnostic source).
+    _write_workflow(tmp_path, "checker", {
+        "name": "checker", "start": "gate",
+        "nodes": [{"id": "gate", "kind": "decision", "command": "true",
+                   "on_pass": None, "on_fail": None}],
+    })
+    tool = _tool(tmp_path)
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "test-model"
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider):
+        await tool.execute(name="checker", task="check it")
+    from durin.workflow import run_log
+    recs = run_log.read_runs_since(tmp_path, "checker")
+    assert len(recs) == 1
+    assert recs[0]["status"] == "completed"
+    assert any(r["node_id"] == "gate" for r in recs[0]["runs"])
+    # the record lives under workflows-runs/, not in the versioned workflows/ dir
+    assert (tmp_path / "workflows-runs" / "checker").is_dir()
+    assert [p.name for p in workflows_dir(tmp_path).glob("*.json")] == ["checker.json"]
+
+
+@pytest.mark.asyncio
 async def test_work_node_runs_through_to_thread_boundary(tmp_path):
     # A work node forces the node runner's inner asyncio.run to execute; it must
     # run inside the asyncio.to_thread worker (no active loop there) to be valid.
