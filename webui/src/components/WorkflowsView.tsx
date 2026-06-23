@@ -9,13 +9,23 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Loader2, Plus, Trash2, Workflow as WorkflowIcon } from "lucide-react";
+import { Lightbulb, Loader2, Play, Plus, Trash2, Workflow as WorkflowIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { ApiError, getWorkflow, listWorkflows, saveWorkflow } from "@/lib/api";
+import {
+  ApiError,
+  applyWorkflowRecommendation,
+  getWorkflow,
+  getWorkflowRecommendations,
+  listWorkflows,
+  runWorkflow,
+  saveWorkflow,
+  type WorkflowRecommendation,
+  type WorkflowRunResult,
+} from "@/lib/api";
 import {
   workflowToFlow,
   type FlowNodeData,
@@ -235,6 +245,10 @@ export function WorkflowsView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [recs, setRecs] = useState<WorkflowRecommendation[]>([]);
+  const [task, setTask] = useState("");
+  const [running, setRunning] = useState(false);
+  const [runResult, setRunResult] = useState<WorkflowRunResult | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -361,6 +375,44 @@ export function WorkflowsView() {
     }
   }, [selected, def, token, t]);
 
+  useEffect(() => {
+    setRunResult(null);
+    if (!selected) {
+      setRecs([]);
+      return;
+    }
+    getWorkflowRecommendations(token, selected).then(setRecs).catch(() => setRecs([]));
+  }, [selected, token]);
+
+  const onRun = useCallback(async () => {
+    if (!selected || !task.trim()) return;
+    setRunning(true);
+    setError(null);
+    setRunResult(null);
+    try {
+      setRunResult(await runWorkflow(token, selected, task));
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setRunning(false);
+    }
+  }, [selected, task, token]);
+
+  const onApplyRec = useCallback(
+    async (id: string) => {
+      if (!selected) return;
+      try {
+        await applyWorkflowRecommendation(token, selected, id);
+        setDef((await getWorkflow(token, selected)) as unknown as WorkflowDef);
+        setRecs(await getWorkflowRecommendations(token, selected));
+        setNotice(t("workflows.recApplied"));
+      } catch (e) {
+        setError(errMsg(e));
+      }
+    },
+    [selected, token, t],
+  );
+
   const nodeIds = def?.nodes.map((n) => n.id) ?? [];
   const selectedNode = def?.nodes.find((n) => n.id === selectedNodeId) ?? null;
 
@@ -391,45 +443,109 @@ export function WorkflowsView() {
       </aside>
 
       <div className="flex h-full flex-1">
-        <div className="relative h-full flex-1">
-          {def && (
-            <div className="absolute left-2 top-2 z-10 flex items-center gap-2">
-              <Button size="sm" variant="outline" onClick={() => addNode("work")}>
-                <Plus className="h-3.5 w-3.5" /> work
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => addNode("decision")}>
-                <Plus className="h-3.5 w-3.5" /> decision
-              </Button>
-              {dirty && (
-                <Button size="sm" onClick={onSave} disabled={saving}>
-                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("workflows.save")}
-                </Button>
-              )}
-              {notice && <span className="text-sm text-emerald-600">{notice}</span>}
-              {error && <span className="text-sm text-destructive">{error}</span>}
+        <div className="flex h-full flex-1 flex-col">
+          {recs.length > 0 && (
+            <div className="flex flex-col gap-1 border-b bg-amber-500/10 px-3 py-2">
+              {recs.map((r) => (
+                <div key={r.id} className="flex items-center gap-2 text-sm">
+                  <Lightbulb className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+                  <span className="flex-1 text-amber-700 dark:text-amber-300">
+                    <span className="font-medium">{r.target_id}.{r.field}</span> — {r.reason}
+                  </span>
+                  <Button size="sm" variant="outline" onClick={() => onApplyRec(r.id)}>
+                    apply
+                  </Button>
+                </div>
+              ))}
             </div>
           )}
-          {def ? (
-            <ReactFlow
-              nodes={flow.nodes}
-              edges={flow.edges}
-              nodeTypes={nodeTypes}
-              fitView
-              nodesDraggable={false}
-              onConnect={onConnect}
-              onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-              onPaneClick={() => setSelectedNodeId(null)}
-              proOptions={{ hideAttribution: true }}
-            >
-              <Background />
-              <Controls showInteractive={false} />
-            </ReactFlow>
-          ) : (
-            !loading && (
-              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                {t("workflows.selectPrompt")}
+          <div className="relative flex-1">
+            {def && (
+              <div className="absolute left-2 top-2 z-10 flex items-center gap-2">
+                <Button size="sm" variant="outline" onClick={() => addNode("work")}>
+                  <Plus className="h-3.5 w-3.5" /> work
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => addNode("decision")}>
+                  <Plus className="h-3.5 w-3.5" /> decision
+                </Button>
+                {dirty && (
+                  <Button size="sm" onClick={onSave} disabled={saving}>
+                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("workflows.save")}
+                  </Button>
+                )}
+                {notice && <span className="text-sm text-emerald-600">{notice}</span>}
+                {error && <span className="text-sm text-destructive">{error}</span>}
               </div>
-            )
+            )}
+            {def ? (
+              <ReactFlow
+                nodes={flow.nodes}
+                edges={flow.edges}
+                nodeTypes={nodeTypes}
+                fitView
+                nodesDraggable={false}
+                onConnect={onConnect}
+                onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+                onPaneClick={() => setSelectedNodeId(null)}
+                proOptions={{ hideAttribution: true }}
+              >
+                <Background />
+                <Controls showInteractive={false} />
+              </ReactFlow>
+            ) : (
+              !loading && (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  {t("workflows.selectPrompt")}
+                </div>
+              )
+            )}
+          </div>
+          {def && (
+            <div className="border-t p-2">
+              <div className="flex items-center gap-2">
+                <Input
+                  value={task}
+                  onChange={(e) => setTask(e.target.value)}
+                  placeholder={t("workflows.taskPlaceholder")}
+                  className="flex-1"
+                />
+                <Button size="sm" onClick={onRun} disabled={running || !task.trim()}>
+                  {running ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Play className="h-3.5 w-3.5" /> {t("workflows.run")}
+                    </>
+                  )}
+                </Button>
+              </div>
+              {runResult && (
+                <div className="mt-2 max-h-48 overflow-y-auto rounded border p-2 text-xs">
+                  <div className="mb-1 font-medium">
+                    {t("workflows.status")}: {runResult.status}
+                  </div>
+                  <div className="mb-1 flex flex-wrap gap-1">
+                    {runResult.runs.map((r, i) => (
+                      <span
+                        key={i}
+                        className={cn(
+                          "rounded px-1.5 py-0.5",
+                          r.passed === false
+                            ? "bg-destructive/10 text-destructive"
+                            : "bg-muted",
+                        )}
+                      >
+                        {r.node_id}#{r.iteration}
+                        {r.passed === true ? " ✓" : r.passed === false ? " ✗" : ""}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="whitespace-pre-wrap text-muted-foreground">
+                    {runResult.final_output}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
 

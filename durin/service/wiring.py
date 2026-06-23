@@ -72,5 +72,6 @@ def build_service_registry(
     registry.register("commands", CommandsService())
     registry.register("oauth", OAuthService())
     registry.register("auth", AuthService(ApiTokenStore()))
-    registry.register("workflows", WorkflowsService(workspace=_workspace()))
+    registry.register("workflows", WorkflowsService(
+        workspace=_workspace(), app_config=config, sessions=session_manager))
     return registry

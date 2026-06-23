@@ -702,7 +702,11 @@
     "selectPrompt": "Select a workflow to view its graph.",
     "save": "Save",
     "saved": "Saved.",
-    "unsaved": "Unsaved changes"
+    "unsaved": "Unsaved changes",
+    "run": "Run",
+    "status": "Status",
+    "taskPlaceholder": "Task to run through this workflow…",
+    "recApplied": "Recommendation applied."
   },
   "skills": {
     "view": "View",

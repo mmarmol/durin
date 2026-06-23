@@ -1313,6 +1313,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/{name}/recommendations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a workflow's open self-improvement recommendations. */
+        get: operations["workflows_recommendations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{name}/recommendations/{id}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply a recommendation (writes its proposed edit into the workflow). */
+        post: operations["workflows_apply_recommendation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{name}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run a workflow on a task (no live MCP — that path is the agent's). */
+        post: operations["workflows_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3102,6 +3153,53 @@ export interface components {
             };
             /** Name */
             name: string;
+        };
+        /** WorkflowRecApplyCommand */
+        WorkflowRecApplyCommand: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
+        /** WorkflowRecApplyResult */
+        WorkflowRecApplyResult: {
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /** Ok */
+            ok: boolean;
+        };
+        /** WorkflowRecsQuery */
+        WorkflowRecsQuery: {
+            /** Name */
+            name: string;
+        };
+        /** WorkflowRecsResult */
+        WorkflowRecsResult: {
+            /** Recommendations */
+            recommendations: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** WorkflowRunCommand */
+        WorkflowRunCommand: {
+            /** Name */
+            name: string;
+            /** Task */
+            task: string;
+        };
+        /** WorkflowRunResult */
+        WorkflowRunResult: {
+            /** Final Output */
+            final_output: string;
+            /** Runs */
+            runs: {
+                [key: string]: unknown;
+            }[];
+            /** Status */
+            status: string;
         };
         /** WorkflowSaveCommand */
         WorkflowSaveCommand: {
@@ -5364,6 +5462,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowDeleteResult"];
+                };
+            };
+        };
+    };
+    workflows_recommendations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowRecsQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowRecsResult"];
+                };
+            };
+        };
+    };
+    workflows_apply_recommendation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowRecApplyCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowRecApplyResult"];
+                };
+            };
+        };
+    };
+    workflows_run: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowRunCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowRunResult"];
                 };
             };
         };

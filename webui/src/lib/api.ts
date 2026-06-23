@@ -242,6 +242,59 @@ export async function deleteWorkflow(
   );
 }
 
+export type WorkflowRunResult = {
+  status: string;
+  final_output: string;
+  runs: Array<{ node_id: string; iteration: number; passed: boolean | null; output: string }>;
+};
+
+export async function runWorkflow(
+  token: string,
+  name: string,
+  task: string,
+  base: string = "",
+): Promise<WorkflowRunResult> {
+  return post<WorkflowRunResult>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}/run`,
+    token,
+    { task },
+  );
+}
+
+export type WorkflowRecommendation = {
+  id: string;
+  target_id: string;
+  field: string;
+  current: string;
+  proposed: string;
+  reason: string;
+};
+
+export async function getWorkflowRecommendations(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<WorkflowRecommendation[]> {
+  const body = await request<{ recommendations: WorkflowRecommendation[] }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}/recommendations`,
+    token,
+  );
+  return body.recommendations;
+}
+
+export async function applyWorkflowRecommendation(
+  token: string,
+  name: string,
+  id: string,
+  base: string = "",
+): Promise<{ ok: boolean; detail: string }> {
+  return post<{ ok: boolean; detail: string }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}/recommendations/${encodeURIComponent(id)}/apply`,
+    token,
+    {},
+  );
+}
+
 export async function listSlashCommands(
   token: string,
   base: string = "",
