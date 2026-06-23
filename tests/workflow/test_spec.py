@@ -105,3 +105,21 @@ def test_invalid_tools_raises():
     with pytest.raises(WorkflowError, match="tools"):
         parse_workflow({"name": "d", "start": "a",
                         "nodes": [{"id": "a", "kind": "work", "tools": "everything"}]})
+
+
+def test_zero_max_visits_raises():
+    with pytest.raises(WorkflowError, match="max_visits"):
+        parse_workflow({"name": "d", "start": "a", "max_visits": 0,
+                        "nodes": [{"id": "a", "kind": "work"}]})
+
+
+def test_non_int_max_visits_raises():
+    with pytest.raises(WorkflowError, match="max_visits"):
+        parse_workflow({"name": "d", "start": "a", "max_visits": "lots",
+                        "nodes": [{"id": "a", "kind": "work"}]})
+
+
+def test_non_string_model_raises():
+    with pytest.raises(WorkflowError, match="model"):
+        parse_workflow({"name": "d", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "model": 123}]})

@@ -70,9 +70,14 @@ def _build_node(raw: dict[str, Any]) -> Node:
             raise WorkflowError(
                 f"node {node_id!r}: tools must be 'none' or 'default', got {tools!r}"
             )
+        model = raw.get("model")
+        if model is not None and not isinstance(model, str):
+            raise WorkflowError(
+                f"node {node_id!r}: model must be a string or omitted, got {model!r}"
+            )
         return WorkNode(
             id=node_id,
-            model=raw.get("model"),
+            model=model,
             context=context,
             prompt=raw.get("prompt", ""),
             next=raw.get("next"),
@@ -126,4 +131,6 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
                 )
 
     max_visits = data.get("max_visits", 3)
+    if isinstance(max_visits, bool) or not isinstance(max_visits, int) or max_visits < 1:
+        raise WorkflowError(f"max_visits must be an int >= 1, got {max_visits!r}")
     return Workflow(name=name, start=start, nodes=nodes, max_visits=max_visits)
