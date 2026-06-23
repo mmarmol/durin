@@ -197,6 +197,7 @@ export class DurinClient {
 
   private voiceStateHandlers = new Set<(chatId: string, state: string) => void>();
   private voiceAudioHandlers = new Set<(chatId: string, url: string, mime: string) => void>();
+  private voicePreviewHandlers = new Set<(url: string | null, error?: string) => void>();
 
   onVoiceState(handler: (chatId: string, state: string) => void): Unsubscribe {
     this.voiceStateHandlers.add(handler);
@@ -205,6 +206,10 @@ export class DurinClient {
   onVoiceAudio(handler: (chatId: string, url: string, mime: string) => void): Unsubscribe {
     this.voiceAudioHandlers.add(handler);
     return () => this.voiceAudioHandlers.delete(handler);
+  }
+  onVoicePreviewAudio(handler: (url: string | null, error?: string) => void): Unsubscribe {
+    this.voicePreviewHandlers.add(handler);
+    return () => this.voicePreviewHandlers.delete(handler);
   }
 
   onSessionUpdate(handler: SessionUpdateHandler): Unsubscribe {
@@ -350,6 +355,9 @@ export class DurinClient {
   }
   sendVoiceBargeIn(chatId: string): void { this.queueSend({ type: "voice_barge_in", chat_id: chatId, webui: true }); }
   sendVoiceReadAll(chatId: string, text: string): void { this.queueSend({ type: "voice_read_all", chat_id: chatId, text, webui: true }); }
+  sendVoicePreview(voice: string | null, language: string | null): void {
+    this.queueSend({ type: "voice_preview", voice, language, webui: true });
+  }
 
   /**
    * Ask the server to transcribe one audio attachment (spec §5.4).
@@ -530,6 +538,10 @@ export class DurinClient {
     }
     if (parsed.event === "voice_audio") {
       for (const h of this.voiceAudioHandlers) h(parsed.chat_id, parsed.url, parsed.mime);
+      return;
+    }
+    if (parsed.event === "voice_preview_audio") {
+      for (const h of this.voicePreviewHandlers) h(parsed.url ?? null, parsed.error);
       return;
     }
 

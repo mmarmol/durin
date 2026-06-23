@@ -51,4 +51,23 @@ describe("DurinClient voice", () => {
     expect(states).toEqual([["c1", "listening"]]);
     expect(audios).toEqual([["c1", "/api/media/x"]]);
   });
+
+  it("sends a voice_preview frame with voice + language", () => {
+    const c = makeClient();
+    c.sendVoicePreview("F4", "es");
+    const f = JSON.parse(last().sent.at(-1)!);
+    expect(f).toEqual({ type: "voice_preview", voice: "F4", language: "es", webui: true });
+  });
+
+  it("routes voice_preview_audio (url + error) to global handlers", () => {
+    const c = makeClient();
+    const events: Array<[string | null, string | undefined]> = [];
+    c.onVoicePreviewAudio((url, error) => events.push([url, error]));
+    last().fakeMessage({ event: "voice_preview_audio", url: "/api/media/p", mime: "audio/wav" });
+    last().fakeMessage({ event: "voice_preview_audio", error: "tts_unavailable" });
+    expect(events).toEqual([
+      ["/api/media/p", undefined],
+      [null, "tts_unavailable"],
+    ]);
+  });
 });
