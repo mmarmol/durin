@@ -1251,9 +1251,11 @@ class AgentLoop:
         active or the persona's slug has no/empty body → caller falls back to
         the default SOUL). ``model_ref`` is the persona's model picker ref
         (``None`` → caller uses the global default / explicit per-turn override).
-        Precedence (cron > session metadata > global default) is handled by
-        ``resolve_active_persona_name``; here ``persona_override`` carries the
-        per-job (cron) name.
+
+        ``persona_override`` is reserved for a future cron-job persona; it is
+        correct forward plumbing but no caller passes it yet. Today the
+        effective precedence is per-conversation (session.metadata["persona"])
+        > global default (agents.defaults.persona).
         """
         from durin.personas.resolve import resolve_active_persona_name
 

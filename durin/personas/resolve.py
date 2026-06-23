@@ -1,5 +1,10 @@
-"""Resolve the active persona NAME for a turn by precedence:
-per-job (cron) > per-conversation (session metadata) > global default."""
+"""Resolve the active persona NAME for a turn.
+
+Effective precedence today: per-conversation (session.metadata["persona"]) >
+global default (agents.defaults.persona).
+
+``cron_persona`` is reserved for a future cron-job persona; it is correct
+forward plumbing but no caller passes it yet, so the cron arm cannot fire."""
 from __future__ import annotations
 
 from typing import Any, Mapping

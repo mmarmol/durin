@@ -1191,10 +1191,7 @@ class Config(BaseSettings):
         default_factory=dict,
         validation_alias=AliasChoices("modelPresets", "model_presets"),
     )
-    personas: dict[str, PersonaConfig] = Field(
-        default_factory=dict,
-        validation_alias=AliasChoices("personas"),
-    )
+    personas: dict[str, PersonaConfig] = Field(default_factory=dict)
     # Per-model capability overrides — keyed by either the bare model
     # name (``glm-5-turbo``) or the provider-qualified form
     # (``custom/glm-5-turbo``). Provider-qualified keys win over bare
