@@ -58,3 +58,32 @@ def test_delete_invalid_slug_rejected(tmp_path):
     svc = _svc(tmp_path)
     with pytest.raises(ValidationFailedError):
         asyncio.run(svc.delete_soul(SoulDeleteCommand(slug="../evil"), _principal()))
+
+
+def test_delete_soul_in_use_blocked(tmp_path, monkeypatch):
+    from durin.service.personas import PersonaUpsertCommand
+    from durin.service.types import ConflictError
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    svc = _svc(tmp_path)
+    svc._store().write("vibes", "# Soul\nx")
+    asyncio.run(svc.upsert_persona(PersonaUpsertCommand(name="p1", soul="vibes"), _principal()))
+    with pytest.raises(ConflictError):
+        asyncio.run(svc.delete_soul(SoulDeleteCommand(slug="vibes"), _principal()))
+
+
+def test_delete_soul_in_use_by_builtin_blocked(tmp_path, monkeypatch):
+    from durin.service.types import ConflictError
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    svc = _svc(tmp_path)
+    svc._store().write("researcher", "# Soul\nx")
+    with pytest.raises(ConflictError):
+        asyncio.run(svc.delete_soul(SoulDeleteCommand(slug="researcher"), _principal()))
+
+
+def test_delete_unused_soul_still_works(tmp_path, monkeypatch):
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    svc = _svc(tmp_path)
+    svc._store().write("unused", "# Soul\nx")
+    asyncio.run(svc.delete_soul(SoulDeleteCommand(slug="unused"), _principal()))
+    res = asyncio.run(svc.list_souls(SoulListQuery(), _principal()))
+    assert "unused" not in {s.slug for s in res.souls}

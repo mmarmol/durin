@@ -186,6 +186,17 @@ class PersonasService:
     )
     async def delete_soul(self, cmd: SoulDeleteCommand, principal: Principal) -> SoulDeleteResult:
         principal.require(Scope.CONFIG_WRITE)
+        from durin.service.types import ConflictError
+        cfg = load_config(get_config_path())
+        in_use = sorted(
+            {n for n, p in cfg.personas.items() if p.soul == cmd.slug}
+            | {n for n, p in BUILTIN_PERSONAS.items() if p.soul == cmd.slug and n not in cfg.personas}
+        )
+        if in_use:
+            raise ConflictError(
+                f"soul {cmd.slug!r} is in use by personas: {', '.join(in_use)}",
+                details={"personas": in_use},
+            )
         store = self._store()
         try:
             store.delete(cmd.slug)
