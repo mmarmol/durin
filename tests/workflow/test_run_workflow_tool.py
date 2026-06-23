@@ -81,3 +81,29 @@ async def test_work_node_runs_through_to_thread_boundary(tmp_path):
         out = await tool.execute(name="doer", task="do it")
     assert "completed" in out.lower()
     assert "did the work" in out
+
+
+@pytest.mark.asyncio
+async def test_judgment_workflow_runs_end_to_end(tmp_path):
+    from durin.agent.runner import AgentRunResult
+    _write_workflow(tmp_path, "reviewed", {
+        "name": "reviewed", "start": "make",
+        "nodes": [
+            {"id": "make", "kind": "work", "next": "review"},
+            {"id": "review", "kind": "decision", "criteria": "Is it good?",
+             "on_pass": None, "on_fail": "make"},
+        ],
+    })
+    tool = _tool(tmp_path)
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "test-model"
+    # work node returns work; judge returns PASS — both via AgentRunner.run
+    results = iter([
+        AgentRunResult(final_content="the code", messages=[{"role": "assistant", "content": "the code"}]),
+        AgentRunResult(final_content="PASS good", messages=[]),
+    ])
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.agent.runner.AgentRunner.run", AsyncMock(side_effect=lambda *a, **k: next(results))):
+        out = await tool.execute(name="reviewed", task="do it")
+    assert "completed" in out.lower()
+    assert "review" in out
