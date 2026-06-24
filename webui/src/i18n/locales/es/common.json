@@ -1305,6 +1305,8 @@
     "title": "Dream",
     "lastRun": "última ejecución {{time}}",
     "runNow": "Correr ahora",
+    "running": "Ejecutando…",
+    "runError": "No se pudo iniciar el dream.",
     "loading": "Cargando…",
     "empty": "Aún no hay actividad de dream.",
     "view": "Ver",

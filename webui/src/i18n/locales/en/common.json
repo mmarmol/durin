@@ -1387,6 +1387,8 @@
     "title": "Dream",
     "lastRun": "last run {{time}}",
     "runNow": "Run now",
+    "running": "Running…",
+    "runError": "Failed to start dream run.",
     "loading": "Loading…",
     "empty": "No dream activity yet.",
     "view": "View",

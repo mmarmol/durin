@@ -14,6 +14,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     fetchDreamDigest: vi.fn(),
     fetchMemoryEntity: vi.fn(),
     describeSkill: vi.fn(),
+    runCronJob: vi.fn(),
   };
 });
 
@@ -32,6 +33,7 @@ beforeEach(() => {
   vi.mocked(api.fetchDreamDigest).mockReset();
   vi.mocked(api.fetchMemoryEntity).mockReset();
   vi.mocked(api.describeSkill).mockReset();
+  vi.mocked(api.runCronJob).mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -240,5 +242,55 @@ describe("DreamView", () => {
     // The View button is disabled when ref is null.
     const viewBtn = screen.getByRole("button", { name: "View" });
     expect(viewBtn).toBeDisabled();
+  });
+
+  it("Run now calls runCronJob with memory_dream and refreshes the digest", async () => {
+    const user = userEvent.setup();
+    const now = Date.now();
+
+    vi.mocked(api.fetchDreamDigest)
+      .mockResolvedValueOnce({ last_run_at_ms: null, events: [] })
+      .mockResolvedValueOnce({
+        last_run_at_ms: now,
+        events: [
+          { at_ms: now, kind: "merged", ref: null, ref_kind: null, summary: "New dream event" },
+        ],
+      });
+    vi.mocked(api.runCronJob).mockResolvedValue({ started: true });
+
+    render(wrap(<DreamView />));
+
+    // Wait for the initial load to finish.
+    expect(await screen.findByText("No dream activity yet.")).toBeInTheDocument();
+
+    const runBtn = screen.getByRole("button", { name: "Run now" });
+    await user.click(runBtn);
+
+    await waitFor(() => {
+      expect(api.runCronJob).toHaveBeenCalledWith("tok", "memory_dream");
+    });
+
+    // After runCronJob succeeds, the digest is refetched and the new event appears.
+    await waitFor(() => {
+      expect(api.fetchDreamDigest).toHaveBeenCalledTimes(2);
+    });
+    expect(await screen.findByText("New dream event")).toBeInTheDocument();
+  });
+
+  it("Run now shows an error message when runCronJob fails", async () => {
+    const user = userEvent.setup();
+
+    vi.mocked(api.fetchDreamDigest).mockResolvedValue({ last_run_at_ms: null, events: [] });
+    vi.mocked(api.runCronJob).mockRejectedValue(new Error("HTTP 503"));
+
+    render(wrap(<DreamView />));
+
+    expect(await screen.findByText("No dream activity yet.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Run now" }));
+
+    expect(await screen.findByText("Failed to start dream run.")).toBeInTheDocument();
+    // Button re-enabled after failure.
+    expect(screen.getByRole("button", { name: "Run now" })).not.toBeDisabled();
   });
 });

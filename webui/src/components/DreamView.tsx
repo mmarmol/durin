@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { DreamDrawer, type DrawerTarget } from "@/components/DreamDrawer";
-import { fetchDreamDigest, type DreamDigest, type DreamEvent } from "@/lib/api";
+import { fetchDreamDigest, runCronJob, type DreamDigest, type DreamEvent } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
 
 function relativeTime(ms: number): string {
@@ -100,6 +100,8 @@ export function DreamView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [drawerTarget, setDrawerTarget] = useState<DrawerTarget | null>(null);
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -122,6 +124,20 @@ export function DreamView() {
 
   const handleClose = useCallback(() => setDrawerTarget(null), []);
 
+  const handleRunNow = useCallback(async () => {
+    setRunning(true);
+    setRunError(null);
+    try {
+      await runCronJob(token, "memory_dream");
+      const d = await fetchDreamDigest(token);
+      setDigest(d);
+    } catch {
+      setRunError(t("dream.runError"));
+    } finally {
+      setRunning(false);
+    }
+  }, [token, t]);
+
   const lastRun = digest?.last_run_at_ms
     ? relativeTime(digest.last_run_at_ms)
     : null;
@@ -141,11 +157,15 @@ export function DreamView() {
           type="button"
           size="sm"
           variant="outline"
-          disabled
+          disabled={running}
           className="ml-auto"
+          onClick={() => void handleRunNow()}
         >
-          {t("dream.runNow")}
+          {running ? t("dream.running") : t("dream.runNow")}
         </Button>
+        {runError ? (
+          <span className="ml-2 text-xs text-destructive">{runError}</span>
+        ) : null}
       </header>
 
       {loading ? (
