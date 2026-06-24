@@ -7,10 +7,13 @@ title: "Memory: Agent Tools"
 ## Purpose
 
 This document specifies the tool API surface that the agent LLM sees for memory
-operations. Five tools are live: `memory_search`, `memory_upsert_entity`,
-`memory_ingest`, `memory_drill`, and `memory_forget`. A sixth class,
-`memory_store`, is compiled into the codebase but disabled at load time — it is
-documented here for completeness.
+operations. Five core tools are live: `memory_search`, `memory_upsert_entity`,
+`memory_ingest`, `memory_drill`, and `memory_forget`. Three additional
+**read-only inspection tools** — `memory_read_entity`, `memory_entity_lineage`,
+and `memory_source_session` — are registered in the same auto-discovery path and
+available to the main agent as well as to the Dream Tier 2 sub-agent. A seventh
+class, `memory_store`, is compiled into the codebase but disabled at load time —
+it is documented here for completeness.
 
 These are the **only** memory-related tools the agent can invoke. Everything
 beyond this boundary — index internals, RRF coefficients, cross-encoder weights,
@@ -20,12 +23,15 @@ LanceDB schema — is invisible to the LLM.
 
 ## Mental model
 
-**Read tool + write tools + delete tool.** `memory_search` is the single read
-surface. The two write tools split by target: `memory_upsert_entity` for facts
-about a *thing* (a person, company, product, topic, place), `memory_ingest` for
-whole documents. `memory_drill` fetches a full body by URI when the search
-result was truncated. `memory_forget` archives an entry and drops its index
-rows — the only correct in-band deletion path.
+**Read tool + write tools + delete tool + inspection tools.** `memory_search` is
+the primary read surface. The two write tools split by target:
+`memory_upsert_entity` for facts about a *thing* (a person, company, product,
+topic, place), `memory_ingest` for whole documents. `memory_drill` fetches a
+full body by URI when the search result was truncated. `memory_forget` archives
+an entry and drops its index rows — the only correct in-band deletion path. The
+three inspection tools (`memory_read_entity`, `memory_entity_lineage`,
+`memory_source_session`) are general read-only capabilities for examining entity
+pages and their provenance; they never modify state.
 
 **Routing is internal.** The agent passes a plain `query` string to
 `memory_search`; the tool routes internally through vector + lexical search,
@@ -50,6 +56,9 @@ flowchart TD
     LLM -->|memory_ingest| MI[MemoryIngestTool\ndurin/agent/tools/memory_ingest.py]
     LLM -->|memory_drill| MD[MemoryDrillTool\ndurin/agent/tools/memory_drill.py]
     LLM -->|memory_forget| MF[MemoryForgetTool\ndurin/agent/tools/memory_forget.py]
+    LLM -->|memory_read_entity| MRE[MemoryReadEntityTool\ndurin/agent/tools/memory_lineage_tools.py]
+    LLM -->|memory_entity_lineage| MEL[MemoryEntityLineageTool\ndurin/agent/tools/memory_lineage_tools.py]
+    LLM -->|memory_source_session| MSS[MemorySourceSessionTool\ndurin/agent/tools/memory_lineage_tools.py]
 
     MS -->|run_search_pipeline| SP[Search pipeline\nvector + lexical + RRF\n+ entity-aware + cross-encoder]
     SP -->|SectionedHit list| SR[render_sectioned\nsectioned_output.py]
@@ -66,6 +75,10 @@ flowchart TD
 
     MF -->|forget_entry| FE[durin/memory/forget.py]
     FE -->|move + index drop| ARC["memory/archive/<class>/<id>.md"]
+
+    MRE -->|EntityPage.to_markdown| ENT
+    MEL -->|dulwich git walker| ENT
+    MSS -->|load_session + provenance refs| SESS["sessions/*.jsonl"]
 
     LOADER([ToolLoader\nloader.py])
     LOADER -->|enabled check\nmemory_store.enabled = False| SKIP[MemoryStoreTool\nNOT registered]
@@ -286,6 +299,87 @@ and calling `reindex_one_file`.
 {"uri": "memory/episodic/abc123", "archived_to": "memory/archive/episodic/abc123.md", "status": "forgotten"}
 ```
 
+### `memory_read_entity`
+
+**File:** `durin/agent/tools/memory_lineage_tools.py`
+
+Reads the **full page** of a single entity — frontmatter, attributes, relations,
+provenance map, and body — serialized via `EntityPage.to_markdown()`. This is a
+deeper view than a `memory_search` result: search results can be truncated and
+do not include raw provenance. Use `memory_read_entity` when you need the
+complete current state of a known entity.
+
+This tool is registered in the auto-discovery path and is available to the main
+agent as well as to internal sub-agents (e.g. the Dream Tier 2 judge).
+
+**Parameters:** `ref` (required) — entity ref in `<type>:<slug>` form (e.g. `person:marcelo`).
+
+**Return:**
+
+```json
+{"ref": "place:torrent", "markdown": "---\ntype: place\nname: Torrent\n…"}
+```
+
+Returns `{"error": "no entity <ref>"}` when the ref does not exist.
+
+### `memory_entity_lineage`
+
+**File:** `durin/agent/tools/memory_lineage_tools.py`
+
+Returns the **git commit history** of an entity page — up to 20 commits, each
+with short SHA, ISO timestamp, author identity, and the full commit message
+(including RFC822 trailers from absorb merges: `Absorbed:`, `Into:`, `Reason:`,
+`Judge-Confidence:`). This lets the agent answer questions like: is this a newly
+minted entity or a long-standing one? Has it ever been merged from another page?
+Who last modified it and why?
+
+**Parameters:** `ref` (required) — entity ref in `<type>:<slug>` form.
+
+**Return:**
+
+```json
+{
+  "ref": "place:torrent",
+  "commits": [
+    {"sha": "a3f9c0112b", "when": "2026-06-24T03:01:00+00:00",
+     "author": "durin-dream <dream@durin.local>",
+     "message": "absorb place:torrent-valencia into place:torrent\n\nAbsorbed: place:torrent-valencia\n…"}
+  ]
+}
+```
+
+Returns `{"error": "lineage unavailable: …", "commits": []}` when the entity
+page has no git history (e.g. just created and not yet committed).
+
+### `memory_source_session`
+
+**File:** `durin/agent/tools/memory_lineage_tools.py`
+
+Reads the **conversation turns** an entity was distilled from: the session turns
+recorded in each patch's `source_ref` provenance chain plus the `derived_from`
+reference documents. This is the primary surface for understanding *why* the
+entity holds a particular fact — tracing it back to the exact conversation that
+produced it.
+
+**Parameters:** `ref` (required) — entity ref in `<type>:<slug>` form.
+
+**Return:**
+
+```json
+{
+  "ref": "place:torrent",
+  "sources": [
+    {"ref": "[[sessions/abc123.md#turn-5]]", "turn": 5,
+     "content": "Torrent is the city in Valencia where Marcelo grew up…"}
+  ]
+}
+```
+
+Returns an empty `sources` list when no provenance source refs are recorded or
+the referenced session files are no longer present.
+
+---
+
 ### `memory_store` (disabled)
 
 **File:** `durin/agent/tools/memory_store.py`
@@ -310,6 +404,9 @@ future re-enable starts from a correct implementation.
 | `MemoryIngestTool` | `durin/agent/tools/memory_ingest.py` | `memory_ingest` tool. Three-step store: verbatim copy + reference write + FTS/vector index. |
 | `MemoryDrillTool` | `durin/agent/tools/memory_drill.py` | `memory_drill` tool. Single or batch URI read, delegating to `drill()`. `MAX_BATCH_URIS = 10`. |
 | `MemoryForgetTool` | `durin/agent/tools/memory_forget.py` | `memory_forget` tool. Delegates to `forget_entry`; drops FTS + vector rows without loading the embedding model. |
+| `MemoryReadEntityTool` | `durin/agent/tools/memory_lineage_tools.py` | `memory_read_entity` tool. Returns `EntityPage.to_markdown()` for a single ref — complete page, no truncation. |
+| `MemoryEntityLineageTool` | `durin/agent/tools/memory_lineage_tools.py` | `memory_entity_lineage` tool. Walks the dulwich git log for an entity page; returns up to 20 commits with SHA, timestamp, author, message. |
+| `MemorySourceSessionTool` | `durin/agent/tools/memory_lineage_tools.py` | `memory_source_session` tool. Collects `source_ref` / `derived_from` provenance entries from an entity page and reads the matching session turns. |
 | `MemoryStoreTool` | `durin/agent/tools/memory_store.py` | Disabled (`enabled()=False`). Internal `store_memory` function retained for compaction callers. |
 | `ToolLoader` | `durin/agent/tools/loader.py` | Discovers `Tool` subclasses, calls `enabled(ctx)` + `create(ctx)`, registers into `ToolRegistry`. |
 | `run_search_pipeline` | `durin/memory/search_pipeline.py` | Full search pipeline entry point called by `memory_search`. |
@@ -411,6 +508,16 @@ index rows pointing at a missing file. The auto-repair cannot reconstruct them
 (it has no record of what was there). `memory_forget` moves the file to the
 archive and drops the index rows atomically, keeping the indices consistent. The
 archive is reversible; nothing is destroyed.
+
+**Three read-only inspection tools, not just one.** `memory_drill` reads any
+workspace URI by path; the three inspection tools (`memory_read_entity`,
+`memory_entity_lineage`, `memory_source_session`) give named, semantically
+distinct entry points into provenance data that would require non-obvious URI
+construction and git plumbing to access via `memory_drill`. Separate tools let
+the LLM (and the Dream Tier 2 sub-agent) ask a focused question ("what is this
+entity's history?") without knowing the storage layout. They are general-purpose
+and registered in the main auto-discovery path — not Dream-internal — so the
+main agent can use them for any conversation involving entity provenance.
 
 **Tool descriptions are canonical in code, not in docs.** The exact text the LLM
 reads lives in each tool's `_PARAMETERS["description"]` and is delegated to the

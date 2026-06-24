@@ -208,11 +208,11 @@ is a sync wrapper over the async runner so the cron can call it in a thread.
 ### Pass 4 — refine: dedup duplicate entities
 
 `run_refine_pass(workspace, *, llm_invoke, model, enabled, confidence_threshold,
-run_started_at, vector_index=None)` is the graph-hygiene pass, gated by `enabled`
-(wired from `memory.dream.auto_absorb.enabled`, **ON by default**). When disabled
-it short-circuits — **no judge, no merge** — and logs the manual path
-(`durin memory absorb-suggest` to surface, `durin memory absorb` to merge). When
-enabled it delegates to `run_refine` (`durin/memory/refine_dream.py`).
+run_started_at, vector_index=None, escalate_floor=0)` is the graph-hygiene pass,
+gated by `enabled` (wired from `memory.dream.auto_absorb.enabled`, **ON by
+default**). When disabled it short-circuits — **no judge, no merge** — and logs
+the manual path (`durin memory absorb-suggest` to surface, `durin memory absorb`
+to merge). When enabled it delegates to `run_refine` (`durin/memory/refine_dream.py`).
 `vector_index` is built once per run by the cron and CLI callers via
 `dream_vector_index(workspace, cfg)` (`durin/memory/dream_passes.py`) and
 threaded through; it is `None` when the vector index is unavailable.
@@ -227,7 +227,7 @@ threaded through; it is `None` when the vector index is unavailable.
    alias pairs. This catches duplicates that share no alias — same entity,
    different name — and feeds them through the same judge. When the vector index is
    unavailable this step is a no-op.
-2. Each pair is filtered out (with a `memory.absorb.skipped` reason) when:
+3. Each pair is filtered out (with a `memory.absorb.skipped` reason) when:
    `cross_type` (different entity types), `tombstoned` (the user previously
    rejected the merge — recorded in `.refine_tombstones.json`), `load_failed`,
    `user_managed` (either page is `author == "user_authored"`), or `quarantine`
@@ -235,13 +235,31 @@ threaded through; it is `None` when the vector index is unavailable.
    started, checked via `created_at` then `updated_at`; no timestamp = treated
    as old, fail-open) — the run never merges its own fresh output; cross-run
    duplicates converge on the next pass.
-3. For survivors, `judge_pair` (`durin/memory/absorb_judge.py`) renders both
-   pages (file mtime, aliases, identifiers, body — the mtime lets it reason about
-   staleness) and returns a verdict — `same`, `different`, or `unclear` — plus a
-   confidence. The prompt treats alias overlap as *evidence, not proof* and
-   defaults to `different` when content evidence is thin.
-4. The pair is merged only when `verdict == "same"` **and**
-   `confidence >= confidence_threshold`; otherwise it is kept separate.
+4. For survivors, `judge_pair` (`durin/memory/absorb_judge.py`) — the
+   **Tier 1 cheap judge** — renders **the whole entity page** via
+   `page.to_markdown()` (body capped at a configurable char budget; the full
+   frontmatter, attributes, and relations are always included before the cap
+   applies). Rendering the whole page rather than a curated field subset means a
+   new field is visible to the judge by default: the failure mode is an extra line
+   of context, not a silent blind spot. The judge returns `same`, `different`, or
+   `unclear` plus a confidence.
+5. **Tier 2 escalation (opt-in):** when `escalate_floor > 0`, a pair the
+   Tier 1 judge cannot settle — verdict `"unclear"`, or verdict `"same"` with
+   confidence in `[escalate_floor, confidence_threshold)` — is handed to a
+   **bounded sub-agent** (`durin/memory/tier2_judge.py`). The sub-agent
+   (`escalate_judge`) spins up an `AgentRunner` with four read-only tools —
+   `memory_read_entity`, `memory_entity_lineage`, `memory_source_session`, and
+   `memory_search` — and a fixed iteration ceiling. It investigates both entities
+   in depth and returns the same `JudgeResult` envelope as the Tier 1 judge.
+   `escalate_floor=0` (the default) leaves this path disabled; escalation must be
+   opted in explicitly.
+6. The pair is merged only when the deciding judge returns `verdict == "same"`
+   **and** `confidence >= confidence_threshold`. Every other outcome keeps the
+   pair separate.
+7. **Flag surface:** when the Tier 2 sub-agent investigated a pair and did not
+   confirm it as `"same"`, the pair is recorded in `memory/.flagged_pairs.json`.
+   `durin memory absorb-suggest` surfaces these under "Flagged by the agent —
+   needs review" so the operator can inspect and merge or dismiss them manually.
 
 `EntityAbsorption.absorb` does a deterministic structural merge (union of
 aliases / attributes / relations / provenance; canonical wins attribute
@@ -323,7 +341,9 @@ cross-process lock `SessionManager` uses for that session's sidecar.
 | `run_refine_pass` | `durin/memory/dream_passes.py` | Dedup gate: short-circuits when `auto_absorb` is off, else delegates to `run_refine`; accepts `vector_index` built by `dream_vector_index`. |
 | `run_refine` | `durin/memory/refine_dream.py` | Dedup engine: alias-overlap + optional embedding-near candidate recall, filters, judge, merge via absorb; tombstone bookkeeping. |
 | `dream_vector_index` | `durin/memory/dream_passes.py` | Builds a `VectorIndex` (or returns `None` when unavailable) for the refine semantic recall step; called once per run by the cron and CLI callers. |
-| `judge_pair` | `durin/memory/absorb_judge.py` | LLM identity judge: returns `same` / `different` / `unclear` + confidence. |
+| `judge_pair` | `durin/memory/absorb_judge.py` | Tier 1 LLM identity judge: renders the whole entity page via `to_markdown()` (body-capped), returns `same` / `different` / `unclear` + confidence. |
+| `escalate_judge` | `durin/memory/tier2_judge.py` | Tier 2 sub-agent: spins up a bounded `AgentRunner` with 4 read-only tools to investigate a borderline pair; returns the same `JudgeResult` envelope. Opt-in via `escalate_floor > 0`. |
+| `add_flagged` / `read_flagged` | `durin/memory/refine_dream.py` | Write / read the `memory/.flagged_pairs.json` flag store: pairs the Tier 2 agent investigated but did not confirm as same. |
 | `run_always_on_pass` | `durin/memory/always_on_dream.py` | Pinned-guidance curation: rank feedback entities, fit budget, flip `always_on` flags. |
 | `ReactiveDreamGate` | `durin/memory/dream_passes.py` | In-process lock + throttle for the reactive triggers. |
 | `get_extract_cursor` / `set_extract_cursor` | `durin/memory/extract_runner.py` | Read / advance the per-session cursor (top-level key, legacy fallback). |
@@ -355,6 +375,7 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM-judge confidence floor (0–100) for an auto-merge. |
 | `memory.dream.auto_absorb.semantic_distance_threshold` | `0.20` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.90; lower = stricter — the judge still decides the merge. |
+| `memory.dream.auto_absorb.escalate_floor` | `0` | **Opt-in.** Confidence floor (0–100) below which the Tier 1 judge's borderline verdicts escalate to a bounded sub-agent for deeper investigation. `0` (the default) disables Tier 2 entirely. Set to e.g. `60` to escalate pairs the cheap judge rated same at 60–94 confidence or returned `unclear`. |
 
 The model every pass uses is resolved by
 `resolve_memory_model(config)` (`durin/memory/model_resolve.py`):

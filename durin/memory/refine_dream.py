@@ -24,10 +24,15 @@ from durin.memory.entity_page import EntityPage
 from durin.memory.llm_invoke import default_llm_invoke
 from durin.utils.atomic_write import atomic_write_text
 
-__all__ = ["is_tombstoned", "add_tombstone", "run_refine"]
+__all__ = ["is_tombstoned", "add_tombstone", "add_flagged", "read_flagged", "run_refine"]
 
 LLMInvoke = Callable[..., Any]
 _TOMBSTONE_FILE = ".refine_tombstones.json"
+_FLAGGED_FILE = ".flagged_pairs.json"
+# Cost bound: a single refine run never fans out more than this many Tier-2
+# sub-agent investigations. Past it, borderline pairs keep the cheap verdict
+# and a `memory.absorb.escalation_capped` event is emitted (never silent).
+_MAX_ESCALATIONS_PER_RUN = 25
 
 
 def _emit(event: str, **data: Any) -> None:
@@ -82,6 +87,61 @@ def add_tombstone(workspace: Path, ref_a: str, ref_b: str) -> None:
     atomic_write_text(p, json.dumps(sorted(keys)))
 
 
+def _flagged_path(workspace: Path) -> Path:
+    return Path(workspace) / "memory" / _FLAGGED_FILE
+
+
+def add_flagged(
+    workspace: Path,
+    ref_a: str,
+    ref_b: str,
+    *,
+    verdict: str,
+    confidence: int,
+    reasoning: str,
+) -> None:
+    """Record a pair the Tier-2 agent investigated but did not confirm as same.
+
+    The record is keyed by sorted pair so order does not matter. A duplicate
+    pair key keeps the newest record. Write failures are swallowed so a store
+    error never breaks the refine pass.
+    """
+    from datetime import datetime, timezone
+    p = _flagged_path(workspace)
+    records: dict[str, dict] = {}
+    if p.exists():
+        try:
+            for rec in json.loads(p.read_text(encoding="utf-8")):
+                key = _pair_key(*rec["pair"])
+                records[key] = rec
+        except Exception:
+            records = {}
+    key = _pair_key(ref_a, ref_b)
+    records[key] = {
+        "pair": sorted([ref_a, ref_b]),
+        "verdict": verdict,
+        "confidence": confidence,
+        "reasoning": reasoning,
+        "at": datetime.now(tz=timezone.utc).isoformat(),
+    }
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(p, json.dumps(list(records.values()), indent=2))
+    except Exception:  # pragma: no cover — write failure must not break refine
+        pass
+
+
+def read_flagged(workspace: Path) -> list[dict]:
+    """Return all flagged pairs from the store, newest-wins per key."""
+    p = _flagged_path(workspace)
+    if not p.exists():
+        return []
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
 def _load_page(workspace: Path, ref: str) -> EntityPage | None:
     type_, _, slug = ref.partition(":")
     path = Path(workspace) / "memory" / "entities" / type_ / f"{slug}.md"
@@ -101,12 +161,19 @@ def _page_mtime(workspace: Path, ref: str):
         return None
 
 
+def _escalate_judge(workspace: Path, ref_a: str, ref_b: str, **kw: object) -> "JudgeResult":
+    """Thin wrapper so tests can monkeypatch without importing tier2_judge at module load."""
+    from durin.memory.tier2_judge import escalate_judge
+    return escalate_judge(workspace, ref_a, ref_b, **kw)
+
+
 def run_refine(
     workspace: Path,
     *,
     llm_invoke: LLMInvoke | None = None,
     model: str | None = None,
     confidence_threshold: int = 95,
+    escalate_floor: int = 0,
     run_started_at: "datetime | None" = None,
     vector_index: object | None = None,
     semantic_distance_threshold: float = 0.20,
@@ -121,6 +188,13 @@ def run_refine(
     When ``vector_index`` is provided, embedding-near same-type pairs within
     ``semantic_distance_threshold`` (L2) are added to the candidate set,
     catching same-thing-different-name duplicates that share no alias.
+
+    When ``escalate_floor > 0``, pairs the cheap judge can't settle — verdict
+    ``"unclear"``, or ``"same"`` with confidence in ``[escalate_floor,
+    confidence_threshold)`` — go to a bounded sub-agent (Tier-2) that
+    investigates with the lineage/source tools. Escalation is best-effort: a
+    Tier-2 exception keeps the pair rather than aborting the pass.
+    ``escalate_floor=0`` disables escalation entirely (old behavior preserved).
     """
     llm_invoke = llm_invoke or default_llm_invoke
     # Pass the vector index so absorb() keeps it current (drops the absorbed
@@ -139,6 +213,7 @@ def run_refine(
     merged: list[dict] = []
     kept: list[dict] = []
     skipped: list[dict] = []
+    escalations = 0
 
     for cand in candidates:
         ref_a, ref_b = cand.refs
@@ -179,19 +254,45 @@ def run_refine(
         _emit("memory.absorb.judged", canonical=ref_a, absorbed=ref_b,
               verdict=judged.verdict, confidence=judged.confidence,
               distance=cand.distance)
-        if judged.verdict == "same" and judged.confidence >= confidence_threshold:
+        decision = judged
+        escalated = False
+        borderline = (
+            judged.verdict == "unclear"
+            or (judged.verdict == "same"
+                and escalate_floor <= judged.confidence < confidence_threshold)
+        )
+        if escalate_floor and borderline:
+            if escalations >= _MAX_ESCALATIONS_PER_RUN:
+                _emit("memory.absorb.escalation_capped",
+                      canonical=ref_a, absorbed=ref_b)
+            else:
+                escalations += 1
+                try:
+                    decision = _escalate_judge(workspace, ref_a, ref_b, model=model)
+                    escalated = True
+                    _emit("memory.absorb.escalated", canonical=ref_a, absorbed=ref_b,
+                          verdict=decision.verdict, confidence=decision.confidence)
+                except Exception as exc:  # noqa: BLE001 — agent best-effort
+                    kept.append({"pair": [ref_a, ref_b], "reason": f"tier2_error:{exc}"})
+                    continue
+        if decision.verdict == "same" and decision.confidence >= confidence_threshold:
             absorber.absorb(
                 ref_a, ref_b, reason="refine",
-                judge_reasoning=judged.reasoning,
-                judge_confidence=judged.confidence,
+                judge_reasoning=decision.reasoning,
+                judge_confidence=decision.confidence,
             )
             merged.append({"canonical": ref_a, "absorbed": ref_b,
-                           "confidence": judged.confidence})
+                           "confidence": decision.confidence})
             _emit("memory.absorb.auto_merged", canonical=ref_a, absorbed=ref_b,
-                  confidence=judged.confidence)
+                  confidence=decision.confidence)
         else:
-            kept.append({"pair": [ref_a, ref_b], "verdict": judged.verdict,
-                         "confidence": judged.confidence})
+            if escalated:
+                add_flagged(workspace, ref_a, ref_b,
+                            verdict=decision.verdict,
+                            confidence=decision.confidence,
+                            reasoning=decision.reasoning)
+            kept.append({"pair": [ref_a, ref_b], "verdict": decision.verdict,
+                         "confidence": decision.confidence})
 
     return {
         "merged": merged,
