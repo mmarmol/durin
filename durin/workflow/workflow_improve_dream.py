@@ -97,7 +97,7 @@ def _build_prompt(name, wf_json: str, diag, history) -> str:
         "Diagnostic (recurring across runs):",
         f"  nodes that loop back: {diag.loop_backs}",
         f"  gates that fail: {diag.gate_fails}",
-        f"  runs that gave up (max_visits): {diag.max_visits_aborts} / {diag.total_runs}",
+        f"  runs that gave up (exhausted): {diag.max_visits_aborts} / {diag.total_runs}",
         f"  candidates to improve: {sorted(diag.candidates())}",
         "",
         "Recent change history (newest first) — do not re-propose what was tried:",

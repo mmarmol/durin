@@ -17,6 +17,8 @@ export type WorkflowNodeDef = {
   list_from?: string | null;
   max_concurrency?: number;
   reconcile?: "read" | "choose" | "union";
+  // work node: per-node visit budget (blank/undefined = inherit workflow default)
+  max_visits?: number;
   [k: string]: unknown;
 };
 

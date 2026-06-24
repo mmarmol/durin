@@ -247,6 +247,7 @@ export type WorkflowRunResult = {
   final_output: string;
   runs: Array<{ node_id: string; iteration: number; passed: boolean | null; output: string }>;
   output_dir?: string;
+  exhausted_node?: string;
 };
 
 export async function runWorkflow(

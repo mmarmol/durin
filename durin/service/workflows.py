@@ -75,6 +75,7 @@ class WorkflowRunResult(Result):
     final_output: str
     runs: list[dict[str, Any]]
     output_dir: str = ""
+    exhausted_node: str = ""
 
 
 class WorkflowRecsQuery(Query):
@@ -209,7 +210,8 @@ class WorkflowsService:
         engine = WorkflowEngine(
             node_runner=node_runner, command_cwd=ws,
             subworkflow_runner=SubworkflowRunner(ws, node_runner, judge),
-            workspace=ws, pick_runner=judge.pick)
+            workspace=ws, pick_runner=judge.pick,
+            max_node_visits=self._app_config.workflow.max_node_visits)
         result = await asyncio.to_thread(
             engine.run, workflow, cmd.task, input_files=cmd.input_files or None
         )
@@ -227,6 +229,7 @@ class WorkflowsService:
                 for r in result.runs
             ],
             output_dir=result.output_dir or "",
+            exhausted_node=result.exhausted_node or "",
         )
 
     @route(
