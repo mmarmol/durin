@@ -319,7 +319,10 @@ Personas live in two places:
 `Config.resolve_persona(name)` tries user config first, then built-ins, and
 returns `None` when the name is unknown (the caller falls back to the default
 SOUL and default model). `Config.persona_names()` returns the union of both
-sets.
+sets. The persona listing (`GET /api/v1/personas` and the webui pane)
+additionally surfaces a synthetic `default` entry — the base SOUL plus the
+default model — last in the list, so the implicit fallback is visible and
+selectable; it is not editable or deletable as a persona.
 
 Example user config:
 

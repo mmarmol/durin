@@ -607,7 +607,7 @@ export function PersonasSettings({ token }: { token: string }) {
                     <span className="flex items-center gap-2">
                       <Drama className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
                       <span>{persona.name}</span>
-                      {persona.builtin ? (
+                      {persona.builtin && persona.name !== "default" ? (
                         <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
                           {t("settings.personas.builtinBadge")}
                         </span>
@@ -631,22 +631,24 @@ export function PersonasSettings({ token }: { token: string }) {
                   }
                 >
                   <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => void changeDefault(isDefault ? null : persona.name)}
-                      className="rounded-full text-[12px]"
-                      title={
-                        isDefault
+                    {persona.name === "default" && isDefault ? null : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => void changeDefault(isDefault ? null : persona.name)}
+                        className="rounded-full text-[12px]"
+                        title={
+                          isDefault
+                            ? t("settings.personas.clearDefault")
+                            : t("settings.personas.setDefault")
+                        }
+                      >
+                        {isDefault
                           ? t("settings.personas.clearDefault")
-                          : t("settings.personas.setDefault")
-                      }
-                    >
-                      {isDefault
-                        ? t("settings.personas.clearDefault")
-                        : t("settings.personas.setDefault")}
-                    </Button>
+                          : t("settings.personas.setDefault")}
+                      </Button>
+                    )}
                     {persona.builtin ? null : (
                       <>
                         <Button
