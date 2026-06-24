@@ -239,6 +239,36 @@ describe("DurinClient", () => {
     expect(chatHandler).not.toHaveBeenCalled();
   });
 
+  it("dispatches dream progress globally", () => {
+    const client = new DurinClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    const handler = vi.fn();
+    client.onDreamProgress(handler);
+    client.connect();
+    lastSocket().fakeOpen();
+
+    lastSocket().fakeMessage({
+      event: "dream_progress",
+      kind: "activity",
+      item: {
+        kind: "merged",
+        summary: "Merged place:y → place:x",
+        ref: "place:x",
+        ref_kind: "entity",
+        at_ms: 1,
+      },
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toMatchObject({
+      kind: "activity",
+      item: { ref: "place:x" },
+    });
+  });
+
   it("resolves newChat() via the server-assigned chat_id", async () => {
     const client = new DurinClient({
       url: "ws://test",
