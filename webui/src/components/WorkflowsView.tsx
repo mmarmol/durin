@@ -45,58 +45,46 @@ function errMsg(e: unknown): string {
 
 const KIND_RING: Record<string, string> = {
   work: "border-emerald-400/70",
-  decision: "border-amber-400/70",
   parallel: "border-violet-400/70",
-  subworkflow: "border-sky-400/70",
+  subflow: "border-sky-400/70",
 };
 
-function isRouting(node: WorkflowNodeDef): boolean {
-  return node.on_pass != null || node.on_fail != null;
-}
-
-// A routing node always presents as a decision (amber ring + "decision" badge)
-// regardless of its stored kind, so a new kind:"work"+routing node matches a
-// legacy kind:"decision" node and the pass/fail edges it draws.
-function displayKind(node: WorkflowNodeDef): string {
-  return isRouting(node) ? "decision" : node.kind;
+// Maps a stored node kind to the i18n key suffix used for display labels.
+// Both "work" and the legacy "decision" alias present as "work" to the user;
+// routing is shown only by the presence of pass/fail edges, never by a badge.
+export function kindLabelKey(kind: string): string {
+  if (kind === "decision" || kind === "work") return "work";
+  if (kind === "subworkflow") return "subflow";
+  return kind; // "parallel"
 }
 
 function nodeSummary(node: WorkflowNodeDef): string {
-  if (isRouting(node)) return node.command != null ? "command" : "judge";
-  switch (node.kind) {
-    case "work":
-      return `${(node.mode as string) ?? "build"} · ${(node.model as string) ?? "default"}`;
-    case "decision":
-      return node.criteria ? "judge" : "command";
-    case "parallel":
-      if (node.worker) return `dynamic · ×N @ runtime`;
-      return `${((node.branches as string[]) ?? []).length} branches`;
-    case "subworkflow":
-      return String(node.workflow ?? "");
-    default:
-      return "";
-  }
+  if (node.command != null) return "command";
+  if (node.kind === "parallel") return node.worker ? "dynamic · ×N" : `${((node.branches as string[]) ?? []).length} branches`;
+  if (node.kind === "subworkflow") return String(node.workflow ?? "");
+  return `${(node.mode as string) ?? "build"} · ${(node.model as string) ?? "default"}`;
 }
 
 function NodeCard({ data, selected }: NodeProps) {
+  const { t } = useTranslation();
   const { node, isStart } = data as unknown as FlowNodeData;
   const isDynamicWorker = !!(data as Record<string, unknown>).dynamicWorker;
-  const kind = displayKind(node);
+  const labelKey = kindLabelKey(node.kind);
   return (
     <div
       className={cn(
         "min-w-[150px] rounded-md border bg-background px-3 py-2",
-        KIND_RING[kind] ?? "border-border",
+        KIND_RING[labelKey] ?? "border-border",
         (isStart || selected) && "ring-2 ring-primary",
         isDynamicWorker && "ring-1 ring-violet-400/60",
       )}
     >
       <Handle type="target" position={Position.Left} />
       <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-        <span>{kind}{isStart ? " · start" : ""}</span>
+        <span>{t("workflows.kind." + labelKey)}{isStart ? " · " + t("workflows.start") : ""}</span>
         {isDynamicWorker && (
           <span className="rounded bg-violet-100 px-1 py-0.5 text-[9px] font-medium text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">
-            ×N @ runtime
+            {t("workflows.dynamicBadge")}
           </span>
         )}
       </div>
@@ -263,7 +251,7 @@ function NodeConfigPanel({
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase">
-          {displayKind(node)}
+          {t("workflows.kind." + kindLabelKey(node.kind))}
         </span>
         <span className="text-sm font-medium">{node.id}</span>
         {!isStart && (
@@ -1005,7 +993,7 @@ export function WorkflowsView() {
             {def && (
               <div className="absolute left-2 top-2 z-10 flex items-center gap-2">
                 <Button size="sm" variant="outline" onClick={addNode}>
-                  <Plus className="h-3.5 w-3.5" /> {t("workflows.addNode")}
+                  <Plus className="h-3.5 w-3.5" /> {t("workflows.addWork")}
                 </Button>
                 <Button size="sm" variant="outline" onClick={addParallelNode}>
                   <Plus className="h-3.5 w-3.5" /> {t("workflows.addParallel")}
