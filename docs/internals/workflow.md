@@ -108,8 +108,15 @@ picks one to apply, discarding the rest; `union` = apply every branch's writes, 
 genuine conflict (two branches wrote *different* content to the same path — identical
 incidental files reconcile cleanly). **Dynamic fan-out workers share the workspace** directly
 (no per-worker isolation in v1); they hand their output off to the merge node via text, so
-`reconcile` has no effect on a dynamic parallel and is not shown in the editor for that mode. A per-node visit count bounds loop-backs: exceeding `max_visits` ends the
-run with status `exhausted` (carrying the exhausted node) instead of looping forever.
+`reconcile` has no effect on a dynamic parallel and is not shown in the editor for that mode. A per-node visit count bounds loop-backs across three tiers (the Airflow/Temporal
+shape — a config default, a per-unit override, and a hard cap). Each node's budget is
+`min(its own max_visits or the workflow's max_visits, workflow.max_node_visits)`: a
+per-node `WorkNode.max_visits` overrides the per-workflow `max_visits` (default 3), and
+both are clamped by the global config ceiling `workflow.max_node_visits` (default 25, in
+settings) — the runaway backstop no node may exceed. Exceeding the budget ends the run
+with status `exhausted` carrying `exhausted_node`; the `run_workflow` tool and the editor's
+runner surface it gracefully (the node, its last FAIL reason, and the best partial), so the
+caller learns it did not complete and why instead of treating a partial as done.
 
 **The engine is decoupled from the LLM and runs loop-safe.** The graph walk depends
 only on an injected `NodeRunner` callable, so it is fully unit-testable with a mock.
