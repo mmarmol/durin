@@ -153,8 +153,8 @@ def run_extract_for_session(
 
     new_msgs = msgs[cursor:]                       # turns cursor+1 .. total
     text = "\n".join(
-        f"{str(m.get('role') or '?').upper()}: {m.get('content')}"
-        for m in new_msgs if m.get("content")
+        f"[turn-{cursor + i + 1}] {str(m.get('role') or '?').upper()}: {m.get('content')}"
+        for i, m in enumerate(new_msgs) if m.get("content")
     )
     refs = entity_refs_in_messages(new_msgs)
     src = f"[[sessions/{jsonl_path.stem}.md#turn-{total}]]"

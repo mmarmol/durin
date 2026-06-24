@@ -801,6 +801,7 @@ class AgentDefaults(Base):
         serialization_alias="preemptiveCompactRatio",
     )  # Default trigger ratio when preset doesn't override.
     decision_log_enabled: bool = True  # Concern B task-state anchor: record key decisions/findings across compaction
+    compaction_learnings_enabled: bool = True  # Backstop: distil durable user learnings (preferences, corrections) at compaction
     decision_log_max_entries: int = Field(default=10, ge=1, le=100)  # Cap on decision-log entries (re-injected every turn)
     decision_log_max_chars: int = Field(default=1500, ge=100, le=20_000)  # Total chars cap on the decision log
     parallel_tool_calls: dict[str, bool] = Field(

@@ -119,6 +119,7 @@ Pass `uri` exactly as memory_search returned it. Refuses entity pages (memory/en
 flowchart TD
     A["Agent turn"] --> B["identity.md\n## Memory + ## Memory writing\n(stable prompt tier)"]
     A --> C["Tool descriptions\nMemorySearchTool.description\nand siblings\n(LLM tool-selection)"]
+    A --> CP["_MEMORY_CAPTURE_SECTION\ncontext.py\n(unconditional, stable tier)"]
 
     D["Dream cron / reactive trigger"] --> E["Extract pass\nbuild_extract_prompt\nextract_dream.py"]
     D --> G["Skill-extract pass\n_SKILL_EXTRACT_PROMPT\ndream_passes.py\n(agentic sub-agent)"]
@@ -155,6 +156,23 @@ flowchart TD
 
 The two `## Memory writing` rules about `body_mode` and `derived_from` are embedded inline in the `memory_upsert_entity` tool description (§3.5 and §5.2) and summarized here.
 
+### 5.7 Always-present capture directive
+
+`_MEMORY_CAPTURE_SECTION` (`durin/agent/context.py`) is a short Markdown section injected unconditionally into the stable prompt tier on every turn, immediately after the operating floor. It is not part of `identity.md`; it is assembled programmatically so it is always present regardless of SOUL or persona configuration.
+
+**What it instructs.** The directive tells the agent to capture durable learnings in the moment — before acknowledging — rather than waiting to be asked. The salience criterion is: *save what stops the user from having to steer, correct, or re-explain later*. Concrete trigger: before writing an acknowledgement like "got it" or "noted", save the thing first.
+
+**Entity taxonomy.** Each learning is authored as an entity via `memory_upsert_entity`:
+- Corrections, preferences, and standing constraints on how to work → `feedback`, `stance`, or `practice` entity. The body must state WHY the preference matters and HOW to apply it, so the agent can judge edge cases rather than apply it blindly.
+- Durable facts about who the user is (role, goals, stable personal context) → update the user's `person` entity.
+- Work context or subject matter → a `project` or `topic` entity.
+
+**Exclusions.** The directive explicitly excludes: content derivable from the code, repo, or git history; task progress and transient state; ephemeral artifacts (PR numbers, commit SHAs, today's status).
+
+**Correct in place.** When the user corrects something already recorded, the agent updates that entity (overwrites the stale value) rather than stacking a contradicting entry on top.
+
+**Expressivity.** The agent briefly tells the user what it saved ("noted — you prefer X"). When a recalled memory materially shaped a decision, it says so ("doing it this way because I recall you prefer Y") so the user can catch and correct a stale memory on the spot. Trivial recalls are not narrated.
+
 ### 5.2 Tool descriptions
 
 Each tool class exposes a `description` property that delegates to `_PARAMETERS["description"]`. That string is emitted as `function.description` in the OpenAI function-calling spec — the field the LLM reads when selecting a tool. Both the `function.description` field and the `function.parameters.description` field carry the same string so there is no divergence between them.
@@ -178,7 +196,8 @@ The five Dream passes each build their prompt in Python. No pass uses a multi-fi
 
 **Extract pass** (`build_extract_prompt` in `extract_dream.py`): Takes an entity page and rendered conversation turns. Asks the LLM to produce a bare JSON object mapping `attribute_key → scalar/list`. Uses an `EXISTING ATTRIBUTE KEYS` block to drive key-reuse and prevent schema drift. Slots: `{ref}`, `{name}`, `{existing}` (sorted keys or `(none)`), `{body}` (truncated to 4 000 chars), `{turns}` (truncated to 12 000 chars). Output parsed by `parse_attributes`: strips code fences, runs `json_repair`, keeps only scalar/list-of-scalar values.
 
-**Discover pass** (`build_discover_prompt` in `extract_dream.py`): Takes the same conversation turns but no target entity. Asks the LLM to propose a JSON array of `{ref, name, attributes}` objects for entities with durable identity-class facts (who/what an entity is, stable roles or relationships, lasting preferences, commitments, life events). Ephemeral details are excluded by the prompt rules. Output parsed by `parse_discoveries` (same tolerant approach). Discovered entities are written as dream-authored pages; the entity name is last-writer-wins (later agent or user corrections simply overwrite it).
+**Discover pass** (`build_discover_prompt` in `extract_dream.py`): Takes the same conversation turns but no target entity. Asks the LLM to propose a JSON array of objects for entities with durable identity-class facts (who/what an entity is, stable roles or relationships, lasting preferences, commitments, life events). Each proposal carries `ref`, `name`, and `attributes`, plus three optional components synthesized from the source turns: `aliases` (other names or spellings for this entity that appear in the turns), `relations` (typed links to other entities mentioned in the turns), and `significance` — one sentence on *why this entity is in the user's memory* (their relationship to it), which must not restate the attributes. The proposal also includes `turn`: the turn number where the entity's durable fact first appears, used to anchor each patch's `source_ref` to that specific turn rather than the session window-end.
+Ephemeral details are excluded by the prompt rules; only facts stated in the turns are used. Output parsed by `parse_discoveries` (same tolerant approach; malformed sub-values in the optional fields are dropped). Discovered entities are written as dream-authored pages; the entity name is last-writer-wins (later agent or user corrections simply overwrite it).
 
 **Derived-from pass** (`build_link_prompt` in `derived_from_dream.py`): Per-session pass that identifies entities lacking a `derived_from` link and reasons over the session's ingested references to build those links. Applies the result as `derived_from` FieldPatches with `author="dream"`.
 
@@ -267,6 +286,7 @@ Sections with zero hits are omitted entirely.
 | Config key | Default | Effect |
 |---|---|---|
 | `memory.enabled` | `true` | Master gate for all memory I/O including Dream prompts and hot-layer injection |
+| `agents.defaults.compaction_learnings_enabled` | `true` | Gates the compaction backstop (`extract_learnings`); when false, no LLM call is made at compaction time for durable learnings |
 | `memory.dream.enabled` | `true` | Gates cron and reactive Dream triggers; `durin memory dream` (manual) always runs |
 | `memory.dream.cron` | `"0 3 * * *"` | Daily schedule for all five passes |
 | `memory.dream.discover_enabled` | `true` | Enables the discover pass (Stage 2 entity discovery) within the extract pass |

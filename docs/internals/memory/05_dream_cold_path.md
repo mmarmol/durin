@@ -133,12 +133,24 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    roles, relationships, commitments, life events — ephemeral chatter excluded)
    about entities the agent did **not** upsert, and writes them as
    `author="dream"` pages, skipping refs already handled in Stage 1 and
-   tombstoned refs. Before creating a new page, each proposal is resolved
-   against the existing graph by name within the same entity type (via the alias
-   index): a **unique** match updates that entity in place instead of minting a
-   new slug; an **ambiguous** match (more than one candidate) creates a new page,
-   deferring disambiguation to the refine pass. When lexical matching yields
-   **no** match, discovery additionally consults the vector index for an
+   tombstoned refs. Each proposal from the discovery prompt is a **rich
+   composite**: it includes the entity `name` and `attributes`, plus optional
+   `aliases` (other names or spellings the turns use for this entity),
+   `relations` (typed links to other entities mentioned in the turns), and a
+   `significance` sentence that captures *why this entity is in the user's
+   memory* — their relationship to it — rather than restating the attributes.
+   The prompt requests all four components from the source turns only; none are
+   invented. The proposal also includes a `turn` field: the turn number where
+   the entity's durable fact first appears. Each patch written by `discover_entities`
+   carries a `source_ref` of `[[sessions/<stem>.md#turn-N]]` using that turn
+   number, falling back to the window-end marker when the proposal omits `turn`,
+   so provenance points to the turn the fact came from rather than the session's
+   window-end watermark. Before creating a new page, each proposal
+   is resolved against the existing graph by name within the same entity type
+   (via the alias index): a **unique** match updates that entity in place instead
+   of minting a new slug; an **ambiguous** match (more than one candidate) creates
+   a new page, deferring disambiguation to the refine pass. When lexical matching
+   yields **no** match, discovery additionally consults the vector index for an
    **embedding-near same-type entity** (L2 distance within
    `semantic_distance_threshold`) and runs the LLM judge to confirm whether the
    proposal is the same entity under a variant name; a confirmed match reuses the
@@ -156,12 +168,15 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    (out of scope here — see the skills internals docs).
 7. Advance the cursor to the total turn count via `set_extract_cursor`.
 
-The `source_ref` recorded in each patch's provenance is the session-turn marker
-`[[sessions/<stem>.md#turn-<total>]]`, so a reader can trace an attribute back to
-its origin turn. `max_seconds` (0 = unbounded) is a hard wall-clock cap: when
-elapsed time crosses it the pass yields **after the current session**, emits
-`memory.dream.max_seconds_reached`, and the cursor resumes the remainder on the
-next trigger.
+The `source_ref` in each patch's provenance points to the turn the fact came from.
+Stage 1 (extract) uses the session window-end marker `[[sessions/<stem>.md#turn-<N>]]`.
+Stage 2 (discover) uses the per-entity `turn` from the LLM proposal when present,
+producing a more precise `[[sessions/<stem>.md#turn-<M>]]` that anchors to the
+specific turn where the entity's durable fact first appears; when the proposal
+omits `turn`, it falls back to the same window-end marker. `max_seconds`
+(0 = unbounded) is a hard wall-clock cap: when elapsed time crosses it the pass
+yields **after the current session**, emits `memory.dream.max_seconds_reached`,
+and the cursor resumes the remainder on the next trigger.
 
 ### Pass 2 — derived_from: link entities to source documents
 
@@ -327,6 +342,7 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | Setting | Default | Effect |
 |---|---|---|
 | `memory.dream.enabled` | `true` | Master switch for the cron + both reactive triggers. Manual `durin memory dream` works regardless. |
+| `agents.defaults.compaction_learnings_enabled` | `true` | Gates the compaction backstop that distils durable learnings at compaction time. When false, no LLM call is made and no learning entities are written during consolidation. |
 | `memory.dream.cron` | `0 3 * * *` | Daily schedule for the full five-pass run. |
 | `memory.dream.post_compaction` | `true` | Arm the reactive extract trigger after a session is compacted. |
 | `memory.dream.on_session_close` | `true` | Arm the reactive extract trigger when a session closes. |
@@ -354,6 +370,15 @@ The model every pass uses is resolved by
 - **Reactive hooks** — `agent.consolidator.on_post_compaction` and
   `agent.on_session_close` (wired in `durin/cli/commands.py`) call a closure that
   runs the **extract pass only** through the shared `ReactiveDreamGate`.
+  Separately, the consolidator itself runs a **compaction backstop**
+  (`Consolidator.extract_learnings`) immediately before firing the hook: it calls
+  the LLM over the archived span to distil durable user learnings (preferences,
+  corrections, standing constraints, stable personal facts) and writes them as
+  `feedback`/`stance`/`practice`/`person` entities with `author="agent"`. This
+  catches learnings that the live-agent capture directive may not have persisted
+  during the session. It is best-effort — a failure never breaks consolidation —
+  and dedup is delegated to the dream's refine pass. The backstop is gated by
+  `agents.defaults.compaction_learnings_enabled` (default true).
 - **CLI** — `durin memory dream` (`durin/cli/memory_cmd.py`) runs the full
   five-pass sequence on demand and prints a one-line summary. Related recovery
   commands: `durin memory absorb-suggest`, `durin memory absorb`,

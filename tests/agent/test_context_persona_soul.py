@@ -36,3 +36,16 @@ def test_operating_floor_skipped_when_soul_has_execution_rules(tmp_path):
     prompt = cb.build_system_prompt(active_persona_soul=legacy)
     # the rule text appears exactly once (from the soul, not duplicated by the floor)
     assert prompt.count("Act immediately on single-step tasks") == 1
+
+
+def test_capture_directive_always_present(tmp_path):
+    # A SOUL that embeds its own Execution Rules makes the operating floor empty —
+    # the capture directive must STILL appear.
+    _write_default_soul(tmp_path, "x")
+    legacy = "# Soul\nVoice.\n\n## Execution Rules\n\nDo the thing."
+    cb = ContextBuilder(tmp_path)
+    prompt = cb.build_system_prompt(active_persona_soul=legacy)
+    assert "Memory — capture as you go" in prompt
+    assert "before you write an acknowledgement" in prompt
+    assert "memory_upsert_entity" in prompt
+    assert "Correct in place" in prompt

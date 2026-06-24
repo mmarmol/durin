@@ -1,7 +1,9 @@
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from durin.memory.entity_page import EntityPage
-from durin.memory.extract_dream import extract_entity, parse_attributes
+from durin.memory.extract_dream import discover_entities, extract_entity, parse_attributes, parse_discoveries
 from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import write_entity
 
@@ -71,3 +73,111 @@ def test_extract_empty_output_is_noop(tmp_path):
                              source_ref="s", at=NOW)], create=True)
     r = extract_entity(tmp_path, "company:x", "t", llm_invoke=_stub("no json here"))
     assert not r.committed
+
+
+def test_parse_discoveries_captures_rich_fields():
+    raw = '''[
+      {"ref": "place:torrent", "name": "Torrent",
+       "aliases": ["Torrente", ""], "turn": 16,
+       "relations": [{"to": "place:valencia", "type": "located_in"},
+                     {"to": "", "type": "bad"}],
+       "significance": "A place the user tracks the weather for.",
+       "attributes": {"region": "Comunidad Valenciana"}}
+    ]'''
+    [p] = parse_discoveries(raw)
+    assert p["ref"] == "place:torrent"
+    assert p["aliases"] == ["Torrente"]                 # empty alias dropped
+    assert p["relations"] == [{"to": "place:valencia", "type": "located_in"}]  # malformed dropped
+    assert p["significance"] == "A place the user tracks the weather for."
+    assert p["turn"] == 16
+    assert p["attributes"] == {"region": "Comunidad Valenciana"}
+
+
+def test_parse_discoveries_rich_fields_optional():
+    raw = '[{"ref": "topic:x", "name": "X", "attributes": {"a": 1}}]'
+    [p] = parse_discoveries(raw)
+    assert p["aliases"] == [] and p["relations"] == []
+    assert p["significance"] is None and p["turn"] is None
+
+
+class _Resp:
+    def __init__(self, text): self.text = text
+
+
+def _page(ws, ref):
+    t, _, s = ref.partition(":")
+    return EntityPage.from_file(Path(ws) / "memory" / "entities" / t / f"{s}.md")
+
+
+# ---------------------------------------------------------------------------
+# Task 3: per-entity provenance precision
+# ---------------------------------------------------------------------------
+
+
+def test_discover_provenance_uses_fact_turn(tmp_path):
+    proposals = json.dumps([{
+        "ref": "place:torrent", "name": "Torrent", "turn": 12,
+        "attributes": {"region": "Comunidad Valenciana"},
+    }])
+    discover_entities(tmp_path, "[turn-12] USER: torrent is in valencia",
+                      existing_refs=[],
+                      llm_invoke=lambda *a, **k: _Resp(proposals), model="m",
+                      source_ref="[[sessions/abc.md#turn-40]]")  # window-end fallback
+    page = EntityPage.from_file(tmp_path / "memory" / "entities" / "place" / "torrent.md")
+    sr = page.provenance["attributes"]["region"]["source_ref"]
+    assert sr == "[[sessions/abc.md#turn-12]]"   # fact turn, NOT the turn-40 watermark
+
+
+def test_discover_provenance_falls_back_when_no_turn(tmp_path):
+    proposals = json.dumps([{
+        "ref": "place:valencia", "name": "Valencia",
+        "attributes": {"country": "Spain"},
+    }])
+    discover_entities(tmp_path, "[turn-5] USER: valencia is in spain",
+                      existing_refs=[],
+                      llm_invoke=lambda *a, **k: _Resp(proposals), model="m",
+                      source_ref="[[sessions/abc.md#turn-40]]")
+    page = EntityPage.from_file(tmp_path / "memory" / "entities" / "place" / "valencia.md")
+    sr = page.provenance["attributes"]["country"]["source_ref"]
+    assert sr == "[[sessions/abc.md#turn-40]]"   # fallback to window-end
+
+
+def test_parse_discoveries_accepts_integer_float_turn():
+    raw = '[{"ref": "topic:x", "name": "X", "turn": 16.0, "attributes": {"a": 1}}]'
+    [p] = parse_discoveries(raw)
+    assert p["turn"] == 16                         # integer-valued float accepted
+
+
+def test_parse_discoveries_rejects_fractional_float_turn():
+    raw = '[{"ref": "topic:x", "name": "X", "turn": 16.5, "attributes": {"a": 1}}]'
+    [p] = parse_discoveries(raw)
+    assert p["turn"] is None                       # fractional float rejected
+
+
+def test_parse_discoveries_rejects_bool_turn():
+    raw = '[{"ref": "topic:x", "name": "X", "turn": true, "attributes": {"a": 1}}]'
+    [p] = parse_discoveries(raw)
+    assert p["turn"] is None                       # bool rejected (True is an int subclass)
+
+
+def test_discover_writes_aliases_relations_significance(tmp_path):
+    proposals = json.dumps([{
+        "ref": "place:torrent", "name": "Torrent",
+        "aliases": ["Torrente"],
+        "relations": [{"to": "place:valencia", "type": "located_in"}],
+        "significance": "A place the user tracks the weather for.",
+        "turn": 5,
+        "attributes": {"region": "Comunidad Valenciana"},
+    }])
+    discover_entities(tmp_path, "USER: torrent stuff", existing_refs=[],
+                      llm_invoke=lambda *a, **k: _Resp(proposals), model="m")
+    page = _page(tmp_path, "place:torrent")
+    assert page is not None
+    assert "Torrente" in page.aliases
+    assert page.attributes.get("region") == "Comunidad Valenciana"
+    assert "weather" in (page.body or "")
+    assert any(r.get("to") == "place:valencia" for r in page.relations)
+    # significance is idempotent across a re-run (body_replace, not append)
+    discover_entities(tmp_path, "USER: torrent stuff", existing_refs=[],
+                      llm_invoke=lambda *a, **k: _Resp(proposals), model="m")
+    assert (_page(tmp_path, "place:torrent").body or "").count("weather") == 1
