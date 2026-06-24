@@ -193,6 +193,18 @@
             "title": "Name",
             "type": "string"
           },
+          "persona": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Persona"
+          },
           "schedule_kind": {
             "title": "Schedule Kind",
             "type": "string"
@@ -287,6 +299,18 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "persona": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Persona"
           },
           "run_history": {
             "default": [],
@@ -544,6 +568,18 @@
             "default": null,
             "title": "Model"
           },
+          "persona": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Persona"
+          },
           "run_at_ms": {
             "title": "Run At Ms",
             "type": "integer"
@@ -755,6 +791,18 @@
             ],
             "default": null,
             "title": "Name"
+          },
+          "persona": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Persona"
           },
           "schedule_kind": {
             "anyOf": [

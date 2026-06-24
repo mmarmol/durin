@@ -13,6 +13,7 @@ import {
   runCronJob,
   toggleCronJob,
   updateCronJob,
+  listPersonas,
   type ChannelInfo,
   type CronJobRow,
 } from "@/lib/api";
@@ -25,6 +26,13 @@ import {
   SettingsSectionTitle,
 } from "./primitives";
 
+const RUN_AS_MODES = [
+  { id: "default", label: "settings.cron.runAsDefault" },
+  { id: "persona", label: "settings.cron.runAsPersona" },
+  { id: "model", label: "settings.cron.runAsModel" },
+] as const;
+type RunAs = (typeof RUN_AS_MODES)[number]["id"];
+
 interface FormState {
   name: string;
   mode: string;
@@ -33,6 +41,7 @@ interface FormState {
   expr: string;
   every_seconds: string;
   model: string;
+  persona: string;
   deliver: boolean;
   channel: string;
   to: string;
@@ -47,6 +56,7 @@ const EMPTY_FORM: FormState = {
   expr: "",
   every_seconds: "",
   model: "",
+  persona: "",
   deliver: false,
   channel: "",
   to: "",
@@ -66,6 +76,7 @@ function jobToForm(job: CronJobRow): FormState {
     expr: job.schedule.expr ?? "",
     every_seconds: job.schedule.every_ms != null ? String(job.schedule.every_ms / 1000) : "",
     model: job.model ?? "",
+    persona: job.persona ?? "",
     deliver: false,
     channel: job.channel ?? "",
     to: "",
@@ -88,15 +99,28 @@ function CronForm({
   const { t } = useTranslation();
   const [form, setForm] = useState<FormState>(editJob ? jobToForm(editJob) : EMPTY_FORM);
   const [channels, setChannels] = useState<ChannelInfo[]>([]);
+  const [personas, setPersonas] = useState<string[]>([]);
+  const [runAs, setRunAs] = useState<RunAs>(
+    editJob?.persona ? "persona" : editJob?.model ? "model" : "default",
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     listChannels(token).then((ch) => setChannels(ch.filter((c) => c.enabled))).catch(() => {});
+    listPersonas(token)
+      .then((r) => setPersonas(r.personas.map((p) => p.name).filter((n) => n !== "default" && n !== "none")))
+      .catch(() => {});
   }, [token]);
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
+
+  // Persona and model are mutually exclusive; switching the mode clears the other.
+  const changeRunAs = (m: RunAs) => {
+    setRunAs(m);
+    setForm((f) => ({ ...f, persona: m === "persona" ? f.persona : "", model: m === "model" ? f.model : "" }));
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -107,7 +131,8 @@ function CronForm({
         name: form.name,
         message: form.message,
         mode: form.mode,
-        model: form.model || null,
+        model: runAs === "model" ? form.model || null : null,
+        persona: runAs === "persona" ? form.persona || null : null,
         schedule_kind: form.schedule_kind,
         expr: form.schedule_kind === "cron" ? form.expr || null : null,
         every_ms:
@@ -226,10 +251,44 @@ function CronForm({
         </div>
       </div>
 
-      {/* Model */}
+      {/* Run as: persona OR model (mutually exclusive) */}
       <div>
-        <label className={labelClass}>{t("settings.cron.fieldModel")}</label>
-        <ModelSelectField value={form.model} onChange={(ref) => set("model", ref)} />
+        <label className={labelClass}>{t("settings.cron.runAs")}</label>
+        <div className="flex flex-wrap gap-1.5">
+          {RUN_AS_MODES.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => changeRunAs(m.id)}
+              className={cn(
+                "rounded-md border px-2.5 py-1 text-[12px] transition-colors",
+                runAs === m.id
+                  ? "border-primary/40 bg-primary/10 text-foreground"
+                  : "border-border/60 text-muted-foreground hover:bg-muted/60",
+              )}
+            >
+              {t(m.label)}
+            </button>
+          ))}
+        </div>
+        {runAs === "persona" ? (
+          <select
+            className={cn(selectClass, "mt-2 w-full")}
+            value={form.persona}
+            onChange={(e) => set("persona", e.target.value)}
+            aria-label={t("settings.cron.fieldPersona")}
+          >
+            <option value="">{t("settings.cron.personaPlaceholder")}</option>
+            {personas.map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+        ) : null}
+        {runAs === "model" ? (
+          <div className="mt-2">
+            <ModelSelectField value={form.model} onChange={(ref) => set("model", ref)} />
+          </div>
+        ) : null}
       </div>
 
       {/* Deliver toggle */}
@@ -665,7 +724,7 @@ function RunHistory({
                     <th className="pb-1 pr-3 font-medium">{t("settings.cron.runAt")}</th>
                     <th className="pb-1 pr-3 font-medium">{t("settings.cron.status")}</th>
                     <th className="pb-1 pr-3 font-medium">{t("settings.cron.duration")}</th>
-                    <th className="pb-1 pr-3 font-medium">{t("settings.cron.model")}</th>
+                    <th className="pb-1 pr-3 font-medium">{t("settings.cron.runAs")}</th>
                     <th className="pb-1 font-medium"></th>
                   </tr>
                 </thead>
@@ -694,7 +753,7 @@ function RunHistory({
                         {formatDuration(run.duration_ms)}
                       </td>
                       <td className="py-1 pr-3 text-muted-foreground">
-                        {run.model ?? "—"}
+                        {run.persona ?? run.model ?? "—"}
                       </td>
                       <td className="py-1">
                         {run.session_key ? (

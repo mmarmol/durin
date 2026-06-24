@@ -364,6 +364,34 @@ async def test_create_job_carries_mode_and_model(workspace: Path) -> None:
     assert created.model == "zai/glm-5"
 
 
+async def test_create_and_update_job_carry_persona(workspace: Path) -> None:
+    """A job can run as a persona; create stores it, update changes it, and the
+    item exposes it so the edit form can restore the choice."""
+    res = await CronService().create(
+        CronAddCommand(
+            name="with-persona",
+            mode="task",
+            message="run X",
+            schedule_kind="cron",
+            expr="0 3 * * *",
+            persona="researcher",
+        ),
+        Principal.local(),
+    )
+    assert res.job.persona == "researcher"
+    assert res.job.model is None
+
+    job_id = res.job.id
+    upd = await CronService().update(
+        CronUpdateCommand(id=job_id, persona="engineer"), Principal.local()
+    )
+    assert upd.job.persona == "engineer"
+
+    listed = await CronService().list(CronListQuery(), Principal.local())
+    created = next(j for j in listed.jobs if j.id == job_id)
+    assert created.persona == "engineer"
+
+
 async def test_list_job_mode_model_defaults(workspace: Path) -> None:
     result = await CronService().list(CronListQuery(), Principal.local())
     user_job = next(j for j in result.jobs if j.id == "abc12345")
