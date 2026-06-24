@@ -129,7 +129,7 @@ function FlaggedPairCard({ pair, onOpen, onResolve, resolving }: FlaggedPairCard
             <span className="text-[11px] text-muted-foreground">↔</span>
             <span className="text-[12px] font-medium text-foreground">{pair.ref_b}</span>
             <span className="text-[11px] text-muted-foreground/60">
-              {pair.verdict} · {Math.round(pair.confidence * 100)}%
+              {pair.verdict} · {pair.confidence}%
             </span>
           </div>
           <p className="text-[13px] text-muted-foreground mt-1">{pair.reasoning}</p>
@@ -240,6 +240,7 @@ function BandejaTab({ onOpen, onOpenSkills, onCountChange }: BandejaTabProps) {
   const [quarantine, setQuarantine] = useState<QuarantineRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [resolvingKeys, setResolvingKeys] = useState<Set<string>>(new Set());
+  const [resolveError, setResolveError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -266,6 +267,7 @@ function BandejaTab({ onOpen, onOpenSkills, onCountChange }: BandejaTabProps) {
     async (pair: FlaggedPair, action: "merge" | "separate") => {
       const key = `${pair.ref_a}:${pair.ref_b}`;
       setResolvingKeys((prev) => new Set(prev).add(key));
+      setResolveError(null);
       try {
         await resolveFlaggedPair(token, { ref_a: pair.ref_a, ref_b: pair.ref_b, action });
         setPairs((prev) => {
@@ -273,6 +275,8 @@ function BandejaTab({ onOpen, onOpenSkills, onCountChange }: BandejaTabProps) {
           onCountChange(next.length + quarantine.length);
           return next;
         });
+      } catch {
+        setResolveError(t("dream.bandeja.resolveError"));
       } finally {
         setResolvingKeys((prev) => {
           const next = new Set(prev);
@@ -281,7 +285,7 @@ function BandejaTab({ onOpen, onOpenSkills, onCountChange }: BandejaTabProps) {
         });
       }
     },
-    [token, quarantine.length, onCountChange],
+    [token, quarantine.length, onCountChange, t],
   );
 
   if (loading) {
@@ -294,6 +298,9 @@ function BandejaTab({ onOpen, onOpenSkills, onCountChange }: BandejaTabProps) {
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-6">
+      {resolveError && (
+        <p className="text-sm text-destructive">{resolveError}</p>
+      )}
       <section>
         <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           {t("dream.bandeja.flaggedTitle")}

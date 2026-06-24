@@ -1342,7 +1342,8 @@
       "keepSeparate": "Mantener separadas",
       "reviewInSkills": "Revisar en Skills",
       "emptyFlagged": "No hay pares de memoria marcados para revisión.",
-      "emptyQuarantine": "No hay skills en cuarentena."
+      "emptyQuarantine": "No hay skills en cuarentena.",
+      "resolveError": "No se pudo resolver el par — es posible que ya haya sido procesado. Recargá para ver el estado actual."
     }
   },
   "workflows": {

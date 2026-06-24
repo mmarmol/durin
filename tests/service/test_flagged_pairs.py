@@ -18,7 +18,7 @@ from durin.service.memory import (
     ResolveFlaggedRequest,
 )
 from durin.service.principal import Principal
-from durin.service.types import ForbiddenError, ValidationFailedError
+from durin.service.types import ConflictError, ForbiddenError, ValidationFailedError
 
 LOCAL = Principal.local()
 MEMORY_READ = Principal.remote("tok", frozenset({"memory:read"}))
@@ -169,6 +169,34 @@ async def test_resolve_merge_calls_absorb_and_removes_flag(tmp_path: Path, monke
     assert absorb_calls[0]["reason"] == "manual_review"
     # flag removed after merge
     assert read_flagged(tmp_path) == []
+
+
+async def test_resolve_merge_stale_pair_raises_conflict(tmp_path: Path, monkeypatch):
+    """absorb() raises AbsorptionError when entity pages are gone (already resolved).
+
+    The service must catch it and re-raise as ConflictError (409), not let the
+    raw exception escape as an unhandled 500.
+    """
+    from durin.memory.absorption import AbsorptionError
+
+    add_flagged(
+        tmp_path, "person:alice", "person:alice-v2",
+        verdict="unclear", confidence=72, reasoning="r",
+    )
+
+    def _fake_absorb_missing(self, canonical, absorbed, **kw):
+        raise AbsorptionError(f"canonical page missing: {canonical}")
+
+    monkeypatch.setattr(
+        "durin.memory.absorption.EntityAbsorption.absorb",
+        _fake_absorb_missing,
+    )
+
+    cmd = ResolveFlaggedRequest(
+        ref_a="person:alice", ref_b="person:alice-v2", action="merge",
+    )
+    with pytest.raises(ConflictError):
+        await _service(tmp_path).resolve_flagged(cmd, LOCAL)
 
 
 async def test_resolve_merge_leaves_other_flags_intact(tmp_path: Path, monkeypatch):

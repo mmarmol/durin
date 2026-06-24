@@ -639,10 +639,17 @@ class MemoryService:
         ws = self._workspace_resolver()
 
         if cmd.action == "merge":
-            from durin.memory.absorption import EntityAbsorption
-            EntityAbsorption(workspace=ws).absorb(
-                cmd.ref_a, cmd.ref_b, reason="manual_review",
-            )
+            from durin.memory.absorption import AbsorptionError, EntityAbsorption
+            from durin.service.types import ConflictError
+            try:
+                EntityAbsorption(workspace=ws).absorb(
+                    cmd.ref_a, cmd.ref_b, reason="manual_review",
+                )
+            except AbsorptionError as exc:
+                raise ConflictError(
+                    f"could not merge: {exc}",
+                    details={"ref_a": cmd.ref_a, "ref_b": cmd.ref_b},
+                ) from exc
         else:
             add_tombstone(ws, cmd.ref_a, cmd.ref_b)
 

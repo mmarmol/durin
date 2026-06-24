@@ -311,7 +311,7 @@ describe("DreamView Bandeja tab", () => {
     ref_a: "person:alice",
     ref_b: "person:alice-smith",
     verdict: "same_entity",
-    confidence: 0.92,
+    confidence: 72,
     reasoning: "Both refs share the same name and email.",
     at_ms: Date.now() - 3_600_000,
   };
@@ -394,6 +394,25 @@ describe("DreamView Bandeja tab", () => {
     await waitFor(() => {
       expect(screen.queryByText("person:alice")).not.toBeInTheDocument();
     });
+  });
+
+  it("shows an inline error message when resolveFlaggedPair fails", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([basePair]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.resolveFlaggedPair).mockRejectedValue(new Error("HTTP 409"));
+
+    render(wrap(<DreamView />));
+    await screen.findByText("No dream activity yet.");
+
+    await user.click(screen.getByRole("button", { name: /Inbox/i }));
+    expect(await screen.findByText("person:alice")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Merge" }));
+
+    // Error message appears; pair row is still visible (not removed on failure)
+    expect(await screen.findByText(/Could not resolve pair/)).toBeInTheDocument();
+    expect(screen.getByText("person:alice")).toBeInTheDocument();
   });
 
   it("renders a quarantined skill and calls onOpenSkills when Review in Skills is clicked", async () => {
