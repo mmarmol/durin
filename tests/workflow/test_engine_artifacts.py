@@ -51,3 +51,20 @@ def test_inert_without_workspace(tmp_path):
     wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
     WorkflowEngine(runner).run(wf, "t")         # no workspace=
     assert seen["a"] is None                    # feature inert, no folder
+
+
+def test_no_tools_node_gets_no_folder_and_nils_the_chain(tmp_path):
+    # A no-tools agent node produces no files: it gets no folder, and (like a command
+    # node) it nils the threaded artifact dir for the next node.
+    seen = {}
+    def runner(req):
+        seen[req.node.id] = (req.output_dir, req.upstream_artifact_dir)
+        return NodeRunResponse(output=f"out-{req.node.id}")
+    wf = _wf([
+        {"id": "a", "kind": "work", "tools": "default", "next": "mid"},
+        {"id": "mid", "kind": "work", "next": "b"},          # tools defaults to "none"
+        {"id": "b", "kind": "work", "tools": "default", "next": None},
+    ], "a")
+    WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
+    assert seen["mid"][0] is None                # no-tools node: no folder
+    assert seen["b"][1] is None                  # the no-tools node nilled the chain

@@ -128,9 +128,12 @@ class WorkflowEngine:
             node = workflow.nodes[current]
 
             if isinstance(node, WorkNode):
-                # Compute artifact folder for agent nodes when a workspace is available.
+                # Compute an artifact folder only for a node that can do file I/O — an
+                # agent body with file tools — and when a workspace is available. A
+                # command node or a no-tools node produces no files, gets no folder, and
+                # nils the chain for the next node (below).
                 out_dir: str | None = None
-                if not node.is_command and self._workspace is not None:
+                if not node.is_command and node.tools == "default" and self._workspace is not None:
                     out_dir = str(artifact_dir(self._workspace, run_id, node.id, iteration))
 
                 req = NodeRunRequest(
@@ -180,9 +183,10 @@ class WorkflowEngine:
                     current = node.on_pass if passed else node.on_fail
                 else:
                     upstream_output = output
-                    # Mirrors upstream_output. A command node has out_dir=None (it is not a
-                    # file producer), so it nils the chain for the next node — consistent
-                    # with it also replacing the text output with its stdout.
+                    # Mirrors upstream_output. A node that can't produce files (a command
+                    # node, or an agent node without file tools) has out_dir=None, so it
+                    # nils the chain for the next node — consistent with it also replacing
+                    # the text output.
                     upstream_artifact_dir = out_dir
                     final_output = output
                     current = node.next
