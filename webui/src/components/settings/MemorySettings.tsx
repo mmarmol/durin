@@ -58,7 +58,7 @@ interface MemoryConfigShape {
     min_seconds_between_runs?: number;
     max_seconds_per_run?: number;
     always_on_token_budget?: number;
-    auto_absorb?: { enabled?: boolean; confidence_threshold?: number; min_age_hours?: number };
+    auto_absorb?: { enabled?: boolean; confidence_threshold?: number; semantic_distance_threshold?: number };
   };
 }
 
@@ -73,7 +73,7 @@ interface DreamState {
   alwaysOnTokenBudget: number;
   autoAbsorb: boolean;
   autoAbsorbConfidence: number;
-  autoAbsorbMinAgeHours: number;
+  autoAbsorbSemanticThreshold: number;
 }
 
 function readCrossEncoder(config: Record<string, unknown> | null): CrossEncoderState {
@@ -101,11 +101,11 @@ function readDream(config: Record<string, unknown> | null): DreamState {
     alwaysOnTokenBudget:
       typeof d.always_on_token_budget === "number" ? d.always_on_token_budget : 1500,
     autoAbsorb:
-      typeof d.auto_absorb?.enabled === "boolean" ? d.auto_absorb.enabled : false,
+      typeof d.auto_absorb?.enabled === "boolean" ? d.auto_absorb.enabled : true,
     autoAbsorbConfidence:
       typeof d.auto_absorb?.confidence_threshold === "number" ? d.auto_absorb.confidence_threshold : 95,
-    autoAbsorbMinAgeHours:
-      typeof d.auto_absorb?.min_age_hours === "number" ? d.auto_absorb.min_age_hours : 24,
+    autoAbsorbSemanticThreshold:
+      typeof d.auto_absorb?.semantic_distance_threshold === "number" ? d.auto_absorb.semantic_distance_threshold : 0.20,
   };
 }
 
@@ -310,13 +310,13 @@ export function MemorySettings({ token }: { token: string }) {
             saving={savingPath === "memory.dream.auto_absorb.confidence_threshold"}
             onSave={(n) => void onSave("memory.dream.auto_absorb.confidence_threshold", n)}
           />
-          <DreamNumberRow
-            title={t("settings.memory.rows.dreamAbsorbMinAge")}
-            description={t("settings.memory.help.dreamAbsorbMinAge")}
-            value={dream.autoAbsorbMinAgeHours}
+          <DreamDecimalRow
+            title={t("settings.memory.rows.dreamAbsorbSemanticThreshold")}
+            description={t("settings.memory.help.dreamAbsorbSemanticThreshold")}
+            value={dream.autoAbsorbSemanticThreshold}
             disabled={!dream.enabled || !dream.autoAbsorb}
-            saving={savingPath === "memory.dream.auto_absorb.min_age_hours"}
-            onSave={(n) => void onSave("memory.dream.auto_absorb.min_age_hours", n)}
+            saving={savingPath === "memory.dream.auto_absorb.semantic_distance_threshold"}
+            onSave={(n) => void onSave("memory.dream.auto_absorb.semantic_distance_threshold", n)}
           />
           <DreamNumberRow
             title={t("settings.memory.rows.dreamThrottle")}
@@ -470,6 +470,61 @@ function DreamNumberRow({
             if (e.key === "Enter") commit();
           }}
           inputMode="numeric"
+          disabled={disabled}
+          className="h-8 w-[110px] rounded-full text-[13px]"
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!dirty || disabled || saving}
+          onClick={commit}
+          className="rounded-full"
+        >
+          {t("settings.config.save")}
+        </Button>
+      </div>
+    </SettingsRow>
+  );
+}
+
+/** Decimal input row for fractional dream tuning knobs (0–1 range). Commit on Enter or Save. */
+function DreamDecimalRow({
+  title,
+  description,
+  value,
+  disabled,
+  saving,
+  onSave,
+}: {
+  title: string;
+  description: string;
+  value: number;
+  disabled: boolean;
+  saving: boolean;
+  onSave: (n: number) => void;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+
+  const parsed = Number(draft);
+  const valid = Number.isFinite(parsed) && parsed >= 0 && parsed <= 1;
+  const dirty = valid && parsed !== value;
+  const commit = () => {
+    if (!dirty) return;
+    onSave(parsed);
+  };
+
+  return (
+    <SettingsRow title={title} description={description}>
+      <div className="flex items-center gap-2">
+        <Input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+          }}
+          inputMode="decimal"
           disabled={disabled}
           className="h-8 w-[110px] rounded-full text-[13px]"
         />

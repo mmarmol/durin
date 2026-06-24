@@ -130,6 +130,8 @@ def run_extract_for_session(
     model: str | None = None,
     discover: bool = True,
     skill_signals: bool = True,
+    confidence_threshold: int = 95,
+    semantic_distance_threshold: float = 0.20,
     alias_index: "Any | None" = None,
     vector_index: "Any | None" = None,
 ) -> dict:
@@ -168,6 +170,8 @@ def run_extract_for_session(
         discovered = discover_entities(
             workspace, text, existing_refs=refs,
             llm_invoke=llm_invoke, model=model, source_ref=src,
+            confidence_threshold=confidence_threshold,
+            semantic_distance_threshold=semantic_distance_threshold,
             alias_index=alias_index, vector_index=vector_index,
         )
     signals: list[dict] = []

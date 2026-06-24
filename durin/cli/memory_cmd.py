@@ -214,15 +214,17 @@ def cmd_dream(
     from datetime import datetime, timezone
     _run_started = datetime.now(timezone.utc)
     _vi = dream_vector_index(workspace, cfg)
+    _absorb = cfg.memory.dream.auto_absorb
     console.print("[dim]Extract pass (sessions → entity attributes)…[/dim]")
     ex = run_extract_pass(workspace, model=model,
                           discover=cfg.memory.dream.discover_enabled,
+                          confidence_threshold=_absorb.confidence_threshold,
+                          semantic_distance_threshold=_absorb.semantic_distance_threshold,
                           vector_index=_vi)
     console.print("[dim]Derived-from pass (link entities → source documents)…[/dim]")
     df = run_derived_from_pass(workspace, model=model)
     console.print("[dim]Skill-extract pass (sessions → reusable procedures)…[/dim]")
     sk = run_skill_extract_pass(workspace, model=model)
-    _absorb = cfg.memory.dream.auto_absorb
     if _absorb.enabled:
         console.print("[dim]Refine pass (dedup duplicate entities)…[/dim]")
     else:
@@ -232,6 +234,7 @@ def cmd_dream(
         )
     rf = run_refine_pass(workspace, model=model, enabled=_absorb.enabled,
                          confidence_threshold=_absorb.confidence_threshold,
+                         semantic_distance_threshold=_absorb.semantic_distance_threshold,
                          run_started_at=_run_started,
                          vector_index=_vi)
     console.print("[dim]Always-on pass (distil pinned guidance)…[/dim]")

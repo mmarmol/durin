@@ -89,6 +89,8 @@ def run_extract_pass(
     max_seconds: int = 0,
     discover: bool = True,
     skill_signals: bool = True,
+    confidence_threshold: int = 95,
+    semantic_distance_threshold: float = 0.20,
     vector_index: object | None = None,
 ) -> dict:
     """Run the extract dream over every session that has new turns.
@@ -126,6 +128,8 @@ def run_extract_pass(
                 r = run_extract_for_session(
                     workspace, jsonl_path, llm_invoke=llm_invoke, model=model,
                     discover=discover, skill_signals=skill_signals,
+                    confidence_threshold=confidence_threshold,
+                    semantic_distance_threshold=semantic_distance_threshold,
                     alias_index=_alias_index, vector_index=vector_index)
                 extracted = r.get("extracted") or []
                 discovered = r.get("discovered") or []
@@ -195,6 +199,7 @@ def run_refine_pass(
     model: str | None = None,
     enabled: bool = True,
     confidence_threshold: int = 95,
+    semantic_distance_threshold: float = 0.20,
     run_started_at: "datetime | None" = None,
     vector_index: object | None = None,
 ) -> dict:
@@ -221,6 +226,7 @@ def run_refine_pass(
     _emit("memory.dream.start", kind="refine")
     out = run_refine(workspace, llm_invoke=llm_invoke, model=model,
                      confidence_threshold=confidence_threshold,
+                     semantic_distance_threshold=semantic_distance_threshold,
                      run_started_at=run_started_at,
                      vector_index=vector_index)
     out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
