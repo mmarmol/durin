@@ -357,6 +357,17 @@ class AutoAbsorbConfig(Base):
             "semanticDistanceThreshold", "semantic_distance_threshold"),
     )
 
+    # Pairs the cheap judge can't settle (verdict 'unclear', or 'same' with
+    # confidence in [escalate_floor, confidence_threshold)) go to a bounded
+    # sub-agent that investigates with the lineage/source tools.
+    # 0 disables escalation entirely (old behavior preserved).
+    escalate_floor: int = Field(
+        default=0,
+        ge=0,
+        le=100,
+        validation_alias=AliasChoices("escalateFloor", "escalate_floor"),
+    )
+
 
 class CrossEncoderConfig(Base):
     """Cross-encoder reranker config.

@@ -3,7 +3,13 @@ from datetime import datetime, timezone
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import write_entity
-from durin.memory.refine_dream import add_tombstone, is_tombstoned, run_refine
+from durin.memory.refine_dream import (
+    add_flagged,
+    add_tombstone,
+    is_tombstoned,
+    read_flagged,
+    run_refine,
+)
 
 NOW = datetime(2026, 6, 5, tzinfo=timezone.utc)
 
@@ -129,3 +135,173 @@ def test_refine_no_cutoff_merges(tmp_path):
     _two_dupes(tmp_path)
     out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 99), run_started_at=None)
     assert out["merged"]
+
+
+# ---------------------------------------------------------------------------
+# Tier-2 routing tests (Task 5)
+# ---------------------------------------------------------------------------
+
+def test_refine_tier2_escalates_unclear_and_merges(tmp_path, monkeypatch):
+    """Tier-1 unclear@80 → escalate → same@97 → merged."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+    from durin.memory.absorb_judge import JudgeResult
+    monkeypatch.setattr(rd, "_escalate_judge",
+                        lambda ws, a, b, **kw: JudgeResult("same", 97, "confirmed same"))
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("unclear", 80),
+                     confidence_threshold=95, escalate_floor=70)
+    assert out["merged"], out
+    assert not (tmp_path / "memory/entities/company/mxhero_inc.md").exists()
+
+
+def test_refine_tier2_escalates_unclear_and_keeps(tmp_path, monkeypatch):
+    """Tier-1 unclear@80 → escalate → different@85 → kept."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+    from durin.memory.absorb_judge import JudgeResult
+    monkeypatch.setattr(rd, "_escalate_judge",
+                        lambda ws, a, b, **kw: JudgeResult("different", 85, "not the same"))
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("unclear", 80),
+                     confidence_threshold=95, escalate_floor=70)
+    assert not out["merged"], out
+    assert out["kept_separate"]
+
+
+def test_refine_tier2_escalates_same_in_borderline_window(tmp_path, monkeypatch):
+    """Tier-1 same@75 (in [floor, threshold)) → escalate → same@97 → merged."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+    from durin.memory.absorb_judge import JudgeResult
+    monkeypatch.setattr(rd, "_escalate_judge",
+                        lambda ws, a, b, **kw: JudgeResult("same", 97, "confirmed"))
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 75),
+                     confidence_threshold=95, escalate_floor=70)
+    assert out["merged"], out
+
+
+def test_refine_tier2_no_escalation_when_floor_zero(tmp_path, monkeypatch):
+    """escalate_floor=0 disables Tier-2; unclear@80 → kept (old behavior)."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+    called = {"n": 0}
+
+    def _fake_escalate(ws, a, b, **kw):
+        called["n"] += 1
+        from durin.memory.absorb_judge import JudgeResult
+        return JudgeResult("same", 97, "should not be called")
+
+    monkeypatch.setattr(rd, "_escalate_judge", _fake_escalate)
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("unclear", 80),
+                     confidence_threshold=95, escalate_floor=0)
+    assert called["n"] == 0
+    assert not out["merged"]
+    assert out["kept_separate"]
+
+
+def test_refine_tier2_no_escalation_same_above_threshold(tmp_path, monkeypatch):
+    """same@97 >= threshold → merges directly, no escalation."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+    called = {"n": 0}
+
+    def _fake_escalate(ws, a, b, **kw):
+        called["n"] += 1
+        from durin.memory.absorb_judge import JudgeResult
+        return JudgeResult("same", 99, "should not be called")
+
+    monkeypatch.setattr(rd, "_escalate_judge", _fake_escalate)
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 97),
+                     confidence_threshold=95, escalate_floor=70)
+    assert called["n"] == 0
+    assert out["merged"]
+
+
+def test_refine_tier2_best_effort_on_error(tmp_path, monkeypatch):
+    """Tier-2 exception → pair kept (best-effort; never aborts pass)."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+
+    def _raise(ws, a, b, **kw):
+        raise RuntimeError("agent timeout")
+
+    monkeypatch.setattr(rd, "_escalate_judge", _raise)
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("unclear", 80),
+                     confidence_threshold=95, escalate_floor=70)
+    assert not out["merged"]
+    assert any("tier2_error" in str(k.get("reason", "")) for k in out["kept_separate"])
+
+
+# ---------------------------------------------------------------------------
+# Task 6: flagged-pairs store + escalation routing
+# ---------------------------------------------------------------------------
+
+def test_flagged_roundtrip(tmp_path):
+    """add_flagged stores a record; read_flagged returns it."""
+    add_flagged(tmp_path, "company:a", "company:b",
+                verdict="different", confidence=85, reasoning="they differ")
+    records = read_flagged(tmp_path)
+    assert len(records) == 1
+    r = records[0]
+    assert sorted(r["pair"]) == ["company:a", "company:b"]
+    assert r["verdict"] == "different"
+    assert r["confidence"] == 85
+    assert r["reasoning"] == "they differ"
+    assert "at" in r
+
+
+def test_flagged_dedup_keeps_newest(tmp_path):
+    """Duplicate pair key (same sorted refs) keeps the newest record."""
+    add_flagged(tmp_path, "company:a", "company:b",
+                verdict="different", confidence=80, reasoning="first")
+    add_flagged(tmp_path, "company:b", "company:a",
+                verdict="unclear", confidence=72, reasoning="second")
+    records = read_flagged(tmp_path)
+    assert len(records) == 1
+    assert records[0]["reasoning"] == "second"
+
+
+def test_flagged_multiple_pairs(tmp_path):
+    """Two distinct pairs → two records."""
+    add_flagged(tmp_path, "company:a", "company:b",
+                verdict="different", confidence=80, reasoning="r1")
+    add_flagged(tmp_path, "person:x", "person:y",
+                verdict="unclear", confidence=60, reasoning="r2")
+    records = read_flagged(tmp_path)
+    assert len(records) == 2
+
+
+def test_refine_escalated_non_merge_writes_flagged(tmp_path, monkeypatch):
+    """Escalated pair with Tier-2 verdict != same → flagged record written."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+    from durin.memory.absorb_judge import JudgeResult
+    monkeypatch.setattr(rd, "_escalate_judge",
+                        lambda ws, a, b, **kw: JudgeResult("unclear", 70, "agent unsure"))
+    run_refine(tmp_path, llm_invoke=_judge_stub("unclear", 80),
+               confidence_threshold=95, escalate_floor=70)
+    records = read_flagged(tmp_path)
+    assert len(records) == 1
+    assert records[0]["verdict"] == "unclear"
+    assert "agent unsure" in records[0]["reasoning"]
+
+
+def test_refine_non_escalated_kept_not_flagged(tmp_path):
+    """Non-escalated kept pairs (floor=0) are NOT written to flagged store."""
+    _two_dupes(tmp_path)
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("different", 90),
+                     confidence_threshold=95, escalate_floor=0)
+    assert out["kept_separate"]
+    records = read_flagged(tmp_path)
+    assert records == []
+
+
+def test_flagged_empty_workspace(tmp_path):
+    """read_flagged on a workspace with no flagged file returns empty list."""
+    assert read_flagged(tmp_path) == []

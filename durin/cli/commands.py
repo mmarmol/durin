@@ -1394,6 +1394,7 @@ def _run_gateway(
                     run_refine_pass, workspace, model=model,
                     enabled=_absorb.enabled,
                     confidence_threshold=_absorb.confidence_threshold,
+                    escalate_floor=_absorb.escalate_floor,
                     semantic_distance_threshold=_absorb.semantic_distance_threshold,
                     run_started_at=_run_started,
                     vector_index=_vi)
