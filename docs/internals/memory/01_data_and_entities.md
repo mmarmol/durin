@@ -277,7 +277,7 @@ Archive is excluded from all default search paths: the vector index, FTS5, the g
 | `memory.owner` | — | Owner person ref for `resolve_principal()`; fallback from `principal_channel_map`. |
 | `principal_channel_map` | `{}` | Maps `channel_id → person:<name>` for principal resolution per channel. |
 | `memory.file_watcher.enabled` | `true` | Reactive re-embed when the user edits a `.md` file directly. |
-| `memory.dream.auto_absorb.enabled` | `false` | Whether the refine pass auto-merges entity duplicates. When off, suggestions are logged for manual review. |
+| `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). When off, suggestions are logged for manual review. |
 
 **CLI surfaces:**
 

@@ -1,4 +1,8 @@
-from durin.config.schema import MemoryConfig
+from durin.config.schema import AutoAbsorbConfig, MemoryConfig
+
+
+def test_auto_absorb_enabled_by_default():
+    assert AutoAbsorbConfig().enabled is True
 
 
 def test_index_skills_defaults_true():

@@ -122,8 +122,8 @@ def test_extract_pass_respects_max_seconds(tmp_path):
 
 
 def test_refine_pass_respects_auto_absorb_enabled(tmp_path):
-    # A1: the refine pass must honour auto_absorb.enabled. Disabled (the
-    # conservative default) → no judge call, no merge; enabled → auto-merge.
+    # A1: the refine pass must honour auto_absorb.enabled. Disabled → no judge
+    # call, no merge; enabled (the default) → auto-merge.
     write_entity(tmp_path, "company:a", [FieldPatch(kind="alias", value="A",
                  author="agent", source_ref="s", at=NOW)], create=True, name="A Inc")
     write_entity(tmp_path, "company:a2", [FieldPatch(kind="alias", value="A",
