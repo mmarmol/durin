@@ -68,6 +68,7 @@ function nodeSummary(node: WorkflowNodeDef): string {
     case "decision":
       return node.criteria ? "judge" : "command";
     case "parallel":
+      if (node.worker) return `dynamic · ×N @ runtime`;
       return `${((node.branches as string[]) ?? []).length} branches`;
     case "subworkflow":
       return String(node.workflow ?? "");
@@ -78,6 +79,7 @@ function nodeSummary(node: WorkflowNodeDef): string {
 
 function NodeCard({ data, selected }: NodeProps) {
   const { node, isStart } = data as unknown as FlowNodeData;
+  const isDynamicWorker = !!(data as Record<string, unknown>).dynamicWorker;
   const kind = displayKind(node);
   return (
     <div
@@ -85,11 +87,17 @@ function NodeCard({ data, selected }: NodeProps) {
         "min-w-[150px] rounded-md border bg-background px-3 py-2",
         KIND_RING[kind] ?? "border-border",
         (isStart || selected) && "ring-2 ring-primary",
+        isDynamicWorker && "ring-1 ring-violet-400/60",
       )}
     >
       <Handle type="target" position={Position.Left} />
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-        {kind}{isStart ? " · start" : ""}
+      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+        <span>{kind}{isStart ? " · start" : ""}</span>
+        {isDynamicWorker && (
+          <span className="rounded bg-violet-100 px-1 py-0.5 text-[9px] font-medium text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">
+            ×N @ runtime
+          </span>
+        )}
       </div>
       <div className="text-sm font-medium">{node.id}</div>
       <div className="text-xs text-muted-foreground">{nodeSummary(node)}</div>
@@ -400,7 +408,115 @@ function NodeConfigPanel({
         </>
       )}
 
-      {(node.kind === "parallel" || node.kind === "subworkflow") && (
+      {node.kind === "parallel" && (() => {
+        const isDynamic = typeof node.worker === "string" && node.worker !== "";
+        const parallelMode = isDynamic ? "dynamic" : "static";
+
+        function handleParallelModeChange(mode: "static" | "dynamic") {
+          if (mode === "dynamic") {
+            onChange({ worker: null, list_from: null, branches: undefined });
+          } else {
+            onChange({ branches: [], worker: undefined, list_from: undefined });
+          }
+        }
+
+        const branchList: string[] = Array.isArray(node.branches) ? (node.branches as string[]) : [];
+
+        function toggleBranch(id: string, checked: boolean) {
+          const next = checked
+            ? [...new Set([...branchList, id])]
+            : branchList.filter((b) => b !== id);
+          onChange({ branches: next });
+        }
+
+        return (
+          <>
+            {/* Mode toggle */}
+            <Field label={t("workflows.parallelMode")}>
+              <select
+                className={selectCls}
+                value={parallelMode}
+                onChange={(e) => handleParallelModeChange(e.target.value as "static" | "dynamic")}
+              >
+                <option value="static">{t("workflows.parallelStatic")}</option>
+                <option value="dynamic">{t("workflows.parallelDynamic")}</option>
+              </select>
+            </Field>
+
+            {parallelMode === "static" ? (
+              <Field label={t("workflows.parallelBranches")}>
+                <div className="flex flex-col gap-1">
+                  {others.length === 0 ? (
+                    <span className="text-xs text-muted-foreground">(no other nodes)</span>
+                  ) : (
+                    others.map((id) => (
+                      <label key={id} className="flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          className="h-3.5 w-3.5 cursor-pointer accent-primary"
+                          checked={branchList.includes(id)}
+                          onChange={(e) => toggleBranch(id, e.target.checked)}
+                        />
+                        {id}
+                      </label>
+                    ))
+                  )}
+                </div>
+              </Field>
+            ) : (
+              <>
+                <Field label={t("workflows.parallelWorker")}>
+                  <TargetSelect
+                    value={node.worker as string | null}
+                    options={others}
+                    onChange={(v) => onChange({ worker: v })}
+                  />
+                </Field>
+                <Field label={t("workflows.parallelListFrom")}>
+                  <TargetSelect
+                    value={node.list_from as string | null}
+                    options={others}
+                    onChange={(v) => onChange({ list_from: v })}
+                  />
+                </Field>
+              </>
+            )}
+
+            {/* Common: max_concurrency, next (merge), reconcile */}
+            <Field label={t("workflows.parallelMaxConcurrency")}>
+              <Input
+                type="number"
+                min={1}
+                value={(node.max_concurrency as number) ?? 2}
+                onChange={(e) => onChange({ max_concurrency: Math.max(1, parseInt(e.target.value, 10) || 2) })}
+                className="h-8"
+              />
+            </Field>
+
+            <Field label={t("workflows.next")}>
+              <TargetSelect
+                value={node.next as string | null}
+                options={others}
+                onChange={(v) => onChange({ next: v })}
+              />
+            </Field>
+
+            <Field label={t("workflows.parallelReconcile")}>
+              <select
+                className={selectCls}
+                value={(node.reconcile as string) ?? "read"}
+                onChange={(e) => onChange({ reconcile: e.target.value as "read" | "choose" | "union" })}
+              >
+                <option value="read">read</option>
+                <option value="choose">choose</option>
+                <option value="union">union</option>
+              </select>
+            </Field>
+          </>
+        );
+      })()}
+
+      {node.kind === "subworkflow" && (
         <Field label={t("workflows.next")}>
           <TargetSelect
             value={node.next as string}
@@ -504,6 +620,13 @@ export function WorkflowsView() {
   const addNode = useCallback(() => {
     const id = `node-${++_idSeq}`;
     const node: WorkflowNodeDef = { id, kind: "work", mode: "build", prompt: "", next: null };
+    mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
+    setSelectedNodeId(id);
+  }, [mutate]);
+
+  const addParallelNode = useCallback(() => {
+    const id = `parallel-${++_idSeq}`;
+    const node: WorkflowNodeDef = { id, kind: "parallel", reconcile: "read", max_concurrency: 2, branches: [], next: null };
     mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
     setSelectedNodeId(id);
   }, [mutate]);
@@ -717,6 +840,9 @@ export function WorkflowsView() {
               <div className="absolute left-2 top-2 z-10 flex items-center gap-2">
                 <Button size="sm" variant="outline" onClick={addNode}>
                   <Plus className="h-3.5 w-3.5" /> {t("workflows.addNode")}
+                </Button>
+                <Button size="sm" variant="outline" onClick={addParallelNode}>
+                  <Plus className="h-3.5 w-3.5" /> {t("workflows.addParallel")}
                 </Button>
                 {dirty && (
                   <Button size="sm" onClick={onSave} disabled={saving}>

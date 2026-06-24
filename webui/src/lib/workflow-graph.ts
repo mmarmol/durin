@@ -12,6 +12,11 @@ export type WorkflowNodeDef = {
   on_pass?: string | null;
   on_fail?: string | null;
   branches?: string[];
+  // parallel dynamic mode fields
+  worker?: string | null;
+  list_from?: string | null;
+  max_concurrency?: number;
+  reconcile?: "read" | "choose" | "union";
   [k: string]: unknown;
 };
 
@@ -37,7 +42,7 @@ const ROW = 110;
 
 function targetsOf(n: WorkflowNodeDef): string[] {
   const out: string[] = [];
-  for (const t of [n.next, n.on_pass, n.on_fail, ...(n.branches ?? [])]) {
+  for (const t of [n.next, n.on_pass, n.on_fail, n.worker, n.list_from, ...(n.branches ?? [])]) {
     if (typeof t === "string") out.push(t);
   }
   return out;
@@ -105,16 +110,39 @@ export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[]
       edges.push({ id: `${source}->${to}:${label ?? ""}`, source, target: to, label });
     }
   };
+
+  // Track which nodes are dynamic-parallel workers so they can carry the ×N badge.
+  const dynamicWorkerIds = new Set<string>();
+  for (const n of def.nodes) {
+    if (n.kind === "parallel" && n.worker) dynamicWorkerIds.add(n.worker);
+  }
+
   for (const n of def.nodes) {
     if (nodeRoutes(n)) {
       // Routing node (kind:"work" with on_pass/on_fail OR legacy kind:"decision")
       add(n.id, n.on_pass, "pass");
       add(n.id, n.on_fail, "fail");
     } else if (n.kind === "parallel") {
-      for (const b of n.branches ?? []) add(n.id, b, "branch");
-      add(n.id, n.next);
+      const isDynamic = typeof n.worker === "string";
+      if (isDynamic) {
+        // Dynamic parallel: list_from → parallel (edge from list source), parallel → worker, parallel → next
+        add(n.id, n.list_from, "list");
+        add(n.id, n.worker, "worker");
+        add(n.id, n.next);
+      } else {
+        // Static parallel: fan out to branches, merge to next
+        for (const b of n.branches ?? []) add(n.id, b, "branch");
+        add(n.id, n.next);
+      }
     } else {
       add(n.id, n.next);
+    }
+  }
+
+  // Annotate dynamic worker nodes with a marker in their data.
+  for (const n of nodes) {
+    if (dynamicWorkerIds.has(n.id)) {
+      n.data = { ...n.data, dynamicWorker: true };
     }
   }
 

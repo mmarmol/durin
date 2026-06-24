@@ -768,7 +768,16 @@
     "onPass": "on pass",
     "onFail": "on fail",
     "next": "next",
-    "command": "command"
+    "command": "command",
+    "addParallel": "parallel",
+    "parallelMode": "mode",
+    "parallelStatic": "static (fixed branches)",
+    "parallelDynamic": "dynamic (×N worker)",
+    "parallelBranches": "branches",
+    "parallelWorker": "worker template",
+    "parallelListFrom": "list from",
+    "parallelMaxConcurrency": "max concurrency",
+    "parallelReconcile": "reconcile"
   },
   "skills": {
     "view": "View",

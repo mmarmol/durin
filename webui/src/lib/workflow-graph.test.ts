@@ -162,4 +162,43 @@ describe("workflowToFlow", () => {
     });
     expect(nodes.every((n) => n.type !== "input_obj" && n.type !== "output_obj")).toBe(true);
   });
+
+  it("a static parallel (branches=[a,b], next=c) emits branch edges and a merge edge", () => {
+    const { edges } = workflowToFlow({
+      name: "sfan",
+      start: "fan",
+      nodes: [
+        { id: "fan", kind: "parallel", branches: ["a", "b"], next: "c" },
+        { id: "a", kind: "work" },
+        { id: "b", kind: "work" },
+        { id: "c", kind: "work" },
+      ],
+    });
+    const branchEdges = edges.filter((e) => e.source === "fan" && e.label === "branch");
+    expect(branchEdges).toHaveLength(2);
+    expect(branchEdges.map((e) => e.target).sort()).toEqual(["a", "b"]);
+    const merge = edges.find((e) => e.source === "fan" && e.target === "c");
+    expect(merge).toBeDefined();
+  });
+
+  it("a dynamic parallel (worker=w, list_from=orch, next=done) emits list/worker/merge edges and the worker node carries the dynamicWorker marker", () => {
+    const { nodes, edges } = workflowToFlow({
+      name: "dfan",
+      start: "orch",
+      nodes: [
+        { id: "orch", kind: "work", next: "fan" },
+        { id: "fan", kind: "parallel", worker: "w", list_from: "orch", next: "done" },
+        { id: "w", kind: "work" },
+        { id: "done", kind: "work" },
+      ],
+    });
+    const listEdge = edges.find((e) => e.source === "fan" && e.target === "orch" && e.label === "list");
+    expect(listEdge).toBeDefined();
+    const workerEdge = edges.find((e) => e.source === "fan" && e.target === "w" && e.label === "worker");
+    expect(workerEdge).toBeDefined();
+    const mergeEdge = edges.find((e) => e.source === "fan" && e.target === "done");
+    expect(mergeEdge).toBeDefined();
+    const workerNode = nodes.find((n) => n.id === "w");
+    expect((workerNode?.data as Record<string, unknown>).dynamicWorker).toBe(true);
+  });
 });
