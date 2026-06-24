@@ -181,12 +181,15 @@ def test_system_prompt_does_not_warn_about_message_time_markers(tmp_path) -> Non
     assert "Message Time" not in prompt
 
 
-def test_default_soul_template_contains_execution_rules() -> None:
-    """Default SOUL.md template must contain execution rules with act/plan layering."""
+def test_operating_floor_template_contains_execution_rules() -> None:
+    """Execution rules now live in the operating floor template, not SOUL.md.
+    SOUL.md carries only voice/personality; the operating floor is always injected."""
+    floor = (pkg_files("durin") / "templates" / "agent" / "operating_floor.md").read_text(encoding="utf-8")
+    assert "## Operating Floor" in floor
+    assert "single-step tasks" in floor
+    assert "multi-step tasks" in floor
     soul = (pkg_files("durin") / "templates" / "SOUL.md").read_text(encoding="utf-8")
-    assert "## Execution Rules" in soul
-    assert "single-step tasks" in soul
-    assert "multi-step tasks" in soul
+    assert "## Execution Rules" not in soul
 
 
 def test_channel_format_hint_telegram(tmp_path) -> None:

@@ -9,6 +9,7 @@ import {
   Cloud,
   Cpu,
   Database,
+  Drama,
   Eye,
   EyeOff,
   Pencil,
@@ -83,6 +84,7 @@ import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { useClient } from "@/providers/ClientProvider";
 import type { SecretEntry, SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
 import { McpSettings } from "./McpSettings";
+import { PersonasSettings } from "./PersonasSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 
 type SettingsSectionKey =
@@ -93,6 +95,7 @@ type SettingsSectionKey =
   | "memory"
   | "transcription"
   | "skills-security"
+  | "personas"
   | "mcp"
   | "cron"
   | "secrets"
@@ -427,6 +430,8 @@ export function SettingsView({
                 <TranscriptionSettings token={token} />
               ) : activeSection === "skills-security" ? (
                 <SkillsSecuritySettings token={token} />
+              ) : activeSection === "personas" ? (
+                <PersonasSettings token={token} />
               ) : activeSection === "mcp" ? (
                 <McpSettings token={token} />
               ) : activeSection === "cron" ? (
@@ -504,6 +509,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "memory", icon: Brain },
   { key: "transcription", icon: Waves },
   { key: "skills-security", icon: ShieldCheck },
+  { key: "personas", icon: Drama },
   { key: "mcp", icon: Plug },
   { key: "cron", icon: Clock },
   { key: "secrets", icon: Lock },

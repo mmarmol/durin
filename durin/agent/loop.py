@@ -221,6 +221,12 @@ class TurnContext:
     pending_summary: str | None = None
 
     model_preset_override: str | None = None
+    persona_override: str | None = None
+    # Resolved once in _state_build from the active persona; reused by the
+    # overflow-retry rebuild and the model-override path so every build of
+    # this turn sees the same SOUL body + model ref.
+    active_persona_soul: str | None = None
+    persona_model_ref: str | None = None
 
     turn_wall_started_at: float = field(default_factory=time.time)
     turn_latency_ms: int | None = None
@@ -1235,12 +1241,44 @@ class AgentLoop:
         except Exception:  # noqa: BLE001
             return mode, False
 
+    def _active_persona(
+        self,
+        session: Session | None,
+        persona_override: str | None,
+    ) -> tuple[str | None, str | None]:
+        """Resolve the active persona for a turn and return ``(soul_body, model_ref)``.
+
+        ``soul_body`` is the resolved SOUL text (``None`` when no persona is
+        active or the persona's slug has no/empty body → caller falls back to
+        the default SOUL). ``model_ref`` is the persona's model picker ref
+        (``None`` → caller uses the global default / explicit per-turn override).
+
+        ``persona_override`` is reserved for a future cron-job persona; it is
+        correct forward plumbing but no caller passes it yet. Today the
+        effective precedence is per-conversation (session.metadata["persona"])
+        > global default (agents.defaults.persona).
+        """
+        from durin.personas.resolve import resolve_active_persona_name
+
+        name = resolve_active_persona_name(
+            self.app_config,
+            session.metadata if session is not None else None,
+            persona_override,
+        )
+        persona = self.app_config.resolve_persona(name) if self.app_config else None
+        if persona is None:
+            return None, None
+        from durin.souls.store import SoulStore
+        body = SoulStore(self.workspace).read(persona.soul)
+        return (body or None), persona.model
+
     def _build_initial_messages(
         self,
         msg: InboundMessage,
         session: Session,
         history: list[dict[str, Any]],
         pending_summary: str | None,
+        active_persona_soul: str | None = None,
     ) -> list[dict[str, Any]]:
         """Build the initial message list for the LLM turn."""
         audio_mode, supports_audio = self._audio_build_args()
@@ -1258,6 +1296,7 @@ class AgentLoop:
             iteration=0,
             audio_mode=audio_mode,
             supports_audio_input=supports_audio,
+            active_persona_soul=active_persona_soul,
         )
 
     async def _dispatch_command_inline(
@@ -1965,6 +2004,7 @@ class AgentLoop:
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
         pending_queue: asyncio.Queue | None = None,
         model_preset: str | None = None,
+        persona: str | None = None,
     ) -> OutboundMessage | None:
         """Process a single inbound message and return the response."""
         self._refresh_provider_snapshot()
@@ -1991,6 +2031,7 @@ class AgentLoop:
             on_stream_end=on_stream_end,
             pending_queue=pending_queue,
             model_preset_override=model_preset,
+            persona_override=persona,
         )
 
         while ctx.state is not TurnState.DONE:
@@ -2190,8 +2231,16 @@ class AgentLoop:
         }
         ctx.history = ctx.session.get_history(**_hist_kwargs)
 
+        # Resolve the active persona once for this turn: its SOUL body feeds the
+        # context build (here and on overflow-retry) and its model ref feeds the
+        # per-turn model-override path in _run_agent_loop. No persona configured
+        # → both stay None → default SOUL + default model (unchanged behavior).
+        ctx.active_persona_soul, ctx.persona_model_ref = self._active_persona(
+            ctx.session, ctx.persona_override
+        )
         ctx.initial_messages = self._build_initial_messages(
-            ctx.msg, ctx.session, ctx.history, ctx.pending_summary
+            ctx.msg, ctx.session, ctx.history, ctx.pending_summary,
+            active_persona_soul=ctx.active_persona_soul,
         )
         ctx.user_persisted_early = self._persist_user_message_early(
             ctx.msg, ctx.session
@@ -2220,7 +2269,9 @@ class AgentLoop:
                 metadata=ctx.msg.metadata,
                 session_key=ctx.session_key,
                 pending_queue=ctx.pending_queue,
-                model_preset=ctx.model_preset_override,
+                # Most specific wins: an explicit per-turn ref (cron per-job
+                # model or /model) overrides the active persona's model.
+                model_preset=ctx.model_preset_override or ctx.persona_model_ref,
             )
             final_content, tools_used, all_msgs, stop_reason, had_injections, tool_events = result
             ctx.final_content = final_content
@@ -2268,6 +2319,7 @@ class AgentLoop:
                 )
                 ctx.initial_messages = self._build_initial_messages(
                     ctx.msg, ctx.session, ctx.history, ctx.pending_summary,
+                    active_persona_soul=ctx.active_persona_soul,
                 )
                 continue
             break
@@ -2675,6 +2727,7 @@ class AgentLoop:
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
         model_preset: str | None = None,
+        persona: str | None = None,
     ) -> OutboundMessage | None:
         """Process a message directly and return the outbound payload.
 
@@ -2712,6 +2765,7 @@ class AgentLoop:
                     on_stream=on_stream,
                     on_stream_end=on_stream_end,
                     model_preset=model_preset,
+                    persona=persona,
                 )
             finally:
                 await turn_lease_cm.__aexit__(None, None, None)

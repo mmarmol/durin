@@ -793,6 +793,11 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     for item in tpl.iterdir():
         if item.name.endswith(".md") and not item.name.startswith("."):
             _write(item, workspace / item.name)
+    souls_tpl = tpl / "souls"
+    if souls_tpl.is_dir():
+        for item in souls_tpl.iterdir():
+            if item.name.endswith(".md") and not item.name.startswith("."):
+                _write(item, workspace / "souls" / item.name)
     _write(None, workspace / "memory" / "history.jsonl")
     (workspace / "skills").mkdir(exist_ok=True)
 

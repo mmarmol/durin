@@ -745,6 +745,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/personas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List personas (user + built-in) and the default */
+        get: operations["personas_list_personas"];
+        put?: never;
+        /** Create or update a user persona */
+        post: operations["personas_upsert_persona"];
+        /** Delete a user persona (built-ins cannot be deleted) */
+        delete: operations["personas_delete_persona"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/personas/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set (or clear) the global default persona */
+        post: operations["personas_set_default"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/personas/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Live round-trip: run the chosen SOUL + model with a short prompt */
+        post: operations["personas_test_persona"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/providers/model": {
         parameters: {
             query?: never;
@@ -1272,6 +1325,25 @@ export interface paths {
         /** Overwrite a MANUAL skill */
         post: operations["skills_save"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/souls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List all SOUL personality files */
+        get: operations["personas_list_souls"];
+        put?: never;
+        /** Create or overwrite a SOUL personality file */
+        post: operations["personas_upsert_soul"];
+        /** Delete a named SOUL file (the default soul cannot be deleted) */
+        delete: operations["personas_delete_soul"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2604,6 +2676,110 @@ export interface components {
              */
             source: string | null;
         };
+        /** PersonaDeleteCommand */
+        PersonaDeleteCommand: {
+            /** Name */
+            name: string;
+        };
+        /** PersonaDeleteResult */
+        PersonaDeleteResult: {
+            /** Ok */
+            ok: boolean;
+        };
+        /** PersonaItem */
+        PersonaItem: {
+            /**
+             * Builtin
+             * @default false
+             */
+            builtin: boolean;
+            /**
+             * Description
+             * @default null
+             */
+            description: string | null;
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
+            /** Name */
+            name: string;
+            /** Soul */
+            soul: string;
+        };
+        /**
+         * PersonaListQuery
+         * @description No inputs — lists all personas (user + built-in) and the default.
+         */
+        PersonaListQuery: Record<string, never>;
+        /** PersonaListResult */
+        PersonaListResult: {
+            /**
+             * Default
+             * @default null
+             */
+            default: string | null;
+            /** Personas */
+            personas: components["schemas"]["PersonaItem"][];
+        };
+        /** PersonaTestCommand */
+        PersonaTestCommand: {
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
+            /**
+             * Soul
+             * @default null
+             */
+            soul: string | null;
+        };
+        /** PersonaTestResult */
+        PersonaTestResult: {
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
+            /** Ok */
+            ok: boolean;
+            /**
+             * Reply
+             * @default null
+             */
+            reply: string | null;
+        };
+        /** PersonaUpsertCommand */
+        PersonaUpsertCommand: {
+            /**
+             * Description
+             * @default null
+             */
+            description: string | null;
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Soul
+             * @default default
+             */
+            soul: string;
+        };
+        /** PersonaUpsertResult */
+        PersonaUpsertResult: {
+            persona: components["schemas"]["PersonaItem"];
+        };
         /** PickerEntryModel */
         PickerEntryModel: {
             /** Group */
@@ -2861,6 +3037,22 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        /** SetDefaultPersonaCommand */
+        SetDefaultPersonaCommand: {
+            /**
+             * Name
+             * @default null
+             */
+            name: string | null;
+        };
+        /** SetDefaultPersonaResult */
+        SetDefaultPersonaResult: {
+            /**
+             * Default
+             * @default null
+             */
+            default: string | null;
+        };
         /** SettingsProviderUpdateCommand */
         SettingsProviderUpdateCommand: {
             /**
@@ -3100,6 +3292,44 @@ export interface components {
             data: {
                 [key: string]: unknown;
             };
+        };
+        /** SoulDeleteCommand */
+        SoulDeleteCommand: {
+            /** Slug */
+            slug: string;
+        };
+        /** SoulDeleteResult */
+        SoulDeleteResult: {
+            /** Ok */
+            ok: boolean;
+        };
+        /** SoulItem */
+        SoulItem: {
+            /** Body */
+            body: string;
+            /** Slug */
+            slug: string;
+        };
+        /**
+         * SoulListQuery
+         * @description No inputs — lists all souls including the default.
+         */
+        SoulListQuery: Record<string, never>;
+        /** SoulListResult */
+        SoulListResult: {
+            /** Souls */
+            souls: components["schemas"]["SoulItem"][];
+        };
+        /** SoulUpsertCommand */
+        SoulUpsertCommand: {
+            /** Body */
+            body: string;
+            /** Slug */
+            slug: string;
+        };
+        /** SoulUpsertResult */
+        SoulUpsertResult: {
+            soul: components["schemas"]["SoulItem"];
         };
         /** TokenMetadata */
         TokenMetadata: {
@@ -4506,6 +4736,126 @@ export interface operations {
             };
         };
     };
+    personas_list_personas: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PersonaListQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonaListResult"];
+                };
+            };
+        };
+    };
+    personas_upsert_persona: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PersonaUpsertCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonaUpsertResult"];
+                };
+            };
+        };
+    };
+    personas_delete_persona: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PersonaDeleteCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonaDeleteResult"];
+                };
+            };
+        };
+    };
+    personas_set_default: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetDefaultPersonaCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetDefaultPersonaResult"];
+                };
+            };
+        };
+    };
+    personas_test_persona: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PersonaTestCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonaTestResult"];
+                };
+            };
+        };
+    };
     config_provider_model_upsert: {
         parameters: {
             query?: never;
@@ -5366,6 +5716,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SkillsResult"];
+                };
+            };
+        };
+    };
+    personas_list_souls: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoulListQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoulListResult"];
+                };
+            };
+        };
+    };
+    personas_upsert_soul: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoulUpsertCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoulUpsertResult"];
+                };
+            };
+        };
+    };
+    personas_delete_soul: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SoulDeleteCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SoulDeleteResult"];
                 };
             };
         };

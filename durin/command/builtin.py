@@ -79,6 +79,13 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "[preset]",
     ),
     BuiltinCommandSpec(
+        "/persona",
+        "Switch persona",
+        "Show or switch the active persona for this conversation.",
+        "user-round",
+        "[name|default]",
+    ),
+    BuiltinCommandSpec(
         "/history",
         "Show conversation history",
         "Print the last N persisted conversation messages.",
@@ -1857,6 +1864,47 @@ async def cmd_why(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+async def cmd_persona(ctx: CommandContext) -> OutboundMessage:
+    """Show or switch the active persona for this conversation."""
+    loop = ctx.loop
+    config = getattr(loop, "app_config", None)
+    session = ctx.session
+    args = ctx.args.strip()
+    metadata = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+
+    def _reply(content: str) -> OutboundMessage:
+        return OutboundMessage(channel=ctx.msg.channel, chat_id=ctx.msg.chat_id, content=content, metadata=metadata)
+
+    names = config.persona_names() if config is not None else []
+
+    def _persona_line(n: str) -> str:
+        persona = config.resolve_persona(n) if config is not None else None
+        desc = persona.description if persona and persona.description else None
+        return f"- `{n}`" + (f" — {desc}" if desc else "")
+
+    if not args:
+        current = (session.metadata.get("persona") if session and session.metadata else None)
+        if not current and config is not None:
+            current = config.agents.defaults.persona
+        avail_lines = [_persona_line(n) for n in names] if names else ["- (none)"]
+        lines = ["## Persona", f"- Current: `{current or 'default'}`", "- Available:"] + avail_lines
+        return _reply("\n".join(lines))
+
+    name = args.split()[0]
+    if name in ("default", "none"):
+        if session is not None:
+            session.metadata.pop("persona", None)
+        return _reply("Switched to the default persona.")
+
+    if name not in names:
+        avail = ", ".join(f"`{n}`" for n in names) or "(none)"
+        return _reply(f"Unknown persona `{name}`. Available: {avail}.")
+
+    if session is not None:
+        session.metadata["persona"] = name
+    return _reply(f"Switched persona to `{name}` for this conversation.")
+
+
 async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     """Return available slash commands."""
     return OutboundMessage(
@@ -1897,6 +1945,8 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/status", cmd_status)
     router.exact("/model", cmd_model)
     router.prefix("/model ", cmd_model)
+    router.exact("/persona", cmd_persona)
+    router.prefix("/persona ", cmd_persona)
     router.exact("/effort", cmd_effort)
     router.prefix("/effort ", cmd_effort)
     router.exact("/history", cmd_history)
