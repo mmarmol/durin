@@ -1,0 +1,49 @@
+{
+  "name": "research-to-answer",
+  "start": "plan",
+  "max_visits": 3,
+  "improvement_mode": "manual",
+  "input": {"text": true, "description": "a question that needs gathering and weighing several sources"},
+  "output": {"text": true, "description": "a source-cited answer that passed a grounding check"},
+  "nodes": [
+    {
+      "id": "plan",
+      "kind": "work",
+      "mode": "plan",
+      "tools": "none",
+      "prompt": "Break the question into 3-6 independent research angles. Write each angle as a SELF-CONTAINED search query that names the specific subject of the question, so it stands on its own without the original question. Output ONLY a JSON array of these query strings, e.g. [\"health benefits of X\", \"risks and side effects of X\"]. No other text.",
+      "next": "gather"
+    },
+    {
+      "id": "gather",
+      "kind": "parallel",
+      "worker": "search",
+      "list_from": "plan",
+      "max_concurrency": 3,
+      "next": "synthesize"
+    },
+    {
+      "id": "search",
+      "kind": "work",
+      "mode": "explore",
+      "tools": "default",
+      "prompt": "Investigate the self-contained research query you were given. Make AT MOST 2-3 web searches and read AT MOST 3-4 sources total, then STOP — do not re-fetch a URL you already read or keep hunting for more. Return concise findings, each claim followed by its source (a URL or title). Cite specifically; never invent a source or summarize vaguely. If sources are thin, say so rather than over-searching."
+    },
+    {
+      "id": "synthesize",
+      "kind": "work",
+      "mode": "explore",
+      "tools": "none",
+      "prompt": "Using the gathered findings, write one coherent, well-structured answer to the original question. Keep every non-trivial claim tied to a source from the findings. Where the findings are thin, say so rather than guessing.",
+      "next": "verify"
+    },
+    {
+      "id": "verify",
+      "kind": "work",
+      "mode": "explore",
+      "tools": "none",
+      "prompt": "Check the answer for grounding against the gathered findings. Give a one-line reason, then end your reply with EXACTLY one of these labels on its own final line:\nGROUNDED  — every non-trivial claim is supported by a cited source in the findings.\nMISSING   — some claim has no supporting source; more evidence must be gathered.\nMISUSED   — some claim contradicts or overstates what its source actually says; rewrite from the existing findings.",
+      "cases": {"GROUNDED": null, "MISSING": "plan", "MISUSED": "synthesize"}
+    }
+  ]
+}

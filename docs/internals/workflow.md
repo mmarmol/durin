@@ -245,7 +245,7 @@ End-to-end for a single `run_workflow` call:
   with its reason, and marks it applied; the anti-Goodhart anchor is the human.
   **auto** mode (apply directly, gated by an external validation signal so it can't win
   by loosening gates) is the next slice; the apply step + seam are in place.
-- **Seeds.** Five starter workflows ship bundled under `durin/templates/workflows/` and
+- **Seeds.** Starter workflows ship bundled under `durin/templates/workflows/` and
   are copied into a fresh workspace's `workflows/` directory by
   `seed_workflows(workspace)` (called from `sync_workspace_templates`) — idempotent,
   never overwrites a user-edited file.
@@ -257,6 +257,7 @@ End-to-end for a single `run_workflow` call:
   | `orchestrate-dev` | orchestrator → dynamic fan-out (worker × N, cap 2) → integrate |
   | `routing-triage` | classify (routing) → specialist_code or specialist_analysis |
   | `build-test-fix` | implement → command gate (pytest) → loop-to-fix on fail |
+  | `research-to-answer` | plan → dynamic fan-out (search × N) → synthesize → verify (multi-way: grounded ends / missing → re-plan / misused → re-synthesize) |
 
 - **Current scope.** Today: sequential execution with **concurrent parallel** branches —
   static (fixed `branches` list) or **dynamic** (`worker` template mapped over a runtime

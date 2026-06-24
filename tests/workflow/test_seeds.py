@@ -15,6 +15,7 @@ _SEED_NAMES = [
     "orchestrate-dev",
     "routing-triage",
     "build-test-fix",
+    "research-to-answer",
 ]
 
 
@@ -37,7 +38,7 @@ def test_seed_parses(name: str):
     assert wf.name == name
 
 
-def test_seed_workflows_copies_all_five(tmp_path: Path):
+def test_seed_workflows_copies_all(tmp_path: Path):
     added = seed_workflows(tmp_path)
     dest = tmp_path / "workflows"
     for name in _SEED_NAMES:
