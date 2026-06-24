@@ -17,6 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Union
 
+from durin.workflow.verdict import normalize_label
+
 
 class WorkflowError(ValueError):
     """Raised when a workflow definition is malformed."""
@@ -180,6 +182,17 @@ def _build_node(raw: dict[str, Any]) -> Node:
                         f"node {node_id!r}: 'cases' values must be a string node id or null, got {target!r}"
                     )
             cases = dict(cases_raw)
+            # Reject labels that normalize to the same form — they would cause a
+            # silent mis-route because parse_label uses the same normalization.
+            seen_norms: dict[str, str] = {}
+            for label in cases:
+                norm = normalize_label(label)
+                if norm in seen_norms:
+                    raise WorkflowError(
+                        f"node {node_id!r}: case labels {seen_norms[norm]!r} and "
+                        f"{label!r} normalize to the same form and would mis-route"
+                    )
+                seen_norms[norm] = label
         # Mutual exclusivity: exactly one of next, on_pass/on_fail, or cases.
         binary_routing = on_pass is not None or on_fail is not None
         if cases is not None and binary_routing:

@@ -249,17 +249,18 @@ class WorkflowEngine:
                                 final_output=abort_msg,
                                 runs=runs,
                                 run_id=run_id,
-                                output_dir=terminal_output_dir,
                             )
                         label = "default"
                     # Record the matched label in the NodeRun trace.
                     runs[-1].route_label = label
                     if target is not None:
-                        # Thread output as reviewer feedback before routing to the
-                        # loop-back target, mirroring the binary fail-edge behaviour.
+                        # Thread this node's output as neutral context before routing to
+                        # the target. Unlike the binary fail-edge (which always carries
+                        # remediation feedback), a cases route may be a forward dispatch,
+                        # not a loop-back, so the framing is intentionally neutral.
                         prior = upstream_output or ""
                         upstream_output = (
-                            f"{prior}\n\nReviewer feedback (address this):\n{output}"
+                            f"{prior}\n\nContext from {node.id!r}:\n{output}"
                         )
                     current = target
                 elif node.routes:

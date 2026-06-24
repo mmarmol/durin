@@ -9,6 +9,18 @@ from __future__ import annotations
 import re
 from typing import Iterable
 
+_PUNCT = re.compile(r"^[^\w]+|[^\w]+$")
+
+
+def normalize_label(s: str) -> str:
+    """Strip leading/trailing punctuation and uppercase.
+
+    Used both when matching agent output and when validating that declared case
+    labels are distinct — two labels that normalize to the same form would cause
+    a silent mis-route, so the spec rejects them at parse time.
+    """
+    return _PUNCT.sub("", s).upper()
+
 
 def parse_verdict(text: str) -> bool:
     """Return True iff the first non-empty line of *text* starts with 'PASS' (case-insensitive)."""
@@ -31,14 +43,9 @@ def parse_label(text: str, labels: Iterable[str]) -> str | None:
     the *labels* iterable on the first match, or None if no line matches any label.
     """
     # Build a lookup: normalized form -> original label (last one wins for duplicates).
-    _punct = re.compile(r"^[^\w]+|[^\w]+$")
-
-    def _normalize(s: str) -> str:
-        return _punct.sub("", s).upper()
-
     label_map: dict[str, str] = {}
     for label in labels:
-        norm = _normalize(label)
+        norm = normalize_label(label)
         if norm:
             label_map[norm] = label
 
@@ -47,7 +54,7 @@ def parse_label(text: str, labels: Iterable[str]) -> str | None:
         stripped = line.strip()
         if not stripped:
             continue
-        norm_line = _normalize(stripped)
+        norm_line = normalize_label(stripped)
         if norm_line in label_map:
             return label_map[norm_line]
     return None

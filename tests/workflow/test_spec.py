@@ -573,3 +573,12 @@ def test_cases_default_label_is_valid():
         {"id": "a", "kind": "work", "cases": {"DONE": None, "default": "a"}},
     ]})
     assert "default" in wf.nodes["a"].cases
+
+
+def test_cases_duplicate_normalized_labels_raise():
+    # "DONE" and "done" both normalize to "DONE" — the spec must reject this to
+    # prevent a silent mis-route (parse_label uses the same normalization).
+    with pytest.raises(WorkflowError, match="normalize to the same form"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "cases": {"DONE": None, "done": "a"}},
+        ]})

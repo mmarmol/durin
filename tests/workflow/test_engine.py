@@ -644,3 +644,25 @@ def test_cases_binary_routing_regression():
     gate_run = next(r for r in res.runs if r.node_id == "gate")
     assert gate_run.passed is True
     assert gate_run.route_label is None  # binary node: no route_label
+
+
+def test_cases_null_target_completes_and_final_output_is_producer():
+    """A cases node routing to null (end) ends the run as 'completed'.
+
+    final_output is the last non-routing producer's output — the cases node itself
+    is the routing judge; the upstream producer ('build') is the last real producer.
+    This locks the terminal-route semantics so a refactor cannot silently change them.
+    """
+    wf = parse_workflow({
+        "name": "w", "start": "build",
+        "nodes": [
+            {"id": "build", "kind": "work", "next": "check"},
+            {"id": "check", "kind": "work",
+             "cases": {"DONE": None, "RETRY": "build"}},
+        ],
+    })
+    eng, _ = _cases_engine({"build": "producer-output", "check": "DONE"})
+    res = eng.run(wf, "t")
+    assert res.status == "completed"
+    # The cases node routed to null; 'build' was the last non-routing producer.
+    assert res.final_output == "producer-output"
