@@ -516,7 +516,9 @@ export function PersonasSettings({ token }: { token: string }) {
               const isDefault = soul.slug === DEFAULT_SOUL_SLUG;
               const useCount = inUseSouls.get(soul.slug) ?? 0;
               const isInUse = useCount > 0;
-              const deleteDisabled = isDefault || isInUse;
+              // Every soul but `default` is deletable; the "in use by N" badge warns
+              // that referencing personas will fall back to the default SOUL.
+              const deleteDisabled = isDefault;
               return (
                 <SettingsRow
                   key={soul.slug}

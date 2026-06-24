@@ -379,12 +379,12 @@ Souls and personas are manageable through three surfaces:
     response carries an `ok: false` error message instead of raising an HTTP
     error; the webui shows it inline (below the form, or under the row).
 
-  - **In-use SOUL delete protection** — a soul that is referenced by any
-    persona cannot be deleted. The backend returns a
-    `409 Conflict` listing which personas hold the reference; the webui disables
-    the delete control for in-use souls and notes the blocking personas. The
-    `default` soul is separately protected from deletion regardless of persona
-    references.
+  - **SOUL deletion** — every soul can be deleted except `default` (the
+    workspace `SOUL.md`). A persona that still references a deleted soul falls
+    back to the default SOUL at runtime (`SoulStore.read` returns empty →
+    `_active_persona` yields `None` → the default SOUL is used), so deleting a
+    referenced soul never breaks the agent. The webui still shows an "in use by
+    N" hint on a referenced soul as a heads-up, but allows the delete.
 
 #### Operating floor
 
