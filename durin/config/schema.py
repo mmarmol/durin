@@ -312,10 +312,10 @@ class AutoAbsorbConfig(Base):
     threshold. Designed to close the loop between dream consolidation
     and manual ``durin memory absorb`` without destructive false-merges.
 
-    Defaults are opt-in conservative: disabled by default, threshold
-    high enough that only obvious matches pass, quarantine window so
-    a dream pass that just created two entities can't re-judge them
-    on the same run.
+    Defaults are opt-in conservative: disabled by default and a
+    threshold high enough that only obvious matches pass. (Refine
+    additionally never merges entities created during the current run,
+    so a pass can't merge its own fresh output.)
 
     The merge itself reuses :meth:`EntityAbsorption.absorb` (which
     preserves content from both pages via ``_merge_pages``, archives
@@ -339,7 +339,6 @@ class AutoAbsorbConfig(Base):
         le=100,
         validation_alias=AliasChoices("confidenceThreshold", "confidence_threshold"),
     )
-
 
 
 class CrossEncoderConfig(Base):
