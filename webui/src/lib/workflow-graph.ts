@@ -80,11 +80,22 @@ function resolveNodeType(n: WorkflowNodeDef): string {
 }
 
 // Find terminal nodes: nodes reachable from start that have no valid outgoing targets.
+// A dynamic parallel's worker node is excluded — it has no `next` by design (it hands
+// off via text to the merge node), so including it would draw a spurious worker→__output__ edge.
 function findTerminals(def: WorkflowDef, byId: Map<string, WorkflowNodeDef>): string[] {
   const depth = computeDepths(def);
   const reachable = new Set(Object.keys(depth));
+  const dynamicWorkers = new Set<string>();
+  for (const n of def.nodes) {
+    if (n.kind === "parallel" && typeof n.worker === "string") dynamicWorkers.add(n.worker);
+  }
   return def.nodes
-    .filter((n) => reachable.has(n.id) && targetsOf(n).filter((t) => byId.has(t)).length === 0)
+    .filter(
+      (n) =>
+        reachable.has(n.id) &&
+        !dynamicWorkers.has(n.id) &&
+        targetsOf(n).filter((t) => byId.has(t)).length === 0,
+    )
     .map((n) => n.id);
 }
 

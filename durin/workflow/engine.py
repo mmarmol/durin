@@ -48,6 +48,10 @@ class NodeRunRequest:
     # no workspace or for command nodes.
     output_dir: str | None = None
     upstream_artifact_dir: str | None = None
+    # Index within a dynamic fan-out batch (0, 1, 2, …). When set, the session-persist
+    # key includes this suffix so each worker gets a distinct session rather than
+    # all workers overwriting the same key.
+    worker_index: int | None = None
 
 
 @dataclass
@@ -311,7 +315,8 @@ class WorkflowEngine:
         worker_node = workflow.nodes[node.worker]
         workers = max(1, min(len(subtasks), node.max_concurrency))
 
-        def _run_worker(subtask):
+        def _run_worker(args):
+            idx, subtask = args
             resp = self._node_runner(NodeRunRequest(
                 node=worker_node,
                 task=subtask,
@@ -320,11 +325,12 @@ class WorkflowEngine:
                 run_id=run_id,
                 iteration=iteration,
                 root_session_key=root_key,
+                worker_index=idx,
             ))
             return subtask, resp.output
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-            results = list(ex.map(_run_worker, subtasks))
+            results = list(ex.map(_run_worker, enumerate(subtasks)))
 
         for _subtask, out in results:
             runs.append(NodeRun(node_id=node.worker, iteration=iteration, output=out))

@@ -248,7 +248,7 @@ function NodeConfigPanel({
 
   function toggleRoutes(on: boolean) {
     if (on) {
-      onChange({ on_pass: null, on_fail: null, next: undefined });
+      onChange({ on_pass: null, on_fail: null, next: undefined, mode: "explore" });
     } else {
       onChange({ on_pass: undefined, on_fail: undefined, next: null });
     }
@@ -511,16 +511,18 @@ function NodeConfigPanel({
               />
             </Field>
 
-            <Field label={t("workflows.parallelReconcile")}>
-              <select
-                className={selectCls}
-                value={(node.reconcile as string) ?? "read"}
-                onChange={(e) => onChange({ reconcile: e.target.value as "read" | "union" })}
-              >
-                <option value="read">read</option>
-                <option value="union">union</option>
-              </select>
-            </Field>
+            {parallelMode === "static" && (
+              <Field label={t("workflows.parallelReconcile")}>
+                <select
+                  className={selectCls}
+                  value={(node.reconcile as string) ?? "read"}
+                  onChange={(e) => onChange({ reconcile: e.target.value as "read" | "union" })}
+                >
+                  <option value="read">read</option>
+                  <option value="union">union</option>
+                </select>
+              </Field>
+            )}
           </>
         );
       })()}

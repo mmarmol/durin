@@ -180,8 +180,9 @@ class AgentNodeRunner:
                 user = f"{user}\n\n--- Files ---\n" + "\n".join(lines)
         messages.append({"role": "user", "content": user})
 
-        # Persona model takes precedence over the node's explicit model; both fall
-        # back to the runner's default.
+        # Persona model when a persona is set, else the node's explicit model, else
+        # the runner's default. The parser's persona-xor-model guard ensures at most
+        # one of persona_model_ref and req.node.model is set at a time.
         model = persona_model_ref or req.node.model or self.default_model
 
         result = asyncio.run(self.runner.run(AgentRunSpec(
@@ -200,7 +201,10 @@ class AgentNodeRunner:
         )
 
     def _persist(self, req: NodeRunRequest, messages: list[dict]) -> str | None:
-        key = f"workflow:{req.run_id}:{req.node.id}:{req.iteration}"
+        if req.worker_index is not None:
+            key = f"workflow:{req.run_id}:{req.node.id}:{req.iteration}:{req.worker_index}"
+        else:
+            key = f"workflow:{req.run_id}:{req.node.id}:{req.iteration}"
         try:
             parent = req.root_session_key
             root = (

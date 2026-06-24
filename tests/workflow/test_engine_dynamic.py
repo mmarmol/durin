@@ -163,3 +163,24 @@ def test_dynamic_fanout_upstream_used_when_list_from_not_in_runs(tmp_path):
     wf = _wf()
     res = WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "go")
     assert sorted(seen) == ["u", "v"]
+
+
+def test_dynamic_fanout_workers_get_distinct_session_keys(tmp_path):
+    """Each dynamic worker must receive a distinct worker_index so _persist generates
+    unique session keys — otherwise all workers overwrite the same key."""
+    seen_indices = []
+
+    def runner(req):
+        if req.node.id == "orch":
+            return NodeRunResponse(output='["a","b","c"]')
+        if req.node.id == "done":
+            return NodeRunResponse(output="fin")
+        seen_indices.append(req.worker_index)
+        return NodeRunResponse(output=f"did {req.task}")
+
+    wf = _wf()
+    res = WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "go")
+    assert res.status == "completed"
+    # Three workers must each have a distinct, non-None index.
+    assert None not in seen_indices
+    assert len(set(seen_indices)) == 3

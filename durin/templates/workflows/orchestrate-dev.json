@@ -19,7 +19,6 @@
       "worker": "dev",
       "list_from": "orchestrator",
       "max_concurrency": 2,
-      "reconcile": "union",
       "next": "integrate"
     },
     {

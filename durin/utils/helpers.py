@@ -829,11 +829,7 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
                 _write(item, workspace / "souls" / item.name)
     _write(None, workspace / "memory" / "history.jsonl")
     (workspace / "skills").mkdir(exist_ok=True)
-    workflows_tpl = tpl / "workflows"
-    if workflows_tpl.is_dir():
-        for item in workflows_tpl.iterdir():
-            if item.name.endswith(".json") and not item.name.startswith("."):
-                _write(item, workspace / "workflows" / item.name)
+    added.extend(seed_workflows(workspace))
 
     if added and not silent:
         from rich.console import Console

@@ -93,12 +93,14 @@ per item, each getting its own list item as input; the list is emitted by the up
 a JSON array, with a newline-split fallback). **`max_concurrency`** (default 2) bounds both
 shapes — at most this many runners execute simultaneously; excess items queue and run in
 waves (anti-rate-limit backpressure). Fan-in collects all branch/worker text outputs into the
-`next` node's input. Its `reconcile` mode decides how branch *writes* come back together
-(`durin/workflow/workspace_fork.py`): `read` = read/analysis branches, no writes applied;
-`choose` = each branch writes in a private copy of the workspace and a judge picks one to
-apply, discarding the rest; `union` = apply every branch's writes, aborting on a genuine
-conflict (two branches wrote *different* content to the same path — identical incidental files
-reconcile cleanly). A per-node visit count bounds loop-backs: exceeding `max_visits` ends the
+`next` node's input. For **static** branches, `reconcile` decides how branch *writes* come
+back together (`durin/workflow/workspace_fork.py`): `read` = read/analysis branches, no
+writes applied; `choose` = each branch writes in a private copy of the workspace and a judge
+picks one to apply, discarding the rest; `union` = apply every branch's writes, aborting on a
+genuine conflict (two branches wrote *different* content to the same path — identical
+incidental files reconcile cleanly). **Dynamic fan-out workers share the workspace** directly
+(no per-worker isolation in v1); they hand their output off to the merge node via text, so
+`reconcile` has no effect on a dynamic parallel and is not shown in the editor for that mode. A per-node visit count bounds loop-backs: exceeding `max_visits` ends the
 run with status `max_visits` instead of looping forever.
 
 **The engine is decoupled from the LLM and runs loop-safe.** The graph walk depends
