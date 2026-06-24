@@ -27,6 +27,19 @@ export function useVoiceSession(client: DurinClient, chatId: string | null, cfg:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, chatId, client]);
 
+  // Self-heal: the gateway holds the voice session in memory per-connection and
+  // drops it on a socket reconnect, while the browser stays active and keeps
+  // transcribing — so replies would otherwise come back as text with no audio.
+  // On a real reconnect (down → open), re-send voice_start to re-establish it.
+  useEffect(() => {
+    if (!active || !chatId) return;
+    let wasDown = false;
+    return client.onStatus((s) => {
+      if (s === "reconnecting" || s === "connecting" || s === "closed") wasDown = true;
+      else if (s === "open" && wasDown) { wasDown = false; client.sendVoiceStart(chatId); }
+    });
+  }, [active, chatId, client]);
+
   const play = useCallback(async (url: string) => {
     const ctx = ctxRef.current; if (!ctx) return;
     const el = audioRef.current ?? new Audio();
