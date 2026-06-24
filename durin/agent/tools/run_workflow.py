@@ -37,13 +37,35 @@ _PARAMETERS = {
 
 def _format_result(result: Any) -> str:
     lines = [f"Workflow run {result.run_id}: {result.status}"]
+
+    if result.status != "completed":
+        if result.status == "exhausted" and result.exhausted_node:
+            lines.append(
+                f"The workflow did not complete: node '{result.exhausted_node}' was retried "
+                "up to its limit and its check kept failing."
+            )
+            last_fail = max(
+                (r for r in result.runs if r.node_id == result.exhausted_node and r.passed is False),
+                key=lambda r: r.iteration,
+                default=None,
+            )
+            if last_fail is not None:
+                lines.append(f"Last failure reason:\n{last_fail.output}")
+        else:
+            lines.append(f"The workflow did not complete (status: {result.status}).")
+
+        if result.final_output:
+            lines.append(f"Closest result:\n{result.final_output}")
+
     for r in result.runs:
         if r.passed is not None:
             lines.append(f"  [{r.node_id}#{r.iteration}] decision: {'pass' if r.passed else 'fail'}")
         else:
             lines.append(f"  [{r.node_id}#{r.iteration}] -> {r.session_key or '(no session)'}")
-    if result.final_output:
+
+    if result.status == "completed" and result.final_output:
         lines.append(f"\nFinal output:\n{result.final_output}")
+
     return "\n".join(lines)
 
 
