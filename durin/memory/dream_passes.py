@@ -23,8 +23,10 @@ from typing import Any, Callable
 from loguru import logger
 
 from durin.memory.derived_from_dream import link_derived_from_for_session
+from durin.memory.embedding import FastembedProvider
 from durin.memory.extract_runner import run_extract_for_session
 from durin.memory.refine_dream import run_refine
+from durin.memory.vector_index import VectorIndex, vector_index_available
 
 __all__ = [
     "run_extract_pass", "run_skill_extract_pass", "run_refine_pass",
@@ -32,6 +34,15 @@ __all__ = [
 ]
 
 LLMInvoke = Callable[..., Any]
+
+
+def dream_vector_index(workspace: Path, cfg: Any) -> "VectorIndex | None":
+    """Build the entity vector index for one dream run, or None when the
+    optional vector backend (lancedb) isn't installed. Built once per run by
+    the cron / CLI callers and passed to the refine pass for semantic recall."""
+    if not vector_index_available():
+        return None
+    return VectorIndex(workspace, FastembedProvider(model=cfg.memory.embedding.model))
 
 
 class ReactiveDreamGate:
@@ -91,6 +102,9 @@ def run_extract_pass(
     import time
     t0 = time.perf_counter()
     _emit("memory.dream.start", kind="extract")
+    from durin.memory.aliases_index import AliasIndex
+    _alias_index = AliasIndex(Path(workspace) / "memory")
+    _alias_index.build()
     sessions_dir = Path(workspace) / "sessions"
     out: dict[str, Any] = {"sessions": 0, "entities": 0, "discovered": 0,
                            "skill_signals": 0, "errors": [], "yielded": False}
@@ -110,7 +124,8 @@ def run_extract_pass(
             try:
                 r = run_extract_for_session(
                     workspace, jsonl_path, llm_invoke=llm_invoke, model=model,
-                    discover=discover, skill_signals=skill_signals)
+                    discover=discover, skill_signals=skill_signals,
+                    alias_index=_alias_index)
                 extracted = r.get("extracted") or []
                 discovered = r.get("discovered") or []
                 sig = r.get("skill_signals") or []
@@ -180,6 +195,7 @@ def run_refine_pass(
     enabled: bool = True,
     confidence_threshold: int = 95,
     run_started_at: "datetime | None" = None,
+    vector_index: object | None = None,
 ) -> dict:
     """Run the refine dream (dedup duplicate entities). The daily cron entry.
 
@@ -189,7 +205,8 @@ def run_refine_pass(
     ``durin memory absorb``. ``confidence_threshold`` is the LLM-judge floor for
     an auto-merge; ``run_started_at`` is the run-scoped quarantine (entities
     created at/after the run start are skipped). Both are wired from config by
-    the cron / manual callers.
+    the cron / manual callers. ``vector_index`` enables semantic recall for
+    same-thing-different-name pairs.
     """
     import time
     t0 = time.perf_counter()
@@ -203,7 +220,8 @@ def run_refine_pass(
     _emit("memory.dream.start", kind="refine")
     out = run_refine(workspace, llm_invoke=llm_invoke, model=model,
                      confidence_threshold=confidence_threshold,
-                     run_started_at=run_started_at)
+                     run_started_at=run_started_at,
+                     vector_index=vector_index)
     out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.end", kind="refine",
           merged=len(out.get("merged", [])), kept=len(out.get("kept_separate", [])),

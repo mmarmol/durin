@@ -130,6 +130,7 @@ def run_extract_for_session(
     model: str | None = None,
     discover: bool = True,
     skill_signals: bool = True,
+    alias_index: "Any | None" = None,
 ) -> dict:
     """Distil this session's new turns into entities (and skill signals).
 
@@ -166,6 +167,7 @@ def run_extract_for_session(
         discovered = discover_entities(
             workspace, text, existing_refs=refs,
             llm_invoke=llm_invoke, model=model, source_ref=src,
+            alias_index=alias_index,
         )
     signals: list[dict] = []
     if skill_signals:

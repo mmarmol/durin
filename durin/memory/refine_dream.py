@@ -108,6 +108,8 @@ def run_refine(
     model: str | None = None,
     confidence_threshold: int = 95,
     run_started_at: "datetime | None" = None,
+    vector_index: object | None = None,
+    semantic_distance_threshold: float = 0.20,
 ) -> dict:
     """Dedup pass: judge alias-overlap candidate pairs and merge the same ones.
 
@@ -115,10 +117,24 @@ def run_refine(
     when either entity was created at/after the run began, so the run never
     merges its own fresh output (duplicates converge on the next pass once
     established). None disables the quarantine.
+
+    When ``vector_index`` is provided, embedding-near same-type pairs within
+    ``semantic_distance_threshold`` (L2) are added to the candidate set,
+    catching same-thing-different-name duplicates that share no alias.
     """
     llm_invoke = llm_invoke or default_llm_invoke
-    absorber = EntityAbsorption(workspace=workspace)
+    # Pass the vector index so absorb() keeps it current (drops the absorbed
+    # row, re-upserts the canonical) — semantic recall READS this index next
+    # run, so a merge must not leave a stale row behind.
+    absorber = EntityAbsorption(workspace=workspace, vector_index=vector_index)
     candidates = absorber.find_candidates()
+    if vector_index is not None:
+        seen = {tuple(sorted(c.refs)) for c in candidates}
+        for sc in absorber.find_semantic_candidates(
+                vector_index, distance_threshold=semantic_distance_threshold):
+            if tuple(sorted(sc.refs)) not in seen:
+                candidates.append(sc)
+                seen.add(tuple(sorted(sc.refs)))
 
     merged: list[dict] = []
     kept: list[dict] = []
@@ -161,7 +177,8 @@ def run_refine(
             skipped.append({"pair": [ref_a, ref_b], "reason": f"judge_error:{exc}"})
             continue
         _emit("memory.absorb.judged", canonical=ref_a, absorbed=ref_b,
-              verdict=judged.verdict, confidence=judged.confidence)
+              verdict=judged.verdict, confidence=judged.confidence,
+              distance=cand.distance)
         if judged.verdict == "same" and judged.confidence >= confidence_threshold:
             absorber.absorb(
                 ref_a, ref_b, reason="refine",

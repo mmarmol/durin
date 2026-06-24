@@ -1354,6 +1354,7 @@ def _run_gateway(
             workspace = config.workspace_path
             from durin.memory.always_on_dream import run_always_on_pass
             from durin.memory.dream_passes import (
+                dream_vector_index,
                 run_derived_from_pass,
                 run_extract_pass,
                 run_refine_pass,
@@ -1382,11 +1383,13 @@ def _run_gateway(
                 df = await _asyncio.to_thread(
                     run_derived_from_pass, workspace, model=model, max_seconds=_cron_max_s)
                 sk = await _asyncio.to_thread(run_skill_extract_pass, workspace, model=model)
+                _vi = dream_vector_index(workspace, config)
                 rf = await _asyncio.to_thread(
                     run_refine_pass, workspace, model=model,
                     enabled=_absorb.enabled,
                     confidence_threshold=_absorb.confidence_threshold,
-                    run_started_at=_run_started)
+                    run_started_at=_run_started,
+                    vector_index=_vi)
                 ao = await _asyncio.to_thread(
                     run_always_on_pass, workspace, model=model,
                     token_budget=config.memory.dream.always_on_token_budget)
