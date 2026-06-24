@@ -1304,6 +1304,34 @@
     "transcriptPrefix": "transcripción",
     "processing": "Procesando…"
   },
+  "dream": {
+    "title": "Dream",
+    "lastRun": "última ejecución {{time}}",
+    "runNow": "Correr ahora",
+    "running": "Ejecutando…",
+    "runError": "No se pudo iniciar el dream.",
+    "loading": "Cargando…",
+    "empty": "Aún no hay actividad de dream.",
+    "view": "Ver",
+    "kind": {
+      "merged": "fusionado",
+      "created": "creado",
+      "improved": "mejorado",
+      "flagged": "marcado"
+    },
+    "close": "Cerrar",
+    "openFull": "Abrir completo",
+    "drawer": {
+      "ariaLabel": "Panel de detalle",
+      "loading": "Cargando…",
+      "notFound": "No encontrado.",
+      "noDetail": "Sin detalle disponible.",
+      "noPage": "Página aún no consolidada.",
+      "type": "Tipo",
+      "aliases": "Alias",
+      "identifiers": "Identificadores"
+    }
+  },
   "workflows": {
     "title": "Workflows",
     "loading": "Cargando…",
@@ -1319,7 +1347,13 @@
     "status": "Estado",
     "taskPlaceholder": "Tarea para ejecutar en este workflow…",
     "recApplied": "Recomendación aplicada.",
-    "kind": { "work": "trabajo", "parallel": "paralelo", "subflow": "sub-flujo", "input": "entrada", "output": "salida" },
+    "kind": {
+      "work": "trabajo",
+      "parallel": "paralelo",
+      "subflow": "sub-flujo",
+      "input": "entrada",
+      "output": "salida"
+    },
     "start": "inicio",
     "dynamicBadge": "×N",
     "addWork": "trabajo",

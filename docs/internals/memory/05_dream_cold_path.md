@@ -415,6 +415,19 @@ The model every pass uses is resolved by
   five-pass sequence on demand and prints a one-line summary. Related recovery
   commands: `durin memory absorb-suggest`, `durin memory absorb`,
   `durin memory revert`, `durin memory history`.
+- **WebUI** — the **Dream** section (`/dream` route, `DreamView` +
+  `DreamDrawer` in `webui/src/components/`) shows a per-run digest feed of
+  recent dream activity: entity merges, entity and learning discoveries, and
+  skill creates / improvements / quarantines. Each event card links to the
+  affected entity or skill — clicking it opens an in-place peek drawer
+  (`DreamDrawer`) that fetches and renders the entity page or skill detail
+  without leaving the feed. The header shows the timestamp of the most recent
+  run and a **Run now** button that triggers the `memory_dream` system cron job
+  via `POST /api/v1/cron/{id}/run` and refreshes the feed on completion. The
+  digest is served by `GET /api/v1/memory/dream/digest` (`MemoryService.dream_digest`,
+  `durin/service/memory.py`): it scans the local telemetry JSONL files for
+  `memory.dream.*` events and maps them to `DreamEvent` objects, newest-first,
+  capped at the requested limit.
 - **Telemetry** — every pass emits best-effort `memory.dream.*` and
   `memory.absorb.*` events (defined in `durin/telemetry/schema.py`) for
   monitoring; see `07_telemetry_and_observability.md`.
