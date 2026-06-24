@@ -6025,7 +6025,7 @@
             "description": "Success"
           }
         },
-        "summary": "Delete a user persona (built-ins cannot be deleted)",
+        "summary": "Delete a persona",
         "x-required-scope": "config:write"
       },
       "get": {
@@ -6052,7 +6052,7 @@
             "description": "Success"
           }
         },
-        "summary": "List personas (user + built-in) and the default",
+        "summary": "List personas and the default",
         "x-required-scope": "config:read"
       },
       "post": {

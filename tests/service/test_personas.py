@@ -1,5 +1,6 @@
 import asyncio
 import pytest
+from durin.personas import seed_example_personas
 from durin.service.personas import (
     PersonasService, PersonaListQuery, PersonaUpsertCommand,
     PersonaDeleteCommand, SetDefaultPersonaCommand,
@@ -18,12 +19,14 @@ def _svc(tmp_path, monkeypatch):
     return PersonasService(workspace_resolver=lambda: tmp_path)
 
 
-def test_list_includes_builtins_and_default(tmp_path, monkeypatch):
+def test_seeded_examples_appear_as_editable(tmp_path, monkeypatch):
     svc = _svc(tmp_path, monkeypatch)
+    seed_example_personas()
     res = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
     names = {p.name for p in res.personas}
     assert {"researcher", "engineer", "tutor"} <= names
-    assert any(p.builtin for p in res.personas)
+    # seeded examples are ordinary editable personas, not an immutable category
+    assert all(p.builtin is False for p in res.personas)
 
 
 def test_upsert_persists_and_lists(tmp_path, monkeypatch):
@@ -34,17 +37,26 @@ def test_upsert_persists_and_lists(tmp_path, monkeypatch):
     assert acme.soul == "default" and acme.builtin is False
 
 
-def test_delete_builtin_rejected(tmp_path, monkeypatch):
+def test_seeded_example_is_deletable(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch)
+    seed_example_personas()
+    asyncio.run(svc.delete_persona(PersonaDeleteCommand(name="researcher"), _principal()))
+    res = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
+    assert not any(p.name == "researcher" for p in res.personas)
+
+
+def test_delete_unknown_persona_raises(tmp_path, monkeypatch):
     svc = _svc(tmp_path, monkeypatch)
     with pytest.raises(DomainError):
-        asyncio.run(svc.delete_persona(PersonaDeleteCommand(name="researcher"), _principal()))
+        asyncio.run(svc.delete_persona(PersonaDeleteCommand(name="ghost"), _principal()))
 
 
 def test_set_default_valid_null_and_invalid(tmp_path, monkeypatch):
     svc = _svc(tmp_path, monkeypatch)
-    asyncio.run(svc.set_default(SetDefaultPersonaCommand(name="engineer"), _principal()))
+    asyncio.run(svc.upsert_persona(PersonaUpsertCommand(name="mine", soul="default"), _principal()))
+    asyncio.run(svc.set_default(SetDefaultPersonaCommand(name="mine"), _principal()))
     res = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
-    assert res.default == "engineer"
+    assert res.default == "mine"
     asyncio.run(svc.set_default(SetDefaultPersonaCommand(name=None), _principal()))
     res2 = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
     assert res2.default == "default"  # cleared → the synthetic base default
@@ -68,14 +80,15 @@ def test_default_persona_listed_last(tmp_path, monkeypatch):
     svc = _svc(tmp_path, monkeypatch)
     res = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
     last = res.personas[-1]
-    assert last.name == "default" and last.soul == "default" and last.model is None and last.builtin is True
+    assert last.name == "default" and last.soul == "default" and last.model is None and last.builtin is False
     assert sum(1 for p in res.personas if p.name == "default") == 1
     assert res.default == "default"  # active default when nothing configured
 
 
 def test_set_default_to_default_clears_override(tmp_path, monkeypatch):
     svc = _svc(tmp_path, monkeypatch)
-    asyncio.run(svc.set_default(SetDefaultPersonaCommand(name="engineer"), _principal()))
+    asyncio.run(svc.upsert_persona(PersonaUpsertCommand(name="mine", soul="default"), _principal()))
+    asyncio.run(svc.set_default(SetDefaultPersonaCommand(name="mine"), _principal()))
     out = asyncio.run(svc.set_default(SetDefaultPersonaCommand(name="default"), _principal()))
     assert out.default is None  # selecting the synthetic default clears the override
     res = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
