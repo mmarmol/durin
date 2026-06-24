@@ -482,6 +482,16 @@ function NodeConfigPanel({
               </>
             )}
 
+            {(parallelMode === "static"
+              ? branchList.length === 0
+              : !(node.worker && node.list_from)) && (
+              <span className="text-xs text-amber-600">
+                {parallelMode === "static"
+                  ? t("workflows.parallelNeedBranch")
+                  : t("workflows.parallelNeedWorkerList")}
+              </span>
+            )}
+
             {/* Common: max_concurrency, next (merge), reconcile */}
             <Field label={t("workflows.parallelMaxConcurrency")}>
               <Input
@@ -505,10 +515,9 @@ function NodeConfigPanel({
               <select
                 className={selectCls}
                 value={(node.reconcile as string) ?? "read"}
-                onChange={(e) => onChange({ reconcile: e.target.value as "read" | "choose" | "union" })}
+                onChange={(e) => onChange({ reconcile: e.target.value as "read" | "union" })}
               >
                 <option value="read">read</option>
-                <option value="choose">choose</option>
                 <option value="union">union</option>
               </select>
             </Field>
@@ -694,6 +703,10 @@ export function WorkflowsView() {
             return n.on_pass ? { ...n, on_fail: c.target } : { ...n, on_pass: c.target };
           }
           if (n.kind === "parallel") {
+            // A DYNAMIC parallel (worker set) must keep branches empty — wiring is
+            // panel-only (worker/list_from). Dragging an edge would contaminate it
+            // and the backend would reject branches+worker together.
+            if (typeof n.worker === "string" && n.worker !== "") return n;
             const b = Array.isArray(n.branches) ? n.branches : [];
             return { ...n, branches: [...new Set([...b, c.target!])] };
           }

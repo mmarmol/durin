@@ -777,7 +777,9 @@
     "parallelWorker": "worker template",
     "parallelListFrom": "list from",
     "parallelMaxConcurrency": "max concurrency",
-    "parallelReconcile": "reconcile"
+    "parallelReconcile": "reconcile",
+    "parallelNeedBranch": "Pick at least one branch to run in parallel.",
+    "parallelNeedWorkerList": "Pick a worker template and the node whose output is the list."
   },
   "skills": {
     "view": "View",
