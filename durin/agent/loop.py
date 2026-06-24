@@ -310,6 +310,7 @@ class AgentLoop:
         decision_log_enabled: bool = True,
         decision_log_max_entries: int = 10,
         decision_log_max_chars: int = 1500,
+        compaction_learnings_enabled: bool = True,
         max_messages: int = 120,
         hooks: list[AgentHook] | None = None,
         unified_session: bool = False,
@@ -444,6 +445,7 @@ class AgentLoop:
             decision_log_enabled=decision_log_enabled,
             decision_log_max_entries=decision_log_max_entries,
             decision_log_max_chars=decision_log_max_chars,
+            compaction_learnings_enabled=compaction_learnings_enabled,
         )
         self.model_presets: dict[str, ModelPresetConfig] = model_presets or {}
         self._active_preset: str | None = None
@@ -720,6 +722,7 @@ class AgentLoop:
             decision_log_enabled=defaults.decision_log_enabled,
             decision_log_max_entries=defaults.decision_log_max_entries,
             decision_log_max_chars=defaults.decision_log_max_chars,
+            compaction_learnings_enabled=defaults.compaction_learnings_enabled,
             max_messages=defaults.max_messages,
             tools_config=config.tools,
             app_config=config,
