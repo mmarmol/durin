@@ -255,6 +255,17 @@ class MemoryDreamConfig(Base):
         validation_alias=AliasChoices("skillSignalsEnabled", "skill_signals_enabled"),
     )
 
+    # Durable-learnings sweep (extract dream stage 4). When ON, the extract pass
+    # mines each session's new turns for feedback-style learnings (corrections,
+    # preferences, project facts) and writes them as feedback entities — so the
+    # memory captures what the agent learned without depending on an explicit
+    # memory_upsert_entity call. ON by default: additive only (writes feedback
+    # entities); `memory.dream.learnings` telemetry measures precision.
+    learnings_sweep_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("learningsSweepEnabled", "learnings_sweep_enabled"),
+    )
+
     # Override the dream model (None → falls through to
     # agents.defaults.model used by ``durin memory dream``).
     model_override: str | None = Field(
@@ -355,6 +366,17 @@ class AutoAbsorbConfig(Base):
         # nothing above it is a meaningful dedup candidate. Matches the webui input.
         validation_alias=AliasChoices(
             "semanticDistanceThreshold", "semantic_distance_threshold"),
+    )
+
+    # Pairs the cheap judge can't settle (verdict 'unclear', or 'same' with
+    # confidence in [escalate_floor, confidence_threshold)) go to a bounded
+    # sub-agent that investigates with the lineage/source tools.
+    # 0 disables escalation entirely (old behavior preserved).
+    escalate_floor: int = Field(
+        default=0,
+        ge=0,
+        le=100,
+        validation_alias=AliasChoices("escalateFloor", "escalate_floor"),
     )
 
 
@@ -801,6 +823,7 @@ class AgentDefaults(Base):
         serialization_alias="preemptiveCompactRatio",
     )  # Default trigger ratio when preset doesn't override.
     decision_log_enabled: bool = True  # Concern B task-state anchor: record key decisions/findings across compaction
+    compaction_learnings_enabled: bool = True  # Backstop: distil durable user learnings (preferences, corrections) at compaction
     decision_log_max_entries: int = Field(default=10, ge=1, le=100)  # Cap on decision-log entries (re-injected every turn)
     decision_log_max_chars: int = Field(default=1500, ge=100, le=20_000)  # Total chars cap on the decision log
     parallel_tool_calls: dict[str, bool] = Field(

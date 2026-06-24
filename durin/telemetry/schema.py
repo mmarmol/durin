@@ -776,9 +776,28 @@ class MemoryAbsorbRevertedEvent(TypedDict):
     canonical: str
     absorbed: str
     original_sha: str  # the auto-merge commit being undone
-    confidence: int  # confidence the original auto-merge recorded
-    iteration: NotRequired[int]
-    session_key: NotRequired[str | None]
+
+
+class MemoryAbsorbEscalatedEvent(TypedDict):
+    """A borderline pair was handed to the Tier-2 sub-agent judge.
+
+    Emitted after the bounded sub-agent returns a verdict, before the
+    merge/keep decision. Use to track escalation rate and Tier-2 outcomes.
+    """
+
+    canonical: str
+    absorbed: str
+    verdict: str   # "same" | "different" | "unclear"
+    confidence: int  # 0-100
+
+
+class MemoryAbsorbEscalationCappedEvent(TypedDict):
+    """A borderline pair was NOT escalated because the run hit its per-run
+    Tier-2 ceiling. The pair keeps the cheap verdict. Use to detect a run
+    that needs a higher ceiling or fewer borderline pairs."""
+
+    canonical: str
+    absorbed: str
 
 
 class MemoryStoreBlockedNearDuplicateEvent(TypedDict):
@@ -826,6 +845,20 @@ class MemoryDreamDiscoverEvent(TypedDict):
     proposed: int
     written: int
     skipped: int
+    refs: list[str]  # the entity refs written
+
+
+class MemoryDreamLearningsEvent(TypedDict):
+    """The extract dream's learnings-sweep stage processed one session.
+
+    It found durable preferences and corrections in conversation turns and
+    wrote them as feedback/stance/practice entities. ``proposed`` is what the
+    LLM returned (before type-guard filtering); ``written`` is what was
+    committed. Lets dashboards measure learnings precision over time.
+    """
+
+    proposed: int
+    written: int
     refs: list[str]  # the entity refs written
 
 
@@ -1173,6 +1206,17 @@ class MemoryDreamAlwaysOnEvent(TypedDict):
     duration_ms: int
 
 
+class MemoryDreamFlaggedEvent(TypedDict):
+    """The refine dream flagged a pair the Tier-2 agent investigated but did not
+    confirm as the same entity.  ``canonical`` and ``absorbed`` are the two refs
+    the judge examined; the pair is stored in ``.flagged_pairs.json`` for future
+    review.  Fires inside ``add_flagged`` so it is always consistent with the
+    on-disk record."""
+
+    canonical: str
+    absorbed: str
+
+
 class MemoryUpsertEntityEvent(TypedDict):
     """memory_upsert_entity tool write (entity page authored/extended)."""
 
@@ -1263,15 +1307,19 @@ EVENTS: dict[str, type] = {
     "memory.dream.end": MemoryDreamEndEvent,
     "memory.dream.patch_applied": MemoryDreamPatchAppliedEvent,
     "memory.dream.discover": MemoryDreamDiscoverEvent,
+    "memory.dream.learnings": MemoryDreamLearningsEvent,
     "memory.dream.skill_extract": MemoryDreamSkillExtractEvent,
     "memory.dream.skill_signals": MemoryDreamSkillSignalsEvent,
     "memory.dream.max_seconds_reached": MemoryDreamMaxSecondsReachedEvent,
     "memory.dream.throttled": MemoryDreamThrottledEvent,
     "memory.dream.always_on": MemoryDreamAlwaysOnEvent,
+    "memory.dream.flagged": MemoryDreamFlaggedEvent,
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
     "memory.absorb.reverted": MemoryAbsorbRevertedEvent,
+    "memory.absorb.escalated": MemoryAbsorbEscalatedEvent,
+    "memory.absorb.escalation_capped": MemoryAbsorbEscalationCappedEvent,
     "memory.hot_layer.failure": MemoryHotLayerFailureEvent,
     "memory.index.write": MemoryIndexWriteEvent,
     "memory.index.rebuild": MemoryIndexRebuildEvent,
@@ -1353,6 +1401,8 @@ __all__ = [
     "MemoryRecallVectorEvent",
     "MemoryDreamPatchAppliedEvent",
     "MemoryDreamDiscoverEvent",
+    "MemoryDreamLearningsEvent",
+    "MemoryDreamFlaggedEvent",
     "MemoryEntityRelationCapWarnedEvent",
     "MemoryEntityRelationCapRejectedEvent",
     "MemoryHealthCheckEvent",

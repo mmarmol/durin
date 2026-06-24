@@ -32,6 +32,7 @@ export function VoiceDock({
   const { state, amplitude, active, toggle } = useVoiceSession(client, chatId, {
     vadThreshold: cfg.vadThreshold,
     endOfTurnSilenceMs: cfg.endOfTurnSilenceMs,
+    idleTimeoutMs: cfg.idleTimeoutMs,
   });
   const pendingStart = useRef(false);
 

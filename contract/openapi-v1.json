@@ -889,6 +889,95 @@
         "title": "CrossEncoderTestResult",
         "type": "object"
       },
+      "DreamDigest": {
+        "description": "List of recent dream events, newest first, capped at *limit*.",
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/DreamEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "last_run_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At Ms"
+          }
+        },
+        "required": [
+          "events",
+          "last_run_at_ms"
+        ],
+        "title": "DreamDigest",
+        "type": "object"
+      },
+      "DreamDigestQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 30,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "DreamDigestQuery",
+        "type": "object"
+      },
+      "DreamEvent": {
+        "description": "One notable thing the nightly dream did.\n\n``kind`` is the operation: \"merged\" | \"created\" | \"improved\" | \"flagged\".\n``ref`` / ``ref_kind`` let the UI deep-link to the affected entity or skill;\nboth are None when the event is not tied to a specific ref (e.g. a bulk\nskill-extract pass with no individual ref emitted).  ``at_ms`` is epoch\nmilliseconds so JS Date can consume it directly.",
+        "properties": {
+          "at_ms": {
+            "title": "At Ms",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "ref_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Kind"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "summary",
+          "ref",
+          "ref_kind",
+          "at_ms"
+        ],
+        "title": "DreamEvent",
+        "type": "object"
+      },
       "ExtrasEnsureCommand": {
         "additionalProperties": false,
         "properties": {
@@ -5573,6 +5662,35 @@
         },
         "summary": "Load and probe a cross-encoder model id (off-thread, may be slow)",
         "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/memory/dream/digest": {
+      "get": {
+        "operationId": "memory_dream_digest",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DreamDigestQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DreamDigest"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Recent dream-pass activity: merges, discoveries, skill updates",
+        "x-required-scope": "memory:read"
       }
     },
     "/api/v1/memory/edge/{a}/{b}": {

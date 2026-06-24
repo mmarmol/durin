@@ -59,6 +59,8 @@ sequenceDiagram
 
 `voice_start` validates the `chat_id`, stores a fresh `VoiceSession`, and emits `voice_state listening`. `voice_stop` pops the session, cancels any in-flight speak task, and emits `idle`. The session is held only in memory on the channel; it is not persisted, because it is transient interaction state, not conversation content (the transcript and replies persist through the normal session store like any other chat).
 
+Two browser-side mechanisms keep the session honest. An **idle timeout** (`voice.idle_timeout_s`, `0` = never) closes the session after that many seconds with no activity; the clock lives in `useVoiceSession` and resets on every state transition, so a turn in progress never trips it. And because the session lives only in the gateway's memory, a socket **reconnect** drops it while the browser stays active and keeps transcribing — which would otherwise leave replies coming back as text with no audio. To prevent that, the hook watches the connection status and re-sends `voice_start` on a reconnect (down → open) while voice is active, re-establishing the session so audio resumes on its own.
+
 ### Capturing speech
 
 The browser hook (`useVoiceSession`) builds a `MicVAD` (Silero VAD via `@ricky0123/vad-web`, running in-browser on ONNX/WASM) over a `getUserMedia` stream opened with `echoCancellation`, `noiseSuppression`, and `autoGainControl` so durin's own playback does not feed back into the mic. The VAD's `positiveSpeechThreshold` comes from `voice.vad_threshold`; end-of-turn silence from `voice.end_of_turn_silence_ms`. When the VAD reports an utterance, the hook sends it as `voice_utterance` with the audio clip. The hook also exposes a live `amplitude` that drives the orb's audio-reactive animation.
@@ -161,7 +163,7 @@ Gateway → client:
 
 ### Extras and the webui
 
-Local STT needs the `[stt]` extra; local TTS needs `[tts]` (the `supertonic` package + `onnxruntime`). Both are opt-in — installed during `durin onboard` if the user enables voice, or from the settings pane's install button. Cloud providers need only an API key. The "Voz" settings pane configures provider, engine/voice, language, the conversational toggles, and the long-reply mode, and shows whether each extra is installed. The floating orb (`VoiceDock`) is the in-chat control; it binds to the active chat's `chat_id`.
+Local STT needs the `[stt]` extra; local TTS needs `[tts]` (the `supertonic` package + `onnxruntime`). Both are opt-in — installed during `durin onboard` if the user enables voice, or from the settings pane's install button. Cloud providers need only an API key. The "Voz" settings pane configures provider, engine/voice, language, the conversational toggles, and the long-reply mode, and shows whether each extra is installed. The floating orb (`VoiceDock`) is the in-chat control; it binds to the active chat's `chat_id`, closes itself after the idle timeout, and re-establishes its session automatically after a socket reconnect.
 
 ## 7. Rationale
 

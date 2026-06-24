@@ -72,6 +72,11 @@ _RE_REASONING = re.compile(
 
 _VALID_VERDICTS = frozenset({"same", "different", "unclear"})
 
+# Maximum characters of the page's to_markdown() serialization included in
+# the judge prompt. Free-text body can grow unboundedly; attributes/relations
+# are typically small and always included in full before the cap applies.
+_PAGE_BUDGET_CHARS = 6000
+
 
 class JudgeError(Exception):
     """Raised when the judge LLM call or output parsing fails after retries."""
@@ -215,34 +220,19 @@ def _load_template() -> str:
     return max(matches, key=len)
 
 
-def _render_page_block(page: EntityPage, *, mtime: datetime | None) -> str:
-    """Render one page as a self-contained block for the judge prompt.
-
-    Includes temporal metadata at the top so the judge can reason about
-    "are these two the same entity OBSERVED in the same time window".
-    """
-    lines: list[str] = []
+def _render_page_block(page: "EntityPage", *, mtime: datetime | None) -> str:
+    """Render the WHOLE page for the judge — the canonical serialization, not a
+    curated field subset. A new entity field is visible by default (the safe
+    direction); only the free-text body is size-capped."""
     created = (
         mtime.astimezone(timezone.utc).isoformat()
         if mtime is not None
         else "(unknown)"
     )
-    lines.append(f"- File last modified: {created}")
-    if page.aliases:
-        lines.append(f"- Aliases: {', '.join(page.aliases)}")
-    # Identifiers are richer than aliases for entity disambiguation
-    # (email / slack / github are usually globally unique).
-    identifiers = page.extra.get("identifiers") if page.extra else None
-    if isinstance(identifiers, dict) and identifiers:
-        for key, value in identifiers.items():
-            if isinstance(value, list):
-                rendered = ", ".join(str(v) for v in value)
-            else:
-                rendered = str(value)
-            lines.append(f"- Identifier ({key}): {rendered}")
-    lines.append("")
-    lines.append(page.body or "(empty body)")
-    return "\n".join(lines)
+    md = page.to_markdown()
+    if len(md) > _PAGE_BUDGET_CHARS:
+        md = md[:_PAGE_BUDGET_CHARS] + "\n…(truncated)"
+    return f"- File last modified: {created}\n\n{md}"
 
 
 # ---------------------------------------------------------------------------

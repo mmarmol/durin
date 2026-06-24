@@ -218,6 +218,7 @@ def cmd_dream(
     console.print("[dim]Extract pass (sessions → entity attributes)…[/dim]")
     ex = run_extract_pass(workspace, model=model,
                           discover=cfg.memory.dream.discover_enabled,
+                          learnings=cfg.memory.dream.learnings_sweep_enabled,
                           confidence_threshold=_absorb.confidence_threshold,
                           semantic_distance_threshold=_absorb.semantic_distance_threshold,
                           vector_index=_vi)
@@ -234,6 +235,7 @@ def cmd_dream(
         )
     rf = run_refine_pass(workspace, model=model, enabled=_absorb.enabled,
                          confidence_threshold=_absorb.confidence_threshold,
+                         escalate_floor=_absorb.escalate_floor,
                          semantic_distance_threshold=_absorb.semantic_distance_threshold,
                          run_started_at=_run_started,
                          vector_index=_vi)
@@ -787,26 +789,38 @@ def cmd_stats(
 def cmd_absorb_suggest() -> None:
     """List candidate pairs that share at least one alias (merge hints)."""
     from durin.memory.absorption import EntityAbsorption
+    from durin.memory.refine_dream import read_flagged
 
     workspace = _workspace_root()
     absorber = EntityAbsorption(workspace=workspace)
     candidates = absorber.find_candidates()
     if not candidates:
         console.print("[green]No merge candidates — no aliases overlap across pages.[/green]")
-        return
+    else:
+        table = Table(title="Merge candidates", show_lines=False)
+        table.add_column("Entity A", style="cyan", no_wrap=True)
+        table.add_column("Entity B", style="cyan", no_wrap=True)
+        table.add_column("Shared aliases", style="yellow")
+        for c in candidates:
+            a, b = c.refs
+            table.add_row(a, b, ", ".join(c.shared_aliases))
+        console.print(table)
+        console.print(
+            "\n[dim]To merge: durin memory absorb <canonical> <absorbed> "
+            "--reason <why>[/dim]"
+        )
 
-    table = Table(title="Merge candidates", show_lines=False)
-    table.add_column("Entity A", style="cyan", no_wrap=True)
-    table.add_column("Entity B", style="cyan", no_wrap=True)
-    table.add_column("Shared aliases", style="yellow")
-    for c in candidates:
-        a, b = c.refs
-        table.add_row(a, b, ", ".join(c.shared_aliases))
-    console.print(table)
-    console.print(
-        "\n[dim]To merge: durin memory absorb <canonical> <absorbed> "
-        "--reason <why>[/dim]"
-    )
+    flagged = read_flagged(workspace)
+    if flagged:
+        console.print("\n[bold yellow]Flagged by the agent — needs review[/bold yellow]")
+        for rec in flagged:
+            a, b = rec["pair"]
+            console.print(
+                f"\n  [cyan]{a}[/cyan]  vs  [cyan]{b}[/cyan]"
+                f"\n  Verdict: {rec['verdict']}  Confidence: {rec['confidence']}"
+                f"\n  Reasoning: {rec['reasoning']}"
+                f"\n  [dim]To merge: durin memory absorb {a} {b} --reason <why>[/dim]"
+            )
 
 
 

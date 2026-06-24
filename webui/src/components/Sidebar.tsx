@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   Menu,
+  Moon,
   Network,
   Search,
   Settings,
@@ -32,6 +33,8 @@ interface SidebarProps {
   skillsActive?: boolean;
   onOpenWorkflows?: () => void;
   workflowsActive?: boolean;
+  onOpenDream?: () => void;
+  dreamActive?: boolean;
   onCollapse: () => void;
 }
 
@@ -192,6 +195,25 @@ export function Sidebar(props: SidebarProps) {
           >
             <Workflow className="h-3.5 w-3.5" aria-hidden />
             {t("workflows.title")}
+          </Button>
+        </div>
+      ) : null}
+      {props.onOpenDream ? (
+        <div className="px-2.5 pb-2">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={props.onOpenDream}
+            className={cn(
+              "h-8 w-full justify-start gap-2 rounded-full px-2.5 text-[12.5px] font-medium",
+              props.dreamActive
+                ? "bg-sidebar-accent/80 text-sidebar-foreground"
+                : "text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
+            )}
+            aria-pressed={!!props.dreamActive}
+          >
+            <Moon className="h-3.5 w-3.5" aria-hidden />
+            {t("dream.title")}
           </Button>
         </div>
       ) : null}

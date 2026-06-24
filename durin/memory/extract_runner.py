@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from durin.memory.extract_dream import discover_entities, extract_entity
+from durin.memory.extract_dream import discover_entities, extract_entity, mine_learnings
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 
@@ -130,6 +130,7 @@ def run_extract_for_session(
     model: str | None = None,
     discover: bool = True,
     skill_signals: bool = True,
+    learnings: bool = True,
     confidence_threshold: int = 95,
     semantic_distance_threshold: float = 0.20,
     alias_index: "Any | None" = None,
@@ -153,8 +154,8 @@ def run_extract_for_session(
 
     new_msgs = msgs[cursor:]                       # turns cursor+1 .. total
     text = "\n".join(
-        f"{str(m.get('role') or '?').upper()}: {m.get('content')}"
-        for m in new_msgs if m.get("content")
+        f"[turn-{cursor + i + 1}] {str(m.get('role') or '?').upper()}: {m.get('content')}"
+        for i, m in enumerate(new_msgs) if m.get("content")
     )
     refs = entity_refs_in_messages(new_msgs)
     src = f"[[sessions/{jsonl_path.stem}.md#turn-{total}]]"
@@ -182,12 +183,18 @@ def run_extract_for_session(
             workspace, text, skill_loads=extract_skill_calls(new_msgs),
             llm_invoke=llm_invoke, model=model, session=jsonl_path.stem,
         )
+    learned: list[dict] = []
+    if learnings:
+        learned = mine_learnings(
+            workspace, text, llm_invoke=llm_invoke, model=model, source_ref=src,
+        )
     set_extract_cursor(jsonl_path, total)          # advance per-batch
     return {
         "session": jsonl_path.stem,
         "extracted": extracted,
         "discovered": discovered,
         "skill_signals": signals,
+        "learnings": learned,
         "cursor": total,
         "new_turns": len(new_msgs),
     }

@@ -22,6 +22,47 @@ from durin.utils.prompt_templates import render_template
 
 logger = logging.getLogger(__name__)
 
+# Always-present directive injected into every system prompt regardless of the
+# active SOUL. The operating floor is conditional (skipped when a SOUL embeds
+# its own "## Execution Rules"), so this section must live outside that path.
+# Static text — no interpolation needed; matches the plan's "THE DIRECTIVE" block.
+_MEMORY_CAPTURE_SECTION = """\
+## Memory — capture as you go
+
+You are building memory for your future self. Saving the right things now is what
+stops the user from having to steer, correct, or re-explain later — that is the test
+for what is worth saving.
+
+**Capture proactively, in the moment — do not wait to be asked.** Concrete trigger:
+before you write an acknowledgement like "got it", "noted", or "I'll keep that in
+mind", save the thing first.
+
+Save when:
+- the user corrects you, or tells you to do (or stop doing) something;
+- the user states a preference, habit, or standing constraint on how they want you to work;
+- you learn a durable fact about who the user is or the context of their work;
+- something surprises you or contradicts what you believed.
+
+Author each as an **entity** with `memory_upsert_entity` — this is what re-feeds you
+next session:
+- **how you should work** (corrections, preferences, what to repeat or avoid) → a
+  `feedback`, `stance`, or `practice` entity. State WHY it matters and HOW to apply it,
+  so you can judge edge cases instead of following blindly.
+- **who the user is** (role, goals, durable personal facts) → update the user's entity.
+- **the work or its external context** → a `project` or `topic` entity.
+
+Do NOT save: anything derivable from the code, the repo, or git history; task progress
+or transient state; ephemeral artifacts (PR numbers, commit SHAs, today's status).
+
+**Correct in place.** When the user corrects something you already recorded, UPDATE that
+entity (overwrite the stale value) — do not stack a contradicting one on top.
+
+**Say what you did, briefly.** When you save something, tell the user in a few words
+("noted — you prefer X"). When a memory materially shaped a decision, say so ("doing it
+this way because I recall you prefer Y") so they can catch and correct a stale memory on
+the spot. Keep it short; never narrate trivial recalls.\
+"""
+
 
 def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     """Roll a ``context.composition`` payload into 2 user-facing buckets.
@@ -214,6 +255,13 @@ class ContextBuilder:
         if floor:
             breakdown["operating_floor"] = floor
             parts.append(floor)
+
+        # Always-present capture directive — unconditional, placed immediately
+        # after the operating floor so it lands in the high-attention stable tier.
+        # Must NOT live inside _build_operating_floor because that returns ""
+        # when the active SOUL already embeds "## Execution Rules".
+        breakdown["memory_capture"] = _MEMORY_CAPTURE_SECTION
+        parts.append(_MEMORY_CAPTURE_SECTION)
 
         always_skills = self.skills.get_always_skills()
         if always_skills:

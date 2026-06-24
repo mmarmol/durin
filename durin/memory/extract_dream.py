@@ -23,12 +23,20 @@ from json_repair import repair_json
 from durin.memory.aliases_index import AliasIndex
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
-from durin.memory.llm_invoke import LLMResponse, default_llm_invoke
+from durin.memory.llm_invoke import default_llm_invoke
 from durin.memory.memory_writer import WriteResult, write_entity
+
+
+def _mine_emit_tool_event(name: str, payload: dict) -> None:
+    """Thin wrapper so tests can monkeypatch without patching the real emit."""
+    from durin.agent.tools._telemetry import emit_tool_event
+    emit_tool_event(name, payload)
+
 
 __all__ = [
     "build_extract_prompt", "parse_attributes", "extract_entity",
     "build_discover_prompt", "parse_discoveries", "discover_entities",
+    "mine_learnings",
 ]
 
 LLMInvoke = Callable[..., Any]
@@ -115,7 +123,7 @@ def extract_entity(
 
     prompt = build_extract_prompt(page, turns)
     resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
-    raw = resp.text if isinstance(resp, LLMResponse) else str(resp)
+    raw = resp.text if hasattr(resp, "text") else str(resp)
     attrs = parse_attributes(raw)
     if not attrs:
         return WriteResult(entity_ref, committed=False, retries=0)
@@ -157,6 +165,17 @@ Rules:
   - "ref": "<type>:<slug>" — lowercase ascii slug; type one of
     person/place/project/topic/organization/event/artifact/stance/practice
   - "name": the display name
+  - "aliases": optional array of OTHER names/spellings for this entity that appear
+    in the turns (e.g. the conversation used both "Torrent" and "Torrente"). Do
+    not invent names that are not present.
+  - "relations": optional array of {{"to": "<type>:<slug>", "type": "<relation>"}}
+    linking this entity to ANOTHER entity mentioned in the turns
+    (e.g. {{"to": "place:valencia", "type": "located_in"}}).
+  - "significance": optional ONE sentence on WHY this entity matters to the user /
+    their relationship to it (e.g. "a place the user tracks the weather for").
+    Omit it unless the turns state such a reason. Do NOT restate the attributes.
+  - "turn": the turn number (the [turn-N] tag) where this entity's durable fact
+    appears.
   - "attributes": a JSON object of scalar or short-list values — NO prose, NO nested objects
 - Output ONLY a JSON array of these objects. If nothing durable is stated, output [].
 
@@ -175,7 +194,9 @@ def parse_discoveries(raw: str) -> list[dict[str, Any]]:
 
     Each item needs a well-formed ``ref`` (``<type>:<slug>``) and a non-empty
     ``name``; ``attributes`` are filtered through :func:`parse_attributes`
-    (scalars / lists of scalars only). Malformed items are dropped, not raised.
+    (scalars / lists of scalars only). Optional fields ``aliases``, ``relations``,
+    ``significance``, and ``turn`` are included with malformed sub-values dropped.
+    Malformed items are dropped, not raised.
     """
     s = raw.strip()
     m = re.search(r"```(?:json)?\s*(.*?)```", s, re.DOTALL)
@@ -200,7 +221,30 @@ def parse_discoveries(raw: str) -> list[dict[str, Any]]:
             parse_attributes(json.dumps(attrs_raw))
             if isinstance(attrs_raw, dict) else {}
         )
-        out.append({"ref": ref, "name": name, "attributes": attrs})
+        aliases = [a.strip() for a in (item.get("aliases") or [])
+                   if isinstance(a, str) and a.strip()]
+        relations = [
+            {"to": r["to"].strip(), "type": str(r.get("type") or "").strip()}
+            for r in (item.get("relations") or [])
+            if isinstance(r, dict) and isinstance(r.get("to"), str)
+            and ":" in r.get("to", "") and str(r.get("type") or "").strip()
+        ]
+        sig_raw = item.get("significance")
+        significance = sig_raw.strip() if isinstance(sig_raw, str) and sig_raw.strip() else None
+        turn_raw = item.get("turn")
+        # Accept integer-valued floats (small models emit 16.0); reject bools
+        # (bool is an int subclass in Python — True/False are not turn numbers)
+        # and fractional floats (16.5 has no meaning as a turn index).
+        if (isinstance(turn_raw, (int, float))
+                and not isinstance(turn_raw, bool)
+                and turn_raw > 0
+                and float(turn_raw).is_integer()):
+            turn = int(turn_raw)
+        else:
+            turn = None
+        out.append({"ref": ref, "name": name, "attributes": attrs,
+                    "aliases": aliases, "relations": relations,
+                    "significance": significance, "turn": turn})
     return out
 
 
@@ -302,7 +346,7 @@ def discover_entities(
     skip = set(existing_refs)
     prompt = build_discover_prompt(turns)
     resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
-    raw = resp.text if isinstance(resp, LLMResponse) else str(resp)
+    raw = resp.text if hasattr(resp, "text") else str(resp)
     proposals = parse_discoveries(raw)
 
     index = alias_index
@@ -317,11 +361,30 @@ def discover_entities(
         ref = prop["ref"]
         if ref in skip or is_deleted(workspace, ref):
             continue
+        # Per-entity provenance: tag the turn the fact came from, not the
+        # window-end watermark. Fall back to the batch src when absent.
+        prop_turn = prop.get("turn")
+        if isinstance(prop_turn, int) and prop_turn > 0:
+            stem = src.split("/")[-1].split(".md")[0] if "sessions/" in src else None
+            entity_src = (f"[[sessions/{stem}.md#turn-{prop_turn}]]"
+                          if stem else src)
+        else:
+            entity_src = src
         patches = [
             FieldPatch(kind="attribute", key=k, value=v, author="dream",
-                       source_ref=src, at=now)
+                       source_ref=entity_src, at=now)
             for k, v in prop["attributes"].items()
         ]
+        for al in prop.get("aliases", []):
+            patches.append(FieldPatch(kind="alias", value=al, author="dream",
+                                      source_ref=entity_src, at=now))
+        for rel in prop.get("relations", []):
+            patches.append(FieldPatch(kind="relation", value=rel, author="dream",
+                                      source_ref=entity_src, at=now))
+        sig = prop.get("significance")
+        if sig:
+            patches.append(FieldPatch(kind="body_replace", value=sig, author="dream",
+                                      source_ref=entity_src, at=now))
         target = _resolve_existing_ref(index, ref, prop["name"])
         if target is None and vector_index is not None:
             target = _resolve_semantic_ref(
@@ -357,6 +420,94 @@ def discover_entities(
             "proposed": len(proposals),
             "written": sum(1 for r in out if r["committed"]),
             "skipped": len(proposals) - len(out),
+            "refs": [r["ref"] for r in out],
+        })
+    except Exception:  # pragma: no cover
+        pass
+    return out
+
+
+# ---------------------------------------------------------------------------
+# mine_learnings — sweep session turns for durable preferences / corrections
+# ---------------------------------------------------------------------------
+
+# Only these types may be written by the learnings sweep. This guard prevents
+# the sweep from ever creating a person: (principal) or other entity type, even
+# if the LLM hallucinates one.
+_LEARNING_TYPES = ("feedback", "stance", "practice")
+
+
+def _parse_learnings(raw: str) -> list[dict[str, Any]]:
+    """Tolerant parse of the learnings LLM's JSON array.
+
+    Strips code fences, repairs small-model JSON quirks, and keeps only items
+    that are dicts with a colon-bearing ``ref``, a non-empty ``name``, and a
+    non-empty ``body``. Malformed items and any non-list output yield ``[]``.
+    """
+    s = raw.strip()
+    m = re.search(r"```(?:json)?\s*(.*?)```", s, re.DOTALL)
+    if m:
+        s = m.group(1).strip()
+    try:
+        obj = json.loads(repair_json(s))
+    except Exception:
+        return []
+    if not isinstance(obj, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in obj:
+        if not isinstance(item, dict):
+            continue
+        ref = str(item.get("ref") or "").strip()
+        name = str(item.get("name") or "").strip()
+        body = str(item.get("body") or "").strip()
+        if not ref or ":" not in ref or not name or not body:
+            continue
+        out.append({"ref": ref, "name": name, "body": body[:400]})
+    return out
+
+
+def mine_learnings(
+    workspace: Path,
+    text: str,
+    *,
+    llm_invoke: LLMInvoke | None = None,
+    model: str | None = None,
+    source_ref: str | None = None,
+) -> list[dict[str, Any]]:
+    """Mine durable learnings (preferences/corrections) from a session-turn span
+    and write them as feedback/stance/practice entities. Best-effort: empty text,
+    LLM failure, or parse failure all yield []. Writes freely (the refine pass
+    deduplicates); never writes a principal or other non-learning type."""
+    from durin.utils.prompt_templates import render_template
+    llm_invoke = llm_invoke or default_llm_invoke
+    if not text.strip():
+        return []
+    prompt = (render_template("agent/consolidator_learnings.md")
+              + "\n\nCONVERSATION SPAN:\n" + text[:12000])
+    try:
+        resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
+        raw = resp.text if hasattr(resp, "text") else str(resp)
+        learnings = _parse_learnings(raw)
+    except Exception:
+        return []
+    now = datetime.now(timezone.utc)
+    src = source_ref or "learnings_sweep"
+    out: list[dict[str, Any]] = []
+    for it in learnings:
+        ref = it["ref"]
+        if ref.split(":", 1)[0] not in _LEARNING_TYPES:
+            continue
+        result = write_entity(
+            workspace, ref,
+            [FieldPatch(kind="body_replace", value=it["body"], author="dream",
+                        source_ref=src, at=now)],
+            create=True, name=it["name"])
+        out.append({"ref": ref, "committed": result.committed})
+    try:
+        _mine_emit_tool_event("memory.dream.learnings", {
+            "proposed": len(learnings),
+            "written": sum(1 for r in out if r["committed"]),
             "refs": [r["ref"] for r in out],
         })
     except Exception:  # pragma: no cover

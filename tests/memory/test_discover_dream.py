@@ -46,7 +46,8 @@ def test_parse_discoveries_validates_and_filters():
     )
     # nested attr dropped (parse_attributes filter); invalid/absent ref dropped
     assert parse_discoveries(raw) == [
-        {"ref": "person:ana", "name": "Ana", "attributes": {"role": "co-founder"}},
+        {"ref": "person:ana", "name": "Ana", "attributes": {"role": "co-founder"},
+         "aliases": [], "relations": [], "significance": None, "turn": None},
     ]
 
 

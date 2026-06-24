@@ -1375,6 +1375,7 @@ def _run_gateway(
             _absorb = config.memory.dream.auto_absorb
             _discover = config.memory.dream.discover_enabled
             _skill_signals = config.memory.dream.skill_signals_enabled
+            _learnings = config.memory.dream.learnings_sweep_enabled
             _dream_error: Exception | None = None
             from datetime import datetime, timezone
             _run_started = datetime.now(timezone.utc)
@@ -1384,6 +1385,7 @@ def _run_gateway(
                     run_extract_pass, workspace, model=model,
                     max_seconds=_cron_max_s, discover=_discover,
                     skill_signals=_skill_signals,
+                    learnings=_learnings,
                     confidence_threshold=_absorb.confidence_threshold,
                     semantic_distance_threshold=_absorb.semantic_distance_threshold,
                     vector_index=_vi)
@@ -1394,6 +1396,7 @@ def _run_gateway(
                     run_refine_pass, workspace, model=model,
                     enabled=_absorb.enabled,
                     confidence_threshold=_absorb.confidence_threshold,
+                    escalate_floor=_absorb.escalate_floor,
                     semantic_distance_threshold=_absorb.semantic_distance_threshold,
                     run_started_at=_run_started,
                     vector_index=_vi)
@@ -1691,6 +1694,7 @@ def _run_gateway(
                         max_seconds=_dream_max_s,
                         discover=config.memory.dream.discover_enabled,
                         skill_signals=config.memory.dream.skill_signals_enabled,
+                        learnings=config.memory.dream.learnings_sweep_enabled,
                         confidence_threshold=config.memory.dream.auto_absorb.confidence_threshold,
                         semantic_distance_threshold=config.memory.dream.auto_absorb.semantic_distance_threshold,
                         vector_index=dream_vector_index(ws, config),

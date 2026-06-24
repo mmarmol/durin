@@ -5,12 +5,14 @@ interface VoiceConfigShape {
   enabled?: boolean;
   vad_threshold?: number;
   end_of_turn_silence_ms?: number;
+  idle_timeout_s?: number;
 }
 
 export function useVoiceConfig(token: string) {
   const [enabled, setEnabled] = useState(true);
   const [vadThreshold, setVadThreshold] = useState(0.5);
   const [endOfTurnSilenceMs, setEndOfTurnSilenceMs] = useState(700);
+  const [idleTimeoutMs, setIdleTimeoutMs] = useState(300_000);
   // `available` gates the orb: voice can only run when it can actually speak,
   // i.e. the TTS backend is usable. Local TTS needs the [tts] extra installed;
   // cloud providers are assumed reachable (the key is checked server-side).
@@ -41,6 +43,9 @@ export function useVoiceConfig(token: string) {
         setEndOfTurnSilenceMs(
           typeof v.end_of_turn_silence_ms === "number" ? v.end_of_turn_silence_ms : 700,
         );
+        setIdleTimeoutMs(
+          typeof v.idle_timeout_s === "number" ? v.idle_timeout_s * 1000 : 300_000,
+        );
         setAvailable(en && ttsReady);
       } catch {
         if (!cancelled) setAvailable(false);
@@ -53,5 +58,5 @@ export function useVoiceConfig(token: string) {
     };
   }, [token]);
 
-  return { enabled, vadThreshold, endOfTurnSilenceMs, available, loading };
+  return { enabled, vadThreshold, endOfTurnSilenceMs, idleTimeoutMs, available, loading };
 }

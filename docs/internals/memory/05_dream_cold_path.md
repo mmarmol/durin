@@ -133,12 +133,24 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    roles, relationships, commitments, life events — ephemeral chatter excluded)
    about entities the agent did **not** upsert, and writes them as
    `author="dream"` pages, skipping refs already handled in Stage 1 and
-   tombstoned refs. Before creating a new page, each proposal is resolved
-   against the existing graph by name within the same entity type (via the alias
-   index): a **unique** match updates that entity in place instead of minting a
-   new slug; an **ambiguous** match (more than one candidate) creates a new page,
-   deferring disambiguation to the refine pass. When lexical matching yields
-   **no** match, discovery additionally consults the vector index for an
+   tombstoned refs. Each proposal from the discovery prompt is a **rich
+   composite**: it includes the entity `name` and `attributes`, plus optional
+   `aliases` (other names or spellings the turns use for this entity),
+   `relations` (typed links to other entities mentioned in the turns), and a
+   `significance` sentence that captures *why this entity is in the user's
+   memory* — their relationship to it — rather than restating the attributes.
+   The prompt requests all four components from the source turns only; none are
+   invented. The proposal also includes a `turn` field: the turn number where
+   the entity's durable fact first appears. Each patch written by `discover_entities`
+   carries a `source_ref` of `[[sessions/<stem>.md#turn-N]]` using that turn
+   number, falling back to the window-end marker when the proposal omits `turn`,
+   so provenance points to the turn the fact came from rather than the session's
+   window-end watermark. Before creating a new page, each proposal
+   is resolved against the existing graph by name within the same entity type
+   (via the alias index): a **unique** match updates that entity in place instead
+   of minting a new slug; an **ambiguous** match (more than one candidate) creates
+   a new page, deferring disambiguation to the refine pass. When lexical matching
+   yields **no** match, discovery additionally consults the vector index for an
    **embedding-near same-type entity** (L2 distance within
    `semantic_distance_threshold`) and runs the LLM judge to confirm whether the
    proposal is the same entity under a variant name; a confirmed match reuses the
@@ -154,14 +166,27 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
 6. **Stage 3 (skill signals, when `skill_signals=True`).** Skill corrections and
    gaps in the same turns are logged as observations for later skill curation
    (out of scope here — see the skills internals docs).
-7. Advance the cursor to the total turn count via `set_extract_cursor`.
+7. **Stage 4 (learnings sweep, when `learnings=True`).** `mine_learnings`
+   (`durin/memory/extract_dream.py`) makes one LLM call over the same turns —
+   reusing the compaction learnings prompt — to extract durable learnings:
+   preferences, corrections, standing constraints, and stable project facts. It
+   writes each result as a `feedback`, `stance`, or `practice` entity with
+   `author="dream"` (never a `person` or other principal type). Writes freely;
+   duplicates with the agent's live captures and the compaction backstop are
+   resolved by the refine pass. Gated by `memory.dream.learnings_sweep_enabled`
+   (default true). Best-effort: an empty turn span, LLM failure, or parse failure
+   yields an empty list without aborting the session.
+8. Advance the cursor to the total turn count via `set_extract_cursor`.
 
-The `source_ref` recorded in each patch's provenance is the session-turn marker
-`[[sessions/<stem>.md#turn-<total>]]`, so a reader can trace an attribute back to
-its origin turn. `max_seconds` (0 = unbounded) is a hard wall-clock cap: when
-elapsed time crosses it the pass yields **after the current session**, emits
-`memory.dream.max_seconds_reached`, and the cursor resumes the remainder on the
-next trigger.
+The `source_ref` in each patch's provenance points to the turn the fact came from.
+Stage 1 (extract) uses the session window-end marker `[[sessions/<stem>.md#turn-<N>]]`.
+Stage 2 (discover) uses the per-entity `turn` from the LLM proposal when present,
+producing a more precise `[[sessions/<stem>.md#turn-<M>]]` that anchors to the
+specific turn where the entity's durable fact first appears; when the proposal
+omits `turn`, it falls back to the same window-end marker. `max_seconds`
+(0 = unbounded) is a hard wall-clock cap: when elapsed time crosses it the pass
+yields **after the current session**, emits `memory.dream.max_seconds_reached`,
+and the cursor resumes the remainder on the next trigger.
 
 ### Pass 2 — derived_from: link entities to source documents
 
@@ -193,11 +218,11 @@ is a sync wrapper over the async runner so the cron can call it in a thread.
 ### Pass 4 — refine: dedup duplicate entities
 
 `run_refine_pass(workspace, *, llm_invoke, model, enabled, confidence_threshold,
-run_started_at, vector_index=None)` is the graph-hygiene pass, gated by `enabled`
-(wired from `memory.dream.auto_absorb.enabled`, **ON by default**). When disabled
-it short-circuits — **no judge, no merge** — and logs the manual path
-(`durin memory absorb-suggest` to surface, `durin memory absorb` to merge). When
-enabled it delegates to `run_refine` (`durin/memory/refine_dream.py`).
+run_started_at, vector_index=None, escalate_floor=0)` is the graph-hygiene pass,
+gated by `enabled` (wired from `memory.dream.auto_absorb.enabled`, **ON by
+default**). When disabled it short-circuits — **no judge, no merge** — and logs
+the manual path (`durin memory absorb-suggest` to surface, `durin memory absorb`
+to merge). When enabled it delegates to `run_refine` (`durin/memory/refine_dream.py`).
 `vector_index` is built once per run by the cron and CLI callers via
 `dream_vector_index(workspace, cfg)` (`durin/memory/dream_passes.py`) and
 threaded through; it is `None` when the vector index is unavailable.
@@ -212,7 +237,7 @@ threaded through; it is `None` when the vector index is unavailable.
    alias pairs. This catches duplicates that share no alias — same entity,
    different name — and feeds them through the same judge. When the vector index is
    unavailable this step is a no-op.
-2. Each pair is filtered out (with a `memory.absorb.skipped` reason) when:
+3. Each pair is filtered out (with a `memory.absorb.skipped` reason) when:
    `cross_type` (different entity types), `tombstoned` (the user previously
    rejected the merge — recorded in `.refine_tombstones.json`), `load_failed`,
    `user_managed` (either page is `author == "user_authored"`), or `quarantine`
@@ -220,13 +245,31 @@ threaded through; it is `None` when the vector index is unavailable.
    started, checked via `created_at` then `updated_at`; no timestamp = treated
    as old, fail-open) — the run never merges its own fresh output; cross-run
    duplicates converge on the next pass.
-3. For survivors, `judge_pair` (`durin/memory/absorb_judge.py`) renders both
-   pages (file mtime, aliases, identifiers, body — the mtime lets it reason about
-   staleness) and returns a verdict — `same`, `different`, or `unclear` — plus a
-   confidence. The prompt treats alias overlap as *evidence, not proof* and
-   defaults to `different` when content evidence is thin.
-4. The pair is merged only when `verdict == "same"` **and**
-   `confidence >= confidence_threshold`; otherwise it is kept separate.
+4. For survivors, `judge_pair` (`durin/memory/absorb_judge.py`) — the
+   **Tier 1 cheap judge** — renders **the whole entity page** via
+   `page.to_markdown()` (body capped at a configurable char budget; the full
+   frontmatter, attributes, and relations are always included before the cap
+   applies). Rendering the whole page rather than a curated field subset means a
+   new field is visible to the judge by default: the failure mode is an extra line
+   of context, not a silent blind spot. The judge returns `same`, `different`, or
+   `unclear` plus a confidence.
+5. **Tier 2 escalation (opt-in):** when `escalate_floor > 0`, a pair the
+   Tier 1 judge cannot settle — verdict `"unclear"`, or verdict `"same"` with
+   confidence in `[escalate_floor, confidence_threshold)` — is handed to a
+   **bounded sub-agent** (`durin/memory/tier2_judge.py`). The sub-agent
+   (`escalate_judge`) spins up an `AgentRunner` with four read-only tools —
+   `memory_read_entity`, `memory_entity_lineage`, `memory_source_session`, and
+   `memory_search` — and a fixed iteration ceiling. It investigates both entities
+   in depth and returns the same `JudgeResult` envelope as the Tier 1 judge.
+   `escalate_floor=0` (the default) leaves this path disabled; escalation must be
+   opted in explicitly.
+6. The pair is merged only when the deciding judge returns `verdict == "same"`
+   **and** `confidence >= confidence_threshold`. Every other outcome keeps the
+   pair separate.
+7. **Flag surface:** when the Tier 2 sub-agent investigated a pair and did not
+   confirm it as `"same"`, the pair is recorded in `memory/.flagged_pairs.json`.
+   `durin memory absorb-suggest` surfaces these under "Flagged by the agent —
+   needs review" so the operator can inspect and merge or dismiss them manually.
 
 `EntityAbsorption.absorb` does a deterministic structural merge (union of
 aliases / attributes / relations / provenance; canonical wins attribute
@@ -308,7 +351,9 @@ cross-process lock `SessionManager` uses for that session's sidecar.
 | `run_refine_pass` | `durin/memory/dream_passes.py` | Dedup gate: short-circuits when `auto_absorb` is off, else delegates to `run_refine`; accepts `vector_index` built by `dream_vector_index`. |
 | `run_refine` | `durin/memory/refine_dream.py` | Dedup engine: alias-overlap + optional embedding-near candidate recall, filters, judge, merge via absorb; tombstone bookkeeping. |
 | `dream_vector_index` | `durin/memory/dream_passes.py` | Builds a `VectorIndex` (or returns `None` when unavailable) for the refine semantic recall step; called once per run by the cron and CLI callers. |
-| `judge_pair` | `durin/memory/absorb_judge.py` | LLM identity judge: returns `same` / `different` / `unclear` + confidence. |
+| `judge_pair` | `durin/memory/absorb_judge.py` | Tier 1 LLM identity judge: renders the whole entity page via `to_markdown()` (body-capped), returns `same` / `different` / `unclear` + confidence. |
+| `escalate_judge` | `durin/memory/tier2_judge.py` | Tier 2 sub-agent: spins up a bounded `AgentRunner` with 4 read-only tools to investigate a borderline pair; returns the same `JudgeResult` envelope. Opt-in via `escalate_floor > 0`. |
+| `add_flagged` / `read_flagged` | `durin/memory/refine_dream.py` | Write / read the `memory/.flagged_pairs.json` flag store: pairs the Tier 2 agent investigated but did not confirm as same. |
 | `run_always_on_pass` | `durin/memory/always_on_dream.py` | Pinned-guidance curation: rank feedback entities, fit budget, flip `always_on` flags. |
 | `ReactiveDreamGate` | `durin/memory/dream_passes.py` | In-process lock + throttle for the reactive triggers. |
 | `get_extract_cursor` / `set_extract_cursor` | `durin/memory/extract_runner.py` | Read / advance the per-session cursor (top-level key, legacy fallback). |
@@ -327,11 +372,13 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | Setting | Default | Effect |
 |---|---|---|
 | `memory.dream.enabled` | `true` | Master switch for the cron + both reactive triggers. Manual `durin memory dream` works regardless. |
+| `agents.defaults.compaction_learnings_enabled` | `true` | Gates the compaction backstop that distils durable learnings at compaction time. When false, no LLM call is made and no learning entities are written during consolidation. |
 | `memory.dream.cron` | `0 3 * * *` | Daily schedule for the full five-pass run. |
 | `memory.dream.post_compaction` | `true` | Arm the reactive extract trigger after a session is compacted. |
 | `memory.dream.on_session_close` | `true` | Arm the reactive extract trigger when a session closes. |
 | `memory.dream.discover_enabled` | `true` | Enable Stage 2 mention-based entity discovery in the extract pass. |
 | `memory.dream.skill_signals_enabled` | `true` | Log skill corrections/gaps from extracted turns. |
+| `memory.dream.learnings_sweep_enabled` | `true` | Enable Stage 4 of the extract pass: mine each session's new turns for durable learnings and write them as `feedback`/`stance`/`practice` entities (`author="dream"`). Dedup is delegated to the refine pass. |
 | `memory.dream.model_override` | `null` | Override the dream model (resolved via `resolve_memory_model`). |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for `ReactiveDreamGate`. 0 disables. The cron is never throttled. |
 | `memory.dream.max_seconds_per_run` | `600` | Hard wall-clock cap; the pass yields after the current session and the cursor resumes. 0 = run to completion. |
@@ -339,6 +386,7 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM-judge confidence floor (0–100) for an auto-merge. |
 | `memory.dream.auto_absorb.semantic_distance_threshold` | `0.20` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.90; lower = stricter — the judge still decides the merge. |
+| `memory.dream.auto_absorb.escalate_floor` | `0` | **Opt-in.** Confidence floor (0–100) below which the Tier 1 judge's borderline verdicts escalate to a bounded sub-agent for deeper investigation. `0` (the default) disables Tier 2 entirely. Set to e.g. `60` to escalate pairs the cheap judge rated same at 60–94 confidence or returned `unclear`. |
 
 The model every pass uses is resolved by
 `resolve_memory_model(config)` (`durin/memory/model_resolve.py`):
@@ -354,10 +402,32 @@ The model every pass uses is resolved by
 - **Reactive hooks** — `agent.consolidator.on_post_compaction` and
   `agent.on_session_close` (wired in `durin/cli/commands.py`) call a closure that
   runs the **extract pass only** through the shared `ReactiveDreamGate`.
+  Separately, the consolidator itself runs a **compaction backstop**
+  (`Consolidator.extract_learnings`) immediately before firing the hook: it calls
+  the LLM over the archived span to distil durable user learnings (preferences,
+  corrections, standing constraints, stable personal facts) and writes them as
+  `feedback`/`stance`/`practice`/`person` entities with `author="agent"`. This
+  catches learnings that the live-agent capture directive may not have persisted
+  during the session. It is best-effort — a failure never breaks consolidation —
+  and dedup is delegated to the dream's refine pass. The backstop is gated by
+  `agents.defaults.compaction_learnings_enabled` (default true).
 - **CLI** — `durin memory dream` (`durin/cli/memory_cmd.py`) runs the full
   five-pass sequence on demand and prints a one-line summary. Related recovery
   commands: `durin memory absorb-suggest`, `durin memory absorb`,
   `durin memory revert`, `durin memory history`.
+- **WebUI** — the **Dream** section (`/dream` route, `DreamView` +
+  `DreamDrawer` in `webui/src/components/`) shows a per-run digest feed of
+  recent dream activity: entity merges, entity and learning discoveries, and
+  skill creates / improvements / quarantines. Each event card links to the
+  affected entity or skill — clicking it opens an in-place peek drawer
+  (`DreamDrawer`) that fetches and renders the entity page or skill detail
+  without leaving the feed. The header shows the timestamp of the most recent
+  run and a **Run now** button that triggers the `memory_dream` system cron job
+  via `POST /api/v1/cron/{id}/run` and refreshes the feed on completion. The
+  digest is served by `GET /api/v1/memory/dream/digest` (`MemoryService.dream_digest`,
+  `durin/service/memory.py`): it scans the local telemetry JSONL files for
+  `memory.dream.*` events and maps them to `DreamEvent` objects, newest-first,
+  capped at the requested limit.
 - **Telemetry** — every pass emits best-effort `memory.dream.*` and
   `memory.absorb.*` events (defined in `durin/telemetry/schema.py`) for
   monitoring; see `07_telemetry_and_observability.md`.

@@ -89,6 +89,7 @@ def run_extract_pass(
     max_seconds: int = 0,
     discover: bool = True,
     skill_signals: bool = True,
+    learnings: bool = True,
     confidence_threshold: int = 95,
     semantic_distance_threshold: float = 0.20,
     vector_index: object | None = None,
@@ -128,13 +129,15 @@ def run_extract_pass(
                 r = run_extract_for_session(
                     workspace, jsonl_path, llm_invoke=llm_invoke, model=model,
                     discover=discover, skill_signals=skill_signals,
+                    learnings=learnings,
                     confidence_threshold=confidence_threshold,
                     semantic_distance_threshold=semantic_distance_threshold,
                     alias_index=_alias_index, vector_index=vector_index)
                 extracted = r.get("extracted") or []
                 discovered = r.get("discovered") or []
                 sig = r.get("skill_signals") or []
-                if extracted or discovered or sig:
+                learned = r.get("learnings") or []
+                if extracted or discovered or sig or learned:
                     out["sessions"] += 1
                     out["entities"] += len(extracted)
                     out["discovered"] += len(discovered)
@@ -199,6 +202,7 @@ def run_refine_pass(
     model: str | None = None,
     enabled: bool = True,
     confidence_threshold: int = 95,
+    escalate_floor: int = 0,
     semantic_distance_threshold: float = 0.20,
     run_started_at: "datetime | None" = None,
     vector_index: object | None = None,
@@ -212,7 +216,8 @@ def run_refine_pass(
     an auto-merge; ``run_started_at`` is the run-scoped quarantine (entities
     created at/after the run start are skipped). Both are wired from config by
     the cron / manual callers. ``vector_index`` enables semantic recall for
-    same-thing-different-name pairs.
+    same-thing-different-name pairs. ``escalate_floor`` enables the Tier-2
+    sub-agent for borderline pairs (0 = disabled).
     """
     import time
     t0 = time.perf_counter()
@@ -226,6 +231,7 @@ def run_refine_pass(
     _emit("memory.dream.start", kind="refine")
     out = run_refine(workspace, llm_invoke=llm_invoke, model=model,
                      confidence_threshold=confidence_threshold,
+                     escalate_floor=escalate_floor,
                      semantic_distance_threshold=semantic_distance_threshold,
                      run_started_at=run_started_at,
                      vector_index=vector_index)
