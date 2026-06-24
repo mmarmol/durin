@@ -123,7 +123,10 @@ def run_refine(
     catching same-thing-different-name duplicates that share no alias.
     """
     llm_invoke = llm_invoke or default_llm_invoke
-    absorber = EntityAbsorption(workspace=workspace)
+    # Pass the vector index so absorb() keeps it current (drops the absorbed
+    # row, re-upserts the canonical) — semantic recall READS this index next
+    # run, so a merge must not leave a stale row behind.
+    absorber = EntityAbsorption(workspace=workspace, vector_index=vector_index)
     candidates = absorber.find_candidates()
     if vector_index is not None:
         seen = {tuple(sorted(c.refs)) for c in candidates}

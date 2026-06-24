@@ -27,6 +27,16 @@ class _FakeVI:
                 return rows[:top_k]
         return []
 
+    # absorb() keeps the index current after a merge (best-effort); the fake
+    # records the calls so a merge stays warning-free and we can assert upkeep.
+    def delete_by_id(self, ref):
+        self.deleted = getattr(self, "deleted", [])
+        self.deleted.append(ref)
+
+    def upsert_entity_page(self, **kw):
+        self.upserted = getattr(self, "upserted", [])
+        self.upserted.append(kw.get("entity_ref"))
+
 
 def _mk(ws, ref, name):
     write_entity(ws, ref, [FieldPatch(kind="attribute", key="k", value="v",

@@ -133,6 +133,8 @@ class EntityAbsorption:
                 name=page.name, aliases=list(page.aliases), body=page.body or "",
                 attributes=page.attributes, relations=page.relations)
             try:
+                # +1: the entity itself is its own nearest neighbour (distance
+                # ~0); request one extra so self-exclusion still leaves top_k.
                 rows = vector_index.search(query, top_k=top_k + 1)
             except Exception:  # noqa: BLE001 — semantic recall is best-effort
                 continue
