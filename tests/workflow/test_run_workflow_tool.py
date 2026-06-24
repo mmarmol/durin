@@ -8,7 +8,7 @@ import pytest
 
 from durin.agent.runner import AgentRunResult
 from durin.agent.tools.run_workflow import RunWorkflowTool
-from durin.config.schema import ToolsConfig
+from durin.config.schema import ToolsConfig, WorkflowConfig
 from durin.providers.base import LLMProvider
 from durin.session.manager import SessionManager
 from durin.workflow.loader import workflows_dir
@@ -16,7 +16,7 @@ from durin.workflow.loader import workflows_dir
 
 def _tool(tmp_path):
     sessions = SessionManager(workspace=tmp_path)
-    app_config = SimpleNamespace(resolve_default_preset=lambda: object(), tools=ToolsConfig())
+    app_config = SimpleNamespace(resolve_default_preset=lambda: object(), tools=ToolsConfig(), workflow=WorkflowConfig())
     ctx = SimpleNamespace(workspace=str(tmp_path), sessions=sessions, app_config=app_config)
     return RunWorkflowTool.create(ctx)
 
@@ -29,7 +29,7 @@ def _write_workflow(tmp_path, name, data):
 
 def test_tool_metadata():
     sessions = MagicMock()
-    ctx = SimpleNamespace(workspace="/tmp", sessions=sessions, app_config=SimpleNamespace(tools=ToolsConfig()))
+    ctx = SimpleNamespace(workspace="/tmp", sessions=sessions, app_config=SimpleNamespace(tools=ToolsConfig(), workflow=WorkflowConfig()))
     tool = RunWorkflowTool.create(ctx)
     assert tool.name == "run_workflow"
     assert "name" in tool.parameters["properties"]
@@ -162,7 +162,7 @@ async def test_run_anchors_node_sessions_to_invoking_session(tmp_path):
     _write_workflow(tmp_path, "w", {"name": "w", "start": "a",
                                     "nodes": [{"id": "a", "kind": "work", "next": None}]})
     sessions = SessionManager(workspace=tmp_path)
-    app_config = SimpleNamespace(resolve_default_preset=lambda: object(), tools=ToolsConfig())
+    app_config = SimpleNamespace(resolve_default_preset=lambda: object(), tools=ToolsConfig(), workflow=WorkflowConfig())
     ctx = SimpleNamespace(workspace=str(tmp_path), sessions=sessions, app_config=app_config)
     tool = RunWorkflowTool.create(ctx)
     tool.set_context(RequestContext(channel="websocket", chat_id="abc", session_key="websocket:abc"))

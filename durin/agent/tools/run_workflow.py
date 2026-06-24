@@ -125,6 +125,7 @@ class RunWorkflowTool(Tool, ContextAware):
             subworkflow_runner=subworkflow_runner,
             workspace=self._workspace,
             pick_runner=judge_runner.pick,
+            max_node_visits=self._app_config.workflow.max_node_visits,
         )
         root_session_key = self._session_key.get()
         result = await asyncio.to_thread(engine.run, workflow, task, root_session_key=root_session_key)

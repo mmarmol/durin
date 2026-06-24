@@ -1,8 +1,8 @@
-"""Schema tests for the global transcription config."""
+"""Schema tests for the global transcription config and workflow config."""
 
 import pytest
 
-from durin.config.schema import Config, TranscriptionConfig, TranscriptionLocalConfig
+from durin.config.schema import Config, TranscriptionConfig, TranscriptionLocalConfig, WorkflowConfig
 
 
 def test_transcription_defaults():
@@ -49,3 +49,15 @@ def test_root_config_has_transcription():
 def test_provider_resolution_values_are_accepted():
     for p in ("local", "openai", "groq", "http"):
         TranscriptionConfig(provider=p)
+
+
+def test_workflow_config_default_and_validation():
+    assert WorkflowConfig().max_node_visits == 25
+    with pytest.raises(Exception):
+        WorkflowConfig(max_node_visits=0)
+
+
+def test_root_config_has_workflow():
+    root = Config()
+    assert isinstance(root.workflow, WorkflowConfig)
+    assert root.workflow.max_node_visits == 25
