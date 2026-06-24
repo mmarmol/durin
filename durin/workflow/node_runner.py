@@ -159,6 +159,14 @@ class AgentNodeRunner:
         user = req.task
         if req.upstream_output:
             user = f"{req.task}\n\n--- Output of the previous step ---\n{req.upstream_output}"
+        if getattr(req.node, "tools", "none") == "default":
+            lines = []
+            if req.upstream_artifact_dir:
+                lines.append(f"Files from the previous step are in: {req.upstream_artifact_dir}")
+            if req.output_dir:
+                lines.append(f"Write any files you produce into: {req.output_dir}")
+            if lines:
+                user = f"{user}\n\n--- Files ---\n" + "\n".join(lines)
         messages.append({"role": "user", "content": user})
 
         result = asyncio.run(self.runner.run(AgentRunSpec(

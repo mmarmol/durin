@@ -22,7 +22,7 @@ from pathlib import Path
 
 # Heavy or machine-managed directories that should never be copied into a branch fork
 # nor diffed: copying them per branch would be ruinous and they are not branch output.
-_EXCLUDE = {".git", "node_modules", ".venv", "venv", "__pycache__", ".durin", ".mypy_cache"}
+_EXCLUDE = {".git", "node_modules", ".venv", "venv", "__pycache__", ".durin", ".mypy_cache", ".workflow"}
 
 
 @dataclass

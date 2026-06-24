@@ -47,7 +47,17 @@ reconnect; the call is marshalled back to the gateway's event loop, where the MC
 session lives). Skills/MCP default empty, so a node sees only what its job needs. The node's output passes along the edge
 as the next node's input. A `shared`-context node reads and extends a running
 conversation buffer; an `own`-context node is isolated and receives only the upstream
-output. **When a node routes** (it has `on_pass`/`on_fail`), the engine derives a
+output. **Output travels two channels.** The **text** of a node's output is the edge — it
+becomes the next node's input (above). For **files**, each agent node with file tools is
+also given a keyed **output folder** (`<workspace>/.workflow/<run>/<node>/<iteration>/`,
+`durin/workflow/artifacts.py`) and is told both where to write its own files and where the
+previous step's folder is, so a produced file can be handed onward without the path being
+guessed. The folder is keyed by run/node/iteration, so it never collides across loop-back
+re-iterations or concurrent/repeated invocations, and it follows the same edge-threading as
+the text (a passing judge's empty folder never replaces the producer's). The `.workflow` tree
+gitignores itself, is excluded from parallel-fork reconciliation, and is pruned to recent
+runs. (Real deliverables a node writes into the workspace proper are the separate,
+already-shared filesystem channel — unchanged.) **When a node routes** (it has `on_pass`/`on_fail`), the engine derives a
 pass/fail verdict from what the node produced: a **command** node passes iff its shell
 command exits 0 (`durin/workflow/condition.py`, run in the workflow's workspace so it
 sees files earlier nodes wrote); an **agent** node ends its own reply with a `PASS`/`FAIL`
@@ -134,6 +144,7 @@ End-to-end for a single `run_workflow` call:
 |---|---|---|
 | `Workflow`, `WorkNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator (one node type; routing optional; `kind:"decision"` back-compat alias; structural-equivalence guard). |
 | `parse_verdict` | `durin/workflow/verdict.py` | The `PASS`/`FAIL` contract read from a routing agent node's own output (default `FAIL`). |
+| `artifact_dir`, `prune_runs` | `durin/workflow/artifacts.py` | The per-node file hand-off folder keyed by run/node/iteration (self-gitignored, pruned to recent runs). |
 | `run_command`, `CommandOutcome` | `durin/workflow/condition.py` | The shell-exit-code condition a command node routes on. |
 | `AgentJudgeRunner` | `durin/workflow/judge.py` | The branch-pick reviewer: `pick` chooses the best of N outputs for a parallel `choose` reconcile. |
 | `fork`, `diff`, `conflicts`, `apply` | `durin/workflow/workspace_fork.py` | Per-branch workspace isolation + reconciliation (choose/union) for writing-in-parallel. |
