@@ -101,12 +101,19 @@ def _page_mtime(workspace: Path, ref: str):
         return None
 
 
+def _escalate_judge(workspace: Path, ref_a: str, ref_b: str, **kw: object) -> "JudgeResult":
+    """Thin wrapper so tests can monkeypatch without importing tier2_judge at module load."""
+    from durin.memory.tier2_judge import escalate_judge
+    return escalate_judge(workspace, ref_a, ref_b, **kw)
+
+
 def run_refine(
     workspace: Path,
     *,
     llm_invoke: LLMInvoke | None = None,
     model: str | None = None,
     confidence_threshold: int = 95,
+    escalate_floor: int = 0,
     run_started_at: "datetime | None" = None,
     vector_index: object | None = None,
     semantic_distance_threshold: float = 0.20,
@@ -121,6 +128,13 @@ def run_refine(
     When ``vector_index`` is provided, embedding-near same-type pairs within
     ``semantic_distance_threshold`` (L2) are added to the candidate set,
     catching same-thing-different-name duplicates that share no alias.
+
+    When ``escalate_floor > 0``, pairs the cheap judge can't settle — verdict
+    ``"unclear"``, or ``"same"`` with confidence in ``[escalate_floor,
+    confidence_threshold)`` — go to a bounded sub-agent (Tier-2) that
+    investigates with the lineage/source tools. Escalation is best-effort: a
+    Tier-2 exception keeps the pair rather than aborting the pass.
+    ``escalate_floor=0`` disables escalation entirely (old behavior preserved).
     """
     llm_invoke = llm_invoke or default_llm_invoke
     # Pass the vector index so absorb() keeps it current (drops the absorbed
@@ -179,19 +193,33 @@ def run_refine(
         _emit("memory.absorb.judged", canonical=ref_a, absorbed=ref_b,
               verdict=judged.verdict, confidence=judged.confidence,
               distance=cand.distance)
-        if judged.verdict == "same" and judged.confidence >= confidence_threshold:
+        decision = judged
+        borderline = (
+            judged.verdict == "unclear"
+            or (judged.verdict == "same"
+                and escalate_floor <= judged.confidence < confidence_threshold)
+        )
+        if escalate_floor and borderline:
+            try:
+                decision = _escalate_judge(workspace, ref_a, ref_b, model=model)
+                _emit("memory.absorb.escalated", canonical=ref_a, absorbed=ref_b,
+                      verdict=decision.verdict, confidence=decision.confidence)
+            except Exception as exc:  # noqa: BLE001 — agent best-effort
+                kept.append({"pair": [ref_a, ref_b], "reason": f"tier2_error:{exc}"})
+                continue
+        if decision.verdict == "same" and decision.confidence >= confidence_threshold:
             absorber.absorb(
                 ref_a, ref_b, reason="refine",
-                judge_reasoning=judged.reasoning,
-                judge_confidence=judged.confidence,
+                judge_reasoning=decision.reasoning,
+                judge_confidence=decision.confidence,
             )
             merged.append({"canonical": ref_a, "absorbed": ref_b,
-                           "confidence": judged.confidence})
+                           "confidence": decision.confidence})
             _emit("memory.absorb.auto_merged", canonical=ref_a, absorbed=ref_b,
-                  confidence=judged.confidence)
+                  confidence=decision.confidence)
         else:
-            kept.append({"pair": [ref_a, ref_b], "verdict": judged.verdict,
-                         "confidence": judged.confidence})
+            kept.append({"pair": [ref_a, ref_b], "verdict": decision.verdict,
+                         "confidence": decision.confidence})
 
     return {
         "merged": merged,

@@ -129,3 +129,103 @@ def test_refine_no_cutoff_merges(tmp_path):
     _two_dupes(tmp_path)
     out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 99), run_started_at=None)
     assert out["merged"]
+
+
+# ---------------------------------------------------------------------------
+# Tier-2 routing tests (Task 5)
+# ---------------------------------------------------------------------------
+
+def test_refine_tier2_escalates_unclear_and_merges(tmp_path, monkeypatch):
+    """Tier-1 unclear@80 → escalate → same@97 → merged."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+    from durin.memory.absorb_judge import JudgeResult
+    monkeypatch.setattr(rd, "_escalate_judge",
+                        lambda ws, a, b, **kw: JudgeResult("same", 97, "confirmed same"))
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("unclear", 80),
+                     confidence_threshold=95, escalate_floor=70)
+    assert out["merged"], out
+    assert not (tmp_path / "memory/entities/company/mxhero_inc.md").exists()
+
+
+def test_refine_tier2_escalates_unclear_and_keeps(tmp_path, monkeypatch):
+    """Tier-1 unclear@80 → escalate → different@85 → kept."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+    from durin.memory.absorb_judge import JudgeResult
+    monkeypatch.setattr(rd, "_escalate_judge",
+                        lambda ws, a, b, **kw: JudgeResult("different", 85, "not the same"))
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("unclear", 80),
+                     confidence_threshold=95, escalate_floor=70)
+    assert not out["merged"], out
+    assert out["kept_separate"]
+
+
+def test_refine_tier2_escalates_same_in_borderline_window(tmp_path, monkeypatch):
+    """Tier-1 same@75 (in [floor, threshold)) → escalate → same@97 → merged."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+    from durin.memory.absorb_judge import JudgeResult
+    monkeypatch.setattr(rd, "_escalate_judge",
+                        lambda ws, a, b, **kw: JudgeResult("same", 97, "confirmed"))
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 75),
+                     confidence_threshold=95, escalate_floor=70)
+    assert out["merged"], out
+
+
+def test_refine_tier2_no_escalation_when_floor_zero(tmp_path, monkeypatch):
+    """escalate_floor=0 disables Tier-2; unclear@80 → kept (old behavior)."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+    called = {"n": 0}
+
+    def _fake_escalate(ws, a, b, **kw):
+        called["n"] += 1
+        from durin.memory.absorb_judge import JudgeResult
+        return JudgeResult("same", 97, "should not be called")
+
+    monkeypatch.setattr(rd, "_escalate_judge", _fake_escalate)
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("unclear", 80),
+                     confidence_threshold=95, escalate_floor=0)
+    assert called["n"] == 0
+    assert not out["merged"]
+    assert out["kept_separate"]
+
+
+def test_refine_tier2_no_escalation_same_above_threshold(tmp_path, monkeypatch):
+    """same@97 >= threshold → merges directly, no escalation."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+    called = {"n": 0}
+
+    def _fake_escalate(ws, a, b, **kw):
+        called["n"] += 1
+        from durin.memory.absorb_judge import JudgeResult
+        return JudgeResult("same", 99, "should not be called")
+
+    monkeypatch.setattr(rd, "_escalate_judge", _fake_escalate)
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 97),
+                     confidence_threshold=95, escalate_floor=70)
+    assert called["n"] == 0
+    assert out["merged"]
+
+
+def test_refine_tier2_best_effort_on_error(tmp_path, monkeypatch):
+    """Tier-2 exception → pair kept (best-effort; never aborts pass)."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+
+    def _raise(ws, a, b, **kw):
+        raise RuntimeError("agent timeout")
+
+    monkeypatch.setattr(rd, "_escalate_judge", _raise)
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("unclear", 80),
+                     confidence_threshold=95, escalate_floor=70)
+    assert not out["merged"]
+    assert any("tier2_error" in str(k.get("reason", "")) for k in out["kept_separate"])

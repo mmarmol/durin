@@ -776,6 +776,19 @@ class MemoryAbsorbRevertedEvent(TypedDict):
     canonical: str
     absorbed: str
     original_sha: str  # the auto-merge commit being undone
+
+
+class MemoryAbsorbEscalatedEvent(TypedDict):
+    """A borderline pair was handed to the Tier-2 sub-agent judge.
+
+    Emitted after the bounded sub-agent returns a verdict, before the
+    merge/keep decision. Use to track escalation rate and Tier-2 outcomes.
+    """
+
+    canonical: str
+    absorbed: str
+    verdict: str   # "same" | "different" | "unclear"
+    confidence: int  # 0-100
     confidence: int  # confidence the original auto-merge recorded
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
@@ -1272,6 +1285,7 @@ EVENTS: dict[str, type] = {
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
     "memory.absorb.reverted": MemoryAbsorbRevertedEvent,
+    "memory.absorb.escalated": MemoryAbsorbEscalatedEvent,
     "memory.hot_layer.failure": MemoryHotLayerFailureEvent,
     "memory.index.write": MemoryIndexWriteEvent,
     "memory.index.rebuild": MemoryIndexRebuildEvent,
