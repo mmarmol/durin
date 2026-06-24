@@ -210,6 +210,8 @@ def cmd_dream(
 
     cfg = load_config()
     model = resolve_memory_model(cfg)
+    from datetime import datetime, timezone
+    _run_started = datetime.now(timezone.utc)
     console.print("[dim]Extract pass (sessions → entity attributes)…[/dim]")
     ex = run_extract_pass(workspace, model=model,
                           discover=cfg.memory.dream.discover_enabled)
@@ -227,7 +229,7 @@ def cmd_dream(
         )
     rf = run_refine_pass(workspace, model=model, enabled=_absorb.enabled,
                          confidence_threshold=_absorb.confidence_threshold,
-                         min_age_hours=_absorb.min_age_hours)
+                         run_started_at=_run_started)
     console.print("[dim]Always-on pass (distil pinned guidance)…[/dim]")
     ao = run_always_on_pass(workspace, model=model,
                             token_budget=cfg.memory.dream.always_on_token_budget)

@@ -1360,6 +1360,7 @@ def _run_gateway(
                 run_skill_extract_pass,
             )
             from durin.memory.model_resolve import resolve_memory_model
+            from durin.workflow.workflow_improve_dream import run_workflow_improve_pass
 
             # The daily cron runs the extract pass (sessions → entity attributes),
             # the skill-extract pass (sessions → reusable procedures as skills),
@@ -1371,6 +1372,8 @@ def _run_gateway(
             _discover = config.memory.dream.discover_enabled
             _skill_signals = config.memory.dream.skill_signals_enabled
             _dream_error: Exception | None = None
+            from datetime import datetime, timezone
+            _run_started = datetime.now(timezone.utc)
             try:
                 ex = await _asyncio.to_thread(
                     run_extract_pass, workspace, model=model,
@@ -1383,10 +1386,16 @@ def _run_gateway(
                     run_refine_pass, workspace, model=model,
                     enabled=_absorb.enabled,
                     confidence_threshold=_absorb.confidence_threshold,
-                    min_age_hours=_absorb.min_age_hours)
+                    run_started_at=_run_started)
                 ao = await _asyncio.to_thread(
                     run_always_on_pass, workspace, model=model,
                     token_budget=config.memory.dream.always_on_token_budget)
+                # Workflow self-improvement: inert unless a workflow opts into
+                # improvement_mode 'manual'/'auto' (off by default).
+                wi = await _asyncio.to_thread(run_workflow_improve_pass, workspace, model=model)
+                logger.info(
+                    "memory_dream cron: workflow_improve(workflows={} proposals={})",
+                    wi.get("workflows", 0), wi.get("proposals", 0))
                 logger.info(
                     "memory_dream cron: extract(sessions={} entities={} {}ms yielded={}) "
                     "derived_from(links={} sessions={} {}ms) "
@@ -2731,6 +2740,10 @@ app.add_typer(_memory_app, name="memory")
 from durin.cli.skill_cmd import skill_app as _skill_app  # noqa: E402
 
 app.add_typer(_skill_app, name="skill")
+
+from durin.cli.workflow_cmd import workflow_app as _workflow_app  # noqa: E402
+
+app.add_typer(_workflow_app, name="workflow")
 
 from durin.cli.auth_cmd import auth_app as _auth_app  # noqa: E402
 

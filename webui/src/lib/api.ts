@@ -192,6 +192,109 @@ export async function fetchSettings(
   return request<SettingsPayload>(`${base}/api/v1/settings`, token);
 }
 
+// --- Workflows (visual editor) ---
+
+export async function listWorkflows(
+  token: string,
+  base: string = "",
+): Promise<string[]> {
+  const body = await request<{ workflows: string[] }>(
+    `${base}/api/v1/workflows`,
+    token,
+  );
+  return body.workflows;
+}
+
+export async function getWorkflow(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<Record<string, unknown>> {
+  const body = await request<{ name: string; definition: Record<string, unknown> }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}`,
+    token,
+  );
+  return body.definition;
+}
+
+export async function saveWorkflow(
+  token: string,
+  name: string,
+  definition: unknown,
+  base: string = "",
+): Promise<void> {
+  await post<{ name: string }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}`,
+    token,
+    { definition },
+  );
+}
+
+export async function deleteWorkflow(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<void> {
+  await del<{ deleted: boolean }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}`,
+    token,
+    {},
+  );
+}
+
+export type WorkflowRunResult = {
+  status: string;
+  final_output: string;
+  runs: Array<{ node_id: string; iteration: number; passed: boolean | null; output: string }>;
+};
+
+export async function runWorkflow(
+  token: string,
+  name: string,
+  task: string,
+  base: string = "",
+): Promise<WorkflowRunResult> {
+  return post<WorkflowRunResult>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}/run`,
+    token,
+    { task },
+  );
+}
+
+export type WorkflowRecommendation = {
+  id: string;
+  target_id: string;
+  field: string;
+  current: string;
+  proposed: string;
+  reason: string;
+};
+
+export async function getWorkflowRecommendations(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<WorkflowRecommendation[]> {
+  const body = await request<{ recommendations: WorkflowRecommendation[] }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}/recommendations`,
+    token,
+  );
+  return body.recommendations;
+}
+
+export async function applyWorkflowRecommendation(
+  token: string,
+  name: string,
+  id: string,
+  base: string = "",
+): Promise<{ ok: boolean; detail: string }> {
+  return post<{ ok: boolean; detail: string }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}/recommendations/${encodeURIComponent(id)}/apply`,
+    token,
+    {},
+  );
+}
+
 export async function listSlashCommands(
   token: string,
   base: string = "",

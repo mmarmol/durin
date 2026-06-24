@@ -312,10 +312,10 @@ class AutoAbsorbConfig(Base):
     threshold. Designed to close the loop between dream consolidation
     and manual ``durin memory absorb`` without destructive false-merges.
 
-    Defaults are opt-in conservative: disabled by default, threshold
-    high enough that only obvious matches pass, quarantine window so
-    a dream pass that just created two entities can't re-judge them
-    on the same run.
+    Defaults are opt-in conservative: disabled by default and a
+    threshold high enough that only obvious matches pass. (Refine
+    additionally never merges entities created during the current run,
+    so a pass can't merge its own fresh output.)
 
     The merge itself reuses :meth:`EntityAbsorption.absorb` (which
     preserves content from both pages via ``_merge_pages``, archives
@@ -338,17 +338,6 @@ class AutoAbsorbConfig(Base):
         ge=0,
         le=100,
         validation_alias=AliasChoices("confidenceThreshold", "confidence_threshold"),
-    )
-
-    # Quarantine: a candidate is only judged if BOTH pages were
-    # created (or last dreamed) at least this many hours ago. Blocks
-    # the "premature consolidation" loop where a dream pass that
-    # alucinated two near-identical pages immediately merges its own
-    # output (avoids premature merging of a dream pass's own output).
-    min_age_hours: int = Field(
-        default=24,
-        ge=0,
-        validation_alias=AliasChoices("minAgeHours", "min_age_hours"),
     )
 
 

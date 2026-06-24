@@ -320,7 +320,6 @@ background file watching, and health checks. See
 |---|---|---|
 | `enabled` | `false` | Run LLM-judge dedup after dream; opt-in because a bad merge is high-blast-radius |
 | `confidence_threshold` | `95` | LLM-judge confidence floor (0-100) for an auto-merge |
-| `min_age_hours` | `24` | Both candidate pages must be at least this old before they are judged |
 
 **`memory.search`** — search pipeline configuration:
 

@@ -10,7 +10,7 @@
 The tools subsystem is the interface between the LLM and every side-effecting
 capability durin offers: reading and writing files, running shell commands,
 searching the web, querying memory, scheduling cron jobs, spawning sub-agents,
-and more. It provides:
+running user-defined workflows (see [workflow.md](workflow.md)), and more. It provides:
 
 - **A single catalog** (`ToolRegistry`) that holds both built-in tools and
   dynamically registered MCP-backed tools, with stable LLM-facing schemas.

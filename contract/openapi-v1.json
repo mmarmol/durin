@@ -4244,6 +4244,236 @@
         ],
         "title": "WebuiThreadResult",
         "type": "object"
+      },
+      "WorkflowDeleteCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkflowDeleteCommand",
+        "type": "object"
+      },
+      "WorkflowDeleteResult": {
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "title": "WorkflowDeleteResult",
+        "type": "object"
+      },
+      "WorkflowGetQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkflowGetQuery",
+        "type": "object"
+      },
+      "WorkflowGetResult": {
+        "properties": {
+          "definition": {
+            "additionalProperties": true,
+            "title": "Definition",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "definition"
+        ],
+        "title": "WorkflowGetResult",
+        "type": "object"
+      },
+      "WorkflowRecApplyCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "id"
+        ],
+        "title": "WorkflowRecApplyCommand",
+        "type": "object"
+      },
+      "WorkflowRecApplyResult": {
+        "properties": {
+          "detail": {
+            "default": "",
+            "title": "Detail",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "WorkflowRecApplyResult",
+        "type": "object"
+      },
+      "WorkflowRecsQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkflowRecsQuery",
+        "type": "object"
+      },
+      "WorkflowRecsResult": {
+        "properties": {
+          "recommendations": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Recommendations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "recommendations"
+        ],
+        "title": "WorkflowRecsResult",
+        "type": "object"
+      },
+      "WorkflowRunCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "task": {
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "task"
+        ],
+        "title": "WorkflowRunCommand",
+        "type": "object"
+      },
+      "WorkflowRunResult": {
+        "properties": {
+          "final_output": {
+            "title": "Final Output",
+            "type": "string"
+          },
+          "runs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "final_output",
+          "runs"
+        ],
+        "title": "WorkflowRunResult",
+        "type": "object"
+      },
+      "WorkflowSaveCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "definition": {
+            "additionalProperties": true,
+            "title": "Definition",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "definition"
+        ],
+        "title": "WorkflowSaveCommand",
+        "type": "object"
+      },
+      "WorkflowSaveResult": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkflowSaveResult",
+        "type": "object"
+      },
+      "WorkflowsListQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 lists every workflow name in the workspace.",
+        "properties": {},
+        "title": "WorkflowsListQuery",
+        "type": "object"
+      },
+      "WorkflowsListResult": {
+        "properties": {
+          "workflows": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Workflows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "workflows"
+        ],
+        "title": "WorkflowsListResult",
+        "type": "object"
       }
     }
   },
@@ -7026,6 +7256,205 @@
         },
         "summary": "Create or overwrite a SOUL personality file",
         "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/workflows": {
+      "get": {
+        "operationId": "workflows_list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowsListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowsListResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List all workflow names.",
+        "x-required-scope": "workflows:read"
+      }
+    },
+    "/api/v1/workflows/{name}": {
+      "delete": {
+        "operationId": "workflows_delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowDeleteCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDeleteResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Delete a workflow definition.",
+        "x-required-scope": "workflows:write"
+      },
+      "get": {
+        "operationId": "workflows_get",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowGetQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowGetResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Load one workflow definition (the raw JSON).",
+        "x-required-scope": "workflows:read"
+      },
+      "post": {
+        "operationId": "workflows_save",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowSaveCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowSaveResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Create or update a workflow definition.",
+        "x-required-scope": "workflows:write"
+      }
+    },
+    "/api/v1/workflows/{name}/recommendations": {
+      "get": {
+        "operationId": "workflows_recommendations",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowRecsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRecsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List a workflow's open self-improvement recommendations.",
+        "x-required-scope": "workflows:read"
+      }
+    },
+    "/api/v1/workflows/{name}/recommendations/{id}/apply": {
+      "post": {
+        "operationId": "workflows_apply_recommendation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowRecApplyCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRecApplyResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Apply a recommendation (writes its proposed edit into the workflow).",
+        "x-required-scope": "workflows:write"
+      }
+    },
+    "/api/v1/workflows/{name}/run": {
+      "post": {
+        "operationId": "workflows_run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowRunCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Run a workflow on a task (no live MCP \u2014 that path is the agent's).",
+        "x-required-scope": "workflows:write"
       }
     }
   }

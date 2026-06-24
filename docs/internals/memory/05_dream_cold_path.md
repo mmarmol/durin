@@ -133,8 +133,13 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    roles, relationships, commitments, life events — ephemeral chatter excluded)
    about entities the agent did **not** upsert, and writes them as
    `author="dream"` pages, skipping refs already handled in Stage 1 and
-   tombstoned refs. The discovered `name` is set via `write_entity(name=...)`,
-   which is **last-writer-wins** — a later explicit agent/user correction simply
+   tombstoned refs. Before creating a new page, each proposal is resolved
+   against the existing graph by name within the same entity type (via the alias
+   index): a **unique** match updates that entity in place instead of minting a
+   new slug; an **ambiguous** match (more than one candidate) or **no** match
+   creates a new page, deferring disambiguation to the refine pass. The
+   discovered `name` is set via `write_entity(name=...)`, which is
+   **last-writer-wins** — a later explicit agent/user correction simply
    overwrites a discovered guess. Per-field precedence applies to *attributes*,
    not to the name.
 6. **Stage 3 (skill signals, when `skill_signals=True`).** Skill corrections and
@@ -179,7 +184,7 @@ is a sync wrapper over the async runner so the cron can call it in a thread.
 ### Pass 4 — refine: dedup duplicate entities
 
 `run_refine_pass(workspace, *, llm_invoke, model, enabled, confidence_threshold,
-min_age_hours)` is the graph-hygiene pass, gated by `enabled` (wired from
+run_started_at)` is the graph-hygiene pass, gated by `enabled` (wired from
 `memory.dream.auto_absorb.enabled`, **OFF by default**). When disabled it
 short-circuits — **no judge, no merge** — and logs the manual path
 (`durin memory absorb-suggest` to surface, `durin memory absorb` to merge). When
@@ -191,8 +196,10 @@ enabled it delegates to `run_refine` (`durin/memory/refine_dream.py`):
    `cross_type` (different entity types), `tombstoned` (the user previously
    rejected the merge — recorded in `.refine_tombstones.json`), `load_failed`,
    `user_managed` (either page is `author == "user_authored"`), or `quarantine`
-   (`min_age_hours > 0` and either page is younger than the window, using
-   `created_at` then `updated_at`; no timestamp = treated as old, fail-open).
+   (`run_started_at` is set and either page was created at or after the run
+   started, checked via `created_at` then `updated_at`; no timestamp = treated
+   as old, fail-open) — the run never merges its own fresh output; cross-run
+   duplicates converge on the next pass.
 3. For survivors, `judge_pair` (`durin/memory/absorb_judge.py`) renders both
    pages (file mtime, aliases, identifiers, body — the mtime lets it reason about
    staleness) and returns a verdict — `same`, `different`, or `unclear` — plus a
@@ -274,7 +281,7 @@ cross-process lock `SessionManager` uses for that session's sidecar.
 | `run_extract_pass` | `durin/memory/dream_passes.py` | Extract pass entry: iterate sessions by cursor, run Stage 1 + Stage 2, yield on `max_seconds`. |
 | `run_extract_for_session` | `durin/memory/extract_runner.py` | Per-session orchestrator: read cursor, process new turns, call extract + discover + skill-signals, advance cursor. |
 | `extract_entity` | `durin/memory/extract_dream.py` | Core extractor: honor delete tombstone, build prompt, parse attributes, apply `FieldPatch`es as `dream`. |
-| `discover_entities` | `durin/memory/extract_dream.py` | Stage 2 mention-based discovery: write dream-authored pages for entities the agent did not upsert. |
+| `discover_entities` | `durin/memory/extract_dream.py` | Stage 2 mention-based discovery: write dream-authored pages for entities the agent did not upsert; deduplicates against existing same-type entities by name before creating. |
 | `run_derived_from_pass` | `durin/memory/dream_passes.py` | Catch/repair pass entry: link entities to ingested source documents. |
 | `link_derived_from_for_session` | `durin/memory/derived_from_dream.py` | Per-session linker: find unlinked entities + ingested references, LLM-map entity to document, apply `derived_from` patches. |
 | `run_skill_extract_pass` | `durin/memory/dream_passes.py` | Agentic skill-mining pass: `AgentRunner` sub-agent authors/acquires skills via `skill_write`. |
@@ -310,7 +317,6 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.always_on_token_budget` | `1500` | Token ceiling for the always-on pin. 0 disables the pin. |
 | `memory.dream.auto_absorb.enabled` | `false` | Master switch for the refine pass's auto-merge. OFF means surface duplicates manually. |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM-judge confidence floor (0–100) for an auto-merge. |
-| `memory.dream.auto_absorb.min_age_hours` | `24` | Quarantine: skip a pair if either page is younger than this. 0 disables. |
 
 The model every pass uses is resolved by
 `resolve_memory_model(config)` (`durin/memory/model_resolve.py`):

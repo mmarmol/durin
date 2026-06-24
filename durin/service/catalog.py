@@ -43,6 +43,7 @@ from durin.service.secrets import SecretsService
 from durin.service.sessions import SessionsService
 from durin.service.settings import SettingsService
 from durin.service.skills import SkillsService
+from durin.service.workflows import WorkflowsService
 
 SERVICE_CLASSES: list[type] = [
     SecretsService,
@@ -58,6 +59,7 @@ SERVICE_CLASSES: list[type] = [
     CommandsService,
     OAuthService,
     AuthService,
+    WorkflowsService,
 ]
 
 
@@ -82,4 +84,5 @@ def build_catalog_registry() -> ServiceRegistry:
     registry.register("commands", CommandsService())
     registry.register("oauth", OAuthService())
     registry.register("auth", AuthService(store=None))
+    registry.register("workflows", WorkflowsService(workspace=Path("/")))
     return registry

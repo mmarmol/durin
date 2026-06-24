@@ -735,6 +735,29 @@
       }
     }
   },
+  "workflows": {
+    "title": "Workflows",
+    "loading": "Loading…",
+    "empty": "No workflows yet — click + to create one.",
+    "new": "New workflow",
+    "newPlaceholder": "workflow name…",
+    "nameExists": "A workflow with that name already exists.",
+    "selectPrompt": "Select a workflow to view its graph.",
+    "save": "Save",
+    "saved": "Saved.",
+    "unsaved": "Unsaved changes",
+    "run": "Run",
+    "status": "Status",
+    "taskPlaceholder": "Task to run through this workflow…",
+    "recApplied": "Recommendation applied.",
+    "routes": "routes (pass/fail)",
+    "onPass": "on pass",
+    "onFail": "on fail",
+    "command": "command",
+    "presetWork": "work",
+    "presetDecision": "decision",
+    "presetGate": "gate"
+  },
   "skills": {
     "view": "View",
     "remove": "Remove",

@@ -2,7 +2,7 @@
 
 When auto-absorb is enabled, the refine pass (``refine_dream.run_refine``)
 calls :func:`judge_pair` on every alias-overlap candidate that survived the
-cross-type filter and the ``min_age_hours`` quarantine. The judge returns a
+cross-type filter and the run-scoped quarantine. The judge returns a
 verdict (``"same"`` / ``"different"`` / ``"unclear"``), a confidence
 score (0-100), and free-form reasoning. Refine merges only when
 ``verdict == "same"`` AND ``confidence >= confidence_threshold``.
