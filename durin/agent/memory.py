@@ -1250,6 +1250,18 @@ class Consolidator:
                                 ref = learning["ref"]
                                 name = learning["name"]
                                 body = learning["body"]
+                                # Guard: only how-to-work entity types are
+                                # written by the backstop. Allowing person:
+                                # refs would body_replace the user's PRINCIPAL
+                                # entity — that is the live agent's job, not
+                                # the backstop's.
+                                ref_type = ref.split(":", 1)[0]
+                                if ref_type not in {"feedback", "stance", "practice"}:
+                                    logger.debug(
+                                        "compaction backstop: skipping ref %r (type %r not pinnable)",
+                                        ref, ref_type,
+                                    )
+                                    continue
                                 write_entity(
                                     self.store.workspace,
                                     ref,

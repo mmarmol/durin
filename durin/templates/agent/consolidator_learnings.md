@@ -5,7 +5,6 @@ Include only:
 - Stated preferences and communication style ("user wants replies in Spanish", "prefers
   brief answers over verbose ones", "code blocks must be copy-pasteable without comments")
 - Explicit corrections or standing constraints the user applied to the agent's behavior
-- Durable facts about who the user is (role, domain expertise, working context)
 - Stable commitments or rules the user declared ("always ask before releasing", "TDD first")
 
 Exclude:
@@ -28,7 +27,6 @@ For "ref", use one of these types:
 - feedback:<slug>   — preference, correction, or rule about how to work with the user
 - stance:<slug>     — a durable principle or architectural position the user holds
 - practice:<slug>   — a durable workflow or process habit the user follows
-- person:<slug>     — a stable fact about who the user is
 
 The body must state: what the preference/fact is, WHY it matters, and HOW to apply it.
 Keep each body under 400 characters.

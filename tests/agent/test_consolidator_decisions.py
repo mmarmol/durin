@@ -254,3 +254,73 @@ async def test_compaction_backstop_skipped_when_disabled(tmp_path):
     assert called == [], "extract_learnings was called even though compaction_learnings_enabled=False"
     entity_path = tmp_path / "memory" / "entities" / "feedback" / "should-not-appear.md"
     assert not entity_path.exists(), "entity file was written despite compaction_learnings_enabled=False"
+
+
+@pytest.mark.asyncio
+async def test_compaction_backstop_skips_person_ref(tmp_path):
+    """The backstop must write feedback refs but skip person refs.
+
+    The backstop's job is how-to-work learnings only. If the LLM returns a
+    person:<slug> ref, writing it would body_replace the user's PRINCIPAL
+    entity — destructive. Only feedback/stance/practice refs are allowed.
+    """
+    from durin.memory.entity_page import EntityPage
+
+    store = MemoryStore(tmp_path)
+    sessions = MagicMock()
+    sessions.save = MagicMock()
+
+    cons = Consolidator(
+        store=store,
+        provider=MagicMock(),
+        model="test-model",
+        sessions=sessions,
+        context_window_tokens=1000,
+        build_messages=MagicMock(return_value=[]),
+        get_tool_definitions=MagicMock(return_value=[]),
+        max_completion_tokens=100,
+        decision_log_enabled=False,
+        compaction_learnings_enabled=True,
+    )
+
+    session = Session(key="test:person-guard")
+    for i in range(70):
+        role = "user" if i in {0, 50} else "assistant"
+        session.add_message(role, f"m{i}")
+
+    cons.estimate_session_prompt_tokens = MagicMock(
+        side_effect=[(1200, "tiktoken"), (400, "tiktoken")]
+    )
+    cons.archive = AsyncMock(
+        return_value=("did work", {"entities": [], "topics": []})
+    )
+
+    # extract_learnings returns two items: one allowed (feedback) and one
+    # forbidden (person). The backstop must write only the feedback entity.
+    async def fake_extract_learnings(span):
+        return [
+            {
+                "ref": "feedback:reply-in-spanish",
+                "name": "Reply in Spanish",
+                "body": "User prefers Spanish replies. Why: works in Spanish. How: reply in Spanish.",
+            },
+            {
+                "ref": "person:marcelo",
+                "name": "Marcelo",
+                "body": "User is Marcelo, a founder and systems engineer.",
+            },
+        ]
+
+    cons.extract_learnings = fake_extract_learnings
+
+    await cons.maybe_consolidate_by_tokens(session)
+
+    feedback_path = tmp_path / "memory" / "entities" / "feedback" / "reply-in-spanish.md"
+    person_path = tmp_path / "memory" / "entities" / "person" / "marcelo.md"
+
+    assert feedback_path.exists(), "feedback entity was not written by the backstop"
+    assert not person_path.exists(), "person entity was written by the backstop (must be skipped)"
+
+    page = EntityPage.from_file(feedback_path)
+    assert page is not None
+    assert "Spanish" in (page.body or "")
