@@ -109,7 +109,7 @@ genuine conflict (two branches wrote *different* content to the same path — id
 incidental files reconcile cleanly). **Dynamic fan-out workers share the workspace** directly
 (no per-worker isolation in v1); they hand their output off to the merge node via text, so
 `reconcile` has no effect on a dynamic parallel and is not shown in the editor for that mode. A per-node visit count bounds loop-backs: exceeding `max_visits` ends the
-run with status `max_visits` instead of looping forever.
+run with status `exhausted` (carrying the exhausted node) instead of looping forever.
 
 **The engine is decoupled from the LLM and runs loop-safe.** The graph walk depends
 only on an injected `NodeRunner` callable, so it is fully unit-testable with a mock.
@@ -137,7 +137,7 @@ flowchart TD
     J -->|no| L[route on_fail / loop back\nthread feedback]
     K --> H
     L --> H
-    E -->|visits over max_visits| Y[WorkflowResult max_visits]
+    E -->|visits over budget| Y[WorkflowResult exhausted]
 ```
 
 ## 4. How it works

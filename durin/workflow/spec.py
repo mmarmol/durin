@@ -45,6 +45,7 @@ class WorkNode:
     command: str = ""                     # non-empty => command body; the agent turn is skipped
     on_pass: str | None = None           # routing: next node on pass/exit-0; set => this node routes
     on_fail: str | None = None           # routing: next node on fail/non-zero exit
+    max_visits: int | None = None        # per-node loop cap (None = inherit workflow default)
     kind: Literal["work"] = "work"
 
     @property
@@ -165,6 +166,12 @@ def _build_node(raw: dict[str, Any]) -> Node:
         mode = raw.get("mode", mode_default)
         if not isinstance(mode, str) or not mode:
             raise WorkflowError(f"node {node_id!r}: mode must be a non-empty string, got {mode!r}")
+        node_max_visits = raw.get("max_visits")
+        if node_max_visits is not None:
+            if isinstance(node_max_visits, bool) or not isinstance(node_max_visits, int) or node_max_visits < 1:
+                raise WorkflowError(
+                    f"node {node_id!r}: max_visits must be an int >= 1, got {node_max_visits!r}"
+                )
         return WorkNode(
             id=node_id,
             model=model,
@@ -179,6 +186,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
             command=raw.get("command", ""),
             on_pass=on_pass,
             on_fail=on_fail,
+            max_visits=node_max_visits,
         )
     if kind == "decision":
         # Back-compat alias: kind=decision maps to a routing WorkNode.
