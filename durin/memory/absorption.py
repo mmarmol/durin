@@ -49,12 +49,13 @@ class AbsorptionError(Exception):
 class MergeCandidate:
     """A pair of entities that might be the same identity.
 
-    ``shared_aliases`` is the list of alias strings that resolve to both
-    refs in the current alias_index — the strongest determinist signal.
-    """
+    ``shared_aliases`` is the deterministic alias-overlap signal (empty for a
+    purely semantic candidate). ``distance`` is the embedding L2 distance when
+    the pair came from semantic recall (None for alias-overlap pairs)."""
 
     refs: tuple[str, str]
     shared_aliases: list[str] = field(default_factory=list)
+    distance: float | None = None
 
 
 class EntityAbsorption:
@@ -102,6 +103,55 @@ class EntityAbsorption:
             for pair, aliases in pairs.items()
         ]
         out.sort(key=lambda c: (-len(c.shared_aliases), c.refs))
+        return out
+
+    def find_semantic_candidates(
+        self,
+        vector_index: object,
+        *,
+        distance_threshold: float,
+        top_k: int = 5,
+    ) -> list[MergeCandidate]:
+        """Embedding-near same-type entity pairs, for pairs that alias overlap
+        misses (same thing, different name). Queries the vector index with each
+        entity's composed text; keeps same-type neighbors within
+        ``distance_threshold``; returns deduped pairs (closest distance kept)."""
+        from durin.memory.entity_page import EntityPage
+        from durin.memory.vector_index import VectorIndex
+
+        pairs: dict[tuple[str, str], float] = {}
+        if not self.entities_root.is_dir():
+            return []
+        for md in sorted(self.entities_root.rglob("*.md")):
+            if "archive" in md.relative_to(self.entities_root).parts:
+                continue
+            page = EntityPage.from_file(md)
+            if page is None:
+                continue
+            self_ref = f"{page.type}:{EntityPage.slug_from_path(md)}"
+            query = VectorIndex._compose_entity_page_text(
+                name=page.name, aliases=list(page.aliases), body=page.body or "",
+                attributes=page.attributes, relations=page.relations)
+            try:
+                rows = vector_index.search(query, top_k=top_k + 1)
+            except Exception:  # noqa: BLE001 — semantic recall is best-effort
+                continue
+            for row in rows:
+                ref = row.get("id")
+                if (not isinstance(ref, str) or ref == self_ref
+                        or row.get("class_name") != "entity_page"):
+                    continue
+                if ref.split(":", 1)[0] != page.type:   # same-type only
+                    continue
+                dist = float(row.get("_distance", 1.0))
+                if dist > distance_threshold:
+                    continue
+                key = tuple(sorted([self_ref, ref]))
+                if key not in pairs or dist < pairs[key]:
+                    pairs[key] = dist
+        out = [MergeCandidate(refs=k, shared_aliases=[], distance=d)
+               for k, d in pairs.items()]
+        out.sort(key=lambda c: (c.distance if c.distance is not None else 1.0, c.refs))
         return out
 
     # ------------------------------------------------------------------

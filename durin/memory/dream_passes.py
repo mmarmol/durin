@@ -191,6 +191,7 @@ def run_refine_pass(
     enabled: bool = True,
     confidence_threshold: int = 95,
     run_started_at: "datetime | None" = None,
+    vector_index: object | None = None,
 ) -> dict:
     """Run the refine dream (dedup duplicate entities). The daily cron entry.
 
@@ -200,7 +201,8 @@ def run_refine_pass(
     ``durin memory absorb``. ``confidence_threshold`` is the LLM-judge floor for
     an auto-merge; ``run_started_at`` is the run-scoped quarantine (entities
     created at/after the run start are skipped). Both are wired from config by
-    the cron / manual callers.
+    the cron / manual callers. ``vector_index`` enables semantic recall for
+    same-thing-different-name pairs.
     """
     import time
     t0 = time.perf_counter()
@@ -214,7 +216,8 @@ def run_refine_pass(
     _emit("memory.dream.start", kind="refine")
     out = run_refine(workspace, llm_invoke=llm_invoke, model=model,
                      confidence_threshold=confidence_threshold,
-                     run_started_at=run_started_at)
+                     run_started_at=run_started_at,
+                     vector_index=vector_index)
     out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.end", kind="refine",
           merged=len(out.get("merged", [])), kept=len(out.get("kept_separate", [])),
