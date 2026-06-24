@@ -8,6 +8,7 @@ from durin.memory.refine_dream import (
     add_tombstone,
     is_tombstoned,
     read_flagged,
+    remove_flagged,
     run_refine,
 )
 
@@ -305,3 +306,44 @@ def test_refine_non_escalated_kept_not_flagged(tmp_path):
 def test_flagged_empty_workspace(tmp_path):
     """read_flagged on a workspace with no flagged file returns empty list."""
     assert read_flagged(tmp_path) == []
+
+
+# ---------------------------------------------------------------------------
+# remove_flagged
+# ---------------------------------------------------------------------------
+
+
+def test_remove_flagged_drops_matching_pair(tmp_path):
+    add_flagged(tmp_path, "company:a", "company:b",
+                verdict="unclear", confidence=70, reasoning="r")
+    remove_flagged(tmp_path, "company:a", "company:b")
+    assert read_flagged(tmp_path) == []
+
+
+def test_remove_flagged_order_independent(tmp_path):
+    """Argument order (a, b) vs (b, a) resolves to the same sorted key."""
+    add_flagged(tmp_path, "company:a", "company:b",
+                verdict="unclear", confidence=70, reasoning="r")
+    remove_flagged(tmp_path, "company:b", "company:a")
+    assert read_flagged(tmp_path) == []
+
+
+def test_remove_flagged_leaves_other_pairs(tmp_path):
+    add_flagged(tmp_path, "company:a", "company:b",
+                verdict="unclear", confidence=70, reasoning="r1")
+    add_flagged(tmp_path, "person:x", "person:y",
+                verdict="different", confidence=85, reasoning="r2")
+    remove_flagged(tmp_path, "company:a", "company:b")
+    remaining = read_flagged(tmp_path)
+    assert len(remaining) == 1
+    assert sorted(remaining[0]["pair"]) == ["person:x", "person:y"]
+
+
+def test_remove_flagged_noop_on_missing(tmp_path):
+    """No error when pair is not in the store."""
+    remove_flagged(tmp_path, "company:a", "company:b")  # file doesn't exist — no error
+
+    add_flagged(tmp_path, "person:x", "person:y",
+                verdict="unclear", confidence=70, reasoning="r")
+    remove_flagged(tmp_path, "company:a", "company:b")  # different pair — no error
+    assert len(read_flagged(tmp_path)) == 1
