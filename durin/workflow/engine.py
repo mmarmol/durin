@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from durin.workflow import workspace_fork
+from durin.workflow.artifacts import artifact_dir, prune_runs
 from durin.workflow.condition import CommandOutcome, run_command
 from durin.workflow.result import NodeRun, WorkflowResult
 from durin.workflow.spec import ParallelNode, SubworkflowNode, WorkNode, Workflow
@@ -40,6 +41,11 @@ class NodeRunRequest:
     # When set, the node's file tools operate here (a private branch copy) instead of
     # the shared workspace — used by writing-in-parallel so branches don't collide.
     workspace_override: str | None = None
+    # Engine-provided keyed output folder for this node (write here) and the folder
+    # the producing predecessor wrote into (read from). Both None when the engine has
+    # no workspace or for command nodes.
+    output_dir: str | None = None
+    upstream_artifact_dir: str | None = None
 
 
 @dataclass
@@ -88,6 +94,8 @@ class WorkflowEngine:
         per-node trace, so the run is still recorded for diagnostics. A wiring/config
         error (a node needing a runner the engine wasn't given) fails fast."""
         run_id = self._run_id_factory()
+        if self._workspace is not None:
+            prune_runs(self._workspace)
         runs: list[NodeRun] = []
         try:
             return self._walk(workflow, task, run_id, runs, root_session_key=root_session_key)
@@ -106,6 +114,7 @@ class WorkflowEngine:
         shared_context: list[dict] = []
         visits: dict[str, int] = {}
         upstream_output: str | None = None
+        upstream_artifact_dir: str | None = None
         final_output: str | None = None
         current: str | None = workflow.start
 
@@ -119,6 +128,14 @@ class WorkflowEngine:
             node = workflow.nodes[current]
 
             if isinstance(node, WorkNode):
+                # Compute an artifact folder only for a node that can do file I/O — an
+                # agent body with file tools — and when a workspace is available. A
+                # command node or a no-tools node produces no files, gets no folder, and
+                # nils the chain for the next node (below).
+                out_dir: str | None = None
+                if not node.is_command and node.tools == "default" and self._workspace is not None:
+                    out_dir = str(artifact_dir(self._workspace, run_id, node.id, iteration))
+
                 req = NodeRunRequest(
                     node=node,
                     task=task,
@@ -129,6 +146,8 @@ class WorkflowEngine:
                     run_id=run_id,
                     iteration=iteration,
                     root_session_key=root_session_key,
+                    output_dir=out_dir,
+                    upstream_artifact_dir=upstream_artifact_dir,
                 )
 
                 if node.is_command:
@@ -158,9 +177,17 @@ class WorkflowEngine:
                         upstream_output = (
                             f"{prior}\n\nReviewer feedback (address this):\n{output}"
                         )
+                    # Do NOT advance upstream_artifact_dir here: a routing judge's
+                    # (empty) folder must never replace the producing node's folder
+                    # for the on_pass target — mirrors upstream_output's update rule.
                     current = node.on_pass if passed else node.on_fail
                 else:
                     upstream_output = output
+                    # Mirrors upstream_output. A node that can't produce files (a command
+                    # node, or an agent node without file tools) has out_dir=None, so it
+                    # nils the chain for the next node — consistent with it also replacing
+                    # the text output.
+                    upstream_artifact_dir = out_dir
                     final_output = output
                     current = node.next
 
@@ -193,11 +220,16 @@ class WorkflowEngine:
             status="completed", final_output=final_output, runs=runs, run_id=run_id
         )
 
-    def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key, workspace_override):
+    def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key, workspace_override, fork_dir=None):
+        out_dir: str | None = None
+        if fork_dir is not None:
+            out_dir = str(artifact_dir(fork_dir, run_id, branch.id, iteration))
         return self._node_runner(NodeRunRequest(
             node=branch, task=task, upstream_output=upstream, shared_context=[],
             run_id=run_id, iteration=iteration, root_session_key=root_key,
             workspace_override=workspace_override,
+            output_dir=out_dir,
+            upstream_artifact_dir=None,
         ))
 
     def _run_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream):
@@ -231,7 +263,8 @@ class WorkflowEngine:
             fork_dir = workspace_fork.fork(self._workspace)
             forks.append(fork_dir)
             resp = self._run_one_branch(
-                workflow.nodes[bid], task, upstream, run_id, iteration, root_key, str(fork_dir))
+                workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
+                str(fork_dir), fork_dir=fork_dir)
             return bid, resp.output, workspace_fork.diff(base, fork_dir)
 
         try:

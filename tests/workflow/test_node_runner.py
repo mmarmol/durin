@@ -268,6 +268,43 @@ def test_non_routing_node_does_not_get_verdict_instruction(tmp_path):
     assert system == "do the work"
 
 
+def test_file_tool_node_is_told_its_output_and_prev_folders(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(final_content="ok", messages=[])
+    nr = _runner(sessions, fake)
+    node = WorkNode(id="b", tools="default", next=None)
+    req = NodeRunRequest(
+        node=node, task="t", upstream_output="prev text", shared_context=[],
+        run_id="r", iteration=1, root_session_key=None,
+        output_dir="/ws/.workflow/r/b/1",
+        upstream_artifact_dir="/ws/.workflow/r/a/1",
+    )
+    nr(req)
+    spec = nr.runner.run.call_args.args[0]
+    user_turns = [m for m in spec.initial_messages if m["role"] == "user"]
+    user_content = " ".join(m["content"] for m in user_turns)
+    assert "/ws/.workflow/r/b/1" in user_content   # write-here path
+    assert "/ws/.workflow/r/a/1" in user_content   # read-prev path
+
+
+def test_no_tool_node_is_not_told_about_folders(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(final_content="ok", messages=[])
+    nr = _runner(sessions, fake)
+    node = WorkNode(id="b", next=None)   # tools defaults to "none"
+    req = NodeRunRequest(
+        node=node, task="t", upstream_output=None, shared_context=[],
+        run_id="r", iteration=1, root_session_key=None,
+        output_dir="/ws/.workflow/r/b/1",
+        upstream_artifact_dir="/ws/.workflow/r/a/1",
+    )
+    nr(req)
+    spec = nr.runner.run.call_args.args[0]
+    user_turns = [m for m in spec.initial_messages if m["role"] == "user"]
+    user_content = " ".join(m["content"] for m in user_turns)
+    assert "/.workflow/" not in user_content   # no folder lines for no-tools node
+
+
 def test_cross_loop_tool_marshals_to_owner_loop():
     import asyncio
     import threading
