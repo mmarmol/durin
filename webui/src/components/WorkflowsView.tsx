@@ -18,6 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   ApiError,
   applyWorkflowRecommendation,
+  deleteWorkflow,
   getWorkflow,
   getWorkflowRecommendations,
   listWorkflows,
@@ -624,6 +625,7 @@ export function WorkflowsView() {
   const [newName, setNewName] = useState("");
   const [personas, setPersonas] = useState<PersonaItem[]>([]);
   const [inputPaths, setInputPaths] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -753,6 +755,21 @@ export function WorkflowsView() {
       setSaving(false);
     }
   }, [newName, names, token, t]);
+
+  const onDeleteWorkflow = useCallback(
+    async (name: string) => {
+      setError(null);
+      try {
+        await deleteWorkflow(token, name);
+        setNames((ns) => ns.filter((x) => x !== name));
+        setConfirmDelete(null);
+        if (selected === name) setSelected(null);
+      } catch (e) {
+        setError(errMsg(e));
+      }
+    },
+    [token, selected],
+  );
 
   const deleteNode = useCallback(
     (id: string) => {
@@ -909,13 +926,52 @@ export function WorkflowsView() {
           <div className="p-2 text-sm text-muted-foreground">{t("workflows.empty")}</div>
         ) : (
           names.map((n) => (
-            <button key={n} type="button" onClick={() => setSelected(n)}
+            <div
+              key={n}
               className={cn(
-                "block w-full truncate rounded px-2 py-1 text-left text-sm hover:bg-accent",
-                selected === n && "bg-accent font-medium",
-              )}>
-              {n}
-            </button>
+                "group flex items-center gap-1 rounded pr-1 hover:bg-accent",
+                selected === n && "bg-accent",
+              )}
+            >
+              <button
+                type="button"
+                onClick={() => setSelected(n)}
+                className={cn(
+                  "min-w-0 flex-1 truncate px-2 py-1 text-left text-sm",
+                  selected === n && "font-medium",
+                )}
+              >
+                {n}
+              </button>
+              {confirmDelete === n ? (
+                <span className="flex shrink-0 items-center gap-1 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => onDeleteWorkflow(n)}
+                    className="rounded px-1 py-0.5 text-destructive hover:underline"
+                  >
+                    {t("workflows.confirmDelete")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(null)}
+                    className="rounded px-1 py-0.5 text-muted-foreground hover:underline"
+                  >
+                    {t("workflows.cancel")}
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(n)}
+                  title={t("workflows.deleteWorkflow")}
+                  aria-label={t("workflows.deleteWorkflow")}
+                  className="shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
           ))
         )}
       </aside>
