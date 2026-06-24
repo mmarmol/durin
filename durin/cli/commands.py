@@ -1375,15 +1375,15 @@ def _run_gateway(
             _dream_error: Exception | None = None
             from datetime import datetime, timezone
             _run_started = datetime.now(timezone.utc)
+            _vi = dream_vector_index(workspace, config)
             try:
                 ex = await _asyncio.to_thread(
                     run_extract_pass, workspace, model=model,
                     max_seconds=_cron_max_s, discover=_discover,
-                    skill_signals=_skill_signals)
+                    skill_signals=_skill_signals, vector_index=_vi)
                 df = await _asyncio.to_thread(
                     run_derived_from_pass, workspace, model=model, max_seconds=_cron_max_s)
                 sk = await _asyncio.to_thread(run_skill_extract_pass, workspace, model=model)
-                _vi = dream_vector_index(workspace, config)
                 rf = await _asyncio.to_thread(
                     run_refine_pass, workspace, model=model,
                     enabled=_absorb.enabled,

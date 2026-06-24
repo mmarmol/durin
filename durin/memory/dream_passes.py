@@ -89,6 +89,7 @@ def run_extract_pass(
     max_seconds: int = 0,
     discover: bool = True,
     skill_signals: bool = True,
+    vector_index: object | None = None,
 ) -> dict:
     """Run the extract dream over every session that has new turns.
 
@@ -125,7 +126,7 @@ def run_extract_pass(
                 r = run_extract_for_session(
                     workspace, jsonl_path, llm_invoke=llm_invoke, model=model,
                     discover=discover, skill_signals=skill_signals,
-                    alias_index=_alias_index)
+                    alias_index=_alias_index, vector_index=vector_index)
                 extracted = r.get("extracted") or []
                 discovered = r.get("discovered") or []
                 sig = r.get("skill_signals") or []

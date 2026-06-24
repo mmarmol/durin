@@ -213,9 +213,11 @@ def cmd_dream(
     model = resolve_memory_model(cfg)
     from datetime import datetime, timezone
     _run_started = datetime.now(timezone.utc)
+    _vi = dream_vector_index(workspace, cfg)
     console.print("[dim]Extract pass (sessions → entity attributes)…[/dim]")
     ex = run_extract_pass(workspace, model=model,
-                          discover=cfg.memory.dream.discover_enabled)
+                          discover=cfg.memory.dream.discover_enabled,
+                          vector_index=_vi)
     console.print("[dim]Derived-from pass (link entities → source documents)…[/dim]")
     df = run_derived_from_pass(workspace, model=model)
     console.print("[dim]Skill-extract pass (sessions → reusable procedures)…[/dim]")
@@ -228,7 +230,6 @@ def cmd_dream(
             "[dim]Refine pass skipped — auto_absorb disabled "
             "(use 'durin memory absorb-suggest' to review duplicates)[/dim]"
         )
-    _vi = dream_vector_index(workspace, cfg)
     rf = run_refine_pass(workspace, model=model, enabled=_absorb.enabled,
                          confidence_threshold=_absorb.confidence_threshold,
                          run_started_at=_run_started,

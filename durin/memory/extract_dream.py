@@ -204,6 +204,52 @@ def parse_discoveries(raw: str) -> list[dict[str, Any]]:
     return out
 
 
+def _resolve_semantic_ref(
+    workspace: Path, vector_index: object, proposed_ref: str, name: str,
+    attributes: dict, *, llm_invoke, model, confidence_threshold: int,
+    distance_threshold: float,
+) -> str | None:
+    """An embedding-near existing same-type entity the judge confirms is the
+    same identity as this proposal — else None. Catches a variant-name
+    duplicate at birth when lexical name matching missed it. Best-effort:
+    any vector/judge failure falls back to None (create)."""
+    from durin.memory.absorb_judge import JudgeError, judge_pair
+    from durin.memory.deletion import is_deleted
+    from durin.memory.vector_index import VectorIndex
+    type_ = proposed_ref.split(":", 1)[0]
+    query = VectorIndex._compose_entity_page_text(
+        name=name, aliases=[], body="", attributes=attributes, relations=[])
+    try:
+        rows = vector_index.search(query, top_k=3)
+    except Exception:  # noqa: BLE001
+        return None
+    for row in rows:
+        ref = row.get("id")
+        if (not isinstance(ref, str) or ref == proposed_ref
+                or row.get("class_name") != "entity_page"
+                or ref.split(":", 1)[0] != type_):
+            continue
+        if float(row.get("_distance", 1.0)) > distance_threshold:
+            return None  # nearest same-type neighbour already too far
+        if is_deleted(workspace, ref):
+            continue
+        ctype, _, cslug = ref.partition(":")
+        candidate = EntityPage.from_file(
+            Path(workspace) / "memory" / "entities" / ctype / f"{cslug}.md")
+        if candidate is None:
+            continue
+        transient = EntityPage(type=type_, name=name, attributes=dict(attributes))
+        try:
+            judged = judge_pair(
+                candidate, transient, [], llm_invoke=llm_invoke, model=model,
+                canonical_ref=ref, absorbed_ref=proposed_ref)
+        except JudgeError:
+            return None
+        return ref if (judged.verdict == "same"
+                       and judged.confidence >= confidence_threshold) else None
+    return None
+
+
 def _resolve_existing_ref(index, proposed_ref: str, name: str) -> str | None:
     """The single existing same-type entity that already owns this name/slug,
     or None. None when there is no match OR when the match is ambiguous (>1
@@ -230,6 +276,9 @@ def discover_entities(
     model: str | None = None,
     source_ref: str | None = None,
     alias_index: "AliasIndex | None" = None,
+    vector_index: object | None = None,
+    confidence_threshold: int = 95,
+    semantic_distance_threshold: float = 0.20,
 ) -> list[dict[str, Any]]:
     """Discover entities mentioned in ``turns`` that the agent did NOT upsert and
     write them as dream-authored pages.
@@ -268,6 +317,12 @@ def discover_entities(
             for k, v in prop["attributes"].items()
         ]
         target = _resolve_existing_ref(index, ref, prop["name"])
+        if target is None and vector_index is not None:
+            target = _resolve_semantic_ref(
+                workspace, vector_index, ref, prop["name"], prop["attributes"],
+                llm_invoke=llm_invoke, model=model,
+                confidence_threshold=confidence_threshold,
+                distance_threshold=semantic_distance_threshold)
         if target is not None:
             # Existing same-type entity already owns this name — update it in
             # place instead of minting a duplicate slug. Leave its name alone.
