@@ -255,6 +255,17 @@ class MemoryDreamConfig(Base):
         validation_alias=AliasChoices("skillSignalsEnabled", "skill_signals_enabled"),
     )
 
+    # Durable-learnings sweep (extract dream stage 4). When ON, the extract pass
+    # mines each session's new turns for feedback-style learnings (corrections,
+    # preferences, project facts) and writes them as feedback entities — so the
+    # memory captures what the agent learned without depending on an explicit
+    # memory_upsert_entity call. ON by default: additive only (writes feedback
+    # entities); `memory.dream.learnings` telemetry measures precision.
+    learnings_sweep_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("learningsSweepEnabled", "learnings_sweep_enabled"),
+    )
+
     # Override the dream model (None → falls through to
     # agents.defaults.model used by ``durin memory dream``).
     model_override: str | None = Field(
