@@ -141,7 +141,10 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    discovered `name` is set via `write_entity(name=...)`, which is
    **last-writer-wins** — a later explicit agent/user correction simply
    overwrites a discovered guess. Per-field precedence applies to *attributes*,
-   not to the name.
+   not to the name. The extract pass builds a **single `AliasIndex`** once per
+   pass (refreshed across all sessions processed in that run) and passes it to
+   each `discover_entities` call; callers that omit it fall back to building
+   their own.
 6. **Stage 3 (skill signals, when `skill_signals=True`).** Skill corrections and
    gaps in the same turns are logged as observations for later skill curation
    (out of scope here — see the skills internals docs).
@@ -184,14 +187,25 @@ is a sync wrapper over the async runner so the cron can call it in a thread.
 ### Pass 4 — refine: dedup duplicate entities
 
 `run_refine_pass(workspace, *, llm_invoke, model, enabled, confidence_threshold,
-run_started_at)` is the graph-hygiene pass, gated by `enabled` (wired from
-`memory.dream.auto_absorb.enabled`, **OFF by default**). When disabled it
-short-circuits — **no judge, no merge** — and logs the manual path
+run_started_at, vector_index=None)` is the graph-hygiene pass, gated by `enabled`
+(wired from `memory.dream.auto_absorb.enabled`, **OFF by default**). When disabled
+it short-circuits — **no judge, no merge** — and logs the manual path
 (`durin memory absorb-suggest` to surface, `durin memory absorb` to merge). When
-enabled it delegates to `run_refine` (`durin/memory/refine_dream.py`):
+enabled it delegates to `run_refine` (`durin/memory/refine_dream.py`).
+`vector_index` is built once per run by the cron and CLI callers via
+`dream_vector_index(workspace, cfg)` (`durin/memory/dream_passes.py`) and
+threaded through; it is `None` when the vector index is unavailable.
+
+`run_refine` assembles the candidate set from two sources:
 
 1. `EntityAbsorption.find_candidates` (`durin/memory/absorption.py`) returns
    pairs that share at least one alias, strongest signal first.
+2. When `vector_index` is provided, `EntityAbsorption.find_semantic_candidates`
+   supplements the set with **embedding-near same-type pairs** whose L2 distance
+   falls within `semantic_distance_threshold` (default 0.20), deduped against the
+   alias pairs. This catches duplicates that share no alias — same entity,
+   different name — and feeds them through the same judge. When the vector index is
+   unavailable this step is a no-op.
 2. Each pair is filtered out (with a `memory.absorb.skipped` reason) when:
    `cross_type` (different entity types), `tombstoned` (the user previously
    rejected the merge — recorded in `.refine_tombstones.json`), `load_failed`,
@@ -285,8 +299,9 @@ cross-process lock `SessionManager` uses for that session's sidecar.
 | `run_derived_from_pass` | `durin/memory/dream_passes.py` | Catch/repair pass entry: link entities to ingested source documents. |
 | `link_derived_from_for_session` | `durin/memory/derived_from_dream.py` | Per-session linker: find unlinked entities + ingested references, LLM-map entity to document, apply `derived_from` patches. |
 | `run_skill_extract_pass` | `durin/memory/dream_passes.py` | Agentic skill-mining pass: `AgentRunner` sub-agent authors/acquires skills via `skill_write`. |
-| `run_refine_pass` | `durin/memory/dream_passes.py` | Dedup gate: short-circuits when `auto_absorb` is off, else delegates to `run_refine`. |
-| `run_refine` | `durin/memory/refine_dream.py` | Dedup engine: candidate filters, judge, merge via absorb; tombstone bookkeeping. |
+| `run_refine_pass` | `durin/memory/dream_passes.py` | Dedup gate: short-circuits when `auto_absorb` is off, else delegates to `run_refine`; accepts `vector_index` built by `dream_vector_index`. |
+| `run_refine` | `durin/memory/refine_dream.py` | Dedup engine: alias-overlap + optional embedding-near candidate recall, filters, judge, merge via absorb; tombstone bookkeeping. |
+| `dream_vector_index` | `durin/memory/dream_passes.py` | Builds a `VectorIndex` (or returns `None` when unavailable) for the refine semantic recall step; called once per run by the cron and CLI callers. |
 | `judge_pair` | `durin/memory/absorb_judge.py` | LLM identity judge: returns `same` / `different` / `unclear` + confidence. |
 | `run_always_on_pass` | `durin/memory/always_on_dream.py` | Pinned-guidance curation: rank feedback entities, fit budget, flip `always_on` flags. |
 | `ReactiveDreamGate` | `durin/memory/dream_passes.py` | In-process lock + throttle for the reactive triggers. |
