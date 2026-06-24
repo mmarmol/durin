@@ -1314,6 +1314,18 @@
       "improved": "mejorado",
       "quarantined": "en cuarentena",
       "flagged": "marcado"
+    },
+    "close": "Cerrar",
+    "openFull": "Abrir completo",
+    "drawer": {
+      "ariaLabel": "Panel de detalle",
+      "loading": "Cargando…",
+      "notFound": "No encontrado.",
+      "noDetail": "Sin detalle disponible.",
+      "noPage": "Página aún no consolidada.",
+      "type": "Tipo",
+      "aliases": "Alias",
+      "identifiers": "Identificadores"
     }
   },
   "workflows": {
@@ -1331,7 +1343,13 @@
     "status": "Estado",
     "taskPlaceholder": "Tarea para ejecutar en este workflow…",
     "recApplied": "Recomendación aplicada.",
-    "kind": { "work": "trabajo", "parallel": "paralelo", "subflow": "sub-flujo", "input": "entrada", "output": "salida" },
+    "kind": {
+      "work": "trabajo",
+      "parallel": "paralelo",
+      "subflow": "sub-flujo",
+      "input": "entrada",
+      "output": "salida"
+    },
     "start": "inicio",
     "dynamicBadge": "×N",
     "addWork": "trabajo",

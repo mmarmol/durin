@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Moon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
+import { DreamDrawer, type DrawerTarget } from "@/components/DreamDrawer";
 import { fetchDreamDigest, type DreamDigest, type DreamEvent } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
 
@@ -24,11 +25,31 @@ function kindDot(kind: string): string {
   return "#14b8a6";
 }
 
-function EventCard({ event }: { event: DreamEvent }) {
+interface EventCardProps {
+  event: DreamEvent;
+  onOpen: (target: DrawerTarget) => void;
+}
+
+function EventCard({ event, onOpen }: EventCardProps) {
   const { t } = useTranslation();
   const color = kindDot(event.kind);
   const kindKey = `dream.kind.${event.kind}` as const;
   const kindLabel = t(kindKey, { defaultValue: event.kind });
+
+  const hasRef =
+    event.ref !== null &&
+    (event.ref_kind === "entity" || event.ref_kind === "skill");
+
+  function handleView() {
+    if (hasRef) {
+      onOpen({
+        ref: event.ref as string,
+        ref_kind: event.ref_kind as "entity" | "skill",
+        summary: event.summary,
+      });
+    }
+  }
+
   return (
     <div className="flex items-start gap-3 rounded-[8px] border border-border/40 bg-card px-4 py-3">
       <span
@@ -47,15 +68,27 @@ function EventCard({ event }: { event: DreamEvent }) {
         </div>
         <p className="text-[13px] text-foreground">{event.summary}</p>
       </div>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        disabled
-        className="shrink-0 text-[12px]"
-      >
-        {t("dream.view")}
-      </Button>
+      {hasRef ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="shrink-0 text-[12px]"
+          onClick={handleView}
+        >
+          {t("dream.view")}
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled
+          className="shrink-0 text-[12px]"
+        >
+          {t("dream.view")}
+        </Button>
+      )}
     </div>
   );
 }
@@ -66,6 +99,7 @@ export function DreamView() {
   const [digest, setDigest] = useState<DreamDigest | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [drawerTarget, setDrawerTarget] = useState<DrawerTarget | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -86,12 +120,15 @@ export function DreamView() {
     };
   }, [token]);
 
+  const handleClose = useCallback(() => setDrawerTarget(null), []);
+
   const lastRun = digest?.last_run_at_ms
     ? relativeTime(digest.last_run_at_ms)
     : null;
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    // position:relative so the drawer's absolute positioning is scoped here.
+    <div className="relative flex h-full min-h-0 flex-col bg-background overflow-hidden">
       <header className="flex shrink-0 items-center gap-2 border-b border-border/40 px-3 py-2">
         <Moon className="h-4 w-4 text-muted-foreground" aria-hidden />
         <h1 className="text-sm font-semibold">{t("dream.title")}</h1>
@@ -127,11 +164,17 @@ export function DreamView() {
         <div className="flex-1 overflow-y-auto px-4 py-4">
           <div className="flex flex-col gap-2">
             {digest.events.map((ev, i) => (
-              <EventCard key={`${ev.at_ms}-${i}`} event={ev} />
+              <EventCard
+                key={`${ev.at_ms}-${i}`}
+                event={ev}
+                onOpen={setDrawerTarget}
+              />
             ))}
           </div>
         </div>
       )}
+
+      <DreamDrawer target={drawerTarget} onClose={handleClose} />
     </div>
   );
 }

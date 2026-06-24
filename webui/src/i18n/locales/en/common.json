@@ -754,7 +754,13 @@
     "status": "Status",
     "taskPlaceholder": "Task to run through this workflow…",
     "recApplied": "Recommendation applied.",
-    "kind": { "work": "work", "parallel": "parallel", "subflow": "subflow", "input": "input", "output": "output" },
+    "kind": {
+      "work": "work",
+      "parallel": "parallel",
+      "subflow": "subflow",
+      "input": "input",
+      "output": "output"
+    },
     "start": "start",
     "dynamicBadge": "×N",
     "addWork": "work",
@@ -1390,6 +1396,18 @@
       "improved": "improved",
       "quarantined": "quarantined",
       "flagged": "flagged"
+    },
+    "close": "Close",
+    "openFull": "Open full",
+    "drawer": {
+      "ariaLabel": "Detail drawer",
+      "loading": "Loading…",
+      "notFound": "Not found.",
+      "noDetail": "No detail available.",
+      "noPage": "No page consolidated yet.",
+      "type": "Type",
+      "aliases": "Aliases",
+      "identifiers": "Identifiers"
     }
   },
   "audio": {
