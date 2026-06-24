@@ -129,6 +129,7 @@ def add_flagged(
         atomic_write_text(p, json.dumps(list(records.values()), indent=2))
     except Exception:  # pragma: no cover — write failure must not break refine
         pass
+    _emit("memory.dream.flagged", canonical=ref_a, absorbed=ref_b)
 
 
 def read_flagged(workspace: Path) -> list[dict]:

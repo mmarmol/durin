@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { Sidebar } from "@/components/Sidebar";
 import { MemoryGraphView } from "@/components/MemoryGraphView";
+import { DreamView } from "@/components/DreamView";
 import { SkillsView } from "@/components/SkillsView";
 import { WorkflowsView } from "@/components/WorkflowsView";
 import { ToastProvider } from "@/components/ui/toast";
@@ -41,7 +42,7 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "durin-webui.sidebar";
 const RESTART_STARTED_KEY = "durin-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
-type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows";
+type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows" | "dream";
 
 function AuthForm({
   failed,
@@ -395,6 +396,11 @@ function Shell({
     setMobileSidebarOpen(false);
   }, []);
 
+  const onOpenDream = useCallback(() => {
+    setView("dream");
+    setMobileSidebarOpen(false);
+  }, []);
+
   const onBackToChat = useCallback(() => {
     setView("chat");
     setMobileSidebarOpen(false);
@@ -506,6 +512,8 @@ function Shell({
     skillsActive: view === "skills",
     onOpenWorkflows,
     workflowsActive: view === "workflows",
+    onOpenDream,
+    dreamActive: view === "dream",
   };
   const showMainSidebar = view !== "settings";
 
@@ -610,6 +618,11 @@ function Shell({
         {view === "workflows" && (
           <div className="absolute inset-0 flex flex-col">
             <WorkflowsView />
+          </div>
+        )}
+        {view === "dream" && (
+          <div className="absolute inset-0 flex flex-col">
+            <DreamView />
           </div>
         )}
       </main>

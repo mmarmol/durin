@@ -31,6 +31,16 @@ from durin.service.principal import Principal, Scope
 from durin.service.registry import route
 from durin.service.types import Command, Query, Result
 
+
+# ---------------------------------------------------------------------------
+# Telemetry directory resolver (injectable for tests via monkeypatch)
+# ---------------------------------------------------------------------------
+
+
+def _telemetry_dir() -> Path:
+    """Return the telemetry JSONL directory used by the logs reader."""
+    return Path.home() / ".cache" / "durin" / "telemetry"
+
 # ---------------------------------------------------------------------------
 # Shared result — most graph-api calls return a plain dict
 # ---------------------------------------------------------------------------
@@ -56,6 +66,39 @@ class ForgetResult(Result):
     """
 
     result: str  # "archived"
+
+
+# ---------------------------------------------------------------------------
+# Dream digest DTOs
+# ---------------------------------------------------------------------------
+
+
+class DreamEvent(Result):
+    """One notable thing the nightly dream did.
+
+    ``kind`` is the operation: "merged" | "created" | "improved" | "flagged".
+    ``ref`` / ``ref_kind`` let the UI deep-link to the affected entity or skill;
+    both are None when the event is not tied to a specific ref (e.g. a bulk
+    skill-extract pass with no individual ref emitted).  ``at_ms`` is epoch
+    milliseconds so JS Date can consume it directly.
+    """
+
+    kind: str
+    summary: str
+    ref: str | None
+    ref_kind: str | None  # "entity" | "skill" | None
+    at_ms: int
+
+
+class DreamDigest(Result):
+    """List of recent dream events, newest first, capped at *limit*."""
+
+    events: list[DreamEvent]
+    last_run_at_ms: int | None  # timestamp of the most recent dream.end / dream.start
+
+
+class DreamDigestQuery(Query):
+    limit: int = 30
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +150,188 @@ class MemorySearchQuery(Query):
 
 class MemoryForgetCommand(Command):
     uri: str
+
+
+# ---------------------------------------------------------------------------
+# Dream digest builder (module-level so it is easily unit-tested)
+# ---------------------------------------------------------------------------
+
+_DREAM_EVENT_TYPES = frozenset({
+    "memory.absorb.auto_merged",
+    "memory.dream.discover",
+    "memory.dream.skill_extract",
+    "memory.dream.skill_signals",
+    "memory.dream.learnings",
+    "memory.dream.flagged",
+    "memory.dream.end",
+    "memory.dream.start",
+})
+
+_RUN_MARKER_TYPES = frozenset({"memory.dream.end", "memory.dream.start"})
+
+
+def _build_dream_digest(limit: int) -> DreamDigest:
+    """Scan telemetry JSONL files and map dream events to DreamEvent objects.
+
+    Reads from ``_telemetry_dir()`` using the same ``LogQuery`` / ``read_page``
+    path the logs endpoint uses — no separate parsing logic.  Events are
+    filtered by type, expanded (one raw event may produce multiple DreamEvents,
+    e.g. ``dream.discover`` with several refs), and sorted newest-first before
+    being capped at *limit*.
+
+    ``last_run_at_ms`` uses the most recent ``memory.dream.end`` / ``dream.start``
+    timestamp if present; falls back to the timestamp of the newest event.
+    """
+    from durin.logs.reader import LogQuery, read_page
+
+    directory = _telemetry_dir()
+    # Request enough raw events to fill *limit* after expansion; dream.discover
+    # and dream.learnings can expand 1→N.  A 10× headroom is ample in practice.
+    raw_limit = max(limit * 10, 300)
+    log_query = LogQuery(
+        source="telemetry",
+        window_hours=None,  # unbounded so old dream runs are included
+        limit=raw_limit,
+    )
+    try:
+        page = read_page(directory, log_query)
+    except Exception:  # noqa: BLE001
+        return DreamDigest(events=[], last_run_at_ms=None)
+
+    events: list[DreamEvent] = []
+    last_run_at_ms: int | None = None
+
+    # page.lines is newest-first (read_page reverses per-file)
+    for line_dict in page.lines:
+        raw = line_dict.get("raw", {})
+        event_type: str = raw.get("type", "")
+        if event_type not in _DREAM_EVENT_TYPES:
+            continue
+
+        ts_ms = int(float(raw.get("ts", 0)) * 1000)
+        data: dict = raw.get("data") or {}
+
+        if event_type in _RUN_MARKER_TYPES:
+            if last_run_at_ms is None or ts_ms > last_run_at_ms:
+                last_run_at_ms = ts_ms
+            continue
+
+        new_events = _map_event(event_type, data, ts_ms)
+        events.extend(new_events)
+
+    # Sort newest-first (page is already newest-first at the line level but
+    # expansion can interleave timestamps from the same raw event).
+    events.sort(key=lambda e: e.at_ms, reverse=True)
+    events = events[:limit]
+
+    if last_run_at_ms is None and events:
+        last_run_at_ms = events[0].at_ms
+
+    return DreamDigest(events=events, last_run_at_ms=last_run_at_ms)
+
+
+def _map_event(event_type: str, data: dict, at_ms: int) -> list[DreamEvent]:
+    """Map one raw telemetry event to zero or more DreamEvent objects."""
+
+    if event_type == "memory.absorb.auto_merged":
+        canonical = data.get("canonical", "")
+        absorbed = data.get("absorbed", "")
+        return [DreamEvent(
+            kind="merged",
+            summary=f"Merged {absorbed} → {canonical}",
+            ref=canonical or None,
+            ref_kind="entity" if canonical else None,
+            at_ms=at_ms,
+        )]
+
+    if event_type == "memory.dream.discover":
+        refs: list[str] = data.get("refs") or []
+        written = data.get("written", len(refs))
+        if not refs:
+            return [DreamEvent(
+                kind="created",
+                summary=f"Discovered {written} entities",
+                ref=None,
+                ref_kind=None,
+                at_ms=at_ms,
+            )]
+        return [
+            DreamEvent(
+                kind="created",
+                summary=f"Discovered entity {ref}",
+                ref=ref,
+                ref_kind="entity",
+                at_ms=at_ms,
+            )
+            for ref in refs
+        ]
+
+    if event_type == "memory.dream.learnings":
+        refs = data.get("refs") or []
+        written = data.get("written", len(refs))
+        if not refs:
+            return [DreamEvent(
+                kind="created",
+                summary=f"Logged {written} learnings",
+                ref=None,
+                ref_kind=None,
+                at_ms=at_ms,
+            )]
+        return [
+            DreamEvent(
+                kind="created",
+                summary=f"Logged learning {ref}",
+                ref=ref,
+                ref_kind="entity",
+                at_ms=at_ms,
+            )
+            for ref in refs
+        ]
+
+    if event_type == "memory.dream.skill_extract":
+        touched = data.get("skills_touched", 0)
+        return [DreamEvent(
+            kind="improved",
+            summary=f"Updated {touched} skill(s) from session patterns",
+            ref=None,
+            ref_kind="skill",
+            at_ms=at_ms,
+        )]
+
+    if event_type == "memory.dream.skill_signals":
+        skills: list[str] = data.get("skills") or []
+        logged = data.get("logged", len(skills))
+        if not skills:
+            return [DreamEvent(
+                kind="improved",
+                summary=f"Logged {logged} skill signal(s)",
+                ref=None,
+                ref_kind="skill",
+                at_ms=at_ms,
+            )]
+        return [
+            DreamEvent(
+                kind="improved",
+                summary=f"Logged skill signal for {skill}",
+                ref=skill,
+                ref_kind="skill",
+                at_ms=at_ms,
+            )
+            for skill in skills
+        ]
+
+    if event_type == "memory.dream.flagged":
+        canonical = data.get("canonical", "")
+        absorbed = data.get("absorbed", "")
+        return [DreamEvent(
+            kind="flagged",
+            summary="Flagged a memory pair for review",
+            ref=canonical or None,
+            ref_kind="entity" if canonical else None,
+            at_ms=at_ms,
+        )]
+
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +519,20 @@ class MemoryService:
             embedding_model=embedding_model,
         )
         return MemoryResult(data=payload)
+
+    @route(
+        "GET",
+        "/api/v1/memory/dream/digest",
+        scope=Scope.MEMORY_READ.value,
+        request_model=DreamDigestQuery,
+        response_model=DreamDigest,
+        summary="Recent dream-pass activity: merges, discoveries, skill updates",
+    )
+    async def dream_digest(
+        self, query: DreamDigestQuery, principal: Principal
+    ) -> DreamDigest:
+        principal.require(Scope.MEMORY_READ)
+        return _build_dream_digest(query.limit)
 
     # -- writes --------------------------------------------------------------
 

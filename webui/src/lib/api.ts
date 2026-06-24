@@ -1547,6 +1547,32 @@ export async function searchMemoryApi(
   return res.data;
 }
 
+export interface DreamEvent {
+  at_ms: number;
+  kind: string;
+  ref: string | null;
+  ref_kind: string | null;
+  summary: string;
+}
+
+export interface DreamDigest {
+  events: DreamEvent[];
+  last_run_at_ms: number | null;
+}
+
+export async function fetchDreamDigest(
+  token: string,
+  limit?: number,
+  base: string = "",
+): Promise<DreamDigest> {
+  const params = new URLSearchParams();
+  if (limit != null) params.set("limit", String(limit));
+  const qs = params.toString();
+  const url = `${base}/api/v1/memory/dream/digest${qs ? `?${qs}` : ""}`;
+  const res = await request<{ data: DreamDigest }>(url, token);
+  return res.data;
+}
+
 export interface MemoryEdgeDetail {
   source: string;
   target: string;
