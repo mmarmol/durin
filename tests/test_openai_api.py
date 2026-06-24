@@ -424,7 +424,7 @@ async def test_process_direct_accepts_media(tmp_path: Path) -> None:
 
     captured_msg = None
 
-    async def fake_process(msg, *, session_key="", on_progress=None, on_stream=None, on_stream_end=None, model_preset=None):
+    async def fake_process(msg, *, session_key="", on_progress=None, on_stream=None, on_stream_end=None, model_preset=None, persona=None):
         nonlocal captured_msg
         captured_msg = msg
         return None
