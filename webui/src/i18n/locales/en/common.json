@@ -806,7 +806,9 @@
     "removeIo": "remove",
     "inputFilesLabel": "input files (one path per line)",
     "inputFilesPlaceholder": "/abs/path/to/file",
-    "outputDir": "output folder"
+    "outputDir": "output folder",
+    "expand": "expand",
+    "done": "done"
   },
   "skills": {
     "view": "View",

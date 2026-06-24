@@ -177,6 +177,21 @@ const RUNS_AS_MODEL = "__model__";
 // Prefix used to encode persona names in the picker value.
 const RUNS_AS_PERSONA_PREFIX = "persona:";
 
+function PromptEditorModal({ value, onChange, onClose }: { value: string; onChange: (v: string) => void; onClose: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6" onClick={onClose}>
+      <div className="flex h-full w-full max-w-3xl flex-col rounded-lg border bg-background p-4" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-sm font-medium">{t("workflows.prompt")}</span>
+          <button type="button" className="text-sm text-muted-foreground hover:text-foreground" onClick={onClose}>{t("workflows.done")}</button>
+        </div>
+        <Textarea autoFocus className="flex-1 resize-none font-mono text-sm" value={value} onChange={(e) => onChange(e.target.value)} />
+      </div>
+    </div>
+  );
+}
+
 function NodeConfigPanel({
   node,
   nodeIds,
@@ -195,6 +210,7 @@ function NodeConfigPanel({
   onDelete: () => void;
 }) {
   const { t } = useTranslation();
+  const [promptModalOpen, setPromptModalOpen] = useState(false);
   const others = nodeIds.filter((id) => id !== node.id);
 
   // A node routes when on_pass or on_fail is set (regardless of kind).
@@ -342,13 +358,30 @@ function NodeConfigPanel({
                 </select>
               </Field>
 
-              <Field label={t("workflows.prompt")}>
+              <div className="flex-1 min-h-0 flex flex-col gap-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">{t("workflows.prompt")}</span>
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => setPromptModalOpen(true)}
+                  >
+                    {t("workflows.expand")}
+                  </button>
+                </div>
                 <Textarea
-                  rows={5}
+                  className="flex-1 resize-none"
                   value={(node.prompt as string) ?? ""}
                   onChange={(e) => onChange({ prompt: e.target.value })}
                 />
-              </Field>
+              </div>
+              {promptModalOpen && (
+                <PromptEditorModal
+                  value={(node.prompt as string) ?? ""}
+                  onChange={(v) => onChange({ prompt: v })}
+                  onClose={() => setPromptModalOpen(false)}
+                />
+              )}
             </>
           )}
 
@@ -580,14 +613,15 @@ function IOConfigPanel({
         />
         {t("workflows.ioFile")}
       </label>
-      <Field label={t("workflows.ioDescription")}>
+      <div className="flex-1 min-h-0 flex flex-col gap-1">
+        <span className="text-xs text-muted-foreground">{t("workflows.ioDescription")}</span>
         <Textarea
-          rows={3}
+          className="flex-1 resize-none"
           value={desc.description ?? ""}
           placeholder={t("workflows.ioDescriptionPlaceholder")}
           onChange={(e) => onChange({ ...desc, description: e.target.value || undefined })}
         />
-      </Field>
+      </div>
       <button
         type="button"
         className="mt-1 flex items-center gap-1.5 self-start text-xs text-destructive hover:underline"
@@ -1114,7 +1148,7 @@ export function WorkflowsView() {
         </div>
 
         {selectedNode && (
-          <aside className="w-72 shrink-0 overflow-y-auto border-l p-3">
+          <aside className="w-96 shrink-0 flex flex-col h-full border-l p-3 overflow-y-auto">
             <NodeConfigPanel
               node={selectedNode}
               nodeIds={nodeIds}
@@ -1128,7 +1162,7 @@ export function WorkflowsView() {
         )}
 
         {selectedIo && def && (
-          <aside className="w-72 shrink-0 overflow-y-auto border-l p-3">
+          <aside className="w-96 shrink-0 flex flex-col h-full border-l p-3 overflow-y-auto">
             <IOConfigPanel
               which={selectedIo}
               desc={(selectedIo === "input" ? def.input : def.output) ?? {}}

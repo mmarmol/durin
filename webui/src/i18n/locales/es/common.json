@@ -1368,6 +1368,8 @@
     "removeIo": "quitar",
     "inputFilesLabel": "archivos de entrada (una ruta por línea)",
     "inputFilesPlaceholder": "/ruta/absoluta/al/archivo",
-    "outputDir": "carpeta de salida"
+    "outputDir": "carpeta de salida",
+    "expand": "expandir",
+    "done": "listo"
   }
 }
