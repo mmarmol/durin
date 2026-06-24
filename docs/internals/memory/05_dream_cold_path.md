@@ -166,7 +166,17 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
 6. **Stage 3 (skill signals, when `skill_signals=True`).** Skill corrections and
    gaps in the same turns are logged as observations for later skill curation
    (out of scope here — see the skills internals docs).
-7. Advance the cursor to the total turn count via `set_extract_cursor`.
+7. **Stage 4 (learnings sweep, when `learnings=True`).** `mine_learnings`
+   (`durin/memory/extract_dream.py`) makes one LLM call over the same turns —
+   reusing the compaction learnings prompt — to extract durable learnings:
+   preferences, corrections, standing constraints, and stable project facts. It
+   writes each result as a `feedback`, `stance`, or `practice` entity with
+   `author="dream"` (never a `person` or other principal type). Writes freely;
+   duplicates with the agent's live captures and the compaction backstop are
+   resolved by the refine pass. Gated by `memory.dream.learnings_sweep_enabled`
+   (default true). Best-effort: an empty turn span, LLM failure, or parse failure
+   yields an empty list without aborting the session.
+8. Advance the cursor to the total turn count via `set_extract_cursor`.
 
 The `source_ref` in each patch's provenance points to the turn the fact came from.
 Stage 1 (extract) uses the session window-end marker `[[sessions/<stem>.md#turn-<N>]]`.
@@ -368,6 +378,7 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.on_session_close` | `true` | Arm the reactive extract trigger when a session closes. |
 | `memory.dream.discover_enabled` | `true` | Enable Stage 2 mention-based entity discovery in the extract pass. |
 | `memory.dream.skill_signals_enabled` | `true` | Log skill corrections/gaps from extracted turns. |
+| `memory.dream.learnings_sweep_enabled` | `true` | Enable Stage 4 of the extract pass: mine each session's new turns for durable learnings and write them as `feedback`/`stance`/`practice` entities (`author="dream"`). Dedup is delegated to the refine pass. |
 | `memory.dream.model_override` | `null` | Override the dream model (resolved via `resolve_memory_model`). |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for `ReactiveDreamGate`. 0 disables. The cron is never throttled. |
 | `memory.dream.max_seconds_per_run` | `600` | Hard wall-clock cap; the pass yields after the current session and the cursor resumes. 0 = run to completion. |

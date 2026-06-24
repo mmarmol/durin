@@ -125,7 +125,7 @@ Three of the five dream passes are wrapped with a `memory.dream.start` / `memory
 
 **Passes that use `dream.start` / `dream.end`:**
 
-- **Extract** (`kind="extract"`) — `dream.end` carries `entities_consolidated`, `entities_failed`, `sessions`, and `yielded` (true when `max_seconds_per_run` cut the pass short). Within the pass: `memory.dream.patch_applied` per entity written (Stage 1); `memory.dream.discover` per session processed (Stage 2: mention discovery, carries `proposed` / `written` / `skipped`).
+- **Extract** (`kind="extract"`) — `dream.end` carries `entities_consolidated`, `entities_failed`, `sessions`, and `yielded` (true when `max_seconds_per_run` cut the pass short). Within the pass: `memory.dream.patch_applied` per entity written (Stage 1); `memory.dream.discover` per session processed (Stage 2: mention discovery, carries `proposed` / `written` / `skipped`); `memory.dream.learnings` per session processed by Stage 4 (learnings sweep, carries `proposed` / `written` / `refs`). `entities_consolidated` counts Stage-1 attribute writes only; learnings writes are tracked separately via `memory.dream.learnings`.
 - **Derived-from** (`kind="derived_from"`) — no dedicated event beyond the `dream.start/end` pair; attribute writes emit `memory.dream.patch_applied`. `dream.end` carries `links`, `sessions`, `errors`, `yielded`.
 - **Refine** (`kind="refine"`) — `dream.end` carries `merged`, `kept`, `candidates`. Produces the absorb-judge events (see below).
 

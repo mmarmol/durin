@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from durin.memory.entity_page import EntityPage
-from durin.memory.extract_dream import discover_entities, extract_entity, parse_attributes, parse_discoveries
+from durin.memory.extract_dream import discover_entities, extract_entity, mine_learnings, parse_attributes, parse_discoveries
 from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import write_entity
 
@@ -181,3 +181,56 @@ def test_discover_writes_aliases_relations_significance(tmp_path):
     discover_entities(tmp_path, "USER: torrent stuff", existing_refs=[],
                       llm_invoke=lambda *a, **k: _Resp(proposals), model="m")
     assert (_page(tmp_path, "place:torrent").body or "").count("weather") == 1
+
+
+# ---------------------------------------------------------------------------
+# mine_learnings: extract + write feedback/stance/practice entities
+# ---------------------------------------------------------------------------
+
+
+class _LResp:
+    def __init__(self, text): self.text = text
+
+
+def test_mine_learnings_writes_feedback_and_skips_principal(tmp_path):
+    out = json.dumps([
+        {"ref": "feedback:spanish", "name": "Reply in Spanish",
+         "body": "User prefers Spanish. Why: works in Spanish. How: converse in Spanish."},
+        {"ref": "person:marcelo", "name": "Marcelo",
+         "body": "the user"},   # must be SKIPPED — never write the principal
+    ])
+    res = mine_learnings(tmp_path, "[turn-1] USER: contestame en español",
+                         llm_invoke=lambda *a, **k: _LResp(out), model="m")
+    fb = EntityPage.from_file(tmp_path / "memory/entities/feedback/spanish.md")
+    assert fb is not None and "Spanish" in (fb.body or "")
+    assert not (tmp_path / "memory/entities/person/marcelo.md").exists()
+    assert [r["ref"] for r in res] == ["feedback:spanish"]
+
+
+def test_mine_learnings_empty_is_noop(tmp_path):
+    res = mine_learnings(tmp_path, "[turn-1] USER: hi",
+                         llm_invoke=lambda *a, **k: _LResp("[]"), model="m")
+    assert res == []
+
+
+def test_mine_learnings_emits_telemetry_event(tmp_path, monkeypatch):
+    """mine_learnings must emit memory.dream.learnings with correct counts."""
+    out = json.dumps([
+        {"ref": "feedback:pref-a", "name": "Pref A", "body": "body a"},
+        {"ref": "stance:pref-b", "name": "Pref B", "body": "body b"},
+        {"ref": "person:bad", "name": "Bad", "body": "filtered out"},
+    ])
+    captured: list[tuple[str, dict]] = []
+    import durin.memory.extract_dream as _ed
+    monkeypatch.setattr(_ed, "_mine_emit_tool_event",
+                        lambda name, payload: captured.append((name, payload)))
+
+    mine_learnings(tmp_path, "some text", llm_invoke=lambda *a, **k: _LResp(out), model="m")
+
+    assert len(captured) == 1
+    event_name, payload = captured[0]
+    assert event_name == "memory.dream.learnings"
+    # 2 accepted (feedback+stance), 1 filtered (person)
+    assert payload["proposed"] == 3
+    assert payload["written"] == 2
+    assert set(payload["refs"]) == {"feedback:pref-a", "stance:pref-b"}
