@@ -4450,6 +4450,11 @@
       },
       "WorkflowRunResult": {
         "properties": {
+          "exhausted_node": {
+            "default": "",
+            "title": "Exhausted Node",
+            "type": "string"
+          },
           "final_output": {
             "title": "Final Output",
             "type": "string"

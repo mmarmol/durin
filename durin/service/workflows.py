@@ -75,6 +75,7 @@ class WorkflowRunResult(Result):
     final_output: str
     runs: list[dict[str, Any]]
     output_dir: str = ""
+    exhausted_node: str = ""
 
 
 class WorkflowRecsQuery(Query):
@@ -228,6 +229,7 @@ class WorkflowsService:
                 for r in result.runs
             ],
             output_dir=result.output_dir or "",
+            exhausted_node=result.exhausted_node or "",
         )
 
     @route(

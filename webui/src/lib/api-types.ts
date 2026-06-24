@@ -3447,6 +3447,11 @@ export interface components {
         };
         /** WorkflowRunResult */
         WorkflowRunResult: {
+            /**
+             * Exhausted Node
+             * @default
+             */
+            exhausted_node: string;
             /** Final Output */
             final_output: string;
             /**
