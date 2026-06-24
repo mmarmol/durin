@@ -708,7 +708,10 @@
         "handsFreeTitle": "Voz manos libres",
         "handsFreeDesc": "El orbe flotante escucha, piensa y habla.",
         "bargeInTitle": "Interrupción al hablar",
-        "bargeInDesc": "Interrumpe al agente hablando por encima de él."
+        "bargeInDesc": "Interrumpe al agente hablando por encima de él.",
+        "idleTimeoutTitle": "Cerrar por inactividad",
+        "idleTimeoutDesc": "Termina la sesión de voz tras este tiempo en silencio. El reloj se reinicia cuando hablás o el asistente responde.",
+        "idleTimeoutNever": "Nunca"
       },
       "spoken": {
         "longRepliesTitle": "Respuestas largas",
