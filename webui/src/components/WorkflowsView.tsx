@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Background,
   Controls,
   Handle,
   Position,
   ReactFlow,
+  useEdgesState,
+  useNodesState,
   type Connection,
+  type Edge,
+  type Node,
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -742,10 +746,17 @@ export function WorkflowsView() {
     })();
   }, [selected, token]);
 
-  const flow = useMemo(
-    () => (def ? workflowToFlow(def) : { nodes: [], edges: [] }),
-    [def],
-  );
+  // React Flow owns node/edge state so a node follows the cursor during a drag
+  // (via onNodesChange). The state is seeded from the def whenever the graph changes;
+  // a drag's drop is persisted to def.ui.positions in onNodeDragStop, which re-seeds
+  // here with the stored position so the node stays put.
+  const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node>([]);
+  const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  useEffect(() => {
+    const f = def ? workflowToFlow(def) : { nodes: [], edges: [] };
+    setRfNodes(f.nodes);
+    setRfEdges(f.edges);
+  }, [def, setRfNodes, setRfEdges]);
 
   const mutate = useCallback((fn: (d: WorkflowDef) => WorkflowDef) => {
     setDef((d) => (d ? fn(d) : d));
@@ -1112,8 +1123,10 @@ export function WorkflowsView() {
             )}
             {def ? (
               <ReactFlow
-                nodes={flow.nodes}
-                edges={flow.edges}
+                nodes={rfNodes}
+                edges={rfEdges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
                 nodeTypes={nodeTypes}
                 fitView
                 onConnect={onConnect}
