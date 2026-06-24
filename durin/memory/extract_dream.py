@@ -224,7 +224,16 @@ def parse_discoveries(raw: str) -> list[dict[str, Any]]:
         sig_raw = item.get("significance")
         significance = sig_raw.strip() if isinstance(sig_raw, str) and sig_raw.strip() else None
         turn_raw = item.get("turn")
-        turn = turn_raw if isinstance(turn_raw, int) and turn_raw > 0 else None
+        # Accept integer-valued floats (small models emit 16.0); reject bools
+        # (bool is an int subclass in Python — True/False are not turn numbers)
+        # and fractional floats (16.5 has no meaning as a turn index).
+        if (isinstance(turn_raw, (int, float))
+                and not isinstance(turn_raw, bool)
+                and turn_raw > 0
+                and float(turn_raw).is_integer()):
+            turn = int(turn_raw)
+        else:
+            turn = None
         out.append({"ref": ref, "name": name, "attributes": attrs,
                     "aliases": aliases, "relations": relations,
                     "significance": significance, "turn": turn})
@@ -344,21 +353,30 @@ def discover_entities(
         ref = prop["ref"]
         if ref in skip or is_deleted(workspace, ref):
             continue
+        # Per-entity provenance: tag the turn the fact came from, not the
+        # window-end watermark. Fall back to the batch src when absent.
+        prop_turn = prop.get("turn")
+        if isinstance(prop_turn, int) and prop_turn > 0:
+            stem = src.split("/")[-1].split(".md")[0] if "sessions/" in src else None
+            entity_src = (f"[[sessions/{stem}.md#turn-{prop_turn}]]"
+                          if stem else src)
+        else:
+            entity_src = src
         patches = [
             FieldPatch(kind="attribute", key=k, value=v, author="dream",
-                       source_ref=src, at=now)
+                       source_ref=entity_src, at=now)
             for k, v in prop["attributes"].items()
         ]
         for al in prop.get("aliases", []):
             patches.append(FieldPatch(kind="alias", value=al, author="dream",
-                                      source_ref=src, at=now))
+                                      source_ref=entity_src, at=now))
         for rel in prop.get("relations", []):
             patches.append(FieldPatch(kind="relation", value=rel, author="dream",
-                                      source_ref=src, at=now))
+                                      source_ref=entity_src, at=now))
         sig = prop.get("significance")
         if sig:
             patches.append(FieldPatch(kind="body_replace", value=sig, author="dream",
-                                      source_ref=src, at=now))
+                                      source_ref=entity_src, at=now))
         target = _resolve_existing_ref(index, ref, prop["name"])
         if target is None and vector_index is not None:
             target = _resolve_semantic_ref(
