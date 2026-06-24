@@ -278,7 +278,6 @@ Archive is excluded from all default search paths: the vector index, FTS5, the g
 | `principal_channel_map` | `{}` | Maps `channel_id → person:<name>` for principal resolution per channel. |
 | `memory.file_watcher.enabled` | `true` | Reactive re-embed when the user edits a `.md` file directly. |
 | `memory.dream.auto_absorb.enabled` | `false` | Whether the refine pass auto-merges entity duplicates. When off, suggestions are logged for manual review. |
-| `memory.dream.auto_absorb.min_age_hours` | `24` | Quarantine: freshly-created entities are skipped by auto-absorb. |
 
 **CLI surfaces:**
 

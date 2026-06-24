@@ -274,7 +274,6 @@ Sections with zero hits are omitted entirely.
 | `memory.dream.always_on_token_budget` | `1500` | Hard token ceiling for always-on pinned guidance; `0` disables the pin |
 | `memory.dream.auto_absorb.enabled` | `false` | Master gate for the refine pass auto-merge; when false, duplicates must be merged manually via `durin memory absorb` |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM judge confidence floor (0–100) for an auto-merge |
-| `memory.dream.auto_absorb.min_age_hours` | `24` | Quarantine window: entities created or edited within this window are skipped by the refine pass |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for `ReactiveDreamGate`; `0` disables; daily cron is never throttled |
 | `memory.dream.max_seconds_per_run` | `600` | Wall-clock cap for the extract pass; it yields after the current session and the per-session cursor resumes on the next trigger |
 | `memory.search.cross_encoder.enabled` | `false` | Enables the cross-encoder reranker (displayed in onboarding as an opt-in) |

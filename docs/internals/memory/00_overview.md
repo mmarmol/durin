@@ -324,7 +324,6 @@ For deeper coverage of individual subsystems, see the sibling docs:
 | `memory.dream.always_on_token_budget` | `1500` | Token ceiling for always-on pinned guidance; 0 disables the pin. |
 | `memory.dream.auto_absorb.enabled` | `false` | Enable automatic entity merging by the refine pass. Off by default; use `durin memory absorb-suggest` and `durin memory absorb` for manual control. |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM judge confidence floor (0–100) for auto-merge. |
-| `memory.dream.auto_absorb.min_age_hours` | `24` | Quarantine newly created/edited entities from auto-merge. |
 
 ### Principal resolution keys
 

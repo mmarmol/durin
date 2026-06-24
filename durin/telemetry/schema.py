@@ -710,7 +710,7 @@ class MemoryAbsorbJudgedEvent(TypedDict):
     """LLM-judge ran on an alias-overlap candidate pair.
 
     Emitted for every candidate that survived the cross-type filter
-    and the 24h quarantine — i.e. every pair that actually reached
+    and the run-scoped quarantine — i.e. every pair that actually reached
     the LLM. Use for tuning ``confidence_threshold`` against the
     empirical distribution of confidences.
     """
@@ -748,8 +748,8 @@ class MemoryAbsorbSkippedEvent(TypedDict):
 
     - ``"cross_type"``: candidate refs span different entity types
       (e.g. person:marcelo vs project:marcelo) — filtered before judge.
-    - ``"quarantine"``: at least one page is younger than ``min_age_hours``
-      (mitigates premature consolidation).
+    - ``"quarantine"``: at least one page was created at/after the run start
+      (the run never merges its own fresh output).
     - ``"below_threshold"``: judge said "same" but confidence < floor.
     - ``"verdict_different"`` / ``"verdict_unclear"``: judge declined.
     - ``"judge_failed"``: LLM call or parse failure after all retries.
