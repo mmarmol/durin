@@ -639,7 +639,7 @@ export function PersonasSettings({ token }: { token: string }) {
                     <span className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
                       <span className="font-mono">
                         {t("settings.personas.fieldSoul")}: {persona.soul}
-                        {persona.model ? ` · ${persona.model}` : ""}
+                        {" · "}{persona.model || t("settings.personas.modelDefault")}
                       </span>
                       {persona.description ? <span>{persona.description}</span> : null}
                       {rowTest?.name === persona.name ? (
@@ -672,24 +672,19 @@ export function PersonasSettings({ token }: { token: string }) {
                         t("settings.personas.test")
                       )}
                     </Button>
-                    {persona.name === "default" && isDefault ? null : (
+                    {!isDefault ? (
                       <Button
                         size="sm"
                         variant="ghost"
                         disabled={busy}
-                        onClick={() => void changeDefault(isDefault ? null : persona.name)}
-                        className="rounded-full text-[12px]"
-                        title={
-                          isDefault
-                            ? t("settings.personas.clearDefault")
-                            : t("settings.personas.setDefault")
-                        }
+                        onClick={() => void changeDefault(persona.name)}
+                        className="rounded-full text-muted-foreground"
+                        title={t("settings.personas.setDefault")}
+                        aria-label={t("settings.personas.setDefault")}
                       >
-                        {isDefault
-                          ? t("settings.personas.clearDefault")
-                          : t("settings.personas.setDefault")}
+                        <Star className="h-3.5 w-3.5" aria-hidden />
                       </Button>
-                    )}
+                    ) : null}
                     {persona.builtin ? null : (
                       <>
                         <Button
