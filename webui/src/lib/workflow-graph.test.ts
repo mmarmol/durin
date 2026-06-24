@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { workflowToFlow, type WorkflowDef } from "./workflow-graph";
+import { safeSubflowTargets, workflowToFlow, type WorkflowDef } from "./workflow-graph";
 
 const DEF: WorkflowDef = {
   name: "wf",
@@ -241,6 +241,8 @@ describe("workflowToFlow", () => {
     expect(a.position).toEqual({ x: 500, y: 40 });
   });
 
+
+
   it("connects OUTPUT from both branches of a routing split (routing-triage)", () => {
     const { edges } = workflowToFlow({
       name: "rt",
@@ -256,5 +258,14 @@ describe("workflowToFlow", () => {
     expect(toOutput).toEqual(["analysis", "code"]);
     // classify routes to both, it is not itself a terminal.
     expect(edges.some((e) => e.source === "classify" && e.target === "__output__")).toBe(false);
+  });
+});
+
+describe("safeSubflowTargets", () => {
+  it("excludes self and any workflow that can reach the current one", () => {
+    const refs = { A: ["B"], B: ["C"], C: [], D: [] };
+    // current = C: B->C and A->B->C reach C, so calling them from C would loop; D is safe.
+    expect(safeSubflowTargets("C", refs).sort()).toEqual(["D"]);
+    expect(safeSubflowTargets("A", refs).sort()).toEqual(["B", "C", "D"]); // none reach A
   });
 });

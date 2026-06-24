@@ -109,6 +109,29 @@ function findTerminals(def: WorkflowDef, byId: Map<string, WorkflowNodeDef>): st
     .map((n) => n.id);
 }
 
+// Returns the workflow names that may be called as a subflow from `current` without
+// creating a cycle. Excluded: `current` itself, and any name from which `current` is
+// reachable via the call graph (calling them would close a loop).
+// `refs` maps each workflow name to the list of workflow names it directly calls.
+export function safeSubflowTargets(current: string, refs: Record<string, string[]>): string[] {
+  const reachesCurrent = new Set<string>();
+  const all = Object.keys(refs);
+  const canReach = (start: string): boolean => {
+    const seen = new Set<string>();
+    const stack = [start];
+    while (stack.length) {
+      const n = stack.pop()!;
+      for (const m of refs[n] ?? []) {
+        if (m === current) return true;
+        if (!seen.has(m)) { seen.add(m); stack.push(m); }
+      }
+    }
+    return false;
+  };
+  for (const c of all) if (c !== current && canReach(c)) reachesCurrent.add(c);
+  return all.filter((c) => c !== current && !reachesCurrent.has(c));
+}
+
 export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[] } {
   const byId = new Map(def.nodes.map((n) => [n.id, n]));
   const depth = computeDepths(def);

@@ -30,6 +30,7 @@ import {
   type WorkflowRunResult,
 } from "@/lib/api";
 import {
+  safeSubflowTargets,
   workflowToFlow,
   type FlowNodeData,
   type IODescriptor,
@@ -197,6 +198,9 @@ function NodeConfigPanel({
   nodeIds,
   isStart,
   personas,
+  allWorkflowNames,
+  currentWorkflowName,
+  token,
   onChange,
   onMakeStart,
   onDelete,
@@ -205,6 +209,9 @@ function NodeConfigPanel({
   nodeIds: string[];
   isStart: boolean;
   personas: PersonaItem[];
+  allWorkflowNames: string[];
+  currentWorkflowName: string;
+  token: string;
   onChange: (patch: Partial<WorkflowNodeDef>) => void;
   onMakeStart: () => void;
   onDelete: () => void;
@@ -212,6 +219,29 @@ function NodeConfigPanel({
   const { t } = useTranslation();
   const [promptModalOpen, setPromptModalOpen] = useState(false);
   const others = nodeIds.filter((id) => id !== node.id);
+
+  // Fetch subflow call-graph refs when this panel is open for a subworkflow node.
+  // Hooks must be declared unconditionally; the fetch body is gated inside the effect.
+  const [refs, setRefs] = useState<Record<string, string[]> | null>(null);
+  useEffect(() => {
+    if (node.kind !== "subworkflow") return;
+    let alive = true;
+    setRefs(null);
+    (async () => {
+      const entries = await Promise.all(
+        allWorkflowNames.map(async (n) => {
+          try {
+            const d = (await getWorkflow(token, n)) as unknown as WorkflowDef;
+            return [n, d.nodes.filter((x) => x.kind === "subworkflow").map((x) => String(x.workflow ?? ""))] as const;
+          } catch {
+            return [n, []] as const;
+          }
+        }),
+      );
+      if (alive) setRefs(Object.fromEntries(entries));
+    })();
+    return () => { alive = false; };
+  }, [node.kind, allWorkflowNames, token]);
 
   // A node routes when on_pass or on_fail is set (regardless of kind).
   const routes = node.on_pass != null || node.on_fail != null;
@@ -551,15 +581,33 @@ function NodeConfigPanel({
         );
       })()}
 
-      {node.kind === "subworkflow" && (
-        <Field label={t("workflows.next")}>
-          <TargetSelect
-            value={node.next as string}
-            options={others}
-            onChange={(v) => onChange({ next: v })}
-          />
-        </Field>
-      )}
+      {node.kind === "subworkflow" && (() => {
+        const safeTargets = refs ? safeSubflowTargets(currentWorkflowName, refs) : [];
+        return (
+          <>
+            <Field label={t("workflows.subflowTarget")}>
+              <select
+                className={selectCls}
+                value={(node.workflow as string) ?? ""}
+                disabled={refs === null}
+                onChange={(e) => onChange({ workflow: e.target.value })}
+              >
+                <option value="">(none)</option>
+                {safeTargets.map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label={t("workflows.next")}>
+              <TargetSelect
+                value={node.next as string}
+                options={others}
+                onChange={(v) => onChange({ next: v })}
+              />
+            </Field>
+          </>
+        );
+      })()}
 
       <button
         type="button"
@@ -726,6 +774,13 @@ export function WorkflowsView() {
   const addParallelNode = useCallback(() => {
     const id = `parallel-${++_idSeq}`;
     const node: WorkflowNodeDef = { id, kind: "parallel", reconcile: "read", max_concurrency: 2, branches: [], next: null };
+    mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
+    setSelectedNodeId(id);
+  }, [mutate]);
+
+  const addSubflowNode = useCallback(() => {
+    const id = `subflow-${++_idSeq}`;
+    const node: WorkflowNodeDef = { id, kind: "subworkflow", workflow: "", next: null };
     mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
     setSelectedNodeId(id);
   }, [mutate]);
@@ -1033,6 +1088,9 @@ export function WorkflowsView() {
                 <Button size="sm" variant="outline" onClick={addParallelNode}>
                   <Plus className="h-3.5 w-3.5" /> {t("workflows.addParallel")}
                 </Button>
+                <Button size="sm" variant="outline" onClick={addSubflowNode}>
+                  <Plus className="h-3.5 w-3.5" /> {t("workflows.addSubflow")}
+                </Button>
                 {!def.input && (
                   <Button size="sm" variant="outline" onClick={() => addIo("input")}>
                     <Plus className="h-3.5 w-3.5" /> {t("workflows.addInput")}
@@ -1191,6 +1249,9 @@ export function WorkflowsView() {
               nodeIds={nodeIds}
               isStart={def?.start === selectedNode.id}
               personas={personas}
+              allWorkflowNames={names}
+              currentWorkflowName={selected ?? ""}
+              token={token}
               onChange={updateNode}
               onMakeStart={() => mutate((d) => ({ ...d, start: selectedNode.id }))}
               onDelete={() => deleteNode(selectedNode.id)}

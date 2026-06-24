@@ -760,6 +760,7 @@
     "addWork": "work",
     "addParallel": "parallel",
     "addSubflow": "subflow",
+    "subflowTarget": "calls workflow",
     "addInput": "input",
     "addOutput": "output",
     "deleteNode": "delete node",

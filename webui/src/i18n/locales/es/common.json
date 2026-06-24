@@ -1322,6 +1322,7 @@
     "addWork": "trabajo",
     "addParallel": "paralelo",
     "addSubflow": "sub-flujo",
+    "subflowTarget": "llama al workflow",
     "addInput": "entrada",
     "addOutput": "salida",
     "deleteNode": "eliminar nodo",
