@@ -135,7 +135,7 @@ def prompt_enable_cross_encoder(
     return bool(answer)
 
 
-def prompt_enable_auto_absorb(current: bool = False) -> bool:
+def prompt_enable_auto_absorb(current: bool = True) -> bool:
     """Render the Q6.3 question and return the user's choice.
 
     *current* is the existing value of ``memory.dream.auto_absorb.enabled``

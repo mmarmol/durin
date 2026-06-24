@@ -312,10 +312,11 @@ class AutoAbsorbConfig(Base):
     threshold. Designed to close the loop between dream consolidation
     and manual ``durin memory absorb`` without destructive false-merges.
 
-    Defaults are opt-in conservative: disabled by default and a
-    threshold high enough that only obvious matches pass. (Refine
-    additionally never merges entities created during the current run,
-    so a pass can't merge its own fresh output.)
+    Enabled by default: the high-precision judge (≥95), prevent-at-source
+    dedup, and the run-scoped quarantine together contain the blast radius
+    that originally justified opt-in. (Refine additionally never merges
+    entities created during the current run, so a pass can't merge its own
+    fresh output.) Disable to require manual ``durin memory absorb``.
 
     The merge itself reuses :meth:`EntityAbsorption.absorb` (which
     preserves content from both pages via ``_merge_pages``, archives
@@ -324,10 +325,12 @@ class AutoAbsorbConfig(Base):
     trailers). Recovery: ``cd memory && git revert <sha>``.
     """
 
-    # Master switch — keep OFF by default; the blast radius of a
-    # silent bad merge is high enough that opt-in is the right
-    # ergonomics.
-    enabled: bool = False
+    # Master switch — ON by default. Prevent-at-source (lexical +
+    # semantic dedup) + the run-scoped quarantine + the judge (≥95)
+    # + the reversible archive now contain the blast radius that
+    # justified opt-in. A bad merge is recoverable: git revert the
+    # absorb commit in memory/ and add a tombstone.
+    enabled: bool = True
 
     # LLM-judge confidence floor (0-100). Default 95 favours
     # precision over recall: most pairs that warrant a merge will
