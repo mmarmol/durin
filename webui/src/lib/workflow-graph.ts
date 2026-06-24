@@ -79,23 +79,28 @@ function resolveNodeType(n: WorkflowNodeDef): string {
   return n.kind;
 }
 
-// Find terminal nodes: nodes reachable from start that have no valid outgoing targets.
-// A dynamic parallel's worker node is excluded — it has no `next` by design (it hands
-// off via text to the merge node), so including it would draw a spurious worker→__output__ edge.
+// Find the terminal nodes whose completion ends the workflow — these connect to the
+// OUTPUT object. A node is terminal when it has an outgoing slot that ends the flow:
+// for a routing node, on_pass or on_fail left unset (a branch that ends); for any other
+// node, an unset or dangling `next`. So a routing node that ends on pass but loops on
+// fail still counts as a terminal. Members of a parallel fan-out (its static branches
+// and its dynamic worker) are excluded — they hand off to the parallel's merge node, not
+// to the workflow output, so treating them as terminal would draw spurious edges to
+// __output__.
 function findTerminals(def: WorkflowDef, byId: Map<string, WorkflowNodeDef>): string[] {
   const depth = computeDepths(def);
   const reachable = new Set(Object.keys(depth));
-  const dynamicWorkers = new Set<string>();
+  const fanMembers = new Set<string>();
   for (const n of def.nodes) {
-    if (n.kind === "parallel" && typeof n.worker === "string") dynamicWorkers.add(n.worker);
+    if (n.kind !== "parallel") continue;
+    if (typeof n.worker === "string") fanMembers.add(n.worker);
+    for (const b of n.branches ?? []) if (typeof b === "string") fanMembers.add(b);
   }
+  const valid = (t: unknown) => typeof t === "string" && byId.has(t);
+  const endsFlow = (n: WorkflowNodeDef) =>
+    nodeRoutes(n) ? !valid(n.on_pass) || !valid(n.on_fail) : !valid(n.next);
   return def.nodes
-    .filter(
-      (n) =>
-        reachable.has(n.id) &&
-        !dynamicWorkers.has(n.id) &&
-        targetsOf(n).filter((t) => byId.has(t)).length === 0,
-    )
+    .filter((n) => reachable.has(n.id) && !fanMembers.has(n.id) && endsFlow(n))
     .map((n) => n.id);
 }
 

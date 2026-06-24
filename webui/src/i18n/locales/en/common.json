@@ -779,7 +779,20 @@
     "parallelMaxConcurrency": "max concurrency",
     "parallelReconcile": "reconcile",
     "parallelNeedBranch": "Pick at least one branch to run in parallel.",
-    "parallelNeedWorkerList": "Pick a worker template and the node whose output is the list."
+    "parallelNeedWorkerList": "Pick a worker template and the node whose output is the list.",
+    "ioInputTitle": "Workflow input",
+    "ioOutputTitle": "Workflow output",
+    "ioInputHint": "What this workflow accepts as input.",
+    "ioOutputHint": "What this workflow produces.",
+    "ioText": "text",
+    "ioFile": "files",
+    "ioAny": "any",
+    "addInput": "input",
+    "addOutput": "output",
+    "removeIo": "remove",
+    "inputFilesLabel": "input files (one path per line)",
+    "inputFilesPlaceholder": "/abs/path/to/file",
+    "outputDir": "output folder"
   },
   "skills": {
     "view": "View",

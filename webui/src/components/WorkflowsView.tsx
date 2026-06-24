@@ -106,29 +106,31 @@ function NodeCard({ data, selected }: NodeProps) {
   );
 }
 
-function ioTags(desc: IODescriptor): string {
+function ioTags(desc: IODescriptor, t: (k: string) => string): string {
   const parts: string[] = [];
-  if (desc.text) parts.push("text");
-  if (desc.file) parts.push("file");
-  return parts.length > 0 ? parts.join(" · ") : "any";
+  if (desc.text) parts.push(t("workflows.ioText"));
+  if (desc.file) parts.push(t("workflows.ioFile"));
+  return parts.length > 0 ? parts.join(" · ") : t("workflows.ioAny");
 }
 
-function IOCard({ data }: NodeProps) {
+function IOCard({ data, selected }: NodeProps) {
+  const { t } = useTranslation();
   const d = data as unknown as { input?: IODescriptor; output?: IODescriptor };
   const isInput = d.input != null;
   const desc = isInput ? d.input! : d.output!;
   return (
     <div
       className={cn(
-        "flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-medium shadow-sm",
+        "flex cursor-pointer items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-medium shadow-sm",
         isInput
           ? "border-teal-400/70 bg-teal-50 text-teal-700 dark:bg-teal-950/40 dark:text-teal-300"
           : "border-orange-400/70 bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300",
+        selected && "ring-2 ring-primary",
       )}
     >
       {isInput ? null : <Handle type="target" position={Position.Left} />}
       <span className="uppercase tracking-widest opacity-60">{isInput ? "INPUT" : "OUTPUT"}</span>
-      <span className="opacity-80">{ioTags(desc)}</span>
+      <span className="opacity-80">{ioTags(desc, t)}</span>
       {isInput ? <Handle type="source" position={Position.Right} /> : null}
     </div>
   );
@@ -548,6 +550,58 @@ function NodeConfigPanel({
   );
 }
 
+// Config panel for an INPUT/OUTPUT canvas object: toggles whether the workflow accepts
+// (input) or produces (output) text and/or files. Editing patches def.input / def.output.
+function IOConfigPanel({
+  which,
+  desc,
+  onChange,
+  onRemove,
+}: {
+  which: "input" | "output";
+  desc: IODescriptor;
+  onChange: (patch: IODescriptor) => void;
+  onRemove: () => void;
+}) {
+  const { t } = useTranslation();
+  const title = which === "input" ? t("workflows.ioInputTitle") : t("workflows.ioOutputTitle");
+  const hint = which === "input" ? t("workflows.ioInputHint") : t("workflows.ioOutputHint");
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase">{which}</span>
+        <span className="text-sm font-medium">{title}</span>
+      </div>
+      <p className="text-xs text-muted-foreground">{hint}</p>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="h-4 w-4 cursor-pointer accent-primary"
+          checked={!!desc.text}
+          onChange={(e) => onChange({ ...desc, text: e.target.checked })}
+        />
+        {t("workflows.ioText")}
+      </label>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="h-4 w-4 cursor-pointer accent-primary"
+          checked={!!desc.file}
+          onChange={(e) => onChange({ ...desc, file: e.target.checked })}
+        />
+        {t("workflows.ioFile")}
+      </label>
+      <button
+        type="button"
+        className="mt-1 flex items-center gap-1.5 self-start text-xs text-destructive hover:underline"
+        onClick={onRemove}
+      >
+        <Trash2 className="h-3.5 w-3.5" /> {t("workflows.removeIo")}
+      </button>
+    </div>
+  );
+}
+
 let _idSeq = 0;
 
 export function WorkflowsView() {
@@ -569,6 +623,7 @@ export function WorkflowsView() {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [personas, setPersonas] = useState<PersonaItem[]>([]);
+  const [inputPaths, setInputPaths] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -641,6 +696,35 @@ export function WorkflowsView() {
     mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
     setSelectedNodeId(id);
   }, [mutate]);
+
+  // Add / edit / remove the workflow's INPUT or OUTPUT descriptor. Adding defaults to
+  // text and selects the new canvas object so the config panel opens for refinement.
+  const addIo = useCallback(
+    (which: "input" | "output") => {
+      mutate((d) => ({ ...d, [which]: d[which] ?? { text: true } }));
+      setSelectedNodeId(which === "input" ? "__input__" : "__output__");
+    },
+    [mutate],
+  );
+
+  const setIo = useCallback(
+    (which: "input" | "output", patch: IODescriptor) => {
+      mutate((d) => ({ ...d, [which]: patch }));
+    },
+    [mutate],
+  );
+
+  const removeIo = useCallback(
+    (which: "input" | "output") => {
+      mutate((d) => {
+        const next = { ...d };
+        delete next[which];
+        return next;
+      });
+      setSelectedNodeId(null);
+    },
+    [mutate],
+  );
 
   const createWorkflow = useCallback(async () => {
     const name = newName.trim();
@@ -749,13 +833,14 @@ export function WorkflowsView() {
     setError(null);
     setRunResult(null);
     try {
-      setRunResult(await runWorkflow(token, selected, task));
+      const files = inputPaths.split("\n").map((s) => s.trim()).filter(Boolean);
+      setRunResult(await runWorkflow(token, selected, task, files));
     } catch (e) {
       setError(errMsg(e));
     } finally {
       setRunning(false);
     }
-  }, [selected, task, token]);
+  }, [selected, task, token, inputPaths]);
 
   const onApplyRec = useCallback(
     async (id: string) => {
@@ -774,6 +859,8 @@ export function WorkflowsView() {
 
   const nodeIds = def?.nodes.map((n) => n.id) ?? [];
   const selectedNode = def?.nodes.find((n) => n.id === selectedNodeId) ?? null;
+  const selectedIo: "input" | "output" | null =
+    selectedNodeId === "__input__" ? "input" : selectedNodeId === "__output__" ? "output" : null;
 
   return (
     <div className="flex h-full w-full">
@@ -859,6 +946,16 @@ export function WorkflowsView() {
                 <Button size="sm" variant="outline" onClick={addParallelNode}>
                   <Plus className="h-3.5 w-3.5" /> {t("workflows.addParallel")}
                 </Button>
+                {!def.input && (
+                  <Button size="sm" variant="outline" onClick={() => addIo("input")}>
+                    <Plus className="h-3.5 w-3.5" /> {t("workflows.addInput")}
+                  </Button>
+                )}
+                {!def.output && (
+                  <Button size="sm" variant="outline" onClick={() => addIo("output")}>
+                    <Plus className="h-3.5 w-3.5" /> {t("workflows.addOutput")}
+                  </Button>
+                )}
                 {dirty && (
                   <Button size="sm" onClick={onSave} disabled={saving}>
                     {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("workflows.save")}
@@ -893,6 +990,20 @@ export function WorkflowsView() {
           </div>
           {def && (
             <div className="border-t p-2">
+              {def.input?.file && (
+                <div className="mb-2 flex flex-col gap-1">
+                  <span className="text-xs text-muted-foreground">
+                    {t("workflows.inputFilesLabel")}
+                  </span>
+                  <Textarea
+                    rows={2}
+                    value={inputPaths}
+                    onChange={(e) => setInputPaths(e.target.value)}
+                    placeholder={t("workflows.inputFilesPlaceholder")}
+                    className="font-mono text-xs"
+                  />
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <Input
                   value={task}
@@ -934,6 +1045,11 @@ export function WorkflowsView() {
                   <div className="whitespace-pre-wrap text-muted-foreground">
                     {runResult.final_output}
                   </div>
+                  {runResult.output_dir && (
+                    <div className="mt-1 font-mono text-[11px] text-muted-foreground">
+                      {t("workflows.outputDir")}: {runResult.output_dir}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -950,6 +1066,17 @@ export function WorkflowsView() {
               onChange={updateNode}
               onMakeStart={() => mutate((d) => ({ ...d, start: selectedNode.id }))}
               onDelete={() => deleteNode(selectedNode.id)}
+            />
+          </aside>
+        )}
+
+        {selectedIo && def && (
+          <aside className="w-72 shrink-0 overflow-y-auto border-l p-3">
+            <IOConfigPanel
+              which={selectedIo}
+              desc={(selectedIo === "input" ? def.input : def.output) ?? {}}
+              onChange={(patch) => setIo(selectedIo, patch)}
+              onRemove={() => removeIo(selectedIo)}
             />
           </aside>
         )}

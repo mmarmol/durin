@@ -240,9 +240,11 @@ End-to-end for a single `run_workflow` call:
   runs **anchored to the invoking session**; **git-versioned definitions** (each run
   snapshots them); **dream-driven self-improvement in manual mode** (recommendations from
   recurring run diagnostics); a **webui Workflows pane** (React Flow) with an editor that
-  has Input/Output canvas objects, a single "add node" (one node type), a **"runs as"**
-  picker (model or persona), body/mode/context/routing config, static and dynamic fan-out
-  authoring with a concurrency cap, and a recommendations banner. Not yet built — see
+  has clickable Input/Output canvas objects (toggle whether the workflow takes/produces
+  text and/or files; file input is supplied as paths in the run bar), a single "add node"
+  (one node type), a **"runs as"** picker (model or persona), body/mode/context/routing
+  config, static and dynamic fan-out authoring with a concurrency cap, and a
+  recommendations banner. Not yet built — see
   [roadmap.md](../roadmap.md) for direction — auto-mode self-improvement (apply +
   validation anchor) and auto-merge of conflicting parallel writes.
 - **Security.** Definitions are local files the user authored, so running their

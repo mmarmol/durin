@@ -201,4 +201,54 @@ describe("workflowToFlow", () => {
     const workerNode = nodes.find((n) => n.id === "w");
     expect((workerNode?.data as Record<string, unknown>).dynamicWorker).toBe(true);
   });
+
+  it("connects OUTPUT from a routing node that ends on pass but loops on fail (evaluator-optimizer)", () => {
+    const { edges } = workflowToFlow({
+      name: "eo",
+      start: "draft",
+      output: { text: true },
+      nodes: [
+        { id: "draft", kind: "work", next: "critique" },
+        { id: "critique", kind: "work", on_pass: null, on_fail: "draft" },
+      ],
+    });
+    // critique ends on pass (on_pass null) → it is the terminal, OUTPUT connects from it.
+    expect(edges.some((e) => e.source === "critique" && e.target === "__output__")).toBe(true);
+    // draft loops the flow, it is not a terminal.
+    expect(edges.some((e) => e.source === "draft" && e.target === "__output__")).toBe(false);
+  });
+
+  it("connects OUTPUT only from the merge node of a static parallel, not its branches (concurrent-review)", () => {
+    const { edges } = workflowToFlow({
+      name: "cr",
+      start: "produce",
+      output: { text: true },
+      nodes: [
+        { id: "produce", kind: "work", next: "fan" },
+        { id: "fan", kind: "parallel", branches: ["review_bugs", "review_security"], next: "synthesize" },
+        { id: "review_bugs", kind: "work" },
+        { id: "review_security", kind: "work" },
+        { id: "synthesize", kind: "work", next: null },
+      ],
+    });
+    const toOutput = edges.filter((e) => e.target === "__output__").map((e) => e.source).sort();
+    expect(toOutput).toEqual(["synthesize"]);
+  });
+
+  it("connects OUTPUT from both branches of a routing split (routing-triage)", () => {
+    const { edges } = workflowToFlow({
+      name: "rt",
+      start: "classify",
+      output: { text: true },
+      nodes: [
+        { id: "classify", kind: "work", on_pass: "code", on_fail: "analysis" },
+        { id: "code", kind: "work", next: null },
+        { id: "analysis", kind: "work", next: null },
+      ],
+    });
+    const toOutput = edges.filter((e) => e.target === "__output__").map((e) => e.source).sort();
+    expect(toOutput).toEqual(["analysis", "code"]);
+    // classify routes to both, it is not itself a terminal.
+    expect(edges.some((e) => e.source === "classify" && e.target === "__output__")).toBe(false);
+  });
 });
