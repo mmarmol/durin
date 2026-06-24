@@ -27,3 +27,4 @@ class WorkflowResult:
     final_output: str | None
     runs: list[NodeRun] = field(default_factory=list)
     run_id: str = ""
+    output_dir: str | None = None  # the terminal node's output folder, if any

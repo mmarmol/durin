@@ -1,0 +1,60 @@
+"""Tests for the bundled seed workflow JSONs and the seed_workflows seeding function."""
+
+import json
+from importlib.resources import files as pkg_files
+from pathlib import Path
+
+import pytest
+
+from durin.utils.helpers import seed_workflows
+from durin.workflow.spec import parse_workflow
+
+_SEED_NAMES = [
+    "evaluator-optimizer",
+    "concurrent-review",
+    "orchestrate-dev",
+    "routing-triage",
+    "build-test-fix",
+]
+
+
+def _seed_path(name: str) -> Path:
+    tpl = pkg_files("durin") / "templates" / "workflows"
+    return Path(str(tpl / f"{name}.json"))
+
+
+@pytest.mark.parametrize("name", _SEED_NAMES)
+def test_seed_file_exists(name: str):
+    path = _seed_path(name)
+    assert path.exists(), f"seed file not found: {name}.json"
+
+
+@pytest.mark.parametrize("name", _SEED_NAMES)
+def test_seed_parses(name: str):
+    path = _seed_path(name)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    wf = parse_workflow(data)
+    assert wf.name == name
+
+
+def test_seed_workflows_copies_all_five(tmp_path: Path):
+    added = seed_workflows(tmp_path)
+    dest = tmp_path / "workflows"
+    for name in _SEED_NAMES:
+        assert (dest / f"{name}.json").exists(), f"missing: {name}.json"
+    assert len(added) == len(_SEED_NAMES)
+
+
+def test_seed_workflows_idempotent(tmp_path: Path):
+    seed_workflows(tmp_path)
+    # second run must not add anything
+    added2 = seed_workflows(tmp_path)
+    assert added2 == []
+
+
+def test_seed_workflows_does_not_overwrite_existing(tmp_path: Path):
+    seed_workflows(tmp_path)
+    target = tmp_path / "workflows" / "evaluator-optimizer.json"
+    target.write_text("USER_CONTENT", encoding="utf-8")
+    seed_workflows(tmp_path)
+    assert target.read_text(encoding="utf-8") == "USER_CONTENT"

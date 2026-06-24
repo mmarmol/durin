@@ -29,6 +29,16 @@ validates that the start and every edge target name a real node, and that `next`
 routing are not both set. (`kind: "decision"` is accepted as a back-compat alias for a
 routing node — `criteria` maps to the node's `prompt`.)
 
+**Workflow I/O is first-class.** A `Workflow` carries optional `input` (`{text?, file?, description?}`)
+and `output` descriptors — rendered as distinct **Input** and **Output** objects on the canvas. The text
+input becomes the start node's task; input files are placed in an input folder the start node reads
+as its "previous step's files" (reusing the artifact channel). Multiple input files pair naturally
+with dynamic fan-out (a worker per file). The terminal node's text output and output folder are
+exposed in the run result. Absent ⇒ today's text-task behavior. The optional free-text `description`
+is a lightweight contract: the engine frames every node's task with the input description (what the
+run received) and the output description (what it must deliver), so the agents are steered and the
+interface is documented — it is a hint, not enforced.
+
 **A node runs its body, then optionally routes.** `WorkflowEngine.run`
 (`durin/workflow/engine.py`) walks the graph from `start`. For an agent node it calls a
 `NodeRunner` — by default `AgentNodeRunner` (`durin/workflow/node_runner.py`), which
@@ -70,18 +80,36 @@ parser rejects a routing agent node that is *structurally identical* (same model
 and prompt) to the producer feeding it, so a quality verdict comes from a genuinely
 independent reviewer (the anti-Goodhart guard). A node can also be a **sub-workflow**
 (`durin/workflow/subworkflow.py`): it runs another named workflow as a nested run
-(reusing the same node and branch-pick runners, bounded by a depth cap) and uses its output;
+(reusing the same node and branch-pick runners, bounded by three recursion layers) and uses its output;
 the nested run carries the same root session key, so its node sessions anchor to the
-invoking conversation too.
-A **parallel** node runs a set of work-node branches concurrently and merges their text
-outputs into the next node's input. Its `reconcile` mode decides how branch *writes*
-come back together (`durin/workflow/workspace_fork.py`): `read` = read/analysis
-branches, no writes applied; `choose` = each branch writes in a private copy of the
-workspace and a judge picks one to apply, discarding the rest; `union` = apply every
-branch's writes, aborting on a genuine conflict (two branches wrote *different* content
-to the same path — identical incidental files reconcile cleanly). A per-node visit count
-bounds loop-backs: exceeding `max_visits` ends the run with status `max_visits` instead
-of looping forever.
+invoking conversation too. The three layers are: (1) the editor excludes cycle-creating
+targets from the sub-workflow picker, so a cycle cannot be authored in the UI; (2) the
+runner maintains a call-stack of workflow names currently executing — if a name is about
+to reenter the chain, it stops immediately with a cycle error (`"Error: workflow cycle
+detected: A -> B -> A"`) rather than recursing; (3) a `max_depth` counter is the backstop
+for deep non-cyclic chains, returning an error at the limit.
+**A node's "runs as" is a single choice:** either a specific model (or omitted ⇒ default) or
+a **Persona** (a named SOUL + its model, mutually exclusive with `model`). Setting `persona`
+on a node injects the SOUL body into the node's system prompt and selects the persona's model.
+The persona is resolved via `durin/workflow/persona_resolve.py` (shared with the agent loop).
+
+A **parallel** node runs branches concurrently and merges their text outputs into the next
+node's input. It has two shapes — **static** (a fixed `branches` list of work-node ids, each
+with its own prompt, all seeing the same input) and **dynamic** (a `worker` template node +
+`list_from` pointing to the upstream node whose output is parsed as a runtime list: one worker
+per item, each getting its own list item as input; the list is emitted by the upstream node as
+a JSON array, with a newline-split fallback). **`max_concurrency`** (default 2) bounds both
+shapes — at most this many runners execute simultaneously; excess items queue and run in
+waves (anti-rate-limit backpressure). Fan-in collects all branch/worker text outputs into the
+`next` node's input. For **static** branches, `reconcile` decides how branch *writes* come
+back together (`durin/workflow/workspace_fork.py`): `read` = read/analysis branches, no
+writes applied; `choose` = each branch writes in a private copy of the workspace and a judge
+picks one to apply, discarding the rest; `union` = apply every branch's writes, aborting on a
+genuine conflict (two branches wrote *different* content to the same path — identical
+incidental files reconcile cleanly). **Dynamic fan-out workers share the workspace** directly
+(no per-worker isolation in v1); they hand their output off to the merge node via text, so
+`reconcile` has no effect on a dynamic parallel and is not shown in the editor for that mode. A per-node visit count bounds loop-backs: exceeding `max_visits` ends the
+run with status `max_visits` instead of looping forever.
 
 **The engine is decoupled from the LLM and runs loop-safe.** The graph walk depends
 only on an injected `NodeRunner` callable, so it is fully unit-testable with a mock.
@@ -152,6 +180,7 @@ End-to-end for a single `run_workflow` call:
 | `SubworkflowRunner` | `durin/workflow/subworkflow.py` | Runs a named workflow as a nested run (depth-capped) for a sub-workflow node. |
 | `WorkflowEngine` | `durin/workflow/engine.py` | The graph executor: routing, loop-back with a visit cap, own/shared context, output threading, and concurrent parallel branches. |
 | `AgentNodeRunner` | `durin/workflow/node_runner.py` | The default node runner: one real `AgentRunner` turn per agent node (adds a verdict instruction when the node routes), persisted as a lineage'd node session. |
+| `seed_workflows` | `durin/utils/helpers.py` | Copy bundled seed JSONs into a workspace's `workflows/` dir (idempotent, called from `sync_workspace_templates`). |
 | `load_workflow` | `durin/workflow/loader.py` | Load and parse a workflow by name from the workspace. |
 | `WorkflowResult`, `NodeRun` | `durin/workflow/result.py` | The typed run outcome and per-node trace. |
 | `RunWorkflowTool` | `durin/agent/tools/run_workflow.py` | The `run_workflow` LLM tool (core scope) that loads, runs, summarizes a workflow, and records its run. |
@@ -194,25 +223,40 @@ End-to-end for a single `run_workflow` call:
   with its reason, and marks it applied; the anti-Goodhart anchor is the human.
   **auto** mode (apply directly, gated by an external validation signal so it can't win
   by loosening gates) is the next slice; the apply step + seam are in place.
-- **Current scope.** This subsystem is built incrementally. Today: sequential execution
-  with **concurrent parallel** branches — read-only, or **writing** with `choose` /
+- **Seeds.** Five starter workflows ship bundled under `durin/templates/workflows/` and
+  are copied into a fresh workspace's `workflows/` directory by
+  `seed_workflows(workspace)` (called from `sync_workspace_templates`) — idempotent,
+  never overwrites a user-edited file.
+
+  | Seed | Pattern |
+  |---|---|
+  | `evaluator-optimizer` | draft → critique (routing loop-back, evaluator-optimizer) |
+  | `concurrent-review` | produce → static fan-out (bugs + security reviewers) → synthesize |
+  | `orchestrate-dev` | orchestrator → dynamic fan-out (worker × N, cap 2) → integrate |
+  | `routing-triage` | classify (routing) → specialist_code or specialist_analysis |
+  | `build-test-fix` | implement → command gate (pytest) → loop-to-fix on fail |
+
+- **Current scope.** Today: sequential execution with **concurrent parallel** branches —
+  static (fixed `branches` list) or **dynamic** (`worker` template mapped over a runtime
+  list, bounded by `max_concurrency` default 2); read-only or **writing** with `choose` /
   `union` reconciliation (private copy per branch + content-aware conflict detection);
-  per-node **work mode** (build/plan/explore) / model / context / tools / **skills** /
-  **MCP servers**; **optional routing** — any node can branch on a shell command's exit
-  code or the `PASS`/`FAIL` verdict in its own agent output (feedback-threaded loop-back),
-  with an anti-Goodhart guard that a routing node not be structurally identical to its
-  producer; **sub-workflow** composition (depth-capped); runs **anchored to the invoking
-  session**; **git-versioned definitions** (each run snapshots them); **dream-driven
-  self-improvement in manual mode** (recommendations from recurring run diagnostics); and
-  a **webui Workflows pane** (React Flow, at the same nav level as Memoria/Skills) that
-  **creates, renders, edits, saves, and runs** a workflow — new workflow from the list
-  header (a minimal one-node graph to edit from), `work`/`decision`/`gate` palette presets
-  (all one node type), per-node config (mode / model / context / tools / prompt) with an
-  optional **routing** toggle (pass/fail targets), add/delete nodes and wire edges by
-  dragging, set the start node, run on a task with the per-node trace shown inline, and
-  apply self-improvement recommendations. Not yet built — see [roadmap.md](../roadmap.md) for direction —
-  auto-mode self-improvement (apply + validation anchor), auto-merge of conflicting
-  parallel writes, and per-node custom persona.
+  per-node **work mode** (build/plan/explore) / **model or persona** (SOUL + model,
+  mutually exclusive) / context / tools; **optional routing** — any node can branch on a
+  shell command's exit code or the `PASS`/`FAIL` verdict in its own agent output
+  (feedback-threaded loop-back), with an anti-Goodhart guard that a routing node not be
+  structurally identical to its producer; **sub-workflow** composition (depth-capped);
+  runs **anchored to the invoking session**; **git-versioned definitions** (each run
+  snapshots them); **dream-driven self-improvement in manual mode** (recommendations from
+  recurring run diagnostics); a **webui Workflows pane** (React Flow) with an editor that
+  has clickable Input/Output canvas objects (toggle text and/or files plus a free-text
+  description; file input is supplied as paths in the run bar), a palette that adds
+  work / parallel / subflow nodes (a routing node is a work node — shown by its pass/fail
+  edges, never a separate type), draggable nodes with a persisted layout, a **"runs as"**
+  picker (model or persona), body/mode/context/routing config, static and dynamic fan-out
+  authoring with a concurrency cap, a subflow target picker that excludes cycle-creating
+  workflows, and a recommendations banner. Not yet built — see
+  [roadmap.md](../roadmap.md) for direction — auto-mode self-improvement (apply +
+  validation anchor) and auto-merge of conflicting parallel writes.
 - **Security.** Definitions are local files the user authored, so running their
   commands and tools is equivalent to the user running them directly; importing remote
   or third-party definitions is not supported in this scope (see [security.md](security.md)).

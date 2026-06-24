@@ -1,0 +1,34 @@
+{
+  "name": "routing-triage",
+  "start": "classify",
+  "max_visits": 3,
+  "input": {"text": true},
+  "output": {"text": true},
+  "nodes": [
+    {
+      "id": "classify",
+      "kind": "work",
+      "mode": "explore",
+      "tools": "none",
+      "prompt": "Read the request and classify it: does it require code changes or is it a question/analysis task? If it requires code changes, end your reply with PASS. If it is a question or analysis task, end with FAIL.",
+      "on_pass": "specialist_code",
+      "on_fail": "specialist_analysis"
+    },
+    {
+      "id": "specialist_code",
+      "kind": "work",
+      "mode": "build",
+      "tools": "default",
+      "prompt": "Handle the code change request. Implement the required changes, run tests if available, and summarize what was done.",
+      "next": null
+    },
+    {
+      "id": "specialist_analysis",
+      "kind": "work",
+      "mode": "explore",
+      "tools": "none",
+      "prompt": "Answer the question or complete the analysis task thoroughly. Provide a well-structured, accurate response.",
+      "next": null
+    }
+  ]
+}

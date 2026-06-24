@@ -17,8 +17,10 @@ AgentRunner + persists node sessions is Task 5.
 from __future__ import annotations
 
 import concurrent.futures
+import shutil
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 from durin.workflow import workspace_fork
@@ -46,6 +48,10 @@ class NodeRunRequest:
     # no workspace or for command nodes.
     output_dir: str | None = None
     upstream_artifact_dir: str | None = None
+    # Index within a dynamic fan-out batch (0, 1, 2, …). When set, the session-persist
+    # key includes this suffix so each worker gets a distinct session rather than
+    # all workers overwriting the same key.
+    worker_index: int | None = None
 
 
 @dataclass
@@ -87,7 +93,12 @@ class WorkflowEngine:
         self._pick_runner = pick_runner
 
     def run(
-        self, workflow: Workflow, task: str, *, root_session_key: str | None = None
+        self,
+        workflow: Workflow,
+        task: str,
+        *,
+        root_session_key: str | None = None,
+        input_files: list[str] | None = None,
     ) -> WorkflowResult:
         """Run the workflow. A node-execution failure (provider/MCP/tool error) does not
         propagate — it ends the run as a typed ``aborted`` result carrying the partial
@@ -98,7 +109,11 @@ class WorkflowEngine:
             prune_runs(self._workspace)
         runs: list[NodeRun] = []
         try:
-            return self._walk(workflow, task, run_id, runs, root_session_key=root_session_key)
+            return self._walk(
+                workflow, self._frame_task(workflow, task), run_id, runs,
+                root_session_key=root_session_key,
+                input_files=input_files,
+            )
         except WorkflowConfigError:
             raise
         except Exception as exc:  # noqa: BLE001 - a node failure becomes a typed aborted result
@@ -107,16 +122,48 @@ class WorkflowEngine:
                 runs=runs, run_id=run_id,
             )
 
+    @staticmethod
+    def _frame_task(workflow: Workflow, task: str) -> str:
+        """Frame the task with the workflow's optional I/O descriptions: the input
+        description as a prefix (what the workflow received) and the output description
+        as a suffix (what it must ultimately deliver). Both are free-text hints that
+        steer the node agents and document the interface — they are not enforced. When
+        neither is set the task is returned unchanged."""
+        def _desc(d: object) -> str | None:
+            text = d.get("description") if isinstance(d, dict) else None
+            text = str(text).strip() if text else ""
+            return text or None
+        intro = _desc(workflow.input)
+        goal = _desc(workflow.output)
+        prefix = f"This workflow's input is: {intro}\n\n" if intro else ""
+        suffix = f"\n\nThe workflow's final deliverable should be: {goal}" if goal else ""
+        return f"{prefix}{task}{suffix}" if (prefix or suffix) else task
+
     def _walk(
-        self, workflow: Workflow, task: str, run_id: str, runs: list[NodeRun],
-        *, root_session_key: str | None = None,
+        self,
+        workflow: Workflow,
+        task: str,
+        run_id: str,
+        runs: list[NodeRun],
+        *,
+        root_session_key: str | None = None,
+        input_files: list[str] | None = None,
     ) -> WorkflowResult:
         shared_context: list[dict] = []
         visits: dict[str, int] = {}
         upstream_output: str | None = None
         upstream_artifact_dir: str | None = None
+        terminal_output_dir: str | None = None
         final_output: str | None = None
         current: str | None = workflow.start
+
+        # Seed an input folder for the start node when input_files are given and a
+        # workspace is available — the start node reads them as "previous step's files".
+        if input_files and self._workspace is not None:
+            input_folder = artifact_dir(self._workspace, run_id, "__input__", 0)
+            for path in input_files:
+                shutil.copy(path, input_folder / Path(path).name)
+            upstream_artifact_dir = str(input_folder)
 
         while current is not None:
             visits[current] = visits.get(current, 0) + 1
@@ -188,6 +235,8 @@ class WorkflowEngine:
                     # nils the chain for the next node — consistent with it also replacing
                     # the text output.
                     upstream_artifact_dir = out_dir
+                    if out_dir is not None:
+                        terminal_output_dir = out_dir
                     final_output = output
                     current = node.next
 
@@ -203,9 +252,15 @@ class WorkflowEngine:
                 current = node.next
 
             elif isinstance(node, ParallelNode):
-                merged, abort = self._run_parallel(
-                    workflow, node, task, run_id, iteration, root_session_key, upstream_output
-                )
+                if node.worker is not None:
+                    merged, abort = self._run_dynamic_parallel(
+                        workflow, node, task, run_id, iteration, root_session_key,
+                        upstream_output, runs
+                    )
+                else:
+                    merged, abort = self._run_parallel(
+                        workflow, node, task, run_id, iteration, root_session_key, upstream_output
+                    )
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=merged))
                 if abort is not None:
                     return WorkflowResult(
@@ -217,7 +272,8 @@ class WorkflowEngine:
 
 
         return WorkflowResult(
-            status="completed", final_output=final_output, runs=runs, run_id=run_id
+            status="completed", final_output=final_output, runs=runs, run_id=run_id,
+            output_dir=terminal_output_dir,
         )
 
     def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key, workspace_override, fork_dir=None):
@@ -232,6 +288,73 @@ class WorkflowEngine:
             upstream_artifact_dir=None,
         ))
 
+    @staticmethod
+    def _parse_subtasks(text: str) -> list[str]:
+        """Parse a runtime list of subtasks from a node's output text.
+
+        Tries JSON first; if the parsed value is a list, returns each element
+        coerced to str.  Falls back to non-empty lines.  Capped at 50 items
+        to bound blast radius on pathological output.
+        """
+        import json
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                items = [str(x) for x in parsed]
+                return items[:50]
+        except (json.JSONDecodeError, ValueError):
+            pass
+        # Fall back: non-empty lines
+        items = [line for line in text.splitlines() if line.strip()]
+        return items[:50]
+
+    def _run_dynamic_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs):
+        """Run a dynamic parallel node: parse a runtime list and run the worker once per item.
+
+        Returns ``(merged_output, abort_message)``.  Each worker run is appended to
+        ``runs`` so the trace shows individual worker outputs.
+        """
+        # Resolve the list source: prefer the most recent recorded output of the
+        # list_from node (it may not be the immediate predecessor); fall back to
+        # upstream_output for the common case where it is.
+        list_text: str | None = None
+        for recorded in reversed(runs):
+            if recorded.node_id == node.list_from:
+                list_text = recorded.output
+                break
+        if list_text is None:
+            list_text = upstream or ""
+
+        subtasks = self._parse_subtasks(list_text)
+        if not subtasks:
+            return "", None
+
+        worker_node = workflow.nodes[node.worker]
+        workers = max(1, min(len(subtasks), node.max_concurrency))
+
+        def _run_worker(args):
+            idx, subtask = args
+            resp = self._node_runner(NodeRunRequest(
+                node=worker_node,
+                task=subtask,
+                upstream_output=subtask,
+                shared_context=[],
+                run_id=run_id,
+                iteration=iteration,
+                root_session_key=root_key,
+                worker_index=idx,
+            ))
+            return subtask, resp.output
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(_run_worker, enumerate(subtasks)))
+
+        for _subtask, out in results:
+            runs.append(NodeRun(node_id=node.worker, iteration=iteration, output=out))
+
+        merged = "\n\n".join(f"[{i}] {out}" for i, (_s, out) in enumerate(results))
+        return merged, None
+
     def _run_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream):
         """Run a parallel node's branches concurrently and reconcile their writes.
 
@@ -242,7 +365,7 @@ class WorkflowEngine:
         file changes are reconciled back.
         """
         branches = node.branches
-        workers = max(1, len(branches))
+        workers = max(1, min(len(branches), node.max_concurrency))
 
         if node.reconcile == "read":
             def _run(bid):

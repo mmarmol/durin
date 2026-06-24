@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Background,
   Controls,
   Handle,
   Position,
   ReactFlow,
+  useEdgesState,
+  useNodesState,
   type Connection,
+  type Edge,
+  type Node,
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -18,17 +22,22 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   ApiError,
   applyWorkflowRecommendation,
+  deleteWorkflow,
   getWorkflow,
   getWorkflowRecommendations,
   listWorkflows,
+  listPersonas,
   runWorkflow,
   saveWorkflow,
+  type PersonaItem,
   type WorkflowRecommendation,
   type WorkflowRunResult,
 } from "@/lib/api";
 import {
+  safeSubflowTargets,
   workflowToFlow,
   type FlowNodeData,
+  type IODescriptor,
   type WorkflowDef,
   type WorkflowNodeDef,
 } from "@/lib/workflow-graph";
@@ -41,56 +50,82 @@ function errMsg(e: unknown): string {
 
 const KIND_RING: Record<string, string> = {
   work: "border-emerald-400/70",
-  decision: "border-amber-400/70",
   parallel: "border-violet-400/70",
-  subworkflow: "border-sky-400/70",
+  subflow: "border-sky-400/70",
 };
 
-function isRouting(node: WorkflowNodeDef): boolean {
-  return node.on_pass != null || node.on_fail != null;
-}
-
-// A routing node always presents as a decision (amber ring + "decision" badge)
-// regardless of its stored kind, so a new kind:"work"+routing node matches a
-// legacy kind:"decision" node and the pass/fail edges it draws.
-function displayKind(node: WorkflowNodeDef): string {
-  return isRouting(node) ? "decision" : node.kind;
+// Maps a stored node kind to the i18n key suffix used for display labels.
+// Both "work" and the legacy "decision" alias present as "work" to the user;
+// routing is shown only by the presence of pass/fail edges, never by a badge.
+export function kindLabelKey(kind: string): string {
+  if (kind === "decision" || kind === "work") return "work";
+  if (kind === "subworkflow") return "subflow";
+  return kind; // "parallel"
 }
 
 function nodeSummary(node: WorkflowNodeDef): string {
-  if (isRouting(node)) return node.command != null ? "command" : "judge";
-  switch (node.kind) {
-    case "work":
-      return `${(node.mode as string) ?? "build"} · ${(node.model as string) ?? "default"}`;
-    case "decision":
-      return node.criteria ? "judge" : "command";
-    case "parallel":
-      return `${((node.branches as string[]) ?? []).length} branches`;
-    case "subworkflow":
-      return String(node.workflow ?? "");
-    default:
-      return "";
-  }
+  if (node.command != null) return "command";
+  if (node.kind === "parallel") return node.worker ? "dynamic · ×N" : `${((node.branches as string[]) ?? []).length} branches`;
+  if (node.kind === "subworkflow") return String(node.workflow ?? "");
+  return `${(node.mode as string) ?? "build"} · ${(node.model as string) ?? "default"}`;
 }
 
 function NodeCard({ data, selected }: NodeProps) {
+  const { t } = useTranslation();
   const { node, isStart } = data as unknown as FlowNodeData;
-  const kind = displayKind(node);
+  const isDynamicWorker = !!(data as Record<string, unknown>).dynamicWorker;
+  const labelKey = kindLabelKey(node.kind);
   return (
     <div
       className={cn(
         "min-w-[150px] rounded-md border bg-background px-3 py-2",
-        KIND_RING[kind] ?? "border-border",
+        KIND_RING[labelKey] ?? "border-border",
         (isStart || selected) && "ring-2 ring-primary",
+        isDynamicWorker && "ring-1 ring-violet-400/60",
       )}
     >
       <Handle type="target" position={Position.Left} />
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-        {kind}{isStart ? " · start" : ""}
+      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+        <span>{t("workflows.kind." + labelKey)}{isStart ? " · " + t("workflows.start") : ""}</span>
+        {isDynamicWorker && (
+          <span className="rounded bg-violet-100 px-1 py-0.5 text-[9px] font-medium text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">
+            {t("workflows.dynamicBadge")}
+          </span>
+        )}
       </div>
       <div className="text-sm font-medium">{node.id}</div>
       <div className="text-xs text-muted-foreground">{nodeSummary(node)}</div>
       <Handle type="source" position={Position.Right} />
+    </div>
+  );
+}
+
+function ioTags(desc: IODescriptor, t: (k: string) => string): string {
+  const parts: string[] = [];
+  if (desc.text) parts.push(t("workflows.ioText"));
+  if (desc.file) parts.push(t("workflows.ioFile"));
+  return parts.length > 0 ? parts.join(" · ") : t("workflows.ioAny");
+}
+
+function IOCard({ data, selected }: NodeProps) {
+  const { t } = useTranslation();
+  const d = data as unknown as { input?: IODescriptor; output?: IODescriptor };
+  const isInput = d.input != null;
+  const desc = isInput ? d.input! : d.output!;
+  return (
+    <div
+      className={cn(
+        "flex cursor-pointer items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-medium shadow-sm",
+        isInput
+          ? "border-teal-400/70 bg-teal-50 text-teal-700 dark:bg-teal-950/40 dark:text-teal-300"
+          : "border-orange-400/70 bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300",
+        selected && "ring-2 ring-primary",
+      )}
+    >
+      {isInput ? null : <Handle type="target" position={Position.Left} />}
+      <span className="uppercase tracking-widest opacity-60">{t("workflows.kind." + (isInput ? "input" : "output"))}</span>
+      <span className="opacity-80">{ioTags(desc, t)}</span>
+      {isInput ? <Handle type="source" position={Position.Right} /> : null}
     </div>
   );
 }
@@ -100,11 +135,12 @@ const nodeTypes = {
   decision: NodeCard,
   parallel: NodeCard,
   subworkflow: NodeCard,
+  input_obj: IOCard,
+  output_obj: IOCard,
 };
 
 const MODES = ["build", "plan", "explore"];
 const CONTEXTS = ["own", "shared"];
-const TOOLS = ["none", "default"];
 const selectCls = "h-8 w-full rounded-md border border-border bg-background px-2 text-sm";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -139,10 +175,36 @@ function TargetSelect({
   );
 }
 
+// Value used in the "runs as" picker to mean the node has no persona/model override.
+const RUNS_AS_DEFAULT = "__default__";
+// Value used to indicate the user typed a specific model string.
+const RUNS_AS_MODEL = "__model__";
+// Prefix used to encode persona names in the picker value.
+const RUNS_AS_PERSONA_PREFIX = "persona:";
+
+function PromptEditorModal({ value, onChange, onClose }: { value: string; onChange: (v: string) => void; onClose: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6" onClick={onClose}>
+      <div className="flex h-full w-full max-w-3xl flex-col rounded-lg border bg-background p-4" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-sm font-medium">{t("workflows.prompt")}</span>
+          <button type="button" className="text-sm text-muted-foreground hover:text-foreground" onClick={onClose}>{t("workflows.done")}</button>
+        </div>
+        <Textarea autoFocus className="flex-1 resize-none font-mono text-sm" value={value} onChange={(e) => onChange(e.target.value)} />
+      </div>
+    </div>
+  );
+}
+
 function NodeConfigPanel({
   node,
   nodeIds,
   isStart,
+  personas,
+  allWorkflowNames,
+  currentWorkflowName,
+  token,
   onChange,
   onMakeStart,
   onDelete,
@@ -150,30 +212,96 @@ function NodeConfigPanel({
   node: WorkflowNodeDef;
   nodeIds: string[];
   isStart: boolean;
+  personas: PersonaItem[];
+  allWorkflowNames: string[];
+  currentWorkflowName: string;
+  token: string;
   onChange: (patch: Partial<WorkflowNodeDef>) => void;
   onMakeStart: () => void;
   onDelete: () => void;
 }) {
   const { t } = useTranslation();
+  const [promptModalOpen, setPromptModalOpen] = useState(false);
   const others = nodeIds.filter((id) => id !== node.id);
+
+  // Fetch subflow call-graph refs when this panel is open for a subworkflow node.
+  // Hooks must be declared unconditionally; the fetch body is gated inside the effect.
+  const [refs, setRefs] = useState<Record<string, string[]> | null>(null);
+  useEffect(() => {
+    if (node.kind !== "subworkflow") return;
+    let alive = true;
+    setRefs(null);
+    (async () => {
+      const entries = await Promise.all(
+        allWorkflowNames.map(async (n) => {
+          try {
+            const d = (await getWorkflow(token, n)) as unknown as WorkflowDef;
+            return [n, d.nodes.filter((x) => x.kind === "subworkflow").map((x) => String(x.workflow ?? ""))] as const;
+          } catch {
+            return [n, []] as const;
+          }
+        }),
+      );
+      if (alive) setRefs(Object.fromEntries(entries));
+    })();
+    return () => { alive = false; };
+  }, [node.kind, allWorkflowNames, token]);
+
   // A node routes when on_pass or on_fail is set (regardless of kind).
   const routes = node.on_pass != null || node.on_fail != null;
-  // A gate node has a command field present.
-  const hasCommand = node.command != null;
+  // body: "command" if the command field is present, else "agent"
+  const body: "agent" | "command" = node.command != null ? "command" : "agent";
+
+  // Determine the current "runs as" picker value.
+  // Persona takes precedence; if a model string is set, show model entry; else default.
+  const currentPersona = node.persona as string | undefined;
+  const currentModel = node.model as string | undefined;
+  let runsAsValue: string;
+  if (currentPersona) {
+    runsAsValue = RUNS_AS_PERSONA_PREFIX + currentPersona;
+  } else if (currentModel) {
+    runsAsValue = RUNS_AS_MODEL;
+  } else {
+    runsAsValue = RUNS_AS_DEFAULT;
+  }
+
+  function handleBodyToggle(newBody: "agent" | "command") {
+    if (newBody === "command") {
+      // Switch to command: set command to empty string, clear agent-only fields.
+      onChange({ command: "", mode: undefined, model: undefined, persona: undefined, prompt: undefined });
+    } else {
+      // Switch to agent: clear command, restore agent defaults.
+      onChange({ command: undefined, mode: "build" });
+    }
+  }
+
+  function handleRunsAsChange(val: string) {
+    if (val === RUNS_AS_DEFAULT) {
+      onChange({ model: undefined, persona: undefined });
+    } else if (val === RUNS_AS_MODEL) {
+      // Keep any existing model string, just clear persona.
+      onChange({ persona: undefined });
+    } else if (val.startsWith(RUNS_AS_PERSONA_PREFIX)) {
+      const name = val.slice(RUNS_AS_PERSONA_PREFIX.length);
+      onChange({ persona: name, model: undefined });
+    }
+  }
 
   function toggleRoutes(on: boolean) {
     if (on) {
-      onChange({ on_pass: null, on_fail: null, next: undefined });
+      onChange({ on_pass: null, on_fail: null, next: undefined, mode: "explore" });
     } else {
       onChange({ on_pass: undefined, on_fail: undefined, next: null });
     }
   }
 
+  const routingToggleId = `routing-toggle-${node.id}`;
+
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase">
-          {displayKind(node)}
+          {t("workflows.kind." + kindLabelKey(node.kind))}
         </span>
         <span className="text-sm font-medium">{node.id}</span>
         {!isStart && (
@@ -182,92 +310,376 @@ function NodeConfigPanel({
             className="ml-auto text-xs text-muted-foreground hover:text-foreground"
             onClick={onMakeStart}
           >
-            set as start
+            {t("workflows.setAsStart")}
           </button>
         )}
       </div>
 
       {(node.kind === "work" || node.kind === "decision") && (
         <>
-          {hasCommand ? (
+          {/* Body toggle: agent vs command */}
+          <Field label={t("workflows.body")}>
+            <select
+              className={selectCls}
+              value={body}
+              onChange={(e) => handleBodyToggle(e.target.value as "agent" | "command")}
+            >
+              <option value="agent">{t("workflows.bodyAgent")}</option>
+              <option value="command">{t("workflows.bodyCommand")}</option>
+            </select>
+          </Field>
+
+          {body === "command" ? (
             <Field label={t("workflows.command")}>
-              <Textarea rows={3} value={(node.command as string) ?? ""}
-                onChange={(e) => onChange({ command: e.target.value })} />
+              <Textarea
+                rows={3}
+                value={(node.command as string) ?? ""}
+                onChange={(e) => onChange({ command: e.target.value })}
+              />
             </Field>
           ) : (
             <>
-              <Field label="work mode">
-                <select className={selectCls} value={(node.mode as string) ?? "build"}
-                  onChange={(e) => onChange({ mode: e.target.value })}>
+              {/* Runs as: default model / specific model / personas */}
+              <Field label={t("workflows.runsAs")}>
+                <select
+                  className={selectCls}
+                  value={runsAsValue}
+                  onChange={(e) => handleRunsAsChange(e.target.value)}
+                >
+                  <option value={RUNS_AS_DEFAULT}>{t("workflows.runsAsDefault")}</option>
+                  <option value={RUNS_AS_MODEL}>{t("workflows.runsAsModel")}</option>
+                  {personas.length > 0 && (
+                    <optgroup label={t("workflows.runsAsPersonasGroup")}>
+                      {personas.map((p) => (
+                        <option key={p.name} value={RUNS_AS_PERSONA_PREFIX + p.name}>
+                          {p.name}
+                          {p.description ? ` — ${p.description}` : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              </Field>
+
+              {/* Show model text input only when specific model is selected */}
+              {runsAsValue === RUNS_AS_MODEL && (
+                <Field label={t("workflows.modelId")}>
+                  <Input
+                    value={currentModel ?? ""}
+                    placeholder={t("workflows.modelPlaceholder")}
+                    onChange={(e) => onChange({ model: e.target.value || undefined })}
+                  />
+                </Field>
+              )}
+
+              <Field label={t("workflows.mode")}>
+                <select
+                  className={selectCls}
+                  value={(node.mode as string) ?? "build"}
+                  onChange={(e) => onChange({ mode: e.target.value })}
+                >
                   {MODES.map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
               </Field>
-              <Field label="model">
-                <Input value={(node.model as string) ?? ""} placeholder="default"
-                  onChange={(e) => onChange({ model: e.target.value || undefined })} />
-              </Field>
-              <Field label="context">
-                <select className={selectCls} value={(node.context as string) ?? "own"}
-                  onChange={(e) => onChange({ context: e.target.value })}>
+
+              <Field label={t("workflows.context")}>
+                <select
+                  className={selectCls}
+                  value={(node.context as string) ?? "own"}
+                  onChange={(e) => onChange({ context: e.target.value })}
+                >
                   {CONTEXTS.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </Field>
-              <Field label="tools">
-                <select className={selectCls} value={(node.tools as string) ?? "none"}
-                  onChange={(e) => onChange({ tools: e.target.value })}>
-                  {TOOLS.map((tl) => <option key={tl} value={tl}>{tl}</option>)}
-                </select>
-              </Field>
-              <Field label="prompt">
-                <Textarea rows={5} value={(node.prompt as string) ?? ""}
-                  onChange={(e) => onChange({ prompt: e.target.value })} />
-              </Field>
+
+              <div className="flex-1 min-h-0 flex flex-col gap-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">{t("workflows.prompt")}</span>
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => setPromptModalOpen(true)}
+                  >
+                    {t("workflows.expand")}
+                  </button>
+                </div>
+                <Textarea
+                  className="flex-1 resize-none"
+                  value={(node.prompt as string) ?? ""}
+                  onChange={(e) => onChange({ prompt: e.target.value })}
+                />
+              </div>
+              {promptModalOpen && (
+                <PromptEditorModal
+                  value={(node.prompt as string) ?? ""}
+                  onChange={(v) => onChange({ prompt: v })}
+                  onClose={() => setPromptModalOpen(false)}
+                />
+              )}
             </>
           )}
 
-          {/* Routing toggle: when on, show on_pass/on_fail; when off, show next */}
-          <label className="flex items-center gap-2 text-xs">
+          {/* Routing toggle — use explicit id/htmlFor to avoid any label nesting issue,
+              and a div wrapper so no outer label can capture the click. */}
+          <div className="flex items-center gap-2">
             <input
+              id={routingToggleId}
               type="checkbox"
+              className="h-4 w-4 cursor-pointer accent-primary"
               checked={routes}
               onChange={(e) => toggleRoutes(e.target.checked)}
             />
-            <span className="text-muted-foreground">{t("workflows.routes")}</span>
-          </label>
+            <label
+              htmlFor={routingToggleId}
+              className="cursor-pointer select-none text-xs text-muted-foreground"
+            >
+              {t("workflows.routes")}
+            </label>
+          </div>
 
           {routes ? (
             <>
               <Field label={t("workflows.onPass")}>
-                <TargetSelect value={node.on_pass as string | null} options={others}
-                  onChange={(v) => onChange({ on_pass: v })} />
+                <TargetSelect
+                  value={node.on_pass as string | null}
+                  options={others}
+                  onChange={(v) => onChange({ on_pass: v })}
+                />
               </Field>
               <Field label={t("workflows.onFail")}>
-                <TargetSelect value={node.on_fail as string | null} options={others}
-                  onChange={(v) => onChange({ on_fail: v })} />
+                <TargetSelect
+                  value={node.on_fail as string | null}
+                  options={others}
+                  onChange={(v) => onChange({ on_fail: v })}
+                />
               </Field>
             </>
           ) : (
-            <Field label="next">
-              <TargetSelect value={node.next as string} options={others}
-                onChange={(v) => onChange({ next: v })} />
+            <Field label={t("workflows.next")}>
+              <TargetSelect
+                value={node.next as string}
+                options={others}
+                onChange={(v) => onChange({ next: v })}
+              />
             </Field>
           )}
         </>
       )}
 
-      {(node.kind === "parallel" || node.kind === "subworkflow") && (
-        <Field label="next">
-          <TargetSelect value={node.next as string} options={others}
-            onChange={(v) => onChange({ next: v })} />
-        </Field>
-      )}
+      {node.kind === "parallel" && (() => {
+        const isDynamic = typeof node.worker === "string" && node.worker !== "";
+        const parallelMode = isDynamic ? "dynamic" : "static";
+
+        function handleParallelModeChange(mode: "static" | "dynamic") {
+          if (mode === "dynamic") {
+            onChange({ worker: null, list_from: null, branches: undefined });
+          } else {
+            onChange({ branches: [], worker: undefined, list_from: undefined });
+          }
+        }
+
+        const branchList: string[] = Array.isArray(node.branches) ? (node.branches as string[]) : [];
+
+        function toggleBranch(id: string, checked: boolean) {
+          const next = checked
+            ? [...new Set([...branchList, id])]
+            : branchList.filter((b) => b !== id);
+          onChange({ branches: next });
+        }
+
+        return (
+          <>
+            {/* Mode toggle */}
+            <Field label={t("workflows.parallelMode")}>
+              <select
+                className={selectCls}
+                value={parallelMode}
+                onChange={(e) => handleParallelModeChange(e.target.value as "static" | "dynamic")}
+              >
+                <option value="static">{t("workflows.parallelStatic")}</option>
+                <option value="dynamic">{t("workflows.parallelDynamic")}</option>
+              </select>
+            </Field>
+
+            {parallelMode === "static" ? (
+              <Field label={t("workflows.parallelBranches")}>
+                <div className="flex flex-col gap-1">
+                  {others.length === 0 ? (
+                    <span className="text-xs text-muted-foreground">(no other nodes)</span>
+                  ) : (
+                    others.map((id) => (
+                      <label key={id} className="flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          className="h-3.5 w-3.5 cursor-pointer accent-primary"
+                          checked={branchList.includes(id)}
+                          onChange={(e) => toggleBranch(id, e.target.checked)}
+                        />
+                        {id}
+                      </label>
+                    ))
+                  )}
+                </div>
+              </Field>
+            ) : (
+              <>
+                <Field label={t("workflows.parallelWorker")}>
+                  <TargetSelect
+                    value={node.worker as string | null}
+                    options={others}
+                    onChange={(v) => onChange({ worker: v })}
+                  />
+                </Field>
+                <Field label={t("workflows.parallelListFrom")}>
+                  <TargetSelect
+                    value={node.list_from as string | null}
+                    options={others}
+                    onChange={(v) => onChange({ list_from: v })}
+                  />
+                </Field>
+              </>
+            )}
+
+            {(parallelMode === "static"
+              ? branchList.length === 0
+              : !(node.worker && node.list_from)) && (
+              <span className="text-xs text-amber-600">
+                {parallelMode === "static"
+                  ? t("workflows.parallelNeedBranch")
+                  : t("workflows.parallelNeedWorkerList")}
+              </span>
+            )}
+
+            {/* Common: max_concurrency, next (merge), reconcile */}
+            <Field label={t("workflows.parallelMaxConcurrency")}>
+              <Input
+                type="number"
+                min={1}
+                value={(node.max_concurrency as number) ?? 2}
+                onChange={(e) => onChange({ max_concurrency: Math.max(1, parseInt(e.target.value, 10) || 2) })}
+                className="h-8"
+              />
+            </Field>
+
+            <Field label={t("workflows.next")}>
+              <TargetSelect
+                value={node.next as string | null}
+                options={others}
+                onChange={(v) => onChange({ next: v })}
+              />
+            </Field>
+
+            {parallelMode === "static" && (
+              <Field label={t("workflows.parallelReconcile")}>
+                <select
+                  className={selectCls}
+                  value={(node.reconcile as string) ?? "read"}
+                  onChange={(e) => onChange({ reconcile: e.target.value as "read" | "union" })}
+                >
+                  <option value="read">read</option>
+                  <option value="union">union</option>
+                </select>
+              </Field>
+            )}
+          </>
+        );
+      })()}
+
+      {node.kind === "subworkflow" && (() => {
+        const safeTargets = refs ? safeSubflowTargets(currentWorkflowName, refs) : [];
+        return (
+          <>
+            <Field label={t("workflows.subflowTarget")}>
+              <select
+                className={selectCls}
+                value={(node.workflow as string) ?? ""}
+                disabled={refs === null}
+                onChange={(e) => onChange({ workflow: e.target.value })}
+              >
+                <option value="">(none)</option>
+                {safeTargets.map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label={t("workflows.next")}>
+              <TargetSelect
+                value={node.next as string}
+                options={others}
+                onChange={(v) => onChange({ next: v })}
+              />
+            </Field>
+          </>
+        );
+      })()}
 
       <button
         type="button"
         className="mt-1 flex items-center gap-1.5 self-start text-xs text-destructive hover:underline"
         onClick={onDelete}
       >
-        <Trash2 className="h-3.5 w-3.5" /> delete node
+        <Trash2 className="h-3.5 w-3.5" /> {t("workflows.deleteNode")}
+      </button>
+    </div>
+  );
+}
+
+// Config panel for an INPUT/OUTPUT canvas object: toggles whether the workflow accepts
+// (input) or produces (output) text and/or files. Editing patches def.input / def.output.
+function IOConfigPanel({
+  which,
+  desc,
+  onChange,
+  onRemove,
+}: {
+  which: "input" | "output";
+  desc: IODescriptor;
+  onChange: (patch: IODescriptor) => void;
+  onRemove: () => void;
+}) {
+  const { t } = useTranslation();
+  const title = which === "input" ? t("workflows.ioInputTitle") : t("workflows.ioOutputTitle");
+  const hint = which === "input" ? t("workflows.ioInputHint") : t("workflows.ioOutputHint");
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase">{t("workflows.kind." + which)}</span>
+        <span className="text-sm font-medium">{title}</span>
+      </div>
+      <p className="text-xs text-muted-foreground">{hint}</p>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="h-4 w-4 cursor-pointer accent-primary"
+          checked={!!desc.text}
+          onChange={(e) => onChange({ ...desc, text: e.target.checked })}
+        />
+        {t("workflows.ioText")}
+      </label>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="h-4 w-4 cursor-pointer accent-primary"
+          checked={!!desc.file}
+          onChange={(e) => onChange({ ...desc, file: e.target.checked })}
+        />
+        {t("workflows.ioFile")}
+      </label>
+      <div className="flex-1 min-h-0 flex flex-col gap-1">
+        <span className="text-xs text-muted-foreground">{t("workflows.ioDescription")}</span>
+        <Textarea
+          className="flex-1 resize-none"
+          value={desc.description ?? ""}
+          placeholder={t("workflows.ioDescriptionPlaceholder")}
+          onChange={(e) => onChange({ ...desc, description: e.target.value || undefined })}
+        />
+      </div>
+      <button
+        type="button"
+        className="mt-1 flex items-center gap-1.5 self-start text-xs text-destructive hover:underline"
+        onClick={onRemove}
+      >
+        <Trash2 className="h-3.5 w-3.5" /> {t("workflows.removeIo")}
       </button>
     </div>
   );
@@ -293,6 +705,10 @@ export function WorkflowsView() {
   const [runResult, setRunResult] = useState<WorkflowRunResult | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  const [personas, setPersonas] = useState<PersonaItem[]>([]);
+  const [inputPaths, setInputPaths] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [runnerOpen, setRunnerOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -306,6 +722,10 @@ export function WorkflowsView() {
         setLoading(false);
       }
     })();
+  }, [token]);
+
+  useEffect(() => {
+    listPersonas(token).then((r) => setPersonas(r.personas)).catch(() => setPersonas([]));
   }, [token]);
 
   useEffect(() => {
@@ -326,10 +746,17 @@ export function WorkflowsView() {
     })();
   }, [selected, token]);
 
-  const flow = useMemo(
-    () => (def ? workflowToFlow(def) : { nodes: [], edges: [] }),
-    [def],
-  );
+  // React Flow owns node/edge state so a node follows the cursor during a drag
+  // (via onNodesChange). The state is seeded from the def whenever the graph changes;
+  // a drag's drop is persisted to def.ui.positions in onNodeDragStop, which re-seeds
+  // here with the stored position so the node stays put.
+  const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node>([]);
+  const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  useEffect(() => {
+    const f = def ? workflowToFlow(def) : { nodes: [], edges: [] };
+    setRfNodes(f.nodes);
+    setRfEdges(f.edges);
+  }, [def, setRfNodes, setRfEdges]);
 
   const mutate = useCallback((fn: (d: WorkflowDef) => WorkflowDef) => {
     setDef((d) => (d ? fn(d) : d));
@@ -348,27 +775,52 @@ export function WorkflowsView() {
     [selectedNodeId, mutate],
   );
 
-  const addNode = useCallback(
-    (preset: "work" | "decision" | "gate") => {
-      const id = `${preset}-${++_idSeq}`;
-      let node: WorkflowNodeDef;
-      if (preset === "work") {
-        node = { id, kind: "work", mode: "build", prompt: "", next: null };
-      } else if (preset === "decision") {
-        node = {
-          id,
-          kind: "work",
-          mode: "explore",
-          prompt: "Evaluate the previous output. End your reply with PASS or FAIL.",
-          on_pass: null,
-          on_fail: null,
-        };
-      } else {
-        // gate: command body that routes
-        node = { id, kind: "work", command: "", on_pass: null, on_fail: null };
-      }
-      mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
-      setSelectedNodeId(id);
+  const addNode = useCallback(() => {
+    const id = `node-${++_idSeq}`;
+    const node: WorkflowNodeDef = { id, kind: "work", mode: "build", prompt: "", next: null };
+    mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
+    setSelectedNodeId(id);
+  }, [mutate]);
+
+  const addParallelNode = useCallback(() => {
+    const id = `parallel-${++_idSeq}`;
+    const node: WorkflowNodeDef = { id, kind: "parallel", reconcile: "read", max_concurrency: 2, branches: [], next: null };
+    mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
+    setSelectedNodeId(id);
+  }, [mutate]);
+
+  const addSubflowNode = useCallback(() => {
+    const id = `subflow-${++_idSeq}`;
+    const node: WorkflowNodeDef = { id, kind: "subworkflow", workflow: "", next: null };
+    mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
+    setSelectedNodeId(id);
+  }, [mutate]);
+
+  // Add / edit / remove the workflow's INPUT or OUTPUT descriptor. Adding defaults to
+  // text and selects the new canvas object so the config panel opens for refinement.
+  const addIo = useCallback(
+    (which: "input" | "output") => {
+      mutate((d) => ({ ...d, [which]: d[which] ?? { text: true } }));
+      setSelectedNodeId(which === "input" ? "__input__" : "__output__");
+    },
+    [mutate],
+  );
+
+  const setIo = useCallback(
+    (which: "input" | "output", patch: IODescriptor) => {
+      mutate((d) => ({ ...d, [which]: patch }));
+    },
+    [mutate],
+  );
+
+  const removeIo = useCallback(
+    (which: "input" | "output") => {
+      mutate((d) => {
+        const next = { ...d };
+        delete next[which];
+        return next;
+      });
+      setSelectedNodeId(null);
     },
     [mutate],
   );
@@ -400,6 +852,21 @@ export function WorkflowsView() {
       setSaving(false);
     }
   }, [newName, names, token, t]);
+
+  const onDeleteWorkflow = useCallback(
+    async (name: string) => {
+      setError(null);
+      try {
+        await deleteWorkflow(token, name);
+        setNames((ns) => ns.filter((x) => x !== name));
+        setConfirmDelete(null);
+        if (selected === name) setSelected(null);
+      } catch (e) {
+        setError(errMsg(e));
+      }
+    },
+    [token, selected],
+  );
 
   const deleteNode = useCallback(
     (id: string) => {
@@ -436,6 +903,10 @@ export function WorkflowsView() {
             return n.on_pass ? { ...n, on_fail: c.target } : { ...n, on_pass: c.target };
           }
           if (n.kind === "parallel") {
+            // A DYNAMIC parallel (worker set) must keep branches empty — wiring is
+            // panel-only (worker/list_from). Dragging an edge would contaminate it
+            // and the backend would reject branches+worker together.
+            if (typeof n.worker === "string" && n.worker !== "") return n;
             const b = Array.isArray(n.branches) ? n.branches : [];
             return { ...n, branches: [...new Set([...b, c.target!])] };
           }
@@ -476,13 +947,14 @@ export function WorkflowsView() {
     setError(null);
     setRunResult(null);
     try {
-      setRunResult(await runWorkflow(token, selected, task));
+      const files = inputPaths.split("\n").map((s) => s.trim()).filter(Boolean);
+      setRunResult(await runWorkflow(token, selected, task, files));
     } catch (e) {
       setError(errMsg(e));
     } finally {
       setRunning(false);
     }
-  }, [selected, task, token]);
+  }, [selected, task, token, inputPaths]);
 
   const onApplyRec = useCallback(
     async (id: string) => {
@@ -501,6 +973,8 @@ export function WorkflowsView() {
 
   const nodeIds = def?.nodes.map((n) => n.id) ?? [];
   const selectedNode = def?.nodes.find((n) => n.id === selectedNodeId) ?? null;
+  const selectedIo: "input" | "output" | null =
+    selectedNodeId === "__input__" ? "input" : selectedNodeId === "__output__" ? "output" : null;
 
   return (
     <div className="flex h-full w-full">
@@ -549,13 +1023,52 @@ export function WorkflowsView() {
           <div className="p-2 text-sm text-muted-foreground">{t("workflows.empty")}</div>
         ) : (
           names.map((n) => (
-            <button key={n} type="button" onClick={() => setSelected(n)}
+            <div
+              key={n}
               className={cn(
-                "block w-full truncate rounded px-2 py-1 text-left text-sm hover:bg-accent",
-                selected === n && "bg-accent font-medium",
-              )}>
-              {n}
-            </button>
+                "group flex items-center gap-1 rounded pr-1 hover:bg-accent",
+                selected === n && "bg-accent",
+              )}
+            >
+              <button
+                type="button"
+                onClick={() => setSelected(n)}
+                className={cn(
+                  "min-w-0 flex-1 truncate px-2 py-1 text-left text-sm",
+                  selected === n && "font-medium",
+                )}
+              >
+                {n}
+              </button>
+              {confirmDelete === n ? (
+                <span className="flex shrink-0 items-center gap-1 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => onDeleteWorkflow(n)}
+                    className="rounded px-1 py-0.5 text-destructive hover:underline"
+                  >
+                    {t("workflows.confirmDelete")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(null)}
+                    className="rounded px-1 py-0.5 text-muted-foreground hover:underline"
+                  >
+                    {t("workflows.cancel")}
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(n)}
+                  title={t("workflows.deleteWorkflow")}
+                  aria-label={t("workflows.deleteWorkflow")}
+                  className="shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
           ))
         )}
       </aside>
@@ -580,15 +1093,25 @@ export function WorkflowsView() {
           <div className="relative flex-1">
             {def && (
               <div className="absolute left-2 top-2 z-10 flex items-center gap-2">
-                <Button size="sm" variant="outline" onClick={() => addNode("work")}>
-                  <Plus className="h-3.5 w-3.5" /> {t("workflows.presetWork")}
+                <Button size="sm" variant="outline" onClick={addNode}>
+                  <Plus className="h-3.5 w-3.5" /> {t("workflows.addWork")}
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => addNode("decision")}>
-                  <Plus className="h-3.5 w-3.5" /> {t("workflows.presetDecision")}
+                <Button size="sm" variant="outline" onClick={addParallelNode}>
+                  <Plus className="h-3.5 w-3.5" /> {t("workflows.addParallel")}
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => addNode("gate")}>
-                  <Plus className="h-3.5 w-3.5" /> {t("workflows.presetGate")}
+                <Button size="sm" variant="outline" onClick={addSubflowNode}>
+                  <Plus className="h-3.5 w-3.5" /> {t("workflows.addSubflow")}
                 </Button>
+                {!def.input && (
+                  <Button size="sm" variant="outline" onClick={() => addIo("input")}>
+                    <Plus className="h-3.5 w-3.5" /> {t("workflows.addInput")}
+                  </Button>
+                )}
+                {!def.output && (
+                  <Button size="sm" variant="outline" onClick={() => addIo("output")}>
+                    <Plus className="h-3.5 w-3.5" /> {t("workflows.addOutput")}
+                  </Button>
+                )}
                 {dirty && (
                   <Button size="sm" onClick={onSave} disabled={saving}>
                     {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("workflows.save")}
@@ -600,14 +1123,27 @@ export function WorkflowsView() {
             )}
             {def ? (
               <ReactFlow
-                nodes={flow.nodes}
-                edges={flow.edges}
+                nodes={rfNodes}
+                edges={rfEdges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
                 nodeTypes={nodeTypes}
                 fitView
-                nodesDraggable={false}
                 onConnect={onConnect}
                 onNodeClick={(_, node) => setSelectedNodeId(node.id)}
                 onPaneClick={() => setSelectedNodeId(null)}
+                onNodeDragStop={(_, node) =>
+                  mutate((d) => ({
+                    ...d,
+                    ui: {
+                      ...d.ui,
+                      positions: {
+                        ...d.ui?.positions,
+                        [node.id]: { x: Math.round(node.position.x), y: Math.round(node.position.y) },
+                      },
+                    },
+                  }))
+                }
                 proOptions={{ hideAttribution: true }}
               >
                 <Background />
@@ -622,48 +1158,97 @@ export function WorkflowsView() {
             )}
           </div>
           {def && (
-            <div className="border-t p-2">
-              <div className="flex items-center gap-2">
-                <Input
-                  value={task}
-                  onChange={(e) => setTask(e.target.value)}
-                  placeholder={t("workflows.taskPlaceholder")}
-                  className="flex-1"
-                />
-                <Button size="sm" onClick={onRun} disabled={running || !task.trim()}>
-                  {running ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <>
-                      <Play className="h-3.5 w-3.5" /> {t("workflows.run")}
-                    </>
+            <div className="border-t">
+              {!runnerOpen ? (
+                <button
+                  type="button"
+                  className="w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent"
+                  onClick={() => setRunnerOpen(true)}
+                >
+                  ▸ {t("workflows.testTitle")}
+                </button>
+              ) : (
+                <div className="p-2">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      {t("workflows.testTitle")}
+                    </span>
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground hover:text-foreground"
+                      onClick={() => setRunnerOpen(false)}
+                    >
+                      ▾ {t("workflows.collapse")}
+                    </button>
+                  </div>
+                  {def.input?.description && (
+                    <div className="mb-2 text-xs text-muted-foreground">
+                      {t("workflows.expectsLabel")}: {def.input.description}
+                    </div>
                   )}
-                </Button>
-              </div>
-              {runResult && (
-                <div className="mt-2 max-h-48 overflow-y-auto rounded border p-2 text-xs">
-                  <div className="mb-1 font-medium">
-                    {t("workflows.status")}: {runResult.status}
-                  </div>
-                  <div className="mb-1 flex flex-wrap gap-1">
-                    {runResult.runs.map((r, i) => (
-                      <span
-                        key={i}
-                        className={cn(
-                          "rounded px-1.5 py-0.5",
-                          r.passed === false
-                            ? "bg-destructive/10 text-destructive"
-                            : "bg-muted",
-                        )}
-                      >
-                        {r.node_id}#{r.iteration}
-                        {r.passed === true ? " ✓" : r.passed === false ? " ✗" : ""}
+                  {def.input?.file && (
+                    <div className="mb-2 flex flex-col gap-1">
+                      <span className="text-xs text-muted-foreground">
+                        {t("workflows.inputFilesLabel")}
                       </span>
-                    ))}
+                      <Textarea
+                        rows={2}
+                        value={inputPaths}
+                        onChange={(e) => setInputPaths(e.target.value)}
+                        placeholder={t("workflows.inputFilesPlaceholder")}
+                        className="font-mono text-xs"
+                      />
+                    </div>
+                  )}
+                  <div className="flex items-start gap-2">
+                    <Textarea
+                      rows={3}
+                      value={task}
+                      onChange={(e) => setTask(e.target.value)}
+                      placeholder={t("workflows.taskPlaceholder")}
+                      className="flex-1 resize-y"
+                    />
+                    <Button size="sm" onClick={onRun} disabled={running || !task.trim()} className="shrink-0">
+                      {running ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Play className="h-3.5 w-3.5" /> {t("workflows.run")}
+                        </>
+                      )}
+                    </Button>
                   </div>
-                  <div className="whitespace-pre-wrap text-muted-foreground">
-                    {runResult.final_output}
-                  </div>
+                  {runResult && (
+                    <div className="mt-2 max-h-72 overflow-y-auto rounded border p-2 text-xs">
+                      <div className="mb-1 font-medium">
+                        {t("workflows.status")}: {runResult.status}
+                      </div>
+                      <div className="mb-1 flex flex-wrap gap-1">
+                        {runResult.runs.map((r, i) => (
+                          <span
+                            key={i}
+                            className={cn(
+                              "rounded px-1.5 py-0.5",
+                              r.passed === false
+                                ? "bg-destructive/10 text-destructive"
+                                : "bg-muted",
+                            )}
+                          >
+                            {r.node_id}#{r.iteration}
+                            {r.passed === true ? " ✓" : r.passed === false ? " ✗" : ""}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="whitespace-pre-wrap text-muted-foreground">
+                        {runResult.final_output}
+                      </div>
+                      {runResult.output_dir && (
+                        <div className="mt-1 font-mono text-[11px] text-muted-foreground">
+                          {t("workflows.outputDir")}: {runResult.output_dir}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -671,14 +1256,29 @@ export function WorkflowsView() {
         </div>
 
         {selectedNode && (
-          <aside className="w-72 shrink-0 overflow-y-auto border-l p-3">
+          <aside className="w-96 shrink-0 flex flex-col h-full border-l p-3 overflow-y-auto">
             <NodeConfigPanel
               node={selectedNode}
               nodeIds={nodeIds}
               isStart={def?.start === selectedNode.id}
+              personas={personas}
+              allWorkflowNames={names}
+              currentWorkflowName={selected ?? ""}
+              token={token}
               onChange={updateNode}
               onMakeStart={() => mutate((d) => ({ ...d, start: selectedNode.id }))}
               onDelete={() => deleteNode(selectedNode.id)}
+            />
+          </aside>
+        )}
+
+        {selectedIo && def && (
+          <aside className="w-96 shrink-0 flex flex-col h-full border-l p-3 overflow-y-auto">
+            <IOConfigPanel
+              which={selectedIo}
+              desc={(selectedIo === "input" ? def.input : def.output) ?? {}}
+              onChange={(patch) => setIo(selectedIo, patch)}
+              onRemove={() => removeIo(selectedIo)}
             />
           </aside>
         )}
