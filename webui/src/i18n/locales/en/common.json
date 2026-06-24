@@ -1377,6 +1377,21 @@
   "list": {
     "scrollToBottom": "Scroll to bottom"
   },
+  "dream": {
+    "title": "Dream",
+    "lastRun": "last run {{time}}",
+    "runNow": "Run now",
+    "loading": "Loading…",
+    "empty": "No dream activity yet.",
+    "view": "View",
+    "kind": {
+      "merged": "merged",
+      "created": "created",
+      "improved": "improved",
+      "quarantined": "quarantined",
+      "flagged": "flagged"
+    }
+  },
   "audio": {
     "downloadingModel": "Downloading model (one-time)…",
     "loadingModel": "Loading model…",

@@ -1301,6 +1301,21 @@
     "transcriptPrefix": "transcripción",
     "processing": "Procesando…"
   },
+  "dream": {
+    "title": "Dream",
+    "lastRun": "última ejecución {{time}}",
+    "runNow": "Correr ahora",
+    "loading": "Cargando…",
+    "empty": "Aún no hay actividad de dream.",
+    "view": "Ver",
+    "kind": {
+      "merged": "fusionado",
+      "created": "creado",
+      "improved": "mejorado",
+      "quarantined": "en cuarentena",
+      "flagged": "marcado"
+    }
+  },
   "workflows": {
     "title": "Workflows",
     "loading": "Cargando…",
