@@ -169,6 +169,7 @@ class CronService:
                             mode=j["payload"].get("mode", "reminder"),
                             message=j["payload"].get("message", ""),
                             model=j["payload"].get("model"),
+                            persona=j["payload"].get("persona"),
                             deliver=j["payload"].get("deliver", False),
                             channel=j["payload"].get("channel"),
                             to=j["payload"].get("to"),
@@ -192,6 +193,7 @@ class CronService:
                                     error=r.get("error"),
                                     session_key=r.get("sessionKey"),
                                     model=r.get("model"),
+                                    persona=r.get("persona"),
                                     summary=r.get("summary"),
                                 )
                                 for r in j.get("state", {}).get("runHistory", [])
@@ -312,6 +314,7 @@ class CronService:
                         "mode": j.payload.mode,
                         "message": j.payload.message,
                         "model": j.payload.model,
+                        "persona": j.payload.persona,
                         "deliver": j.payload.deliver,
                         "channel": j.payload.channel,
                         "to": j.payload.to,
@@ -627,6 +630,7 @@ class CronService:
                 error=job.state.last_error,
                 session_key=job.payload.session_key if job.payload.kind == "agent_turn" else None,
                 model=job.payload.model,
+                persona=job.payload.persona,
             ))
             job.state.run_history = job.state.run_history[-self._run_history_max:]
 
@@ -671,6 +675,7 @@ class CronService:
         session_key: str | None = None,
         mode: str = "reminder",
         model: str | None = None,
+        persona: str | None = None,
     ) -> CronJob:
         """Add a new job."""
         _validate_schedule_for_add(schedule)
@@ -686,6 +691,7 @@ class CronService:
                 mode=mode,
                 message=message,
                 model=model,
+                persona=persona,
                 deliver=deliver,
                 channel=channel,
                 to=to,
@@ -835,10 +841,11 @@ class CronService:
         delete_after_run: bool | None = None,
         mode: str | None = None,
         model: str | None = ...,
+        persona: str | None = ...,
     ) -> CronJob | Literal["not_found", "protected"]:
         """Update mutable fields of an existing job. System jobs cannot be updated.
 
-        For ``channel``, ``to``, and ``model``, pass an explicit value (including
+        For ``channel``, ``to``, ``model``, and ``persona``, pass an explicit value (including
         ``None``) to update; omit (sentinel ``...``) to leave unchanged.
         """
         with self._lock:
@@ -868,6 +875,8 @@ class CronService:
                 job.payload.mode = mode
             if model is not ...:
                 job.payload.model = model
+            if persona is not ...:
+                job.payload.persona = persona
 
             job.updated_at_ms = _now_ms()
             if job.enabled:

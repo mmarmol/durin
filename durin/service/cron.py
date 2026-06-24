@@ -75,6 +75,7 @@ def _job_to_dict(job: Any, *, cron_scheduler: Any | None = None) -> dict[str, An
         "message": "" if is_system else job.payload.message,
         "mode": job.payload.mode,
         "model": job.payload.model,
+        "persona": job.payload.persona,
         "channel": job.payload.channel or "",
         "state": {
             "next_run_at_ms": job.state.next_run_at_ms,
@@ -94,6 +95,7 @@ def _job_to_dict(job: Any, *, cron_scheduler: Any | None = None) -> dict[str, An
                 "error": r.error,
                 "session_key": r.session_key,
                 "model": r.model,
+                "persona": r.persona,
                 "summary": r.summary,
             }
             for r in job.state.run_history
@@ -178,6 +180,7 @@ class CronRunRecordResult(Result):
     error: str | None = None
     session_key: str | None = None
     model: str | None = None
+    persona: str | None = None
     summary: str | None = None
 
 
@@ -190,6 +193,7 @@ class CronJobItem(Result):
     message: str
     mode: str
     model: str | None = None
+    persona: str | None = None
     channel: str
     state: CronJobStateResult
     run_history: list[CronRunRecordResult] = []
@@ -232,6 +236,7 @@ class CronAddCommand(Command):
     message: str
     mode: str = "reminder"
     model: str | None = None
+    persona: str | None = None
     schedule_kind: str
     expr: str | None = None
     every_ms: int | None = None
@@ -248,6 +253,7 @@ class CronUpdateCommand(Command):
     message: str | None = None
     mode: str | None = None
     model: str | None = None
+    persona: str | None = None
     schedule_kind: str | None = None
     expr: str | None = None
     every_ms: int | None = None
@@ -389,6 +395,7 @@ class CronService:
             to=cmd.to,
             mode=cmd.mode,
             model=cmd.model,
+            persona=cmd.persona,
         )
         return CronAddResult(
             job=CronJobItem(**_job_to_dict(job, cron_scheduler=self._cron_scheduler))
@@ -414,6 +421,7 @@ class CronService:
             deliver=cmd.deliver,
             mode=cmd.mode,
             model=(cmd.model if cmd.model is not None else ...),
+            persona=(cmd.persona if cmd.persona is not None else ...),
             channel=(cmd.channel if cmd.channel is not None else ...),
             to=(cmd.to if cmd.to is not None else ...),
         )

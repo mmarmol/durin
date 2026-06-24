@@ -1545,6 +1545,11 @@ export interface components {
             model: string | null;
             /** Name */
             name: string;
+            /**
+             * Persona
+             * @default null
+             */
+            persona: string | null;
             /** Schedule Kind */
             schedule_kind: string;
             /**
@@ -1585,6 +1590,11 @@ export interface components {
             model: string | null;
             /** Name */
             name: string;
+            /**
+             * Persona
+             * @default null
+             */
+            persona: string | null;
             /**
              * Run History
              * @default []
@@ -1662,6 +1672,11 @@ export interface components {
              * @default null
              */
             model: string | null;
+            /**
+             * Persona
+             * @default null
+             */
+            persona: string | null;
             /** Run At Ms */
             run_at_ms: number;
             /**
@@ -1747,6 +1762,11 @@ export interface components {
              * @default null
              */
             name: string | null;
+            /**
+             * Persona
+             * @default null
+             */
+            persona: string | null;
             /**
              * Schedule Kind
              * @default null
