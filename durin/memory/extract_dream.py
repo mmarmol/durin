@@ -157,6 +157,17 @@ Rules:
   - "ref": "<type>:<slug>" — lowercase ascii slug; type one of
     person/place/project/topic/organization/event/artifact/stance/practice
   - "name": the display name
+  - "aliases": optional array of OTHER names/spellings for this entity that appear
+    in the turns (e.g. the conversation used both "Torrent" and "Torrente"). Do
+    not invent names that are not present.
+  - "relations": optional array of {"to": "<type>:<slug>", "type": "<relation>"}
+    linking this entity to ANOTHER entity mentioned in the turns
+    (e.g. {"to": "place:valencia", "type": "located_in"}).
+  - "significance": optional ONE sentence on WHY this entity matters to the user /
+    their relationship to it (e.g. "a place the user tracks the weather for").
+    Omit it unless the turns state such a reason. Do NOT restate the attributes.
+  - "turn": the turn number (the [turn-N] tag) where this entity's durable fact
+    appears.
   - "attributes": a JSON object of scalar or short-list values — NO prose, NO nested objects
 - Output ONLY a JSON array of these objects. If nothing durable is stated, output [].
 
@@ -175,7 +186,9 @@ def parse_discoveries(raw: str) -> list[dict[str, Any]]:
 
     Each item needs a well-formed ``ref`` (``<type>:<slug>``) and a non-empty
     ``name``; ``attributes`` are filtered through :func:`parse_attributes`
-    (scalars / lists of scalars only). Malformed items are dropped, not raised.
+    (scalars / lists of scalars only). Optional fields ``aliases``, ``relations``,
+    ``significance``, and ``turn`` are included with malformed sub-values dropped.
+    Malformed items are dropped, not raised.
     """
     s = raw.strip()
     m = re.search(r"```(?:json)?\s*(.*?)```", s, re.DOTALL)
@@ -200,7 +213,21 @@ def parse_discoveries(raw: str) -> list[dict[str, Any]]:
             parse_attributes(json.dumps(attrs_raw))
             if isinstance(attrs_raw, dict) else {}
         )
-        out.append({"ref": ref, "name": name, "attributes": attrs})
+        aliases = [a.strip() for a in (item.get("aliases") or [])
+                   if isinstance(a, str) and a.strip()]
+        relations = [
+            {"to": r["to"].strip(), "type": str(r.get("type") or "").strip()}
+            for r in (item.get("relations") or [])
+            if isinstance(r, dict) and isinstance(r.get("to"), str)
+            and ":" in r.get("to", "") and str(r.get("type") or "").strip()
+        ]
+        sig_raw = item.get("significance")
+        significance = sig_raw.strip() if isinstance(sig_raw, str) and sig_raw.strip() else None
+        turn_raw = item.get("turn")
+        turn = turn_raw if isinstance(turn_raw, int) and turn_raw > 0 else None
+        out.append({"ref": ref, "name": name, "attributes": attrs,
+                    "aliases": aliases, "relations": relations,
+                    "significance": significance, "turn": turn})
     return out
 
 

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from durin.memory.entity_page import EntityPage
-from durin.memory.extract_dream import extract_entity, parse_attributes
+from durin.memory.extract_dream import extract_entity, parse_attributes, parse_discoveries
 from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import write_entity
 
@@ -71,3 +71,28 @@ def test_extract_empty_output_is_noop(tmp_path):
                              source_ref="s", at=NOW)], create=True)
     r = extract_entity(tmp_path, "company:x", "t", llm_invoke=_stub("no json here"))
     assert not r.committed
+
+
+def test_parse_discoveries_captures_rich_fields():
+    raw = '''[
+      {"ref": "place:torrent", "name": "Torrent",
+       "aliases": ["Torrente", ""], "turn": 16,
+       "relations": [{"to": "place:valencia", "type": "located_in"},
+                     {"to": "", "type": "bad"}],
+       "significance": "A place the user tracks the weather for.",
+       "attributes": {"region": "Comunidad Valenciana"}}
+    ]'''
+    [p] = parse_discoveries(raw)
+    assert p["ref"] == "place:torrent"
+    assert p["aliases"] == ["Torrente"]                 # empty alias dropped
+    assert p["relations"] == [{"to": "place:valencia", "type": "located_in"}]  # malformed dropped
+    assert p["significance"] == "A place the user tracks the weather for."
+    assert p["turn"] == 16
+    assert p["attributes"] == {"region": "Comunidad Valenciana"}
+
+
+def test_parse_discoveries_rich_fields_optional():
+    raw = '[{"ref": "topic:x", "name": "X", "attributes": {"a": 1}}]'
+    [p] = parse_discoveries(raw)
+    assert p["aliases"] == [] and p["relations"] == []
+    assert p["significance"] is None and p["turn"] is None
