@@ -202,7 +202,7 @@ The following events exist in the catalog without dedicated sections above — c
 | `memory.health_check.interval_seconds` | `900` | Seconds between health-check ticks. Also controls the retention run cadence (piggybacked). |
 | `memory.dream.max_seconds_per_run` | `600` | Hard wall-clock cap per extract pass; triggers `memory.dream.max_seconds_reached` and sets `yielded=true` on `memory.dream.end`. |
 | `memory.dream.min_seconds_between_runs` | `300` | Reactive throttle window for `ReactiveDreamGate`; 0 disables throttling. |
-| `memory.dream.auto_absorb.enabled` | `false` | When false, the refine pass runs but does not judge or merge — no `memory.absorb.*` events appear in the auto path. Manual `durin memory absorb` still works. |
+| `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates. When false, the pass runs but does not judge or merge — no `memory.absorb.*` events appear in the auto path. Manual `durin memory absorb` still works. |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM-judge confidence floor (0–100) below which a `same` verdict is skipped (`memory.absorb.skipped` with `reason=below_threshold`). |
 | `telemetry.push.enabled` | `false` | Opt-in HTTPS push sink. When false, only local JSONL is written. |
 | `telemetry.push.url` | `""` | HTTPS endpoint for push. Must be `https://`. |

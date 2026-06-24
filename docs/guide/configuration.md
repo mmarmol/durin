@@ -314,11 +314,11 @@ background file watching, and health checks. See
 | `max_seconds_per_run` | `600` | Wall-clock cap per extract pass; `0` = run to completion |
 | `always_on_token_budget` | `1500` | Token budget for the always-on guidance pin injected into every prompt; `0` disables |
 
-**`memory.dream.auto_absorb`** — post-dream automatic entity deduplication (off by default):
+**`memory.dream.auto_absorb`** — post-dream automatic entity deduplication (ON by default):
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | Run LLM-judge dedup after dream; opt-in because a bad merge is high-blast-radius |
+| `enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone) |
 | `confidence_threshold` | `95` | LLM-judge confidence floor (0-100) for an auto-merge |
 
 **`memory.search`** — search pipeline configuration:

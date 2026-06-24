@@ -136,10 +136,16 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    tombstoned refs. Before creating a new page, each proposal is resolved
    against the existing graph by name within the same entity type (via the alias
    index): a **unique** match updates that entity in place instead of minting a
-   new slug; an **ambiguous** match (more than one candidate) or **no** match
-   creates a new page, deferring disambiguation to the refine pass. The
-   discovered `name` is set via `write_entity(name=...)`, which is
-   **last-writer-wins** — a later explicit agent/user correction simply
+   new slug; an **ambiguous** match (more than one candidate) creates a new page,
+   deferring disambiguation to the refine pass. When lexical matching yields
+   **no** match, discovery additionally consults the vector index for an
+   **embedding-near same-type entity** (L2 distance within
+   `semantic_distance_threshold`) and runs the LLM judge to confirm whether the
+   proposal is the same entity under a variant name; a confirmed match reuses the
+   existing entity instead of minting a new slug, preventing variant-name
+   duplicates at birth. This semantic step is a no-op when the vector index is
+   unavailable. The discovered `name` is set via `write_entity(name=...)`, which
+   is **last-writer-wins** — a later explicit agent/user correction simply
    overwrites a discovered guess. Per-field precedence applies to *attributes*,
    not to the name. The extract pass builds a **single `AliasIndex`** once per
    pass (refreshed across all sessions processed in that run) and passes it to
@@ -188,7 +194,7 @@ is a sync wrapper over the async runner so the cron can call it in a thread.
 
 `run_refine_pass(workspace, *, llm_invoke, model, enabled, confidence_threshold,
 run_started_at, vector_index=None)` is the graph-hygiene pass, gated by `enabled`
-(wired from `memory.dream.auto_absorb.enabled`, **OFF by default**). When disabled
+(wired from `memory.dream.auto_absorb.enabled`, **ON by default**). When disabled
 it short-circuits — **no judge, no merge** — and logs the manual path
 (`durin memory absorb-suggest` to surface, `durin memory absorb` to merge). When
 enabled it delegates to `run_refine` (`durin/memory/refine_dream.py`).
@@ -330,7 +336,7 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for `ReactiveDreamGate`. 0 disables. The cron is never throttled. |
 | `memory.dream.max_seconds_per_run` | `600` | Hard wall-clock cap; the pass yields after the current session and the cursor resumes. 0 = run to completion. |
 | `memory.dream.always_on_token_budget` | `1500` | Token ceiling for the always-on pin. 0 disables the pin. |
-| `memory.dream.auto_absorb.enabled` | `false` | Master switch for the refine pass's auto-merge. OFF means surface duplicates manually. |
+| `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM-judge confidence floor (0–100) for an auto-merge. |
 
 The model every pass uses is resolved by

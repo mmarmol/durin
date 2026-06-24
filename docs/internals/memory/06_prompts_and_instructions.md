@@ -272,7 +272,7 @@ Sections with zero hits are omitted entirely.
 | `memory.dream.discover_enabled` | `true` | Enables the discover pass (Stage 2 entity discovery) within the extract pass |
 | `memory.dream.skill_signals_enabled` | `true` | Enables skill-signal detection during the extract pass |
 | `memory.dream.always_on_token_budget` | `1500` | Hard token ceiling for always-on pinned guidance; `0` disables the pin |
-| `memory.dream.auto_absorb.enabled` | `false` | Master gate for the refine pass auto-merge; when false, duplicates must be merged manually via `durin memory absorb` |
+| `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). When false, duplicates must be merged manually via `durin memory absorb` |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM judge confidence floor (0–100) for an auto-merge |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for `ReactiveDreamGate`; `0` disables; daily cron is never throttled |
 | `memory.dream.max_seconds_per_run` | `600` | Wall-clock cap for the extract pass; it yields after the current session and the per-session cursor resumes on the next trigger |

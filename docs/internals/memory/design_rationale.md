@@ -346,19 +346,18 @@ instead, which keeps the raw track immutable and recoverable while still letting
 the entity graph grow. Both tracks remain fully searchable from write time;
 keeping them separate is about provenance and ownership, not about recall.
 
-### Why auto-absorb defaults OFF
+### Why auto-absorb defaults ON
 
-Merging two entity pages is a high-blast-radius, lossy-feeling operation: it
-deletes one page (to archive), rewrites another, and is only as good as an LLM's
-identity judgement. A wrong merge ("two people named Marcelo are the same
-person") corrupts the graph in a way that is annoying to notice and to undo. So
-the refine pass ships with `auto_absorb.enabled = false`: by default it surfaces
-duplicate candidates on demand (`durin memory absorb-suggest`) and lets the
-operator merge deliberately (`durin memory absorb`), with the merge always
-reversible via `git revert`. An operator who has tuned the confidence threshold
-and trusts the judge can flip auto-merge on per workspace. The default is
-conservative on purpose — a destructive default is the wrong trade when the
-manual path is one command away.
+Merging two entity pages is a potentially high-blast-radius operation: it
+deletes one page (to archive) and rewrites another. However, every merge is
+reversible — `git revert` of the absorb commit restores both pages, and a
+tombstone entry prevents the same pair from being re-proposed. With the
+confidence threshold set at 95 and quarantine logic preventing the pass from
+merging its own freshly-created output, the judge is conservative enough that
+auto-merge is safe as the default. The refine pass therefore ships with
+`auto_absorb.enabled = true`; operators who want explicit control can set it
+to `false` and use `durin memory absorb-suggest` / `durin memory absorb`
+instead.
 
 ### Why per-field author precedence
 
