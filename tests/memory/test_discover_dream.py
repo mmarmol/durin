@@ -206,3 +206,23 @@ def test_discover_dedups_within_run_across_calls(tmp_path):
     page = EntityPage.from_file(_page_path(tmp_path, "person:ana_perez"))
     assert page.attributes["role"] == "co-founder"
     assert page.attributes["city"] == "Lisbon"
+
+
+def test_discover_uses_injected_alias_index(tmp_path):
+    # An injected shared index built once is used and kept current across calls.
+    from durin.memory.aliases_index import AliasIndex
+    idx = AliasIndex(tmp_path / "memory")
+    idx.build()
+    discover_entities(
+        tmp_path, "co-founder Ana Pérez",
+        alias_index=idx,
+        llm_invoke=_stub('[{"ref":"person:ana_perez","name":"Ana Pérez",'
+                         '"attributes":{"role":"co-founder"}}]'))
+    # second call, SAME injected index (not rebuilt) must see the first write
+    out2 = discover_entities(
+        tmp_path, "Ana Pérez in Lisbon",
+        alias_index=idx,
+        llm_invoke=_stub('[{"ref":"person:ana","name":"Ana Pérez",'
+                         '"attributes":{"city":"Lisbon"}}]'))
+    assert out2 == [{"ref": "person:ana_perez", "committed": True}]
+    assert not _page_path(tmp_path, "person:ana").exists()

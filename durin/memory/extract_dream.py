@@ -229,6 +229,7 @@ def discover_entities(
     llm_invoke: LLMInvoke | None = None,
     model: str | None = None,
     source_ref: str | None = None,
+    alias_index: "AliasIndex | None" = None,
 ) -> list[dict[str, Any]]:
     """Discover entities mentioned in ``turns`` that the agent did NOT upsert and
     write them as dream-authored pages.
@@ -249,8 +250,10 @@ def discover_entities(
     raw = resp.text if isinstance(resp, LLMResponse) else str(resp)
     proposals = parse_discoveries(raw)
 
-    index = AliasIndex(Path(workspace) / "memory")
-    index.build()
+    index = alias_index
+    if index is None:
+        index = AliasIndex(Path(workspace) / "memory")
+        index.build()
 
     now = datetime.now(timezone.utc)
     src = source_ref or "discover_dream"

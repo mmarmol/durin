@@ -194,6 +194,7 @@ def cmd_dream(
     # new passes.
     from durin.memory.always_on_dream import run_always_on_pass
     from durin.memory.dream_passes import (
+        dream_vector_index,
         run_derived_from_pass,
         run_extract_pass,
         run_refine_pass,
@@ -227,9 +228,11 @@ def cmd_dream(
             "[dim]Refine pass skipped — auto_absorb disabled "
             "(use 'durin memory absorb-suggest' to review duplicates)[/dim]"
         )
+    _vi = dream_vector_index(workspace, cfg)
     rf = run_refine_pass(workspace, model=model, enabled=_absorb.enabled,
                          confidence_threshold=_absorb.confidence_threshold,
-                         run_started_at=_run_started)
+                         run_started_at=_run_started,
+                         vector_index=_vi)
     console.print("[dim]Always-on pass (distil pinned guidance)…[/dim]")
     ao = run_always_on_pass(workspace, model=model,
                             token_budget=cfg.memory.dream.always_on_token_budget)
