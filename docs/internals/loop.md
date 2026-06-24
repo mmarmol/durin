@@ -370,12 +370,13 @@ Souls and personas are manageable through three surfaces:
 
   Two additional behaviors in this surface:
 
-  - **Live model + SOUL test** — the persona form has a "Test" action
-    (`POST /api/v1/personas/test`) that runs the selected soul and model
-    against a fixed short prompt and returns the model's reply. If the provider
-    or model reference is invalid, the response carries an `ok: false` error
-    message instead of raising an HTTP error; the webui shows it inline below
-    the form.
+  - **Live model + SOUL test** — the persona form *and each persona row* (so
+    any persona — including built-ins and the default — can be tested straight
+    from the list) carry a "Test" action (`POST /api/v1/personas/test`) that
+    runs the selected soul and model against a fixed short prompt and returns
+    the model's reply. If the provider or model reference is invalid, the
+    response carries an `ok: false` error message instead of raising an HTTP
+    error; the webui shows it inline (below the form, or under the row).
 
   - **In-use SOUL delete protection** — a soul that is referenced by any
     persona (user-defined or built-in) cannot be deleted. The backend returns a
