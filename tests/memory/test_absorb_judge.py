@@ -116,7 +116,9 @@ def test_build_prompt_substitutes_all_fields() -> None:
     assert "person:marcelo" in prompt
     assert "person:marcelo-d" in prompt
     assert "Marcelo, marcelo" in prompt
-    assert "Identifier (email): mmarmol@mxhero.com" in prompt
+    # Identifier value reaches the prompt via to_markdown() YAML serialization
+    # (no longer hand-formatted as "Identifier (email): ...").
+    assert "mmarmol@mxhero.com" in prompt
     assert "Founder of durin" in prompt
     assert "Random contact" in prompt
     # Temporal context per glm C2 mitigation.
@@ -198,3 +200,26 @@ def test_judge_pair_wraps_llm_exception_as_judge_error() -> None:
     with pytest.raises(JudgeError) as exc_info:
         judge_pair(a, b, [], llm_invoke=stub, max_retries=1)
     assert "provider down" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# guard test: whole page (attributes / relations / provenance) reaches prompt
+# ---------------------------------------------------------------------------
+
+
+def test_build_prompt_renders_whole_page(tmp_path) -> None:
+    a = EntityPage(
+        type="place", name="Torrent",
+        attributes={"warning_zone": "Litoral norte de Valencia"},
+        relations=[{"to": "place:valencia", "type": "in"}],
+        provenance={"attributes": {"warning_zone": {"author": "dream"}}},
+    )
+    b = EntityPage(type="place", name="Torrent", attributes={"country": "Spain"})
+    prompt = _build_prompt(
+        canonical=a, absorbed=b, shared_aliases=["torrent"],
+        canonical_ref="place:torrent", absorbed_ref="place:torrent-valencia",
+        canonical_mtime=None, absorbed_mtime=None,
+    )
+    assert "warning_zone" in prompt and "Litoral norte de Valencia" in prompt
+    assert "place:valencia" in prompt          # relation
+    assert "country" in prompt and "Spain" in prompt
