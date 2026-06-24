@@ -1,7 +1,9 @@
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from durin.memory.entity_page import EntityPage
-from durin.memory.extract_dream import extract_entity, parse_attributes, parse_discoveries
+from durin.memory.extract_dream import discover_entities, extract_entity, parse_attributes, parse_discoveries
 from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import write_entity
 
@@ -96,3 +98,35 @@ def test_parse_discoveries_rich_fields_optional():
     [p] = parse_discoveries(raw)
     assert p["aliases"] == [] and p["relations"] == []
     assert p["significance"] is None and p["turn"] is None
+
+
+class _Resp:
+    def __init__(self, text): self.text = text
+
+
+def _page(ws, ref):
+    t, _, s = ref.partition(":")
+    return EntityPage.from_file(Path(ws) / "memory" / "entities" / t / f"{s}.md")
+
+
+def test_discover_writes_aliases_relations_significance(tmp_path):
+    proposals = json.dumps([{
+        "ref": "place:torrent", "name": "Torrent",
+        "aliases": ["Torrente"],
+        "relations": [{"to": "place:valencia", "type": "located_in"}],
+        "significance": "A place the user tracks the weather for.",
+        "turn": 5,
+        "attributes": {"region": "Comunidad Valenciana"},
+    }])
+    discover_entities(tmp_path, "USER: torrent stuff", existing_refs=[],
+                      llm_invoke=lambda *a, **k: _Resp(proposals), model="m")
+    page = _page(tmp_path, "place:torrent")
+    assert page is not None
+    assert "Torrente" in page.aliases
+    assert page.attributes.get("region") == "Comunidad Valenciana"
+    assert "weather" in (page.body or "")
+    assert any(r.get("to") == "place:valencia" for r in page.relations)
+    # significance is idempotent across a re-run (body_replace, not append)
+    discover_entities(tmp_path, "USER: torrent stuff", existing_refs=[],
+                      llm_invoke=lambda *a, **k: _Resp(proposals), model="m")
+    assert (_page(tmp_path, "place:torrent").body or "").count("weather") == 1

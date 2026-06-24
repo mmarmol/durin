@@ -23,7 +23,7 @@ from json_repair import repair_json
 from durin.memory.aliases_index import AliasIndex
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
-from durin.memory.llm_invoke import LLMResponse, default_llm_invoke
+from durin.memory.llm_invoke import default_llm_invoke
 from durin.memory.memory_writer import WriteResult, write_entity
 
 __all__ = [
@@ -115,7 +115,7 @@ def extract_entity(
 
     prompt = build_extract_prompt(page, turns)
     resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
-    raw = resp.text if isinstance(resp, LLMResponse) else str(resp)
+    raw = resp.text if hasattr(resp, "text") else str(resp)
     attrs = parse_attributes(raw)
     if not attrs:
         return WriteResult(entity_ref, committed=False, retries=0)
@@ -160,9 +160,9 @@ Rules:
   - "aliases": optional array of OTHER names/spellings for this entity that appear
     in the turns (e.g. the conversation used both "Torrent" and "Torrente"). Do
     not invent names that are not present.
-  - "relations": optional array of {"to": "<type>:<slug>", "type": "<relation>"}
+  - "relations": optional array of {{"to": "<type>:<slug>", "type": "<relation>"}}
     linking this entity to ANOTHER entity mentioned in the turns
-    (e.g. {"to": "place:valencia", "type": "located_in"}).
+    (e.g. {{"to": "place:valencia", "type": "located_in"}}).
   - "significance": optional ONE sentence on WHY this entity matters to the user /
     their relationship to it (e.g. "a place the user tracks the weather for").
     Omit it unless the turns state such a reason. Do NOT restate the attributes.
@@ -329,7 +329,7 @@ def discover_entities(
     skip = set(existing_refs)
     prompt = build_discover_prompt(turns)
     resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
-    raw = resp.text if isinstance(resp, LLMResponse) else str(resp)
+    raw = resp.text if hasattr(resp, "text") else str(resp)
     proposals = parse_discoveries(raw)
 
     index = alias_index
@@ -349,6 +349,16 @@ def discover_entities(
                        source_ref=src, at=now)
             for k, v in prop["attributes"].items()
         ]
+        for al in prop.get("aliases", []):
+            patches.append(FieldPatch(kind="alias", value=al, author="dream",
+                                      source_ref=src, at=now))
+        for rel in prop.get("relations", []):
+            patches.append(FieldPatch(kind="relation", value=rel, author="dream",
+                                      source_ref=src, at=now))
+        sig = prop.get("significance")
+        if sig:
+            patches.append(FieldPatch(kind="body_replace", value=sig, author="dream",
+                                      source_ref=src, at=now))
         target = _resolve_existing_ref(index, ref, prop["name"])
         if target is None and vector_index is not None:
             target = _resolve_semantic_ref(
