@@ -13,6 +13,12 @@ def resolve_persona(config: object, name: str | None) -> tuple[str | None, str |
     Returns ``(None, None)`` when *name* is falsy, the persona is unknown, or
     any load step fails. Never raises — callers fall back to the default SOUL
     and default model.
+
+    The ``if not name`` short-circuit is equivalent to the old loop path: the
+    caller resolves the *name* (via ``resolve_active_persona_name``, which already
+    applies ``agents.defaults.persona``), so a falsy name here means "no persona
+    anywhere" — the same case where ``config.resolve_persona(None)`` returned None.
+    ``config.workspace_path`` is the canonical SoulStore root for both callers.
     """
     if not name:
         return None, None

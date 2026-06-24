@@ -357,3 +357,24 @@ def test_node_persona_applies_soul_and_model(monkeypatch):
     node = WorkNode(id="a", persona="engineer")
     nr(NodeRunRequest(node=node, task="t", upstream_output=None, shared_context=[], run_id="r", iteration=1, root_session_key=None))
     assert "ENGINEER SOUL" in captured["system"] and captured["model"] == "persona-model"
+
+
+def test_node_persona_degrades_gracefully_without_app_config():
+    # A surface that builds AgentNodeRunner without an app_config (app_config=None) must
+    # not crash on a persona-bearing node — it falls back to the default model, no soul.
+    captured = {}
+
+    class R:
+        final_content = "ok"
+        messages = []
+
+    class Runner:
+        async def run(self, spec):
+            captured["model"] = spec.model
+            return R()
+
+    from durin.workflow import node_runner as nr_mod
+    nr = nr_mod.AgentNodeRunner(Runner(), sessions=_fake_sessions(), default_model="m")  # no app_config
+    node = WorkNode(id="a", persona="engineer")
+    nr(NodeRunRequest(node=node, task="t", upstream_output=None, shared_context=[], run_id="r", iteration=1, root_session_key=None))
+    assert captured["model"] == "m"   # fell back to default; no crash
