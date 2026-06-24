@@ -36,6 +36,8 @@ export type WorkflowDef = {
   improvement_mode?: string;
   input?: IODescriptor;
   output?: IODescriptor;
+  // Layout hints stored by the editor; ignored by the engine.
+  ui?: { positions?: Record<string, { x: number; y: number }> };
 };
 
 export type FlowNodeData = { node: WorkflowNodeDef; isStart: boolean };
@@ -115,10 +117,11 @@ export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[]
   const nodes: Node[] = def.nodes.map((n) => {
     const col = depth[n.id] ?? 0;
     const row = (rowByCol[col] = (rowByCol[col] ?? 0) + 1) - 1;
+    const stored = def.ui?.positions?.[n.id];
     return {
       id: n.id,
       type: resolveNodeType(n),
-      position: { x: col * COL, y: row * ROW },
+      position: stored ?? { x: col * COL, y: row * ROW },
       data: { node: n, isStart: n.id === def.start } satisfies FlowNodeData,
     };
   });
@@ -170,10 +173,11 @@ export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[]
     const inputId = "__input__";
     const startDepth = depth[def.start] ?? 0;
     const inputRow = (rowByCol[-1] = (rowByCol[-1] ?? 0) + 1) - 1;
+    const storedInput = def.ui?.positions?.[inputId];
     nodes.push({
       id: inputId,
       type: "input_obj",
-      position: { x: (startDepth - 1) * COL, y: inputRow * ROW },
+      position: storedInput ?? { x: (startDepth - 1) * COL, y: inputRow * ROW },
       data: { input: def.input },
     });
     edges.push({ id: `${inputId}->${def.start}:`, source: inputId, target: def.start });
@@ -185,10 +189,11 @@ export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[]
     // Position after the deepest terminal
     const maxDepth = Math.max(0, ...terminals.map((id) => depth[id] ?? 0));
     const outputRow = (rowByCol[maxDepth + 1] = (rowByCol[maxDepth + 1] ?? 0) + 1) - 1;
+    const storedOutput = def.ui?.positions?.[outputId];
     nodes.push({
       id: outputId,
       type: "output_obj",
-      position: { x: (maxDepth + 1) * COL, y: outputRow * ROW },
+      position: storedOutput ?? { x: (maxDepth + 1) * COL, y: outputRow * ROW },
       data: { output: def.output },
     });
     for (const tid of terminals) {

@@ -1058,10 +1058,21 @@ export function WorkflowsView() {
                 edges={flow.edges}
                 nodeTypes={nodeTypes}
                 fitView
-                nodesDraggable={false}
                 onConnect={onConnect}
                 onNodeClick={(_, node) => setSelectedNodeId(node.id)}
                 onPaneClick={() => setSelectedNodeId(null)}
+                onNodeDragStop={(_, node) =>
+                  mutate((d) => ({
+                    ...d,
+                    ui: {
+                      ...d.ui,
+                      positions: {
+                        ...d.ui?.positions,
+                        [node.id]: { x: Math.round(node.position.x), y: Math.round(node.position.y) },
+                      },
+                    },
+                  }))
+                }
                 proOptions={{ hideAttribution: true }}
               >
                 <Background />

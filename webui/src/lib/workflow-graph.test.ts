@@ -235,6 +235,12 @@ describe("workflowToFlow", () => {
     expect(toOutput).toEqual(["synthesize"]);
   });
 
+  it("uses def.ui.positions for a node when present", () => {
+    const { nodes } = workflowToFlow({ name: "p", start: "a", ui: { positions: { a: { x: 500, y: 40 } } }, nodes: [{ id: "a", kind: "work", next: null }] });
+    const a = nodes.find((n) => n.id === "a")!;
+    expect(a.position).toEqual({ x: 500, y: 40 });
+  });
+
   it("connects OUTPUT from both branches of a routing split (routing-triage)", () => {
     const { edges } = workflowToFlow({
       name: "rt",
