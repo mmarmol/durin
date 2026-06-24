@@ -1266,7 +1266,7 @@ class AgentLoop:
             session.metadata if session is not None else None,
             persona_override,
         )
-        return resolve_persona(self.app_config, name)
+        return resolve_persona(self.app_config, name, self.workspace)
 
     def _build_initial_messages(
         self,

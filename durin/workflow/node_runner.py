@@ -149,7 +149,8 @@ class AgentNodeRunner:
 
         # Apply persona: prepend its SOUL body and use its model ref when set.
         persona_name = getattr(req.node, "persona", None)
-        persona_soul, persona_model_ref = resolve_persona(self._app_config, persona_name)
+        persona_soul, persona_model_ref = resolve_persona(
+            self._app_config, persona_name, self.sessions.workspace)
         if persona_soul:
             system = f"{persona_soul}\n\n{system}" if system else persona_soul
 

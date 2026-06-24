@@ -352,7 +352,7 @@ def test_node_persona_applies_soul_and_model(monkeypatch):
             return R()
 
     from durin.workflow import node_runner as nr_mod
-    monkeypatch.setattr(nr_mod, "resolve_persona", lambda cfg, name: ("ENGINEER SOUL", "persona-model"))
+    monkeypatch.setattr(nr_mod, "resolve_persona", lambda cfg, name, ws=None: ("ENGINEER SOUL", "persona-model"))
     nr = nr_mod.AgentNodeRunner(Runner(), sessions=_fake_sessions(), default_model="m", app_config=object())
     node = WorkNode(id="a", persona="engineer")
     nr(NodeRunRequest(node=node, task="t", upstream_output=None, shared_context=[], run_id="r", iteration=1, root_session_key=None))
