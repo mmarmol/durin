@@ -80,9 +80,14 @@ parser rejects a routing agent node that is *structurally identical* (same model
 and prompt) to the producer feeding it, so a quality verdict comes from a genuinely
 independent reviewer (the anti-Goodhart guard). A node can also be a **sub-workflow**
 (`durin/workflow/subworkflow.py`): it runs another named workflow as a nested run
-(reusing the same node and branch-pick runners, bounded by a depth cap) and uses its output;
+(reusing the same node and branch-pick runners, bounded by three recursion layers) and uses its output;
 the nested run carries the same root session key, so its node sessions anchor to the
-invoking conversation too.
+invoking conversation too. The three layers are: (1) the editor excludes cycle-creating
+targets from the sub-workflow picker, so a cycle cannot be authored in the UI; (2) the
+runner maintains a call-stack of workflow names currently executing — if a name is about
+to reenter the chain, it stops immediately with a cycle error (`"Error: workflow cycle
+detected: A -> B -> A"`) rather than recursing; (3) a `max_depth` counter is the backstop
+for deep non-cyclic chains, returning an error at the limit.
 **A node's "runs as" is a single choice:** either a specific model (or omitted ⇒ default) or
 a **Persona** (a named SOUL + its model, mutually exclusive with `model`). Setting `persona`
 on a node injects the SOUL body into the node's system prompt and selects the persona's model.

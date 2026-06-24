@@ -26,14 +26,19 @@ class SubworkflowRunner:
         *,
         max_depth: int = 5,
         _depth: int = 0,
+        _stack: tuple[str, ...] = (),
     ) -> None:
         self.workspace = workspace
         self.node_runner = node_runner
         self.judge_runner = judge_runner
         self.max_depth = max_depth
         self._depth = _depth
+        self._stack = _stack
 
     def __call__(self, name: str, task: str, root_session_key: str | None = None) -> str:
+        if name in self._stack:
+            chain = " -> ".join(self._stack + (name,))
+            return f"Error: workflow cycle detected: {chain}"
         if self._depth >= self.max_depth:
             return f"Error: sub-workflow nesting exceeded max depth {self.max_depth}"
         try:
@@ -42,7 +47,7 @@ class SubworkflowRunner:
             return f"Error: {exc}"
         nested = SubworkflowRunner(
             self.workspace, self.node_runner, self.judge_runner,
-            max_depth=self.max_depth, _depth=self._depth + 1,
+            max_depth=self.max_depth, _depth=self._depth + 1, _stack=self._stack + (name,),
         )
         engine = WorkflowEngine(
             node_runner=self.node_runner,
