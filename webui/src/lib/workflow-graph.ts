@@ -23,6 +23,9 @@ export type WorkflowNodeDef = {
 export type IODescriptor = {
   text?: boolean;
   file?: boolean;
+  // Free-text contract: what this input/output is (e.g. "a CSV with columns
+  // date,amount"). Steers the boundary node's agent and documents the interface.
+  description?: string;
 };
 
 export type WorkflowDef = {

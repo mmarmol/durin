@@ -110,7 +110,7 @@ class WorkflowEngine:
         runs: list[NodeRun] = []
         try:
             return self._walk(
-                workflow, task, run_id, runs,
+                workflow, self._frame_task(workflow, task), run_id, runs,
                 root_session_key=root_session_key,
                 input_files=input_files,
             )
@@ -121,6 +121,23 @@ class WorkflowEngine:
                 status="aborted", final_output=f"workflow error: {exc}",
                 runs=runs, run_id=run_id,
             )
+
+    @staticmethod
+    def _frame_task(workflow: Workflow, task: str) -> str:
+        """Frame the task with the workflow's optional I/O descriptions: the input
+        description as a prefix (what the workflow received) and the output description
+        as a suffix (what it must ultimately deliver). Both are free-text hints that
+        steer the node agents and document the interface — they are not enforced. When
+        neither is set the task is returned unchanged."""
+        def _desc(d: object) -> str | None:
+            text = d.get("description") if isinstance(d, dict) else None
+            text = str(text).strip() if text else ""
+            return text or None
+        intro = _desc(workflow.input)
+        goal = _desc(workflow.output)
+        prefix = f"This workflow's input is: {intro}\n\n" if intro else ""
+        suffix = f"\n\nThe workflow's final deliverable should be: {goal}" if goal else ""
+        return f"{prefix}{task}{suffix}" if (prefix or suffix) else task
 
     def _walk(
         self,

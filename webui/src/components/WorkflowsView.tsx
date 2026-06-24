@@ -592,6 +592,14 @@ function IOConfigPanel({
         />
         {t("workflows.ioFile")}
       </label>
+      <Field label={t("workflows.ioDescription")}>
+        <Textarea
+          rows={3}
+          value={desc.description ?? ""}
+          placeholder={t("workflows.ioDescriptionPlaceholder")}
+          onChange={(e) => onChange({ ...desc, description: e.target.value || undefined })}
+        />
+      </Field>
       <button
         type="button"
         className="mt-1 flex items-center gap-1.5 self-start text-xs text-destructive hover:underline"
@@ -1046,6 +1054,11 @@ export function WorkflowsView() {
           </div>
           {def && (
             <div className="border-t p-2">
+              {def.input?.description && (
+                <div className="mb-2 text-xs text-muted-foreground">
+                  {t("workflows.expectsLabel")}: {def.input.description}
+                </div>
+              )}
               {def.input?.file && (
                 <div className="mb-2 flex flex-col gap-1">
                   <span className="text-xs text-muted-foreground">

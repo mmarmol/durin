@@ -29,12 +29,15 @@ validates that the start and every edge target name a real node, and that `next`
 routing are not both set. (`kind: "decision"` is accepted as a back-compat alias for a
 routing node — `criteria` maps to the node's `prompt`.)
 
-**Workflow I/O is first-class.** A `Workflow` carries optional `input` (`{text?, file?}`) and
-`output` descriptors — rendered as distinct **Input** and **Output** objects on the canvas. The text
+**Workflow I/O is first-class.** A `Workflow` carries optional `input` (`{text?, file?, description?}`)
+and `output` descriptors — rendered as distinct **Input** and **Output** objects on the canvas. The text
 input becomes the start node's task; input files are placed in an input folder the start node reads
 as its "previous step's files" (reusing the artifact channel). Multiple input files pair naturally
 with dynamic fan-out (a worker per file). The terminal node's text output and output folder are
-exposed in the run result. Absent ⇒ today's text-task behavior.
+exposed in the run result. Absent ⇒ today's text-task behavior. The optional free-text `description`
+is a lightweight contract: the engine frames every node's task with the input description (what the
+run received) and the output description (what it must deliver), so the agents are steered and the
+interface is documented — it is a hint, not enforced.
 
 **A node runs its body, then optionally routes.** `WorkflowEngine.run`
 (`durin/workflow/engine.py`) walks the graph from `start`. For an agent node it calls a

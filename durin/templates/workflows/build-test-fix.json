@@ -2,8 +2,8 @@
   "name": "build-test-fix",
   "start": "implement",
   "max_visits": 4,
-  "input": {"text": true},
-  "output": {"text": true},
+  "input": {"text": true, "description": "a feature request or bug report describing what to implement or fix"},
+  "output": {"text": true, "description": "working code plus a short summary of what changed and the final test result"},
   "nodes": [
     {
       "id": "implement",

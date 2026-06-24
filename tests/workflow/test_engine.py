@@ -69,6 +69,32 @@ def test_output_passes_downstream():
     assert b_call.upstream_output == "out-a"
 
 
+def test_io_descriptions_frame_the_task():
+    wf = parse_workflow({
+        "name": "d", "start": "a",
+        "input": {"text": True, "description": "a CSV of sales"},
+        "output": {"text": True, "description": "a markdown report"},
+        "nodes": [{"id": "a", "kind": "work", "next": None}],
+    })
+    eng, calls = _engine({"a": "out-a"}, [])
+    eng.run(wf, "do it")
+    task = calls[0].task
+    assert "a CSV of sales" in task
+    assert "a markdown report" in task
+    assert "do it" in task
+
+
+def test_task_unchanged_without_io_descriptions():
+    wf = parse_workflow({
+        "name": "d", "start": "a",
+        "input": {"file": True},  # declared, but no description
+        "nodes": [{"id": "a", "kind": "work", "next": None}],
+    })
+    eng, calls = _engine({"a": "out-a"}, [])
+    eng.run(wf, "do it")
+    assert calls[0].task == "do it"
+
+
 def test_decision_pass_continues():
     wf = parse_workflow({
         "name": "d", "start": "a",

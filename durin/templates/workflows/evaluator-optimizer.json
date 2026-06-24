@@ -2,8 +2,8 @@
   "name": "evaluator-optimizer",
   "start": "draft",
   "max_visits": 4,
-  "input": {"text": true},
-  "output": {"text": true},
+  "input": {"text": true, "description": "a task or question to answer well"},
+  "output": {"text": true, "description": "a refined answer that passed the critique"},
   "nodes": [
     {
       "id": "draft",
