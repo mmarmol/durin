@@ -391,6 +391,7 @@ export interface CronJobRow {
   message: string;
   mode: string;
   model: string | null;
+  persona: string | null;
   channel: string;
   state: {
     next_run_at_ms: number | null;
@@ -408,6 +409,7 @@ export interface CronJobRow {
     error: string | null;
     session_key: string | null;
     model: string | null;
+    persona: string | null;
     summary: string | null;
   }>;
 }

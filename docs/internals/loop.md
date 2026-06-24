@@ -344,11 +344,14 @@ Example user config:
 The active persona for a turn is resolved once in `_state_build` by
 `resolve_active_persona_name` (`durin/personas/resolve.py`):
 
-1. **Per-conversation** — `session.metadata["persona"]`, set by `/persona
+1. **Cron job** — `job.payload.persona`, set per job in the cron panel or the
+   `cron` tool; applies only to that job's run (mutually exclusive with the
+   job's per-run model).
+2. **Per-conversation** — `session.metadata["persona"]`, set by `/persona
    <name>` and cleared by `/persona default`.
-2. **Global default** — `agents.defaults.persona` in config (applies to every
+3. **Global default** — `agents.defaults.persona` in config (applies to every
    new conversation until overridden).
-3. **No persona** — default `SOUL.md` and global default model, unchanged from
+4. **No persona** — default `SOUL.md` and global default model, unchanged from
    pre-persona behavior.
 
 The resolved persona's soul body replaces the default SOUL in the stable system-

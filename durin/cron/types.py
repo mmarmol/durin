@@ -25,6 +25,7 @@ class CronPayload:
     mode: Literal["reminder", "task"] = "reminder"
     message: str = ""
     model: str | None = None
+    persona: str | None = None  # cron-job persona (soul + model); an explicit model overrides it
     # Deliver response to channel
     deliver: bool = False
     channel: str | None = None  # e.g. "whatsapp"
@@ -42,6 +43,7 @@ class CronRunRecord:
     error: str | None = None
     session_key: str | None = None
     model: str | None = None
+    persona: str | None = None
     summary: str | None = None
 
 

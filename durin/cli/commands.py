@@ -1494,6 +1494,7 @@ def _run_gateway(
                 chat_id=job.payload.to or "direct",
                 on_progress=None,
                 model_preset=job.payload.model,
+                persona=job.payload.persona,
             )
         finally:
             if isinstance(cron_tool, CronTool) and cron_token is not None:

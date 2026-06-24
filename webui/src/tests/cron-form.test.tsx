@@ -19,6 +19,12 @@ vi.mock("@/lib/api", () => ({
   removeCronJob: vi.fn(),
   runCronJob: vi.fn(),
   toggleCronJob: vi.fn(),
+  listPersonas: vi.fn(() =>
+    Promise.resolve({
+      personas: [{ name: "researcher", soul: "researcher", model: null, description: "", builtin: false }],
+      default: "default",
+    }),
+  ),
 }));
 
 // ModelSelectField uses useClient() internally.
@@ -35,6 +41,7 @@ const MOCK_JOB = {
   message: "Run daily report",
   mode: "reminder",
   model: null,
+  persona: null,
   channel: "default",
   state: { next_run_at_ms: null, last_run_at_ms: null, last_status: null, last_error: null },
   created_at_ms: 1000,
@@ -101,6 +108,26 @@ describe("CronSettings – create form", () => {
     expect(body.schedule_kind).toBe("cron");
     expect(body.expr).toBe("0 9 * * *");
     expect(body.deliver).toBe(false);
+  });
+
+  it("runAs persona sends persona and clears model", async () => {
+    render(<CronSettings token="tok" />);
+    await waitFor(() => expect(listCronJobs).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: /add job/i }));
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "As Persona" } });
+    fireEvent.change(screen.getByLabelText(/prompt/i), { target: { value: "Do it" } });
+    fireEvent.change(screen.getByLabelText(/cron expression/i), { target: { value: "0 9 * * *" } });
+
+    // Switch the run-as mode to Persona, wait for the list to load, and pick one.
+    fireEvent.click(screen.getByRole("button", { name: /^persona$/i }));
+    await screen.findByRole("option", { name: "researcher" });
+    fireEvent.change(screen.getByLabelText(/^persona$/i), { target: { value: "researcher" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /^save/i }));
+    await waitFor(() => expect(addCronJob).toHaveBeenCalledTimes(1));
+    const [, body] = addCronJob.mock.calls[0];
+    expect(body.persona).toBe("researcher");
+    expect(body.model).toBeNull();
   });
 
   it("interval schedule sends schedule_kind 'every' with every_ms", async () => {
