@@ -23,8 +23,10 @@ from typing import Any, Callable
 from loguru import logger
 
 from durin.memory.derived_from_dream import link_derived_from_for_session
+from durin.memory.embedding import FastembedProvider
 from durin.memory.extract_runner import run_extract_for_session
 from durin.memory.refine_dream import run_refine
+from durin.memory.vector_index import VectorIndex, vector_index_available
 
 __all__ = [
     "run_extract_pass", "run_skill_extract_pass", "run_refine_pass",
@@ -32,6 +34,15 @@ __all__ = [
 ]
 
 LLMInvoke = Callable[..., Any]
+
+
+def dream_vector_index(workspace: Path, cfg: Any) -> "VectorIndex | None":
+    """Build the entity vector index for one dream run, or None when the
+    optional vector backend (lancedb) isn't installed. Built once per run by
+    the cron / CLI callers and passed to the refine pass for semantic recall."""
+    if not vector_index_available():
+        return None
+    return VectorIndex(workspace, FastembedProvider(model=cfg.memory.embedding.model))
 
 
 class ReactiveDreamGate:
