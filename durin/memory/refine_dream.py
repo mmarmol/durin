@@ -24,10 +24,11 @@ from durin.memory.entity_page import EntityPage
 from durin.memory.llm_invoke import default_llm_invoke
 from durin.utils.atomic_write import atomic_write_text
 
-__all__ = ["is_tombstoned", "add_tombstone", "run_refine"]
+__all__ = ["is_tombstoned", "add_tombstone", "add_flagged", "read_flagged", "run_refine"]
 
 LLMInvoke = Callable[..., Any]
 _TOMBSTONE_FILE = ".refine_tombstones.json"
+_FLAGGED_FILE = ".flagged_pairs.json"
 
 
 def _emit(event: str, **data: Any) -> None:
@@ -80,6 +81,61 @@ def add_tombstone(workspace: Path, ref_a: str, ref_b: str) -> None:
     keys.add(_pair_key(ref_a, ref_b))
     p.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(p, json.dumps(sorted(keys)))
+
+
+def _flagged_path(workspace: Path) -> Path:
+    return Path(workspace) / "memory" / _FLAGGED_FILE
+
+
+def add_flagged(
+    workspace: Path,
+    ref_a: str,
+    ref_b: str,
+    *,
+    verdict: str,
+    confidence: int,
+    reasoning: str,
+) -> None:
+    """Record a pair the Tier-2 agent investigated but did not confirm as same.
+
+    The record is keyed by sorted pair so order does not matter. A duplicate
+    pair key keeps the newest record. Write failures are swallowed so a store
+    error never breaks the refine pass.
+    """
+    from datetime import datetime, timezone
+    p = _flagged_path(workspace)
+    records: dict[str, dict] = {}
+    if p.exists():
+        try:
+            for rec in json.loads(p.read_text(encoding="utf-8")):
+                key = _pair_key(*rec["pair"])
+                records[key] = rec
+        except Exception:
+            records = {}
+    key = _pair_key(ref_a, ref_b)
+    records[key] = {
+        "pair": sorted([ref_a, ref_b]),
+        "verdict": verdict,
+        "confidence": confidence,
+        "reasoning": reasoning,
+        "at": datetime.now(tz=timezone.utc).isoformat(),
+    }
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(p, json.dumps(list(records.values()), indent=2))
+    except Exception:  # pragma: no cover — write failure must not break refine
+        pass
+
+
+def read_flagged(workspace: Path) -> list[dict]:
+    """Return all flagged pairs from the store, newest-wins per key."""
+    p = _flagged_path(workspace)
+    if not p.exists():
+        return []
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return []
 
 
 def _load_page(workspace: Path, ref: str) -> EntityPage | None:
@@ -194,6 +250,7 @@ def run_refine(
               verdict=judged.verdict, confidence=judged.confidence,
               distance=cand.distance)
         decision = judged
+        escalated = False
         borderline = (
             judged.verdict == "unclear"
             or (judged.verdict == "same"
@@ -202,6 +259,7 @@ def run_refine(
         if escalate_floor and borderline:
             try:
                 decision = _escalate_judge(workspace, ref_a, ref_b, model=model)
+                escalated = True
                 _emit("memory.absorb.escalated", canonical=ref_a, absorbed=ref_b,
                       verdict=decision.verdict, confidence=decision.confidence)
             except Exception as exc:  # noqa: BLE001 — agent best-effort
@@ -218,6 +276,11 @@ def run_refine(
             _emit("memory.absorb.auto_merged", canonical=ref_a, absorbed=ref_b,
                   confidence=decision.confidence)
         else:
+            if escalated:
+                add_flagged(workspace, ref_a, ref_b,
+                            verdict=decision.verdict,
+                            confidence=decision.confidence,
+                            reasoning=decision.reasoning)
             kept.append({"pair": [ref_a, ref_b], "verdict": decision.verdict,
                          "confidence": decision.confidence})
 

@@ -3,7 +3,13 @@ from datetime import datetime, timezone
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import write_entity
-from durin.memory.refine_dream import add_tombstone, is_tombstoned, run_refine
+from durin.memory.refine_dream import (
+    add_flagged,
+    add_tombstone,
+    is_tombstoned,
+    read_flagged,
+    run_refine,
+)
 
 NOW = datetime(2026, 6, 5, tzinfo=timezone.utc)
 
@@ -229,3 +235,73 @@ def test_refine_tier2_best_effort_on_error(tmp_path, monkeypatch):
                      confidence_threshold=95, escalate_floor=70)
     assert not out["merged"]
     assert any("tier2_error" in str(k.get("reason", "")) for k in out["kept_separate"])
+
+
+# ---------------------------------------------------------------------------
+# Task 6: flagged-pairs store + escalation routing
+# ---------------------------------------------------------------------------
+
+def test_flagged_roundtrip(tmp_path):
+    """add_flagged stores a record; read_flagged returns it."""
+    add_flagged(tmp_path, "company:a", "company:b",
+                verdict="different", confidence=85, reasoning="they differ")
+    records = read_flagged(tmp_path)
+    assert len(records) == 1
+    r = records[0]
+    assert sorted(r["pair"]) == ["company:a", "company:b"]
+    assert r["verdict"] == "different"
+    assert r["confidence"] == 85
+    assert r["reasoning"] == "they differ"
+    assert "at" in r
+
+
+def test_flagged_dedup_keeps_newest(tmp_path):
+    """Duplicate pair key (same sorted refs) keeps the newest record."""
+    add_flagged(tmp_path, "company:a", "company:b",
+                verdict="different", confidence=80, reasoning="first")
+    add_flagged(tmp_path, "company:b", "company:a",
+                verdict="unclear", confidence=72, reasoning="second")
+    records = read_flagged(tmp_path)
+    assert len(records) == 1
+    assert records[0]["reasoning"] == "second"
+
+
+def test_flagged_multiple_pairs(tmp_path):
+    """Two distinct pairs → two records."""
+    add_flagged(tmp_path, "company:a", "company:b",
+                verdict="different", confidence=80, reasoning="r1")
+    add_flagged(tmp_path, "person:x", "person:y",
+                verdict="unclear", confidence=60, reasoning="r2")
+    records = read_flagged(tmp_path)
+    assert len(records) == 2
+
+
+def test_refine_escalated_non_merge_writes_flagged(tmp_path, monkeypatch):
+    """Escalated pair with Tier-2 verdict != same → flagged record written."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+    from durin.memory.absorb_judge import JudgeResult
+    monkeypatch.setattr(rd, "_escalate_judge",
+                        lambda ws, a, b, **kw: JudgeResult("unclear", 70, "agent unsure"))
+    run_refine(tmp_path, llm_invoke=_judge_stub("unclear", 80),
+               confidence_threshold=95, escalate_floor=70)
+    records = read_flagged(tmp_path)
+    assert len(records) == 1
+    assert records[0]["verdict"] == "unclear"
+    assert "agent unsure" in records[0]["reasoning"]
+
+
+def test_refine_non_escalated_kept_not_flagged(tmp_path):
+    """Non-escalated kept pairs (floor=0) are NOT written to flagged store."""
+    _two_dupes(tmp_path)
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("different", 90),
+                     confidence_threshold=95, escalate_floor=0)
+    assert out["kept_separate"]
+    records = read_flagged(tmp_path)
+    assert records == []
+
+
+def test_flagged_empty_workspace(tmp_path):
+    """read_flagged on a workspace with no flagged file returns empty list."""
+    assert read_flagged(tmp_path) == []
