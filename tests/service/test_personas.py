@@ -47,7 +47,7 @@ def test_set_default_valid_null_and_invalid(tmp_path, monkeypatch):
     assert res.default == "engineer"
     asyncio.run(svc.set_default(SetDefaultPersonaCommand(name=None), _principal()))
     res2 = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
-    assert res2.default is None
+    assert res2.default == "default"  # cleared → the synthetic base default
     with pytest.raises(DomainError):
         asyncio.run(svc.set_default(SetDefaultPersonaCommand(name="ghost"), _principal()))
 
@@ -60,5 +60,30 @@ def test_delete_clears_dangling_default(tmp_path, monkeypatch):
     assert res_before.default == "acme"
     asyncio.run(svc.delete_persona(PersonaDeleteCommand(name="acme"), _principal()))
     res_after = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
-    assert res_after.default is None
+    assert res_after.default == "default"  # default persona deleted → base default
     assert not any(p.name == "acme" for p in res_after.personas)
+
+
+def test_default_persona_listed_last(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch)
+    res = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
+    last = res.personas[-1]
+    assert last.name == "default" and last.soul == "default" and last.model is None and last.builtin is True
+    assert sum(1 for p in res.personas if p.name == "default") == 1
+    assert res.default == "default"  # active default when nothing configured
+
+
+def test_set_default_to_default_clears_override(tmp_path, monkeypatch):
+    svc = _svc(tmp_path, monkeypatch)
+    asyncio.run(svc.set_default(SetDefaultPersonaCommand(name="engineer"), _principal()))
+    out = asyncio.run(svc.set_default(SetDefaultPersonaCommand(name="default"), _principal()))
+    assert out.default is None  # selecting the synthetic default clears the override
+    res = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
+    assert res.default == "default"
+
+
+def test_upsert_reserved_name_rejected(tmp_path, monkeypatch):
+    from durin.service.types import ValidationFailedError
+    svc = _svc(tmp_path, monkeypatch)
+    with pytest.raises(ValidationFailedError):
+        asyncio.run(svc.upsert_persona(PersonaUpsertCommand(name="default", soul="default"), _principal()))
