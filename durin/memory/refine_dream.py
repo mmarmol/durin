@@ -29,6 +29,10 @@ __all__ = ["is_tombstoned", "add_tombstone", "add_flagged", "read_flagged", "run
 LLMInvoke = Callable[..., Any]
 _TOMBSTONE_FILE = ".refine_tombstones.json"
 _FLAGGED_FILE = ".flagged_pairs.json"
+# Cost bound: a single refine run never fans out more than this many Tier-2
+# sub-agent investigations. Past it, borderline pairs keep the cheap verdict
+# and a `memory.absorb.escalation_capped` event is emitted (never silent).
+_MAX_ESCALATIONS_PER_RUN = 25
 
 
 def _emit(event: str, **data: Any) -> None:
@@ -209,6 +213,7 @@ def run_refine(
     merged: list[dict] = []
     kept: list[dict] = []
     skipped: list[dict] = []
+    escalations = 0
 
     for cand in candidates:
         ref_a, ref_b = cand.refs
@@ -257,14 +262,19 @@ def run_refine(
                 and escalate_floor <= judged.confidence < confidence_threshold)
         )
         if escalate_floor and borderline:
-            try:
-                decision = _escalate_judge(workspace, ref_a, ref_b, model=model)
-                escalated = True
-                _emit("memory.absorb.escalated", canonical=ref_a, absorbed=ref_b,
-                      verdict=decision.verdict, confidence=decision.confidence)
-            except Exception as exc:  # noqa: BLE001 — agent best-effort
-                kept.append({"pair": [ref_a, ref_b], "reason": f"tier2_error:{exc}"})
-                continue
+            if escalations >= _MAX_ESCALATIONS_PER_RUN:
+                _emit("memory.absorb.escalation_capped",
+                      canonical=ref_a, absorbed=ref_b)
+            else:
+                escalations += 1
+                try:
+                    decision = _escalate_judge(workspace, ref_a, ref_b, model=model)
+                    escalated = True
+                    _emit("memory.absorb.escalated", canonical=ref_a, absorbed=ref_b,
+                          verdict=decision.verdict, confidence=decision.confidence)
+                except Exception as exc:  # noqa: BLE001 — agent best-effort
+                    kept.append({"pair": [ref_a, ref_b], "reason": f"tier2_error:{exc}"})
+                    continue
         if decision.verdict == "same" and decision.confidence >= confidence_threshold:
             absorber.absorb(
                 ref_a, ref_b, reason="refine",

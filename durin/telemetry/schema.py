@@ -791,6 +791,15 @@ class MemoryAbsorbEscalatedEvent(TypedDict):
     confidence: int  # 0-100
 
 
+class MemoryAbsorbEscalationCappedEvent(TypedDict):
+    """A borderline pair was NOT escalated because the run hit its per-run
+    Tier-2 ceiling. The pair keeps the cheap verdict. Use to detect a run
+    that needs a higher ceiling or fewer borderline pairs."""
+
+    canonical: str
+    absorbed: str
+
+
 class MemoryStoreBlockedNearDuplicateEvent(TypedDict):
     """memory_store dedup pre-persist refused a write because the embedding
     distance to an existing entry fell below the configured threshold. The
@@ -1283,6 +1292,7 @@ EVENTS: dict[str, type] = {
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
     "memory.absorb.reverted": MemoryAbsorbRevertedEvent,
     "memory.absorb.escalated": MemoryAbsorbEscalatedEvent,
+    "memory.absorb.escalation_capped": MemoryAbsorbEscalationCappedEvent,
     "memory.hot_layer.failure": MemoryHotLayerFailureEvent,
     "memory.index.write": MemoryIndexWriteEvent,
     "memory.index.rebuild": MemoryIndexRebuildEvent,

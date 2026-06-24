@@ -124,6 +124,9 @@ _SRC_RE = _re.compile(r"\[\[sessions/(.+?)\.md#turn-(\d+)\]\]")
 
 
 def _source_refs(page) -> list[str]:
+    # v1 scope: derived_from + per-attribute provenance source_refs — where the
+    # bulk of dream-distilled facts come from. Relation-level provenance is
+    # intentionally out of scope here.
     refs: list[str] = list(getattr(page, "derived_from", []) or [])
     prov = getattr(page, "provenance", {}) or {}
     for field in (prov.get("attributes") or {}).values():
