@@ -1416,6 +1416,20 @@
       "type": "Type",
       "aliases": "Aliases",
       "identifiers": "Identifiers"
+    },
+    "tabs": {
+      "resumen": "Summary",
+      "bandeja": "Inbox"
+    },
+    "bandeja": {
+      "flaggedTitle": "Memories flagged for review",
+      "quarantineTitle": "Skills in quarantine",
+      "merge": "Merge",
+      "keepSeparate": "Keep separate",
+      "reviewInSkills": "Review in Skills",
+      "emptyFlagged": "No memory pairs flagged for review.",
+      "emptyQuarantine": "No skills in quarantine.",
+      "resolveError": "Could not resolve pair — it may have already been processed. Refresh to see the current state."
     }
   },
   "audio": {

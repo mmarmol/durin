@@ -622,7 +622,7 @@ function Shell({
         )}
         {view === "dream" && (
           <div className="absolute inset-0 flex flex-col">
-            <DreamView />
+            <DreamView onOpenSkills={onOpenSkills} />
           </div>
         )}
       </main>

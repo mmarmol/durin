@@ -353,7 +353,7 @@ cross-process lock `SessionManager` uses for that session's sidecar.
 | `dream_vector_index` | `durin/memory/dream_passes.py` | Builds a `VectorIndex` (or returns `None` when unavailable) for the refine semantic recall step; called once per run by the cron and CLI callers. |
 | `judge_pair` | `durin/memory/absorb_judge.py` | Tier 1 LLM identity judge: renders the whole entity page via `to_markdown()` (body-capped), returns `same` / `different` / `unclear` + confidence. |
 | `escalate_judge` | `durin/memory/tier2_judge.py` | Tier 2 sub-agent: spins up a bounded `AgentRunner` with 4 read-only tools to investigate a borderline pair; returns the same `JudgeResult` envelope. Opt-in via `escalate_floor > 0`. |
-| `add_flagged` / `read_flagged` | `durin/memory/refine_dream.py` | Write / read the `memory/.flagged_pairs.json` flag store: pairs the Tier 2 agent investigated but did not confirm as same. |
+| `add_flagged` / `read_flagged` / `remove_flagged` | `durin/memory/refine_dream.py` | Write / read / delete entries in the `memory/.flagged_pairs.json` flag store: pairs the Tier 2 agent investigated but did not confirm as same. `remove_flagged` is called after the user resolves a pair (merge or separate) so it no longer appears in the Bandeja. |
 | `run_always_on_pass` | `durin/memory/always_on_dream.py` | Pinned-guidance curation: rank feedback entities, fit budget, flip `always_on` flags. |
 | `ReactiveDreamGate` | `durin/memory/dream_passes.py` | In-process lock + throttle for the reactive triggers. |
 | `get_extract_cursor` / `set_extract_cursor` | `durin/memory/extract_runner.py` | Read / advance the per-session cursor (top-level key, legacy fallback). |
@@ -416,18 +416,40 @@ The model every pass uses is resolved by
   commands: `durin memory absorb-suggest`, `durin memory absorb`,
   `durin memory revert`, `durin memory history`.
 - **WebUI** — the **Dream** section (`/dream` route, `DreamView` +
-  `DreamDrawer` in `webui/src/components/`) shows a per-run digest feed of
-  recent dream activity: entity merges, entity and learning discoveries, and
-  skill creates / improvements / quarantines. Each event card links to the
-  affected entity or skill — clicking it opens an in-place peek drawer
-  (`DreamDrawer`) that fetches and renders the entity page or skill detail
-  without leaving the feed. The header shows the timestamp of the most recent
-  run and a **Run now** button that triggers the `memory_dream` system cron job
-  via `POST /api/v1/cron/{id}/run` and refreshes the feed on completion. The
-  digest is served by `GET /api/v1/memory/dream/digest` (`MemoryService.dream_digest`,
+  `DreamDrawer` in `webui/src/components/`) has two tabs.
+
+  **Resumen tab** — a per-run digest feed of recent dream activity: entity
+  merges, entity and learning discoveries, and skill creates / improvements /
+  quarantines. Each event card links to the affected entity or skill — clicking
+  it opens an in-place peek drawer (`DreamDrawer`) that fetches and renders the
+  entity page or skill detail without leaving the feed. The header shows the
+  timestamp of the most recent run and a **Run now** button that triggers the
+  `memory_dream` system cron job via `POST /api/v1/cron/{id}/run` and refreshes
+  the feed on completion. The digest is served by
+  `GET /api/v1/memory/dream/digest` (`MemoryService.dream_digest`,
   `durin/service/memory.py`): it scans the local telemetry JSONL files for
   `memory.dream.*` events and maps them to `DreamEvent` objects, newest-first,
   capped at the requested limit.
+
+  **Bandeja tab** (inbox) — surfaces two categories of items that need human
+  attention, with a badge on the tab when items are present.
+
+  - *Flagged memory pairs* — pairs the Tier 2 merge judge investigated but did
+    not auto-merge (stored in `memory/.flagged_pairs.json`). Each card shows
+    both entity references, the judge's verdict, confidence, and reasoning. The
+    user resolves each pair with **Merge** (absorb one entity into the other via
+    `EntityAbsorption.absorb`) or **Keep separate** (write a tombstone via
+    `add_tombstone` so the pair is never re-surfaced). Either action calls
+    `POST /api/v1/memory/flagged-pairs/resolve` (`MemoryService.resolve_flagged`,
+    `durin/service/memory.py`) with `action="merge"` or `action="separate"`,
+    then removes the entry from the store via `remove_flagged`. The full list is
+    fetched on tab load via `GET /api/v1/memory/flagged-pairs`
+    (`MemoryService.flagged_pairs`).
+
+  - *Quarantined skills* — the existing quarantine list surfaced as a secondary
+    section. Each card shows the skill name and routes the user to the Skills
+    section for the full triage workflow; the Bandeja does not duplicate the
+    triage UI.
 - **Telemetry** — every pass emits best-effort `memory.dream.*` and
   `memory.absorb.*` events (defined in `durin/telemetry/schema.py`) for
   monitoring; see `07_telemetry_and_observability.md`.

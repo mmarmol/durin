@@ -1092,6 +1092,76 @@
         "title": "ExtrasStatusResult",
         "type": "object"
       },
+      "FlaggedPair": {
+        "description": "One memory pair the dream escalated for human review.",
+        "properties": {
+          "at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At Ms"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "integer"
+          },
+          "reasoning": {
+            "title": "Reasoning",
+            "type": "string"
+          },
+          "ref_a": {
+            "title": "Ref A",
+            "type": "string"
+          },
+          "ref_b": {
+            "title": "Ref B",
+            "type": "string"
+          },
+          "verdict": {
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref_a",
+          "ref_b",
+          "verdict",
+          "confidence",
+          "reasoning",
+          "at_ms"
+        ],
+        "title": "FlaggedPair",
+        "type": "object"
+      },
+      "FlaggedPairs": {
+        "description": "All memory pairs currently awaiting human review.",
+        "properties": {
+          "pairs": {
+            "items": {
+              "$ref": "#/components/schemas/FlaggedPair"
+            },
+            "title": "Pairs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "pairs"
+        ],
+        "title": "FlaggedPairs",
+        "type": "object"
+      },
+      "FlaggedPairsQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 returns the full current flagged-pairs list.",
+        "properties": {},
+        "title": "FlaggedPairsQuery",
+        "type": "object"
+      },
       "ForgetResult": {
         "description": "Result of a SUCCESSFUL archive \u2014 ``result`` is always ``\"archived\"``.\n\nThe failure outcomes are raised as DomainErrors so the front door renders\nthem as problem+json (one error format): protected \u2192 ``ForbiddenError`` (403),\ninvalid \u2192 ``ValidationFailedError`` (422), not_found \u2192 ``NotFoundError`` (404).",
         "properties": {
@@ -3348,6 +3418,50 @@
           "models"
         ],
         "title": "ProviderModelsResult",
+        "type": "object"
+      },
+      "ResolveFlaggedRequest": {
+        "additionalProperties": false,
+        "description": "Resolve a flagged pair: merge the two entities or keep them separate.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "ref_a": {
+            "title": "Ref A",
+            "type": "string"
+          },
+          "ref_b": {
+            "title": "Ref B",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref_a",
+          "ref_b",
+          "action"
+        ],
+        "title": "ResolveFlaggedRequest",
+        "type": "object"
+      },
+      "ResolveResult": {
+        "description": "Outcome of a resolve action.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "action"
+        ],
+        "title": "ResolveResult",
         "type": "object"
       },
       "RevokeTokenCommand": {
@@ -5805,6 +5919,64 @@
         },
         "summary": "One entry's frontmatter + body",
         "x-required-scope": "memory:read"
+      }
+    },
+    "/api/v1/memory/flagged-pairs": {
+      "get": {
+        "operationId": "memory_flagged_pairs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlaggedPairsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlaggedPairs"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Memory pairs the dream flagged for human review (Dream Bandeja)",
+        "x-required-scope": "memory:read"
+      }
+    },
+    "/api/v1/memory/flagged-pairs/resolve": {
+      "post": {
+        "operationId": "memory_resolve_flagged",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveFlaggedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Resolve a flagged pair: merge the entities or keep them separate",
+        "x-required-scope": "memory:write"
       }
     },
     "/api/v1/memory/graph": {

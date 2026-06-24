@@ -153,6 +153,47 @@ class MemoryForgetCommand(Command):
 
 
 # ---------------------------------------------------------------------------
+# Flagged-pairs DTOs (Dream Bandeja)
+# ---------------------------------------------------------------------------
+
+
+class FlaggedPair(Result):
+    """One memory pair the dream escalated for human review."""
+
+    ref_a: str
+    ref_b: str
+    verdict: str
+    confidence: int
+    reasoning: str
+    at_ms: int | None
+
+
+class FlaggedPairs(Result):
+    """All memory pairs currently awaiting human review."""
+
+    pairs: list[FlaggedPair]
+
+
+class FlaggedPairsQuery(Query):
+    """No inputs — returns the full current flagged-pairs list."""
+
+
+class ResolveFlaggedRequest(Command):
+    """Resolve a flagged pair: merge the two entities or keep them separate."""
+
+    ref_a: str
+    ref_b: str
+    action: str  # "merge" | "separate"
+
+
+class ResolveResult(Result):
+    """Outcome of a resolve action."""
+
+    ok: bool
+    action: str
+
+
+# ---------------------------------------------------------------------------
 # Dream digest builder (module-level so it is easily unit-tested)
 # ---------------------------------------------------------------------------
 
@@ -533,6 +574,87 @@ class MemoryService:
     ) -> DreamDigest:
         principal.require(Scope.MEMORY_READ)
         return _build_dream_digest(query.limit)
+
+    @route(
+        "GET",
+        "/api/v1/memory/flagged-pairs",
+        scope=Scope.MEMORY_READ.value,
+        request_model=FlaggedPairsQuery,
+        response_model=FlaggedPairs,
+        summary="Memory pairs the dream flagged for human review (Dream Bandeja)",
+    )
+    async def flagged_pairs(
+        self, query: FlaggedPairsQuery, principal: Principal
+    ) -> FlaggedPairs:
+        principal.require(Scope.MEMORY_READ)
+        from datetime import datetime, timezone
+
+        from durin.memory.refine_dream import read_flagged
+
+        ws = self._workspace_resolver()
+        raw = read_flagged(ws)
+        pairs: list[FlaggedPair] = []
+        for rec in raw:
+            ref_a, ref_b = rec["pair"][0], rec["pair"][1]
+            at_ms: int | None = None
+            if "at" in rec:
+                try:
+                    dt = datetime.fromisoformat(rec["at"])
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    at_ms = int(dt.timestamp() * 1000)
+                except Exception:
+                    at_ms = None
+            pairs.append(FlaggedPair(
+                ref_a=ref_a,
+                ref_b=ref_b,
+                verdict=rec.get("verdict", ""),
+                confidence=rec.get("confidence", 0),
+                reasoning=rec.get("reasoning", ""),
+                at_ms=at_ms,
+            ))
+        return FlaggedPairs(pairs=pairs)
+
+    @route(
+        "POST",
+        "/api/v1/memory/flagged-pairs/resolve",
+        scope=Scope.MEMORY_WRITE.value,
+        request_model=ResolveFlaggedRequest,
+        response_model=ResolveResult,
+        summary="Resolve a flagged pair: merge the entities or keep them separate",
+    )
+    async def resolve_flagged(
+        self, cmd: ResolveFlaggedRequest, principal: Principal
+    ) -> ResolveResult:
+        principal.require(Scope.MEMORY_WRITE)
+        from durin.memory.refine_dream import add_tombstone, remove_flagged
+        from durin.service.types import ValidationFailedError
+
+        if cmd.action not in ("merge", "separate"):
+            raise ValidationFailedError(
+                f"unknown action: {cmd.action!r}; must be 'merge' or 'separate'",
+                details={"action": cmd.action},
+            )
+
+        ws = self._workspace_resolver()
+
+        if cmd.action == "merge":
+            from durin.memory.absorption import AbsorptionError, EntityAbsorption
+            from durin.service.types import ConflictError
+            try:
+                EntityAbsorption(workspace=ws).absorb(
+                    cmd.ref_a, cmd.ref_b, reason="manual_review",
+                )
+            except AbsorptionError as exc:
+                raise ConflictError(
+                    f"could not merge: {exc}",
+                    details={"ref_a": cmd.ref_a, "ref_b": cmd.ref_b},
+                ) from exc
+        else:
+            add_tombstone(ws, cmd.ref_a, cmd.ref_b)
+
+        remove_flagged(ws, cmd.ref_a, cmd.ref_b)
+        return ResolveResult(ok=True, action=cmd.action)
 
     # -- writes --------------------------------------------------------------
 
