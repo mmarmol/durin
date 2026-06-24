@@ -808,6 +808,8 @@
     "inputFilesPlaceholder": "/abs/path/to/file",
     "outputDir": "output folder",
     "expand": "expand",
+    "collapse": "collapse",
+    "testTitle": "test — run once",
     "done": "done"
   },
   "skills": {

@@ -1370,6 +1370,8 @@
     "inputFilesPlaceholder": "/ruta/absoluta/al/archivo",
     "outputDir": "carpeta de salida",
     "expand": "expandir",
+    "collapse": "contraer",
+    "testTitle": "probar — correr una prueba",
     "done": "listo"
   }
 }

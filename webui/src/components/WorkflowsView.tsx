@@ -656,6 +656,7 @@ export function WorkflowsView() {
   const [personas, setPersonas] = useState<PersonaItem[]>([]);
   const [inputPaths, setInputPaths] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [runnerOpen, setRunnerOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -1075,70 +1076,95 @@ export function WorkflowsView() {
             )}
           </div>
           {def && (
-            <div className="border-t p-2">
-              {def.input?.description && (
-                <div className="mb-2 text-xs text-muted-foreground">
-                  {t("workflows.expectsLabel")}: {def.input.description}
-                </div>
-              )}
-              {def.input?.file && (
-                <div className="mb-2 flex flex-col gap-1">
-                  <span className="text-xs text-muted-foreground">
-                    {t("workflows.inputFilesLabel")}
-                  </span>
-                  <Textarea
-                    rows={2}
-                    value={inputPaths}
-                    onChange={(e) => setInputPaths(e.target.value)}
-                    placeholder={t("workflows.inputFilesPlaceholder")}
-                    className="font-mono text-xs"
-                  />
-                </div>
-              )}
-              <div className="flex items-center gap-2">
-                <Input
-                  value={task}
-                  onChange={(e) => setTask(e.target.value)}
-                  placeholder={t("workflows.taskPlaceholder")}
-                  className="flex-1"
-                />
-                <Button size="sm" onClick={onRun} disabled={running || !task.trim()}>
-                  {running ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <>
-                      <Play className="h-3.5 w-3.5" /> {t("workflows.run")}
-                    </>
+            <div className="border-t">
+              {!runnerOpen ? (
+                <button
+                  type="button"
+                  className="w-full px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent"
+                  onClick={() => setRunnerOpen(true)}
+                >
+                  ▸ {t("workflows.testTitle")}
+                </button>
+              ) : (
+                <div className="p-2">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      {t("workflows.testTitle")}
+                    </span>
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground hover:text-foreground"
+                      onClick={() => setRunnerOpen(false)}
+                    >
+                      ▾ {t("workflows.collapse")}
+                    </button>
+                  </div>
+                  {def.input?.description && (
+                    <div className="mb-2 text-xs text-muted-foreground">
+                      {t("workflows.expectsLabel")}: {def.input.description}
+                    </div>
                   )}
-                </Button>
-              </div>
-              {runResult && (
-                <div className="mt-2 max-h-48 overflow-y-auto rounded border p-2 text-xs">
-                  <div className="mb-1 font-medium">
-                    {t("workflows.status")}: {runResult.status}
-                  </div>
-                  <div className="mb-1 flex flex-wrap gap-1">
-                    {runResult.runs.map((r, i) => (
-                      <span
-                        key={i}
-                        className={cn(
-                          "rounded px-1.5 py-0.5",
-                          r.passed === false
-                            ? "bg-destructive/10 text-destructive"
-                            : "bg-muted",
-                        )}
-                      >
-                        {r.node_id}#{r.iteration}
-                        {r.passed === true ? " ✓" : r.passed === false ? " ✗" : ""}
+                  {def.input?.file && (
+                    <div className="mb-2 flex flex-col gap-1">
+                      <span className="text-xs text-muted-foreground">
+                        {t("workflows.inputFilesLabel")}
                       </span>
-                    ))}
+                      <Textarea
+                        rows={2}
+                        value={inputPaths}
+                        onChange={(e) => setInputPaths(e.target.value)}
+                        placeholder={t("workflows.inputFilesPlaceholder")}
+                        className="font-mono text-xs"
+                      />
+                    </div>
+                  )}
+                  <div className="flex items-start gap-2">
+                    <Textarea
+                      rows={3}
+                      value={task}
+                      onChange={(e) => setTask(e.target.value)}
+                      placeholder={t("workflows.taskPlaceholder")}
+                      className="flex-1 resize-y"
+                    />
+                    <Button size="sm" onClick={onRun} disabled={running || !task.trim()} className="shrink-0">
+                      {running ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Play className="h-3.5 w-3.5" /> {t("workflows.run")}
+                        </>
+                      )}
+                    </Button>
                   </div>
-                  <div className="whitespace-pre-wrap text-muted-foreground">
-                    {runResult.final_output}
-                  </div>
-                  {runResult.output_dir && (
-                    <div className="mt-1 font-mono text-[11px] text-muted-foreground">
-                      {t("workflows.outputDir")}: {runResult.output_dir}
+                  {runResult && (
+                    <div className="mt-2 max-h-72 overflow-y-auto rounded border p-2 text-xs">
+                      <div className="mb-1 font-medium">
+                        {t("workflows.status")}: {runResult.status}
+                      </div>
+                      <div className="mb-1 flex flex-wrap gap-1">
+                        {runResult.runs.map((r, i) => (
+                          <span
+                            key={i}
+                            className={cn(
+                              "rounded px-1.5 py-0.5",
+                              r.passed === false
+                                ? "bg-destructive/10 text-destructive"
+                                : "bg-muted",
+                            )}
+                          >
+                            {r.node_id}#{r.iteration}
+                            {r.passed === true ? " ✓" : r.passed === false ? " ✗" : ""}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="whitespace-pre-wrap text-muted-foreground">
+                        {runResult.final_output}
+                      </div>
+                      {runResult.output_dir && (
+                        <div className="mt-1 font-mono text-[11px] text-muted-foreground">
+                          {t("workflows.outputDir")}: {runResult.output_dir}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
