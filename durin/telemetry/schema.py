@@ -789,9 +789,6 @@ class MemoryAbsorbEscalatedEvent(TypedDict):
     absorbed: str
     verdict: str   # "same" | "different" | "unclear"
     confidence: int  # 0-100
-    confidence: int  # confidence the original auto-merge recorded
-    iteration: NotRequired[int]
-    session_key: NotRequired[str | None]
 
 
 class MemoryStoreBlockedNearDuplicateEvent(TypedDict):
