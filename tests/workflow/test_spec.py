@@ -418,6 +418,18 @@ def test_node_persona_defaults_none():
     assert a.persona is None
 
 
+def test_legacy_decision_node_persona_xor_model():
+    # the kind=decision alias honors persona the same way (read it; xor with model)
+    a = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "decision", "criteria": "ok?", "persona": "engineer",
+         "on_pass": "b", "on_fail": "a"}, {"id": "b", "kind": "work"}]}).nodes["a"]
+    assert a.persona == "engineer"
+    with pytest.raises(WorkflowError):     # persona + model on a decision → reject
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "decision", "criteria": "ok?", "persona": "engineer",
+             "model": "glm-5.2", "on_pass": "b"}, {"id": "b", "kind": "work"}]})
+
+
 def test_parallel_max_concurrency_defaults_2_and_parses():
     fan = parse_workflow({"name": "w", "start": "f", "nodes": [
         {"id": "f", "kind": "parallel", "branches": ["a"], "next": None},

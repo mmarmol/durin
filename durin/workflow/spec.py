@@ -192,6 +192,15 @@ def _build_node(raw: dict[str, Any]) -> Node:
         model = raw.get("model")
         if model is None:                       # map judge_model only when model is unset
             model = raw.get("judge_model")
+        persona = raw.get("persona")
+        if persona is not None and not isinstance(persona, str):
+            raise WorkflowError(
+                f"node {node_id!r}: persona must be a string or omitted, got {persona!r}"
+            )
+        if persona is not None and model is not None:
+            raise WorkflowError(
+                f"node {node_id!r}: persona and model are mutually exclusive — set one or neither"
+            )
         on_pass = raw.get("on_pass")
         on_fail = raw.get("on_fail")
         if raw.get("next") is not None and (on_pass is not None or on_fail is not None):
@@ -203,6 +212,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
         return WorkNode(
             id=node_id,
             model=model,
+            persona=persona,
             context=raw.get("context", "own"),
             prompt=criteria,
             next=raw.get("next"),
