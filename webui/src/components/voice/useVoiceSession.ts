@@ -4,7 +4,7 @@ import type { DurinClient } from "@/lib/durin-client";
 import { ONNX_WASM_BASE_PATH, VAD_BASE_ASSET_PATH } from "@/lib/voiceAssets";
 import type { OrbState } from "./VoiceOrb";
 
-interface Cfg { vadThreshold: number; endOfTurnSilenceMs: number }
+interface Cfg { vadThreshold: number; endOfTurnSilenceMs: number; idleTimeoutMs: number }
 
 export function useVoiceSession(client: DurinClient, chatId: string | null, cfg: Cfg) {
   const [state, setState] = useState<OrbState>("idle");
@@ -25,6 +25,19 @@ export function useVoiceSession(client: DurinClient, chatId: string | null, cfg:
     const offAudio = client.onVoiceAudio((cid, url) => { if (cid === chatId) void play(url); });
     return () => { offState(); offAudio(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, chatId, client]);
+
+  // Self-heal: the gateway holds the voice session in memory per-connection and
+  // drops it on a socket reconnect, while the browser stays active and keeps
+  // transcribing — so replies would otherwise come back as text with no audio.
+  // On a real reconnect (down → open), re-send voice_start to re-establish it.
+  useEffect(() => {
+    if (!active || !chatId) return;
+    let wasDown = false;
+    return client.onStatus((s) => {
+      if (s === "reconnecting" || s === "connecting" || s === "closed") wasDown = true;
+      else if (s === "open" && wasDown) { wasDown = false; client.sendVoiceStart(chatId); }
+    });
   }, [active, chatId, client]);
 
   const play = useCallback(async (url: string) => {
@@ -104,6 +117,16 @@ export function useVoiceSession(client: DurinClient, chatId: string | null, cfg:
 
   const toggle = useCallback(() => { if (active) stop(); else void start(); }, [active, start, stop]);
   useEffect(() => () => { if (vadRef.current) stop(); }, [stop]);
+
+  // Auto-close after a stretch of silence. The clock runs only in the idle
+  // "listening" state and is reset by any state transition (a turn moves through
+  // transcribing/thinking/speaking), so it never fires mid-exchange. 0 disables it.
+  useEffect(() => {
+    if (!active || cfg.idleTimeoutMs <= 0 || state !== "listening") return;
+    const id = setTimeout(() => { stop(); }, cfg.idleTimeoutMs);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, state, cfg.idleTimeoutMs, stop]);
 
   return { state, amplitude, active, toggle };
 }

@@ -46,6 +46,7 @@ interface TranscriptionState {
   ttsOpenaiApiKey: string;
   voiceEnabled: boolean;
   bargeIn: boolean;
+  idleTimeoutS: number;
   spokenMode: string;
   spokenThreshold: number;
 }
@@ -75,6 +76,7 @@ function readState(config: Record<string, unknown> | null): TranscriptionState {
     ttsOpenaiApiKey: (ttsOpenai.api_key as string) ?? "",
     voiceEnabled: typeof voice.enabled === "boolean" ? voice.enabled : true,
     bargeIn: typeof voice.barge_in === "boolean" ? voice.barge_in : true,
+    idleTimeoutS: typeof voice.idle_timeout_s === "number" ? voice.idle_timeout_s : 300,
     spokenMode: (sr.mode as string) ?? "model_led",
     spokenThreshold: typeof sr.long_threshold_words === "number" ? sr.long_threshold_words : 60,
   };
@@ -108,6 +110,7 @@ const SPOKEN_MODES: ReadonlyArray<{ value: string; labelKey: string }> = [
   { value: "model_led", labelKey: "settings.voice.spoken.modelLed" },
   { value: "verbatim", labelKey: "settings.voice.spoken.verbatim" },
 ];
+const IDLE_TIMEOUTS: ReadonlyArray<number> = [0, 60, 180, 300, 600, 900];
 
 export function TranscriptionSettings({ token }: { token: string }) {
   const { t } = useTranslation();
@@ -591,6 +594,24 @@ export function TranscriptionSettings({ token }: { token: string }) {
                       onClick={() => void onSave("voice.barge_in", !state.bargeIn)}>
                 {state.bargeIn ? t("settings.config.on") : t("settings.config.off")}
               </Button>
+            </SettingsRow>
+            <SettingsRow
+              title={t("settings.voice.conv.idleTimeoutTitle")}
+              description={t("settings.voice.conv.idleTimeoutDesc")}
+            >
+              <select
+                aria-label={t("settings.voice.conv.idleTimeoutTitle")}
+                value={String(state.idleTimeoutS)}
+                onChange={(e) => void onSave("voice.idle_timeout_s", Number(e.target.value))}
+                disabled={savingPath === "voice.idle_timeout_s"}
+                className="h-8 rounded-full border bg-background px-3 text-[13px]"
+              >
+                {IDLE_TIMEOUTS.map((s) => (
+                  <option key={s} value={s}>
+                    {s === 0 ? t("settings.voice.conv.idleTimeoutNever") : `${s / 60} min`}
+                  </option>
+                ))}
+              </select>
             </SettingsRow>
           </SettingsGroup>
         </section>
