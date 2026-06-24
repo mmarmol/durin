@@ -1670,13 +1670,20 @@ def _run_gateway(
                     # extract its new turns into entity attributes immediately
                     # (the frequent dream, event-driven; the per-session cursor
                     # makes it idempotent). Refine stays on the daily cron.
-                    from durin.memory.dream_passes import run_extract_pass
+                    from durin.memory.dream_passes import (
+                        dream_vector_index, run_extract_pass)
                     from durin.memory.model_resolve import resolve_memory_model
+                    # Pass the vector index so source-side semantic dedup runs on
+                    # the reactive path too (where most turns are processed first
+                    # — the cron rarely re-sees them). Bounded cost: the reactive
+                    # dream is throttled (min_seconds_between_runs) and the
+                    # embedding model loads lazily.
                     out = run_extract_pass(
                         ws, model=resolve_memory_model(config),
                         max_seconds=_dream_max_s,
                         discover=config.memory.dream.discover_enabled,
                         skill_signals=config.memory.dream.skill_signals_enabled,
+                        vector_index=dream_vector_index(ws, config),
                     )
                     logger.info(
                         "reactive dream done ({}): {} session(s), {} attribute "

@@ -212,7 +212,11 @@ def _resolve_semantic_ref(
     """An embedding-near existing same-type entity the judge confirms is the
     same identity as this proposal — else None. Catches a variant-name
     duplicate at birth when lexical name matching missed it. Best-effort:
-    any vector/judge failure falls back to None (create)."""
+    any vector/judge failure falls back to None (create).
+
+    The index is the run's start-of-pass snapshot, so an entity created
+    earlier in the SAME run isn't visible here — same-run cross-session
+    variants are caught by the nightly refine pass instead."""
     from durin.memory.absorb_judge import JudgeError, judge_pair
     from durin.memory.deletion import is_deleted
     from durin.memory.vector_index import VectorIndex
@@ -220,7 +224,9 @@ def _resolve_semantic_ref(
     query = VectorIndex._compose_entity_page_text(
         name=name, aliases=[], body="", attributes=attributes, relations=[])
     try:
-        rows = vector_index.search(query, top_k=3)
+        # top_k=5: the nearest few neighbours; type-filtered below. A few extra
+        # covers the case where closer neighbours are a different type.
+        rows = vector_index.search(query, top_k=5)
     except Exception:  # noqa: BLE001
         return None
     for row in rows:
