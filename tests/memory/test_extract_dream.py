@@ -113,9 +113,6 @@ def _page(ws, ref):
 # Task 3: per-entity provenance precision
 # ---------------------------------------------------------------------------
 
-class _Resp2:
-    def __init__(self, text): self.text = text
-
 
 def test_discover_provenance_uses_fact_turn(tmp_path):
     proposals = json.dumps([{
@@ -124,7 +121,7 @@ def test_discover_provenance_uses_fact_turn(tmp_path):
     }])
     discover_entities(tmp_path, "[turn-12] USER: torrent is in valencia",
                       existing_refs=[],
-                      llm_invoke=lambda *a, **k: _Resp2(proposals), model="m",
+                      llm_invoke=lambda *a, **k: _Resp(proposals), model="m",
                       source_ref="[[sessions/abc.md#turn-40]]")  # window-end fallback
     page = EntityPage.from_file(tmp_path / "memory" / "entities" / "place" / "torrent.md")
     sr = page.provenance["attributes"]["region"]["source_ref"]
@@ -138,7 +135,7 @@ def test_discover_provenance_falls_back_when_no_turn(tmp_path):
     }])
     discover_entities(tmp_path, "[turn-5] USER: valencia is in spain",
                       existing_refs=[],
-                      llm_invoke=lambda *a, **k: _Resp2(proposals), model="m",
+                      llm_invoke=lambda *a, **k: _Resp(proposals), model="m",
                       source_ref="[[sessions/abc.md#turn-40]]")
     page = EntityPage.from_file(tmp_path / "memory" / "entities" / "place" / "valencia.md")
     sr = page.provenance["attributes"]["country"]["source_ref"]
@@ -150,10 +147,12 @@ def test_parse_discoveries_accepts_integer_float_turn():
     [p] = parse_discoveries(raw)
     assert p["turn"] == 16                         # integer-valued float accepted
 
+
 def test_parse_discoveries_rejects_fractional_float_turn():
     raw = '[{"ref": "topic:x", "name": "X", "turn": 16.5, "attributes": {"a": 1}}]'
     [p] = parse_discoveries(raw)
     assert p["turn"] is None                       # fractional float rejected
+
 
 def test_parse_discoveries_rejects_bool_turn():
     raw = '[{"ref": "topic:x", "name": "X", "turn": true, "attributes": {"a": 1}}]'
