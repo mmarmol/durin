@@ -1,7 +1,7 @@
 from pathlib import Path
 from datetime import datetime, timezone
 import asyncio
-from durin.agent.tools.memory_lineage_tools import MemoryReadEntityTool
+from durin.agent.tools.memory_lineage_tools import MemoryReadEntityTool, MemoryEntityLineageTool
 from durin.memory.memory_writer import write_entity
 from durin.memory.field_patch import FieldPatch
 
@@ -18,3 +18,12 @@ def test_read_entity_returns_full_markdown(tmp_path):
 def test_read_entity_missing(tmp_path):
     out = asyncio.run(MemoryReadEntityTool(tmp_path).execute(ref="place:nope"))
     assert "error" in out
+
+
+def test_entity_lineage_lists_commits(tmp_path):
+    write_entity(tmp_path, "place:torrent", [FieldPatch(kind="attribute",
+        key="region", value="Valencia", author="dream", source_ref="s", at=NOW)],
+        create=True, name="Torrent")
+    out = asyncio.run(MemoryEntityLineageTool(tmp_path).execute(ref="place:torrent"))
+    assert out["commits"], out
+    assert "when" in out["commits"][0] and "message" in out["commits"][0]
