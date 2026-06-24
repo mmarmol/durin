@@ -72,13 +72,15 @@ function computeDepths(def: WorkflowDef): Record<string, number> {
 
 // A node "routes" when it has on_pass or on_fail set, regardless of kind.
 // This means both legacy kind:"decision" nodes and new kind:"work" nodes with
-// routing fields render identically (pass/fail edges + decision ring/handles).
+// routing fields render identically (pass/fail edges + handles).
 function nodeRoutes(n: WorkflowNodeDef): boolean {
   return n.on_pass != null || n.on_fail != null;
 }
 
-// Resolve the React Flow node type: routing nodes always render as "decision"
-// so NodeCard shows the decision ring regardless of the stored kind.
+// Resolve the React Flow node type for component selection: routing nodes resolve
+// to "decision" so the correct React Flow node component is used. Both "decision"
+// and "work" map to NodeCard — this is an internal discriminator, not a user-facing
+// label. The type does not imply a visual ring; that concept was removed.
 function resolveNodeType(n: WorkflowNodeDef): string {
   if (nodeRoutes(n)) return "decision";
   return n.kind;

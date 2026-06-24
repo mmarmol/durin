@@ -811,7 +811,8 @@
     "expand": "expand",
     "collapse": "collapse",
     "testTitle": "test — run once",
-    "done": "done"
+    "done": "done",
+    "setAsStart": "set as start"
   },
   "skills": {
     "view": "View",

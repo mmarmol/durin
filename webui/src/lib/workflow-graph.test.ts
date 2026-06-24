@@ -104,7 +104,7 @@ describe("workflowToFlow", () => {
     expect(edges.find((e) => e.source === "gate" && e.label === "fail")?.target).toBe("prod");
   });
 
-  it("a routing kind:work node type is 'decision' so NodeCard shows the decision ring", () => {
+  it("a routing kind:work node resolves to the internal 'decision' flow-type (component selection)", () => {
     const { nodes } = workflowToFlow({
       name: "ring",
       start: "gate",
@@ -240,8 +240,6 @@ describe("workflowToFlow", () => {
     const a = nodes.find((n) => n.id === "a")!;
     expect(a.position).toEqual({ x: 500, y: 40 });
   });
-
-
 
   it("connects OUTPUT from both branches of a routing split (routing-triage)", () => {
     const { edges } = workflowToFlow({

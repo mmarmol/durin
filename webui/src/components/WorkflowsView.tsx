@@ -119,7 +119,7 @@ function IOCard({ data, selected }: NodeProps) {
       )}
     >
       {isInput ? null : <Handle type="target" position={Position.Left} />}
-      <span className="uppercase tracking-widest opacity-60">{isInput ? "INPUT" : "OUTPUT"}</span>
+      <span className="uppercase tracking-widest opacity-60">{t("workflows.kind." + (isInput ? "input" : "output"))}</span>
       <span className="opacity-80">{ioTags(desc, t)}</span>
       {isInput ? <Handle type="source" position={Position.Right} /> : null}
     </div>
@@ -306,7 +306,7 @@ function NodeConfigPanel({
             className="ml-auto text-xs text-muted-foreground hover:text-foreground"
             onClick={onMakeStart}
           >
-            set as start
+            {t("workflows.setAsStart")}
           </button>
         )}
       </div>
@@ -639,7 +639,7 @@ function IOConfigPanel({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
-        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase">{which}</span>
+        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase">{t("workflows.kind." + which)}</span>
         <span className="text-sm font-medium">{title}</span>
       </div>
       <p className="text-xs text-muted-foreground">{hint}</p>

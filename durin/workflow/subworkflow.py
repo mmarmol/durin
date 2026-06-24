@@ -2,10 +2,11 @@
 
 A subworkflow node delegates to this. It loads the named workflow and runs a nested
 WorkflowEngine reusing the same node and branch-pick runners, so nodes inside a sub-workflow
-behave exactly as at the top level. A depth counter caps nesting: beyond ``max_depth``
-it returns an error string instead of recursing, which also bounds a cyclic reference
-(a workflow that includes itself). A missing workflow returns an error string rather
-than raising, so one bad reference does not abort the whole run.
+behave exactly as at the top level. Cycles (a workflow that includes itself) are caught
+precisely on re-entry by a call-stack guard. ``max_depth`` is the backstop for deeply
+nested but non-cyclic workflows: beyond that limit it returns an error string instead of
+recursing. A missing workflow returns an error string rather than raising, so one bad
+reference does not abort the whole run.
 """
 
 from __future__ import annotations

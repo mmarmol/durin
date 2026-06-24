@@ -1373,6 +1373,7 @@
     "expand": "expandir",
     "collapse": "contraer",
     "testTitle": "probar — correr una prueba",
-    "done": "listo"
+    "done": "listo",
+    "setAsStart": "marcar como inicio"
   }
 }
