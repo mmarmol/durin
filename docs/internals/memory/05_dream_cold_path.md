@@ -142,9 +142,10 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    The prompt requests all four components from the source turns only; none are
    invented. The proposal also includes a `turn` field: the turn number where
    the entity's durable fact first appears. Each patch written by `discover_entities`
-   carries a `source_ref` of `[[sessions/<stem>.md#turn-N]]` using that per-entity
-   turn number, so provenance points to the turn the fact came from rather than
-   the session's window-end watermark. Before creating a new page, each proposal
+   carries a `source_ref` of `[[sessions/<stem>.md#turn-N]]` using that turn
+   number, falling back to the window-end marker when the proposal omits `turn`,
+   so provenance points to the turn the fact came from rather than the session's
+   window-end watermark. Before creating a new page, each proposal
    is resolved against the existing graph by name within the same entity type
    (via the alias index): a **unique** match updates that entity in place instead
    of minting a new slug; an **ambiguous** match (more than one candidate) creates
@@ -168,9 +169,8 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
 7. Advance the cursor to the total turn count via `set_extract_cursor`.
 
 The `source_ref` in each patch's provenance points to the turn the fact came from.
-Stage 1 (extract) uses the session window-end marker
-`[[sessions/<stem>.md#turn-<N>]]` where N is the last processed turn. Stage 2
-(discover) uses the per-entity `turn` from the LLM proposal when present,
+Stage 1 (extract) uses the session window-end marker `[[sessions/<stem>.md#turn-<N>]]`.
+Stage 2 (discover) uses the per-entity `turn` from the LLM proposal when present,
 producing a more precise `[[sessions/<stem>.md#turn-<M>]]` that anchors to the
 specific turn where the entity's durable fact first appears; when the proposal
 omits `turn`, it falls back to the same window-end marker. `max_seconds`
