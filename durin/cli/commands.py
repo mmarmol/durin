@@ -1380,7 +1380,10 @@ def _run_gateway(
                 ex = await _asyncio.to_thread(
                     run_extract_pass, workspace, model=model,
                     max_seconds=_cron_max_s, discover=_discover,
-                    skill_signals=_skill_signals, vector_index=_vi)
+                    skill_signals=_skill_signals,
+                    confidence_threshold=_absorb.confidence_threshold,
+                    semantic_distance_threshold=_absorb.semantic_distance_threshold,
+                    vector_index=_vi)
                 df = await _asyncio.to_thread(
                     run_derived_from_pass, workspace, model=model, max_seconds=_cron_max_s)
                 sk = await _asyncio.to_thread(run_skill_extract_pass, workspace, model=model)
@@ -1388,6 +1391,7 @@ def _run_gateway(
                     run_refine_pass, workspace, model=model,
                     enabled=_absorb.enabled,
                     confidence_threshold=_absorb.confidence_threshold,
+                    semantic_distance_threshold=_absorb.semantic_distance_threshold,
                     run_started_at=_run_started,
                     vector_index=_vi)
                 ao = await _asyncio.to_thread(
@@ -1683,6 +1687,8 @@ def _run_gateway(
                         max_seconds=_dream_max_s,
                         discover=config.memory.dream.discover_enabled,
                         skill_signals=config.memory.dream.skill_signals_enabled,
+                        confidence_threshold=config.memory.dream.auto_absorb.confidence_threshold,
+                        semantic_distance_threshold=config.memory.dream.auto_absorb.semantic_distance_threshold,
                         vector_index=dream_vector_index(ws, config),
                     )
                     logger.info(

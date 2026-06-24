@@ -320,6 +320,7 @@ background file watching, and health checks. See
 |---|---|---|
 | `enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone) |
 | `confidence_threshold` | `95` | LLM-judge confidence floor (0-100) for an auto-merge |
+| `semantic_distance_threshold` | `0.20` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.90; lower = stricter — the judge still decides the merge |
 
 **`memory.search`** — search pipeline configuration:
 

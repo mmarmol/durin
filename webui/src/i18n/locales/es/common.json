@@ -253,7 +253,7 @@
         "dreamDiscover": "También crea entidades a partir de hechos durables que mencionás pero no guardás explícitamente, para que la memoria crezca desde la conversación — no solo desde los guardados explícitos. Activado por defecto.",
         "dreamAutoAbsorb": "Permite que la pasada de refine fusione automáticamente entidades que juzga duplicadas (solo alta confianza). Apagado mantiene las fusiones manuales.",
         "dreamAbsorbConfidence": "Confianza mínima (0-100) que el juez exige para fusionar dos entidades. 95 = alta precisión. Solo aplica con auto-absorber activado.",
-        "dreamAbsorbMinAge": "Cuarentena: no fusionar entidades más nuevas que estas horas, para que dos entidades recién creadas no se fusionen antes de diferenciarse. Solo con auto-absorber activado.",
+        "dreamAbsorbSemanticThreshold": "Qué tan cerca (distancia de embedding, ~0–1; 0.20 ≈ 90% de parecido) deben estar dos entidades del mismo tipo para que el judge las considere la misma. Menor = más estricto. El judge decide la fusión real.",
         "dreamThrottle": "Segundos mínimos entre pasadas reactivas de dream (post-compactación / cierre de sesión). Absorbe ráfagas para que no se apilen pasadas solapadas; 0 desactiva. El cron diario nunca se limita.",
         "dreamMaxSeconds": "Cota wall-clock por pasada de extract. Al alcanzarla, la pasada cede tras la sesión actual y el cursor por-sesión reanuda el resto en el siguiente disparador. 0 = sin límite.",
         "dreamAlwaysOnBudget": "Presupuesto de tokens para la guía 'always-on' que se pinea en cada prompt. El dream rankea el feedback (stance/practice), descarta contradicciones y mete los de mayor prioridad en este presupuesto. 0 desactiva el pin."
@@ -269,7 +269,7 @@
         "dreamDiscover": "Descubrir entidades del chat",
         "dreamAutoAbsorb": "Auto-absorber duplicados",
         "dreamAbsorbConfidence": "Confianza de auto-absorción",
-        "dreamAbsorbMinAge": "Cuarentena de fusión (h)",
+        "dreamAbsorbSemanticThreshold": "Distancia de coincidencia semántica",
         "dreamThrottle": "Throttle reactivo (s)",
         "dreamMaxSeconds": "Máx. segundos por pasada",
         "dreamAlwaysOnBudget": "Presupuesto always-on (tokens)"
