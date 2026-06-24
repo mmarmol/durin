@@ -242,7 +242,7 @@ class WorkflowEngine:
         file changes are reconciled back.
         """
         branches = node.branches
-        workers = max(1, len(branches))
+        workers = max(1, min(len(branches), node.max_concurrency))
 
         if node.reconcile == "read":
             def _run(bid):

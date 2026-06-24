@@ -404,3 +404,28 @@ def test_parallel_choose_without_pick_runner_aborts(tmp_path):
     eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1", workspace=str(tmp_path))
     res = eng.run(_writing_wf("choose", criteria="best"), "t")
     assert res.status == "aborted"
+
+
+def test_parallel_respects_max_concurrency(tmp_path):
+    import threading
+    import time
+
+    live = []
+    lock = threading.Lock()
+    peak = [0]
+
+    def runner(req):
+        with lock:
+            live.append(req.node.id)
+            peak[0] = max(peak[0], len(live))
+        time.sleep(0.05)
+        with lock:
+            live.remove(req.node.id)
+        return NodeRunResponse(output="x")
+
+    nodes = [{"id": "f", "kind": "parallel", "branches": ["a", "b", "c", "d"],
+              "max_concurrency": 2, "next": None}]
+    nodes += [{"id": n, "kind": "work"} for n in "abcd"]
+    wf = parse_workflow({"name": "w", "start": "f", "nodes": nodes})
+    WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
+    assert peak[0] <= 2
