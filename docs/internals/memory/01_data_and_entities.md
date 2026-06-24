@@ -278,6 +278,8 @@ Archive is excluded from all default search paths: the vector index, FTS5, the g
 | `principal_channel_map` | `{}` | Maps `channel_id → person:<name>` for principal resolution per channel. |
 | `memory.file_watcher.enabled` | `true` | Reactive re-embed when the user edits a `.md` file directly. |
 | `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). When off, suggestions are logged for manual review. |
+| `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM judge confidence floor (0–100) for an auto-merge. |
+| `memory.dream.auto_absorb.semantic_distance_threshold` | `0.20` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.90; lower = stricter — the judge still decides the merge. |
 
 **CLI surfaces:**
 
