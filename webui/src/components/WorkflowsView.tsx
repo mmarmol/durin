@@ -364,7 +364,9 @@ function NodeConfigPanel({
   function handleBodyToggle(newBody: "agent" | "command") {
     if (newBody === "command") {
       // Switch to command: set command to empty string, clear agent-only fields.
-      onChange({ command: "", mode: undefined, model: undefined, persona: undefined, prompt: undefined });
+      // Also clear multi-way cases — a command node routes only on its exit code
+      // (binary on_pass/on_fail), never on an emitted label.
+      onChange({ command: "", mode: undefined, model: undefined, persona: undefined, prompt: undefined, cases: undefined });
     } else {
       // Switch to agent: clear command, restore agent defaults.
       onChange({ command: undefined, mode: "build" });
@@ -546,7 +548,10 @@ function NodeConfigPanel({
                 onChange={(e) => switchRoutingShape(e.target.value as "binary" | "multiway")}
               >
                 <option value="binary">{t("workflows.routingShapeBinary")}</option>
-                <option value="multiway">{t("workflows.routingShapeMultiway")}</option>
+                {/* A command node routes only on its exit code, so multi-way (label-based) is agent-only. */}
+                {body !== "command" && (
+                  <option value="multiway">{t("workflows.routingShapeMultiway")}</option>
+                )}
               </select>
             </Field>
           )}

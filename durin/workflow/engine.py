@@ -4,10 +4,12 @@ Walks a parsed Workflow from its start node, following edges. A work node runs v
 the injected ``node_runner`` and its output passes along the edge to the next node;
 a 'shared'-context node also reads/extends a running shared-context buffer, while an
 'own'-context node is isolated (it sees only the upstream output). A routing node
-(one with on_pass/on_fail set) derives a pass/fail verdict from its own output (agent
-nodes: first-line PASS/FAIL from parse_verdict; command nodes: exit code) and follows
-the appropriate edge. A per-node visit cap guards against infinite loop-backs. The run
-returns a typed WorkflowResult.
+derives a verdict from its own output and follows the matching edge: a binary node
+(on_pass/on_fail) routes on a PASS/FAIL verdict (agent: first-line parse_verdict;
+command: exit code); a multi-way node (cases) routes on which declared label the agent
+emits (parse_label) — to that label's target, to "default", or aborting if neither. A
+per-node visit cap guards against infinite loop-backs. The run returns a typed
+WorkflowResult.
 
 The graph logic is decoupled from real LLM execution: ``node_runner`` is injectable
 so this engine is fully unit-testable with a mock. The default runner that wraps
