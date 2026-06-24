@@ -86,6 +86,29 @@ def test_run_no_upsert_no_extraction(tmp_path):
     assert out["cursor"] == 1
 
 
+def test_run_extract_calls_learnings_when_enabled(tmp_path, monkeypatch):
+    calls = {}
+    import durin.memory.extract_runner as er
+    def _mine(ws, text, **k):
+        calls["text"] = text
+        return [{"ref": "feedback:x", "committed": True}]
+    monkeypatch.setattr(er, "mine_learnings", _mine)
+    monkeypatch.setattr(er, "extract_entity", lambda *a, **k: type("R", (), {"committed": False})())
+    monkeypatch.setattr(er, "discover_entities", lambda *a, **k: [])
+    monkeypatch.setattr(er, "entity_refs_in_messages", lambda m: [])
+    monkeypatch.setattr(er, "load_session", lambda p: ({}, [{"role": "user", "content": "hola"}]))
+    monkeypatch.setattr(er, "get_extract_cursor", lambda p: 0)
+    monkeypatch.setattr(er, "set_extract_cursor", lambda p, n: None)
+    r = er.run_extract_for_session(tmp_path, tmp_path / "s.jsonl",
+                                   skill_signals=False, discover=False, learnings=True)
+    assert "[turn-1] USER: hola" in calls["text"]
+    assert r["learnings"] == [{"ref": "feedback:x", "committed": True}]
+    calls.clear()
+    er.run_extract_for_session(tmp_path, tmp_path / "s.jsonl",
+                               skill_signals=False, discover=False, learnings=False)
+    assert "text" not in calls   # disabled -> not called
+
+
 def test_extract_text_numbers_turns(tmp_path, monkeypatch):
     # Build a 2-turn session at cursor 0; capture the text passed to discover.
     captured = {}

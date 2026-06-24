@@ -218,6 +218,7 @@ def cmd_dream(
     console.print("[dim]Extract pass (sessions → entity attributes)…[/dim]")
     ex = run_extract_pass(workspace, model=model,
                           discover=cfg.memory.dream.discover_enabled,
+                          learnings=cfg.memory.dream.learnings_sweep_enabled,
                           confidence_threshold=_absorb.confidence_threshold,
                           semantic_distance_threshold=_absorb.semantic_distance_threshold,
                           vector_index=_vi)

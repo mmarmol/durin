@@ -848,6 +848,20 @@ class MemoryDreamDiscoverEvent(TypedDict):
     refs: list[str]  # the entity refs written
 
 
+class MemoryDreamLearningsEvent(TypedDict):
+    """The extract dream's learnings-sweep stage processed one session.
+
+    It found durable preferences and corrections in conversation turns and
+    wrote them as feedback/stance/practice entities. ``proposed`` is what the
+    LLM returned (before type-guard filtering); ``written`` is what was
+    committed. Lets dashboards measure learnings precision over time.
+    """
+
+    proposed: int
+    written: int
+    refs: list[str]  # the entity refs written
+
+
 class MemoryEntityRelationCapWarnedEvent(TypedDict):
     """An entity write took its relation count across the soft cap (50). The
     write proceeded (alert-only); this event lets dashboards spot mega-hub
@@ -1282,6 +1296,7 @@ EVENTS: dict[str, type] = {
     "memory.dream.end": MemoryDreamEndEvent,
     "memory.dream.patch_applied": MemoryDreamPatchAppliedEvent,
     "memory.dream.discover": MemoryDreamDiscoverEvent,
+    "memory.dream.learnings": MemoryDreamLearningsEvent,
     "memory.dream.skill_extract": MemoryDreamSkillExtractEvent,
     "memory.dream.skill_signals": MemoryDreamSkillSignalsEvent,
     "memory.dream.max_seconds_reached": MemoryDreamMaxSecondsReachedEvent,
@@ -1374,6 +1389,7 @@ __all__ = [
     "MemoryRecallVectorEvent",
     "MemoryDreamPatchAppliedEvent",
     "MemoryDreamDiscoverEvent",
+    "MemoryDreamLearningsEvent",
     "MemoryEntityRelationCapWarnedEvent",
     "MemoryEntityRelationCapRejectedEvent",
     "MemoryHealthCheckEvent",

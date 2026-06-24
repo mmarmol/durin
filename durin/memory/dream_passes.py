@@ -89,6 +89,7 @@ def run_extract_pass(
     max_seconds: int = 0,
     discover: bool = True,
     skill_signals: bool = True,
+    learnings: bool = True,
     confidence_threshold: int = 95,
     semantic_distance_threshold: float = 0.20,
     vector_index: object | None = None,
@@ -128,13 +129,15 @@ def run_extract_pass(
                 r = run_extract_for_session(
                     workspace, jsonl_path, llm_invoke=llm_invoke, model=model,
                     discover=discover, skill_signals=skill_signals,
+                    learnings=learnings,
                     confidence_threshold=confidence_threshold,
                     semantic_distance_threshold=semantic_distance_threshold,
                     alias_index=_alias_index, vector_index=vector_index)
                 extracted = r.get("extracted") or []
                 discovered = r.get("discovered") or []
                 sig = r.get("skill_signals") or []
-                if extracted or discovered or sig:
+                learned = r.get("learnings") or []
+                if extracted or discovered or sig or learned:
                     out["sessions"] += 1
                     out["entities"] += len(extracted)
                     out["discovered"] += len(discovered)
