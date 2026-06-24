@@ -1573,6 +1573,31 @@ export async function fetchDreamDigest(
   return res.data;
 }
 
+export type FlaggedPair = components["schemas"]["FlaggedPair"];
+
+export async function fetchFlaggedPairs(
+  token: string,
+  base: string = "",
+): Promise<FlaggedPair[]> {
+  const res = await request<{ pairs: FlaggedPair[] }>(
+    `${base}/api/v1/memory/flagged-pairs`,
+    token,
+  );
+  return res.pairs;
+}
+
+export async function resolveFlaggedPair(
+  token: string,
+  body: { ref_a: string; ref_b: string; action: "merge" | "separate" },
+  base: string = "",
+): Promise<{ ok: boolean; action: string }> {
+  return post<{ ok: boolean; action: string }>(
+    `${base}/api/v1/memory/flagged-pairs/resolve`,
+    token,
+    body,
+  );
+}
+
 export interface MemoryEdgeDetail {
   source: string;
   target: string;

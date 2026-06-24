@@ -1330,6 +1330,19 @@
       "type": "Tipo",
       "aliases": "Alias",
       "identifiers": "Identificadores"
+    },
+    "tabs": {
+      "resumen": "Resumen",
+      "bandeja": "Bandeja"
+    },
+    "bandeja": {
+      "flaggedTitle": "Memorias marcadas para revisar",
+      "quarantineTitle": "Skills en cuarentena",
+      "merge": "Fusionar",
+      "keepSeparate": "Mantener separadas",
+      "reviewInSkills": "Revisar en Skills",
+      "emptyFlagged": "No hay pares de memoria marcados para revisión.",
+      "emptyQuarantine": "No hay skills en cuarentena."
     }
   },
   "workflows": {
