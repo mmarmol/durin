@@ -309,7 +309,7 @@ use `"default"`), `model` (a model picker ref — a preset name or
 `"provider model"` string — or `None` to inherit the global default model), and
 `description` (free text shown in `/persona` listings).
 
-Personas live in the `personas` map in `config.yml`, structurally identical to
+Personas live in the `personas` map in `config.json`, structurally identical to
 `model_presets`. On first run, three example personas (`researcher`, `engineer`,
 `tutor`) are seeded into that map (`durin/personas/builtin.py`'s
 `seed_example_personas`, guarded by the `agents.defaults.personas_seeded`
@@ -327,12 +327,16 @@ reserved persona names).
 
 Example user config:
 
-```yaml
-personas:
-  acme:
-    soul: researcher
-    model: fast        # a named preset
-    description: "Research mode for Acme project"
+```json
+{
+  "personas": {
+    "acme": {
+      "soul": "researcher",
+      "model": "fast",
+      "description": "Research mode for Acme project"
+    }
+  }
+}
 ```
 
 #### Selection and precedence
@@ -360,7 +364,7 @@ Souls and personas are manageable through three surfaces:
 
 - **`/persona` slash command** — switches the active persona for the current
   conversation; `/persona default` reverts.
-- **`agents.defaults.persona` in `config.yml`** — sets the global default persona
+- **`agents.defaults.persona` in `config.json`** — sets the global default persona
   applied to every new conversation.
 - **Webui Personas settings section** — a SOUL library editor (create, edit,
   delete named soul files) and a Persona definitions panel (create/update
