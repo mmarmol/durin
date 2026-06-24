@@ -253,9 +253,9 @@ triggers (session compaction, session close) run only the extract pass, throttle
    entity pairs sharing aliases via `AliasIndex`, skip cross-type / tombstoned /
    user-managed / quarantined pairs, judge survivors via `absorb_judge.judge_pair`
    (LLM returning same / different / unclear + confidence), and merge on
-   `same + confidence ≥ threshold` via `EntityAbsorption.absorb`. Disabled by default
-   (`memory.dream.auto_absorb.enabled = false`); manual `durin memory absorb` is
-   always available.
+   `same + confidence ≥ threshold` via `EntityAbsorption.absorb`. ON by default
+   (`memory.dream.auto_absorb.enabled = true`); a bad merge is recoverable via
+   `git revert` of the absorb commit. Manual `durin memory absorb` is always available.
 
 5. **always_on** (`always_on_dream.run_always_on_pass`): gather stance, practice, and
    feedback entity pages, rank them via an LLM judge that drops contradictions, fit the
@@ -322,7 +322,7 @@ For deeper coverage of individual subsystems, see the sibling docs:
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for reactive triggers; 0 disables. |
 | `memory.dream.max_seconds_per_run` | `600` | Hard wall-clock cap per extract pass; 0 = unbounded. |
 | `memory.dream.always_on_token_budget` | `1500` | Token ceiling for always-on pinned guidance; 0 disables the pin. |
-| `memory.dream.auto_absorb.enabled` | `false` | Enable automatic entity merging by the refine pass. Off by default; use `durin memory absorb-suggest` and `durin memory absorb` for manual control. |
+| `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). Use `durin memory absorb-suggest` and `durin memory absorb` for manual control. |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM judge confidence floor (0–100) for auto-merge. |
 
 ### Principal resolution keys

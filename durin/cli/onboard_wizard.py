@@ -1029,7 +1029,7 @@ def _configure_memory(
             config.memory.search.cross_encoder, "model", "",
         )
         absorb_on = bool(getattr(
-            config.memory.dream.auto_absorb, "enabled", False,
+            config.memory.dream.auto_absorb, "enabled", True,
         ))
         aux_model = getattr(
             config.memory.dream, "model_override", None,
