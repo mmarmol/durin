@@ -275,3 +275,31 @@ async def test_dream_digest_sorted_newest_first(tmp_path: Path, monkeypatch):
     assert len(result.events) == 2
     assert result.events[0].at_ms > result.events[1].at_ms
     assert result.events[0].ref == "person:new"
+
+
+# ---------------------------------------------------------------------------
+# dream.flagged -> kind="flagged"
+# ---------------------------------------------------------------------------
+
+
+async def test_dream_digest_maps_flagged(tmp_path: Path, monkeypatch):
+    tel_dir = tmp_path / "telemetry"
+    ts = 1_700_000_400.0
+    lines = [
+        _jsonl_line("memory.dream.flagged", {
+            "canonical": "person:alice",
+            "absorbed": "person:alice-v2",
+        }, ts=ts),
+    ]
+    _seed_telemetry(tel_dir, lines)
+    monkeypatch.setattr("durin.service.memory._telemetry_dir", lambda: tel_dir)
+
+    result = await _service(tmp_path).dream_digest(DreamDigestQuery(), LOCAL)
+
+    assert len(result.events) == 1
+    ev = result.events[0]
+    assert ev.kind == "flagged"
+    assert ev.ref == "person:alice"
+    assert ev.ref_kind == "entity"
+    assert ev.summary == "Flagged a memory pair for review"
+    assert ev.at_ms == int(ts * 1000)

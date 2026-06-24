@@ -1206,6 +1206,17 @@ class MemoryDreamAlwaysOnEvent(TypedDict):
     duration_ms: int
 
 
+class MemoryDreamFlaggedEvent(TypedDict):
+    """The refine dream flagged a pair the Tier-2 agent investigated but did not
+    confirm as the same entity.  ``canonical`` and ``absorbed`` are the two refs
+    the judge examined; the pair is stored in ``.flagged_pairs.json`` for future
+    review.  Fires inside ``add_flagged`` so it is always consistent with the
+    on-disk record."""
+
+    canonical: str
+    absorbed: str
+
+
 class MemoryUpsertEntityEvent(TypedDict):
     """memory_upsert_entity tool write (entity page authored/extended)."""
 
@@ -1302,6 +1313,7 @@ EVENTS: dict[str, type] = {
     "memory.dream.max_seconds_reached": MemoryDreamMaxSecondsReachedEvent,
     "memory.dream.throttled": MemoryDreamThrottledEvent,
     "memory.dream.always_on": MemoryDreamAlwaysOnEvent,
+    "memory.dream.flagged": MemoryDreamFlaggedEvent,
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
@@ -1390,6 +1402,7 @@ __all__ = [
     "MemoryDreamPatchAppliedEvent",
     "MemoryDreamDiscoverEvent",
     "MemoryDreamLearningsEvent",
+    "MemoryDreamFlaggedEvent",
     "MemoryEntityRelationCapWarnedEvent",
     "MemoryEntityRelationCapRejectedEvent",
     "MemoryHealthCheckEvent",

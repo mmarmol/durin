@@ -7,8 +7,10 @@ import MarkdownTextRenderer from "@/components/MarkdownTextRenderer";
 import {
   describeSkill,
   fetchMemoryEntity,
+  getSkill,
   type MemoryEntityDetail,
   type SkillDescribeResult,
+  type SkillDetail,
 } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
@@ -95,23 +97,27 @@ function EntityDetail({ entity }: { entity: MemoryEntityDetail }) {
   );
 }
 
-function SkillDetail({ skill }: { skill: SkillDescribeResult }) {
+function SkillDetail({ skill }: { skill: SkillDetail | SkillDescribeResult }) {
   const { t } = useTranslation();
+  // Local SkillDetail has `content` (the raw SKILL.md); registry
+  // SkillDescribeResult has `description` + optional `body`.
+  const content = "content" in skill ? skill.content : skill.body;
+  const description = "description" in skill ? skill.description : undefined;
   return (
     <div className="space-y-3 text-xs">
-      {skill.description ? (
+      {description ? (
         <p className="text-[12.5px] leading-relaxed text-foreground">
-          {skill.description}
+          {description}
         </p>
       ) : null}
-      {skill.body ? (
-        <div className="border-t border-border/40 pt-3">
+      {content ? (
+        <div className={description ? "border-t border-border/40 pt-3" : undefined}>
           <MarkdownTextRenderer className="text-[12.5px] leading-relaxed">
-            {skill.body}
+            {content}
           </MarkdownTextRenderer>
         </div>
       ) : (
-        !skill.description && (
+        !description && (
           <p className="text-muted-foreground">{t("dream.drawer.noDetail")}</p>
         )
       )}
@@ -126,7 +132,10 @@ export function DreamDrawer({ target, onClose }: DreamDrawerProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [entityDetail, setEntityDetail] = useState<MemoryEntityDetail | null>(null);
-  const [skillDetail, setSkillDetail] = useState<SkillDescribeResult | null>(null);
+  // Local SkillDetail (name+content) is preferred; SkillDescribeResult is the
+  // fallback when the local lookup returns a 404 (skill was removed after the
+  // dream ran).
+  const [skillDetail, setSkillDetail] = useState<SkillDetail | SkillDescribeResult | null>(null);
 
   // Fetch the detail whenever the target changes.
   useEffect(() => {
@@ -160,11 +169,20 @@ export function DreamDrawer({ target, onClose }: DreamDrawerProps) {
           if (!cancelled) setLoading(false);
         });
     } else {
-      // ref_kind === "skill": use describeSkill (never throws on 404, returns
-      // empty description on failure — see api.ts:describeSkill).
-      describeSkill(token, target.ref)
+      // ref_kind === "skill": prefer the LOCAL skill record (getSkill →
+      // GET /api/v1/skills/{name}) so the drawer shows the installed SKILL.md
+      // content without a registry network call.  Falls back to describeSkill
+      // only when the local lookup throws (e.g. skill was removed after the
+      // dream ran).
+      getSkill(token, target.ref)
         .then((d) => {
           if (!cancelled) setSkillDetail(d);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          return describeSkill(token, target.ref).then((d) => {
+            if (!cancelled) setSkillDetail(d);
+          });
         })
         .catch((e: unknown) => {
           if (!cancelled) setError((e as Error).message);
@@ -193,7 +211,7 @@ export function DreamDrawer({ target, onClose }: DreamDrawerProps) {
 
   const displayName =
     entityDetail?.page?.name ??
-    skillDetail?.ref ??
+    (skillDetail && ("name" in skillDetail ? skillDetail.name : skillDetail.ref)) ??
     target?.ref ??
     "";
 

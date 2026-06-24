@@ -21,7 +21,6 @@ function relativeTime(ms: number): string {
 function kindDot(kind: string): string {
   if (kind === "merged" || kind === "created" || kind === "flagged") return "#14b8a6";
   if (kind === "improved") return "#d97706";
-  if (kind === "quarantined") return "#dc2626";
   return "#14b8a6";
 }
 

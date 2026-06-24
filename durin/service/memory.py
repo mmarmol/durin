@@ -76,11 +76,11 @@ class ForgetResult(Result):
 class DreamEvent(Result):
     """One notable thing the nightly dream did.
 
-    ``kind`` is the operation: "merged" | "created" | "improved" | "quarantined"
-    | "flagged".  ``ref`` / ``ref_kind`` let the UI deep-link to the affected
-    entity or skill; both are None when the event is not tied to a specific ref
-    (e.g. a bulk skill-extract pass with no individual ref emitted).
-    ``at_ms`` is epoch milliseconds so JS Date can consume it directly.
+    ``kind`` is the operation: "merged" | "created" | "improved" | "flagged".
+    ``ref`` / ``ref_kind`` let the UI deep-link to the affected entity or skill;
+    both are None when the event is not tied to a specific ref (e.g. a bulk
+    skill-extract pass with no individual ref emitted).  ``at_ms`` is epoch
+    milliseconds so JS Date can consume it directly.
     """
 
     kind: str
@@ -162,6 +162,7 @@ _DREAM_EVENT_TYPES = frozenset({
     "memory.dream.skill_extract",
     "memory.dream.skill_signals",
     "memory.dream.learnings",
+    "memory.dream.flagged",
     "memory.dream.end",
     "memory.dream.start",
 })
@@ -318,6 +319,17 @@ def _map_event(event_type: str, data: dict, at_ms: int) -> list[DreamEvent]:
             )
             for skill in skills
         ]
+
+    if event_type == "memory.dream.flagged":
+        canonical = data.get("canonical", "")
+        absorbed = data.get("absorbed", "")
+        return [DreamEvent(
+            kind="flagged",
+            summary="Flagged a memory pair for review",
+            ref=canonical or None,
+            ref_kind="entity" if canonical else None,
+            at_ms=at_ms,
+        )]
 
     return []
 

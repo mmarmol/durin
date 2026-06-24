@@ -1838,11 +1838,11 @@ export interface components {
          * DreamEvent
          * @description One notable thing the nightly dream did.
          *
-         *     ``kind`` is the operation: "merged" | "created" | "improved" | "quarantined"
-         *     | "flagged".  ``ref`` / ``ref_kind`` let the UI deep-link to the affected
-         *     entity or skill; both are None when the event is not tied to a specific ref
-         *     (e.g. a bulk skill-extract pass with no individual ref emitted).
-         *     ``at_ms`` is epoch milliseconds so JS Date can consume it directly.
+         *     ``kind`` is the operation: "merged" | "created" | "improved" | "flagged".
+         *     ``ref`` / ``ref_kind`` let the UI deep-link to the affected entity or skill;
+         *     both are None when the event is not tied to a specific ref (e.g. a bulk
+         *     skill-extract pass with no individual ref emitted).  ``at_ms`` is epoch
+         *     milliseconds so JS Date can consume it directly.
          */
         DreamEvent: {
             /** At Ms */

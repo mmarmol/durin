@@ -13,7 +13,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     fetchDreamDigest: vi.fn(),
     fetchMemoryEntity: vi.fn(),
-    describeSkill: vi.fn(),
+    getSkill: vi.fn(),
     runCronJob: vi.fn(),
   };
 });
@@ -32,7 +32,7 @@ function wrap(children: ReactNode) {
 beforeEach(() => {
   vi.mocked(api.fetchDreamDigest).mockReset();
   vi.mocked(api.fetchMemoryEntity).mockReset();
-  vi.mocked(api.describeSkill).mockReset();
+  vi.mocked(api.getSkill).mockReset();
   vi.mocked(api.runCronJob).mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
@@ -145,10 +145,10 @@ describe("DreamView", () => {
       ],
     });
 
-    vi.mocked(api.describeSkill).mockResolvedValue({
-      ref: "git",
-      description: "Git source control operations",
-      body: "Use this skill to run git commands.",
+    vi.mocked(api.getSkill).mockResolvedValue({
+      name: "git",
+      mode: "auto",
+      content: "# Git skill\n\nUse this skill to run git commands.",
     });
 
     render(wrap(<DreamView />));
@@ -159,12 +159,13 @@ describe("DreamView", () => {
     await user.click(viewBtn);
 
     await waitFor(() => {
-      expect(api.describeSkill).toHaveBeenCalledWith("tok", "git");
+      expect(api.getSkill).toHaveBeenCalledWith("tok", "git");
     });
 
-    // Skill ref appears as the drawer title.
+    // Skill name appears as the drawer title.
     expect(await screen.findByText("git")).toBeInTheDocument();
-    expect(screen.getByText("Git source control operations")).toBeInTheDocument();
+    // Local SKILL.md content is rendered.
+    expect(screen.getByText(/Use this skill to run git commands/)).toBeInTheDocument();
   });
 
   it("closes the drawer when the X button is clicked", async () => {
