@@ -161,6 +161,7 @@ async def test_compaction_backstop_writes_learning_entity(tmp_path):
         get_tool_definitions=MagicMock(return_value=[]),
         max_completion_tokens=100,
         decision_log_enabled=False,  # isolate the learnings block
+        compaction_learnings_enabled=True,
     )
 
     # Build a Session with enough messages for a compaction boundary.
@@ -199,3 +200,57 @@ async def test_compaction_backstop_writes_learning_entity(tmp_path):
     page = EntityPage.from_file(entity_path)
     assert page is not None, "feedback entity file was not created"
     assert "Spanish" in (page.body or ""), "entity body does not contain expected content"
+
+
+@pytest.mark.asyncio
+async def test_compaction_backstop_skipped_when_disabled(tmp_path):
+    """With compaction_learnings_enabled=False the backstop writes no entity."""
+    store = MemoryStore(tmp_path)
+    sessions = MagicMock()
+    sessions.save = MagicMock()
+
+    cons = Consolidator(
+        store=store,
+        provider=MagicMock(),
+        model="test-model",
+        sessions=sessions,
+        context_window_tokens=1000,
+        build_messages=MagicMock(return_value=[]),
+        get_tool_definitions=MagicMock(return_value=[]),
+        max_completion_tokens=100,
+        decision_log_enabled=False,
+        compaction_learnings_enabled=False,
+    )
+
+    session = Session(key="test:learnings-disabled")
+    for i in range(70):
+        role = "user" if i in {0, 50} else "assistant"
+        session.add_message(role, f"m{i}")
+
+    cons.estimate_session_prompt_tokens = MagicMock(
+        side_effect=[(1200, "tiktoken"), (400, "tiktoken")]
+    )
+    cons.archive = AsyncMock(
+        return_value=("did work and stated preferences", {"entities": [], "topics": []})
+    )
+
+    # Stub extract_learnings — it must NOT be called when disabled.
+    called = []
+
+    async def fake_extract_learnings(span):
+        called.append(span)
+        return [
+            {
+                "ref": "feedback:should-not-appear",
+                "name": "Should not appear",
+                "body": "This entity must not be written.",
+            }
+        ]
+
+    cons.extract_learnings = fake_extract_learnings
+
+    await cons.maybe_consolidate_by_tokens(session)
+
+    assert called == [], "extract_learnings was called even though compaction_learnings_enabled=False"
+    entity_path = tmp_path / "memory" / "entities" / "feedback" / "should-not-appear.md"
+    assert not entity_path.exists(), "entity file was written despite compaction_learnings_enabled=False"

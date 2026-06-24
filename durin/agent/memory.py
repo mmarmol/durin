@@ -499,6 +499,7 @@ class Consolidator:
         decision_log_enabled: bool = True,
         decision_log_max_entries: int = 10,
         decision_log_max_chars: int = 1500,
+        compaction_learnings_enabled: bool = True,
     ):
         self.store = store
         self.provider = provider
@@ -527,6 +528,9 @@ class Consolidator:
         self.decision_log_enabled = decision_log_enabled
         self.decision_log_max_entries = decision_log_max_entries
         self.decision_log_max_chars = decision_log_max_chars
+        # Toggle for the compaction backstop that extracts durable user learnings
+        # (preferences, corrections, standing constraints) at compaction time.
+        self.compaction_learnings_enabled = compaction_learnings_enabled
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
@@ -1182,6 +1186,10 @@ class Consolidator:
                             "post-compaction hook raised for {}",
                             session.key,
                         )
+                # Shared span for both post-compaction extraction passes below.
+                # Computed once here so both gated blocks can reuse it without
+                # independently slicing the same list.
+                span = session.messages[consolidated_start:session.last_consolidated]
                 # Concern B (task-state anchor): one LLM call per compaction
                 # extracts key decisions/findings from the span just archived
                 # and appends them to the decision log so they survive in
@@ -1189,7 +1197,6 @@ class Consolidator:
                 # Best-effort: failures must never break consolidation.
                 if self.decision_log_enabled:
                     try:
-                        span = session.messages[consolidated_start:session.last_consolidated]
                         decisions = await self.extract_decisions(span)
                         if decisions:
                             from datetime import timezone
@@ -1228,37 +1235,38 @@ class Consolidator:
                 # may have missed. Best-effort: failures must never break consolidation.
                 # Dedup is NOT done here — the dream's refine pass already dedups
                 # feedback entities; we rely on it.
-                try:
-                    span = session.messages[consolidated_start:session.last_consolidated]
-                    learnings = await self.extract_learnings(span)
-                    if learnings:
-                        from datetime import timezone
+                if self.compaction_learnings_enabled:
+                    try:
+                        learnings = await self.extract_learnings(span)
+                        if learnings:
+                            from datetime import timezone
 
-                        from durin.memory.field_patch import FieldPatch
-                        from durin.memory.memory_writer import write_entity
+                            from durin.memory.field_patch import FieldPatch
+                            from durin.memory.memory_writer import write_entity
 
-                        now = datetime.now(timezone.utc)
-                        for learning in learnings:
-                            ref = learning["ref"]
-                            name = learning["name"]
-                            body = learning["body"]
-                            write_entity(
-                                self.store.workspace,
-                                ref,
-                                [
-                                    FieldPatch(
-                                        kind="body_replace",
-                                        value=body,
-                                        author="agent",
-                                        source_ref=session.key,
-                                        at=now,
-                                    )
-                                ],
-                                create=True,
-                                name=name,
-                            )
-                except Exception:
-                    logger.exception("Learning extraction failed for {}", session.key)
+                            now = datetime.now(timezone.utc)
+                            session_ref = f"[[sessions/{self.sessions.safe_key(session.key)}.md]]"
+                            for learning in learnings:
+                                ref = learning["ref"]
+                                name = learning["name"]
+                                body = learning["body"]
+                                write_entity(
+                                    self.store.workspace,
+                                    ref,
+                                    [
+                                        FieldPatch(
+                                            kind="body_replace",
+                                            value=body,
+                                            author="agent",
+                                            source_ref=session_ref,
+                                            at=now,
+                                        )
+                                    ],
+                                    create=True,
+                                    name=name,
+                                )
+                    except Exception:
+                        logger.exception("Learning extraction failed for {}", session.key)
         finally:
             lock.release()
 
