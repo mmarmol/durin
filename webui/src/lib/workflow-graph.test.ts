@@ -235,7 +235,7 @@ describe("workflowToFlow", () => {
     expect(toOutput).toEqual(["synthesize"]);
   });
 
-  it("a cases node produces one labeled edge per entry; null targets are omitted from edges (handled by terminal logic)", () => {
+  it("a cases node produces one labeled edge per entry; null targets are omitted from edges (no target node to connect to)", () => {
     const { edges } = workflowToFlow({
       name: "mw",
       start: "router",
@@ -246,11 +246,12 @@ describe("workflowToFlow", () => {
       ],
     });
     const fromRouter = edges.filter((e) => e.source === "router");
-    // approve -> done, reject -> fix; escalate is null (no target node) so no edge added
+    // approve -> done, reject -> fix; escalate is null so no edge is drawn
     expect(fromRouter).toHaveLength(2);
     expect(fromRouter.find((e) => e.target === "done")?.label).toBe("approve");
     expect(fromRouter.find((e) => e.target === "fix")?.label).toBe("reject");
-    // no edge for escalate (null = end-of-flow handled by OUTPUT terminal)
+    // no edge for escalate — a null target only connects to __output__ when the workflow
+    // declares an output descriptor; without one, no terminal edge is emitted either
     expect(fromRouter.find((e) => e.label === "escalate")).toBeUndefined();
   });
 

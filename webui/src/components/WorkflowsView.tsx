@@ -161,13 +161,14 @@ function TargetSelect({
   options: string[];
   onChange: (v: string | null) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <select
       className={selectCls}
       value={value ?? ""}
       onChange={(e) => onChange(e.target.value || null)}
     >
-      <option value="">(end)</option>
+      <option value="">{t("workflows.caseTargetEnd")}</option>
       {options.map((o) => (
         <option key={o} value={o}>{o}</option>
       ))}
@@ -214,6 +215,8 @@ function CasesEditor({
   const entries = Object.entries(cases);
 
   function setLabel(oldLabel: string, newLabel: string) {
+    // Refuse the rename when it would create a duplicate label.
+    if (newLabel !== oldLabel && newLabel in cases) return;
     const next: Record<string, string | null> = {};
     for (const [k, v] of entries) {
       next[k === oldLabel ? newLabel : k] = v;
@@ -389,7 +392,7 @@ function NodeConfigPanel({
       onChange({ ...clear, on_pass: null, on_fail: null, mode: "explore" });
     } else {
       // multiway: start with one empty case row
-      onChange({ ...clear, cases: { "": null }, mode: "explore" });
+      onChange({ ...clear, cases: { "case1": null }, mode: "explore" });
     }
   }
 

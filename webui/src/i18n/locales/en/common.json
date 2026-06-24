@@ -788,7 +788,7 @@
     "mode": "mode",
     "context": "context",
     "prompt": "prompt",
-    "routes": "routes (pass/fail)",
+    "routes": "routes",
     "routingShape": "routing shape",
     "routingShapeBinary": "binary (pass / fail)",
     "routingShapeMultiway": "multi-way (custom labels)",

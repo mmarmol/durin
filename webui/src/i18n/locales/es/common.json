@@ -1378,7 +1378,7 @@
     "mode": "modo",
     "context": "contexto",
     "prompt": "prompt",
-    "routes": "rutea (pass/fail)",
+    "routes": "rutea",
     "routingShape": "tipo de ruteo",
     "routingShapeBinary": "binario (pass / fail)",
     "routingShapeMultiway": "múltiple (etiquetas personalizadas)",
