@@ -29,6 +29,7 @@ from durin.memory.memory_writer import WriteResult, write_entity
 __all__ = [
     "build_extract_prompt", "parse_attributes", "extract_entity",
     "build_discover_prompt", "parse_discoveries", "discover_entities",
+    "mine_learnings",
 ]
 
 LLMInvoke = Callable[..., Any]
@@ -416,4 +417,84 @@ def discover_entities(
         })
     except Exception:  # pragma: no cover
         pass
+    return out
+
+
+# ---------------------------------------------------------------------------
+# mine_learnings — sweep session turns for durable preferences / corrections
+# ---------------------------------------------------------------------------
+
+# Only these types may be written by the learnings sweep. This guard prevents
+# the sweep from ever creating a person: (principal) or other entity type, even
+# if the LLM hallucinates one.
+_LEARNING_TYPES = ("feedback", "stance", "practice")
+
+
+def _parse_learnings(raw: str) -> list[dict[str, Any]]:
+    """Tolerant parse of the learnings LLM's JSON array.
+
+    Strips code fences, repairs small-model JSON quirks, and keeps only items
+    that are dicts with a colon-bearing ``ref``, a non-empty ``name``, and a
+    non-empty ``body``. Malformed items and any non-list output yield ``[]``.
+    """
+    s = raw.strip()
+    m = re.search(r"```(?:json)?\s*(.*?)```", s, re.DOTALL)
+    if m:
+        s = m.group(1).strip()
+    try:
+        obj = json.loads(repair_json(s))
+    except Exception:
+        return []
+    if not isinstance(obj, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in obj:
+        if not isinstance(item, dict):
+            continue
+        ref = str(item.get("ref") or "").strip()
+        name = str(item.get("name") or "").strip()
+        body = str(item.get("body") or "").strip()
+        if not ref or ":" not in ref or not name or not body:
+            continue
+        out.append({"ref": ref, "name": name, "body": body})
+    return out
+
+
+def mine_learnings(
+    workspace: Path,
+    text: str,
+    *,
+    llm_invoke: LLMInvoke | None = None,
+    model: str | None = None,
+    source_ref: str | None = None,
+) -> list[dict[str, Any]]:
+    """Mine durable learnings (preferences/corrections) from a session-turn span
+    and write them as feedback/stance/practice entities. Best-effort: empty text,
+    LLM failure, or parse failure all yield []. Writes freely (the refine pass
+    deduplicates); never writes a principal or other non-learning type."""
+    from durin.utils.prompt_templates import render_template
+    llm_invoke = llm_invoke or default_llm_invoke
+    if not text.strip():
+        return []
+    prompt = (render_template("agent/consolidator_learnings.md")
+              + "\n\nCONVERSATION SPAN:\n" + text[:12000])
+    try:
+        resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
+        raw = resp.text if hasattr(resp, "text") else str(resp)
+        learnings = _parse_learnings(raw)
+    except Exception:
+        return []
+    now = datetime.now(timezone.utc)
+    src = source_ref or "learnings_sweep"
+    out: list[dict[str, Any]] = []
+    for it in learnings:
+        ref = it["ref"]
+        if ref.split(":", 1)[0] not in _LEARNING_TYPES:
+            continue
+        result = write_entity(
+            workspace, ref,
+            [FieldPatch(kind="body_replace", value=it["body"], author="dream",
+                        source_ref=src, at=now)],
+            create=True, name=it["name"])
+        out.append({"ref": ref, "committed": result.committed})
     return out
