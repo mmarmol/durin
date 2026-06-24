@@ -849,7 +849,9 @@ def test_agent_uses_default_config_when_no_workspace_or_config_flags(mock_agent_
     result = runner.invoke(app, ["agent", "-m", "hello"])
 
     assert result.exit_code == 0
-    assert mock_agent_runtime["load_config"].call_args.args == (None,)
+    # The agent loads the default config (None); seed_example_personas re-reads it
+    # afterwards, so assert the default-load happened rather than that it was last.
+    assert any(c.args == (None,) for c in mock_agent_runtime["load_config"].call_args_list)
     assert mock_agent_runtime["sync_templates"].call_args.args == (
         mock_agent_runtime["config"].workspace_path,
     )

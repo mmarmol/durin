@@ -752,12 +752,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List personas (user + built-in) and the default */
+        /** List personas and the default */
         get: operations["personas_list_personas"];
         put?: never;
         /** Create or update a user persona */
         post: operations["personas_upsert_persona"];
-        /** Delete a user persona (built-ins cannot be deleted) */
+        /** Delete a persona */
         delete: operations["personas_delete_persona"];
         options?: never;
         head?: never;

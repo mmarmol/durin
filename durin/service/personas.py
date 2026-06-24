@@ -2,8 +2,9 @@
 
 Two surfaces:
 - SOUL files: list, upsert, delete named SOUL.md personality files in the workspace.
-- Personas: list, upsert, delete named PersonaConfig entries in config (user personas
-  and built-ins); set or clear the global default persona.
+- Personas: list, upsert, delete named PersonaConfig entries in config; set or clear
+  the global default persona. Example personas are seeded into config on first run
+  (durin.personas.seed_example_personas) as ordinary editable/deletable entries.
 """
 
 from __future__ import annotations
@@ -13,7 +14,6 @@ from typing import Callable
 
 from durin.config.loader import get_config_path, load_config, mutate_config
 from durin.config.schema import PersonaConfig
-from durin.personas.builtin import BUILTIN_PERSONAS
 from durin.service.principal import Principal, Scope
 from durin.service.registry import route
 from durin.service.types import (
@@ -186,17 +186,9 @@ class PersonasService:
     )
     async def delete_soul(self, cmd: SoulDeleteCommand, principal: Principal) -> SoulDeleteResult:
         principal.require(Scope.CONFIG_WRITE)
-        from durin.service.types import ConflictError
-        cfg = load_config(get_config_path())
-        in_use = sorted(
-            {n for n, p in cfg.personas.items() if p.soul == cmd.slug}
-            | {n for n, p in BUILTIN_PERSONAS.items() if p.soul == cmd.slug and n not in cfg.personas}
-        )
-        if in_use:
-            raise ConflictError(
-                f"soul {cmd.slug!r} is in use by personas: {', '.join(in_use)}",
-                details={"personas": in_use},
-            )
+        # Any soul except `default` can be deleted, even when a persona references
+        # it: a dangling reference falls back to the default SOUL at runtime (see
+        # AgentLoop._active_persona), so deletion never breaks the agent.
         store = self._store()
         try:
             store.delete(cmd.slug)
@@ -217,7 +209,7 @@ class PersonasService:
         scope=Scope.CONFIG_READ.value,
         request_model=PersonaListQuery,
         response_model=PersonaListResult,
-        summary="List personas (user + built-in) and the default",
+        summary="List personas and the default",
     )
     async def list_personas(self, query: PersonaListQuery, principal: Principal) -> PersonaListResult:
         principal.require(Scope.CONFIG_READ)
@@ -225,9 +217,6 @@ class PersonasService:
         items: list[PersonaItem] = []
         for name, p in cfg.personas.items():
             items.append(PersonaItem(name=name, soul=p.soul, model=p.model, description=p.description, builtin=False))
-        for name, p in BUILTIN_PERSONAS.items():
-            if name not in cfg.personas:
-                items.append(PersonaItem(name=name, soul=p.soul, model=p.model, description=p.description, builtin=True))
         items.sort(key=lambda i: i.name)
         # The implicit base — the default SOUL + the default model — listed LAST so it is
         # visible and selectable like any other persona. It is the fallback used when no
@@ -240,7 +229,7 @@ class PersonasService:
                     soul="default",
                     model=None,
                     description="durin's base voice — the default SOUL with the default model.",
-                    builtin=True,
+                    builtin=False,
                 )
             )
         # When no persona is configured, the synthetic "default" is the active default.
@@ -275,14 +264,12 @@ class PersonasService:
         scope=Scope.CONFIG_WRITE.value,
         request_model=PersonaDeleteCommand,
         response_model=PersonaDeleteResult,
-        summary="Delete a user persona (built-ins cannot be deleted)",
+        summary="Delete a persona",
     )
     async def delete_persona(self, cmd: PersonaDeleteCommand, principal: Principal) -> PersonaDeleteResult:
         principal.require(Scope.CONFIG_WRITE)
         cfg = load_config(get_config_path())
         if cmd.name not in cfg.personas:
-            if cmd.name in BUILTIN_PERSONAS:
-                raise ForbiddenError("built-in persona cannot be deleted", details={"name": cmd.name})
             raise NotFoundError("no such persona", details={"name": cmd.name})
 
         def _m(c: object) -> None:
