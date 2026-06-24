@@ -21,8 +21,10 @@ import {
   getWorkflow,
   getWorkflowRecommendations,
   listWorkflows,
+  listPersonas,
   runWorkflow,
   saveWorkflow,
+  type PersonaItem,
   type WorkflowRecommendation,
   type WorkflowRunResult,
 } from "@/lib/api";
@@ -135,7 +137,6 @@ const nodeTypes = {
 
 const MODES = ["build", "plan", "explore"];
 const CONTEXTS = ["own", "shared"];
-const TOOLS = ["none", "default"];
 const selectCls = "h-8 w-full rounded-md border border-border bg-background px-2 text-sm";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -170,10 +171,18 @@ function TargetSelect({
   );
 }
 
+// Value used in the "runs as" picker to mean the node has no persona/model override.
+const RUNS_AS_DEFAULT = "__default__";
+// Value used to indicate the user typed a specific model string.
+const RUNS_AS_MODEL = "__model__";
+// Prefix used to encode persona names in the picker value.
+const RUNS_AS_PERSONA_PREFIX = "persona:";
+
 function NodeConfigPanel({
   node,
   nodeIds,
   isStart,
+  personas,
   onChange,
   onMakeStart,
   onDelete,
@@ -181,16 +190,53 @@ function NodeConfigPanel({
   node: WorkflowNodeDef;
   nodeIds: string[];
   isStart: boolean;
+  personas: PersonaItem[];
   onChange: (patch: Partial<WorkflowNodeDef>) => void;
   onMakeStart: () => void;
   onDelete: () => void;
 }) {
   const { t } = useTranslation();
   const others = nodeIds.filter((id) => id !== node.id);
+
   // A node routes when on_pass or on_fail is set (regardless of kind).
   const routes = node.on_pass != null || node.on_fail != null;
-  // A gate node has a command field present.
-  const hasCommand = node.command != null;
+  // body: "command" if the command field is present, else "agent"
+  const body: "agent" | "command" = node.command != null ? "command" : "agent";
+
+  // Determine the current "runs as" picker value.
+  // Persona takes precedence; if a model string is set, show model entry; else default.
+  const currentPersona = node.persona as string | undefined;
+  const currentModel = node.model as string | undefined;
+  let runsAsValue: string;
+  if (currentPersona) {
+    runsAsValue = RUNS_AS_PERSONA_PREFIX + currentPersona;
+  } else if (currentModel) {
+    runsAsValue = RUNS_AS_MODEL;
+  } else {
+    runsAsValue = RUNS_AS_DEFAULT;
+  }
+
+  function handleBodyToggle(newBody: "agent" | "command") {
+    if (newBody === "command") {
+      // Switch to command: set command to empty string, clear agent-only fields.
+      onChange({ command: "", mode: undefined, model: undefined, persona: undefined, prompt: undefined });
+    } else {
+      // Switch to agent: clear command, restore agent defaults.
+      onChange({ command: undefined, mode: "build" });
+    }
+  }
+
+  function handleRunsAsChange(val: string) {
+    if (val === RUNS_AS_DEFAULT) {
+      onChange({ model: undefined, persona: undefined });
+    } else if (val === RUNS_AS_MODEL) {
+      // Keep any existing model string, just clear persona.
+      onChange({ persona: undefined });
+    } else if (val.startsWith(RUNS_AS_PERSONA_PREFIX)) {
+      const name = val.slice(RUNS_AS_PERSONA_PREFIX.length);
+      onChange({ persona: name, model: undefined });
+    }
+  }
 
   function toggleRoutes(on: boolean) {
     if (on) {
@@ -199,6 +245,8 @@ function NodeConfigPanel({
       onChange({ on_pass: undefined, on_fail: undefined, next: null });
     }
   }
+
+  const routingToggleId = `routing-toggle-${node.id}`;
 
   return (
     <div className="flex flex-col gap-3">
@@ -220,76 +268,145 @@ function NodeConfigPanel({
 
       {(node.kind === "work" || node.kind === "decision") && (
         <>
-          {hasCommand ? (
+          {/* Body toggle: agent vs command */}
+          <Field label={t("workflows.body")}>
+            <select
+              className={selectCls}
+              value={body}
+              onChange={(e) => handleBodyToggle(e.target.value as "agent" | "command")}
+            >
+              <option value="agent">{t("workflows.bodyAgent")}</option>
+              <option value="command">{t("workflows.bodyCommand")}</option>
+            </select>
+          </Field>
+
+          {body === "command" ? (
             <Field label={t("workflows.command")}>
-              <Textarea rows={3} value={(node.command as string) ?? ""}
-                onChange={(e) => onChange({ command: e.target.value })} />
+              <Textarea
+                rows={3}
+                value={(node.command as string) ?? ""}
+                onChange={(e) => onChange({ command: e.target.value })}
+              />
             </Field>
           ) : (
             <>
-              <Field label="work mode">
-                <select className={selectCls} value={(node.mode as string) ?? "build"}
-                  onChange={(e) => onChange({ mode: e.target.value })}>
+              {/* Runs as: default model / specific model / personas */}
+              <Field label={t("workflows.runsAs")}>
+                <select
+                  className={selectCls}
+                  value={runsAsValue}
+                  onChange={(e) => handleRunsAsChange(e.target.value)}
+                >
+                  <option value={RUNS_AS_DEFAULT}>{t("workflows.runsAsDefault")}</option>
+                  <option value={RUNS_AS_MODEL}>{t("workflows.runsAsModel")}</option>
+                  {personas.length > 0 && (
+                    <optgroup label={t("workflows.runsAsPersonasGroup")}>
+                      {personas.map((p) => (
+                        <option key={p.name} value={RUNS_AS_PERSONA_PREFIX + p.name}>
+                          {p.name}
+                          {p.description ? ` — ${p.description}` : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              </Field>
+
+              {/* Show model text input only when specific model is selected */}
+              {runsAsValue === RUNS_AS_MODEL && (
+                <Field label={t("workflows.modelId")}>
+                  <Input
+                    value={currentModel ?? ""}
+                    placeholder={t("workflows.modelPlaceholder")}
+                    onChange={(e) => onChange({ model: e.target.value || undefined })}
+                  />
+                </Field>
+              )}
+
+              <Field label={t("workflows.mode")}>
+                <select
+                  className={selectCls}
+                  value={(node.mode as string) ?? "build"}
+                  onChange={(e) => onChange({ mode: e.target.value })}
+                >
                   {MODES.map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
               </Field>
-              <Field label="model">
-                <Input value={(node.model as string) ?? ""} placeholder="default"
-                  onChange={(e) => onChange({ model: e.target.value || undefined })} />
-              </Field>
-              <Field label="context">
-                <select className={selectCls} value={(node.context as string) ?? "own"}
-                  onChange={(e) => onChange({ context: e.target.value })}>
+
+              <Field label={t("workflows.context")}>
+                <select
+                  className={selectCls}
+                  value={(node.context as string) ?? "own"}
+                  onChange={(e) => onChange({ context: e.target.value })}
+                >
                   {CONTEXTS.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </Field>
-              <Field label="tools">
-                <select className={selectCls} value={(node.tools as string) ?? "none"}
-                  onChange={(e) => onChange({ tools: e.target.value })}>
-                  {TOOLS.map((tl) => <option key={tl} value={tl}>{tl}</option>)}
-                </select>
-              </Field>
-              <Field label="prompt">
-                <Textarea rows={5} value={(node.prompt as string) ?? ""}
-                  onChange={(e) => onChange({ prompt: e.target.value })} />
+
+              <Field label={t("workflows.prompt")}>
+                <Textarea
+                  rows={5}
+                  value={(node.prompt as string) ?? ""}
+                  onChange={(e) => onChange({ prompt: e.target.value })}
+                />
               </Field>
             </>
           )}
 
-          {/* Routing toggle: when on, show on_pass/on_fail; when off, show next */}
-          <label className="flex items-center gap-2 text-xs">
+          {/* Routing toggle — use explicit id/htmlFor to avoid any label nesting issue,
+              and a div wrapper so no outer label can capture the click. */}
+          <div className="flex items-center gap-2">
             <input
+              id={routingToggleId}
               type="checkbox"
+              className="h-4 w-4 cursor-pointer accent-primary"
               checked={routes}
               onChange={(e) => toggleRoutes(e.target.checked)}
             />
-            <span className="text-muted-foreground">{t("workflows.routes")}</span>
-          </label>
+            <label
+              htmlFor={routingToggleId}
+              className="cursor-pointer select-none text-xs text-muted-foreground"
+            >
+              {t("workflows.routes")}
+            </label>
+          </div>
 
           {routes ? (
             <>
               <Field label={t("workflows.onPass")}>
-                <TargetSelect value={node.on_pass as string | null} options={others}
-                  onChange={(v) => onChange({ on_pass: v })} />
+                <TargetSelect
+                  value={node.on_pass as string | null}
+                  options={others}
+                  onChange={(v) => onChange({ on_pass: v })}
+                />
               </Field>
               <Field label={t("workflows.onFail")}>
-                <TargetSelect value={node.on_fail as string | null} options={others}
-                  onChange={(v) => onChange({ on_fail: v })} />
+                <TargetSelect
+                  value={node.on_fail as string | null}
+                  options={others}
+                  onChange={(v) => onChange({ on_fail: v })}
+                />
               </Field>
             </>
           ) : (
-            <Field label="next">
-              <TargetSelect value={node.next as string} options={others}
-                onChange={(v) => onChange({ next: v })} />
+            <Field label={t("workflows.next")}>
+              <TargetSelect
+                value={node.next as string}
+                options={others}
+                onChange={(v) => onChange({ next: v })}
+              />
             </Field>
           )}
         </>
       )}
 
       {(node.kind === "parallel" || node.kind === "subworkflow") && (
-        <Field label="next">
-          <TargetSelect value={node.next as string} options={others}
-            onChange={(v) => onChange({ next: v })} />
+        <Field label={t("workflows.next")}>
+          <TargetSelect
+            value={node.next as string}
+            options={others}
+            onChange={(v) => onChange({ next: v })}
+          />
         </Field>
       )}
 
@@ -298,7 +415,7 @@ function NodeConfigPanel({
         className="mt-1 flex items-center gap-1.5 self-start text-xs text-destructive hover:underline"
         onClick={onDelete}
       >
-        <Trash2 className="h-3.5 w-3.5" /> delete node
+        <Trash2 className="h-3.5 w-3.5" /> {t("workflows.deleteNode")}
       </button>
     </div>
   );
@@ -324,6 +441,7 @@ export function WorkflowsView() {
   const [runResult, setRunResult] = useState<WorkflowRunResult | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  const [personas, setPersonas] = useState<PersonaItem[]>([]);
 
   useEffect(() => {
     (async () => {
@@ -337,6 +455,10 @@ export function WorkflowsView() {
         setLoading(false);
       }
     })();
+  }, [token]);
+
+  useEffect(() => {
+    listPersonas(token).then((r) => setPersonas(r.personas)).catch(() => setPersonas([]));
   }, [token]);
 
   useEffect(() => {
@@ -379,30 +501,12 @@ export function WorkflowsView() {
     [selectedNodeId, mutate],
   );
 
-  const addNode = useCallback(
-    (preset: "work" | "decision" | "gate") => {
-      const id = `${preset}-${++_idSeq}`;
-      let node: WorkflowNodeDef;
-      if (preset === "work") {
-        node = { id, kind: "work", mode: "build", prompt: "", next: null };
-      } else if (preset === "decision") {
-        node = {
-          id,
-          kind: "work",
-          mode: "explore",
-          prompt: "Evaluate the previous output. End your reply with PASS or FAIL.",
-          on_pass: null,
-          on_fail: null,
-        };
-      } else {
-        // gate: command body that routes
-        node = { id, kind: "work", command: "", on_pass: null, on_fail: null };
-      }
-      mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
-      setSelectedNodeId(id);
-    },
-    [mutate],
-  );
+  const addNode = useCallback(() => {
+    const id = `node-${++_idSeq}`;
+    const node: WorkflowNodeDef = { id, kind: "work", mode: "build", prompt: "", next: null };
+    mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
+    setSelectedNodeId(id);
+  }, [mutate]);
 
   const createWorkflow = useCallback(async () => {
     const name = newName.trim();
@@ -611,14 +715,8 @@ export function WorkflowsView() {
           <div className="relative flex-1">
             {def && (
               <div className="absolute left-2 top-2 z-10 flex items-center gap-2">
-                <Button size="sm" variant="outline" onClick={() => addNode("work")}>
-                  <Plus className="h-3.5 w-3.5" /> {t("workflows.presetWork")}
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => addNode("decision")}>
-                  <Plus className="h-3.5 w-3.5" /> {t("workflows.presetDecision")}
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => addNode("gate")}>
-                  <Plus className="h-3.5 w-3.5" /> {t("workflows.presetGate")}
+                <Button size="sm" variant="outline" onClick={addNode}>
+                  <Plus className="h-3.5 w-3.5" /> {t("workflows.addNode")}
                 </Button>
                 {dirty && (
                   <Button size="sm" onClick={onSave} disabled={saving}>
@@ -707,6 +805,7 @@ export function WorkflowsView() {
               node={selectedNode}
               nodeIds={nodeIds}
               isStart={def?.start === selectedNode.id}
+              personas={personas}
               onChange={updateNode}
               onMakeStart={() => mutate((d) => ({ ...d, start: selectedNode.id }))}
               onDelete={() => deleteNode(selectedNode.id)}
