@@ -20,7 +20,9 @@ on:
 
 concurrency:
   group: webui-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded runs only on PRs; let every push-to-main run finish so each
+  # merged commit keeps its own pass/fail signal.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

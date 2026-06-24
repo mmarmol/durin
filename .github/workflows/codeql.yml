@@ -4,12 +4,14 @@ name: CodeQL
 # config file — default setup doesn't support path filters. Languages match what
 # default setup scanned: actions, javascript-typescript, python (all interpreted, so
 # no autobuild step is needed).
+#
+# Triggers: push-to-main (the authoritative scan that feeds the Security tab's
+# default-branch baseline) + a weekly cron (catches newly-published CVEs in code
+# that hasn't changed). No pull_request trigger: a PR's code is scanned seconds
+# later by the push-to-main run on merge, so a per-PR scan only duplicates it.
 
 on:
   push:
-    branches:
-      - main
-  pull_request:
     branches:
       - main
   schedule:
@@ -17,7 +19,9 @@ on:
 
 concurrency:
   group: codeql-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel an in-flight scan: push-to-main and the weekly cron share this
+  # group, and each baseline scan should complete rather than be pre-empted.
+  cancel-in-progress: false
 
 jobs:
   analyze:

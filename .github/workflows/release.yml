@@ -11,6 +11,12 @@ on:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+*"
 
+concurrency:
+  # Serialize releases and never cancel one mid-flight: a second tag pushed while
+  # a release is publishing waits its turn instead of racing the PyPI upload.
+  group: release
+  cancel-in-progress: false
+
 permissions:
   contents: write   # for creating the GitHub Release + attaching artifacts
   id-token: write   # for PyPI OIDC trusted publishing
