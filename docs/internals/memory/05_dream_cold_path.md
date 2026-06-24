@@ -342,6 +342,7 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | Setting | Default | Effect |
 |---|---|---|
 | `memory.dream.enabled` | `true` | Master switch for the cron + both reactive triggers. Manual `durin memory dream` works regardless. |
+| `agents.defaults.compaction_learnings_enabled` | `true` | Gates the compaction backstop that distils durable learnings at compaction time. When false, no LLM call is made and no learning entities are written during consolidation. |
 | `memory.dream.cron` | `0 3 * * *` | Daily schedule for the full five-pass run. |
 | `memory.dream.post_compaction` | `true` | Arm the reactive extract trigger after a session is compacted. |
 | `memory.dream.on_session_close` | `true` | Arm the reactive extract trigger when a session closes. |
@@ -369,6 +370,15 @@ The model every pass uses is resolved by
 - **Reactive hooks** — `agent.consolidator.on_post_compaction` and
   `agent.on_session_close` (wired in `durin/cli/commands.py`) call a closure that
   runs the **extract pass only** through the shared `ReactiveDreamGate`.
+  Separately, the consolidator itself runs a **compaction backstop**
+  (`Consolidator.extract_learnings`) immediately before firing the hook: it calls
+  the LLM over the archived span to distil durable user learnings (preferences,
+  corrections, standing constraints, stable personal facts) and writes them as
+  `feedback`/`stance`/`practice`/`person` entities with `author="agent"`. This
+  catches learnings that the live-agent capture directive may not have persisted
+  during the session. It is best-effort — a failure never breaks consolidation —
+  and dedup is delegated to the dream's refine pass. The backstop is gated by
+  `agents.defaults.compaction_learnings_enabled` (default true).
 - **CLI** — `durin memory dream` (`durin/cli/memory_cmd.py`) runs the full
   five-pass sequence on demand and prints a one-line summary. Related recovery
   commands: `durin memory absorb-suggest`, `durin memory absorb`,
