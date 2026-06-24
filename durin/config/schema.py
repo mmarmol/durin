@@ -745,6 +745,7 @@ class AgentDefaults(Base):
     workspace: str = Field(default_factory=lambda: str(durin_home() / "workspace"))
     model_preset: str | None = None  # Active preset name — takes precedence over fields below
     persona: str | None = None  # default persona name for interactive chats
+    personas_seeded: bool = False  # set once the example personas are seeded into `personas`
     model: str = "anthropic/claude-opus-4-5"
     provider: str = (
         "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
@@ -1273,21 +1274,17 @@ class Config(BaseSettings):
         return self.model_presets[name]
 
     def resolve_persona(self, name: str | None = None) -> "PersonaConfig | None":
-        """Resolve a persona by name: user config first, then built-ins.
-        ``None`` when the name is unset/empty or unknown (caller falls back to
-        the default SOUL + default model)."""
+        """Resolve a persona by name from user config. ``None`` when the name is
+        unset/empty or unknown (caller falls back to the default SOUL + default
+        model)."""
         if name is None:
             name = self.agents.defaults.persona
         if not name:
             return None
-        if name in self.personas:
-            return self.personas[name]
-        from durin.personas.builtin import BUILTIN_PERSONAS
-        return BUILTIN_PERSONAS.get(name)
+        return self.personas.get(name)
 
     def persona_names(self) -> list[str]:
-        from durin.personas.builtin import BUILTIN_PERSONAS
-        return sorted(set(self.personas) | set(BUILTIN_PERSONAS))
+        return sorted(self.personas)
 
     @property
     def workspace_path(self) -> Path:

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Search, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -47,9 +48,13 @@ interface ModelPickerPopoverProps {
   onClose: () => void;
   onSelect: (ref: string) => void;
   activeModel: string | null;
+  /** When set, the popover is portaled to <body> and positioned `fixed` against
+   *  this element, so it escapes overflow-clipping ancestors (e.g. the scrollable
+   *  settings panel). Without it, the popover stays absolutely positioned. */
+  anchorRef?: React.RefObject<HTMLElement | null>;
 }
 
-export function ModelPickerPopover({ open, onClose, onSelect, activeModel }: ModelPickerPopoverProps) {
+export function ModelPickerPopover({ open, onClose, onSelect, activeModel, anchorRef }: ModelPickerPopoverProps) {
   const { t } = useTranslation();
   const { token } = useClient();
   const [query, setQuery] = useState("");
@@ -58,6 +63,7 @@ export function ModelPickerPopover({ open, onClose, onSelect, activeModel }: Mod
   const [loaded, setLoaded] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null);
 
   useEffect(() => {
     if (!open || loaded) return;
@@ -78,16 +84,44 @@ export function ModelPickerPopover({ open, onClose, onSelect, activeModel }: Mod
     }
   }, [open]);
 
+  // When anchored, position the portaled popover `fixed` against the trigger,
+  // flipping below it when there isn't room above. Recompute on scroll/resize.
+  useLayoutEffect(() => {
+    if (!open || !anchorRef?.current) return;
+    const compute = () => {
+      const el = anchorRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const WIDTH = 340, GAP = 8, EST_HEIGHT = 360, MARGIN = 16;
+      const left = Math.max(MARGIN, Math.min(r.left, window.innerWidth - WIDTH - MARGIN));
+      const spaceAbove = r.top;
+      const spaceBelow = window.innerHeight - r.bottom;
+      if (spaceAbove >= EST_HEIGHT || spaceAbove >= spaceBelow) {
+        setPos({ left, bottom: window.innerHeight - r.top + GAP });
+      } else {
+        setPos({ left, top: r.bottom + GAP });
+      }
+    };
+    compute();
+    window.addEventListener("scroll", compute, true);
+    window.addEventListener("resize", compute);
+    return () => {
+      window.removeEventListener("scroll", compute, true);
+      window.removeEventListener("resize", compute);
+    };
+  }, [open, anchorRef]);
+
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        onClose();
-      }
+      const target = e.target as Node;
+      if (containerRef.current?.contains(target)) return;
+      if (anchorRef?.current?.contains(target)) return;
+      onClose();
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [open, onClose]);
+  }, [open, onClose, anchorRef]);
 
   // Group filtered entries by their section, preserving server order (the
   // "Easy pick" block is emitted first, then one block per configured provider).
@@ -131,13 +165,19 @@ export function ModelPickerPopover({ open, onClose, onSelect, activeModel }: Mod
 
   const empty = !loading && groups.length === 0;
 
-  return (
+  const panel = (
     <div
       ref={containerRef}
+      style={
+        anchorRef
+          ? { position: "fixed", left: pos?.left, top: pos?.top, bottom: pos?.bottom, visibility: pos ? "visible" : "hidden" }
+          : undefined
+      }
       className={cn(
-        "absolute bottom-full left-0 z-50 mb-2 w-[340px] max-w-[calc(100vw-2rem)]",
+        "z-50 w-[340px] max-w-[calc(100vw-2rem)]",
+        anchorRef ? "fixed" : "absolute bottom-full left-0 mb-2 slide-in-from-bottom-2",
         "rounded-xl border border-border/70 bg-popover shadow-xl",
-        "animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-200",
+        "animate-in fade-in-0 zoom-in-95 duration-200",
       )}
     >
       <div className="flex items-center gap-2 border-b border-border/50 px-3 py-2.5">
@@ -179,6 +219,8 @@ export function ModelPickerPopover({ open, onClose, onSelect, activeModel }: Mod
       </div>
     </div>
   );
+
+  return anchorRef ? createPortal(panel, document.body) : panel;
 }
 
 function ModelRow({

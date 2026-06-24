@@ -17,7 +17,7 @@ def _ctx(args, session):
 async def test_status_lists_available():
     session = Session(key="cli:direct")
     out = await cmd_persona(_ctx("", session))
-    assert "mine" in out.content and "researcher" in out.content  # user + built-in
+    assert "mine" in out.content  # lists the configured personas
 
 
 @pytest.mark.asyncio

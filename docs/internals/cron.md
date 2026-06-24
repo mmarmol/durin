@@ -74,7 +74,7 @@ Each due job passes through `_execute_job`. The `_executing` set provides an in-
 1. Sets `job.payload.session_key` to a fresh `cron:{id}:run:{timestamp_ms}` key.
 2. Wraps `job.payload.message` with `build_cron_turn_prompt(mode, message)`. In `reminder` mode the prompt instructs the agent to deliver a brief user-facing message; in `task` mode the raw message is passed as-is and the agent executes it with full tools.
 3. Marks the `cron` tool's `_in_cron_context` ContextVar so the agent cannot schedule new jobs from within an execution.
-4. Dispatches through the agent loop with an optional per-job model override from `job.payload.model`.
+4. Dispatches through the agent loop with an optional per-job persona (`job.payload.persona`) or model override (`job.payload.model`) — the two are mutually exclusive (set one or the other). The persona is threaded as the cron-level persona, which wins over any conversation or global default.
 5. If `job.payload.deliver` is true, delivers the result to the configured channel and recipient.
 
 After `on_job` completes (or raises), `_execute_job` records `last_run_at_ms`, `last_status`, `last_error`, and appends a `CronRunRecord` to `run_history`. The history list is trimmed to `_run_history_max` (the newest entries are kept). For one-shot `at` jobs, `delete_after_run=True` removes the job from the store; `delete_after_run=False` sets `enabled=False`.
@@ -105,9 +105,9 @@ Every `agent_turn` execution creates a session keyed `cron:{id}:run:{timestamp_m
 |---|---|---|
 | `CronJob` | `durin/cron/types.py` | Root job record: id (8-char uuid), name, enabled, schedule, payload, state, timestamps, `delete_after_run` |
 | `CronSchedule` | `durin/cron/types.py` | Schedule descriptor: kind (`at`/`every`/`cron`), `at_ms`, `every_ms`, `expr`, `tz` |
-| `CronPayload` | `durin/cron/types.py` | Execution spec: kind (`agent_turn`/`system_event`), mode (`reminder`/`task`), message, model override, deliver flag, channel routing, session key |
+| `CronPayload` | `durin/cron/types.py` | Execution spec: kind (`agent_turn`/`system_event`), mode (`reminder`/`task`), message, model **or** persona override (mutually exclusive), deliver flag, channel routing, session key |
 | `CronJobState` | `durin/cron/types.py` | Run state: `next_run_at_ms`, `last_run_at_ms`, `last_status`, `last_error`, `run_history` |
-| `CronRunRecord` | `durin/cron/types.py` | One execution record: `run_at_ms`, status, `duration_ms`, error, `session_key`, model, summary |
+| `CronRunRecord` | `durin/cron/types.py` | One execution record: `run_at_ms`, status, `duration_ms`, error, `session_key`, model, persona, summary |
 | `CronStore` | `durin/cron/types.py` | Persistent container: version, jobs list. Serialized to JSON at `store_path` |
 | `CronService` | `durin/cron/service.py` | Main scheduler: lifecycle (`start`/`stop`), job CRUD, timer loop, two-lock tick, `on_job` callback wiring |
 | `_compute_next_run` | `durin/cron/service.py` | Pure function: given a schedule and reference time, returns the next fire timestamp in ms (or `None` for expired one-shots and invalid expressions) |
@@ -138,10 +138,10 @@ Every `agent_turn` execution creates a session keyed `cron:{id}:run:{timestamp_m
 
 The `cron` tool (in `durin/agent/tools/cron.py`) is available to the agent when `cron_service` is wired in the tool context. It exposes four actions:
 
-- **`add`** — requires `message` and exactly one of `every_seconds`, `cron_expr`, or `at`. Optional: `name`, `tz`, `deliver`, `mode` (`reminder`/`task`), `model`.
+- **`add`** — requires `message` and exactly one of `every_seconds`, `cron_expr`, or `at`. Optional: `name`, `tz`, `deliver`, `mode` (`reminder`/`task`), and either `model` or `persona` (mutually exclusive).
 - **`list`** — lists all enabled jobs with schedule, last/next run, and status.
 - **`remove`** — removes a non-system job by `job_id`.
-- **`update`** — updates name, message, schedule, deliver, mode, or model on an existing non-system job.
+- **`update`** — updates name, message, schedule, deliver, mode, model, or persona on an existing non-system job.
 
 Scheduling new jobs or updating existing ones from within a cron execution is blocked by the `_in_cron_context` ContextVar guard (returns an error rather than allowing nested scheduling).
 
@@ -162,7 +162,7 @@ All write routes require `CRON_WRITE` scope; the list route requires `CRON_READ`
 
 ### Webui
 
-The webui exposes a dedicated cron panel at the `/cron` route, showing each job's schedule label, mode, model, last/next run times, status badge, and run history. The panel provides a form to create new jobs, toggle, edit, remove, and manually trigger a run. System jobs are shown for inspection but their remove and edit actions are disabled.
+The webui exposes a dedicated cron panel at the `/cron` route, showing each job's schedule label, mode, the persona or model it runs as, last/next run times, status badge, and run history. The panel provides a form to create new jobs, toggle, edit, remove, and manually trigger a run. System jobs are shown for inspection but their remove and edit actions are disabled.
 
 ## 7. Rationale
 

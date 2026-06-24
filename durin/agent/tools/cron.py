@@ -55,6 +55,10 @@ _CRON_PARAMETERS = tool_parameters_schema(
         "Optional per-job model preset/ref to run the job with (omit to use the agent's default "
         "model). For update, providing it changes the model."
     ),
+    persona=StringSchema(
+        "Optional persona name to run the job as (its SOUL + model). Mutually exclusive with "
+        "'model' — set one or the other, not both. For update, providing it changes the persona."
+    ),
     job_id=StringSchema("REQUIRED when action='remove' or action='update'. Job ID to operate on (obtain via action='list')."),
     required=["action"],
     description=(
@@ -160,12 +164,13 @@ class CronTool(Tool, ContextAware):
         deliver: bool = True,
         mode: str | None = None,
         model: str | None = None,
+        persona: str | None = None,
         **kwargs: Any,
     ) -> str:
         if action == "add":
             if self._in_cron_context.get():
                 return "Error: cannot schedule new jobs from within a cron job execution"
-            return self._add_job(name, message, every_seconds, cron_expr, tz, at, deliver, mode, model)
+            return self._add_job(name, message, every_seconds, cron_expr, tz, at, deliver, mode, model, persona)
         elif action == "list":
             return self._list_jobs()
         elif action == "remove":
@@ -174,7 +179,7 @@ class CronTool(Tool, ContextAware):
             if self._in_cron_context.get():
                 return "Error: cannot edit jobs from within a cron job execution"
             return self._update_job(
-                job_id, name, message, every_seconds, cron_expr, tz, at, deliver, mode, model,
+                job_id, name, message, every_seconds, cron_expr, tz, at, deliver, mode, model, persona,
             )
         return f"Unknown action: {action}"
 
@@ -189,6 +194,7 @@ class CronTool(Tool, ContextAware):
         deliver: bool = True,
         mode: str | None = None,
         model: str | None = None,
+        persona: str | None = None,
     ) -> str:
         if not message:
             return (
@@ -244,6 +250,7 @@ class CronTool(Tool, ContextAware):
             session_key=self._session_key.get() or None,
             mode=mode or "reminder",
             model=model,
+            persona=persona,
         )
         return f"Created job '{job.name}' (id: {job.id})"
 
@@ -314,6 +321,7 @@ class CronTool(Tool, ContextAware):
         deliver: bool | None,
         mode: str | None = None,
         model: str | None = None,
+        persona: str | None = None,
     ) -> str:
         if not job_id:
             return "Error: job_id is required for update"
@@ -399,6 +407,7 @@ class CronTool(Tool, ContextAware):
             or (deliver is False)
             or (mode is not None)
             or (model is not None)
+            or (persona is not None)
         )
         if not any_change_real:
             return (
@@ -422,6 +431,8 @@ class CronTool(Tool, ContextAware):
             kwargs["mode"] = mode
         if model is not None:
             kwargs["model"] = model
+        if persona is not None:
+            kwargs["persona"] = persona
 
         result = self._cron.update_job(job_id, **kwargs)
         if result == "not_found":
