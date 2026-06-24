@@ -197,6 +197,93 @@ function PromptEditorModal({ value, onChange, onClose }: { value: string; onChan
   );
 }
 
+// Editable list of { label, target } rows for multi-way routing via the cases field.
+// Each row maps a case label (the agent's verdict word) to a target node id or null (end).
+// Labels must be non-empty and unique; duplicates are prevented on edit.
+function CasesEditor({
+  cases,
+  options,
+  onChange,
+  t,
+}: {
+  cases: Record<string, string | null>;
+  options: string[];
+  onChange: (cases: Record<string, string | null>) => void;
+  t: (k: string) => string;
+}) {
+  const entries = Object.entries(cases);
+
+  function setLabel(oldLabel: string, newLabel: string) {
+    const next: Record<string, string | null> = {};
+    for (const [k, v] of entries) {
+      next[k === oldLabel ? newLabel : k] = v;
+    }
+    onChange(next);
+  }
+
+  function setTarget(label: string, target: string | null) {
+    onChange({ ...cases, [label]: target });
+  }
+
+  function addCase() {
+    // Find a label name that does not collide with existing ones.
+    let name = "";
+    let i = entries.length + 1;
+    while (name === "" || name in cases) {
+      name = `case${i++}`;
+    }
+    onChange({ ...cases, [name]: null });
+  }
+
+  function removeCase(label: string) {
+    const next = { ...cases };
+    delete next[label];
+    onChange(next);
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-xs text-muted-foreground">{t("workflows.cases")}</span>
+      {entries.map(([label, target]) => (
+        <div key={label} className="flex items-center gap-1">
+          <Input
+            value={label}
+            placeholder={t("workflows.caseLabelPlaceholder")}
+            className="h-7 flex-1 text-xs"
+            onChange={(e) => setLabel(label, e.target.value)}
+          />
+          <span className="text-xs text-muted-foreground">→</span>
+          <select
+            className={`${selectCls} h-7 flex-1`}
+            value={target ?? ""}
+            onChange={(e) => setTarget(label, e.target.value || null)}
+          >
+            <option value="">{t("workflows.caseTargetEnd")}</option>
+            {options.map((o) => (
+              <option key={o} value={o}>{o}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="shrink-0 p-1 text-muted-foreground hover:text-destructive"
+            onClick={() => removeCase(label)}
+            aria-label={t("workflows.caseRemove")}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="flex items-center gap-1 self-start text-xs text-muted-foreground hover:text-foreground"
+        onClick={addCase}
+      >
+        <Plus className="h-3.5 w-3.5" /> {t("workflows.caseAdd")}
+      </button>
+    </div>
+  );
+}
+
 function NodeConfigPanel({
   node,
   nodeIds,
@@ -247,8 +334,14 @@ function NodeConfigPanel({
     return () => { alive = false; };
   }, [node.kind, allWorkflowNames, token]);
 
-  // A node routes when on_pass or on_fail is set (regardless of kind).
-  const routes = node.on_pass != null || node.on_fail != null;
+  // Determine the active routing shape: "binary" (on_pass/on_fail), "multiway" (cases), or "none" (next).
+  const routingShape: "binary" | "multiway" | "none" =
+    node.on_pass != null || node.on_fail != null
+      ? "binary"
+      : node.cases != null
+        ? "multiway"
+        : "none";
+  const routes = routingShape !== "none";
   // body: "command" if the command field is present, else "agent"
   const body: "agent" | "command" = node.command != null ? "command" : "agent";
 
@@ -287,11 +380,16 @@ function NodeConfigPanel({
     }
   }
 
-  function toggleRoutes(on: boolean) {
-    if (on) {
-      onChange({ on_pass: null, on_fail: null, next: undefined, mode: "explore" });
+  function switchRoutingShape(shape: "none" | "binary" | "multiway") {
+    // Always clear all three shapes first, then apply the selected one.
+    const clear: Partial<WorkflowNodeDef> = { on_pass: undefined, on_fail: undefined, cases: undefined, next: undefined };
+    if (shape === "none") {
+      onChange({ ...clear, next: null });
+    } else if (shape === "binary") {
+      onChange({ ...clear, on_pass: null, on_fail: null, mode: "explore" });
     } else {
-      onChange({ on_pass: undefined, on_fail: undefined, next: null });
+      // multiway: start with one empty case row
+      onChange({ ...clear, cases: { "": null }, mode: "explore" });
     }
   }
 
@@ -427,7 +525,7 @@ function NodeConfigPanel({
               type="checkbox"
               className="h-4 w-4 cursor-pointer accent-primary"
               checked={routes}
-              onChange={(e) => toggleRoutes(e.target.checked)}
+              onChange={(e) => switchRoutingShape(e.target.checked ? "binary" : "none")}
             />
             <label
               htmlFor={routingToggleId}
@@ -437,7 +535,20 @@ function NodeConfigPanel({
             </label>
           </div>
 
-          {routes ? (
+          {routes && (
+            <Field label={t("workflows.routingShape")}>
+              <select
+                className={selectCls}
+                value={routingShape}
+                onChange={(e) => switchRoutingShape(e.target.value as "binary" | "multiway")}
+              >
+                <option value="binary">{t("workflows.routingShapeBinary")}</option>
+                <option value="multiway">{t("workflows.routingShapeMultiway")}</option>
+              </select>
+            </Field>
+          )}
+
+          {routingShape === "binary" && (
             <>
               <Field label={t("workflows.onPass")}>
                 <TargetSelect
@@ -454,7 +565,18 @@ function NodeConfigPanel({
                 />
               </Field>
             </>
-          ) : (
+          )}
+
+          {routingShape === "multiway" && (
+            <CasesEditor
+              cases={(node.cases as Record<string, string | null>) ?? {}}
+              options={others}
+              onChange={(cases) => onChange({ cases })}
+              t={t}
+            />
+          )}
+
+          {routingShape === "none" && (
             <Field label={t("workflows.next")}>
               <TargetSelect
                 value={node.next as string}
@@ -887,15 +1009,25 @@ export function WorkflowsView() {
       mutate((d) => {
         const nodes = d.nodes
           .filter((n) => n.id !== id)
-          .map((n) => ({
-            ...n,
-            next: n.next === id ? null : n.next,
-            on_pass: n.on_pass === id ? null : n.on_pass,
-            on_fail: n.on_fail === id ? null : n.on_fail,
-            branches: Array.isArray(n.branches)
-              ? n.branches.filter((b) => b !== id)
-              : n.branches,
-          }));
+          .map((n) => {
+            const patch: Partial<WorkflowNodeDef> = {
+              next: n.next === id ? null : n.next,
+              on_pass: n.on_pass === id ? null : n.on_pass,
+              on_fail: n.on_fail === id ? null : n.on_fail,
+              branches: Array.isArray(n.branches)
+                ? n.branches.filter((b) => b !== id)
+                : n.branches,
+            };
+            // Remap any cases that pointed to the deleted node to null (end).
+            if (n.cases != null) {
+              const remapped: Record<string, string | null> = {};
+              for (const [label, target] of Object.entries(n.cases)) {
+                remapped[label] = target === id ? null : target;
+              }
+              patch.cases = remapped;
+            }
+            return { ...n, ...patch };
+          });
         const start = d.start === id ? (nodes[0]?.id ?? "") : d.start;
         return { ...d, nodes, start };
       });
@@ -911,7 +1043,9 @@ export function WorkflowsView() {
         ...d,
         nodes: d.nodes.map((n) => {
           if (n.id !== c.source) return n;
-          // A node with on_pass/on_fail (routing node) — fill the empty slot first.
+          // Multi-way routing nodes: cases are authored in the panel, not by dragging edges.
+          if (n.cases != null) return n;
+          // A node with on_pass/on_fail (binary routing) — fill the empty slot first.
           const isRouting = n.on_pass != null || n.on_fail != null;
           if (n.kind === "decision" || isRouting) {
             return n.on_pass ? { ...n, on_fail: c.target } : { ...n, on_pass: c.target };

@@ -235,6 +235,53 @@ describe("workflowToFlow", () => {
     expect(toOutput).toEqual(["synthesize"]);
   });
 
+  it("a cases node produces one labeled edge per entry; null targets are omitted from edges (handled by terminal logic)", () => {
+    const { edges } = workflowToFlow({
+      name: "mw",
+      start: "router",
+      nodes: [
+        { id: "router", kind: "work", cases: { approve: "done", reject: "fix", escalate: null } },
+        { id: "done", kind: "work" },
+        { id: "fix", kind: "work" },
+      ],
+    });
+    const fromRouter = edges.filter((e) => e.source === "router");
+    // approve -> done, reject -> fix; escalate is null (no target node) so no edge added
+    expect(fromRouter).toHaveLength(2);
+    expect(fromRouter.find((e) => e.target === "done")?.label).toBe("approve");
+    expect(fromRouter.find((e) => e.target === "fix")?.label).toBe("reject");
+    // no edge for escalate (null = end-of-flow handled by OUTPUT terminal)
+    expect(fromRouter.find((e) => e.label === "escalate")).toBeUndefined();
+  });
+
+  it("a cases node with a null target is a terminal and connects to OUTPUT", () => {
+    const { edges } = workflowToFlow({
+      name: "mw2",
+      start: "router",
+      output: { text: true },
+      nodes: [
+        { id: "router", kind: "work", cases: { approve: null, reject: "fix" } },
+        { id: "fix", kind: "work", next: null },
+      ],
+    });
+    const toOutput = edges.filter((e) => e.target === "__output__").map((e) => e.source).sort();
+    // both router (approve: null) and fix (next: null) are terminals
+    expect(toOutput).toEqual(["fix", "router"]);
+  });
+
+  it("a cases node resolves to the 'decision' flow-type for visual consistency", () => {
+    const { nodes } = workflowToFlow({
+      name: "mwtype",
+      start: "router",
+      nodes: [
+        { id: "router", kind: "work", cases: { a: "done", b: null } },
+        { id: "done", kind: "work" },
+      ],
+    });
+    const router = nodes.find((n) => n.id === "router")!;
+    expect(router.type).toBe("decision");
+  });
+
   it("uses def.ui.positions for a node when present", () => {
     const { nodes } = workflowToFlow({ name: "p", start: "a", ui: { positions: { a: { x: 500, y: 40 } } }, nodes: [{ id: "a", kind: "work", next: null }] });
     const a = nodes.find((n) => n.id === "a")!;
