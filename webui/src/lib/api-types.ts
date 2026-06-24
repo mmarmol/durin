@@ -541,6 +541,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/memory/flagged-pairs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Memory pairs the dream flagged for human review (Dream Bandeja) */
+        get: operations["memory_flagged_pairs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/memory/flagged-pairs/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve a flagged pair: merge the entities or keep them separate */
+        post: operations["memory_resolve_flagged"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/memory/graph": {
         parameters: {
             query?: never;
@@ -1909,6 +1943,37 @@ export interface components {
             present: boolean;
         };
         /**
+         * FlaggedPair
+         * @description One memory pair the dream escalated for human review.
+         */
+        FlaggedPair: {
+            /** At Ms */
+            at_ms: number | null;
+            /** Confidence */
+            confidence: number;
+            /** Reasoning */
+            reasoning: string;
+            /** Ref A */
+            ref_a: string;
+            /** Ref B */
+            ref_b: string;
+            /** Verdict */
+            verdict: string;
+        };
+        /**
+         * FlaggedPairs
+         * @description All memory pairs currently awaiting human review.
+         */
+        FlaggedPairs: {
+            /** Pairs */
+            pairs: components["schemas"]["FlaggedPair"][];
+        };
+        /**
+         * FlaggedPairsQuery
+         * @description No inputs — returns the full current flagged-pairs list.
+         */
+        FlaggedPairsQuery: Record<string, never>;
+        /**
          * ForgetResult
          * @description Result of a SUCCESSFUL archive — ``result`` is always ``"archived"``.
          *
@@ -2985,6 +3050,28 @@ export interface components {
             models: components["schemas"]["ProviderModelEntry"][];
             /** Provider */
             provider: string;
+        };
+        /**
+         * ResolveFlaggedRequest
+         * @description Resolve a flagged pair: merge the two entities or keep them separate.
+         */
+        ResolveFlaggedRequest: {
+            /** Action */
+            action: string;
+            /** Ref A */
+            ref_a: string;
+            /** Ref B */
+            ref_b: string;
+        };
+        /**
+         * ResolveResult
+         * @description Outcome of a resolve action.
+         */
+        ResolveResult: {
+            /** Action */
+            action: string;
+            /** Ok */
+            ok: boolean;
         };
         /** RevokeTokenCommand */
         RevokeTokenCommand: {
@@ -4536,6 +4623,54 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ForgetResult"];
+                };
+            };
+        };
+    };
+    memory_flagged_pairs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FlaggedPairsQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FlaggedPairs"];
+                };
+            };
+        };
+    };
+    memory_resolve_flagged: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveFlaggedRequest"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolveResult"];
                 };
             };
         };
