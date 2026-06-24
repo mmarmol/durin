@@ -472,6 +472,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/memory/dream/digest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recent dream-pass activity: merges, discoveries, skill updates */
+        get: operations["memory_dream_digest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/memory/edge/{a}/{b}": {
         parameters: {
             query?: never;
@@ -1798,6 +1815,46 @@ export interface components {
             model_id: string;
             /** Status */
             status: string;
+        };
+        /**
+         * DreamDigest
+         * @description List of recent dream events, newest first, capped at *limit*.
+         */
+        DreamDigest: {
+            /** Events */
+            events: components["schemas"]["DreamEvent"][];
+            /** Last Run At Ms */
+            last_run_at_ms: number | null;
+        };
+        /** DreamDigestQuery */
+        DreamDigestQuery: {
+            /**
+             * Limit
+             * @default 30
+             */
+            limit: number;
+        };
+        /**
+         * DreamEvent
+         * @description One notable thing the nightly dream did.
+         *
+         *     ``kind`` is the operation: "merged" | "created" | "improved" | "quarantined"
+         *     | "flagged".  ``ref`` / ``ref_kind`` let the UI deep-link to the affected
+         *     entity or skill; both are None when the event is not tied to a specific ref
+         *     (e.g. a bulk skill-extract pass with no individual ref emitted).
+         *     ``at_ms`` is epoch milliseconds so JS Date can consume it directly.
+         */
+        DreamEvent: {
+            /** At Ms */
+            at_ms: number;
+            /** Kind */
+            kind: string;
+            /** Ref */
+            ref: string | null;
+            /** Ref Kind */
+            ref_kind: string | null;
+            /** Summary */
+            summary: string;
         };
         /** ExtrasEnsureCommand */
         ExtrasEnsureCommand: {
@@ -4354,6 +4411,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CrossEncoderTestResult"];
+                };
+            };
+        };
+    };
+    memory_dream_digest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DreamDigestQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DreamDigest"];
                 };
             };
         };
