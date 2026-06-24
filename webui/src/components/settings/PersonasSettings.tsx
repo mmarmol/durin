@@ -368,6 +368,8 @@ export function PersonasSettings({ token }: { token: string }) {
   const [personaForm, setPersonaForm] = useState<"new" | PersonaItem | null>(null);
   const [confirmSoul, setConfirmSoul] = useState<string | null>(null);
   const [confirmPersona, setConfirmPersona] = useState<string | null>(null);
+  const [testingRow, setTestingRow] = useState<string | null>(null);
+  const [rowTest, setRowTest] = useState<{ name: string; res: TestResult } | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -431,6 +433,19 @@ export function PersonasSettings({ token }: { token: string }) {
       setError(errLabel(e));
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const testRow = async (persona: PersonaItem) => {
+    setTestingRow(persona.name);
+    setRowTest(null);
+    try {
+      const res = await testPersona(token, { model: persona.model ?? null, soul: persona.soul });
+      setRowTest({ name: persona.name, res });
+    } catch (e) {
+      setRowTest({ name: persona.name, res: { ok: false, error: errLabel(e) } });
+    } finally {
+      setTestingRow(null);
     }
   };
 
@@ -627,10 +642,36 @@ export function PersonasSettings({ token }: { token: string }) {
                         {persona.model ? ` · ${persona.model}` : ""}
                       </span>
                       {persona.description ? <span>{persona.description}</span> : null}
+                      {rowTest?.name === persona.name ? (
+                        <span
+                          className={cn(
+                            "mt-1 block whitespace-pre-wrap rounded-md border px-2 py-1.5 text-[11px] leading-relaxed",
+                            rowTest.res.ok
+                              ? "border-green-500/20 bg-green-500/5 text-foreground"
+                              : "border-destructive/20 bg-destructive/5 text-destructive",
+                          )}
+                        >
+                          {rowTest.res.ok ? (rowTest.res.reply ?? "") : (rowTest.res.error ?? "")}
+                        </span>
+                      ) : null}
                     </span>
                   }
                 >
                   <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={testingRow === persona.name}
+                      onClick={() => void testRow(persona)}
+                      className="rounded-full text-[12px] text-muted-foreground"
+                      title={t("settings.personas.test")}
+                    >
+                      {testingRow === persona.name ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                      ) : (
+                        t("settings.personas.test")
+                      )}
+                    </Button>
                     {persona.name === "default" && isDefault ? null : (
                       <Button
                         size="sm"
