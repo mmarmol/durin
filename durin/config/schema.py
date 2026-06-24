@@ -684,6 +684,17 @@ class ModelPresetConfig(Base):
         )
 
 
+class PersonaConfig(Base):
+    """A named persona: a SOUL plus an optional model, selectable for a chat or
+    a cron job. ``soul`` is a SoulStore slug (``default`` = the workspace
+    SOUL.md). ``model`` is a model picker ref (a preset name or a
+    ``"provider model"`` pair); ``None`` means use the global default model."""
+
+    soul: str = "default"
+    model: str | None = None
+    description: str | None = None
+
+
 class ModelCapabilityOverride(Base):
     """User-declared capability override for a specific model name.
 
@@ -716,6 +727,7 @@ class AgentDefaults(Base):
     # own workspace; an existing config keeps the value persisted on disk.
     workspace: str = Field(default_factory=lambda: str(durin_home() / "workspace"))
     model_preset: str | None = None  # Active preset name — takes precedence over fields below
+    persona: str | None = None  # default persona name for interactive chats
     model: str = "anthropic/claude-opus-4-5"
     provider: str = (
         "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
@@ -1168,6 +1180,7 @@ class Config(BaseSettings):
         default_factory=dict,
         validation_alias=AliasChoices("modelPresets", "model_presets"),
     )
+    personas: dict[str, PersonaConfig] = Field(default_factory=dict)
     # Per-model capability overrides — keyed by either the bare model
     # name (``glm-5-turbo``) or the provider-qualified form
     # (``custom/glm-5-turbo``). Provider-qualified keys win over bare
@@ -1241,6 +1254,23 @@ class Config(BaseSettings):
         if name not in self.model_presets:
             raise KeyError(f"model_preset {name!r} not found in model_presets")
         return self.model_presets[name]
+
+    def resolve_persona(self, name: str | None = None) -> "PersonaConfig | None":
+        """Resolve a persona by name: user config first, then built-ins.
+        ``None`` when the name is unset/empty or unknown (caller falls back to
+        the default SOUL + default model)."""
+        if name is None:
+            name = self.agents.defaults.persona
+        if not name:
+            return None
+        if name in self.personas:
+            return self.personas[name]
+        from durin.personas.builtin import BUILTIN_PERSONAS
+        return BUILTIN_PERSONAS.get(name)
+
+    def persona_names(self) -> list[str]:
+        from durin.personas.builtin import BUILTIN_PERSONAS
+        return sorted(set(self.personas) | set(BUILTIN_PERSONAS))
 
     @property
     def workspace_path(self) -> Path:

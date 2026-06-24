@@ -123,13 +123,15 @@ class TestLoadBootstrapFiles:
 
     def test_multiple_bootstrap_files(self, tmp_path):
         (tmp_path / "AGENTS.md").write_text("Rules.", encoding="utf-8")
-        (tmp_path / "SOUL.md").write_text("Soul.", encoding="utf-8")
+        (tmp_path / "TOOLS.md").write_text("Tools.", encoding="utf-8")
         builder = _builder(tmp_path)
         result = builder._load_bootstrap_files()
         assert "## AGENTS.md" in result
-        assert "## SOUL.md" in result
+        assert "## TOOLS.md" in result
         assert "Rules." in result
-        assert "Soul." in result
+        assert "Tools." in result
+        # SOUL.md is no longer a bootstrap file; it is rendered as a dedicated
+        # soul block in _build_stable_layer (persona-driven).
 
     def test_all_bootstrap_files(self, tmp_path):
         for name in ContextBuilder.BOOTSTRAP_FILES:

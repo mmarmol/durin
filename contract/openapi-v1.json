@@ -2695,6 +2695,250 @@
         "title": "OAuthStatusResult",
         "type": "object"
       },
+      "PersonaDeleteCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "PersonaDeleteCommand",
+        "type": "object"
+      },
+      "PersonaDeleteResult": {
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "PersonaDeleteResult",
+        "type": "object"
+      },
+      "PersonaItem": {
+        "properties": {
+          "builtin": {
+            "default": false,
+            "title": "Builtin",
+            "type": "boolean"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "soul": {
+            "title": "Soul",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "soul"
+        ],
+        "title": "PersonaItem",
+        "type": "object"
+      },
+      "PersonaListQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 lists all personas (user + built-in) and the default.",
+        "properties": {},
+        "title": "PersonaListQuery",
+        "type": "object"
+      },
+      "PersonaListResult": {
+        "properties": {
+          "default": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default"
+          },
+          "personas": {
+            "items": {
+              "$ref": "#/components/schemas/PersonaItem"
+            },
+            "title": "Personas",
+            "type": "array"
+          }
+        },
+        "required": [
+          "personas"
+        ],
+        "title": "PersonaListResult",
+        "type": "object"
+      },
+      "PersonaTestCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "soul": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Soul"
+          }
+        },
+        "title": "PersonaTestCommand",
+        "type": "object"
+      },
+      "PersonaTestResult": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "reply": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reply"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "PersonaTestResult",
+        "type": "object"
+      },
+      "PersonaUpsertCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Description"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "soul": {
+            "default": "default",
+            "title": "Soul",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "PersonaUpsertCommand",
+        "type": "object"
+      },
+      "PersonaUpsertResult": {
+        "properties": {
+          "persona": {
+            "$ref": "#/components/schemas/PersonaItem"
+          }
+        },
+        "required": [
+          "persona"
+        ],
+        "title": "PersonaUpsertResult",
+        "type": "object"
+      },
       "PickerEntryModel": {
         "properties": {
           "group": {
@@ -3262,6 +3506,43 @@
         "title": "SessionsListResult",
         "type": "object"
       },
+      "SetDefaultPersonaCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          }
+        },
+        "title": "SetDefaultPersonaCommand",
+        "type": "object"
+      },
+      "SetDefaultPersonaResult": {
+        "properties": {
+          "default": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Default"
+          }
+        },
+        "title": "SetDefaultPersonaResult",
+        "type": "object"
+      },
       "SettingsProviderUpdateCommand": {
         "additionalProperties": false,
         "properties": {
@@ -3768,6 +4049,105 @@
           "data"
         ],
         "title": "SkillsResult",
+        "type": "object"
+      },
+      "SoulDeleteCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug"
+        ],
+        "title": "SoulDeleteCommand",
+        "type": "object"
+      },
+      "SoulDeleteResult": {
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "SoulDeleteResult",
+        "type": "object"
+      },
+      "SoulItem": {
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "body"
+        ],
+        "title": "SoulItem",
+        "type": "object"
+      },
+      "SoulListQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 lists all souls including the default.",
+        "properties": {},
+        "title": "SoulListQuery",
+        "type": "object"
+      },
+      "SoulListResult": {
+        "properties": {
+          "souls": {
+            "items": {
+              "$ref": "#/components/schemas/SoulItem"
+            },
+            "title": "Souls",
+            "type": "array"
+          }
+        },
+        "required": [
+          "souls"
+        ],
+        "title": "SoulListResult",
+        "type": "object"
+      },
+      "SoulUpsertCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "body"
+        ],
+        "title": "SoulUpsertCommand",
+        "type": "object"
+      },
+      "SoulUpsertResult": {
+        "properties": {
+          "soul": {
+            "$ref": "#/components/schemas/SoulItem"
+          }
+        },
+        "required": [
+          "soul"
+        ],
+        "title": "SoulUpsertResult",
         "type": "object"
       },
       "TokenMetadata": {
@@ -5620,6 +6000,147 @@
         "x-required-scope": "settings:read"
       }
     },
+    "/api/v1/personas": {
+      "delete": {
+        "operationId": "personas_delete_persona",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonaDeleteCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonaDeleteResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Delete a user persona (built-ins cannot be deleted)",
+        "x-required-scope": "config:write"
+      },
+      "get": {
+        "operationId": "personas_list_personas",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonaListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonaListResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List personas (user + built-in) and the default",
+        "x-required-scope": "config:read"
+      },
+      "post": {
+        "operationId": "personas_upsert_persona",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonaUpsertCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonaUpsertResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Create or update a user persona",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/personas/default": {
+      "post": {
+        "operationId": "personas_set_default",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDefaultPersonaCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetDefaultPersonaResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Set (or clear) the global default persona",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/personas/test": {
+      "post": {
+        "operationId": "personas_test_persona",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonaTestCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonaTestResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Live round-trip: run the chosen SOUL + model with a short prompt",
+        "x-required-scope": "config:read"
+      }
+    },
     "/api/v1/providers/model": {
       "post": {
         "operationId": "config_provider_model_upsert",
@@ -6652,6 +7173,89 @@
         },
         "summary": "Overwrite a MANUAL skill",
         "x-required-scope": "skills:write"
+      }
+    },
+    "/api/v1/souls": {
+      "delete": {
+        "operationId": "personas_delete_soul",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SoulDeleteCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SoulDeleteResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Delete a named SOUL file (the default soul cannot be deleted)",
+        "x-required-scope": "config:write"
+      },
+      "get": {
+        "operationId": "personas_list_souls",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SoulListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SoulListResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List all SOUL personality files",
+        "x-required-scope": "config:read"
+      },
+      "post": {
+        "operationId": "personas_upsert_soul",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SoulUpsertCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SoulUpsertResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Create or overwrite a SOUL personality file",
+        "x-required-scope": "config:write"
       }
     },
     "/api/v1/workflows": {
