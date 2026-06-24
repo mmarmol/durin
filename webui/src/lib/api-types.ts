@@ -3415,6 +3415,11 @@ export interface components {
         };
         /** WorkflowRunCommand */
         WorkflowRunCommand: {
+            /**
+             * Input Files
+             * @default []
+             */
+            input_files: string[];
             /** Name */
             name: string;
             /** Task */
@@ -3424,6 +3429,11 @@ export interface components {
         WorkflowRunResult: {
             /** Final Output */
             final_output: string;
+            /**
+             * Output Dir
+             * @default
+             */
+            output_dir: string;
             /** Runs */
             runs: {
                 [key: string]: unknown;

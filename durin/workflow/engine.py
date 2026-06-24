@@ -17,8 +17,10 @@ AgentRunner + persists node sessions is Task 5.
 from __future__ import annotations
 
 import concurrent.futures
+import shutil
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 from durin.workflow import workspace_fork
@@ -87,7 +89,12 @@ class WorkflowEngine:
         self._pick_runner = pick_runner
 
     def run(
-        self, workflow: Workflow, task: str, *, root_session_key: str | None = None
+        self,
+        workflow: Workflow,
+        task: str,
+        *,
+        root_session_key: str | None = None,
+        input_files: list[str] | None = None,
     ) -> WorkflowResult:
         """Run the workflow. A node-execution failure (provider/MCP/tool error) does not
         propagate — it ends the run as a typed ``aborted`` result carrying the partial
@@ -98,7 +105,11 @@ class WorkflowEngine:
             prune_runs(self._workspace)
         runs: list[NodeRun] = []
         try:
-            return self._walk(workflow, task, run_id, runs, root_session_key=root_session_key)
+            return self._walk(
+                workflow, task, run_id, runs,
+                root_session_key=root_session_key,
+                input_files=input_files,
+            )
         except WorkflowConfigError:
             raise
         except Exception as exc:  # noqa: BLE001 - a node failure becomes a typed aborted result
@@ -108,15 +119,30 @@ class WorkflowEngine:
             )
 
     def _walk(
-        self, workflow: Workflow, task: str, run_id: str, runs: list[NodeRun],
-        *, root_session_key: str | None = None,
+        self,
+        workflow: Workflow,
+        task: str,
+        run_id: str,
+        runs: list[NodeRun],
+        *,
+        root_session_key: str | None = None,
+        input_files: list[str] | None = None,
     ) -> WorkflowResult:
         shared_context: list[dict] = []
         visits: dict[str, int] = {}
         upstream_output: str | None = None
         upstream_artifact_dir: str | None = None
+        terminal_output_dir: str | None = None
         final_output: str | None = None
         current: str | None = workflow.start
+
+        # Seed an input folder for the start node when input_files are given and a
+        # workspace is available — the start node reads them as "previous step's files".
+        if input_files and self._workspace is not None:
+            input_folder = artifact_dir(self._workspace, run_id, "__input__", 0)
+            for path in input_files:
+                shutil.copy(path, input_folder / Path(path).name)
+            upstream_artifact_dir = str(input_folder)
 
         while current is not None:
             visits[current] = visits.get(current, 0) + 1
@@ -188,6 +214,8 @@ class WorkflowEngine:
                     # nils the chain for the next node — consistent with it also replacing
                     # the text output.
                     upstream_artifact_dir = out_dir
+                    if out_dir is not None:
+                        terminal_output_dir = out_dir
                     final_output = output
                     current = node.next
 
@@ -223,7 +251,8 @@ class WorkflowEngine:
 
 
         return WorkflowResult(
-            status="completed", final_output=final_output, runs=runs, run_id=run_id
+            status="completed", final_output=final_output, runs=runs, run_id=run_id,
+            output_dir=terminal_output_dir,
         )
 
     def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key, workspace_override, fork_dir=None):

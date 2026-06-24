@@ -7,6 +7,7 @@ from durin.service.types import NotFoundError, ValidationFailedError
 from durin.service.workflows import (
     WorkflowDeleteCommand,
     WorkflowGetQuery,
+    WorkflowRunCommand,
     WorkflowSaveCommand,
     WorkflowsListQuery,
     WorkflowsService,
@@ -64,3 +65,12 @@ async def test_get_missing_raises_not_found(tmp_path):
 async def test_delete_missing_raises_not_found(tmp_path):
     with pytest.raises(NotFoundError):
         await _svc(tmp_path).delete(WorkflowDeleteCommand(name="ghost"), Principal.local())
+
+
+def test_run_command_accepts_input_files():
+    """WorkflowRunCommand accepts an optional input_files list (smoke test for the model)."""
+    cmd_default = WorkflowRunCommand(name="wf", task="go")
+    assert cmd_default.input_files == []
+
+    cmd_with = WorkflowRunCommand(name="wf", task="go", input_files=["/tmp/a.txt", "/tmp/b.txt"])
+    assert cmd_with.input_files == ["/tmp/a.txt", "/tmp/b.txt"]
