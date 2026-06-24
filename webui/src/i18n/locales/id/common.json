@@ -247,7 +247,7 @@
         "dreamDiscover": "Juga buat entitas dari fakta tahan lama yang Anda sebutkan tetapi tidak disimpan secara eksplisit, sehingga memori tumbuh dari percakapan — bukan hanya dari penyimpanan eksplisit. Aktif secara default.",
         "dreamAutoAbsorb": "Biarkan pass refine secara otomatis menggabungkan entitas yang dinilai duplikat (hanya keyakinan tinggi). Mati menjaga penggabungan tetap manual.",
         "dreamAbsorbConfidence": "Keyakinan minimum (0-100) yang dibutuhkan juri untuk menggabungkan dua entitas. 95 = presisi tinggi. Hanya berlaku saat auto-absorb aktif.",
-        "dreamAbsorbMinAge": "Karantina: jangan gabungkan entitas yang lebih baru dari jumlah jam ini, agar dua entitas yang baru dibuat tidak digabungkan sebelum saling membedakan. Hanya saat auto-absorb aktif.",
+        "dreamAbsorbSemanticThreshold": "Seberapa dekat (jarak embedding, ~0–1; 0.20 ≈ 90% mirip) dua entitas bertipe sama agar dianggap sama oleh judge. Lebih rendah = lebih ketat. Judge tetap memutuskan penggabungan.",
         "dreamThrottle": "Detik minimum antara pass dream reaktif (post-compaction / penutupan sesi). Menyerap lonjakan agar pass yang tumpang tindih tidak menumpuk; 0 menonaktifkan. Cron harian tidak pernah dibatasi.",
         "dreamMaxSeconds": "Batas wall-clock keras per pass extract. Saat tercapai, pass mengalah setelah sesi saat ini dan kursor per-sesi melanjutkan sisanya pada trigger berikutnya. 0 = tanpa batas.",
         "dreamAlwaysOnBudget": "Anggaran token untuk panduan 'always-on' yang dipasang di setiap prompt. Dream me-rangking feedback (stance/practice), membuang kontradiksi, dan memasukkan item prioritas tertinggi ke dalam anggaran ini. 0 menonaktifkan pin."
@@ -263,7 +263,7 @@
         "dreamDiscover": "Temukan entitas dari obrolan",
         "dreamAutoAbsorb": "Auto-absorb duplikat",
         "dreamAbsorbConfidence": "Keyakinan auto-absorb",
-        "dreamAbsorbMinAge": "Karantina penggabungan (j)",
+        "dreamAbsorbSemanticThreshold": "Jarak kecocokan semantik",
         "dreamThrottle": "Throttle reaktif (d)",
         "dreamMaxSeconds": "Maks. detik per pass",
         "dreamAlwaysOnBudget": "Anggaran always-on (token)"
