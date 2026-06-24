@@ -343,6 +343,18 @@ class AutoAbsorbConfig(Base):
         validation_alias=AliasChoices("confidenceThreshold", "confidence_threshold"),
     )
 
+    # Semantic candidate threshold: LanceDB L2² distance below which an
+    # embedding-near same-type entity is handed to the judge (in refine AND
+    # at discovery time). ~0.0–1.0; 0.20 ≈ cosine 0.90. Lower = stricter
+    # (fewer candidates, fewer judge calls); the judge (confidence_threshold)
+    # still decides the actual merge/reuse.
+    semantic_distance_threshold: float = Field(
+        default=0.20,
+        ge=0.0,
+        validation_alias=AliasChoices(
+            "semanticDistanceThreshold", "semantic_distance_threshold"),
+    )
+
 
 class CrossEncoderConfig(Base):
     """Cross-encoder reranker config.
