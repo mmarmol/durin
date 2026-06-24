@@ -379,3 +379,91 @@ def test_allows_judge_differing_by_model_or_prompt():
         {"id": "done", "kind": "work"},
     ], start="p"))
     assert wf.nodes["j"].routes      # differs by prompt+mode -> allowed
+
+
+# ── Task 1 new tests ──────────────────────────────────────────────────────────
+
+def test_workflow_io_descriptors_parse():
+    wf = parse_workflow({"name": "w", "start": "a", "input": {"text": True, "file": True},
+                         "output": {"file": True}, "nodes": [{"id": "a", "kind": "work"}]})
+    assert wf.input == {"text": True, "file": True} and wf.output == {"file": True}
+
+
+def test_workflow_io_defaults_none():
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [{"id": "a", "kind": "work"}]})
+    assert wf.input is None and wf.output is None
+
+
+def test_workflow_io_must_be_dict():
+    with pytest.raises(WorkflowError):
+        parse_workflow({"name": "w", "start": "a", "input": "text",
+                        "nodes": [{"id": "a", "kind": "work"}]})
+    with pytest.raises(WorkflowError):
+        parse_workflow({"name": "w", "start": "a", "output": ["file"],
+                        "nodes": [{"id": "a", "kind": "work"}]})
+
+
+def test_node_persona_xor_model():
+    a = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "persona": "engineer"}]}).nodes["a"]
+    assert a.persona == "engineer"
+    with pytest.raises(WorkflowError):     # both set → reject
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "persona": "engineer", "model": "glm-5.2"}]})
+
+
+def test_node_persona_defaults_none():
+    a = parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work"}]}).nodes["a"]
+    assert a.persona is None
+
+
+def test_parallel_max_concurrency_defaults_2_and_parses():
+    fan = parse_workflow({"name": "w", "start": "f", "nodes": [
+        {"id": "f", "kind": "parallel", "branches": ["a"], "next": None},
+        {"id": "a", "kind": "work"}]}).nodes["f"]
+    assert fan.max_concurrency == 2
+    fan2 = parse_workflow({"name": "w", "start": "f", "nodes": [
+        {"id": "f", "kind": "parallel", "branches": ["a"], "max_concurrency": 5, "next": None},
+        {"id": "a", "kind": "work"}]}).nodes["f"]
+    assert fan2.max_concurrency == 5
+
+
+def test_parallel_max_concurrency_must_be_at_least_1():
+    with pytest.raises(WorkflowError):
+        parse_workflow({"name": "w", "start": "f", "nodes": [
+            {"id": "f", "kind": "parallel", "branches": ["a"], "max_concurrency": 0, "next": None},
+            {"id": "a", "kind": "work"}]})
+
+
+def test_dynamic_parallel_worker_and_list_from():
+    wf = parse_workflow({"name": "w", "start": "orch", "nodes": [
+        {"id": "orch", "kind": "work", "next": "fan"},
+        {"id": "fan", "kind": "parallel", "worker": "dev", "list_from": "orch", "next": "done"},
+        {"id": "dev", "kind": "work"}, {"id": "done", "kind": "work"}]})
+    fan = wf.nodes["fan"]
+    assert fan.worker == "dev" and fan.list_from == "orch" and fan.branches == ()
+
+
+def test_dynamic_parallel_branches_must_be_empty():
+    with pytest.raises(WorkflowError):
+        parse_workflow({"name": "w", "start": "orch", "nodes": [
+            {"id": "orch", "kind": "work", "next": "fan"},
+            {"id": "fan", "kind": "parallel", "branches": ["a"], "worker": "dev",
+             "list_from": "orch", "next": None},
+            {"id": "a", "kind": "work"}, {"id": "dev", "kind": "work"}]})
+
+
+def test_dynamic_parallel_requires_list_from():
+    with pytest.raises(WorkflowError):
+        parse_workflow({"name": "w", "start": "orch", "nodes": [
+            {"id": "orch", "kind": "work", "next": "fan"},
+            {"id": "fan", "kind": "parallel", "worker": "dev", "next": None},
+            {"id": "dev", "kind": "work"}]})
+
+
+def test_dynamic_parallel_worker_and_list_from_must_be_real_nodes():
+    with pytest.raises(WorkflowError):
+        parse_workflow({"name": "w", "start": "orch", "nodes": [
+            {"id": "orch", "kind": "work", "next": "fan"},
+            {"id": "fan", "kind": "parallel", "worker": "ghost", "list_from": "orch", "next": None}]})
