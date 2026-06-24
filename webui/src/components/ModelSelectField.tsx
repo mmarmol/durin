@@ -68,6 +68,7 @@ export function ModelSelectField({
         onClose={() => setOpen(false)}
         onSelect={handleSelect}
         activeModel={value || null}
+        anchorRef={wrapperRef}
       />
     </div>
   );
