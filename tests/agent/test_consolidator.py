@@ -38,9 +38,10 @@ def consolidator(store, mock_provider):
         get_tool_definitions=MagicMock(return_value=[]),
         max_completion_tokens=100,
     )
-    # Stub out decision extraction so these tests don't trigger an extra
-    # provider call (test_consolidator_decisions.py covers that code path).
+    # Stub out decision and learning extraction so these tests don't trigger
+    # extra provider calls (test_consolidator_decisions.py covers those paths).
     cons.extract_decisions = AsyncMock(return_value=[])
+    cons.extract_learnings = AsyncMock(return_value=[])
     return cons
 
 

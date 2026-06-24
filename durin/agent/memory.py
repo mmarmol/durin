@@ -925,6 +925,73 @@ class Consolidator:
             logger.warning("Decision extraction LLM call failed; skipping")
             return []
 
+    async def extract_learnings(
+        self, messages: list[dict]
+    ) -> list[dict[str, str]]:
+        """Extract durable user learnings from a span via LLM (best-effort).
+
+        Mirrors extract_decisions but targets feedback/stance/practice/person
+        entities: preferences, corrections, standing constraints, and stable
+        personal facts about the user. Returns a list of
+        {"ref": str, "name": str, "body": str} objects, or [] on empty input,
+        empty LLM output, or any failure (must never crash compaction).
+        """
+        if not messages:
+            return []
+        try:
+            from json_repair import repair_json
+
+            formatted = MemoryStore._format_messages(messages)
+            formatted = self._truncate_to_token_budget(formatted)
+            response = await self.provider.chat_with_retry(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": render_template(
+                            "agent/consolidator_learnings.md",
+                            strip=True,
+                        ),
+                    },
+                    {"role": "user", "content": formatted},
+                ],
+                tools=None,
+                tool_choice=None,
+            )
+            if response.finish_reason == "error":
+                return []
+            raw = (response.content or "").strip()
+            if not raw:
+                return []
+            # Strip code fences if present.
+            m = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL)
+            if m:
+                raw = m.group(1).strip()
+            try:
+                obj = json.loads(repair_json(raw))
+            except Exception:
+                return []
+            if not isinstance(obj, list):
+                return []
+            out: list[dict[str, str]] = []
+            for item in obj:
+                if not isinstance(item, dict):
+                    continue
+                ref = item.get("ref", "")
+                name = item.get("name", "")
+                body = item.get("body", "")
+                if (
+                    isinstance(ref, str) and ":" in ref
+                    and isinstance(name, str)
+                    and isinstance(body, str)
+                    and ref and name and body
+                ):
+                    out.append({"ref": ref, "name": name, "body": body[:400]})
+            return out
+        except Exception:
+            logger.warning("Learning extraction LLM call failed; skipping")
+            return []
+
     async def maybe_consolidate_by_tokens(
         self,
         session: Session,
@@ -1154,6 +1221,44 @@ class Consolidator:
                                         })
                     except Exception:
                         logger.exception("Decision extraction failed for {}", session.key)
+                # Compaction backstop: distil durable user learnings (preferences,
+                # corrections, standing constraints, stable personal facts) from
+                # the archived span and persist them as feedback/stance/practice
+                # entities. This catches what the in-the-moment capture directive
+                # may have missed. Best-effort: failures must never break consolidation.
+                # Dedup is NOT done here — the dream's refine pass already dedups
+                # feedback entities; we rely on it.
+                try:
+                    span = session.messages[consolidated_start:session.last_consolidated]
+                    learnings = await self.extract_learnings(span)
+                    if learnings:
+                        from datetime import timezone
+
+                        from durin.memory.field_patch import FieldPatch
+                        from durin.memory.memory_writer import write_entity
+
+                        now = datetime.now(timezone.utc)
+                        for learning in learnings:
+                            ref = learning["ref"]
+                            name = learning["name"]
+                            body = learning["body"]
+                            write_entity(
+                                self.store.workspace,
+                                ref,
+                                [
+                                    FieldPatch(
+                                        kind="body_replace",
+                                        value=body,
+                                        author="agent",
+                                        source_ref=session.key,
+                                        at=now,
+                                    )
+                                ],
+                                create=True,
+                                name=name,
+                            )
+                except Exception:
+                    logger.exception("Learning extraction failed for {}", session.key)
         finally:
             lock.release()
 

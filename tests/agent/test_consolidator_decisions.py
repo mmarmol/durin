@@ -1,4 +1,4 @@
-"""Tests for Consolidator.extract_decisions (auto-extraction at compaction)."""
+"""Tests for Consolidator.extract_decisions and extract_learnings (auto-extraction at compaction)."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -136,3 +136,66 @@ async def test_maybe_consolidate_persists_extracted_decisions(tmp_path):
     # sessions.save must have been called (once for the compaction round,
     # once for the decision log write).
     assert sessions.save.call_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_compaction_backstop_writes_learning_entity(tmp_path):
+    """extract_learnings result is written as a feedback entity at compaction.
+
+    The compaction block calls extract_learnings(span), then writes each
+    learning as an entity via write_entity — verifying the call-site wiring.
+    """
+    from durin.memory.entity_page import EntityPage
+
+    store = MemoryStore(tmp_path)
+    sessions = MagicMock()
+    sessions.save = MagicMock()
+
+    cons = Consolidator(
+        store=store,
+        provider=MagicMock(),
+        model="test-model",
+        sessions=sessions,
+        context_window_tokens=1000,
+        build_messages=MagicMock(return_value=[]),
+        get_tool_definitions=MagicMock(return_value=[]),
+        max_completion_tokens=100,
+        decision_log_enabled=False,  # isolate the learnings block
+    )
+
+    # Build a Session with enough messages for a compaction boundary.
+    session = Session(key="test:learnings")
+    for i in range(70):
+        role = "user" if i in {0, 50} else "assistant"
+        session.add_message(role, f"m{i}")
+
+    # Force one compaction round.
+    cons.estimate_session_prompt_tokens = MagicMock(
+        side_effect=[(1200, "tiktoken"), (400, "tiktoken")]
+    )
+    cons.archive = AsyncMock(
+        return_value=("did work and stated preferences", {"entities": [], "topics": []})
+    )
+
+    # Stub extract_learnings to return one durable learning.
+    async def fake_extract_learnings(span):
+        return [
+            {
+                "ref": "feedback:spanish-replies",
+                "name": "Reply in Spanish",
+                "body": (
+                    "User prefers replies in Spanish. "
+                    "Why: works in Spanish. "
+                    "How to apply: converse in Spanish, keep code English."
+                ),
+            }
+        ]
+
+    cons.extract_learnings = fake_extract_learnings
+
+    await cons.maybe_consolidate_by_tokens(session)
+
+    entity_path = tmp_path / "memory" / "entities" / "feedback" / "spanish-replies.md"
+    page = EntityPage.from_file(entity_path)
+    assert page is not None, "feedback entity file was not created"
+    assert "Spanish" in (page.body or ""), "entity body does not contain expected content"
