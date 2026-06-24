@@ -102,6 +102,9 @@ def run_extract_pass(
     import time
     t0 = time.perf_counter()
     _emit("memory.dream.start", kind="extract")
+    from durin.memory.aliases_index import AliasIndex
+    _alias_index = AliasIndex(Path(workspace) / "memory")
+    _alias_index.build()
     sessions_dir = Path(workspace) / "sessions"
     out: dict[str, Any] = {"sessions": 0, "entities": 0, "discovered": 0,
                            "skill_signals": 0, "errors": [], "yielded": False}
@@ -121,7 +124,8 @@ def run_extract_pass(
             try:
                 r = run_extract_for_session(
                     workspace, jsonl_path, llm_invoke=llm_invoke, model=model,
-                    discover=discover, skill_signals=skill_signals)
+                    discover=discover, skill_signals=skill_signals,
+                    alias_index=_alias_index)
                 extracted = r.get("extracted") or []
                 discovered = r.get("discovered") or []
                 sig = r.get("skill_signals") or []
