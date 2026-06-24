@@ -351,6 +351,8 @@ class AutoAbsorbConfig(Base):
     semantic_distance_threshold: float = Field(
         default=0.20,
         ge=0.0,
+        le=1.0,  # L2² of 1.0 ≈ cosine 0.5 — already far looser than useful;
+        # nothing above it is a meaningful dedup candidate. Matches the webui input.
         validation_alias=AliasChoices(
             "semanticDistanceThreshold", "semantic_distance_threshold"),
     )
