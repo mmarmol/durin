@@ -256,6 +256,10 @@ class PersonasService:
     )
     async def upsert_persona(self, cmd: PersonaUpsertCommand, principal: Principal) -> PersonaUpsertResult:
         principal.require(Scope.CONFIG_WRITE)
+        # "default"/"none" are reserved for the synthetic base entry — a user persona by
+        # those names would hijack the immutable default slot in the listing.
+        if cmd.name in ("default", "none"):
+            raise ValidationFailedError(f"{cmd.name!r} is a reserved persona name")
 
         def _m(cfg: object) -> None:
             cfg.personas[cmd.name] = PersonaConfig(soul=cmd.soul, model=cmd.model, description=cmd.description)

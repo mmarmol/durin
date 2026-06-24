@@ -80,3 +80,10 @@ def test_set_default_to_default_clears_override(tmp_path, monkeypatch):
     assert out.default is None  # selecting the synthetic default clears the override
     res = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
     assert res.default == "default"
+
+
+def test_upsert_reserved_name_rejected(tmp_path, monkeypatch):
+    from durin.service.types import ValidationFailedError
+    svc = _svc(tmp_path, monkeypatch)
+    with pytest.raises(ValidationFailedError):
+        asyncio.run(svc.upsert_persona(PersonaUpsertCommand(name="default", soul="default"), _principal()))
