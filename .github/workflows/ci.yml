@@ -12,7 +12,10 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded runs only on PRs (a new push obsoletes the old one).
+  # On push-to-main let every run finish, so each merged commit keeps its own
+  # pass/fail signal instead of being cancelled by the next merge.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Opt JavaScript actions into Node.js 24 (Node 20 is deprecated and
 # forced off on 2026-06-02). See release.yml for the rationale.
