@@ -15,12 +15,19 @@ export type WorkflowNodeDef = {
   [k: string]: unknown;
 };
 
+export type IODescriptor = {
+  text?: boolean;
+  file?: boolean;
+};
+
 export type WorkflowDef = {
   name: string;
   start: string;
   nodes: WorkflowNodeDef[];
   max_visits?: number;
   improvement_mode?: string;
+  input?: IODescriptor;
+  output?: IODescriptor;
 };
 
 export type FlowNodeData = { node: WorkflowNodeDef; isStart: boolean };
@@ -67,6 +74,15 @@ function resolveNodeType(n: WorkflowNodeDef): string {
   return n.kind;
 }
 
+// Find terminal nodes: nodes reachable from start that have no valid outgoing targets.
+function findTerminals(def: WorkflowDef, byId: Map<string, WorkflowNodeDef>): string[] {
+  const depth = computeDepths(def);
+  const reachable = new Set(Object.keys(depth));
+  return def.nodes
+    .filter((n) => reachable.has(n.id) && targetsOf(n).filter((t) => byId.has(t)).length === 0)
+    .map((n) => n.id);
+}
+
 export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[] } {
   const byId = new Map(def.nodes.map((n) => [n.id, n]));
   const depth = computeDepths(def);
@@ -101,5 +117,37 @@ export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[]
       add(n.id, n.next);
     }
   }
+
+  // Emit I/O object nodes when the def declares input/output descriptors.
+  if (def.input) {
+    const inputId = "__input__";
+    const startDepth = depth[def.start] ?? 0;
+    const inputRow = (rowByCol[-1] = (rowByCol[-1] ?? 0) + 1) - 1;
+    nodes.push({
+      id: inputId,
+      type: "input_obj",
+      position: { x: (startDepth - 1) * COL, y: inputRow * ROW },
+      data: { input: def.input },
+    });
+    edges.push({ id: `${inputId}->${def.start}:`, source: inputId, target: def.start });
+  }
+
+  if (def.output) {
+    const outputId = "__output__";
+    const terminals = findTerminals(def, byId);
+    // Position after the deepest terminal
+    const maxDepth = Math.max(0, ...terminals.map((id) => depth[id] ?? 0));
+    const outputRow = (rowByCol[maxDepth + 1] = (rowByCol[maxDepth + 1] ?? 0) + 1) - 1;
+    nodes.push({
+      id: outputId,
+      type: "output_obj",
+      position: { x: (maxDepth + 1) * COL, y: outputRow * ROW },
+      data: { output: def.output },
+    });
+    for (const tid of terminals) {
+      edges.push({ id: `${tid}->${outputId}:`, source: tid, target: outputId });
+    }
+  }
+
   return { nodes, edges };
 }

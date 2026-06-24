@@ -125,4 +125,41 @@ describe("workflowToFlow", () => {
     });
     expect(nodes[0].type).toBe("work");
   });
+
+  it("a def with input descriptor yields an input_obj node and an edge from it to start", () => {
+    const { nodes, edges } = workflowToFlow({
+      name: "io",
+      start: "a",
+      input: { text: true, file: true },
+      nodes: [{ id: "a", kind: "work", next: null }],
+    });
+    const inputNode = nodes.find((n) => n.type === "input_obj");
+    expect(inputNode).toBeDefined();
+    expect(inputNode!.data).toMatchObject({ input: { text: true, file: true } });
+    const edge = edges.find((e) => e.source === inputNode!.id && e.target === "a");
+    expect(edge).toBeDefined();
+  });
+
+  it("a def with output descriptor yields an output_obj node and an edge from the terminal node to it", () => {
+    const { nodes, edges } = workflowToFlow({
+      name: "io",
+      start: "a",
+      output: { file: true },
+      nodes: [{ id: "a", kind: "work", next: null }],
+    });
+    const outputNode = nodes.find((n) => n.type === "output_obj");
+    expect(outputNode).toBeDefined();
+    expect(outputNode!.data).toMatchObject({ output: { file: true } });
+    const edge = edges.find((e) => e.target === outputNode!.id && e.source === "a");
+    expect(edge).toBeDefined();
+  });
+
+  it("a def with neither input nor output yields no I/O object nodes", () => {
+    const { nodes } = workflowToFlow({
+      name: "plain",
+      start: "a",
+      nodes: [{ id: "a", kind: "work", next: null }],
+    });
+    expect(nodes.every((n) => n.type !== "input_obj" && n.type !== "output_obj")).toBe(true);
+  });
 });

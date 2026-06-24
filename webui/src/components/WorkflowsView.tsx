@@ -29,6 +29,7 @@ import {
 import {
   workflowToFlow,
   type FlowNodeData,
+  type IODescriptor,
   type WorkflowDef,
   type WorkflowNodeDef,
 } from "@/lib/workflow-graph";
@@ -95,11 +96,41 @@ function NodeCard({ data, selected }: NodeProps) {
   );
 }
 
+function ioTags(desc: IODescriptor): string {
+  const parts: string[] = [];
+  if (desc.text) parts.push("text");
+  if (desc.file) parts.push("file");
+  return parts.length > 0 ? parts.join(" · ") : "any";
+}
+
+function IOCard({ data }: NodeProps) {
+  const d = data as unknown as { input?: IODescriptor; output?: IODescriptor };
+  const isInput = d.input != null;
+  const desc = isInput ? d.input! : d.output!;
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2 rounded-full border px-4 py-1.5 text-xs font-medium shadow-sm",
+        isInput
+          ? "border-teal-400/70 bg-teal-50 text-teal-700 dark:bg-teal-950/40 dark:text-teal-300"
+          : "border-orange-400/70 bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300",
+      )}
+    >
+      {isInput ? null : <Handle type="target" position={Position.Left} />}
+      <span className="uppercase tracking-widest opacity-60">{isInput ? "INPUT" : "OUTPUT"}</span>
+      <span className="opacity-80">{ioTags(desc)}</span>
+      {isInput ? <Handle type="source" position={Position.Right} /> : null}
+    </div>
+  );
+}
+
 const nodeTypes = {
   work: NodeCard,
   decision: NodeCard,
   parallel: NodeCard,
   subworkflow: NodeCard,
+  input_obj: IOCard,
+  output_obj: IOCard,
 };
 
 const MODES = ["build", "plan", "explore"];
