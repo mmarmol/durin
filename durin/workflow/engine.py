@@ -203,9 +203,15 @@ class WorkflowEngine:
                 current = node.next
 
             elif isinstance(node, ParallelNode):
-                merged, abort = self._run_parallel(
-                    workflow, node, task, run_id, iteration, root_session_key, upstream_output
-                )
+                if node.worker is not None:
+                    merged, abort = self._run_dynamic_parallel(
+                        workflow, node, task, run_id, iteration, root_session_key,
+                        upstream_output, runs
+                    )
+                else:
+                    merged, abort = self._run_parallel(
+                        workflow, node, task, run_id, iteration, root_session_key, upstream_output
+                    )
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=merged))
                 if abort is not None:
                     return WorkflowResult(
@@ -231,6 +237,71 @@ class WorkflowEngine:
             output_dir=out_dir,
             upstream_artifact_dir=None,
         ))
+
+    @staticmethod
+    def _parse_subtasks(text: str) -> list[str]:
+        """Parse a runtime list of subtasks from a node's output text.
+
+        Tries JSON first; if the parsed value is a list, returns each element
+        coerced to str.  Falls back to non-empty lines.  Capped at 50 items
+        to bound blast radius on pathological output.
+        """
+        import json
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                items = [str(x) for x in parsed]
+                return items[:50]
+        except (json.JSONDecodeError, ValueError):
+            pass
+        # Fall back: non-empty lines
+        items = [line for line in text.splitlines() if line.strip()]
+        return items[:50]
+
+    def _run_dynamic_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs):
+        """Run a dynamic parallel node: parse a runtime list and run the worker once per item.
+
+        Returns ``(merged_output, abort_message)``.  Each worker run is appended to
+        ``runs`` so the trace shows individual worker outputs.
+        """
+        # Resolve the list source: prefer the most recent recorded output of the
+        # list_from node (it may not be the immediate predecessor); fall back to
+        # upstream_output for the common case where it is.
+        list_text: str | None = None
+        for recorded in reversed(runs):
+            if recorded.node_id == node.list_from:
+                list_text = recorded.output
+                break
+        if list_text is None:
+            list_text = upstream or ""
+
+        subtasks = self._parse_subtasks(list_text)
+        if not subtasks:
+            return "", None
+
+        worker_node = workflow.nodes[node.worker]
+        workers = max(1, min(len(subtasks), node.max_concurrency))
+
+        def _run_worker(subtask):
+            resp = self._node_runner(NodeRunRequest(
+                node=worker_node,
+                task=subtask,
+                upstream_output=subtask,
+                shared_context=[],
+                run_id=run_id,
+                iteration=iteration,
+                root_session_key=root_key,
+            ))
+            return subtask, resp.output
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(_run_worker, subtasks))
+
+        for _subtask, out in results:
+            runs.append(NodeRun(node_id=node.worker, iteration=iteration, output=out))
+
+        merged = "\n\n".join(f"[{i}] {out}" for i, (_s, out) in enumerate(results))
+        return merged, None
 
     def _run_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream):
         """Run a parallel node's branches concurrently and reconcile their writes.
