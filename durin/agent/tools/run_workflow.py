@@ -115,6 +115,7 @@ class RunWorkflowTool(Tool, ContextAware):
             tools_config=self._app_config.tools,
             live_tool_registry=self._live_tool_registry,
             main_loop=main_loop,
+            app_config=self._app_config,
         )
         judge_runner = AgentJudgeRunner(runner, default_model=provider.get_default_model())
         subworkflow_runner = SubworkflowRunner(self._workspace, node_runner, judge_runner)

@@ -199,7 +199,9 @@ class WorkflowsService:
         runner = AgentRunner(provider)
         node_runner = AgentNodeRunner(
             runner, self._sessions, default_model=provider.get_default_model(),
-            tools_config=self._app_config.tools)
+            tools_config=self._app_config.tools,
+            app_config=self._app_config,
+        )
         judge = AgentJudgeRunner(runner, default_model=provider.get_default_model())
         ws = str(self._workspace)
         engine = WorkflowEngine(
