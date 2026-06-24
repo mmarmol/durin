@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import re as _re
+from datetime import datetime, timezone as _tz
 from pathlib import Path
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.memory.entity_page import EntityPage
+from durin.memory.extract_runner import load_session
 
 _READ_PARAMS = tool_parameters_schema(
     ref=StringSchema("Entity ref '<type>:<slug>' (e.g. 'place:torrent')."),
@@ -55,8 +58,6 @@ class MemoryReadEntityTool(Tool):
             return {"error": f"unreadable {ref}"}
         return {"ref": ref, "markdown": page.to_markdown()}
 
-
-from datetime import datetime, timezone as _tz  # noqa: E402
 
 _LINEAGE_PARAMS = tool_parameters_schema(
     ref=StringSchema("Entity ref '<type>:<slug>'."),
@@ -110,3 +111,80 @@ class MemoryEntityLineageTool(Tool):
             return {"ref": ref, "commits": out}
         except Exception as exc:  # noqa: BLE001
             return {"error": f"lineage unavailable: {exc}", "commits": []}
+
+
+_SRC_PARAMS = tool_parameters_schema(
+    ref=StringSchema("Entity ref '<type>:<slug>'."),
+    required=["ref"],
+    description="Read the conversation turns a memory entity was distilled from "
+                "(its provenance source_refs + derived_from). Use to see the original "
+                "context behind an entity's facts.",
+)
+_SRC_RE = _re.compile(r"\[\[sessions/(.+?)\.md#turn-(\d+)\]\]")
+
+
+def _source_refs(page) -> list[str]:
+    refs: list[str] = list(getattr(page, "derived_from", []) or [])
+    prov = getattr(page, "provenance", {}) or {}
+    for field in (prov.get("attributes") or {}).values():
+        sr = field.get("source_ref") if isinstance(field, dict) else None
+        if sr:
+            refs.append(sr)
+    seen, out = set(), []
+    for r in refs:
+        if r not in seen:
+            seen.add(r)
+            out.append(r)
+    return out
+
+
+@tool_parameters(_SRC_PARAMS)
+class MemorySourceSessionTool(Tool):
+    config_key = "memory"
+
+    def __init__(self, workspace: str | Path) -> None:
+        self._workspace = Path(workspace).expanduser()
+
+    @property
+    def name(self) -> str:
+        return "memory_source_session"
+
+    @property
+    def description(self) -> str:
+        return _SRC_PARAMS["description"]
+
+    @property
+    def read_only(self) -> bool:
+        return True
+
+    @classmethod
+    def create(cls, ctx: Any) -> Tool:
+        return cls(workspace=ctx.workspace)
+
+    async def execute(self, **kwargs: Any) -> Any:
+        ref = (kwargs.get("ref") or "").strip()
+        type_, _, slug = ref.partition(":")
+        path = Path(self._workspace) / "memory" / "entities" / type_ / f"{slug}.md"
+        if not path.exists():
+            return {"error": f"no entity {ref}", "sources": []}
+        page = EntityPage.from_file(path)
+        if page is None:
+            return {"error": f"unreadable {ref}", "sources": []}
+        out = []
+        for sr in _source_refs(page):
+            m = _SRC_RE.search(sr)
+            if not m:
+                continue
+            key, n = m.group(1), int(m.group(2))
+            jl = Path(self._workspace) / "sessions" / f"{key}.jsonl"
+            if not jl.exists():
+                continue
+            try:
+                _meta, msgs = load_session(jl)
+            except Exception:  # noqa: BLE001
+                continue
+            if 1 <= n <= len(msgs):
+                content = msgs[n - 1].get("content")
+                out.append({"ref": sr, "turn": n,
+                            "content": content if isinstance(content, str) else str(content)})
+        return {"ref": ref, "sources": out}
