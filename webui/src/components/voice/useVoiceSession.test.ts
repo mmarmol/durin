@@ -34,7 +34,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("useVoiceSession", () => {
   it("starts the VAD and emits voice_start on toggle", async () => {
     const c = fakeClient();
-    const { result } = renderHook(() => useVoiceSession(c as never, "c1", { vadThreshold: 0.5, endOfTurnSilenceMs: 700 }));
+    const { result } = renderHook(() => useVoiceSession(c as never, "c1", { vadThreshold: 0.5, endOfTurnSilenceMs: 700, idleTimeoutMs: 0 }));
     await act(async () => { result.current.toggle(); });
     await waitFor(() => expect(c.sendVoiceStart).toHaveBeenCalledWith("c1"));
     expect(vadStart).toHaveBeenCalled();
@@ -42,7 +42,7 @@ describe("useVoiceSession", () => {
 
   it("sends an utterance as a wav data-url on speech end", async () => {
     const c = fakeClient();
-    const { result } = renderHook(() => useVoiceSession(c as never, "c1", { vadThreshold: 0.5, endOfTurnSilenceMs: 700 }));
+    const { result } = renderHook(() => useVoiceSession(c as never, "c1", { vadThreshold: 0.5, endOfTurnSilenceMs: 700, idleTimeoutMs: 0 }));
     await act(async () => { result.current.toggle(); });
     await waitFor(() => expect(speechEndCb).not.toBeNull());
     await act(async () => { speechEndCb!(new Float32Array([0, 0.1])); });
@@ -51,9 +51,30 @@ describe("useVoiceSession", () => {
 
   it("reflects server voice_state", async () => {
     const c = fakeClient();
-    const { result } = renderHook(() => useVoiceSession(c as never, "c1", { vadThreshold: 0.5, endOfTurnSilenceMs: 700 }));
+    const { result } = renderHook(() => useVoiceSession(c as never, "c1", { vadThreshold: 0.5, endOfTurnSilenceMs: 700, idleTimeoutMs: 0 }));
     await act(async () => { result.current.toggle(); });
     await act(async () => { c._emitState("c1", "speaking"); });
     expect(result.current.state).toBe("speaking");
+  });
+
+  it("auto-closes after the idle timeout when nothing happens", async () => {
+    const c = fakeClient();
+    const { result } = renderHook(() =>
+      useVoiceSession(c as never, "c1", { vadThreshold: 0.5, endOfTurnSilenceMs: 700, idleTimeoutMs: 30 }));
+    await act(async () => { result.current.toggle(); });
+    await waitFor(() => expect(c.sendVoiceStart).toHaveBeenCalledWith("c1"));
+    await waitFor(() => expect(c.sendVoiceStop).toHaveBeenCalledWith("c1"));
+    expect(result.current.active).toBe(false);
+  });
+
+  it("does not auto-close while a turn is in progress", async () => {
+    const c = fakeClient();
+    const { result } = renderHook(() =>
+      useVoiceSession(c as never, "c1", { vadThreshold: 0.5, endOfTurnSilenceMs: 700, idleTimeoutMs: 40 }));
+    await act(async () => { result.current.toggle(); });
+    await act(async () => { c._emitState("c1", "speaking"); });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(c.sendVoiceStop).not.toHaveBeenCalled();
+    expect(result.current.active).toBe(true);
   });
 });

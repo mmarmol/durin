@@ -4,7 +4,7 @@ import type { DurinClient } from "@/lib/durin-client";
 import { ONNX_WASM_BASE_PATH, VAD_BASE_ASSET_PATH } from "@/lib/voiceAssets";
 import type { OrbState } from "./VoiceOrb";
 
-interface Cfg { vadThreshold: number; endOfTurnSilenceMs: number }
+interface Cfg { vadThreshold: number; endOfTurnSilenceMs: number; idleTimeoutMs: number }
 
 export function useVoiceSession(client: DurinClient, chatId: string | null, cfg: Cfg) {
   const [state, setState] = useState<OrbState>("idle");
@@ -104,6 +104,16 @@ export function useVoiceSession(client: DurinClient, chatId: string | null, cfg:
 
   const toggle = useCallback(() => { if (active) stop(); else void start(); }, [active, start, stop]);
   useEffect(() => () => { if (vadRef.current) stop(); }, [stop]);
+
+  // Auto-close after a stretch of silence. The clock runs only in the idle
+  // "listening" state and is reset by any state transition (a turn moves through
+  // transcribing/thinking/speaking), so it never fires mid-exchange. 0 disables it.
+  useEffect(() => {
+    if (!active || cfg.idleTimeoutMs <= 0 || state !== "listening") return;
+    const id = setTimeout(() => { stop(); }, cfg.idleTimeoutMs);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, state, cfg.idleTimeoutMs, stop]);
 
   return { state, amplitude, active, toggle };
 }
