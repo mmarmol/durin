@@ -479,3 +479,97 @@ def test_dynamic_parallel_worker_and_list_from_must_be_real_nodes():
         parse_workflow({"name": "w", "start": "orch", "nodes": [
             {"id": "orch", "kind": "work", "next": "fan"},
             {"id": "fan", "kind": "parallel", "worker": "ghost", "list_from": "orch", "next": None}]})
+
+
+# ── cases: multi-way routing spec tests ──────────────────────────────────────
+
+
+def _cases_wf(cases, extra_nodes=None, command=""):
+    """Build a minimal workflow with a single cases node for parse tests."""
+    nodes = [{"id": "a", "kind": "work", "cases": cases, "command": command}]
+    if extra_nodes:
+        nodes.extend(extra_nodes)
+    return {"name": "w", "start": "a", "nodes": nodes}
+
+
+def test_cases_node_parses_and_cases_field_set():
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "cases": {"GROUNDED": None, "MISSING": "fix", "MISUSED": "fix"}},
+        {"id": "fix", "kind": "work"},
+    ]})
+    a = wf.nodes["a"]
+    assert isinstance(a, WorkNode)
+    assert a.cases == {"GROUNDED": None, "MISSING": "fix", "MISUSED": "fix"}
+
+
+def test_cases_node_routes_property_is_true():
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "cases": {"DONE": None, "RETRY": "a"}},
+    ]})
+    assert wf.nodes["a"].routes is True
+
+
+def test_cases_node_mode_defaults_explore():
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "cases": {"DONE": None}},
+    ]})
+    assert wf.nodes["a"].mode == "explore"
+
+
+def test_cases_and_next_are_mutually_exclusive():
+    with pytest.raises(WorkflowError, match="mutually exclusive"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "cases": {"DONE": None}, "next": "b"},
+            {"id": "b", "kind": "work"},
+        ]})
+
+
+def test_cases_and_on_pass_are_mutually_exclusive():
+    with pytest.raises(WorkflowError, match="mutually exclusive"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "cases": {"DONE": None}, "on_pass": "b"},
+            {"id": "b", "kind": "work"},
+        ]})
+
+
+def test_cases_and_command_are_mutually_exclusive():
+    with pytest.raises(WorkflowError, match="command"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "cases": {"DONE": None}, "command": "pytest"},
+        ]})
+
+
+def test_cases_empty_dict_raises():
+    with pytest.raises(WorkflowError, match="must not be empty"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "cases": {}},
+        ]})
+
+
+def test_cases_non_dict_raises():
+    with pytest.raises(WorkflowError, match="must be a dict"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "cases": ["DONE", "RETRY"]},
+        ]})
+
+
+def test_cases_unknown_target_caught_by_reachability():
+    with pytest.raises(WorkflowError, match="unknown node"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "cases": {"DONE": "ghost"}},
+        ]})
+
+
+def test_cases_null_target_is_valid():
+    # null target = end the run; should parse without error.
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "cases": {"DONE": None, "RETRY": "a"}},
+    ]})
+    assert wf.nodes["a"].cases["DONE"] is None
+
+
+def test_cases_default_label_is_valid():
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "cases": {"DONE": None, "default": "a"}},
+    ]})
+    assert "default" in wf.nodes["a"].cases

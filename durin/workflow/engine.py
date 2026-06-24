@@ -28,7 +28,7 @@ from durin.workflow.artifacts import artifact_dir, prune_runs
 from durin.workflow.condition import CommandOutcome, run_command
 from durin.workflow.result import NodeRun, WorkflowResult
 from durin.workflow.spec import ParallelNode, SubworkflowNode, WorkNode, Workflow
-from durin.workflow.verdict import parse_verdict
+from durin.workflow.verdict import parse_label, parse_verdict
 
 
 @dataclass
@@ -210,18 +210,59 @@ class WorkflowEngine:
                                         output=output, session_key=None,
                                         passed=passed if node.routes else None))
                 else:
-                    # Agent body: run a full agent turn; verdict (if routing) comes
-                    # from the first non-empty line of the agent's own output.
+                    # Agent body: run a full agent turn; for a multi-way node the
+                    # verdict is a matched case label; for binary routing it is
+                    # PASS/FAIL from the first non-empty line; for a linear node
+                    # there is no verdict.
                     resp = self._node_runner(req)
                     output = resp.output
-                    passed = parse_verdict(output) if node.routes else None
+                    if node.cases is not None:
+                        # Multi-way: label matching replaces pass/fail.
+                        passed = None
+                    elif node.routes:
+                        passed = parse_verdict(output)
+                    else:
+                        passed = None
                     runs.append(NodeRun(node_id=node.id, iteration=iteration,
                                         output=output, session_key=resp.session_key,
                                         passed=passed))
                     if node.context == "shared":
                         shared_context.extend(resp.messages)
 
-                if node.routes:
+                if node.cases is not None:
+                    # Multi-way routing: match the agent's output against declared labels.
+                    _UNSET = object()
+                    label = parse_label(output, node.cases)
+                    if label is not None:
+                        target = node.cases[label]
+                    else:
+                        # No label matched — fall back to "default" case, or abort.
+                        target = node.cases.get("default", _UNSET)
+                        if target is _UNSET:
+                            expected = sorted(node.cases)
+                            abort_msg = (
+                                f"node {node.id!r}: agent output did not match any expected label "
+                                f"({', '.join(expected)})"
+                            )
+                            return WorkflowResult(
+                                status="aborted",
+                                final_output=abort_msg,
+                                runs=runs,
+                                run_id=run_id,
+                                output_dir=terminal_output_dir,
+                            )
+                        label = "default"
+                    # Record the matched label in the NodeRun trace.
+                    runs[-1].route_label = label
+                    if target is not None:
+                        # Thread output as reviewer feedback before routing to the
+                        # loop-back target, mirroring the binary fail-edge behaviour.
+                        prior = upstream_output or ""
+                        upstream_output = (
+                            f"{prior}\n\nReviewer feedback (address this):\n{output}"
+                        )
+                    current = target
+                elif node.routes:
                     if not passed:
                         # Thread reviewer feedback into upstream so the producer sees it.
                         prior = upstream_output or ""

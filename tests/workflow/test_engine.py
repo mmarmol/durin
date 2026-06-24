@@ -484,3 +484,163 @@ def test_parallel_respects_max_concurrency(tmp_path):
     wf = parse_workflow({"name": "w", "start": "f", "nodes": nodes})
     WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
     assert peak[0] <= 2
+
+
+# ── Multi-way routing (cases) engine tests ────────────────────────────────────
+
+
+def _cases_engine(node_outputs: dict) -> tuple:
+    """Engine with a scripted agent runner for cases tests."""
+    calls = []
+
+    def node_runner(req: NodeRunRequest) -> NodeRunResponse:
+        calls.append(req)
+        return NodeRunResponse(
+            output=node_outputs[req.node.id],
+            session_key=f"workflow:r1:{req.node.id}:{req.iteration}",
+            messages=[{"role": "assistant", "content": node_outputs[req.node.id]}],
+        )
+
+    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1")
+    return eng, calls
+
+
+def _3way_wf():
+    """A 3-outcome workflow: verify routes GROUNDED→end, MISSING→plan, MISUSED→synthesize."""
+    return parse_workflow({
+        "name": "w", "start": "verify",
+        "nodes": [
+            {"id": "verify", "kind": "work",
+             "cases": {"GROUNDED": None, "MISSING": "plan", "MISUSED": "synthesize"}},
+            {"id": "plan", "kind": "work", "next": None},
+            {"id": "synthesize", "kind": "work", "next": None},
+        ],
+    })
+
+
+def test_cases_routes_to_grounded_end():
+    """A matched label with a null target ends the run as completed."""
+    wf = _3way_wf()
+    eng, calls = _cases_engine({"verify": "analysis done\nGROUNDED"})
+    res = eng.run(wf, "t")
+    assert res.status == "completed"
+    assert [r.node_id for r in res.runs] == ["verify"]
+
+
+def test_cases_routes_to_missing_target():
+    """A matched label with a node target routes to that node."""
+    wf = _3way_wf()
+    eng, calls = _cases_engine({"verify": "MISSING", "plan": "plan output"})
+    res = eng.run(wf, "t")
+    assert res.status == "completed"
+    assert [r.node_id for r in res.runs] == ["verify", "plan"]
+    assert res.final_output == "plan output"
+
+
+def test_cases_routes_to_misused_target():
+    """A third label routes to its distinct target."""
+    wf = _3way_wf()
+    eng, calls = _cases_engine({"verify": "MISUSED", "synthesize": "synth output"})
+    res = eng.run(wf, "t")
+    assert res.status == "completed"
+    assert [r.node_id for r in res.runs] == ["verify", "synthesize"]
+    assert res.final_output == "synth output"
+
+
+def test_cases_default_catches_unmatched_verdict():
+    """When the label doesn't match but 'default' is in cases, route to it."""
+    wf = parse_workflow({
+        "name": "w", "start": "classify",
+        "nodes": [
+            {"id": "classify", "kind": "work",
+             "cases": {"DONE": None, "default": "fallback"}},
+            {"id": "fallback", "kind": "work", "next": None},
+        ],
+    })
+    eng, calls = _cases_engine({"classify": "something unrecognized", "fallback": "handled"})
+    res = eng.run(wf, "t")
+    assert res.status == "completed"
+    assert [r.node_id for r in res.runs] == ["classify", "fallback"]
+
+
+def test_cases_no_match_no_default_aborts():
+    """Unmatched verdict with no default case aborts the run with a clear message."""
+    wf = _3way_wf()
+    eng, _ = _cases_engine({"verify": "I cannot decide"})
+    res = eng.run(wf, "t")
+    assert res.status == "aborted"
+    assert "verify" in res.final_output
+    # All expected labels should be mentioned
+    for label in ["GROUNDED", "MISSING", "MISUSED"]:
+        assert label in res.final_output
+
+
+def test_cases_route_label_recorded_in_trace():
+    """The matched case label is recorded in the NodeRun trace."""
+    wf = _3way_wf()
+    eng, _ = _cases_engine({"verify": "MISSING", "plan": "plan done"})
+    res = eng.run(wf, "t")
+    verify_run = next(r for r in res.runs if r.node_id == "verify")
+    assert verify_run.route_label == "MISSING"
+    assert verify_run.passed is None  # multi-way: pass/fail does not apply
+
+
+def test_cases_feedback_threaded_on_loopback():
+    """When a cases node routes to a non-terminal (non-null) target, its output is
+    threaded into upstream_output so the target node sees why it was re-invoked."""
+    seen_upstream: list = []
+
+    def runner(req: NodeRunRequest) -> NodeRunResponse:
+        if req.node.id == "plan":
+            seen_upstream.append(req.upstream_output)
+            return NodeRunResponse(output="plan output")
+        # verify: emit MISSING on first call, GROUNDED on second
+        output = "MISSING" if len(seen_upstream) == 0 else "GROUNDED"
+        return NodeRunResponse(output=output)
+
+    wf = parse_workflow({
+        "name": "w", "start": "verify", "max_visits": 5,
+        "nodes": [
+            {"id": "verify", "kind": "work",
+             "cases": {"GROUNDED": None, "MISSING": "plan"}},
+            {"id": "plan", "kind": "work", "next": "verify"},
+        ],
+    })
+    res = WorkflowEngine(runner, run_id_factory=lambda: "r1").run(wf, "t")
+    assert res.status == "completed"
+    # plan must have received the verify output as reviewer feedback
+    assert any("MISSING" in (u or "") for u in seen_upstream)
+
+
+def test_cases_visit_cap_still_bounds_loop():
+    """A cases loop-back is subject to the same visit cap as binary routing."""
+    wf = parse_workflow({
+        "name": "w", "start": "check", "max_visits": 2,
+        "nodes": [
+            {"id": "check", "kind": "work", "cases": {"RETRY": "check", "DONE": None}},
+        ],
+    })
+    eng, calls = _cases_engine({"check": "RETRY"})  # always loops back
+    res = eng.run(wf, "t")
+    assert res.status == "exhausted"
+    assert res.exhausted_node == "check"
+    assert len(calls) == 2  # ran exactly max_visits times
+
+
+def test_cases_binary_routing_regression():
+    """Binary on_pass/on_fail nodes still work exactly as before (regression guard)."""
+    wf = parse_workflow({
+        "name": "w", "start": "prod", "max_visits": 5,
+        "nodes": [
+            {"id": "prod", "kind": "work", "next": "gate"},
+            {"id": "gate", "kind": "work", "on_pass": "done", "on_fail": "prod"},
+            {"id": "done", "kind": "work", "next": None},
+        ],
+    })
+    outputs = {"prod": "draft", "gate": "PASS\nok", "done": "final"}
+    eng, calls = _cases_engine(outputs)
+    res = eng.run(wf, "t")
+    assert res.status == "completed"
+    gate_run = next(r for r in res.runs if r.node_id == "gate")
+    assert gate_run.passed is True
+    assert gate_run.route_label is None  # binary node: no route_label

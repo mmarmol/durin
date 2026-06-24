@@ -67,15 +67,30 @@ re-iterations or concurrent/repeated invocations, and it follows the same edge-t
 the text (a passing judge's empty folder never replaces the producer's). The `.workflow` tree
 gitignores itself, is excluded from parallel-fork reconciliation, and is pruned to recent
 runs. (Real deliverables a node writes into the workspace proper are the separate,
-already-shared filesystem channel — unchanged.) **When a node routes** (it has `on_pass`/`on_fail`), the engine derives a
-pass/fail verdict from what the node produced: a **command** node passes iff its shell
-command exits 0 (`durin/workflow/condition.py`, run in the workflow's workspace so it
-sees files earlier nodes wrote); an **agent** node ends its own reply with a `PASS`/`FAIL`
-line the engine parses (`durin/workflow/verdict.py`) — so a routing agent node can
-*verify* (read the diff, run the tests) before ruling, not just read text. The engine
-routes to `on_pass` or `on_fail`; on a fail the node's feedback is threaded into the
-loop-back so the producer re-runs knowing what to fix. Routing agent nodes default to
-**explore** (read-only) mode. **Independence is a graph rule, not a node type:** the
+already-shared filesystem channel — unchanged.) **When a node routes**, the engine derives a verdict from what the node produced
+and follows an edge. A node may route in one of two shapes:
+
+**Binary routing** (`on_pass`/`on_fail`): a **command** node passes iff its shell command exits 0
+(`durin/workflow/condition.py`, run in the workflow's workspace so it sees files earlier nodes
+wrote); an **agent** node ends its own reply with a `PASS`/`FAIL` line the engine parses
+(`durin/workflow/verdict.py`) — so a routing agent node can *verify* (read the diff, run the
+tests) before ruling, not just read text. The engine routes to `on_pass` or `on_fail`; on a fail
+the node's feedback is threaded into the loop-back so the producer re-runs knowing what to fix.
+
+**Multi-way routing** (`cases`): an agent node declares a set of labeled outcomes
+(`{"GROUNDED": null, "MISSING": "plan", "MISUSED": "synthesize"}`). It ends its reply with
+exactly one label; the engine matches the last non-empty line of the output against the declared
+labels (case-insensitive, surrounding punctuation tolerated), then follows the matching edge.
+A `null` target ends the run; any other target is a node id. If the output matches no label the
+engine tries a `"default"` key — if that is also absent, the run ends as `aborted` naming the
+node and the sorted list of expected labels. Like binary fail-edges, the node's output is
+threaded as reviewer feedback before routing to a non-terminal target. The matched label is
+recorded in the `NodeRun` trace (`route_label`); `passed` is `None` (pass/fail does not apply).
+Binary `on_pass`/`on_fail` is the 2-way special case of this pattern; `cases`, `on_pass`/`on_fail`,
+and `next` are mutually exclusive. A command node cannot use `cases` (its verdict is an exit code,
+not a text label). Routing agent nodes default to **explore** (read-only) mode.
+
+**Independence is a graph rule, not a node type:** the
 parser rejects a routing agent node that is *structurally identical* (same model, mode,
 and prompt) to the producer feeding it, so a quality verdict comes from a genuinely
 independent reviewer (the anti-Goodhart guard). A node can also be a **sub-workflow**
@@ -178,7 +193,7 @@ End-to-end for a single `run_workflow` call:
 | Symbol | File | Role |
 |---|---|---|
 | `Workflow`, `WorkNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator (one node type; routing optional; `kind:"decision"` back-compat alias; structural-equivalence guard). |
-| `parse_verdict` | `durin/workflow/verdict.py` | The `PASS`/`FAIL` contract read from a routing agent node's own output (default `FAIL`). |
+| `parse_verdict`, `parse_label` | `durin/workflow/verdict.py` | The verdict contracts: `parse_verdict` returns the binary `PASS`/`FAIL` from a routing agent node's output (default `FAIL`); `parse_label` matches the last non-empty line of a multi-way node's output against the declared case labels (case-insensitive, punctuation-tolerant). |
 | `artifact_dir`, `prune_runs` | `durin/workflow/artifacts.py` | The per-node file hand-off folder keyed by run/node/iteration (self-gitignored, pruned to recent runs). |
 | `run_command`, `CommandOutcome` | `durin/workflow/condition.py` | The shell-exit-code condition a command node routes on. |
 | `AgentJudgeRunner` | `durin/workflow/judge.py` | The branch-pick reviewer: `pick` chooses the best of N outputs for a parallel `choose` reconcile. |
@@ -248,10 +263,11 @@ End-to-end for a single `run_workflow` call:
   list, bounded by `max_concurrency` default 2); read-only or **writing** with `choose` /
   `union` reconciliation (private copy per branch + content-aware conflict detection);
   per-node **work mode** (build/plan/explore) / **model or persona** (SOUL + model,
-  mutually exclusive) / context / tools; **optional routing** — any node can branch on a
-  shell command's exit code or the `PASS`/`FAIL` verdict in its own agent output
-  (feedback-threaded loop-back), with an anti-Goodhart guard that a routing node not be
-  structurally identical to its producer; **sub-workflow** composition (depth-capped);
+  mutually exclusive) / context / tools; **optional routing** in two shapes — **binary**
+  (`on_pass`/`on_fail`: shell exit code or `PASS`/`FAIL` verdict, feedback-threaded loop-back)
+  and **multi-way** (`cases`: agent emits one of N declared labels, last-line match,
+  `default` fallback, aborts clearly when no label matched), with an anti-Goodhart guard
+  that a routing node not be structurally identical to its producer; **sub-workflow** composition (depth-capped);
   runs **anchored to the invoking session**; **git-versioned definitions** (each run
   snapshots them); **dream-driven self-improvement in manual mode** (recommendations from
   recurring run diagnostics); a **webui Workflows pane** (React Flow) with an editor that

@@ -18,7 +18,8 @@ class NodeRun:
     iteration: int
     output: str
     session_key: str | None = None   # for work nodes that persisted a session
-    passed: bool | None = None       # for a routing node: did its verdict pass? (None = not a routing node)
+    passed: bool | None = None       # for a binary routing node: did its verdict pass? (None = not a binary routing node)
+    route_label: str | None = None   # for a multi-way routing node: the matched case label (None otherwise)
 
 
 @dataclass

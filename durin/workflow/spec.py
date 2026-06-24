@@ -45,13 +45,14 @@ class WorkNode:
     command: str = ""                     # non-empty => command body; the agent turn is skipped
     on_pass: str | None = None           # routing: next node on pass/exit-0; set => this node routes
     on_fail: str | None = None           # routing: next node on fail/non-zero exit
+    cases: dict[str, str | None] | None = None  # multi-way routing: label -> target node id (null = end)
     max_visits: int | None = None        # per-node loop cap (None = inherit workflow default)
     kind: Literal["work"] = "work"
 
     @property
     def routes(self) -> bool:
-        """True when this node emits a pass/fail verdict and branches on it."""
-        return self.on_pass is not None or self.on_fail is not None
+        """True when this node emits a verdict and branches: binary (on_pass/on_fail) or multi-way (cases)."""
+        return self.on_pass is not None or self.on_fail is not None or self.cases is not None
 
     @property
     def is_command(self) -> bool:
@@ -157,11 +158,49 @@ def _build_node(raw: dict[str, Any]) -> Node:
         on_pass = raw.get("on_pass")
         on_fail = raw.get("on_fail")
         next_node = raw.get("next")
-        if next_node is not None and (on_pass is not None or on_fail is not None):
+        cases_raw = raw.get("cases")
+        # Parse and validate multi-way routing cases.
+        cases: dict[str, str | None] | None = None
+        if cases_raw is not None:
+            if not isinstance(cases_raw, dict):
+                raise WorkflowError(
+                    f"node {node_id!r}: 'cases' must be a dict, got {cases_raw!r}"
+                )
+            if not cases_raw:
+                raise WorkflowError(
+                    f"node {node_id!r}: 'cases' must not be empty"
+                )
+            for label, target in cases_raw.items():
+                if not isinstance(label, str) or not label:
+                    raise WorkflowError(
+                        f"node {node_id!r}: 'cases' keys must be non-empty strings, got {label!r}"
+                    )
+                if target is not None and not isinstance(target, str):
+                    raise WorkflowError(
+                        f"node {node_id!r}: 'cases' values must be a string node id or null, got {target!r}"
+                    )
+            cases = dict(cases_raw)
+        # Mutual exclusivity: exactly one of next, on_pass/on_fail, or cases.
+        binary_routing = on_pass is not None or on_fail is not None
+        if cases is not None and binary_routing:
+            raise WorkflowError(
+                f"node {node_id!r}: 'cases' and 'on_pass'/'on_fail' are mutually exclusive"
+            )
+        if cases is not None and next_node is not None:
+            raise WorkflowError(
+                f"node {node_id!r}: 'cases' and 'next' are mutually exclusive"
+            )
+        if next_node is not None and binary_routing:
             raise WorkflowError(
                 f"node {node_id!r}: 'next' and routing ('on_pass'/'on_fail') are mutually exclusive"
             )
-        routes = on_pass is not None or on_fail is not None
+        # A command node's verdict is its exit code; it cannot emit a label.
+        command = raw.get("command", "")
+        if cases is not None and command:
+            raise WorkflowError(
+                f"node {node_id!r}: 'cases' requires an agent body — a command node cannot emit a label"
+            )
+        routes = binary_routing or cases is not None
         mode_default = "explore" if routes else "build"
         mode = raw.get("mode", mode_default)
         if not isinstance(mode, str) or not mode:
@@ -183,9 +222,10 @@ def _build_node(raw: dict[str, Any]) -> Node:
             tools=tools,
             skills=skills,
             mcps=mcps,
-            command=raw.get("command", ""),
+            command=command,
             on_pass=on_pass,
             on_fail=on_fail,
+            cases=cases,
             max_visits=node_max_visits,
         )
     if kind == "decision":
@@ -295,6 +335,8 @@ def _build_node(raw: dict[str, Any]) -> Node:
 
 def _edge_targets(node: Node) -> list[str | None]:
     if isinstance(node, WorkNode):
+        if node.cases is not None:
+            return list(node.cases.values())
         if node.routes:
             return [node.on_pass, node.on_fail]
         return [node.next]
