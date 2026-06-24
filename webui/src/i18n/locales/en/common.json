@@ -812,7 +812,11 @@
     "collapse": "collapse",
     "testTitle": "Test run",
     "done": "done",
-    "setAsStart": "set as start"
+    "setAsStart": "set as start",
+    "maxVisits": "max visits",
+    "maxVisitsHint": "blank = workflow default",
+    "exhausted": "did not complete — retries exhausted",
+    "exhaustedNode": "exhausted at"
   },
   "skills": {
     "view": "View",

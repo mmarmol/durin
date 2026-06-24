@@ -1374,6 +1374,10 @@
     "collapse": "contraer",
     "testTitle": "Probar",
     "done": "listo",
-    "setAsStart": "marcar como inicio"
+    "setAsStart": "marcar como inicio",
+    "maxVisits": "máximo de visitas",
+    "maxVisitsHint": "vacío = default del workflow",
+    "exhausted": "no se completó — reintentos agotados",
+    "exhaustedNode": "agotado en"
   }
 }
