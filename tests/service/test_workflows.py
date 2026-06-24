@@ -8,10 +8,12 @@ from durin.service.workflows import (
     WorkflowDeleteCommand,
     WorkflowGetQuery,
     WorkflowRunCommand,
+    WorkflowRunResult,
     WorkflowSaveCommand,
     WorkflowsListQuery,
     WorkflowsService,
 )
+from durin.workflow.result import NodeRun, WorkflowResult
 
 _VALID = {"name": "wf", "start": "a", "nodes": [{"id": "a", "kind": "work"}]}
 
@@ -74,3 +76,44 @@ def test_run_command_accepts_input_files():
 
     cmd_with = WorkflowRunCommand(name="wf", task="go", input_files=["/tmp/a.txt", "/tmp/b.txt"])
     assert cmd_with.input_files == ["/tmp/a.txt", "/tmp/b.txt"]
+
+
+def test_workflow_run_result_forwards_exhausted_node():
+    """WorkflowRunResult carries exhausted_node from an engine WorkflowResult."""
+    engine_result = WorkflowResult(
+        status="exhausted",
+        final_output="partial output",
+        runs=[NodeRun(node_id="loop_node", iteration=5, output="last attempt")],
+        exhausted_node="loop_node",
+    )
+    dto = WorkflowRunResult(
+        status=engine_result.status,
+        final_output=engine_result.final_output or "",
+        runs=[
+            {"node_id": r.node_id, "iteration": r.iteration, "passed": r.passed,
+             "output": (r.output or "")[:2000]}
+            for r in engine_result.runs
+        ],
+        output_dir=engine_result.output_dir or "",
+        exhausted_node=engine_result.exhausted_node or "",
+    )
+    assert dto.status == "exhausted"
+    assert dto.exhausted_node == "loop_node"
+
+
+def test_workflow_run_result_exhausted_node_defaults_empty():
+    """WorkflowRunResult.exhausted_node defaults to empty string for non-exhausted runs."""
+    engine_result = WorkflowResult(
+        status="completed",
+        final_output="done",
+        runs=[],
+        exhausted_node=None,
+    )
+    dto = WorkflowRunResult(
+        status=engine_result.status,
+        final_output=engine_result.final_output or "",
+        runs=[],
+        output_dir=engine_result.output_dir or "",
+        exhausted_node=engine_result.exhausted_node or "",
+    )
+    assert dto.exhausted_node == ""

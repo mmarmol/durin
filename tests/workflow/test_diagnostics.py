@@ -38,7 +38,7 @@ def test_candidates_require_recurrence_floor():
 
 def test_max_visits_aborts_counted():
     d = compute_diagnostics([
-        _rec("r1", [{"node_id": "a", "iteration": 3}], status="max_visits"),
+        _rec("r1", [{"node_id": "a", "iteration": 3}], status="exhausted"),
         _rec("r2", [{"node_id": "a", "iteration": 1}]),
     ])
     assert d.max_visits_aborts == 1

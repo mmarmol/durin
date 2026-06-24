@@ -166,7 +166,36 @@ def test_max_visits_aborts_infinite_loop():
     })
     eng, _ = _engine({"a": "out-a"}, [False, False, False, False])  # never passes
     res = eng.run(wf, "t")
-    assert res.status == "max_visits"
+    assert res.status == "exhausted"
+    assert res.exhausted_node is not None
+
+
+def test_per_node_max_visits_overrides_workflow_default():
+    # workflow default max_visits=5, but node 'a' caps itself at 2.
+    wf = parse_workflow({
+        "name": "d", "start": "a", "max_visits": 5,
+        "nodes": [
+            {"id": "a", "kind": "work", "max_visits": 2, "on_pass": None, "on_fail": "a"},
+        ],
+    })
+    eng, calls = _engine({"a": "FAIL keep going"}, [])  # always FAIL → loops back to itself
+    res = eng.run(wf, "t")
+    assert res.status == "exhausted"
+    assert res.exhausted_node == "a"
+    assert len([c for c in calls if c.node.id == "a"]) == 2  # ran exactly its 2-visit budget
+
+
+def test_global_ceiling_clamps_a_higher_per_node_value():
+    wf = parse_workflow({
+        "name": "d", "start": "a", "max_visits": 50,
+        "nodes": [{"id": "a", "kind": "work", "max_visits": 50, "on_pass": None, "on_fail": "a"}],
+    })
+    eng, calls = _engine({"a": "FAIL"}, [])
+    eng2 = WorkflowEngine(node_runner=eng._node_runner, run_id_factory=lambda: "r1",
+                          command_runner=eng._command_runner, max_node_visits=3)
+    res = eng2.run(wf, "t")
+    assert res.status == "exhausted"
+    assert len([c for c in calls if c.node.id == "a"]) == 3  # clamped to the ceiling of 3
 
 
 def test_shared_vs_own_context():

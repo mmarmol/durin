@@ -23,8 +23,9 @@ class NodeRun:
 
 @dataclass
 class WorkflowResult:
-    status: Literal["completed", "max_visits", "aborted"]
+    status: Literal["completed", "exhausted", "aborted"]
     final_output: str | None
     runs: list[NodeRun] = field(default_factory=list)
     run_id: str = ""
     output_dir: str | None = None  # the terminal node's output folder, if any
+    exhausted_node: str | None = None  # set when status=="exhausted": the node that hit its budget

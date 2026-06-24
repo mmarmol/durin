@@ -463,6 +463,20 @@ function NodeConfigPanel({
               />
             </Field>
           )}
+
+          <Field label={t("workflows.maxVisits")}>
+            <Input
+              type="number"
+              min={1}
+              value={(node.max_visits as number | undefined) ?? ""}
+              placeholder={t("workflows.maxVisitsHint")}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10);
+                onChange({ max_visits: e.target.value === "" || !Number.isFinite(n) ? undefined : Math.max(1, n) });
+              }}
+              className="h-8"
+            />
+          </Field>
         </>
       )}
 
@@ -1220,9 +1234,16 @@ export function WorkflowsView() {
                   </div>
                   {runResult && (
                     <div className="mt-2 max-h-72 overflow-y-auto rounded border p-2 text-xs">
-                      <div className="mb-1 font-medium">
-                        {t("workflows.status")}: {runResult.status}
-                      </div>
+                      {runResult.status !== "completed" && (
+                        <div className="mb-2 rounded bg-amber-500/10 px-2 py-1.5 text-amber-700 dark:text-amber-400">
+                          <span className="font-medium">{t("workflows.exhausted")}</span>
+                          {runResult.exhausted_node && (
+                            <span className="ml-1">
+                              — {t("workflows.exhaustedNode")}: <span className="font-mono">{runResult.exhausted_node}</span>
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <div className="mb-1 flex flex-wrap gap-1">
                         {runResult.runs.map((r, i) => (
                           <span

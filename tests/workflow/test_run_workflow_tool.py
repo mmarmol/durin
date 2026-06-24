@@ -7,16 +7,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from durin.agent.runner import AgentRunResult
-from durin.agent.tools.run_workflow import RunWorkflowTool
-from durin.config.schema import ToolsConfig
+from durin.agent.tools.run_workflow import RunWorkflowTool, _format_result
+from durin.config.schema import ToolsConfig, WorkflowConfig
 from durin.providers.base import LLMProvider
 from durin.session.manager import SessionManager
 from durin.workflow.loader import workflows_dir
+from durin.workflow.result import NodeRun, WorkflowResult
 
 
 def _tool(tmp_path):
     sessions = SessionManager(workspace=tmp_path)
-    app_config = SimpleNamespace(resolve_default_preset=lambda: object(), tools=ToolsConfig())
+    app_config = SimpleNamespace(resolve_default_preset=lambda: object(), tools=ToolsConfig(), workflow=WorkflowConfig())
     ctx = SimpleNamespace(workspace=str(tmp_path), sessions=sessions, app_config=app_config)
     return RunWorkflowTool.create(ctx)
 
@@ -29,7 +30,7 @@ def _write_workflow(tmp_path, name, data):
 
 def test_tool_metadata():
     sessions = MagicMock()
-    ctx = SimpleNamespace(workspace="/tmp", sessions=sessions, app_config=SimpleNamespace(tools=ToolsConfig()))
+    ctx = SimpleNamespace(workspace="/tmp", sessions=sessions, app_config=SimpleNamespace(tools=ToolsConfig(), workflow=WorkflowConfig()))
     tool = RunWorkflowTool.create(ctx)
     assert tool.name == "run_workflow"
     assert "name" in tool.parameters["properties"]
@@ -162,7 +163,7 @@ async def test_run_anchors_node_sessions_to_invoking_session(tmp_path):
     _write_workflow(tmp_path, "w", {"name": "w", "start": "a",
                                     "nodes": [{"id": "a", "kind": "work", "next": None}]})
     sessions = SessionManager(workspace=tmp_path)
-    app_config = SimpleNamespace(resolve_default_preset=lambda: object(), tools=ToolsConfig())
+    app_config = SimpleNamespace(resolve_default_preset=lambda: object(), tools=ToolsConfig(), workflow=WorkflowConfig())
     ctx = SimpleNamespace(workspace=str(tmp_path), sessions=sessions, app_config=app_config)
     tool = RunWorkflowTool.create(ctx)
     tool.set_context(RequestContext(channel="websocket", chat_id="abc", session_key="websocket:abc"))
@@ -174,3 +175,58 @@ async def test_run_anchors_node_sessions_to_invoking_session(tmp_path):
         await tool.execute(name="w", task="t")
     kids = sessions.children_of("websocket:abc")
     assert kids and kids[0]["origin_type"] == "workflow_node"
+
+
+def test_exhausted_run_renders_gracefully():
+    result = WorkflowResult(
+        status="exhausted",
+        run_id="run-abc",
+        exhausted_node="check",
+        final_output="my best attempt",
+        runs=[
+            NodeRun(node_id="check", iteration=1, output="has issues", passed=False),
+            NodeRun(node_id="check", iteration=2, output="still has a bug on line 4", passed=False),
+        ],
+    )
+    text = _format_result(result)
+    assert "did not complete" in text.lower()
+    assert "check" in text
+    assert "still has a bug on line 4" in text
+    assert "my best attempt" in text
+
+
+def test_completed_run_format_unchanged():
+    result = WorkflowResult(
+        status="completed",
+        run_id="run-xyz",
+        exhausted_node=None,
+        final_output="the final answer",
+        runs=[
+            NodeRun(node_id="make", iteration=1, output="draft", session_key="ws:s1"),
+            NodeRun(node_id="review", iteration=1, output="pass", passed=True),
+        ],
+    )
+    text = _format_result(result)
+    assert "did not complete" not in text.lower()
+    # byte-exact regression guard: a completed run must render exactly as before
+    assert text == (
+        "Workflow run run-xyz: completed\n"
+        "  [make#1] -> ws:s1\n"
+        "  [review#1] decision: pass\n"
+        "\nFinal output:\nthe final answer"
+    )
+
+
+def test_aborted_run_renders_gracefully():
+    result = WorkflowResult(
+        status="aborted",
+        run_id="run-789",
+        exhausted_node=None,
+        final_output="partial work",
+        runs=[
+            NodeRun(node_id="work", iteration=1, output="incomplete", session_key=None),
+        ],
+    )
+    text = _format_result(result)
+    assert "did not complete" in text.lower()
+    assert "partial work" in text

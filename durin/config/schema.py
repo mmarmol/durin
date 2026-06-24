@@ -933,6 +933,12 @@ class CronConfig(Base):
     run_session_retention_hours: int = Field(default=48, ge=0, le=8760)
 
 
+class WorkflowConfig(Base):
+    """Workflow engine configuration."""
+
+    max_node_visits: int = Field(default=25, ge=1)
+
+
 class GatewayConfig(Base):
     """Gateway/server configuration."""
 
@@ -1199,6 +1205,7 @@ class Config(BaseSettings):
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
+    workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     catalog_refresh: CatalogRefreshConfig = Field(

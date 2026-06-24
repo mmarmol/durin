@@ -80,6 +80,7 @@ class WorkflowEngine:
         subworkflow_runner: Callable[..., str] | None = None,
         workspace: str | None = None,
         pick_runner: Callable[[str, list[str], "str | None"], int] | None = None,
+        max_node_visits: int = 1000,
     ) -> None:
         self._node_runner = node_runner
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex[:12])
@@ -91,6 +92,7 @@ class WorkflowEngine:
         # read-only engine needs neither.
         self._workspace = workspace
         self._pick_runner = pick_runner
+        self._max_node_visits = max_node_visits
 
     def run(
         self,
@@ -167,12 +169,14 @@ class WorkflowEngine:
 
         while current is not None:
             visits[current] = visits.get(current, 0) + 1
-            if visits[current] > workflow.max_visits:
+            node = workflow.nodes[current]
+            budget = min(getattr(node, "max_visits", None) or workflow.max_visits, self._max_node_visits)
+            if visits[current] > budget:
                 return WorkflowResult(
-                    status="max_visits", final_output=final_output, runs=runs, run_id=run_id
+                    status="exhausted", final_output=final_output, runs=runs,
+                    run_id=run_id, exhausted_node=current,
                 )
             iteration = visits[current]
-            node = workflow.nodes[current]
 
             if isinstance(node, WorkNode):
                 # Compute an artifact folder only for a node that can do file I/O — an

@@ -32,7 +32,7 @@ class Diagnostics:
 def compute_diagnostics(records: list[dict]) -> Diagnostics:
     d = Diagnostics(total_runs=len(records))
     for rec in records:
-        if rec.get("status") == "max_visits":
+        if rec.get("status") == "exhausted":
             d.max_visits_aborts += 1
         max_iter: dict[str, int] = {}
         failed_gates: set[str] = set()
