@@ -1259,18 +1259,14 @@ class AgentLoop:
         > global default (agents.defaults.persona).
         """
         from durin.personas.resolve import resolve_active_persona_name
+        from durin.workflow.persona_resolve import resolve_persona
 
         name = resolve_active_persona_name(
             self.app_config,
             session.metadata if session is not None else None,
             persona_override,
         )
-        persona = self.app_config.resolve_persona(name) if self.app_config else None
-        if persona is None:
-            return None, None
-        from durin.souls.store import SoulStore
-        body = SoulStore(self.workspace).read(persona.soul)
-        return (body or None), persona.model
+        return resolve_persona(self.app_config, name, self.workspace)
 
     def _build_initial_messages(
         self,

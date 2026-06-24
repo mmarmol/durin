@@ -324,3 +324,57 @@ def test_cross_loop_tool_marshals_to_owner_loop():
         assert f"ran on loop {id(owner)}" in result
     finally:
         owner.call_soon_threadsafe(owner.stop)
+
+
+def _fake_sessions(tmp_path=None):
+    """Minimal SessionManager stub: satisfies _persist without touching disk."""
+    sessions = MagicMock()
+    sessions.workspace = MagicMock()
+    sessions.workspace.resolve.return_value = MagicMock(__str__=lambda s: "/tmp")
+    parent_session = MagicMock()
+    parent_session.metadata = {}
+    sessions.get_or_create.return_value = parent_session
+    sessions.save = MagicMock()
+    return sessions
+
+
+def test_node_persona_applies_soul_and_model(monkeypatch):
+    captured = {}
+
+    class R:
+        final_content = "ok"
+        messages = []
+
+    class Runner:
+        async def run(self, spec):
+            captured["system"] = spec.initial_messages[0]["content"]
+            captured["model"] = spec.model
+            return R()
+
+    from durin.workflow import node_runner as nr_mod
+    monkeypatch.setattr(nr_mod, "resolve_persona", lambda cfg, name, ws=None: ("ENGINEER SOUL", "persona-model"))
+    nr = nr_mod.AgentNodeRunner(Runner(), sessions=_fake_sessions(), default_model="m", app_config=object())
+    node = WorkNode(id="a", persona="engineer")
+    nr(NodeRunRequest(node=node, task="t", upstream_output=None, shared_context=[], run_id="r", iteration=1, root_session_key=None))
+    assert "ENGINEER SOUL" in captured["system"] and captured["model"] == "persona-model"
+
+
+def test_node_persona_degrades_gracefully_without_app_config():
+    # A surface that builds AgentNodeRunner without an app_config (app_config=None) must
+    # not crash on a persona-bearing node — it falls back to the default model, no soul.
+    captured = {}
+
+    class R:
+        final_content = "ok"
+        messages = []
+
+    class Runner:
+        async def run(self, spec):
+            captured["model"] = spec.model
+            return R()
+
+    from durin.workflow import node_runner as nr_mod
+    nr = nr_mod.AgentNodeRunner(Runner(), sessions=_fake_sessions(), default_model="m")  # no app_config
+    node = WorkNode(id="a", persona="engineer")
+    nr(NodeRunRequest(node=node, task="t", upstream_output=None, shared_context=[], run_id="r", iteration=1, root_session_key=None))
+    assert captured["model"] == "m"   # fell back to default; no crash

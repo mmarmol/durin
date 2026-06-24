@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 from durin.workflow.engine import WorkflowEngine, NodeRunResponse
 from durin.workflow.spec import parse_workflow
@@ -68,3 +69,72 @@ def test_no_tools_node_gets_no_folder_and_nils_the_chain(tmp_path):
     WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
     assert seen["mid"][0] is None                # no-tools node: no folder
     assert seen["b"][1] is None                  # the no-tools node nilled the chain
+
+
+# Task 5: input_files + output_dir tests
+
+def test_input_files_seeded_into_start_nodes_upstream_artifact_dir(tmp_path):
+    """When input_files is provided, the start node receives its upstream_artifact_dir
+    pointing to a folder that contains those files."""
+    # Create a couple of input files in a source directory.
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "report.txt").write_text("hello")
+    (src / "data.csv").write_text("a,b\n1,2")
+
+    seen = {}
+    def runner(req):
+        seen[req.node.id] = req.upstream_artifact_dir
+        return NodeRunResponse(output=f"out-{req.node.id}")
+
+    wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
+    WorkflowEngine(runner, workspace=str(tmp_path)).run(
+        wf, "t", input_files=[str(src / "report.txt"), str(src / "data.csv")]
+    )
+
+    upstream = seen["a"]
+    assert upstream is not None
+    folder = Path(upstream)
+    assert folder.is_dir()
+    assert (folder / "report.txt").read_text() == "hello"
+    assert (folder / "data.csv").read_text() == "a,b\n1,2"
+
+
+def test_input_files_none_leaves_start_node_without_upstream_dir(tmp_path):
+    """When no input_files are given, the start node still gets no upstream_artifact_dir
+    (today's unchanged behavior)."""
+    seen = {}
+    def runner(req):
+        seen[req.node.id] = req.upstream_artifact_dir
+        return NodeRunResponse(output="x")
+
+    wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
+    WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
+    assert seen["a"] is None
+
+
+def test_output_dir_reflects_terminal_nodes_folder(tmp_path):
+    """WorkflowResult.output_dir is the output folder of the last node that produced one."""
+    seen = {}
+    def runner(req):
+        seen[req.node.id] = req.output_dir
+        return NodeRunResponse(output=f"out-{req.node.id}")
+
+    wf = _wf([
+        {"id": "a", "kind": "work", "tools": "default", "next": "b"},
+        {"id": "b", "kind": "work", "tools": "default", "next": None},
+    ], "a")
+    result = WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
+    # The terminal node is 'b'; result.output_dir should equal b's output folder.
+    assert result.output_dir == seen["b"]
+    assert result.output_dir is not None
+
+
+def test_output_dir_none_when_no_workspace():
+    """When no workspace is configured, output_dir is None."""
+    def runner(req):
+        return NodeRunResponse(output="x")
+
+    wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
+    result = WorkflowEngine(runner).run(wf, "t")   # no workspace=
+    assert result.output_dir is None

@@ -1,0 +1,47 @@
+{
+  "name": "concurrent-review",
+  "start": "produce",
+  "max_visits": 3,
+  "input": {"text": true},
+  "output": {"text": true},
+  "nodes": [
+    {
+      "id": "produce",
+      "kind": "work",
+      "mode": "build",
+      "tools": "default",
+      "prompt": "Implement the requested change. Write clean, working code with appropriate tests.",
+      "next": "fan"
+    },
+    {
+      "id": "fan",
+      "kind": "parallel",
+      "branches": ["review_bugs", "review_security"],
+      "max_concurrency": 2,
+      "reconcile": "read",
+      "next": "synthesize"
+    },
+    {
+      "id": "review_bugs",
+      "kind": "work",
+      "mode": "explore",
+      "tools": "none",
+      "prompt": "Review the code for logical errors, edge cases, and potential runtime failures. List any bugs found, or confirm the code looks correct."
+    },
+    {
+      "id": "review_security",
+      "kind": "work",
+      "mode": "explore",
+      "tools": "none",
+      "prompt": "Review the code for security vulnerabilities: injection risks, unsafe input handling, credential exposure, or insecure defaults. List any issues found, or confirm the code looks safe."
+    },
+    {
+      "id": "synthesize",
+      "kind": "work",
+      "mode": "explore",
+      "tools": "none",
+      "prompt": "Synthesize the bug review and security review findings into a concise verdict. Summarize the most important issues and recommend whether the code is ready to merge or needs fixes.",
+      "next": null
+    }
+  ]
+}

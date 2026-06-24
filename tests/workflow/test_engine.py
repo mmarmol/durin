@@ -69,6 +69,32 @@ def test_output_passes_downstream():
     assert b_call.upstream_output == "out-a"
 
 
+def test_io_descriptions_frame_the_task():
+    wf = parse_workflow({
+        "name": "d", "start": "a",
+        "input": {"text": True, "description": "a CSV of sales"},
+        "output": {"text": True, "description": "a markdown report"},
+        "nodes": [{"id": "a", "kind": "work", "next": None}],
+    })
+    eng, calls = _engine({"a": "out-a"}, [])
+    eng.run(wf, "do it")
+    task = calls[0].task
+    assert "a CSV of sales" in task
+    assert "a markdown report" in task
+    assert "do it" in task
+
+
+def test_task_unchanged_without_io_descriptions():
+    wf = parse_workflow({
+        "name": "d", "start": "a",
+        "input": {"file": True},  # declared, but no description
+        "nodes": [{"id": "a", "kind": "work", "next": None}],
+    })
+    eng, calls = _engine({"a": "out-a"}, [])
+    eng.run(wf, "do it")
+    assert calls[0].task == "do it"
+
+
 def test_decision_pass_continues():
     wf = parse_workflow({
         "name": "d", "start": "a",
@@ -404,3 +430,28 @@ def test_parallel_choose_without_pick_runner_aborts(tmp_path):
     eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1", workspace=str(tmp_path))
     res = eng.run(_writing_wf("choose", criteria="best"), "t")
     assert res.status == "aborted"
+
+
+def test_parallel_respects_max_concurrency(tmp_path):
+    import threading
+    import time
+
+    live = []
+    lock = threading.Lock()
+    peak = [0]
+
+    def runner(req):
+        with lock:
+            live.append(req.node.id)
+            peak[0] = max(peak[0], len(live))
+        time.sleep(0.05)
+        with lock:
+            live.remove(req.node.id)
+        return NodeRunResponse(output="x")
+
+    nodes = [{"id": "f", "kind": "parallel", "branches": ["a", "b", "c", "d"],
+              "max_concurrency": 2, "next": None}]
+    nodes += [{"id": n, "kind": "work"} for n in "abcd"]
+    wf = parse_workflow({"name": "w", "start": "f", "nodes": nodes})
+    WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
+    assert peak[0] <= 2
