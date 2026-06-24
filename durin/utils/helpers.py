@@ -770,6 +770,35 @@ def _format_composition_section(payload: dict[str, Any]) -> list[str]:
     return out
 
 
+def seed_workflows(workspace: Path) -> list[str]:
+    """Copy bundled seed workflow JSONs into <workspace>/workflows/.
+
+    Idempotent: only creates files that are absent, never overwrites existing ones.
+    Returns the list of relative paths that were created.
+    """
+    from importlib.resources import files as pkg_files
+
+    try:
+        tpl = pkg_files("durin") / "templates" / "workflows"
+    except Exception:
+        return []
+    if not tpl.is_dir():
+        return []
+
+    added: list[str] = []
+    dest_dir = Path(workspace) / "workflows"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for item in tpl.iterdir():
+        if not item.name.endswith(".json") or item.name.startswith("."):
+            continue
+        dest = dest_dir / item.name
+        if dest.exists():
+            continue
+        dest.write_text(item.read_text(encoding="utf-8"), encoding="utf-8")
+        added.append(str(dest.relative_to(workspace)))
+    return added
+
+
 def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
     """Sync bundled templates to workspace. Only creates missing files."""
     from importlib.resources import files as pkg_files
@@ -800,6 +829,11 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
                 _write(item, workspace / "souls" / item.name)
     _write(None, workspace / "memory" / "history.jsonl")
     (workspace / "skills").mkdir(exist_ok=True)
+    workflows_tpl = tpl / "workflows"
+    if workflows_tpl.is_dir():
+        for item in workflows_tpl.iterdir():
+            if item.name.endswith(".json") and not item.name.startswith("."):
+                _write(item, workspace / "workflows" / item.name)
 
     if added and not silent:
         from rich.console import Console

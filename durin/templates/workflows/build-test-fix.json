@@ -1,0 +1,25 @@
+{
+  "name": "build-test-fix",
+  "start": "implement",
+  "max_visits": 4,
+  "input": {"text": true},
+  "output": {"text": true},
+  "nodes": [
+    {
+      "id": "implement",
+      "kind": "work",
+      "mode": "build",
+      "tools": "default",
+      "prompt": "Implement the requested feature or fix. Write production-quality code and ensure the implementation is complete.",
+      "next": "tests"
+    },
+    {
+      "id": "tests",
+      "kind": "work",
+      "mode": "build",
+      "command": "pytest -q --tb=short 2>&1 | tail -20",
+      "on_pass": null,
+      "on_fail": "implement"
+    }
+  ]
+}
