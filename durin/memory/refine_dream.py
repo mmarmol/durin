@@ -39,15 +39,14 @@ def _emit(event: str, **data: Any) -> None:
         pass
 
 
-def _too_fresh(page: "EntityPage", min_age_hours: int, now: Any) -> bool:
-    """True when the entity is younger than the quarantine window (B3). Uses
-    created_at, falling back to updated_at; with no timestamp the entity is
-    treated as old (never quarantined — fail open, don't block a merge)."""
-    from datetime import timedelta
+def _created_this_run(page: "EntityPage", run_started_at: Any) -> bool:
+    """True when the entity was created at/after the run began — the run looking
+    at its own fresh output. created_at falls back to updated_at; with no
+    timestamp the entity is treated as established (fail open, don't block)."""
     ts = page.created_at or page.updated_at
-    if ts is None:
+    if ts is None or run_started_at is None:
         return False
-    return (now - ts) < timedelta(hours=min_age_hours)
+    return ts >= run_started_at
 
 
 def _tombstone_path(workspace: Path) -> Path:
@@ -108,18 +107,16 @@ def run_refine(
     llm_invoke: LLMInvoke | None = None,
     model: str | None = None,
     confidence_threshold: int = 95,
-    min_age_hours: int = 0,
+    run_started_at: "datetime | None" = None,
 ) -> dict:
     """Dedup pass: judge alias-overlap candidate pairs and merge the same ones.
 
-    ``min_age_hours`` (B3) quarantines freshly-created/edited entities: a
-    candidate pair is skipped when either entity is younger than the window, so
-    the dream doesn't merge two entities before they have differentiated. 0
-    disables the quarantine.
+    ``run_started_at`` is the run-scoped quarantine: a candidate pair is skipped
+    when either entity was created at/after the run began, so the run never
+    merges its own fresh output (duplicates converge on the next pass once
+    established). None disables the quarantine.
     """
-    from datetime import datetime, timezone
     llm_invoke = llm_invoke or default_llm_invoke
-    now = datetime.now(timezone.utc)
     absorber = EntityAbsorption(workspace=workspace)
     candidates = absorber.find_candidates()
 
@@ -146,8 +143,9 @@ def run_refine(
             skipped.append({"pair": [ref_a, ref_b], "reason": "user_managed"})
             _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason="user_managed")
             continue
-        if min_age_hours and (_too_fresh(page_a, min_age_hours, now)
-                              or _too_fresh(page_b, min_age_hours, now)):
+        if run_started_at is not None and (
+                _created_this_run(page_a, run_started_at)
+                or _created_this_run(page_b, run_started_at)):
             skipped.append({"pair": [ref_a, ref_b], "reason": "quarantine"})
             _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason="quarantine")
             continue

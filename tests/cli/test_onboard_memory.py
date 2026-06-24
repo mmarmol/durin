@@ -33,7 +33,7 @@ def test_question_text_anchors() -> None:
     assert "OFF by default" in text
     # The three defaults that the user is implicitly accepting:
     assert "95" in text                # confidence threshold
-    assert "24h" in text or "24 h" in text  # min_age_hours
+    assert "quarantine" in text.lower()  # run-scoped quarantine
     assert "Dream consolidator model" in text or "dream model" in text.lower()
     # The y/N prompt — N (capital) signals default
     assert "[y/N]" in text
