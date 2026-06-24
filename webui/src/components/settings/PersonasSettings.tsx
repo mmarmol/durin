@@ -622,11 +622,6 @@ export function PersonasSettings({ token }: { token: string }) {
                     <span className="flex items-center gap-2">
                       <Drama className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
                       <span>{persona.name}</span>
-                      {persona.builtin && persona.name !== "default" ? (
-                        <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                          {t("settings.personas.builtinBadge")}
-                        </span>
-                      ) : null}
                       {isDefault ? (
                         <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-primary">
                           <Star className="h-2.5 w-2.5 fill-current" aria-hidden />
@@ -685,27 +680,27 @@ export function PersonasSettings({ token }: { token: string }) {
                         <Star className="h-3.5 w-3.5" aria-hidden />
                       </Button>
                     ) : null}
-                    {persona.builtin ? null : (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={busy}
-                          onClick={() => setPersonaForm(persona)}
-                          className="rounded-full text-muted-foreground"
-                          title={t("settings.personas.editPersona")}
-                          aria-label={t("settings.personas.editPersona")}
-                        >
-                          <Pencil className="h-3.5 w-3.5" aria-hidden />
-                        </Button>
-                        <InlineDelete
-                          confirming={confirmPersona === persona.name}
-                          busy={busy}
-                          onAsk={() => setConfirmPersona(persona.name)}
-                          onConfirm={() => void removePersona(persona.name)}
-                          onCancel={() => setConfirmPersona(null)}
-                        />
-                      </>
+                    {persona.name === "default" ? null : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => setPersonaForm(persona)}
+                        className="rounded-full text-muted-foreground"
+                        title={t("settings.personas.editPersona")}
+                        aria-label={t("settings.personas.editPersona")}
+                      >
+                        <Pencil className="h-3.5 w-3.5" aria-hidden />
+                      </Button>
+                    )}
+                    {persona.name === "default" ? null : (
+                      <InlineDelete
+                        confirming={confirmPersona === persona.name}
+                        busy={busy}
+                        onAsk={() => setConfirmPersona(persona.name)}
+                        onConfirm={() => void removePersona(persona.name)}
+                        onCancel={() => setConfirmPersona(null)}
+                      />
                     )}
                   </div>
                 </SettingsRow>

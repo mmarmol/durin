@@ -1,3 +1,3 @@
-from durin.personas.builtin import BUILTIN_PERSONAS
+from durin.personas.builtin import SEED_PERSONAS, seed_example_personas
 
-__all__ = ["BUILTIN_PERSONAS"]
+__all__ = ["SEED_PERSONAS", "seed_example_personas"]

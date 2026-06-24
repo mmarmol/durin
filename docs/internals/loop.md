@@ -298,8 +298,8 @@ backward compatibility and git-tracking); every other soul lives under
 without any tooling.
 
 On a fresh workspace, three example souls are pre-seeded under `workspace/souls/`
-(`researcher`, `engineer`, `tutor`). They give built-in personas something to
-reference and serve as templates for user-defined souls.
+(`researcher`, `engineer`, `tutor`). They back the seeded example personas and
+serve as templates for user-defined souls.
 
 #### Persona records
 
@@ -309,20 +309,21 @@ use `"default"`), `model` (a model picker ref — a preset name or
 `"provider model"` string — or `None` to inherit the global default model), and
 `description` (free text shown in `/persona` listings).
 
-Personas live in two places:
+Personas live in the `personas` map in `config.yml`, structurally identical to
+`model_presets`. On first run, three example personas (`researcher`, `engineer`,
+`tutor`) are seeded into that map (`durin/personas/builtin.py`'s
+`seed_example_personas`, guarded by the `agents.defaults.personas_seeded`
+marker) as ordinary entries — fully editable and deletable; a user who removes
+one keeps it removed across restarts (the marker prevents re-injection).
 
-- **User config** — a `personas` map in `config.yml`, structurally identical to
-  `model_presets`. User-config entries take precedence when names collide.
-- **Built-ins** — code-defined entries in `durin/personas/builtin.py`
-  (`researcher`, `engineer`, `tutor`). Always available without any user config.
-
-`Config.resolve_persona(name)` tries user config first, then built-ins, and
-returns `None` when the name is unknown (the caller falls back to the default
-SOUL and default model). `Config.persona_names()` returns the union of both
-sets. The persona listing (`GET /api/v1/personas` and the webui pane)
-additionally surfaces a synthetic `default` entry — the base SOUL plus the
-default model — last in the list, so the implicit fallback is visible and
-selectable; it is not editable or deletable as a persona.
+`Config.resolve_persona(name)` looks the name up in the `personas` map and
+returns `None` when it is unknown (the caller falls back to the default SOUL and
+default model). `Config.persona_names()` lists the configured personas. The
+persona listing (`GET /api/v1/personas` and the webui pane) additionally
+surfaces a synthetic `default` entry — the base SOUL plus the default model —
+last in the list, so the implicit fallback is visible and selectable; that
+synthetic entry alone is not editable or deletable (`default`/`none` are
+reserved persona names).
 
 Example user config:
 
@@ -371,15 +372,15 @@ Souls and personas are manageable through three surfaces:
   Two additional behaviors in this surface:
 
   - **Live model + SOUL test** — the persona form *and each persona row* (so
-    any persona — including built-ins and the default — can be tested straight
-    from the list) carry a "Test" action (`POST /api/v1/personas/test`) that
+    any persona — including the seeded examples and the default — can be tested
+    straight from the list) carry a "Test" action (`POST /api/v1/personas/test`) that
     runs the selected soul and model against a fixed short prompt and returns
     the model's reply. If the provider or model reference is invalid, the
     response carries an `ok: false` error message instead of raising an HTTP
     error; the webui shows it inline (below the form, or under the row).
 
   - **In-use SOUL delete protection** — a soul that is referenced by any
-    persona (user-defined or built-in) cannot be deleted. The backend returns a
+    persona cannot be deleted. The backend returns a
     `409 Conflict` listing which personas hold the reference; the webui disables
     the delete control for in-use souls and notes the blocking personas. The
     `default` soul is separately protected from deletion regardless of persona
@@ -466,10 +467,10 @@ messages back to the bus and clears the per-session latency entry.
 | `session_turn_lease` | [`durin/session/turn_lease.py`](../../durin/session/turn_lease.py) | Cross-process per-session turn lock held for the whole turn. |
 | `ContextBuilder` | [`durin/agent/context.py`](../../durin/agent/context.py) | Builds the tiered system prompt and the LLM message list, including the active SOUL and operating floor. |
 | `SoulStore` | [`durin/souls/store.py`](../../durin/souls/store.py) | File-backed SOUL library: `default` → `SOUL.md`, named souls → `souls/<slug>.md`. |
-| `PersonaConfig` | [`durin/config/schema.py`](../../durin/config/schema.py) | A soul + optional model + description; lives in the `personas` config map or `BUILTIN_PERSONAS`. |
-| `resolve_persona` / `persona_names` | [`durin/config/schema.py`](../../durin/config/schema.py) | Resolver (user config → built-ins) and listing method on `Config`. |
+| `PersonaConfig` | [`durin/config/schema.py`](../../durin/config/schema.py) | A soul + optional model + description; lives in the `personas` config map. |
+| `resolve_persona` / `persona_names` | [`durin/config/schema.py`](../../durin/config/schema.py) | Resolver (by name from the `personas` map) and listing method on `Config`. |
 | `resolve_active_persona_name` | [`durin/personas/resolve.py`](../../durin/personas/resolve.py) | Precedence resolver: per-conversation metadata → global default → None. |
-| `BUILTIN_PERSONAS` | [`durin/personas/builtin.py`](../../durin/personas/builtin.py) | Code-defined personas always available without user config (`researcher`, `engineer`, `tutor`). |
+| `SEED_PERSONAS` / `seed_example_personas` | [`durin/personas/builtin.py`](../../durin/personas/builtin.py) | Example personas (`researcher`, `engineer`, `tutor`) seeded once into config on first run as ordinary editable/deletable entries. |
 | `AgentMode` | [`durin/agent/agent_mode.py`](../../durin/agent/agent_mode.py) | Permission-as-data tool filter (build / plan / explore). |
 | `AgentHook` / `CompositeHook` | [`durin/agent/hook.py`](../../durin/agent/hook.py) | Per-iteration lifecycle callbacks with fan-out and error isolation. |
 | `AgentProgressHook` | [`durin/agent/progress_hook.py`](../../durin/agent/progress_hook.py) | The hook wired on every turn (streaming, tool hints, iteration count). |
