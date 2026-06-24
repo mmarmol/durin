@@ -26,6 +26,13 @@ from durin.memory.field_patch import FieldPatch
 from durin.memory.llm_invoke import default_llm_invoke
 from durin.memory.memory_writer import WriteResult, write_entity
 
+
+def _mine_emit_tool_event(name: str, payload: dict) -> None:
+    """Thin wrapper so tests can monkeypatch without patching the real emit."""
+    from durin.agent.tools._telemetry import emit_tool_event
+    emit_tool_event(name, payload)
+
+
 __all__ = [
     "build_extract_prompt", "parse_attributes", "extract_entity",
     "build_discover_prompt", "parse_discoveries", "discover_entities",
@@ -456,7 +463,7 @@ def _parse_learnings(raw: str) -> list[dict[str, Any]]:
         body = str(item.get("body") or "").strip()
         if not ref or ":" not in ref or not name or not body:
             continue
-        out.append({"ref": ref, "name": name, "body": body})
+        out.append({"ref": ref, "name": name, "body": body[:400]})
     return out
 
 
@@ -497,4 +504,12 @@ def mine_learnings(
                         source_ref=src, at=now)],
             create=True, name=it["name"])
         out.append({"ref": ref, "committed": result.committed})
+    try:
+        _mine_emit_tool_event("memory.dream.learnings", {
+            "proposed": len(learnings),
+            "written": sum(1 for r in out if r["committed"]),
+            "refs": [r["ref"] for r in out],
+        })
+    except Exception:  # pragma: no cover
+        pass
     return out

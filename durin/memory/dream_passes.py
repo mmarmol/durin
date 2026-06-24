@@ -136,7 +136,8 @@ def run_extract_pass(
                 extracted = r.get("extracted") or []
                 discovered = r.get("discovered") or []
                 sig = r.get("skill_signals") or []
-                if extracted or discovered or sig:
+                learned = r.get("learnings") or []
+                if extracted or discovered or sig or learned:
                     out["sessions"] += 1
                     out["entities"] += len(extracted)
                     out["discovered"] += len(discovered)

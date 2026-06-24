@@ -211,3 +211,26 @@ def test_mine_learnings_empty_is_noop(tmp_path):
     res = mine_learnings(tmp_path, "[turn-1] USER: hi",
                          llm_invoke=lambda *a, **k: _LResp("[]"), model="m")
     assert res == []
+
+
+def test_mine_learnings_emits_telemetry_event(tmp_path, monkeypatch):
+    """mine_learnings must emit memory.dream.learnings with correct counts."""
+    out = json.dumps([
+        {"ref": "feedback:pref-a", "name": "Pref A", "body": "body a"},
+        {"ref": "stance:pref-b", "name": "Pref B", "body": "body b"},
+        {"ref": "person:bad", "name": "Bad", "body": "filtered out"},
+    ])
+    captured: list[tuple[str, dict]] = []
+    import durin.memory.extract_dream as _ed
+    monkeypatch.setattr(_ed, "_mine_emit_tool_event",
+                        lambda name, payload: captured.append((name, payload)))
+
+    mine_learnings(tmp_path, "some text", llm_invoke=lambda *a, **k: _LResp(out), model="m")
+
+    assert len(captured) == 1
+    event_name, payload = captured[0]
+    assert event_name == "memory.dream.learnings"
+    # 2 accepted (feedback+stance), 1 filtered (person)
+    assert payload["proposed"] == 3
+    assert payload["written"] == 2
+    assert set(payload["refs"]) == {"feedback:pref-a", "stance:pref-b"}
