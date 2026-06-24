@@ -25,6 +25,7 @@ from durin.config.schema import ToolsConfig
 from durin.session.lineage import build_lineage, root_of
 from durin.session.manager import Session, SessionManager
 from durin.workflow.engine import NodeRunRequest, NodeRunResponse
+from durin.workflow.persona_resolve import resolve_persona
 
 
 class _CrossLoopTool(Tool):
@@ -74,6 +75,7 @@ class AgentNodeRunner:
         tools_config: ToolsConfig | None = None,
         live_tool_registry: ToolRegistry | None = None,
         main_loop=None,
+        app_config=None,
     ) -> None:
         self.runner = runner
         self.sessions = sessions
@@ -86,6 +88,7 @@ class AgentNodeRunner:
         # subset of MCP tools without reconnecting (see _CrossLoopTool).
         self._live_tool_registry = live_tool_registry
         self._main_loop = main_loop
+        self._app_config = app_config
 
     def _build_tools(self, node, workspace_override: str | None = None) -> ToolRegistry:
         """Build the node's tool registry: its built-in set ('none'→empty,
@@ -143,6 +146,14 @@ class AgentNodeRunner:
 
     def __call__(self, req: NodeRunRequest) -> NodeRunResponse:
         system = req.node.prompt
+
+        # Apply persona: prepend its SOUL body and use its model ref when set.
+        persona_name = getattr(req.node, "persona", None)
+        persona_soul, persona_model_ref = resolve_persona(
+            self._app_config, persona_name, self.sessions.workspace)
+        if persona_soul:
+            system = f"{persona_soul}\n\n{system}" if system else persona_soul
+
         skills_text = self._load_skills(getattr(req.node, "skills", ()))
         if skills_text:
             system = f"{system}\n\n# Skills\n\n{skills_text}" if system else f"# Skills\n\n{skills_text}"
@@ -169,10 +180,15 @@ class AgentNodeRunner:
                 user = f"{user}\n\n--- Files ---\n" + "\n".join(lines)
         messages.append({"role": "user", "content": user})
 
+        # Persona model when a persona is set, else the node's explicit model, else
+        # the runner's default. The parser's persona-xor-model guard ensures at most
+        # one of persona_model_ref and req.node.model is set at a time.
+        model = persona_model_ref or req.node.model or self.default_model
+
         result = asyncio.run(self.runner.run(AgentRunSpec(
             initial_messages=messages,
             tools=self._build_tools(req.node, req.workspace_override),
-            model=req.node.model or self.default_model,
+            model=model,
             max_iterations=self.max_iterations,
             max_tool_result_chars=self.max_tool_result_chars,
         )))
@@ -185,7 +201,10 @@ class AgentNodeRunner:
         )
 
     def _persist(self, req: NodeRunRequest, messages: list[dict]) -> str | None:
-        key = f"workflow:{req.run_id}:{req.node.id}:{req.iteration}"
+        if req.worker_index is not None:
+            key = f"workflow:{req.run_id}:{req.node.id}:{req.iteration}:{req.worker_index}"
+        else:
+            key = f"workflow:{req.run_id}:{req.node.id}:{req.iteration}"
         try:
             parent = req.root_session_key
             root = (

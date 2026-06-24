@@ -34,6 +34,7 @@ class WorkNode:
 
     id: str
     model: str | None = None              # None = engine default
+    persona: str | None = None            # named persona (xor model; None = no persona)
     context: Literal["own", "shared"] = "own"
     prompt: str = ""                      # agent system/role framing (empty = upstream context only)
     next: str | None = None              # next node id; None = end (mutually exclusive with on_pass/on_fail)
@@ -73,7 +74,13 @@ class ParallelNode:
     outputs. ``reconcile`` decides how their file writes come back together:
     'read' = read-only branches (no isolation, no writes applied); 'choose' = each
     branch writes in its own copy, a judge picks one to apply; 'union' = apply every
-    branch's writes, failing on a same-file conflict."""
+    branch's writes, failing on a same-file conflict.
+
+    Static mode: ``branches`` is non-empty, ``worker``/``list_from`` are None.
+    Dynamic mode: ``worker`` names a work node to run per item; ``list_from`` names
+    the upstream node whose output is parsed as the runtime list; ``branches`` is
+    empty.  Bounded by ``max_concurrency`` in both modes.
+    """
 
     id: str
     branches: tuple[str, ...] = ()
@@ -81,6 +88,9 @@ class ParallelNode:
     reconcile: Literal["read", "choose", "union"] = "read"
     criteria: str = ""                   # for 'choose': how the judge picks the winner
     judge_model: str | None = None       # optional model for the 'choose' judge
+    max_concurrency: int = 2             # max simultaneous branch/worker runners (>= 1)
+    worker: str | None = None            # dynamic mode: worker-template node id
+    list_from: str | None = None         # dynamic mode: node whose output is the runtime list
     kind: Literal["parallel"] = "parallel"
 
 
@@ -98,6 +108,8 @@ class Workflow:
     # dream-driven self-improvement: 'off' = never touched; 'manual' = dream leaves a
     # recommendation to review; 'auto' = dream applies edits directly (later slice).
     improvement_mode: Literal["off", "manual", "auto"] = "off"
+    input: dict | None = None            # workflow I/O descriptors (e.g. {text: bool, file: bool})
+    output: dict | None = None
 
 
 def _str_list(value: Any, node_id: str, field: str) -> tuple[str, ...]:
@@ -130,6 +142,15 @@ def _build_node(raw: dict[str, Any]) -> Node:
             raise WorkflowError(
                 f"node {node_id!r}: model must be a string or omitted, got {model!r}"
             )
+        persona = raw.get("persona")
+        if persona is not None and not isinstance(persona, str):
+            raise WorkflowError(
+                f"node {node_id!r}: persona must be a string or omitted, got {persona!r}"
+            )
+        if persona is not None and model is not None:
+            raise WorkflowError(
+                f"node {node_id!r}: persona and model are mutually exclusive — set one or neither"
+            )
         skills = _str_list(raw.get("skills", []), node_id, "skills")
         mcps = _str_list(raw.get("mcps", []), node_id, "mcps")
         on_pass = raw.get("on_pass")
@@ -147,6 +168,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
         return WorkNode(
             id=node_id,
             model=model,
+            persona=persona,
             context=context,
             prompt=raw.get("prompt", ""),
             next=next_node,
@@ -170,6 +192,15 @@ def _build_node(raw: dict[str, Any]) -> Node:
         model = raw.get("model")
         if model is None:                       # map judge_model only when model is unset
             model = raw.get("judge_model")
+        persona = raw.get("persona")
+        if persona is not None and not isinstance(persona, str):
+            raise WorkflowError(
+                f"node {node_id!r}: persona must be a string or omitted, got {persona!r}"
+            )
+        if persona is not None and model is not None:
+            raise WorkflowError(
+                f"node {node_id!r}: persona and model are mutually exclusive — set one or neither"
+            )
         on_pass = raw.get("on_pass")
         on_fail = raw.get("on_fail")
         if raw.get("next") is not None and (on_pass is not None or on_fail is not None):
@@ -181,6 +212,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
         return WorkNode(
             id=node_id,
             model=model,
+            persona=persona,
             context=raw.get("context", "own"),
             prompt=criteria,
             next=raw.get("next"),
@@ -200,11 +232,36 @@ def _build_node(raw: dict[str, Any]) -> Node:
             )
         return SubworkflowNode(id=node_id, workflow=workflow, next=raw.get("next"))
     if kind == "parallel":
-        branches = raw.get("branches", [])
-        if not isinstance(branches, list) or not branches:
-            raise WorkflowError(
-                f"node {node_id!r}: a parallel node needs a non-empty 'branches' list"
-            )
+        worker = raw.get("worker")
+        list_from = raw.get("list_from")
+        branches_raw = raw.get("branches", [])
+        is_dynamic = worker is not None
+
+        if is_dynamic:
+            if branches_raw:
+                raise WorkflowError(
+                    f"node {node_id!r}: a dynamic parallel node (worker set) must not also set 'branches'"
+                )
+            if list_from is None:
+                raise WorkflowError(
+                    f"node {node_id!r}: a dynamic parallel node needs 'list_from' alongside 'worker'"
+                )
+            if not isinstance(worker, str) or not worker:
+                raise WorkflowError(
+                    f"node {node_id!r}: worker must be a non-empty string, got {worker!r}"
+                )
+            if not isinstance(list_from, str) or not list_from:
+                raise WorkflowError(
+                    f"node {node_id!r}: list_from must be a non-empty string, got {list_from!r}"
+                )
+            branches: tuple[str, ...] = ()
+        else:
+            if not isinstance(branches_raw, list) or not branches_raw:
+                raise WorkflowError(
+                    f"node {node_id!r}: a parallel node needs a non-empty 'branches' list"
+                )
+            branches = tuple(branches_raw)
+
         reconcile = raw.get("reconcile", "read")
         if reconcile not in ("read", "choose", "union"):
             raise WorkflowError(
@@ -215,9 +272,15 @@ def _build_node(raw: dict[str, Any]) -> Node:
             raise WorkflowError(
                 f"node {node_id!r}: a 'choose' parallel node needs 'criteria' for the judge"
             )
+        max_concurrency = raw.get("max_concurrency", 2)
+        if isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int) or max_concurrency < 1:
+            raise WorkflowError(
+                f"node {node_id!r}: max_concurrency must be an int >= 1, got {max_concurrency!r}"
+            )
         return ParallelNode(
-            id=node_id, branches=tuple(branches), next=raw.get("next"),
+            id=node_id, branches=branches, next=raw.get("next"),
             reconcile=reconcile, criteria=criteria, judge_model=raw.get("judge_model"),
+            max_concurrency=max_concurrency, worker=worker, list_from=list_from,
         )
     raise WorkflowError(f"node {node_id!r}: unknown kind {kind!r}")
 
@@ -230,7 +293,12 @@ def _edge_targets(node: Node) -> list[str | None]:
     if isinstance(node, SubworkflowNode):
         return [node.next]
     if isinstance(node, ParallelNode):
-        return [*node.branches, node.next]
+        targets: list[str | None] = [*node.branches, node.next]
+        if node.worker is not None:
+            targets.append(node.worker)
+        if node.list_from is not None:
+            targets.append(node.list_from)
+        return targets
     return []  # unreachable with the current Node union
 
 
@@ -307,6 +375,15 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
         raise WorkflowError(
             f"improvement_mode must be 'off', 'manual' or 'auto', got {mode!r}"
         )
+
+    wf_input = data.get("input")
+    if wf_input is not None and not isinstance(wf_input, dict):
+        raise WorkflowError(f"workflow 'input' must be a dict or omitted, got {wf_input!r}")
+    wf_output = data.get("output")
+    if wf_output is not None and not isinstance(wf_output, dict):
+        raise WorkflowError(f"workflow 'output' must be a dict or omitted, got {wf_output!r}")
+
     return Workflow(
-        name=name, start=start, nodes=nodes, max_visits=max_visits, improvement_mode=mode
+        name=name, start=start, nodes=nodes, max_visits=max_visits, improvement_mode=mode,
+        input=wf_input, output=wf_output,
     )

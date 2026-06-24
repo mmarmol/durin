@@ -33,11 +33,28 @@ def test_missing_subworkflow_returns_error_not_raise(tmp_path):
     assert "ghost" in out or "Error" in out
 
 
-def test_depth_cap_stops_runaway_recursion(tmp_path):
-    # 'loop' references itself via a subworkflow node → would recurse forever
-    # without the depth cap. The cap returns an error string at the limit.
-    _write(tmp_path, "loop", {"name": "loop", "start": "s",
-                              "nodes": [{"id": "s", "kind": "subworkflow", "workflow": "loop", "next": None}]})
-    runner = SubworkflowRunner(tmp_path, _node_runner("x"), judge_runner=None, max_depth=3)
-    out = runner("loop", "t")
+def test_depth_cap_stops_deep_non_cyclic_nesting(tmp_path):
+    # A calls B, B calls C, C calls D — no cycle, but deep enough to hit the depth cap.
+    # The cap returns an error string at the limit.
+    _write(tmp_path, "A", {"name": "A", "start": "s",
+                           "nodes": [{"id": "s", "kind": "subworkflow", "workflow": "B", "next": None}]})
+    _write(tmp_path, "B", {"name": "B", "start": "s",
+                           "nodes": [{"id": "s", "kind": "subworkflow", "workflow": "C", "next": None}]})
+    _write(tmp_path, "C", {"name": "C", "start": "s",
+                           "nodes": [{"id": "s", "kind": "subworkflow", "workflow": "D", "next": None}]})
+    _write(tmp_path, "D", {"name": "D", "start": "s",
+                           "nodes": [{"id": "s", "kind": "work", "next": None}]})
+    runner = SubworkflowRunner(tmp_path, _node_runner("x"), judge_runner=None, max_depth=2)
+    out = runner("A", "t")
     assert "depth" in out.lower()
+
+
+def test_subworkflow_cycle_is_detected(tmp_path):
+    # workflow A has a subworkflow node calling A again; the call-stack guard
+    # must stop on reentry with a clear cycle error, not a generic depth error.
+    _write(tmp_path, "A", {"name": "A", "start": "call",
+                           "nodes": [{"id": "call", "kind": "subworkflow", "workflow": "A", "next": None}]})
+    runner = SubworkflowRunner(tmp_path, _node_runner("x"), judge_runner=None)
+    out = runner("A", task="go")
+    assert "cycle detected" in out
+    assert "A -> A" in out

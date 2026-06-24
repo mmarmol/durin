@@ -4424,6 +4424,14 @@
       "WorkflowRunCommand": {
         "additionalProperties": false,
         "properties": {
+          "input_files": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Input Files",
+            "type": "array"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -4444,6 +4452,11 @@
         "properties": {
           "final_output": {
             "title": "Final Output",
+            "type": "string"
+          },
+          "output_dir": {
+            "default": "",
+            "title": "Output Dir",
             "type": "string"
           },
           "runs": {
