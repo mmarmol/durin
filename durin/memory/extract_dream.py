@@ -20,6 +20,7 @@ from typing import Any, Callable, Iterable
 
 from json_repair import repair_json
 
+from durin.memory.aliases_index import AliasIndex
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
 from durin.memory.llm_invoke import LLMResponse, default_llm_invoke
@@ -203,6 +204,23 @@ def parse_discoveries(raw: str) -> list[dict[str, Any]]:
     return out
 
 
+def _resolve_existing_ref(index, proposed_ref: str, name: str) -> str | None:
+    """The single existing same-type entity that already owns this name/slug,
+    or None. None when there is no match OR when the match is ambiguous (>1
+    existing entity shares the name) — ambiguity defers to refine + the judge,
+    preserving deliberate same-name disambiguation (person:marcelo_marmol vs
+    person:marcelo_diaz)."""
+    type_, _, slug = proposed_ref.partition(":")
+    matches: set[str] = set()
+    for key in (name, slug):
+        if not key:
+            continue
+        for ref in index.lookup(key):
+            if ref != proposed_ref and ref.split(":", 1)[0] == type_:
+                matches.add(ref)
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
 def discover_entities(
     workspace: Path,
     turns: str,
@@ -231,6 +249,9 @@ def discover_entities(
     raw = resp.text if isinstance(resp, LLMResponse) else str(resp)
     proposals = parse_discoveries(raw)
 
+    index = AliasIndex(Path(workspace) / "memory")
+    index.build()
+
     now = datetime.now(timezone.utc)
     src = source_ref or "discover_dream"
     out: list[dict[str, Any]] = []
@@ -243,9 +264,28 @@ def discover_entities(
                        source_ref=src, at=now)
             for k, v in prop["attributes"].items()
         ]
-        result = write_entity(
-            workspace, ref, patches, create=True, name=prop["name"])
-        out.append({"ref": ref, "committed": result.committed})
+        target = _resolve_existing_ref(index, ref, prop["name"])
+        if target is not None:
+            # Existing same-type entity already owns this name — update it in
+            # place instead of minting a duplicate slug. Leave its name alone.
+            result = write_entity(workspace, target, patches, create=False)
+            written = target
+        else:
+            result = write_entity(
+                workspace, ref, patches, create=True, name=prop["name"])
+            written = ref
+        # Best-effort: keep the index current so a later proposal in this same
+        # pass resolves against what we just wrote. A failed re-read is harmless
+        # — the next call's build() rebuilds the index from disk.
+        type_, _, slug = written.partition(":")
+        try:
+            page = EntityPage.from_file(
+                Path(workspace) / "memory" / "entities" / type_ / f"{slug}.md")
+        except OSError:
+            page = None
+        if page is not None:
+            index.refresh_for(page, slug)
+        out.append({"ref": written, "committed": result.committed})
 
     try:
         from durin.agent.tools._telemetry import emit_tool_event

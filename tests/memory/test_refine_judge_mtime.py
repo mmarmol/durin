@@ -23,7 +23,7 @@ def test_refine_passes_page_mtimes_to_judge(tmp_path, monkeypatch):
         return SimpleNamespace(verdict="different", confidence=10, reasoning="x")
 
     monkeypatch.setattr("durin.memory.refine_dream.judge_pair", fake_judge)
-    run_refine(tmp_path, llm_invoke=lambda *a, **k: "", min_age_hours=0)
+    run_refine(tmp_path, llm_invoke=lambda *a, **k: "")
 
     assert isinstance(captured.get("canonical_mtime"), datetime)
     assert isinstance(captured.get("absorbed_mtime"), datetime)
