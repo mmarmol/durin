@@ -709,7 +709,10 @@
         "handsFreeTitle": "Hands-free voice",
         "handsFreeDesc": "The floating orb listens, thinks and speaks.",
         "bargeInTitle": "Barge-in",
-        "bargeInDesc": "Interrupt the agent by speaking over it."
+        "bargeInDesc": "Interrupt the agent by speaking over it.",
+        "idleTimeoutTitle": "Auto-close when idle",
+        "idleTimeoutDesc": "End the voice session after this much silence. The timer resets when you speak or the assistant replies.",
+        "idleTimeoutNever": "Never"
       },
       "spoken": {
         "longRepliesTitle": "Long replies",
