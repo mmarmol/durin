@@ -203,18 +203,33 @@ def test_completed_run_format_unchanged():
         final_output="the final answer",
         runs=[
             NodeRun(node_id="make", iteration=1, output="draft", session_key="ws:s1"),
-            NodeRun(node_id="review", iteration=1, output="pass", passed=True),
+            NodeRun(node_id="review", iteration=1, output="pass", passed=True, session_key="ws:s2"),
         ],
     )
     text = _format_result(result)
     assert "did not complete" not in text.lower()
-    # byte-exact regression guard: a completed run must render exactly as before
+    # byte-exact regression guard: a routing node now also surfaces its session key
     assert text == (
         "Workflow run run-xyz: completed\n"
         "  [make#1] -> ws:s1\n"
-        "  [review#1] decision: pass\n"
+        "  [review#1] decision: pass -> ws:s2\n"
         "\nFinal output:\nthe final answer"
     )
+
+
+def test_routing_node_without_session_renders_decision_only():
+    result = WorkflowResult(
+        status="completed",
+        run_id="run-cmd",
+        exhausted_node=None,
+        final_output="ok",
+        runs=[
+            # A command gate routes on its exit code and has no session.
+            NodeRun(node_id="gate", iteration=1, output="", passed=True, session_key=None),
+        ],
+    )
+    text = _format_result(result)
+    assert "  [gate#1] decision: pass\n" in text + "\n"
 
 
 def test_aborted_run_renders_gracefully():

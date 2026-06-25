@@ -57,7 +57,13 @@ def _format_result(result: Any) -> str:
 
     for r in result.runs:
         if r.passed is not None:
-            lines.append(f"  [{r.node_id}#{r.iteration}] decision: {'pass' if r.passed else 'fail'}")
+            # A routing/decision node: surface its verdict and, when it ran as an agent
+            # turn (so the verdict is auditable), the session key. A command gate has no
+            # session and renders the verdict alone.
+            line = f"  [{r.node_id}#{r.iteration}] decision: {'pass' if r.passed else 'fail'}"
+            if r.session_key:
+                line += f" -> {r.session_key}"
+            lines.append(line)
         else:
             lines.append(f"  [{r.node_id}#{r.iteration}] -> {r.session_key or '(no session)'}")
 
