@@ -1,0 +1,50 @@
+{
+  "name": "brainstorming",
+  "start": "clarify",
+  "max_visits": 3,
+  "improvement_mode": "manual",
+  "input": {"text": true, "description": "a task or idea to think through before building"},
+  "output": {"text": true, "description": "a clear design spec: the chosen approach, requirements, and open questions"},
+  "nodes": [
+    {
+      "id": "clarify",
+      "kind": "work",
+      "mode": "plan",
+      "tools": "default",
+      "prompt": "You are about to brainstorm a design for the given task. FIRST decide whether you understand it well enough to explore productively, or whether something ESSENTIAL is genuinely ambiguous or missing — the real goal, who it is for, a hard constraint, or what 'done' means. Read whatever context is available (files, code) to answer your own questions before asking the user. Only the user can resolve a true blocker.\n\nEnd your reply with EXACTLY one of these labels on its own final line:\nREADY     — the task is clear enough to start exploring.\nNEED_INFO — something essential is ambiguous or missing. BEFORE the label, list the SPECIFIC questions the user must answer (2-4, concrete, each one whose answer would actually change the design). Do not ask for nice-to-haves or anything you could reasonably decide yourself — only genuine blockers.",
+      "cases": {"READY": "frame", "NEED_INFO": "__needs_input__"}
+    },
+    {
+      "id": "frame",
+      "kind": "work",
+      "mode": "plan",
+      "tools": "none",
+      "prompt": "Frame the brainstorm. Break the task into 3-4 INDEPENDENT angles worth exploring in parallel, each written as a self-contained instruction that names the specific subject so it stands on its own. Cover distinct lenses, for example: the real user intent and the underlying goal; the requirements and hard constraints; the alternative approaches worth weighing; and the risks, edge cases and unknowns. Output ONLY a JSON array of these instruction strings — nothing else.",
+      "next": "explore"
+    },
+    {
+      "id": "explore",
+      "kind": "parallel",
+      "worker": "probe",
+      "list_from": "frame",
+      "max_concurrency": 3,
+      "next": "synthesize"
+    },
+    {
+      "id": "probe",
+      "kind": "work",
+      "mode": "explore",
+      "tools": "default",
+      "max_turns": 5,
+      "prompt": "Explore the single angle you were given for this design problem. Read any relevant context (code, files) you actually need, then think it through concretely. Return concise, USEFUL findings for this angle — concrete options, trade-offs, constraints, or risks — not vague generalities and not a restatement of the task. If the angle turns out to be a non-issue, say so briefly rather than padding."
+    },
+    {
+      "id": "synthesize",
+      "kind": "work",
+      "mode": "explore",
+      "tools": "none",
+      "prompt": "Using the explored angles, write one clear DESIGN SPEC for the task. Cover: the RECOMMENDED approach and why; the key REQUIREMENTS and constraints it must satisfy; the main ALTERNATIVES considered and why they were set aside; and any OPEN QUESTIONS that remain. Be concrete and decisive — recommend, do not just list options. Where the exploration was thin, say so plainly rather than inventing certainty. This spec is what a planning step will turn into an executable plan, so make it specific enough to act on.",
+      "next": null
+    }
+  ]
+}

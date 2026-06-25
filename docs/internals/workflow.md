@@ -411,11 +411,12 @@ End-to-end for a single `run_workflow` call:
   | Seed | Pattern |
   |---|---|
   | `research-to-answer` | plan → dynamic fan-out (search × N) → synthesize → verify, a **tolerant** per-claim grounding gate (multi-way: GROUNDED ends — a summary intro and minor gaps are acceptable / MISSING → re-plan / MISUSED → re-synthesize) |
+  | `brainstorming` | clarify gate (routes `NEED_INFO` to the reserved `__needs_input__` terminal → asks the caller for info) → frame angles → parallel explore → synthesize a design **spec** |
+  | `writing-plans` | intake gate (`__needs_input__` on a thin brief) → draft a step-by-step plan → parallel critique (gaps / risks / verifiability / scope) → revise → a tolerant verifiability gate (GAPS loops back) → a `/build`-ready plan with a `## Verification` section |
 
-  This is the one bundled seed today: a deliberately small, exercised exemplar of the
-  orchestrator-workers + evaluator-optimizer shape. More seeds (routing, parallel review,
-  support triage) are added as each is built and live-verified, so every bundled seed is a
-  trustworthy example rather than a stub.
+  Each is a deliberately small, live-verified exemplar — orchestrator-workers +
+  evaluator-optimizer, plus the consultative `needs_input` shape (see "Current scope").
+  More seeds are added one trustworthy example at a time, never as stubs.
 
 - **Current scope.** Today: sequential execution with **concurrent parallel** branches —
   static (fixed `branches` list) or **dynamic** (`worker` template mapped over a runtime
@@ -426,7 +427,11 @@ End-to-end for a single `run_workflow` call:
   (`on_pass`/`on_fail`: shell exit code or `PASS`/`FAIL` verdict, feedback-threaded loop-back)
   and **multi-way** (`cases`: agent emits one of N declared labels, last-line match,
   `default` fallback, aborts clearly when no label matched), with an anti-Goodhart guard
-  that a routing node not be structurally identical to its producer; **sub-workflow** composition (depth-capped);
+  that a routing node not be structurally identical to its producer; a multi-way case may
+  route to the reserved **`__needs_input__`** terminal, ending the run with status
+  `needs_input` and the node's output carrying the questions — the human-in-the-loop lives
+  in the agent that invoked the workflow (it asks the user and re-runs with the answers),
+  so the engine never blocks for input; **sub-workflow** composition (depth-capped);
   runs **anchored to the invoking session**; **git-versioned definitions** (each run
   snapshots them); **dream-driven self-improvement in manual mode** (recommendations from
   recurring run diagnostics); a **webui Workflows pane** (React Flow) with an editor that

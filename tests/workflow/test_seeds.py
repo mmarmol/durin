@@ -11,6 +11,8 @@ from durin.workflow.spec import parse_workflow
 
 _SEED_NAMES = [
     "research-to-answer",
+    "brainstorming",
+    "writing-plans",
 ]
 
 
