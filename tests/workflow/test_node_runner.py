@@ -344,6 +344,7 @@ def test_node_persona_applies_soul_and_model(monkeypatch):
     class R:
         final_content = "ok"
         messages = []
+        stop_reason = "completed"
 
     class Runner:
         async def run(self, spec):
@@ -367,6 +368,7 @@ def test_node_persona_degrades_gracefully_without_app_config():
     class R:
         final_content = "ok"
         messages = []
+        stop_reason = "completed"
 
     class Runner:
         async def run(self, spec):
@@ -546,3 +548,30 @@ def test_no_max_turns_never_triggers_synthesis_even_on_max_iterations(tmp_path):
     resp = nr(req)
     assert nr.runner.run.call_count == 1
     assert resp.output == "hit limit"
+
+
+def test_model_error_stop_reason_is_treated_as_a_node_failure(tmp_path):
+    # A provider that exhausts its retries returns stop_reason="error" + a placeholder
+    # WITHOUT raising. The node runner must treat it as a node failure (persist the
+    # partial session, then raise the typed error) so it is never recorded as a
+    # misleading 'ok' carrying the placeholder string.
+    import pytest
+
+    from durin.workflow.engine import NodeExecutionError
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(
+        final_content="[Assistant reply unavailable due to model error.]",
+        messages=[{"role": "user", "content": "t"}],
+        stop_reason="error",
+    )
+    nr = _runner(sessions, fake)
+    req = NodeRunRequest(
+        node=WorkNode(id="plan", prompt="Plan it.", next=None),
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    with pytest.raises(NodeExecutionError) as ei:
+        nr(req)
+    assert ei.value.node_id == "plan"
+    assert ei.value.session_key   # the failed node's partial conversation was persisted
+    SessionManager(workspace=tmp_path).get_or_create(ei.value.session_key)

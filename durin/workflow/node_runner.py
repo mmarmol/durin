@@ -238,9 +238,21 @@ class AgentNodeRunner:
             # synthesis_result.messages is the superset (first-run history + synthesis turns)
             all_messages = synthesis_result.messages
             final_output = synthesis_result.final_content or ""
+            final_stop_reason = synthesis_result.stop_reason
         else:
             all_messages = list(result.messages)
             final_output = result.final_content or ""
+            final_stop_reason = result.stop_reason
+
+        # A provider that exhausts its retries returns stop_reason="error" with a
+        # placeholder string instead of raising. Without this guard the node would be
+        # recorded a misleading 'ok' carrying that garbage (and downstream nodes would
+        # consume it); treat it as a node failure so it routes exactly like a raised one
+        # (sequential -> named abort; parallel worker -> isolated node_failed).
+        if final_stop_reason == "error":
+            raise self._on_failure(
+                req, all_messages,
+                RuntimeError(f"model error: {(final_output or 'no response').strip()[:200]}"))
 
         session_key = self._persist(req, all_messages)
         return NodeRunResponse(
