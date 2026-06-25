@@ -451,10 +451,22 @@ class WorkflowEngine:
         Tries JSON first; if the parsed value is a list, returns each element
         coerced to str.  Falls back to non-empty lines.  Capped at 50 items
         to bound blast radius on pathological output.
+
+        A planner often wraps the array in a markdown code fence (```/```json);
+        strip a leading and trailing fence line before the JSON attempt so the
+        fenced array parses to its elements instead of falling through to the
+        line-split fallback (which would yield the literal fence lines).
         """
         import json
+        candidate = text.strip()
+        lines = candidate.splitlines()
+        if lines and lines[0].lstrip().startswith("```"):
+            lines = lines[1:]
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            candidate = "\n".join(lines)
         try:
-            parsed = json.loads(text)
+            parsed = json.loads(candidate)
             if isinstance(parsed, list):
                 items = [str(x) for x in parsed]
                 return items[:50]
