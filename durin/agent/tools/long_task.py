@@ -1,8 +1,10 @@
 """Sustained goal tools on the main agent (Codex-style).
 
-Follow the built-in **long-goal** skill for lifecycle rules and how to phrase
-objectives (especially **idempotent**, compaction-safe goals). Load that skill
-from the skills listing (path shown there) before composing ``long_task.goal`` text.
+The essential rules — call promptly, and phrase the goal idempotently (end-state +
+done-ness, self-contained, safe to re-read after compaction) — are stated inline in the
+tool descriptions, so the tools are self-sufficient. The built-in **long-goal** skill is
+an OPTIONAL deeper reference (project-shaped work, research-first); it is not required to
+use these tools.
 
 ``long_task`` registers an objective on the session (JSON-serializable metadata).
 Active objectives are mirrored each turn into the Runtime Context block (see
@@ -87,10 +89,14 @@ class _GoalToolsMixin(ContextAware):
 @tool_parameters(
     tool_parameters_schema(
         goal=StringSchema(
-            "Sustained objective for this chat thread. First read the built-in **long-goal** skill, "
-            "especially its Start fast section, then call this promptly once the user's intent is clear. "
-            "The goal must still be idempotent, self-contained, bounded, and explicit about done-ness; "
-            "do not delay this tool call to over-plan, research, or decide execution details.",
+            "Sustained objective for this chat thread. Call this PROMPTLY once the user's intent is "
+            "clear — do not delay it to over-plan, research, or decide execution details. Write the "
+            "goal so it survives compaction and resume (it is re-read cold across turns): state the "
+            "desired END STATE plus how you will know it is done, not fragile step-by-step narration; "
+            "repeat the constraints that matter (paths, names, counts, scope in/out); and phrase any "
+            "mutation as check-then-act or 'ensure …' so re-reading the goal never triggers duplicate "
+            "or destructive work. (The built-in long-goal skill has optional deeper guidance — "
+            "project-shaped work, research-first — but is not required.)",
             max_length=12_000,
         ),
         ui_summary=StringSchema(
@@ -135,12 +141,11 @@ class LongTaskTool(Tool, _GoalToolsMixin):
     @property
     def description(self) -> str:
         return (
-            "Mark this thread as a sustained long-running task. "
-            "First read the built-in **long-goal** skill, especially its Start fast section; then call this "
-            "as soon as the user's intent is clear. Write a good idempotent goal, but do not delay the tool "
-            "call with long planning, research, or execution-detail thinking. "
-            "The active goal is mirrored in Runtime Context each turn. Use normal tools until done, then call "
-            "complete_goal when the objective is satisfied, cancelled, or replaced. "
+            "Mark this thread as a sustained long-running task, kept in focus across turns: the active "
+            "goal is mirrored in Runtime Context every turn and survives compaction. Call this as soon "
+            "as the user's intent is clear — write a good idempotent goal (see the goal parameter for "
+            "how), but do not delay the call with long planning or research. Use normal tools until "
+            "done, then call complete_goal when the objective is satisfied, cancelled, or replaced. "
             "If a goal is already active, finish it or call complete_goal before registering another."
         )
 
