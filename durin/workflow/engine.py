@@ -20,12 +20,15 @@ from __future__ import annotations
 
 import concurrent.futures
 import shutil
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from durin.workflow import workspace_fork
+from loguru import logger
+
+from durin.workflow import run_log, workspace_fork
 from durin.workflow.artifacts import artifact_dir, prune_runs
 from durin.workflow.condition import CommandOutcome, run_command
 from durin.workflow.result import NodeRun, WorkflowResult
@@ -107,24 +110,69 @@ class WorkflowEngine:
         """Run the workflow. A node-execution failure (provider/MCP/tool error) does not
         propagate — it ends the run as a typed ``aborted`` result carrying the partial
         per-node trace, so the run is still recorded for diagnostics. A wiring/config
-        error (a node needing a runner the engine wasn't given) fails fast."""
+        error (a node needing a runner the engine wasn't given) fails fast.
+
+        When the engine has a workspace it owns a live run manifest: a ``running`` record
+        written before the walk, updated after each node, and finalized on every exit
+        path. Manifest writes are best-effort — a record failure never breaks the run."""
         run_id = self._run_id_factory()
         if self._workspace is not None:
             prune_runs(self._workspace)
         runs: list[NodeRun] = []
+        # The effective root MUST match node_runner's headless rooting: a None calling
+        # session means node sessions are rooted under workflow:<run_id>:root, so the
+        # manifest records that same key or runs_for_session can't find the run.
+        effective_root = root_session_key or f"workflow:{run_id}:root"
+        started_at = time.time()
+        self._start_manifest(workflow, run_id, effective_root, started_at)
+
+        def _update() -> None:
+            self._update_manifest(workflow, run_id, runs)
+
         try:
-            return self._walk(
+            result = self._walk(
                 workflow, self._frame_task(workflow, task), run_id, runs,
                 root_session_key=root_session_key,
                 input_files=input_files,
+                update_manifest=_update,
             )
         except WorkflowConfigError:
             raise
         except Exception as exc:  # noqa: BLE001 - a node failure becomes a typed aborted result
-            return WorkflowResult(
+            result = WorkflowResult(
                 status="aborted", final_output=f"workflow error: {exc}",
                 runs=runs, run_id=run_id,
             )
+        self._finalize_manifest(workflow, result, effective_root, started_at)
+        return result
+
+    def _start_manifest(self, workflow, run_id, root_session_key, started_at) -> None:
+        if self._workspace is None:
+            return
+        try:
+            run_log.start_run(self._workspace, workflow.name, run_id,
+                              root_session_key=root_session_key, started_at=started_at)
+        except Exception:  # noqa: BLE001 - a manifest write must not break the run
+            logger.exception("workflow run manifest start failed for {}", workflow.name)
+
+    def _update_manifest(self, workflow, run_id, runs) -> None:
+        if self._workspace is None:
+            return
+        try:
+            run_log.update_run(self._workspace, workflow.name, run_id,
+                               WorkflowResult(status="running", final_output=None, runs=runs))
+        except Exception:  # noqa: BLE001 - a manifest write must not break the run
+            logger.exception("workflow run manifest update failed for {}", workflow.name)
+
+    def _finalize_manifest(self, workflow, result, root_session_key, started_at) -> None:
+        if self._workspace is None:
+            return
+        try:
+            run_log.finalize_run(self._workspace, workflow.name, result,
+                                 root_session_key=root_session_key, started_at=started_at,
+                                 finished_at=time.time())
+        except Exception:  # noqa: BLE001 - a manifest write must not break the run
+            logger.exception("workflow run manifest finalize failed for {}", workflow.name)
 
     @staticmethod
     def _frame_task(workflow: Workflow, task: str) -> str:
@@ -152,6 +200,7 @@ class WorkflowEngine:
         *,
         root_session_key: str | None = None,
         input_files: list[str] | None = None,
+        update_manifest: Callable[[], None] | None = None,
     ) -> WorkflowResult:
         shared_context: list[dict] = []
         visits: dict[str, int] = {}
@@ -319,6 +368,10 @@ class WorkflowEngine:
                 final_output = merged
                 current = node.next
 
+            # The node's record(s) are now appended — refresh the live manifest so an
+            # in-flight run is observable before the next node starts.
+            if update_manifest is not None:
+                update_manifest()
 
         return WorkflowResult(
             status="completed", final_output=final_output, runs=runs, run_id=run_id,

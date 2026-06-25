@@ -14,8 +14,6 @@ import asyncio
 from contextvars import ContextVar
 from typing import Any
 
-from loguru import logger
-
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 
@@ -151,12 +149,5 @@ class RunWorkflowTool(Tool, ContextAware):
         )
         root_session_key = self._session_key.get()
         result = await asyncio.to_thread(engine.run, workflow, task, root_session_key=root_session_key)
-
-        # Record the run's diagnostic trace for dream self-improvement (best-effort).
-        try:
-            from durin.workflow.run_log import write_run
-            write_run(self._workspace, name, result)
-        except Exception:  # noqa: BLE001 - a record failure must not break the run
-            logger.exception("workflow run-record write failed for {}", name)
-
+        # The engine owns the run manifest (started→updated→finalized); no record write here.
         return _format_result(result)

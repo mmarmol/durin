@@ -215,11 +215,7 @@ class WorkflowsService:
         result = await asyncio.to_thread(
             engine.run, workflow, cmd.task, input_files=cmd.input_files or None
         )
-        try:
-            from durin.workflow.run_log import write_run
-            write_run(self._workspace, cmd.name, result)
-        except Exception:  # noqa: BLE001 - a record failure must not break the run
-            pass
+        # The engine owns the run manifest (started→updated→finalized); no record write here.
         return WorkflowRunResult(
             status=result.status,
             final_output=result.final_output or "",
