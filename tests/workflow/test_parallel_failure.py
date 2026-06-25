@@ -4,6 +4,7 @@ merged output notes the failures. Only when EVERY unit fails does the node abort
 
 from pathlib import Path
 
+from durin.workflow import run_log
 from durin.workflow.condition import CommandOutcome
 from durin.workflow.engine import NodeRunResponse, WorkflowEngine
 from durin.workflow.spec import parse_workflow
@@ -136,3 +137,37 @@ def test_command_node_has_no_session_status():
     c = next(r for r in res.runs if r.node_id == "c")
     assert c.session_key is None
     assert c.status == "no_session"
+
+
+def test_persist_failure_marks_node_not_silently_ok(tmp_path):
+    # A node that ran but whose session save failed must be recorded 'persist_failed',
+    # not a misleading 'ok' with a silently-absent session — and the manifest agrees.
+    def runner(req):
+        return NodeRunResponse(output="did work", session_key=None, persist_failed=True)
+
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "next": None}]})
+    res = WorkflowEngine(runner, workspace=str(tmp_path),
+                         run_id_factory=lambda: "r1").run(wf, "go")
+    assert res.status == "completed"
+    a = next(r for r in res.runs if r.node_id == "a")
+    assert a.session_key is None
+    assert a.status == "persist_failed"
+    rec = run_log.read_manifest(tmp_path, "w", "r1")
+    assert next(r for r in rec["runs"] if r["node_id"] == "a")["status"] == "persist_failed"
+
+
+def test_persist_failure_in_fanout_worker_is_marked(tmp_path):
+    def runner(req):
+        if req.node.id == "orch":
+            return NodeRunResponse(output='["a","b"]')
+        if req.node.id == "done":
+            return NodeRunResponse(output="fin")
+        return NodeRunResponse(output=f"did {req.task}", session_key=None, persist_failed=True)
+
+    res = WorkflowEngine(runner, workspace=str(tmp_path),
+                         run_id_factory=lambda: "r1").run(_fanout_wf(), "go")
+    assert res.status == "completed"
+    workers = [r for r in res.runs if r.node_id == "dev"]
+    assert len(workers) == 2
+    assert all(w.status == "persist_failed" for w in workers)

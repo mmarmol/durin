@@ -64,6 +64,10 @@ class NodeRunResponse:
     output: str
     session_key: str | None = None
     messages: list[dict] = field(default_factory=list)
+    # True when the node ran but persisting its session failed (the conversation is
+    # lost). Lets the engine record a truthful 'persist_failed' status instead of a
+    # misleading 'ok' with a silently-absent session.
+    persist_failed: bool = False
 
 
 NodeRunner = Callable[[NodeRunRequest], NodeRunResponse]
@@ -324,7 +328,8 @@ class WorkflowEngine:
                         passed = None
                     runs.append(NodeRun(node_id=node.id, iteration=iteration,
                                         output=output, session_key=resp.session_key,
-                                        passed=passed))
+                                        passed=passed,
+                                        status="persist_failed" if resp.persist_failed else "ok"))
                     if node.context == "shared":
                         shared_context.extend(resp.messages)
                         if len(shared_context) > _SHARED_CONTEXT_MAX_MESSAGES:
@@ -445,13 +450,16 @@ class WorkflowEngine:
     @staticmethod
     def _record_branches(runs, results, iteration):
         """Append a per-branch NodeRun (carrying its session_key, branch_id and failure
-        status) for each ``(branch_id, output, session_key, error)`` tuple — so
-        static-parallel branch sessions stay attributable in the run trace, mirroring the
-        dynamic fan-out worker records. ``error`` is None for a branch that completed."""
-        for bid, out, session_key, error in results:
+        status) for each ``(branch_id, output, session_key, error, persist_failed)`` tuple
+        — so static-parallel branch sessions stay attributable in the run trace, mirroring
+        the dynamic fan-out worker records. ``error`` is None for a branch that completed;
+        ``persist_failed`` marks a branch that ran but whose session save raised."""
+        for bid, out, session_key, error, persist_failed in results:
             runs.append(NodeRun(node_id=bid, iteration=iteration, output=out,
                                 session_key=session_key, branch_id=bid,
-                                status="node_failed" if error else "ok", error=error))
+                                status=("node_failed" if error else
+                                        "persist_failed" if persist_failed else "ok"),
+                                error=error))
 
     @staticmethod
     def _parse_subtasks(text: str) -> list[str]:
@@ -525,26 +533,28 @@ class WorkflowEngine:
                     root_session_key=root_key,
                     worker_index=idx,
                 ))
-                return idx, resp.output, resp.session_key, None
+                return idx, resp.output, resp.session_key, None, resp.persist_failed
             except NodeExecutionError as exc:
-                return idx, "", exc.session_key, str(exc.cause)
+                return idx, "", exc.session_key, str(exc.cause), False
             except Exception as exc:  # noqa: BLE001 - isolate a single worker's failure
-                return idx, "", None, str(exc)
+                return idx, "", None, str(exc), False
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
             results = sorted(ex.map(_run_worker, enumerate(subtasks)))
 
-        for idx, out, session_key, error in results:
+        for idx, out, session_key, error, persist_failed in results:
             runs.append(NodeRun(node_id=node.worker, iteration=iteration, output=out,
                                 session_key=session_key, worker_index=idx,
-                                status="node_failed" if error else "ok", error=error))
+                                status=("node_failed" if error else
+                                        "persist_failed" if persist_failed else "ok"),
+                                error=error))
 
-        if all(error for _idx, _out, _key, error in results):
+        if all(error for _idx, _out, _key, error, _pf in results):
             return "", f"parallel node {node.id!r}: every worker failed"
 
         merged = "\n\n".join(
             f"[{idx}] {out}" if error is None else f"[{idx}] FAILED: {error}"
-            for idx, out, _key, error in results
+            for idx, out, _key, error, _pf in results
         )
         return merged, None
 
@@ -568,19 +578,19 @@ class WorkflowEngine:
                 try:
                     resp = self._run_one_branch(
                         workflow.nodes[bid], task, upstream, run_id, iteration, root_key, None)
-                    return bid, resp.output, resp.session_key, None
+                    return bid, resp.output, resp.session_key, None, resp.persist_failed
                 except NodeExecutionError as exc:
-                    return bid, "", exc.session_key, str(exc.cause)
+                    return bid, "", exc.session_key, str(exc.cause), False
                 except Exception as exc:  # noqa: BLE001 - isolate a single branch's failure
-                    return bid, "", None, str(exc)
+                    return bid, "", None, str(exc), False
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
                 results = list(ex.map(_run, branches))
             self._record_branches(runs, results, iteration)
-            if all(error for _bid, _out, _key, error in results):
+            if all(error for _bid, _out, _key, error, _pf in results):
                 return "", f"parallel node {node.id!r}: every branch failed"
             return "\n\n".join(
                 f"[{bid}]\n{out}" if error is None else f"[{bid}] FAILED: {error}"
-                for bid, out, _key, error in results), None
+                for bid, out, _key, error, _pf in results), None
 
         if self._workspace is None:
             return "", f"parallel node {node.id!r}: reconcile={node.reconcile!r} needs a workspace"
@@ -599,7 +609,7 @@ class WorkflowEngine:
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
                 results = list(ex.map(_run, branches))
-            self._record_branches(runs, [(bid, out, key, None) for bid, out, key, _ in results], iteration)
+            self._record_branches(runs, [(bid, out, key, None, False) for bid, out, key, _ in results], iteration)
             if node.reconcile == "choose":
                 if self._pick_runner is None:
                     return "", f"parallel node {node.id!r}: 'choose' needs a pick_runner"

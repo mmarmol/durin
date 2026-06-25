@@ -247,6 +247,9 @@ class AgentNodeRunner:
             output=final_output,
             session_key=session_key,
             messages=all_messages,
+            # This runner always persists; a None key means the save raised, not that
+            # the node had no session — surface that as a persist failure.
+            persist_failed=session_key is None,
         )
 
     def _persist(self, req: NodeRunRequest, messages: list[dict]) -> str | None:
@@ -262,6 +265,8 @@ class AgentNodeRunner:
             if not req.root_session_key and not self.sessions.exists(run_root):
                 # A top-level run-root: no parent lineage block (so children_of(run_root)
                 # returns the node sessions, not the root itself), just an origin marker.
+                # Concurrent fan-out workers can both pass this check; save() is an atomic
+                # locked replace, so the worst case is a harmless identical re-write.
                 stub = Session(key=run_root)
                 stub.metadata[ORIGIN_TYPE] = "workflow_run"
                 stub.metadata[ORIGIN_ID] = req.run_id
