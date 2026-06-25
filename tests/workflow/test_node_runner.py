@@ -417,7 +417,6 @@ def test_max_turns_sets_run_max_iterations(tmp_path):
 def test_no_max_turns_uses_global_max_iterations(tmp_path):
     sessions = SessionManager(workspace=tmp_path)
     fake = AgentRunResult(final_content="done", messages=[])
-    provider = MagicMock(spec=AgentRunResult)
     from durin.agent.runner import AgentRunner
     from durin.providers.base import LLMProvider
     ar = AgentRunner(MagicMock(spec=LLMProvider))
@@ -475,6 +474,39 @@ def test_max_turns_exhausted_triggers_synthesis_call(tmp_path):
     assert "final answer" in second_spec.initial_messages[-1]["content"].lower()
     # Output comes from the synthesis, not the canned "max_iterations" string.
     assert resp.output == "synthesized answer"
+
+
+def test_empty_synthesis_yields_empty_output_not_canned_message(tmp_path):
+    # When synthesis run returns empty final_content, node output must be ""
+    # not the first run's canned "max iterations reached" string.
+    sessions = SessionManager(workspace=tmp_path)
+    first_result = AgentRunResult(
+        final_content="max iterations reached",
+        messages=[{"role": "user", "content": "task"}],
+        stop_reason="max_iterations",
+    )
+    synthesis_result = AgentRunResult(
+        final_content="",
+        messages=[
+            {"role": "user", "content": "task"},
+            {"role": "user", "content": "give your best final answer"},
+        ],
+        stop_reason="completed",
+    )
+    from durin.agent.runner import AgentRunner
+    ar = AgentRunner(MagicMock(spec=LLMProvider))
+    ar.run = AsyncMock(side_effect=[first_result, synthesis_result])
+    nr = AgentNodeRunner(ar, sessions, default_model="m")
+
+    req = NodeRunRequest(
+        node=WorkNode(id="a", next=None, max_turns=3),
+        task="task", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    resp = nr(req)
+
+    assert resp.output == ""
+    assert "max iterations" not in resp.output
 
 
 def test_max_turns_within_budget_no_second_call(tmp_path):

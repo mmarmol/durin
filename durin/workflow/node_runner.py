@@ -225,12 +225,9 @@ class AgentNodeRunner:
                 max_iterations=1,
                 max_tool_result_chars=self.max_tool_result_chars,
             )))
-            # Combine: original tool-use messages + synthesis turn
-            all_messages = list(result.messages) + [
-                m for m in synthesis_result.messages
-                if m not in result.messages
-            ]
-            final_output = synthesis_result.final_content or result.final_content or ""
+            # synthesis_result.messages is the superset (first-run history + synthesis turns)
+            all_messages = synthesis_result.messages
+            final_output = synthesis_result.final_content or ""
         else:
             all_messages = list(result.messages)
             final_output = result.final_content or ""
