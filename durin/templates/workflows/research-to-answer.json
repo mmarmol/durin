@@ -3,8 +3,14 @@
   "start": "plan",
   "max_visits": 3,
   "improvement_mode": "manual",
-  "input": {"text": true, "description": "a question that needs gathering and weighing several sources"},
-  "output": {"text": true, "description": "a source-cited answer that passed a grounding check"},
+  "input": {
+    "text": true,
+    "description": "a question that needs gathering and weighing several sources"
+  },
+  "output": {
+    "text": true,
+    "description": "a source-cited answer that passed a grounding check"
+  },
   "nodes": [
     {
       "id": "plan",
@@ -28,7 +34,7 @@
       "mode": "explore",
       "tools": "default",
       "max_turns": 6,
-      "prompt": "Investigate the self-contained research query you were given. Make AT MOST 2-3 web searches and read AT MOST 3-4 sources total, then STOP — do not re-fetch a URL you already read or keep hunting for more. Return concise findings, each claim followed by its source (a URL or title). Cite specifically; never invent a source or summarize vaguely. If sources are thin, say so rather than over-searching."
+      "prompt": "Investigate the self-contained research query you were given. Make AT MOST 2-3 web searches and read AT MOST 3-4 sources total, then STOP \u2014 do not re-fetch a URL you already read or keep hunting for more. Return concise findings, each claim followed by its source (a URL or title). Cite specifically; never invent a source or summarize vaguely. If sources are thin, say so rather than over-searching."
     },
     {
       "id": "synthesize",
@@ -43,8 +49,12 @@
       "kind": "work",
       "mode": "explore",
       "tools": "none",
-      "prompt": "Check the answer for grounding against the gathered findings. Give a one-line reason, then end your reply with EXACTLY one of these labels on its own final line:\nGROUNDED  — every non-trivial claim is supported by a cited source in the findings.\nMISSING   — some claim has no supporting source; more evidence must be gathered.\nMISUSED   — some claim contradicts or overstates what its source actually says; rewrite from the existing findings.",
-      "cases": {"GROUNDED": null, "MISSING": "plan", "MISUSED": "synthesize"}
+      "prompt": "Judge whether the answer is grounded in the gathered findings, claim by claim \u2014 not all-or-nothing.\n\nFor each SUBSTANTIVE factual claim in the answer, check whether a gathered finding supports it, and apply these tolerance rules:\n- A brief summary or opening sentence that restates conclusions which ARE supported later in the body does NOT need its own citation \u2014 judge it by the body.\n- Do not fail the whole answer for one or two minor unsupported details; judge by whether the BULK of the substantive claims are supported and whether the planned angles were covered.\n- Hedges, general context and opinions are not factual claims and do not count.\n\nGive a one-line reason, then end your reply with EXACTLY one of these labels on its own final line:\nGROUNDED \u2014 the substantive claims are supported by the findings (a clean summary intro and one or two minor gaps are acceptable).\nMISSING  \u2014 one or more SUBSTANTIVE claims have NO support in the findings, or a planned angle went unanswered. Name specifically which claims/angles are missing.\nMISUSED  \u2014 a claim contradicts or overstates what its finding actually says; it should be rewritten from the existing findings.",
+      "cases": {
+        "GROUNDED": null,
+        "MISSING": "plan",
+        "MISUSED": "synthesize"
+      }
     }
   ]
 }

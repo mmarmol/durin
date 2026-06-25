@@ -410,12 +410,12 @@ End-to-end for a single `run_workflow` call:
 
   | Seed | Pattern |
   |---|---|
-  | `evaluator-optimizer` | draft → critique (routing loop-back, evaluator-optimizer) |
-  | `concurrent-review` | produce → static fan-out (bugs + security reviewers) → synthesize |
-  | `orchestrate-dev` | orchestrator → dynamic fan-out (worker × N, cap 2) → integrate |
-  | `routing-triage` | classify (routing) → specialist_code or specialist_analysis |
-  | `build-test-fix` | implement → command gate (pytest) → loop-to-fix on fail |
-  | `research-to-answer` | plan → dynamic fan-out (search × N) → synthesize → verify (multi-way: grounded ends / missing → re-plan / misused → re-synthesize) |
+  | `research-to-answer` | plan → dynamic fan-out (search × N) → synthesize → verify, a **tolerant** per-claim grounding gate (multi-way: GROUNDED ends — a summary intro and minor gaps are acceptable / MISSING → re-plan / MISUSED → re-synthesize) |
+
+  This is the one bundled seed today: a deliberately small, exercised exemplar of the
+  orchestrator-workers + evaluator-optimizer shape. More seeds (routing, parallel review,
+  support triage) are added as each is built and live-verified, so every bundled seed is a
+  trustworthy example rather than a stub.
 
 - **Current scope.** Today: sequential execution with **concurrent parallel** branches —
   static (fixed `branches` list) or **dynamic** (`worker` template mapped over a runtime

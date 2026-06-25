@@ -10,11 +10,6 @@ from durin.utils.helpers import seed_workflows
 from durin.workflow.spec import parse_workflow
 
 _SEED_NAMES = [
-    "evaluator-optimizer",
-    "concurrent-review",
-    "orchestrate-dev",
-    "routing-triage",
-    "build-test-fix",
     "research-to-answer",
 ]
 
@@ -55,7 +50,7 @@ def test_seed_workflows_idempotent(tmp_path: Path):
 
 def test_seed_workflows_does_not_overwrite_existing(tmp_path: Path):
     seed_workflows(tmp_path)
-    target = tmp_path / "workflows" / "evaluator-optimizer.json"
+    target = tmp_path / "workflows" / "research-to-answer.json"
     target.write_text("USER_CONTENT", encoding="utf-8")
     seed_workflows(tmp_path)
     assert target.read_text(encoding="utf-8") == "USER_CONTENT"
