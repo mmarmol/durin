@@ -78,6 +78,25 @@ def test_aborted_run_is_finalized(tmp_path):
     assert "finished_at" in rec
 
 
+def test_config_error_finalizes_manifest_not_left_running(tmp_path):
+    # A config/wiring error (a subworkflow node but no subworkflow_runner) is re-raised,
+    # but the manifest must be finalized 'aborted' — never left a stale 'running' record
+    # that the crash sweep would later mislabel 'crashed'.
+    import pytest
+
+    from durin.workflow.engine import WorkflowConfigError
+    wf = parse_workflow({"name": "w", "start": "s", "nodes": [
+        {"id": "s", "kind": "subworkflow", "workflow": "child", "next": None}]})
+
+    engine = WorkflowEngine(lambda req: NodeRunResponse(output="x"),
+                            workspace=str(tmp_path), run_id_factory=lambda: "r1")
+    with pytest.raises(WorkflowConfigError):
+        engine.run(wf, "go")
+    rec = run_log.read_manifest(tmp_path, "w", "r1")
+    assert rec["status"] == "aborted"
+    assert "finished_at" in rec
+
+
 def test_no_manifest_without_workspace(tmp_path):
     # A read-only engine (no workspace) writes no manifest and still runs.
     def runner(req):

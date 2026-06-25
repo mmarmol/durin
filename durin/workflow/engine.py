@@ -136,7 +136,15 @@ class WorkflowEngine:
                 input_files=input_files,
                 update_manifest=_update,
             )
-        except WorkflowConfigError:
+        except WorkflowConfigError as exc:
+            # A config/wiring error is fatal and re-raised, but finalize the manifest first
+            # so it does not linger as a stale 'running' record — otherwise the crash sweep
+            # would later mislabel a deterministic config bug as 'crashed'.
+            self._finalize_manifest(
+                workflow,
+                WorkflowResult(status="aborted", final_output=f"workflow config error: {exc}",
+                               runs=runs, run_id=run_id),
+                effective_root, started_at)
             raise
         except Exception as exc:  # noqa: BLE001 - a node failure becomes a typed aborted result
             result = WorkflowResult(
