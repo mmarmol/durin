@@ -292,7 +292,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
         # so a shared context buffer is incompatible with routing (mirrors the work path).
         if (on_pass is not None or on_fail is not None) and raw.get("context", "own") == "shared":
             raise WorkflowError(
-                f"node {node_id!r}: a routing node ('on_pass'/'on_fail' or 'cases') cannot use "
+                f"node {node_id!r}: a routing node ('on_pass'/'on_fail') cannot use "
                 f"context='shared'"
             )
         # Routing agent nodes default to explore mode (read-only) for independence.

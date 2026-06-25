@@ -481,8 +481,9 @@ class WorkflowEngine:
                 return items[:50]
         except (json.JSONDecodeError, ValueError):
             pass
-        # Fall back: non-empty lines
-        items = [line for line in text.splitlines() if line.strip()]
+        # Fall back: non-empty lines (of the fence-stripped candidate, so a malformed
+        # fenced array doesn't leak its fence lines as bogus subtasks).
+        items = [line for line in candidate.splitlines() if line.strip()]
         return items[:50]
 
     def _run_dynamic_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs):
