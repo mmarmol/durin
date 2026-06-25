@@ -21,6 +21,7 @@ from durin.channels.websocket import (
     _normalize_config_path,
     _parse_envelope,
     _parse_inbound_payload,
+    publish_dream_progress,
     publish_runtime_model_update,
 )
 from durin.config.loader import load_config, save_config
@@ -251,6 +252,50 @@ async def test_runtime_model_update_publisher_uses_websocket_outbound_event() ->
         "_runtime_model_updated": True,
         "model": "openai/gpt-4.1",
         "model_preset": "fast",
+    }
+
+
+@pytest.mark.asyncio
+async def test_send_broadcasts_dream_progress_to_all_connections() -> None:
+    bus = MessageBus()
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+    # Two connections on different chats — dream progress is global, so both
+    # must receive it (it is not scoped to a single chat's subscribers).
+    conn_a = AsyncMock()
+    conn_b = AsyncMock()
+    channel._attach(conn_a, "chat-1")
+    channel._attach(conn_b, "chat-2")
+
+    publish_dream_progress(bus, {
+        "kind": "activity",
+        "item": {
+            "kind": "merged", "summary": "Merged place:y → place:x",
+            "ref": "place:x", "ref_kind": "entity", "at_ms": 1,
+        },
+    })
+    await channel.send(bus.outbound.get_nowait())
+
+    for conn in (conn_a, conn_b):
+        conn.send_text.assert_awaited_once()
+        payload = json.loads(conn.send_text.call_args[0][0])
+        assert payload["event"] == "dream_progress"
+        assert payload["kind"] == "activity"
+        assert payload["item"]["ref"] == "place:x"
+
+
+@pytest.mark.asyncio
+async def test_dream_progress_publisher_uses_global_outbound_event() -> None:
+    bus = MessageBus()
+
+    publish_dream_progress(bus, {"kind": "run_started"})
+
+    event = bus.outbound.get_nowait()
+    assert event.channel == "websocket"
+    assert event.chat_id == "*"
+    assert event.content == ""
+    assert event.metadata == {
+        "_dream_progress": True,
+        "dream": {"kind": "run_started"},
     }
 
 

@@ -90,10 +90,29 @@ class DreamEvent(Result):
     at_ms: int
 
 
+class DreamLastRun(Result):
+    """Counts for the most recent dream run — drives the "última corrida" card.
+
+    These are headline pass deltas for that one run (per-item detail is in the
+    events feed). All-zero is a valid, expected state: an idle run that found
+    nothing new still reports 0/0/0/0 so the card always shows what the last run
+    did rather than going blank.
+    """
+
+    at_ms: int
+    sessions: int
+    entities: int
+    merged: int
+    skills_created: int
+    skills_improved: int
+
+
 class DreamDigest(Result):
-    """List of recent dream events, newest first, capped at *limit*."""
+    """Recent dream activity: the latest run's counts (headline) plus a
+    newest-first feed of prior runs and their activity, capped at *limit*."""
 
     events: list[DreamEvent]
+    last_run: DreamLastRun | None  # the most recent run's counts (headline card)
     last_run_at_ms: int | None  # timestamp of the most recent dream.end / dream.start
 
 
@@ -153,21 +172,53 @@ class MemoryForgetCommand(Command):
 
 
 # ---------------------------------------------------------------------------
-# Dream digest builder (module-level so it is easily unit-tested)
+# Flagged-pairs DTOs (Dream Bandeja)
 # ---------------------------------------------------------------------------
 
-_DREAM_EVENT_TYPES = frozenset({
-    "memory.absorb.auto_merged",
-    "memory.dream.discover",
-    "memory.dream.skill_extract",
-    "memory.dream.skill_signals",
-    "memory.dream.learnings",
-    "memory.dream.flagged",
-    "memory.dream.end",
-    "memory.dream.start",
-})
 
-_RUN_MARKER_TYPES = frozenset({"memory.dream.end", "memory.dream.start"})
+class FlaggedPair(Result):
+    """One memory pair the dream escalated for human review."""
+
+    ref_a: str
+    ref_b: str
+    verdict: str
+    confidence: int
+    reasoning: str
+    at_ms: int | None
+
+
+class FlaggedPairs(Result):
+    """All memory pairs currently awaiting human review."""
+
+    pairs: list[FlaggedPair]
+
+
+class FlaggedPairsQuery(Query):
+    """No inputs — returns the full current flagged-pairs list."""
+
+
+class ResolveFlaggedRequest(Command):
+    """Resolve a flagged pair: merge the two entities or keep them separate."""
+
+    ref_a: str
+    ref_b: str
+    action: str  # "merge" | "separate"
+
+
+class ResolveResult(Result):
+    """Outcome of a resolve action."""
+
+    ok: bool
+    action: str
+
+
+# ---------------------------------------------------------------------------
+# Dream digest builder (module-level so it is easily unit-tested)
+#
+# The event-type sets and the event→item mapping live in
+# ``durin.memory.dream_digest`` so the live websocket tee renders items
+# identical to this after-the-fact digest.
+# ---------------------------------------------------------------------------
 
 
 def _build_dream_digest(limit: int) -> DreamDigest:
@@ -183,6 +234,11 @@ def _build_dream_digest(limit: int) -> DreamDigest:
     timestamp if present; falls back to the timestamp of the newest event.
     """
     from durin.logs.reader import LogQuery, read_page
+    from durin.memory.dream_digest import (
+        DREAM_EVENT_TYPES,
+        RUN_MARKER_TYPES,
+        map_dream_event,
+    )
 
     directory = _telemetry_dir()
     # Request enough raw events to fill *limit* after expansion; dream.discover
@@ -196,27 +252,43 @@ def _build_dream_digest(limit: int) -> DreamDigest:
     try:
         page = read_page(directory, log_query)
     except Exception:  # noqa: BLE001
-        return DreamDigest(events=[], last_run_at_ms=None)
+        return DreamDigest(events=[], last_run=None, last_run_at_ms=None)
 
     events: list[DreamEvent] = []
     last_run_at_ms: int | None = None
+    last_run: DreamLastRun | None = None
 
     # page.lines is newest-first (read_page reverses per-file)
     for line_dict in page.lines:
         raw = line_dict.get("raw", {})
         event_type: str = raw.get("type", "")
-        if event_type not in _DREAM_EVENT_TYPES:
+        if event_type not in DREAM_EVENT_TYPES:
             continue
 
         ts_ms = int(float(raw.get("ts", 0)) * 1000)
         data: dict = raw.get("data") or {}
 
-        if event_type in _RUN_MARKER_TYPES:
+        if event_type in RUN_MARKER_TYPES:
             if last_run_at_ms is None or ts_ms > last_run_at_ms:
                 last_run_at_ms = ts_ms
             continue
 
-        new_events = _map_event(event_type, data, ts_ms)
+        # The newest run_summary becomes the headline "última corrida" card and
+        # is NOT duplicated in the feed; older run_summaries fall through to the
+        # feed as "run" history entries. page.lines is newest-first, so the first
+        # run_summary we see is the newest.
+        if event_type == "memory.dream.run_summary" and last_run is None:
+            last_run = DreamLastRun(
+                at_ms=ts_ms,
+                sessions=int(data.get("sessions", 0)),
+                entities=int(data.get("entities", 0)),
+                merged=int(data.get("merged", 0)),
+                skills_created=int(data.get("skills_created", 0)),
+                skills_improved=int(data.get("skills_improved", 0)),
+            )
+            continue
+
+        new_events = [DreamEvent(**d) for d in map_dream_event(event_type, data, ts_ms)]
         events.extend(new_events)
 
     # Sort newest-first (page is already newest-first at the line level but
@@ -224,114 +296,10 @@ def _build_dream_digest(limit: int) -> DreamDigest:
     events.sort(key=lambda e: e.at_ms, reverse=True)
     events = events[:limit]
 
-    if last_run_at_ms is None and events:
-        last_run_at_ms = events[0].at_ms
+    if last_run_at_ms is None:
+        last_run_at_ms = last_run.at_ms if last_run else (events[0].at_ms if events else None)
 
-    return DreamDigest(events=events, last_run_at_ms=last_run_at_ms)
-
-
-def _map_event(event_type: str, data: dict, at_ms: int) -> list[DreamEvent]:
-    """Map one raw telemetry event to zero or more DreamEvent objects."""
-
-    if event_type == "memory.absorb.auto_merged":
-        canonical = data.get("canonical", "")
-        absorbed = data.get("absorbed", "")
-        return [DreamEvent(
-            kind="merged",
-            summary=f"Merged {absorbed} → {canonical}",
-            ref=canonical or None,
-            ref_kind="entity" if canonical else None,
-            at_ms=at_ms,
-        )]
-
-    if event_type == "memory.dream.discover":
-        refs: list[str] = data.get("refs") or []
-        written = data.get("written", len(refs))
-        if not refs:
-            return [DreamEvent(
-                kind="created",
-                summary=f"Discovered {written} entities",
-                ref=None,
-                ref_kind=None,
-                at_ms=at_ms,
-            )]
-        return [
-            DreamEvent(
-                kind="created",
-                summary=f"Discovered entity {ref}",
-                ref=ref,
-                ref_kind="entity",
-                at_ms=at_ms,
-            )
-            for ref in refs
-        ]
-
-    if event_type == "memory.dream.learnings":
-        refs = data.get("refs") or []
-        written = data.get("written", len(refs))
-        if not refs:
-            return [DreamEvent(
-                kind="created",
-                summary=f"Logged {written} learnings",
-                ref=None,
-                ref_kind=None,
-                at_ms=at_ms,
-            )]
-        return [
-            DreamEvent(
-                kind="created",
-                summary=f"Logged learning {ref}",
-                ref=ref,
-                ref_kind="entity",
-                at_ms=at_ms,
-            )
-            for ref in refs
-        ]
-
-    if event_type == "memory.dream.skill_extract":
-        touched = data.get("skills_touched", 0)
-        return [DreamEvent(
-            kind="improved",
-            summary=f"Updated {touched} skill(s) from session patterns",
-            ref=None,
-            ref_kind="skill",
-            at_ms=at_ms,
-        )]
-
-    if event_type == "memory.dream.skill_signals":
-        skills: list[str] = data.get("skills") or []
-        logged = data.get("logged", len(skills))
-        if not skills:
-            return [DreamEvent(
-                kind="improved",
-                summary=f"Logged {logged} skill signal(s)",
-                ref=None,
-                ref_kind="skill",
-                at_ms=at_ms,
-            )]
-        return [
-            DreamEvent(
-                kind="improved",
-                summary=f"Logged skill signal for {skill}",
-                ref=skill,
-                ref_kind="skill",
-                at_ms=at_ms,
-            )
-            for skill in skills
-        ]
-
-    if event_type == "memory.dream.flagged":
-        canonical = data.get("canonical", "")
-        absorbed = data.get("absorbed", "")
-        return [DreamEvent(
-            kind="flagged",
-            summary="Flagged a memory pair for review",
-            ref=canonical or None,
-            ref_kind="entity" if canonical else None,
-            at_ms=at_ms,
-        )]
-
-    return []
+    return DreamDigest(events=events, last_run=last_run, last_run_at_ms=last_run_at_ms)
 
 
 # ---------------------------------------------------------------------------
@@ -533,6 +501,87 @@ class MemoryService:
     ) -> DreamDigest:
         principal.require(Scope.MEMORY_READ)
         return _build_dream_digest(query.limit)
+
+    @route(
+        "GET",
+        "/api/v1/memory/flagged-pairs",
+        scope=Scope.MEMORY_READ.value,
+        request_model=FlaggedPairsQuery,
+        response_model=FlaggedPairs,
+        summary="Memory pairs the dream flagged for human review (Dream Bandeja)",
+    )
+    async def flagged_pairs(
+        self, query: FlaggedPairsQuery, principal: Principal
+    ) -> FlaggedPairs:
+        principal.require(Scope.MEMORY_READ)
+        from datetime import datetime, timezone
+
+        from durin.memory.refine_dream import read_flagged
+
+        ws = self._workspace_resolver()
+        raw = read_flagged(ws)
+        pairs: list[FlaggedPair] = []
+        for rec in raw:
+            ref_a, ref_b = rec["pair"][0], rec["pair"][1]
+            at_ms: int | None = None
+            if "at" in rec:
+                try:
+                    dt = datetime.fromisoformat(rec["at"])
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    at_ms = int(dt.timestamp() * 1000)
+                except Exception:
+                    at_ms = None
+            pairs.append(FlaggedPair(
+                ref_a=ref_a,
+                ref_b=ref_b,
+                verdict=rec.get("verdict", ""),
+                confidence=rec.get("confidence", 0),
+                reasoning=rec.get("reasoning", ""),
+                at_ms=at_ms,
+            ))
+        return FlaggedPairs(pairs=pairs)
+
+    @route(
+        "POST",
+        "/api/v1/memory/flagged-pairs/resolve",
+        scope=Scope.MEMORY_WRITE.value,
+        request_model=ResolveFlaggedRequest,
+        response_model=ResolveResult,
+        summary="Resolve a flagged pair: merge the entities or keep them separate",
+    )
+    async def resolve_flagged(
+        self, cmd: ResolveFlaggedRequest, principal: Principal
+    ) -> ResolveResult:
+        principal.require(Scope.MEMORY_WRITE)
+        from durin.memory.refine_dream import add_tombstone, remove_flagged
+        from durin.service.types import ValidationFailedError
+
+        if cmd.action not in ("merge", "separate"):
+            raise ValidationFailedError(
+                f"unknown action: {cmd.action!r}; must be 'merge' or 'separate'",
+                details={"action": cmd.action},
+            )
+
+        ws = self._workspace_resolver()
+
+        if cmd.action == "merge":
+            from durin.memory.absorption import AbsorptionError, EntityAbsorption
+            from durin.service.types import ConflictError
+            try:
+                EntityAbsorption(workspace=ws).absorb(
+                    cmd.ref_a, cmd.ref_b, reason="manual_review",
+                )
+            except AbsorptionError as exc:
+                raise ConflictError(
+                    f"could not merge: {exc}",
+                    details={"ref_a": cmd.ref_a, "ref_b": cmd.ref_b},
+                ) from exc
+        else:
+            add_tombstone(ws, cmd.ref_a, cmd.ref_b)
+
+        remove_flagged(ws, cmd.ref_a, cmd.ref_b)
+        return ResolveResult(ok=True, action=cmd.action)
 
     # -- writes --------------------------------------------------------------
 

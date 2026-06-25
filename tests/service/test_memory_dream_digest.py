@@ -136,7 +136,7 @@ async def test_dream_digest_maps_discover(tmp_path: Path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# dream.skill_extract -> kind="improved"
+# dream.skill_extract -> kind="created" (skill_write is create-only)
 # ---------------------------------------------------------------------------
 
 
@@ -156,7 +156,8 @@ async def test_dream_digest_maps_skill_extract(tmp_path: Path, monkeypatch):
 
     assert len(result.events) == 1
     ev = result.events[0]
-    assert ev.kind == "improved"
+    assert ev.kind == "created"
+    assert "new skill" in ev.summary
     assert ev.ref is None
     assert ev.ref_kind == "skill"
     assert ev.at_ms == int(ts * 1000)
@@ -303,3 +304,51 @@ async def test_dream_digest_maps_flagged(tmp_path: Path, monkeypatch):
     assert ev.ref_kind == "entity"
     assert ev.summary == "Flagged a memory pair for review"
     assert ev.at_ms == int(ts * 1000)
+
+
+# ---------------------------------------------------------------------------
+# run_summary -> last_run headline (newest), excluded from the feed; older
+# run_summaries stay in the feed as "run" history entries
+# ---------------------------------------------------------------------------
+
+
+async def test_dream_digest_extracts_last_run_and_excludes_it_from_feed(
+    tmp_path: Path, monkeypatch
+):
+    tel_dir = tmp_path / "telemetry"
+    ts_old = 1_700_000_000.0
+    ts_new = 1_700_001_000.0
+    lines = [
+        _jsonl_line("memory.absorb.auto_merged", {
+            "canonical": "person:a", "absorbed": "person:a2",
+        }, ts=ts_old),
+        _jsonl_line("memory.dream.run_summary", {
+            "sessions": 2, "entities": 1, "merged": 1,
+            "skills_created": 2, "skills_improved": 1,
+        }, ts=ts_old + 1),
+        _jsonl_line("memory.dream.run_summary", {
+            "sessions": 0, "entities": 0, "merged": 0,
+            "skills_created": 0, "skills_improved": 0,
+        }, ts=ts_new),
+    ]
+    _seed_telemetry(tel_dir, lines)
+    monkeypatch.setattr("durin.service.memory._telemetry_dir", lambda: tel_dir)
+
+    result = await _service(tmp_path).dream_digest(DreamDigestQuery(), LOCAL)
+
+    # The newest run_summary becomes the headline card — all zeros is valid.
+    assert result.last_run is not None
+    assert result.last_run.at_ms == int(ts_new * 1000)
+    assert (
+        result.last_run.sessions, result.last_run.entities,
+        result.last_run.merged, result.last_run.skills_created,
+        result.last_run.skills_improved,
+    ) == (0, 0, 0, 0, 0)
+
+    run_entries = [e for e in result.events if e.kind == "run"]
+    # The newest run is NOT duplicated in the feed...
+    assert all(e.at_ms != int(ts_new * 1000) for e in run_entries)
+    # ...but the older run_summary IS in the feed as a history entry...
+    assert any(e.at_ms == int((ts_old + 1) * 1000) for e in run_entries)
+    # ...alongside its activity item.
+    assert any(e.kind == "merged" for e in result.events)

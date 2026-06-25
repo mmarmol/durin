@@ -24,7 +24,7 @@ from durin.memory.entity_page import EntityPage
 from durin.memory.llm_invoke import default_llm_invoke
 from durin.utils.atomic_write import atomic_write_text
 
-__all__ = ["is_tombstoned", "add_tombstone", "add_flagged", "read_flagged", "run_refine"]
+__all__ = ["is_tombstoned", "add_tombstone", "add_flagged", "read_flagged", "remove_flagged", "run_refine"]
 
 LLMInvoke = Callable[..., Any]
 _TOMBSTONE_FILE = ".refine_tombstones.json"
@@ -141,6 +141,32 @@ def read_flagged(workspace: Path) -> list[dict]:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return []
+
+
+def remove_flagged(workspace: Path, ref_a: str, ref_b: str) -> None:
+    """Drop the entry for the given pair from the flagged-pairs store.
+
+    Keyed by the sorted pair so argument order does not matter.  No-ops when
+    the pair is not present.  Write failures are swallowed (best-effort) so a
+    store error never breaks the caller.
+    """
+    p = _flagged_path(workspace)
+    if not p.exists():
+        return
+    try:
+        records: dict[str, dict] = {}
+        for rec in json.loads(p.read_text(encoding="utf-8")):
+            records[_pair_key(*rec["pair"])] = rec
+    except Exception:
+        return
+    target = _pair_key(ref_a, ref_b)
+    if target not in records:
+        return
+    del records[target]
+    try:
+        atomic_write_text(p, json.dumps(list(records.values()), indent=2))
+    except Exception:  # pragma: no cover — write failure must not break caller
+        pass
 
 
 def _load_page(workspace: Path, ref: str) -> EntityPage | None:

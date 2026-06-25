@@ -1400,10 +1400,22 @@
   },
   "dream": {
     "title": "Dream",
+    "lastRunTitle": "Last run",
+    "historyTitle": "History",
+    "stats": {
+      "entities": "entities",
+      "merged": "merges",
+      "skillsCreated": "new skills",
+      "skillsImproved": "improved skills",
+      "sessions": "sessions"
+    },
     "lastRun": "last run {{time}}",
     "runNow": "Run now",
     "running": "Running…",
+    "runningBanner": "The dream is running — events appear here live.",
+    "runningEmpty": "Working… the first results will appear shortly.",
     "runError": "Failed to start dream run.",
+    "runFailed": "The dream run finished with errors.",
     "loading": "Loading…",
     "empty": "No dream activity yet.",
     "view": "View",
@@ -1411,7 +1423,8 @@
       "merged": "merged",
       "created": "created",
       "improved": "improved",
-      "flagged": "flagged"
+      "flagged": "flagged",
+      "run": "run"
     },
     "close": "Close",
     "openFull": "Open full",
@@ -1424,6 +1437,20 @@
       "type": "Type",
       "aliases": "Aliases",
       "identifiers": "Identifiers"
+    },
+    "tabs": {
+      "resumen": "Summary",
+      "bandeja": "Inbox"
+    },
+    "bandeja": {
+      "flaggedTitle": "Memories flagged for review",
+      "quarantineTitle": "Skills in quarantine",
+      "merge": "Merge",
+      "keepSeparate": "Keep separate",
+      "reviewInSkills": "Review in Skills",
+      "emptyFlagged": "No memory pairs flagged for review.",
+      "emptyQuarantine": "No skills in quarantine.",
+      "resolveError": "Could not resolve pair — it may have already been processed. Refresh to see the current state."
     }
   },
   "audio": {

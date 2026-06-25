@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
@@ -15,15 +15,35 @@ vi.mock("@/lib/api", async (importOriginal) => {
     fetchMemoryEntity: vi.fn(),
     getSkill: vi.fn(),
     runCronJob: vi.fn(),
+    fetchFlaggedPairs: vi.fn(),
+    resolveFlaggedPair: vi.fn(),
+    listQuarantine: vi.fn(),
   };
 });
 
-function wrap(children: ReactNode) {
+type DurinClient = import("@/lib/durin-client").DurinClient;
+
+// A minimal fake client that captures the DreamView's dream-progress handler so
+// a test can drive live frames (run_started / activity / run_finished).
+function fakeClient(): { client: DurinClient; emitDream: (ev: unknown) => void } {
+  let handler: ((ev: unknown) => void) | null = null;
+  const client = {
+    onDreamProgress: (h: (ev: unknown) => void) => {
+      handler = h;
+      return () => {
+        handler = null;
+      };
+    },
+  } as unknown as DurinClient;
+  return {
+    client,
+    emitDream: (ev) => act(() => handler?.(ev)),
+  };
+}
+
+function wrap(children: ReactNode, client?: DurinClient) {
   return (
-    <ClientProvider
-      client={{} as unknown as import("@/lib/durin-client").DurinClient}
-      token="tok"
-    >
+    <ClientProvider client={client ?? fakeClient().client} token="tok">
       {children}
     </ClientProvider>
   );
@@ -34,6 +54,13 @@ beforeEach(() => {
   vi.mocked(api.fetchMemoryEntity).mockReset();
   vi.mocked(api.getSkill).mockReset();
   vi.mocked(api.runCronJob).mockReset();
+  vi.mocked(api.fetchFlaggedPairs).mockReset();
+  vi.mocked(api.resolveFlaggedPair).mockReset();
+  vi.mocked(api.listQuarantine).mockReset();
+
+  // Default Bandeja mocks to empty so Resumen tests don't need them
+  vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([]);
+  vi.mocked(api.listQuarantine).mockResolvedValue([]);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -41,6 +68,7 @@ describe("DreamView", () => {
   it("renders event summaries returned by fetchDreamDigest", async () => {
     const now = Date.now();
     vi.mocked(api.fetchDreamDigest).mockResolvedValue({
+      last_run: null,
       last_run_at_ms: now - 60_000,
       events: [
         { at_ms: now - 120_000, kind: "merged", ref: null, ref_kind: null, summary: "Merged entity Alpha into Beta" },
@@ -57,6 +85,7 @@ describe("DreamView", () => {
 
   it("shows the empty state when there are no events", async () => {
     vi.mocked(api.fetchDreamDigest).mockResolvedValue({
+      last_run: null,
       last_run_at_ms: null,
       events: [],
     });
@@ -79,6 +108,7 @@ describe("DreamView", () => {
     const now = Date.now();
 
     vi.mocked(api.fetchDreamDigest).mockResolvedValue({
+      last_run: null,
       last_run_at_ms: now - 60_000,
       events: [
         {
@@ -133,6 +163,7 @@ describe("DreamView", () => {
     const now = Date.now();
 
     vi.mocked(api.fetchDreamDigest).mockResolvedValue({
+      last_run: null,
       last_run_at_ms: null,
       events: [
         {
@@ -173,6 +204,7 @@ describe("DreamView", () => {
     const now = Date.now();
 
     vi.mocked(api.fetchDreamDigest).mockResolvedValue({
+      last_run: null,
       last_run_at_ms: null,
       events: [
         {
@@ -224,6 +256,7 @@ describe("DreamView", () => {
     const now = Date.now();
 
     vi.mocked(api.fetchDreamDigest).mockResolvedValue({
+      last_run: null,
       last_run_at_ms: null,
       events: [
         {
@@ -245,13 +278,38 @@ describe("DreamView", () => {
     expect(viewBtn).toBeDisabled();
   });
 
-  it("Run now calls runCronJob with memory_dream and refreshes the digest", async () => {
+  it("shows the última corrida card with counts, even all zeros", async () => {
+    const now = Date.now();
+    vi.mocked(api.fetchDreamDigest).mockResolvedValue({
+      last_run: {
+        at_ms: now, sessions: 0, entities: 0, merged: 0,
+        skills_created: 0, skills_improved: 0,
+      },
+      last_run_at_ms: now,
+      events: [],
+    });
+
+    render(wrap(<DreamView />));
+
+    // The headline card renders (NOT the empty state) and shows the zero counts,
+    // including the created-vs-improved skills split.
+    expect(await screen.findByText("Last run")).toBeInTheDocument();
+    expect(screen.getByText("entities")).toBeInTheDocument();
+    expect(screen.getByText("merges")).toBeInTheDocument();
+    expect(screen.getByText("new skills")).toBeInTheDocument();
+    expect(screen.getByText("improved skills")).toBeInTheDocument();
+    expect(screen.queryByText("No dream activity yet.")).not.toBeInTheDocument();
+  });
+
+  it("Run now triggers memory_dream; the live run_finished frame refreshes the digest", async () => {
     const user = userEvent.setup();
     const now = Date.now();
+    const { client, emitDream } = fakeClient();
 
     vi.mocked(api.fetchDreamDigest)
-      .mockResolvedValueOnce({ last_run_at_ms: null, events: [] })
+      .mockResolvedValueOnce({ last_run: null, last_run_at_ms: null, events: [] })
       .mockResolvedValueOnce({
+        last_run: null,
         last_run_at_ms: now,
         events: [
           { at_ms: now, kind: "merged", ref: null, ref_kind: null, summary: "New dream event" },
@@ -259,29 +317,58 @@ describe("DreamView", () => {
       });
     vi.mocked(api.runCronJob).mockResolvedValue({ started: true });
 
-    render(wrap(<DreamView />));
+    render(wrap(<DreamView />, client));
 
     // Wait for the initial load to finish.
     expect(await screen.findByText("No dream activity yet.")).toBeInTheDocument();
 
-    const runBtn = screen.getByRole("button", { name: "Run now" });
-    await user.click(runBtn);
+    await user.click(screen.getByRole("button", { name: "Run now" }));
 
     await waitFor(() => {
       expect(api.runCronJob).toHaveBeenCalledWith("tok", "memory_dream");
     });
 
-    // After runCronJob succeeds, the digest is refetched and the new event appears.
+    // The server run is async (returns immediately). Nothing refetches until
+    // the live run_finished frame arrives — that drives the reconcile fetch.
+    emitDream({ event: "dream_progress", kind: "run_finished", ok: true });
+
     await waitFor(() => {
       expect(api.fetchDreamDigest).toHaveBeenCalledTimes(2);
     });
     expect(await screen.findByText("New dream event")).toBeInTheDocument();
   });
 
+  it("streams live activity items into the feed during a run (no refetch needed)", async () => {
+    const now = Date.now();
+    const { client, emitDream } = fakeClient();
+
+    vi.mocked(api.fetchDreamDigest).mockResolvedValue({ last_run: null, last_run_at_ms: null, events: [] });
+
+    render(wrap(<DreamView />, client));
+    expect(await screen.findByText("No dream activity yet.")).toBeInTheDocument();
+
+    emitDream({ event: "dream_progress", kind: "run_started" });
+    emitDream({
+      event: "dream_progress",
+      kind: "activity",
+      item: {
+        at_ms: now,
+        kind: "merged",
+        ref: "place:x",
+        ref_kind: "entity",
+        summary: "Live merge event",
+      },
+    });
+
+    expect(await screen.findByText("Live merge event")).toBeInTheDocument();
+    // The live item came over the socket — the digest was only fetched once (initial load).
+    expect(api.fetchDreamDigest).toHaveBeenCalledTimes(1);
+  });
+
   it("Run now shows an error message when runCronJob fails", async () => {
     const user = userEvent.setup();
 
-    vi.mocked(api.fetchDreamDigest).mockResolvedValue({ last_run_at_ms: null, events: [] });
+    vi.mocked(api.fetchDreamDigest).mockResolvedValue({ last_run: null, last_run_at_ms: null, events: [] });
     vi.mocked(api.runCronJob).mockRejectedValue(new Error("HTTP 503"));
 
     render(wrap(<DreamView />));
@@ -293,5 +380,150 @@ describe("DreamView", () => {
     expect(await screen.findByText("Failed to start dream run.")).toBeInTheDocument();
     // Button re-enabled after failure.
     expect(screen.getByRole("button", { name: "Run now" })).not.toBeDisabled();
+  });
+});
+
+describe("DreamView Bandeja tab", () => {
+  const basePair: api.FlaggedPair = {
+    ref_a: "person:alice",
+    ref_b: "person:alice-smith",
+    verdict: "same_entity",
+    confidence: 72,
+    reasoning: "Both refs share the same name and email.",
+    at_ms: Date.now() - 3_600_000,
+  };
+
+  const baseQuarantine: api.QuarantineRow = {
+    name: "shady-skill",
+    status: "quarantined",
+    source: "https://example.com/shady.zip",
+    verdict: "caution",
+    findings: [{ category: "network", severity: "caution", where: "SKILL.md", detail: "Makes outbound requests." }],
+  };
+
+  beforeEach(() => {
+    vi.mocked(api.fetchDreamDigest).mockResolvedValue({ last_run: null, last_run_at_ms: null, events: [] });
+  });
+
+  it("shows the Inbox badge count on initial load without opening the tab", async () => {
+    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([
+      basePair,
+      { ...basePair, ref_a: "person:bob" },
+    ]); // 2 pairs
+    vi.mocked(api.listQuarantine).mockResolvedValue([baseQuarantine]); // 1 quarantined skill
+
+    render(wrap(<DreamView />));
+
+    // Stay on the default Resumen tab — the badge must still surface 3 (2 + 1)
+    // without the user ever opening the Inbox tab.
+    const inboxBtn = await screen.findByRole("button", { name: /Inbox/i });
+    await waitFor(() => expect(inboxBtn).toHaveTextContent("3"));
+    expect(screen.getByText("No dream activity yet.")).toBeInTheDocument();
+  });
+
+  it("renders a flagged pair when the Bandeja tab is clicked", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([basePair]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+
+    render(wrap(<DreamView />));
+    await screen.findByText("No dream activity yet.");
+
+    await user.click(screen.getByRole("button", { name: /Inbox/i }));
+
+    expect(await screen.findByText("person:alice")).toBeInTheDocument();
+    expect(screen.getByText("person:alice-smith")).toBeInTheDocument();
+    expect(screen.getByText("Both refs share the same name and email.")).toBeInTheDocument();
+  });
+
+  it("calls resolveFlaggedPair with action:merge and removes the row", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([basePair]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.resolveFlaggedPair).mockResolvedValue({ ok: true, action: "merge" });
+
+    render(wrap(<DreamView />));
+    await screen.findByText("No dream activity yet.");
+
+    await user.click(screen.getByRole("button", { name: /Inbox/i }));
+    expect(await screen.findByText("person:alice")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Merge" }));
+
+    await waitFor(() => {
+      expect(api.resolveFlaggedPair).toHaveBeenCalledWith(
+        "tok",
+        { ref_a: "person:alice", ref_b: "person:alice-smith", action: "merge" },
+      );
+    });
+
+    // Row is removed optimistically after resolution
+    await waitFor(() => {
+      expect(screen.queryByText("person:alice")).not.toBeInTheDocument();
+    });
+  });
+
+  it("calls resolveFlaggedPair with action:separate and removes the row", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([basePair]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.resolveFlaggedPair).mockResolvedValue({ ok: true, action: "separate" });
+
+    render(wrap(<DreamView />));
+    await screen.findByText("No dream activity yet.");
+
+    await user.click(screen.getByRole("button", { name: /Inbox/i }));
+    expect(await screen.findByText("person:alice")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Keep separate" }));
+
+    await waitFor(() => {
+      expect(api.resolveFlaggedPair).toHaveBeenCalledWith(
+        "tok",
+        { ref_a: "person:alice", ref_b: "person:alice-smith", action: "separate" },
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("person:alice")).not.toBeInTheDocument();
+    });
+  });
+
+  it("shows an inline error message when resolveFlaggedPair fails", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([basePair]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.resolveFlaggedPair).mockRejectedValue(new Error("HTTP 409"));
+
+    render(wrap(<DreamView />));
+    await screen.findByText("No dream activity yet.");
+
+    await user.click(screen.getByRole("button", { name: /Inbox/i }));
+    expect(await screen.findByText("person:alice")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Merge" }));
+
+    // Error message appears; pair row is still visible (not removed on failure)
+    expect(await screen.findByText(/Could not resolve pair/)).toBeInTheDocument();
+    expect(screen.getByText("person:alice")).toBeInTheDocument();
+  });
+
+  it("renders a quarantined skill and calls onOpenSkills when Review in Skills is clicked", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([baseQuarantine]);
+
+    const onOpenSkills = vi.fn();
+    render(wrap(<DreamView onOpenSkills={onOpenSkills} />));
+    await screen.findByText("No dream activity yet.");
+
+    await user.click(screen.getByRole("button", { name: /Inbox/i }));
+
+    expect(await screen.findByText("shady-skill")).toBeInTheDocument();
+    expect(screen.getByText("Makes outbound requests.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Review in Skills" }));
+
+    expect(onOpenSkills).toHaveBeenCalledOnce();
   });
 });

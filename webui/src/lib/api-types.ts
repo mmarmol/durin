@@ -541,6 +541,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/memory/flagged-pairs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Memory pairs the dream flagged for human review (Dream Bandeja) */
+        get: operations["memory_flagged_pairs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/memory/flagged-pairs/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve a flagged pair: merge the entities or keep them separate */
+        post: operations["memory_resolve_flagged"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/memory/graph": {
         parameters: {
             query?: never;
@@ -1818,11 +1852,13 @@ export interface components {
         };
         /**
          * DreamDigest
-         * @description List of recent dream events, newest first, capped at *limit*.
+         * @description Recent dream activity: the latest run's counts (headline) plus a
+         *     newest-first feed of prior runs and their activity, capped at *limit*.
          */
         DreamDigest: {
             /** Events */
             events: components["schemas"]["DreamEvent"][];
+            last_run: components["schemas"]["DreamLastRun"] | null;
             /** Last Run At Ms */
             last_run_at_ms: number | null;
         };
@@ -1855,6 +1891,29 @@ export interface components {
             ref_kind: string | null;
             /** Summary */
             summary: string;
+        };
+        /**
+         * DreamLastRun
+         * @description Counts for the most recent dream run — drives the "última corrida" card.
+         *
+         *     These are headline pass deltas for that one run (per-item detail is in the
+         *     events feed). All-zero is a valid, expected state: an idle run that found
+         *     nothing new still reports 0/0/0/0 so the card always shows what the last run
+         *     did rather than going blank.
+         */
+        DreamLastRun: {
+            /** At Ms */
+            at_ms: number;
+            /** Entities */
+            entities: number;
+            /** Merged */
+            merged: number;
+            /** Sessions */
+            sessions: number;
+            /** Skills Created */
+            skills_created: number;
+            /** Skills Improved */
+            skills_improved: number;
         };
         /** ExtrasEnsureCommand */
         ExtrasEnsureCommand: {
@@ -1908,6 +1967,37 @@ export interface components {
             /** Present */
             present: boolean;
         };
+        /**
+         * FlaggedPair
+         * @description One memory pair the dream escalated for human review.
+         */
+        FlaggedPair: {
+            /** At Ms */
+            at_ms: number | null;
+            /** Confidence */
+            confidence: number;
+            /** Reasoning */
+            reasoning: string;
+            /** Ref A */
+            ref_a: string;
+            /** Ref B */
+            ref_b: string;
+            /** Verdict */
+            verdict: string;
+        };
+        /**
+         * FlaggedPairs
+         * @description All memory pairs currently awaiting human review.
+         */
+        FlaggedPairs: {
+            /** Pairs */
+            pairs: components["schemas"]["FlaggedPair"][];
+        };
+        /**
+         * FlaggedPairsQuery
+         * @description No inputs — returns the full current flagged-pairs list.
+         */
+        FlaggedPairsQuery: Record<string, never>;
         /**
          * ForgetResult
          * @description Result of a SUCCESSFUL archive — ``result`` is always ``"archived"``.
@@ -2985,6 +3075,28 @@ export interface components {
             models: components["schemas"]["ProviderModelEntry"][];
             /** Provider */
             provider: string;
+        };
+        /**
+         * ResolveFlaggedRequest
+         * @description Resolve a flagged pair: merge the two entities or keep them separate.
+         */
+        ResolveFlaggedRequest: {
+            /** Action */
+            action: string;
+            /** Ref A */
+            ref_a: string;
+            /** Ref B */
+            ref_b: string;
+        };
+        /**
+         * ResolveResult
+         * @description Outcome of a resolve action.
+         */
+        ResolveResult: {
+            /** Action */
+            action: string;
+            /** Ok */
+            ok: boolean;
         };
         /** RevokeTokenCommand */
         RevokeTokenCommand: {
@@ -4536,6 +4648,54 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ForgetResult"];
+                };
+            };
+        };
+    };
+    memory_flagged_pairs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FlaggedPairsQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FlaggedPairs"];
+                };
+            };
+        };
+    };
+    memory_resolve_flagged: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveFlaggedRequest"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolveResult"];
                 };
             };
         };
