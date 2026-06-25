@@ -74,6 +74,20 @@ class WorkflowConfigError(RuntimeError):
     programmer/config error — it fails fast rather than being swallowed as a run abort."""
 
 
+class NodeExecutionError(RuntimeError):
+    """A node's agent turn raised. Carries the node identity, iteration and the session
+    key under which the node runner persisted the partial conversation — so the engine
+    can record an attributable ``node_failed`` NodeRun and name the node in the aborted
+    result, and the failed node's session stays navigable."""
+
+    def __init__(self, node_id: str, iteration: int, session_key: str | None, cause: BaseException) -> None:
+        super().__init__(f"node {node_id!r} (iteration {iteration}) failed: {cause}")
+        self.node_id = node_id
+        self.iteration = iteration
+        self.session_key = session_key
+        self.cause = cause
+
+
 class WorkflowEngine:
     def __init__(
         self,
@@ -146,6 +160,15 @@ class WorkflowEngine:
                                runs=runs, run_id=run_id),
                 effective_root, started_at)
             raise
+        except NodeExecutionError as exc:
+            # A named node failure: the walk already appended its node_failed NodeRun.
+            # Carry the node identity into the aborted result so the abort names it.
+            result = WorkflowResult(
+                status="aborted",
+                final_output=f"workflow aborted: node {exc.node_id!r} (iteration {exc.iteration}) failed: {exc.cause}",
+                runs=runs, run_id=run_id,
+                failed_node=exc.node_id, failed_iteration=exc.iteration,
+            )
         except Exception as exc:  # noqa: BLE001 - a node failure becomes a typed aborted result
             result = WorkflowResult(
                 status="aborted", final_output=f"workflow error: {exc}",
@@ -273,7 +296,18 @@ class WorkflowEngine:
                     # verdict is a matched case label; for binary routing it is
                     # PASS/FAIL from the first non-empty line; for a linear node
                     # there is no verdict.
-                    resp = self._node_runner(req)
+                    try:
+                        resp = self._node_runner(req)
+                    except NodeExecutionError as exc:
+                        # The node's turn raised: record an attributable node_failed run
+                        # (with the persisted session key) so the manifest captures it,
+                        # then re-raise to abort the walk — run() names the node.
+                        runs.append(NodeRun(node_id=node.id, iteration=iteration,
+                                            output="", session_key=exc.session_key,
+                                            status="node_failed", error=str(exc.cause)))
+                        if update_manifest is not None:
+                            update_manifest()
+                        raise
                     output = resp.output
                     if node.cases is not None:
                         # Multi-way: label matching replaces pass/fail.

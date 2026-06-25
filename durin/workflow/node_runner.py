@@ -24,7 +24,7 @@ from durin.agent.tools.registry import ToolRegistry
 from durin.config.schema import ToolsConfig
 from durin.session.lineage import ORIGIN_ID, ORIGIN_TYPE, build_lineage, root_of
 from durin.session.manager import Session, SessionManager
-from durin.workflow.engine import NodeRunRequest, NodeRunResponse
+from durin.workflow.engine import NodeExecutionError, NodeRunRequest, NodeRunResponse
 from durin.workflow.persona_resolve import resolve_persona
 
 
@@ -198,13 +198,20 @@ class AgentNodeRunner:
         else:
             run_max_iterations = self.max_iterations
 
-        result = asyncio.run(self.runner.run(AgentRunSpec(
-            initial_messages=messages,
-            tools=self._build_tools(req.node, req.workspace_override),
-            model=model,
-            max_iterations=run_max_iterations,
-            max_tool_result_chars=self.max_tool_result_chars,
-        )))
+        # If the agent turn raises (provider/MCP/tool error), the partial conversation
+        # would otherwise be lost and the failure would name no node. Persist whatever
+        # messages exist (status node_failed) and raise a typed error carrying the node
+        # identity and the persisted session key so the engine can record + name it.
+        try:
+            result = asyncio.run(self.runner.run(AgentRunSpec(
+                initial_messages=messages,
+                tools=self._build_tools(req.node, req.workspace_override),
+                model=model,
+                max_iterations=run_max_iterations,
+                max_tool_result_chars=self.max_tool_result_chars,
+            )))
+        except Exception as exc:  # noqa: BLE001 - persist + re-raise as a typed node failure
+            raise self._on_failure(req, messages, exc) from exc
 
         # When the node exhausted its tool-round budget without finishing, make a
         # second call with no tools so the model must emit a synthesis from what it
@@ -218,13 +225,16 @@ class AgentNodeRunner:
                     "gathered so far, give your best final answer now."
                 ),
             }]
-            synthesis_result = asyncio.run(self.runner.run(AgentRunSpec(
-                initial_messages=synthesis_messages,
-                tools=ToolRegistry(),   # no tools — model must emit text
-                model=model,
-                max_iterations=1,
-                max_tool_result_chars=self.max_tool_result_chars,
-            )))
+            try:
+                synthesis_result = asyncio.run(self.runner.run(AgentRunSpec(
+                    initial_messages=synthesis_messages,
+                    tools=ToolRegistry(),   # no tools — model must emit text
+                    model=model,
+                    max_iterations=1,
+                    max_tool_result_chars=self.max_tool_result_chars,
+                )))
+            except Exception as exc:  # noqa: BLE001 - persist the gathered history, then re-raise typed
+                raise self._on_failure(req, list(result.messages), exc) from exc
             # synthesis_result.messages is the superset (first-run history + synthesis turns)
             all_messages = synthesis_result.messages
             final_output = synthesis_result.final_content or ""
@@ -271,3 +281,11 @@ class AgentNodeRunner:
         except Exception:
             logger.exception("workflow node session persist failed for {}", key)
             return None
+
+    def _on_failure(self, req: NodeRunRequest, messages: list[dict], cause: Exception) -> NodeExecutionError:
+        """Persist the node's partial conversation (best-effort) and build the typed
+        error the engine catches — so a failed node keeps a navigable session and the
+        aborted result can name it by id, iteration and session key."""
+        logger.exception("workflow node {} agent turn failed", req.node.id)
+        session_key = self._persist(req, messages)
+        return NodeExecutionError(req.node.id, req.iteration, session_key, cause)

@@ -34,3 +34,5 @@ class WorkflowResult:
     run_id: str = ""
     output_dir: str | None = None  # the terminal node's output folder, if any
     exhausted_node: str | None = None  # set when status=="exhausted": the node that hit its budget
+    failed_node: str | None = None  # set when a node's agent turn raised: the node that failed
+    failed_iteration: int | None = None  # the iteration of the failed node (with failed_node)
