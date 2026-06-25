@@ -159,22 +159,163 @@ flowchart TD
     A([run_workflow name task]) --> B[load_workflow\nworkspace/workflows/name.json]
     B --> C[parse_workflow to Workflow]
     C --> D[WorkflowEngine.run\nvia asyncio.to_thread]
-    D --> E[execute node body\nagent turn or shell command]
-    E --> F{node routes?}
-    F -->|no| G[output becomes\nnext upstream_output]
+    D --> MANIFEST_START[start_run manifest\nstatus='running']
+    MANIFEST_START --> E[execute node body\nagent turn or shell command]
+    E --> UPDATE[update_run manifest\nper-node trace]
+    UPDATE --> F{node routes?}
+    F -->|no / next| G[output becomes\nnext upstream_output]
     G --> H{next is None?}
     H -->|no| E
-    H -->|yes| Z[WorkflowResult completed]
-    F -->|yes| I[derive verdict\nexit code / parse PASS-FAIL]
+    H -->|yes| Z[WorkflowResult completed\nfinalize_run manifest]
+    F -->|binary on_pass/on_fail| I[parse_verdict\nfirst non-empty line]
     I --> J{passed?}
     J -->|yes| K[route on_pass]
-    J -->|no| L[route on_fail / loop back\nthread feedback]
+    J -->|no| L[route on_fail / loop back\nthread reviewer feedback]
     K --> H
     L --> H
-    E -->|visits over budget| Y[WorkflowResult exhausted]
+    F -->|multi-way cases| MW[parse_label\nlast matching line from end]
+    MW --> MWT{label target?}
+    MWT -->|node id| E
+    MWT -->|null / none| Z
+    MWT -->|no match + no default| ABORT[WorkflowResult aborted\nfinalize_run manifest]
+    E -->|visits over budget| Y[WorkflowResult exhausted\nfinalize_run manifest]
+    E -->|agent turn raises| FAIL[persist partial session\nNodeRun node_failed\nWorkflowResult aborted]
+    E -->|parallel node| PAR[run branches/workers\nconcurrently]
+    PAR --> |all workers fail| ABORT
+    PAR --> MERGE[merge outputs\nper-worker NodeRuns]
+    MERGE --> G
+    E -->|subworkflow node| SUB[SubworkflowRunner\nnested run\ndepth-capped]
+    SUB --> G
 ```
 
-## 4. How it works
+## 4. Run auditability
+
+### 4a. The run manifest
+
+Every run with a workspace produces a durable **run manifest** at
+`<workspace>/workflows-runs/<name>/<run_id>.json`. The manifest is a live record, not
+a post-run summary:
+
+1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: []}`.
+2. **After each node** — `update_run` rewrites the file with the accumulated per-node trace and `status: "running"`, so an in-flight run is observable by reading the file.
+3. **On every exit path** (normal completion, exhaustion, abort, or config error) — `finalize_run` writes the terminal status (`completed`/`exhausted`/`aborted`), `finished_at`, and the full trace.
+
+Each file is keyed by `run_id` and owned by a single writer, so full-file rewrites per update are safe with no RMW lock. Manifest writes are best-effort — a write failure is logged but never interrupts the run.
+
+The per-node entries in the manifest's `runs` array carry:
+
+| Field | Meaning |
+|---|---|
+| `node_id` | the node's id in the graph |
+| `iteration` | how many times this node has executed (loop-back counting) |
+| `session_key` | the persisted session containing the node's conversation (`workflow:<run_id>:<node_id>:<iteration>`, or with a `:<worker_index>` suffix for fan-out workers; `null` for command nodes) |
+| `worker_index` | fan-out worker index (0-based; `null` for non-fan-out nodes) |
+| `branch_id` | static-parallel branch node id (`null` for non-branch nodes) |
+| `status` | `"ok"` / `"no_session"` (command) / `"persist_failed"` (save raised) / `"node_failed"` (agent turn raised) |
+| `passed` | binary routing verdict (`true`/`false`/`null` for non-binary nodes) |
+| `route_label` | matched case label for multi-way nodes (`null` otherwise) |
+
+`read_runs_since` (used by the dream self-improvement pass) returns all records for a
+workflow; callers that need only terminal runs should skip records whose `status` is
+`"running"` or `"crashed"`.
+
+**Crash reconciliation.** A `running` manifest whose `started_at` is older than a generous
+threshold can only be a run whose process died before finalizing. The gateway's startup
+sweep (`reconcile_running`) rewrites any such record's status to `"crashed"` (preserving
+its partial trace) so an auditor sees a truthful status rather than a permanently stale
+`running`. The threshold is deliberately generous; real runs finalize fast.
+
+### 4b. The session invariant
+
+The engine never shares the calling session with a node. Every unit of work — every
+agent node, every fan-out worker, every static branch — runs in its own fresh session
+keyed `workflow:<run_id>:<node_id>:<iteration>` (plus `:<worker_index>` for fan-out
+workers), with exactly one recorded parent.
+
+**Reverse lineage** (child → parent): each node session carries a `parent_session_id`
+pointing to the calling session. **Forward reference** (caller → node sessions): the
+run manifest records each node's `session_key`, so you can reach every session a run
+produced directly from the manifest.
+
+**No orphan sessions.** Service and cron runs have no calling session. Rather than
+letting each node session self-root (producing orphans that `children_of` cannot
+find), the engine synthesizes a per-run root: all node sessions of a headless run share
+`parent_session_id = workflow:<run_id>:root`. That stub session (`origin_type="workflow_run"`) is
+created once on first use, so `children_of("workflow:<run_id>:root")` returns every
+node session of the run. The manifest's `root_session_key` records the same key, so
+`runs_for_session` can find the run from either the calling session or the synthetic root.
+
+### 4c. The failure model
+
+**Failed node.** When a node's agent turn raises (provider/MCP/tool error), the node
+runner persists whatever conversation messages existed under the node's session key with
+status `node_failed`, then raises a typed `NodeExecutionError` carrying the `node_id`,
+`iteration`, and persisted `session_key`. The engine catches this, appends a
+`NodeRun(status="node_failed", session_key=..., error=...)` to the trace (so the
+manifest captures it), then returns a `WorkflowResult(status="aborted")` that names the
+failing node (`failed_node`, `failed_iteration`). The failed node's session remains
+navigable in full.
+
+**Parallel node failure isolation.** For dynamic fan-out workers and `read`-reconcile
+static branches, a single worker/branch failure is isolated: the failing unit records
+its own `node_failed` NodeRun (with its `session_key` and `error`), surviving units
+complete normally, and their outputs are merged (failed units appear as `FAILED: …` in
+the merged output). The run is only aborted when every unit failed. **`choose` and
+`union` reconcile are deliberately not isolated**: these branches write to private
+workspace forks and a half-failed fork has no coherent state to merge, so a branch
+failure in those modes propagates and aborts the run.
+
+`NodeRun.status` values: `"ok"` (agent node persisted), `"no_session"` (command node,
+by design), `"persist_failed"` (session save raised but the run continued), `"node_failed"`
+(the node's agent turn raised).
+
+### 4d. Verdict asymmetry
+
+Binary and multi-way routing read the agent's output differently:
+
+- **`parse_verdict` (binary)** reads the **first non-empty line** of the output and returns
+  `True` iff it starts with `PASS` (case-insensitive). Default is `False` (FAIL) — an
+  empty output or an unparseable answer loops back, never silently passes.
+- **`parse_label` (multi-way)** scans lines **from the end** for a line whose full
+  stripped, de-punctuated text equals one of the declared case labels (case-insensitive).
+  It returns the **last** matching line.
+
+**Practical implication:** a binary routing node must put its `PASS`/`FAIL` verdict on
+the very first line of its reply. Placing it at the end of a long response causes
+`parse_verdict` to read an earlier content line and default to `FAIL`, looping back
+unexpectedly. Multi-way `parse_label` has the opposite convention — it reads from the
+end — so a label buried mid-reply is ignored in favour of the last matching line.
+
+### 4e. Context vs. session
+
+`context` controls what a node **sees**, not where its work is stored.
+
+- **`own` (default):** the node receives only the upstream edge output as its user
+  message. Its work is always its own fresh session regardless.
+- **`shared`:** the node additionally receives a running buffer of all preceding
+  `shared` nodes' conversation turns as extra context before its user message, and its
+  own turns are appended to that buffer for subsequent `shared` nodes. The buffer is
+  capped to bound prompt growth on long shared chains.
+
+**`shared` is sequential-only.** Parallel workers are always isolated (each gets its
+own session; there is no shared buffer across concurrent threads), and only their text
+outputs are merged (`[0] … [1] …`). A routing node may not use `context="shared"`;
+the spec rejects that combination at parse time because a routing node reads its own
+output to derive a verdict, not the shared buffer.
+
+### 4f. HTTP surface for run data
+
+The `WorkflowsService` exposes read routes for run manifests:
+
+| Route | What it returns |
+|---|---|
+| `GET /api/v1/workflows/{name}/runs/{run_id}` | one run's manifest (live or terminal) |
+| `GET /api/v1/workflows/runs?session=<key>` | all run manifests whose `root_session_key` matches, newest-first |
+
+The `POST /api/v1/workflows/{name}/run` response carries `run_id` and a per-node trace
+with `session_key`, `worker_index`, `status`, and `route_label` for each entry.
+
+## 5. How it works
 
 End-to-end for a single `run_workflow` call:
 
@@ -195,12 +336,16 @@ End-to-end for a single `run_workflow` call:
    loops back, re-running the target node as the next iteration (a sibling node session),
    capped by `max_visits`.
 4. **Return.** The run produces a typed `WorkflowResult` (status + final output +
-   per-node trace), which the tool formats into a short summary for the agent. The
-   node sessions persist on disk, so the run's work is navigable, searchable, and
-   visible to the dream memory passes — the same way subagent and cron per-run sessions
-   are (see [cron.md](cron.md), [memory/00_overview.md](memory/00_overview.md)).
+   per-node trace, including each node's `session_key`). The engine finalizes the run
+   manifest before returning; neither the tool nor the service writes an additional
+   record. The tool formats the result into a short summary (each node's session key is
+   included for agent and routing nodes). The node sessions persist on disk, so the
+   run's work is navigable, searchable, and visible to the dream memory passes — the
+   same way subagent and cron per-run sessions are (see [cron.md](cron.md),
+   [memory/00_overview.md](memory/00_overview.md)). See §4 for how to navigate the run
+   from its manifest.
 
-## 5. Key types & entry points
+## 6. Key types & entry points
 
 | Symbol | File | Role |
 |---|---|---|
@@ -218,12 +363,13 @@ End-to-end for a single `run_workflow` call:
 | `load_workflow` | `durin/workflow/loader.py` | Load and parse a workflow by name from the workspace. |
 | `WorkflowResult`, `NodeRun` | `durin/workflow/result.py` | The typed run outcome and per-node trace. |
 | `RunWorkflowTool` | `durin/agent/tools/run_workflow.py` | The `run_workflow` LLM tool (core scope) that loads, runs, summarizes a workflow, and records its run. |
-| `write_run`, `read_runs_since` | `durin/workflow/run_log.py` | Per-run diagnostic records (beside `workflows/`), the self-improvement signal source. |
+| `start_run`, `update_run`, `finalize_run`, `read_manifest`, `runs_for_session`, `reconcile_running`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
+| `NodeExecutionError` | `durin/workflow/engine.py` | Typed error raised by the node runner when an agent turn fails; carries `node_id`, `iteration`, and `session_key` so the engine can record an attributable `NodeRun` before aborting. |
 | `compute_diagnostics` | `durin/workflow/diagnostics.py` | Reduces run records to recurring per-node trouble (loop-backs, gate fails) → improvement candidates. |
 | `run_workflow_improve_pass` | `durin/workflow/workflow_improve_dream.py` | The dream pass: observes manual-mode workflows, proposes one scoped edit, records a recommendation. |
 | `log_recommendation`, `open_recommendations` | `durin/workflow/workflow_recommendations.py` | The per-workflow recommendation queue (manual mode). |
 
-## 6. Configuration & surfaces
+## 7. Configuration & surfaces
 
 - **Definitions** live as JSON under `<workspace>/workflows/<name>.json`. That
   directory is a small local git repo (`durin/workflow/version_store.py`, via the
