@@ -32,7 +32,7 @@ from durin.workflow import run_log, workspace_fork
 from durin.workflow.artifacts import artifact_dir, prune_runs
 from durin.workflow.condition import CommandOutcome, run_command
 from durin.workflow.result import NodeRun, WorkflowResult
-from durin.workflow.spec import ParallelNode, SubworkflowNode, WorkNode, Workflow
+from durin.workflow.spec import NEEDS_INPUT_TARGET, ParallelNode, SubworkflowNode, WorkNode, Workflow
 from durin.workflow.verdict import parse_label, parse_verdict
 
 
@@ -361,6 +361,15 @@ class WorkflowEngine:
                         label = "default"
                     # Record the matched label in the NodeRun trace.
                     runs[-1].route_label = label
+                    if target == NEEDS_INPUT_TARGET:
+                        # The gate routed to the reserved needs-input terminal: end the run
+                        # asking the caller for more information. The node's output carries
+                        # the questions; the invoking agent (which owns the user channel)
+                        # asks the user and re-runs the workflow with the answers.
+                        return WorkflowResult(
+                            status="needs_input", final_output=output,
+                            runs=runs, run_id=run_id,
+                        )
                     if target is not None:
                         # Thread this node's output as neutral context before routing to
                         # the target. Unlike the binary fail-edge (which always carries

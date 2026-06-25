@@ -36,7 +36,16 @@ _PARAMETERS = {
 def _format_result(result: Any) -> str:
     lines = [f"Workflow run {result.run_id}: {result.status}"]
 
-    if result.status != "completed":
+    if result.status == "needs_input":
+        lines.append(
+            "The workflow needs more information before it can finish — it did NOT fail. "
+            "You own the conversation with the user, so ask them the questions below "
+            "(via ask_user_question or just in your reply), then call this workflow again "
+            "with the SAME task plus the user's answers appended."
+        )
+        if result.final_output:
+            lines.append(f"\nNeeds clarification:\n{result.final_output}")
+    elif result.status != "completed":
         if result.status == "exhausted" and result.exhausted_node:
             lines.append(
                 f"The workflow did not complete: node '{result.exhausted_node}' was retried "
@@ -108,7 +117,9 @@ class RunWorkflowTool(Tool, ContextAware):
             "Run a user-defined workflow on a task. The workflow is a flow graph of "
             "nodes (defined in <workspace>/workflows/<name>.json); a node does the work "
             "and, when it has routing set (on_pass/on_fail), routes the flow on its "
-            "verdict. Returns a run summary."
+            "verdict. Returns a run summary. If the summary says the workflow needs more "
+            "information, it paused with questions instead of failing — ask the user those "
+            "questions and call this tool again with the same task plus their answers."
         )
 
     async def execute(self, name: str, task: str) -> str:  # type: ignore[override]

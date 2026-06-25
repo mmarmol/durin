@@ -19,6 +19,12 @@ from typing import Any, Literal, Union
 
 from durin.workflow.verdict import normalize_label
 
+# Reserved multi-way routing target: a node whose matched case routes here ends the
+# run asking the caller for more information (status "needs_input", the node's output
+# carries the questions) instead of completing. It is NOT a node id — the human-in-the-
+# loop lives in the agent that invoked the workflow, which asks the user and re-runs.
+NEEDS_INPUT_TARGET = "__needs_input__"
+
 
 class WorkflowError(ValueError):
     """Raised when a workflow definition is malformed."""
@@ -418,7 +424,7 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
 
     for node in nodes.values():
         for target in _edge_targets(node):
-            if target is not None and target not in nodes:
+            if target is not None and target != NEEDS_INPUT_TARGET and target not in nodes:
                 raise WorkflowError(
                     f"node {node.id!r} points to unknown node {target!r}"
                 )

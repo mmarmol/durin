@@ -28,7 +28,7 @@ class NodeRun:
 
 @dataclass
 class WorkflowResult:
-    status: Literal["completed", "exhausted", "aborted"]
+    status: Literal["completed", "needs_input", "exhausted", "aborted"]
     final_output: str | None
     runs: list[NodeRun] = field(default_factory=list)
     run_id: str = ""
