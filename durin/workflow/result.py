@@ -20,6 +20,10 @@ class NodeRun:
     session_key: str | None = None   # for work nodes that persisted a session
     passed: bool | None = None       # for a binary routing node: did its verdict pass? (None = not a binary routing node)
     route_label: str | None = None   # for a multi-way routing node: the matched case label (None otherwise)
+    worker_index: int | None = None  # for a fan-out worker: its index in the batch (None otherwise)
+    branch_id: str | None = None     # for a static-parallel branch: the branch node id (None otherwise)
+    status: str = "ok"               # "ok" (agent node persisted) | "no_session" (command node) | "persist_failed" (save raised) | "node_failed" (the node's agent turn raised)
+    error: str | None = None         # failure detail when status is "node_failed"/"persist_failed" (None otherwise)
 
 
 @dataclass
