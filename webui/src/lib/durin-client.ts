@@ -54,6 +54,8 @@ type EventHandler = (ev: InboundEvent) => void;
 type StatusHandler = (status: ConnectionStatus) => void;
 type RuntimeModelHandler = (modelName: string | null, modelPreset?: string | null) => void;
 type SessionUpdateHandler = (chatId: string) => void;
+type DreamProgressEvent = Extract<InboundEvent, { event: "dream_progress" }>;
+type DreamProgressHandler = (ev: DreamProgressEvent) => void;
 
 /** Structured connection-level errors surfaced to the UI.
  *
@@ -127,6 +129,7 @@ export class DurinClient {
   private statusHandlers = new Set<StatusHandler>();
   private runtimeModelHandlers = new Set<RuntimeModelHandler>();
   private sessionUpdateHandlers = new Set<SessionUpdateHandler>();
+  private dreamProgressHandlers = new Set<DreamProgressHandler>();
   private errorHandlers = new Set<ErrorHandler>();
   // chat_id -> handlers listening on it
   private chatHandlers = new Map<string, Set<EventHandler>>();
@@ -216,6 +219,15 @@ export class DurinClient {
     this.sessionUpdateHandlers.add(handler);
     return () => {
       this.sessionUpdateHandlers.delete(handler);
+    };
+  }
+
+  /** Subscribe to live memory-dream progress frames (run_started / activity /
+   * run_finished), broadcast globally while a dream run is in flight. */
+  onDreamProgress(handler: DreamProgressHandler): Unsubscribe {
+    this.dreamProgressHandlers.add(handler);
+    return () => {
+      this.dreamProgressHandlers.delete(handler);
     };
   }
 
@@ -495,6 +507,11 @@ export class DurinClient {
       return;
     }
 
+    if (parsed.event === "dream_progress") {
+      this.emitDreamProgress(parsed);
+      return;
+    }
+
     if (parsed.event === "secret_stored") {
       const pending = this.pendingSecretStores.get(parsed.request_id);
       if (pending) {
@@ -562,6 +579,12 @@ export class DurinClient {
   private emitSessionUpdate(chatId: string): void {
     for (const handler of this.sessionUpdateHandlers) {
       handler(chatId);
+    }
+  }
+
+  private emitDreamProgress(ev: DreamProgressEvent): void {
+    for (const handler of this.dreamProgressHandlers) {
+      handler(ev);
     }
   }
 

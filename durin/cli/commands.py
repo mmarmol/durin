@@ -1380,6 +1380,34 @@ def _run_gateway(
             from datetime import datetime, timezone
             _run_started = datetime.now(timezone.utc)
             _vi = dream_vector_index(workspace, config)
+
+            # Live feedback: persist this run's telemetry so the dream digest
+            # reflects it afterward, AND tee each activity event to the webui
+            # over the websocket as it happens. The passes run via
+            # asyncio.to_thread, which copies the current context, so binding the
+            # logger here propagates it into those threads; emit_tool_event then
+            # writes JSONL and fans out to the DreamProgressSink.
+            from durin.channels.websocket import publish_dream_progress
+            from durin.memory.dream_live import DreamProgressSink
+            from durin.telemetry.logger import (
+                bind_telemetry,
+                get_session_logger,
+                reset_telemetry,
+            )
+
+            _dream_loop = _asyncio.get_running_loop()
+
+            def _publish_dream(payload: dict) -> None:
+                # Pass threads can't touch the asyncio bus queue directly; hop
+                # back onto the loop thread first.
+                _dream_loop.call_soon_threadsafe(
+                    publish_dream_progress, bus, payload)
+
+            _dream_tlog = get_session_logger("cron_dream")
+            _dream_tlog.add_sink(DreamProgressSink(_publish_dream))
+            _dream_ttok = bind_telemetry(_dream_tlog)
+            ex, df, sk, rf, ao, wi = {}, {}, {}, {}, {}, {}
+            publish_dream_progress(bus, {"kind": "run_started"})
             try:
                 ex = await _asyncio.to_thread(
                     run_extract_pass, workspace, model=model,
@@ -1426,6 +1454,10 @@ def _run_gateway(
                 logger.exception("memory_dream cron failed")
                 _dream_error = _dream_exc
 
+            # Skills improved by the curation pass (edits applied to existing
+            # skills) — distinct from skills CREATED by the skill-extract pass.
+            # Initialized here so the run summary has it even if curation fails.
+            _skills_improved = 0
             try:
                 from durin.agent.skill_curation import curate_catalog
                 from durin.memory.llm_invoke import default_llm_invoke
@@ -1443,6 +1475,7 @@ def _run_gateway(
                 _usage = collect_recent_skill_calls(workspace, within_hours=24)
                 summary = curate_catalog(workspace, judge=_judge, usage=_usage,
                                          drift_check=check_upstream_drift, allowlist=_allowlist)
+                _skills_improved = summary.get("applied", 0)
                 _obs = summary.get("observations", {})
                 logger.info(
                     "skill curation: reviewed={} applied={} deferred={} "
@@ -1465,6 +1498,29 @@ def _run_gateway(
                 )
             except Exception:
                 logger.exception("cron run-session reaper (non-fatal) failed")
+
+            # One summary entry per run — even an empty run leaves a visible
+            # "ran, nothing new" line in the Dream feed instead of silently
+            # updating only the last-run time. Persisted via the still-bound
+            # logger and teed live by the DreamProgressSink.
+            from durin.agent.tools._telemetry import emit_tool_event
+            emit_tool_event("memory.dream.run_summary", {
+                "sessions": ex.get("sessions", 0) if isinstance(ex, dict) else 0,
+                "entities": ex.get("entities", 0) if isinstance(ex, dict) else 0,
+                "merged": len(rf.get("merged", [])) if isinstance(rf, dict) else 0,
+                "skills_created": sk.get("skills_touched", 0) if isinstance(sk, dict) else 0,
+                "skills_improved": _skills_improved,
+            })
+
+            # Unbind telemetry and tell the webui the run is over (success or
+            # not) so its "running" pulse always stops. Runs before the error
+            # re-raise below; the passes/curation/reaper above each catch their
+            # own exceptions, so nothing escapes between here and bind.
+            reset_telemetry(_dream_ttok)
+            publish_dream_progress(bus, {
+                "kind": "run_finished",
+                "ok": _dream_error is None,
+            })
 
             if _dream_error is not None:
                 # Surface the failure so _execute_job records status="error"
@@ -1664,6 +1720,11 @@ def _run_gateway(
                 import time as _time_dream
 
                 from durin.agent.tools._telemetry import emit_tool_event
+                from durin.telemetry.logger import (
+                    bind_telemetry,
+                    get_session_logger,
+                    reset_telemetry,
+                )
                 # Skip when a pass is already running or one ran too recently —
                 # the per-session cursor makes a skipped run harmless.
                 skip = _dream_gate.try_begin(_dream_min_s)
@@ -1676,6 +1737,10 @@ def _run_gateway(
                     logger.debug("reactive dream skipped ({}): {}", trigger, skip)
                     return
                 t_run = _time_dream.perf_counter()
+                # Fresh daemon thread = no inherited context; bind a telemetry
+                # logger so the reactive extract's emits persist and the dream
+                # digest sees this run (without it emit_tool_event is a no-op).
+                _rtok = bind_telemetry(get_session_logger("reactive_dream"))
                 try:
                     # Reactive EXTRACT — when a session closes or compacts,
                     # extract its new turns into entity attributes immediately
@@ -1705,9 +1770,20 @@ def _run_gateway(
                         trigger, out["sessions"], out["entities"], out["yielded"],
                         int((_time_dream.perf_counter() - t_run) * 1000),
                     )
+                    # Record a run summary so reactive runs also surface in the
+                    # Dream feed / "última corrida" card. The reactive path is
+                    # extract-only (refine/skills are cron-only), so those are 0.
+                    emit_tool_event("memory.dream.run_summary", {
+                        "sessions": out.get("sessions", 0),
+                        "entities": out.get("entities", 0),
+                        "merged": 0,
+                        "skills_created": 0,
+                        "skills_improved": 0,
+                    })
                 except Exception:
                     logger.exception("{} dream failed ({})", trigger, session_key)
                 finally:
+                    reset_telemetry(_rtok)
                     _dream_gate.end()
 
             _threading_dream.Thread(

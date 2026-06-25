@@ -121,6 +121,8 @@ Each `memory_search` call emits:
 
 ### Dream events (cold path — five passes)
 
+The dream runs outside the agent loop, so nothing binds the telemetry `ContextVar` for it automatically. The cron handler and each reactive trigger therefore bind their own `TelemetryLogger` (`get_session_logger("cron_dream" | "reactive_dream")`) for the duration of the run — without that bind, `emit_tool_event` resolves no logger and every dream event is silently dropped (the digest then stays empty even after a real run). The cron run additionally registers a `DreamProgressSink` on that logger to tee activity events to the webui live (see §6).
+
 Three of the five dream passes are wrapped with a `memory.dream.start` / `memory.dream.end` pair. The remaining two emit their own named events directly, with no start/end envelope.
 
 **Passes that use `dream.start` / `dream.end`:**
@@ -136,6 +138,7 @@ Three of the five dream passes are wrapped with a `memory.dream.start` / `memory
 
 Additional dream events:
 
+- **`memory.dream.run_summary`** — one rollup per run (cron and reactive), emitted after all passes complete. Carries `sessions`, `entities`, `merged`, `skills_created` (new skills authored by the skill-extract pass) and `skills_improved` (existing skills edited by the curation pass). Drives the Dream feed's per-run entry so that an empty run still shows "ran — no new changes" rather than silently updating only the last-run timestamp.
 - **`memory.dream.max_seconds_reached`** — extract pass hit its wall-clock cap and yielded. `sessions_done` gives progress before yielding; the per-session cursor resumes on the next trigger.
 - **`memory.dream.throttled`** — a reactive trigger (`post_compaction` or `session_close`) was skipped by the in-process gate. `reason` is `locked` or `throttled`.
 
@@ -222,7 +225,9 @@ The following events exist in the catalog without dedicated sections above — c
 
 ### API and webui
 
-Telemetry data is not directly exposed via the API or webui today. The `durin memory stats` CLI is the primary operational surface. The optional HTTPS push sink routes events to an external collector (Grafana/Loki, Datadog, or a custom endpoint) for dashboarding.
+The webui **Dream** view surfaces dream telemetry two ways. `GET /api/v1/memory/dream/digest` reads the persisted `memory.dream.*` / `memory.absorb.*` JSONL and maps it to a digest of recent activity (a per-run summary entry, plus entities merged, entities/learnings created, skills improved, pairs flagged) — the after-the-fact view. While a manually triggered run is in flight, the cron handler also tees each activity event live over the websocket as a global `dream_progress` frame (`run_started` / `activity` / `run_finished`), which drives the view's live feed and "running" indicator. Both surfaces share one mapping (`durin/memory/dream_digest.py`) so a live item and its replayed-from-digest twin render identically. Either way, the events only exist because the dream now binds a telemetry logger for its run (see §4).
+
+The `durin memory stats` CLI remains the primary aggregate-metrics surface, and the optional HTTPS push sink routes events to an external collector (Grafana/Loki, Datadog, or a custom endpoint) for dashboarding.
 
 ## 7. Metrics derived from events
 

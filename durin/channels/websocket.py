@@ -143,6 +143,23 @@ def publish_runtime_model_update(
     ))
 
 
+def publish_dream_progress(bus: MessageBus, payload: dict[str, Any]) -> None:
+    """Enqueue a dream-progress frame for ALL websocket subscribers (global fan-out).
+
+    ``payload`` is a small dict with a ``kind`` ("run_started" | "activity" |
+    "run_finished") plus kind-specific fields. Mirrors
+    :func:`publish_runtime_model_update`: a ``chat_id="*"`` outbound message
+    flagged so the channel's ``send`` dispatcher broadcasts it to every open
+    connection rather than a single chat's subscribers.
+    """
+    bus.outbound.put_nowait(OutboundMessage(
+        channel="websocket",
+        chat_id="*",
+        content="",
+        metadata={"_dream_progress": True, "dream": payload},
+    ))
+
+
 def _default_model_name_from_config() -> str | None:
     """Resolved model string from on-disk config (bootstrap fallback)."""
     try:
@@ -1606,6 +1623,14 @@ class WebSocketChannel(BaseChannel):
             )
             return
 
+        # Dream progress — a global (chat_id="*") frame broadcast to every
+        # connection. Checked before the per-chat subscriber lookup below
+        # because it has no chat to scope to.
+        if msg.metadata.get("_dream_progress"):
+            payload = msg.metadata.get("dream")
+            await self.send_dream_progress(payload if isinstance(payload, dict) else {})
+            return
+
         # Provider retry heartbeat — surface as a dedicated WS event so the
         # UI can render a transient banner ("retrying in 4s, attempt 2 of 7")
         # instead of letting the error become the assistant's reply.
@@ -1934,3 +1959,19 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" runtime_model_updated ")
+
+    async def send_dream_progress(self, payload: dict[str, Any]) -> None:
+        """Broadcast a dream-progress frame to every open websocket connection.
+
+        The dashboard listens for these to drive the Dream view's live feed and
+        its "running" indicator while a (manually triggered) dream run is in
+        flight. Like :meth:`send_runtime_model_updated`, it fans out to all
+        connections, not a single chat's subscribers.
+        """
+        conns = list(self._conn_chats)
+        if not conns:
+            return
+        body: dict[str, Any] = {"event": "dream_progress", **payload}
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" dream_progress ")

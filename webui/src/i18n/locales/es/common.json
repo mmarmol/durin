@@ -1306,10 +1306,22 @@
   },
   "dream": {
     "title": "Dream",
+    "lastRunTitle": "Última corrida",
+    "historyTitle": "Historial",
+    "stats": {
+      "entities": "entidades",
+      "merged": "fusiones",
+      "skillsCreated": "skills nuevas",
+      "skillsImproved": "skills mejoradas",
+      "sessions": "sesiones"
+    },
     "lastRun": "última ejecución {{time}}",
     "runNow": "Correr ahora",
     "running": "Ejecutando…",
+    "runningBanner": "El dream está corriendo — los eventos aparecen acá en vivo.",
+    "runningEmpty": "Trabajando… los primeros resultados aparecerán en breve.",
     "runError": "No se pudo iniciar el dream.",
+    "runFailed": "El dream terminó con errores.",
     "loading": "Cargando…",
     "empty": "Aún no hay actividad de dream.",
     "view": "Ver",
@@ -1317,7 +1329,8 @@
       "merged": "fusionado",
       "created": "creado",
       "improved": "mejorado",
-      "flagged": "marcado"
+      "flagged": "marcado",
+      "run": "corrida"
     },
     "close": "Cerrar",
     "openFull": "Abrir completo",

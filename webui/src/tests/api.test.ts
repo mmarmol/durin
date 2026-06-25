@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   deleteSession,
   disconnectCodex,
+  fetchDreamDigest,
   fetchModelPicker,
   fetchSettings,
   fetchWebuiThread,
@@ -239,5 +240,29 @@ describe("webui API helpers", () => {
     await expect(fetchSettings("stale-token")).rejects.toMatchObject({ status: 401 });
     expect(fetchMock).toHaveBeenCalledTimes(2); // original + one retry, no loop
     setApiReauthHandler(null);
+  });
+
+  it("fetchDreamDigest returns the digest from an unwrapped response (no data envelope)", async () => {
+    // The endpoint returns the DreamDigest fields directly. Reading res.data
+    // here silently yielded undefined and the digest never reached the UI.
+    const digest = {
+      events: [],
+      last_run: { at_ms: 1, sessions: 0, entities: 0, merged: 0, skills: 0 },
+      last_run_at_ms: 1,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => digest,
+      } as Response),
+    );
+
+    const out = await fetchDreamDigest("tok");
+
+    expect(out).toBeDefined();
+    expect(out.last_run).toEqual(digest.last_run);
+    expect(out.events).toEqual([]);
   });
 });

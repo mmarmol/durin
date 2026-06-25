@@ -12,6 +12,7 @@ import {
   runCronJob,
   type DreamDigest,
   type DreamEvent,
+  type DreamLastRun,
   type FlaggedPair,
   type QuarantineRow,
 } from "@/lib/api";
@@ -29,6 +30,7 @@ function relativeTime(ms: number): string {
 }
 
 function kindDot(kind: string): string {
+  if (kind === "run") return "#64748b"; // muted — a per-run summary, not a content change
   if (kind === "merged" || kind === "created" || kind === "flagged") return "#14b8a6";
   if (kind === "improved") return "#d97706";
   return "#14b8a6";
@@ -87,7 +89,7 @@ function EventCard({ event, onOpen }: EventCardProps) {
         >
           {t("dream.view")}
         </Button>
-      ) : (
+      ) : event.kind === "run" ? null : (
         <Button
           type="button"
           variant="ghost"
@@ -98,6 +100,55 @@ function EventCard({ event, onOpen }: EventCardProps) {
           {t("dream.view")}
         </Button>
       )}
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex items-baseline gap-1.5">
+      <span className="text-[18px] font-semibold tabular-nums text-foreground">{value}</span>
+      <span className="text-[11px] text-muted-foreground">{label}</span>
+    </div>
+  );
+}
+
+interface LastRunCardProps {
+  lastRun: DreamLastRun | null;
+  running: boolean;
+}
+
+/** The "última corrida" headline card — always shows what the most recent run
+ * did (its counts), even when nothing changed (0/0/0/0), so the screen is never
+ * blank after a run. While a run is in flight it shows a live "running" pulse. */
+function LastRunCard({ lastRun, running }: LastRunCardProps) {
+  const { t } = useTranslation();
+  return (
+    <div className="rounded-[10px] border border-border/50 bg-card px-4 py-3">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          {t("dream.lastRunTitle")}
+        </span>
+        {running ? (
+          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-[#14b8a6]" aria-hidden />
+            {t("dream.running")}
+          </span>
+        ) : lastRun ? (
+          <span className="text-[11px] text-muted-foreground/60">{relativeTime(lastRun.at_ms)}</span>
+        ) : null}
+      </div>
+      {running && !lastRun ? (
+        <p className="text-[13px] text-muted-foreground">{t("dream.runningEmpty")}</p>
+      ) : lastRun ? (
+        <div className="flex flex-wrap gap-x-5 gap-y-1.5">
+          <Stat label={t("dream.stats.entities")} value={lastRun.entities} />
+          <Stat label={t("dream.stats.merged")} value={lastRun.merged} />
+          <Stat label={t("dream.stats.skillsCreated")} value={lastRun.skills_created} />
+          <Stat label={t("dream.stats.skillsImproved")} value={lastRun.skills_improved} />
+          <Stat label={t("dream.stats.sessions")} value={lastRun.sessions} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -353,9 +404,10 @@ interface DreamViewProps {
 }
 
 export function DreamView({ onOpenSkills }: DreamViewProps) {
-  const { token } = useClient();
+  const { token, client } = useClient();
   const { t } = useTranslation();
   const [digest, setDigest] = useState<DreamDigest | null>(null);
+  const [liveEvents, setLiveEvents] = useState<DreamEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [drawerTarget, setDrawerTarget] = useState<DrawerTarget | null>(null);
@@ -383,18 +435,70 @@ export function DreamView({ onOpenSkills }: DreamViewProps) {
     };
   }, [token]);
 
+  // Fetch the Bandeja count on load so the tab badge surfaces pending items
+  // without the user having to open the tab first (the count lived inside
+  // BandejaTab, which only mounts when that tab is active). BandejaTab still
+  // refetches and keeps the count live while it is open.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([fetchFlaggedPairs(token), listQuarantine(token)])
+      .then(([p, q]) => {
+        if (!cancelled) setBandejaCount(p.length + q.length);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  // Live dream progress: drive the "running" indicator and prepend activity
+  // items to the feed as the dream produces them. On run_finished, refetch the
+  // (now-persisted) digest and drop the live items in the same swap so nothing
+  // flickers or duplicates.
+  useEffect(() => {
+    const unsub = client.onDreamProgress((ev) => {
+      if (ev.kind === "run_started") {
+        setRunning(true);
+        setRunError(null);
+        setLiveEvents([]);
+      } else if (ev.kind === "activity" && ev.item) {
+        const item = ev.item as DreamEvent;
+        setLiveEvents((prev) => [item, ...prev]);
+      } else if (ev.kind === "run_finished") {
+        if (ev.ok === false) setRunError(t("dream.runFailed"));
+        fetchDreamDigest(token)
+          .then((d) => {
+            setDigest(d);
+            setLiveEvents([]);
+          })
+          .catch(() => undefined)
+          .finally(() => setRunning(false));
+      }
+    });
+    return unsub;
+  }, [client, token, t]);
+
+  // Fallback: a run_finished frame can be missed if the socket drops mid-run.
+  // Don't leave the indicator stuck — clear it after a generous ceiling.
+  useEffect(() => {
+    if (!running) return;
+    const timer = setTimeout(() => setRunning(false), 20 * 60_000);
+    return () => clearTimeout(timer);
+  }, [running]);
+
   const handleClose = useCallback(() => setDrawerTarget(null), []);
 
   const handleRunNow = useCallback(async () => {
     setRunning(true);
     setRunError(null);
+    setLiveEvents([]);
     try {
+      // The cron run is async on the server (returns immediately). Live
+      // dream_progress frames drive the feed and clear `running` on
+      // run_finished — so we deliberately do NOT refetch the digest here.
       await runCronJob(token, "memory_dream");
-      const d = await fetchDreamDigest(token);
-      setDigest(d);
     } catch {
       setRunError(t("dream.runError"));
-    } finally {
       setRunning(false);
     }
   }, [token, t]);
@@ -403,9 +507,8 @@ export function DreamView({ onOpenSkills }: DreamViewProps) {
     setBandejaCount(count);
   }, []);
 
-  const lastRun = digest?.last_run_at_ms
-    ? relativeTime(digest.last_run_at_ms)
-    : null;
+  // Live items (this run) on top of the persisted digest, newest-first.
+  const events = [...liveEvents, ...(digest?.events ?? [])];
 
   return (
     // position:relative so the drawer's absolute positioning is scoped here.
@@ -413,9 +516,10 @@ export function DreamView({ onOpenSkills }: DreamViewProps) {
       <header className="flex shrink-0 items-center gap-2 border-b border-border/40 px-3 py-2">
         <Moon className="h-4 w-4 text-muted-foreground" aria-hidden />
         <h1 className="text-sm font-semibold">{t("dream.title")}</h1>
-        {lastRun ? (
-          <span className="text-xs text-muted-foreground">
-            {t("dream.lastRun", { time: lastRun })}
+        {running ? (
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-[#14b8a6]" aria-hidden />
+            {t("dream.running")}
           </span>
         ) : null}
         <Button
@@ -472,21 +576,29 @@ export function DreamView({ onOpenSkills }: DreamViewProps) {
           <div className="flex flex-1 items-center justify-center text-sm text-destructive">
             {error}
           </div>
-        ) : !digest || digest.events.length === 0 ? (
+        ) : !digest?.last_run && events.length === 0 && !running ? (
           <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
             {t("dream.empty")}
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto px-4 py-4">
-            <div className="flex flex-col gap-2">
-              {digest.events.map((ev, i) => (
-                <EventCard
-                  key={`${ev.at_ms}-${i}`}
-                  event={ev}
-                  onOpen={setDrawerTarget}
-                />
-              ))}
-            </div>
+          <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
+            <LastRunCard lastRun={digest?.last_run ?? null} running={running} />
+            {events.length > 0 ? (
+              <div>
+                <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {t("dream.historyTitle")}
+                </h2>
+                <div className="flex flex-col gap-2">
+                  {events.map((ev, i) => (
+                    <EventCard
+                      key={`${ev.at_ms}-${i}`}
+                      event={ev}
+                      onOpen={setDrawerTarget}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         )
       ) : (
