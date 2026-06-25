@@ -27,6 +27,7 @@
       "kind": "work",
       "mode": "explore",
       "tools": "default",
+      "max_turns": 6,
       "prompt": "Investigate the self-contained research query you were given. Make AT MOST 2-3 web searches and read AT MOST 3-4 sources total, then STOP — do not re-fetch a URL you already read or keep hunting for more. Return concise findings, each claim followed by its source (a URL or title). Cite specifically; never invent a source or summarize vaguely. If sources are thin, say so rather than over-searching."
     },
     {

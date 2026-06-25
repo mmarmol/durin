@@ -582,3 +582,49 @@ def test_cases_duplicate_normalized_labels_raise():
         parse_workflow({"name": "w", "start": "a", "nodes": [
             {"id": "a", "kind": "work", "cases": {"DONE": None, "done": "a"}},
         ]})
+
+
+# ── max_turns spec tests ──────────────────────────────────────────────────────
+
+
+def test_max_turns_defaults_none():
+    a = parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work"}]}).nodes["a"]
+    assert a.max_turns is None
+
+
+def test_max_turns_parses_valid_int():
+    a = parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "max_turns": 6}]}).nodes["a"]
+    assert a.max_turns == 6
+
+
+def test_max_turns_zero_raises():
+    with pytest.raises(WorkflowError, match="max_turns must be an int >= 1"):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "max_turns": 0}]})
+
+
+def test_max_turns_negative_raises():
+    with pytest.raises(WorkflowError, match="max_turns must be an int >= 1"):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "max_turns": -3}]})
+
+
+def test_max_turns_bool_rejected():
+    # bool is a subclass of int; True == 1 but must still be rejected.
+    with pytest.raises(WorkflowError, match="max_turns must be an int >= 1"):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "max_turns": True}]})
+
+
+def test_max_turns_string_raises():
+    with pytest.raises(WorkflowError, match="max_turns must be an int >= 1"):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "max_turns": "6"}]})
+
+
+def test_max_turns_on_command_node_raises():
+    with pytest.raises(WorkflowError, match="max_turns cannot be set on a command node"):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "command": "pytest", "max_turns": 3}]})

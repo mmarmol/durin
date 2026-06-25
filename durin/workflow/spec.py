@@ -49,6 +49,7 @@ class WorkNode:
     on_fail: str | None = None           # routing: next node on fail/non-zero exit
     cases: dict[str, str | None] | None = None  # multi-way routing: label -> target node id (null = end)
     max_visits: int | None = None        # per-node loop cap (None = inherit workflow default)
+    max_turns: int | None = None         # agentic tool-round budget for this node (None = global default)
     kind: Literal["work"] = "work"
 
     @property
@@ -224,6 +225,16 @@ def _build_node(raw: dict[str, Any]) -> Node:
                 raise WorkflowError(
                     f"node {node_id!r}: max_visits must be an int >= 1, got {node_max_visits!r}"
                 )
+        node_max_turns = raw.get("max_turns")
+        if node_max_turns is not None:
+            if isinstance(node_max_turns, bool) or not isinstance(node_max_turns, int) or node_max_turns < 1:
+                raise WorkflowError(
+                    f"node {node_id!r}: max_turns must be an int >= 1, got {node_max_turns!r}"
+                )
+            if command:
+                raise WorkflowError(
+                    f"node {node_id!r}: max_turns cannot be set on a command node"
+                )
         return WorkNode(
             id=node_id,
             model=model,
@@ -240,6 +251,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
             on_fail=on_fail,
             cases=cases,
             max_visits=node_max_visits,
+            max_turns=node_max_turns,
         )
     if kind == "decision":
         # Back-compat alias: kind=decision maps to a routing WorkNode.

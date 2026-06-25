@@ -185,19 +185,61 @@ class AgentNodeRunner:
         # one of persona_model_ref and req.node.model is set at a time.
         model = persona_model_ref or req.node.model or self.default_model
 
+        node_max_turns = getattr(req.node, "max_turns", None)
+        if node_max_turns is not None:
+            # Prepend a budget note so the model knows to be efficient.
+            budget_note = (
+                f"\n\nYou have up to {node_max_turns} rounds of tool use. "
+                "Gather efficiently, then give your final answer."
+            )
+            system_msg = messages[0]
+            messages[0] = {**system_msg, "content": system_msg["content"] + budget_note}
+            run_max_iterations = node_max_turns
+        else:
+            run_max_iterations = self.max_iterations
+
         result = asyncio.run(self.runner.run(AgentRunSpec(
             initial_messages=messages,
             tools=self._build_tools(req.node, req.workspace_override),
             model=model,
-            max_iterations=self.max_iterations,
+            max_iterations=run_max_iterations,
             max_tool_result_chars=self.max_tool_result_chars,
         )))
 
-        session_key = self._persist(req, result.messages)
+        # When the node exhausted its tool-round budget without finishing, make a
+        # second call with no tools so the model must emit a synthesis from what it
+        # gathered. This converts the canned "max iterations" outcome into a real
+        # answer and persists both runs' messages.
+        if node_max_turns is not None and result.stop_reason == "max_iterations":
+            synthesis_messages = list(result.messages) + [{
+                "role": "user",
+                "content": (
+                    "You have used all your tool rounds. Based solely on what you have "
+                    "gathered so far, give your best final answer now."
+                ),
+            }]
+            synthesis_result = asyncio.run(self.runner.run(AgentRunSpec(
+                initial_messages=synthesis_messages,
+                tools=ToolRegistry(),   # no tools — model must emit text
+                model=model,
+                max_iterations=1,
+                max_tool_result_chars=self.max_tool_result_chars,
+            )))
+            # Combine: original tool-use messages + synthesis turn
+            all_messages = list(result.messages) + [
+                m for m in synthesis_result.messages
+                if m not in result.messages
+            ]
+            final_output = synthesis_result.final_content or result.final_content or ""
+        else:
+            all_messages = list(result.messages)
+            final_output = result.final_content or ""
+
+        session_key = self._persist(req, all_messages)
         return NodeRunResponse(
-            output=result.final_content or "",
+            output=final_output,
             session_key=session_key,
-            messages=list(result.messages),
+            messages=all_messages,
         )
 
     def _persist(self, req: NodeRunRequest, messages: list[dict]) -> str | None:

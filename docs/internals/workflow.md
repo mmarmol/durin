@@ -133,6 +133,18 @@ with status `exhausted` carrying `exhausted_node`; the `run_workflow` tool and t
 runner surface it gracefully (the node, its last FAIL reason, and the best partial), so the
 caller learns it did not complete and why instead of treating a partial as done.
 
+**`max_turns`** (distinct from `max_visits`) caps how many tool-use rounds the model gets
+within a single node execution. When set on a `WorkNode` (agent nodes only; command nodes
+reject it), the node runner (1) prepends a budget note to the node's system prompt ("You
+have up to N rounds of tool use. Gather efficiently, then give your final answer."),
+(2) runs the agent with `max_iterations = max_turns` instead of the global default, and
+(3) if the run ends because the budget was exhausted, makes a second call with no tools
+and `max_iterations=1` asking the model to synthesize from what it gathered — so the node
+always produces a real answer rather than a canned "max iterations" message. The second
+call's messages are appended to the first run's messages and persisted together. If the
+first run completes within budget, no second call is made and the path is byte-for-byte
+identical to a node without `max_turns`.
+
 **The engine is decoupled from the LLM and runs loop-safe.** The graph walk depends
 only on an injected `NodeRunner` callable, so it is fully unit-testable with a mock.
 The real runner drives the async `AgentRunner` synchronously per node, so the
