@@ -89,6 +89,7 @@ def test_workflow_run_result_forwards_exhausted_node():
     dto = WorkflowRunResult(
         status=engine_result.status,
         final_output=engine_result.final_output or "",
+        run_id=engine_result.run_id,
         runs=[
             {"node_id": r.node_id, "iteration": r.iteration, "passed": r.passed,
              "output": (r.output or "")[:2000]}
@@ -112,6 +113,7 @@ def test_workflow_run_result_exhausted_node_defaults_empty():
     dto = WorkflowRunResult(
         status=engine_result.status,
         final_output=engine_result.final_output or "",
+        run_id=engine_result.run_id,
         runs=[],
         output_dir=engine_result.output_dir or "",
         exhausted_node=engine_result.exhausted_node or "",

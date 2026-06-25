@@ -1417,6 +1417,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the run manifests a session spawned (forward lineage), newest-first. */
+        get: operations["workflows_session_runs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{name}": {
         parameters: {
             query?: never;
@@ -1481,6 +1498,23 @@ export interface paths {
         put?: never;
         /** Run a workflow on a task (no live MCP — that path is the agent's). */
         post: operations["workflows_run"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{name}/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one run's manifest (status + per-node session trace). */
+        get: operations["workflows_run_manifest"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3614,6 +3648,20 @@ export interface components {
             /** Task */
             task: string;
         };
+        /** WorkflowRunManifestQuery */
+        WorkflowRunManifestQuery: {
+            /** Name */
+            name: string;
+            /** Run Id */
+            run_id: string;
+        };
+        /** WorkflowRunManifestResult */
+        WorkflowRunManifestResult: {
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+        };
         /** WorkflowRunResult */
         WorkflowRunResult: {
             /**
@@ -3628,6 +3676,8 @@ export interface components {
              * @default
              */
             output_dir: string;
+            /** Run Id */
+            run_id: string;
             /** Runs */
             runs: {
                 [key: string]: unknown;
@@ -3648,6 +3698,18 @@ export interface components {
         WorkflowSaveResult: {
             /** Name */
             name: string;
+        };
+        /** WorkflowSessionRunsQuery */
+        WorkflowSessionRunsQuery: {
+            /** Session */
+            session: string;
+        };
+        /** WorkflowSessionRunsResult */
+        WorkflowSessionRunsResult: {
+            /** Runs */
+            runs: {
+                [key: string]: unknown;
+            }[];
         };
         /**
          * WorkflowsListQuery
@@ -6092,6 +6154,30 @@ export interface operations {
             };
         };
     };
+    workflows_session_runs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowSessionRunsQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowSessionRunsResult"];
+                };
+            };
+        };
+    };
     workflows_get: {
         parameters: {
             query?: never;
@@ -6232,6 +6318,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowRunResult"];
+                };
+            };
+        };
+    };
+    workflows_run_manifest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowRunManifestQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowRunManifestResult"];
                 };
             };
         };

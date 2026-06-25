@@ -25,6 +25,7 @@ from durin.service.types import (
 )
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
+from durin.workflow import run_log
 from durin.workflow.loader import WorkflowNotFound, load_workflow, workflows_dir
 from durin.workflow.spec import WorkflowError, parse_workflow
 from durin.workflow.version_store import version_lock_target
@@ -73,9 +74,27 @@ class WorkflowRunCommand(Command):
 class WorkflowRunResult(Result):
     status: str
     final_output: str
-    runs: list[dict[str, Any]]
+    run_id: str                       # the run's manifest id — the key for the read routes below
+    runs: list[dict[str, Any]]        # per-node trace: node_id/iteration/passed/session_key/worker_index/status/route_label/output
     output_dir: str = ""
     exhausted_node: str = ""
+
+
+class WorkflowRunManifestQuery(Query):
+    name: str
+    run_id: str
+
+
+class WorkflowRunManifestResult(Result):
+    manifest: dict[str, Any]   # the live/terminal run manifest (status, started/finished, per-node trace)
+
+
+class WorkflowSessionRunsQuery(Query):
+    session: str   # a root session key; lists the runs that session spawned
+
+
+class WorkflowSessionRunsResult(Result):
+    runs: list[dict[str, Any]]   # matching run manifests, newest-first
 
 
 class WorkflowRecsQuery(Query):
@@ -219,14 +238,40 @@ class WorkflowsService:
         return WorkflowRunResult(
             status=result.status,
             final_output=result.final_output or "",
+            run_id=result.run_id,
             runs=[
                 {"node_id": r.node_id, "iteration": r.iteration, "passed": r.passed,
+                 "session_key": r.session_key, "worker_index": r.worker_index,
+                 "status": r.status, "route_label": r.route_label,
                  "output": (r.output or "")[:2000]}
                 for r in result.runs
             ],
             output_dir=result.output_dir or "",
             exhausted_node=result.exhausted_node or "",
         )
+
+    @route(
+        "GET", "/api/v1/workflows/runs",
+        scope=Scope.WORKFLOWS_READ.value,
+        request_model=WorkflowSessionRunsQuery, response_model=WorkflowSessionRunsResult,
+        summary="List the run manifests a session spawned (forward lineage), newest-first.",
+    )
+    async def session_runs(self, query: WorkflowSessionRunsQuery, principal: Principal) -> WorkflowSessionRunsResult:
+        principal.require(Scope.WORKFLOWS_READ)
+        return WorkflowSessionRunsResult(runs=run_log.runs_for_session(self._workspace, query.session))
+
+    @route(
+        "GET", "/api/v1/workflows/{name}/runs/{run_id}",
+        scope=Scope.WORKFLOWS_READ.value,
+        request_model=WorkflowRunManifestQuery, response_model=WorkflowRunManifestResult,
+        summary="Read one run's manifest (status + per-node session trace).",
+    )
+    async def run_manifest(self, query: WorkflowRunManifestQuery, principal: Principal) -> WorkflowRunManifestResult:
+        principal.require(Scope.WORKFLOWS_READ)
+        manifest = run_log.read_manifest(self._workspace, query.name, query.run_id)
+        if manifest is None:
+            raise NotFoundError(f"run {query.run_id!r} of workflow {query.name!r} not found")
+        return WorkflowRunManifestResult(manifest=manifest)
 
     @route(
         "GET", "/api/v1/workflows/{name}/recommendations",

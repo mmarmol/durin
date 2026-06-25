@@ -4701,6 +4701,39 @@
         "title": "WorkflowRunCommand",
         "type": "object"
       },
+      "WorkflowRunManifestQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "run_id"
+        ],
+        "title": "WorkflowRunManifestQuery",
+        "type": "object"
+      },
+      "WorkflowRunManifestResult": {
+        "properties": {
+          "manifest": {
+            "additionalProperties": true,
+            "title": "Manifest",
+            "type": "object"
+          }
+        },
+        "required": [
+          "manifest"
+        ],
+        "title": "WorkflowRunManifestResult",
+        "type": "object"
+      },
       "WorkflowRunResult": {
         "properties": {
           "exhausted_node": {
@@ -4715,6 +4748,10 @@
           "output_dir": {
             "default": "",
             "title": "Output Dir",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
             "type": "string"
           },
           "runs": {
@@ -4733,6 +4770,7 @@
         "required": [
           "status",
           "final_output",
+          "run_id",
           "runs"
         ],
         "title": "WorkflowRunResult",
@@ -4769,6 +4807,37 @@
           "name"
         ],
         "title": "WorkflowSaveResult",
+        "type": "object"
+      },
+      "WorkflowSessionRunsQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "session": {
+            "title": "Session",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "WorkflowSessionRunsQuery",
+        "type": "object"
+      },
+      "WorkflowSessionRunsResult": {
+        "properties": {
+          "runs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "WorkflowSessionRunsResult",
         "type": "object"
       },
       "WorkflowsListQuery": {
@@ -7693,6 +7762,35 @@
         "x-required-scope": "workflows:read"
       }
     },
+    "/api/v1/workflows/runs": {
+      "get": {
+        "operationId": "workflows_session_runs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowSessionRunsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowSessionRunsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List the run manifests a session spawned (forward lineage), newest-first.",
+        "x-required-scope": "workflows:read"
+      }
+    },
     "/api/v1/workflows/{name}": {
       "delete": {
         "operationId": "workflows_delete",
@@ -7861,6 +7959,35 @@
         },
         "summary": "Run a workflow on a task (no live MCP \u2014 that path is the agent's).",
         "x-required-scope": "workflows:write"
+      }
+    },
+    "/api/v1/workflows/{name}/runs/{run_id}": {
+      "get": {
+        "operationId": "workflows_run_manifest",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowRunManifestQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunManifestResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Read one run's manifest (status + per-node session trace).",
+        "x-required-scope": "workflows:read"
       }
     }
   }
