@@ -119,6 +119,9 @@ def finalize_run(
         "started_at": started_at,
         "finished_at": finished_at,
         "ts": finished_at,
+        # The terminal output (the answer, the plan, or — on needs_input — the questions),
+        # capped, so a historical audit of the run shows the result, not only the trace.
+        "final_output": (result.final_output or "")[:8000],
         "runs": _node_records(result),
     }
     path = _record_path(workspace, name, result.run_id)
