@@ -1450,6 +1450,18 @@
     "maxVisits": "máximo de visitas",
     "maxVisitsHint": "vacío = default del workflow",
     "exhausted": "no se completó — reintentos agotados",
-    "exhaustedNode": "agotado en"
+    "exhaustedNode": "agotado en",
+    "finalOutput": "salida final",
+    "runHistory": "ejecuciones",
+    "copySession": "copiar clave de sesión",
+    "sessionCopied": "clave de sesión copiada",
+    "workerLabel": "worker {{index}}",
+    "branchLabel": "rama {{id}}",
+    "runStatus": {
+      "ok": "ok",
+      "no_session": "sin sesión",
+      "persist_failed": "fallo al guardar",
+      "node_failed": "falló"
+    }
   }
 }

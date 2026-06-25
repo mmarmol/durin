@@ -833,7 +833,19 @@
     "maxVisits": "max visits",
     "maxVisitsHint": "blank = workflow default",
     "exhausted": "did not complete — retries exhausted",
-    "exhaustedNode": "exhausted at"
+    "exhaustedNode": "exhausted at",
+    "finalOutput": "final output",
+    "runHistory": "runs",
+    "copySession": "copy session key",
+    "sessionCopied": "session key copied",
+    "workerLabel": "worker {{index}}",
+    "branchLabel": "branch {{id}}",
+    "runStatus": {
+      "ok": "ok",
+      "no_session": "no session",
+      "persist_failed": "save failed",
+      "node_failed": "failed"
+    }
   },
   "skills": {
     "view": "View",

@@ -242,10 +242,27 @@ export async function deleteWorkflow(
   );
 }
 
+// One per-node entry in a run's trace. The attribution fields make a run auditable:
+// session_key points at the fresh session that produced the row; worker_index/branch_id
+// identify a fan-out worker or a static parallel branch so concurrent units stay legible;
+// status is "ok" | "no_session" | "persist_failed" | "node_failed".
+export type WorkflowRunNode = {
+  node_id: string;
+  iteration: number;
+  passed: boolean | null;
+  output: string;
+  session_key: string | null;
+  worker_index: number | null;
+  branch_id?: string | null;
+  status: string;
+  route_label: string | null;
+};
+
 export type WorkflowRunResult = {
   status: string;
   final_output: string;
-  runs: Array<{ node_id: string; iteration: number; passed: boolean | null; output: string }>;
+  run_id: string;
+  runs: WorkflowRunNode[];
   output_dir?: string;
   exhausted_node?: string;
 };

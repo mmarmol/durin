@@ -13,7 +13,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Lightbulb, Loader2, Play, Plus, Trash2, Workflow as WorkflowIcon } from "lucide-react";
+import { Check, Copy, Lightbulb, Loader2, Play, Plus, Trash2, Workflow as WorkflowIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,7 @@ import {
   saveWorkflow,
   type PersonaItem,
   type WorkflowRecommendation,
+  type WorkflowRunNode,
   type WorkflowRunResult,
 } from "@/lib/api";
 import {
@@ -829,6 +830,136 @@ function IOConfigPanel({
   );
 }
 
+// A node's run status mapped to a chip tone. "ok"/"no_session" are normal; the two
+// failure statuses ("persist_failed", "node_failed") render in the destructive tone.
+function statusTone(status: string): string {
+  if (status === "node_failed" || status === "persist_failed") {
+    return "bg-destructive/10 text-destructive";
+  }
+  if (status === "no_session") return "bg-muted text-muted-foreground";
+  return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
+}
+
+// A workflow node session is headless (not a chat in the sidebar), so there is no
+// in-app viewer to open it by key. Surface the key as a labelled, copyable reference
+// so an auditor can look the session up by hand.
+function CopyableKey({ value }: { value: string }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const onCopy = useCallback(() => {
+    if (!navigator.clipboard) return;
+    void navigator.clipboard.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1_500);
+    });
+  }, [value]);
+  return (
+    <button
+      type="button"
+      onClick={onCopy}
+      title={t("workflows.copySession")}
+      aria-label={copied ? t("workflows.sessionCopied") : t("workflows.copySession")}
+      className="inline-flex max-w-full items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground hover:text-foreground"
+    >
+      {copied ? <Check className="h-3 w-3 shrink-0" /> : <Copy className="h-3 w-3 shrink-0" />}
+      <span className="truncate">{value}</span>
+    </button>
+  );
+}
+
+// One per-node/worker row in a run's trace: identity (node_id#iteration, plus fan-out
+// worker_index / static branch_id so concurrent units are legible), a status chip and
+// route verdict, the copyable session key, and the node's (truncated) output.
+function RunNodeRow({ run }: { run: WorkflowRunNode }) {
+  const { t } = useTranslation();
+  const verdict =
+    run.route_label != null && run.route_label !== ""
+      ? run.route_label
+      : run.passed === true
+        ? "✓"
+        : run.passed === false
+          ? "✗"
+          : null;
+  return (
+    <div className="flex flex-col gap-1 rounded border px-2 py-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-mono text-[11px] font-medium">
+          {run.node_id}#{run.iteration}
+        </span>
+        {run.worker_index != null && (
+          <span className="rounded bg-violet-500/10 px-1 py-0.5 text-[10px] text-violet-700 dark:text-violet-300">
+            {t("workflows.workerLabel", { index: run.worker_index })}
+          </span>
+        )}
+        {run.branch_id && (
+          <span className="rounded bg-sky-500/10 px-1 py-0.5 text-[10px] text-sky-700 dark:text-sky-300">
+            {t("workflows.branchLabel", { id: run.branch_id })}
+          </span>
+        )}
+        <span className={cn("rounded px-1 py-0.5 text-[10px]", statusTone(run.status))}>
+          {t("workflows.runStatus." + run.status, run.status)}
+        </span>
+        {verdict != null && (
+          <span
+            className={cn(
+              "rounded px-1 py-0.5 text-[10px]",
+              run.passed === false ? "bg-destructive/10 text-destructive" : "bg-muted",
+            )}
+          >
+            {verdict}
+          </span>
+        )}
+        {run.session_key && <CopyableKey value={run.session_key} />}
+      </div>
+      {run.output && (
+        <div className="whitespace-pre-wrap break-words text-[11px] text-muted-foreground">
+          {run.output}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The detail view of a single run: the exhausted/incomplete banner (if any), a row per
+// node/worker (status, output, session affordance), the final output and output folder.
+function RunDetail({ result }: { result: WorkflowRunResult }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col gap-2">
+      {result.status !== "completed" && (
+        <div className="rounded bg-amber-500/10 px-2 py-1.5 text-amber-700 dark:text-amber-400">
+          <span className="font-medium">{t("workflows.exhausted")}</span>
+          {result.exhausted_node && (
+            <span className="ml-1">
+              — {t("workflows.exhaustedNode")}: <span className="font-mono">{result.exhausted_node}</span>
+            </span>
+          )}
+        </div>
+      )}
+      <div className="flex flex-col gap-1.5">
+        {result.runs.map((run, i) => (
+          <RunNodeRow key={`${run.node_id}#${run.iteration}#${i}`} run={run} />
+        ))}
+      </div>
+      {result.final_output && (
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            {t("workflows.finalOutput")}
+          </span>
+          <div className="whitespace-pre-wrap break-words text-muted-foreground">
+            {result.final_output}
+          </div>
+        </div>
+      )}
+      {result.output_dir && (
+        <div className="font-mono text-[11px] text-muted-foreground">
+          {t("workflows.outputDir")}: {result.output_dir}
+        </div>
+      )}
+    </div>
+  );
+}
+
 let _idSeq = 0;
 
 export function WorkflowsView() {
@@ -847,6 +978,9 @@ export function WorkflowsView() {
   const [task, setTask] = useState("");
   const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState<WorkflowRunResult | null>(null);
+  // Minimal run history: the runs triggered for the selected workflow this session,
+  // newest-first. Clicking one re-shows its detail (the full result is kept in memory).
+  const [runHistory, setRunHistory] = useState<WorkflowRunResult[]>([]);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [personas, setPersonas] = useState<PersonaItem[]>([]);
@@ -1090,6 +1224,7 @@ export function WorkflowsView() {
 
   useEffect(() => {
     setRunResult(null);
+    setRunHistory([]);
     if (!selected) {
       setRecs([]);
       return;
@@ -1104,7 +1239,10 @@ export function WorkflowsView() {
     setRunResult(null);
     try {
       const files = inputPaths.split("\n").map((s) => s.trim()).filter(Boolean);
-      setRunResult(await runWorkflow(token, selected, task, files));
+      const result = await runWorkflow(token, selected, task, files);
+      setRunResult(result);
+      // Newest-first; de-dupe by run_id so a re-render never doubles an entry.
+      setRunHistory((prev) => [result, ...prev.filter((r) => r.run_id !== result.run_id)]);
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -1374,42 +1512,33 @@ export function WorkflowsView() {
                       )}
                     </Button>
                   </div>
+                  {runHistory.length > 1 && (
+                    <div className="mt-2 flex flex-wrap items-center gap-1">
+                      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        {t("workflows.runHistory")}
+                      </span>
+                      {runHistory.map((r, i) => (
+                        <button
+                          key={r.run_id}
+                          type="button"
+                          onClick={() => setRunResult(r)}
+                          title={r.run_id}
+                          className={cn(
+                            "rounded border px-1.5 py-0.5 font-mono text-[10px]",
+                            runResult?.run_id === r.run_id
+                              ? "border-primary text-foreground"
+                              : "text-muted-foreground hover:text-foreground",
+                            r.status !== "completed" && "border-amber-500/60",
+                          )}
+                        >
+                          #{runHistory.length - i}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {runResult && (
                     <div className="mt-2 max-h-72 overflow-y-auto rounded border p-2 text-xs">
-                      {runResult.status !== "completed" && (
-                        <div className="mb-2 rounded bg-amber-500/10 px-2 py-1.5 text-amber-700 dark:text-amber-400">
-                          <span className="font-medium">{t("workflows.exhausted")}</span>
-                          {runResult.exhausted_node && (
-                            <span className="ml-1">
-                              — {t("workflows.exhaustedNode")}: <span className="font-mono">{runResult.exhausted_node}</span>
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      <div className="mb-1 flex flex-wrap gap-1">
-                        {runResult.runs.map((r, i) => (
-                          <span
-                            key={i}
-                            className={cn(
-                              "rounded px-1.5 py-0.5",
-                              r.passed === false
-                                ? "bg-destructive/10 text-destructive"
-                                : "bg-muted",
-                            )}
-                          >
-                            {r.node_id}#{r.iteration}
-                            {r.passed === true ? " ✓" : r.passed === false ? " ✗" : ""}
-                          </span>
-                        ))}
-                      </div>
-                      <div className="whitespace-pre-wrap text-muted-foreground">
-                        {runResult.final_output}
-                      </div>
-                      {runResult.output_dir && (
-                        <div className="mt-1 font-mono text-[11px] text-muted-foreground">
-                          {t("workflows.outputDir")}: {runResult.output_dir}
-                        </div>
-                      )}
+                      <RunDetail result={runResult} />
                     </div>
                   )}
                 </div>
