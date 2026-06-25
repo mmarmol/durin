@@ -22,7 +22,7 @@ from durin.agent.tools.file_state import FileStates
 from durin.agent.tools.loader import ToolLoader
 from durin.agent.tools.registry import ToolRegistry
 from durin.config.schema import ToolsConfig
-from durin.session.lineage import build_lineage, root_of
+from durin.session.lineage import ORIGIN_ID, ORIGIN_TYPE, build_lineage, root_of
 from durin.session.manager import Session, SessionManager
 from durin.workflow.engine import NodeRunRequest, NodeRunResponse
 from durin.workflow.persona_resolve import resolve_persona
@@ -245,14 +245,22 @@ class AgentNodeRunner:
         else:
             key = f"workflow:{req.run_id}:{req.node.id}:{req.iteration}"
         try:
-            parent = req.root_session_key
-            root = (
-                root_of(self.sessions.get_or_create(parent).metadata, default=parent)
-                if parent else key
-            )
+            # Headless runs (no calling session) would otherwise self-root each node
+            # session at its own key, leaving them as orphans. Root them all under a
+            # synthetic per-run session so children_of(run_root) finds every node.
+            run_root = req.root_session_key or f"workflow:{req.run_id}:root"
+            if not req.root_session_key and not self.sessions.exists(run_root):
+                # A top-level run-root: no parent lineage block (so children_of(run_root)
+                # returns the node sessions, not the root itself), just an origin marker.
+                stub = Session(key=run_root)
+                stub.metadata[ORIGIN_TYPE] = "workflow_run"
+                stub.metadata[ORIGIN_ID] = req.run_id
+                stub.metadata["title"] = f"workflow run: {req.run_id}"
+                self.sessions.save(stub)
+            root = root_of(self.sessions.get_or_create(run_root).metadata, default=run_root)
             session = Session(key=key, messages=list(messages))
             session.metadata.update(build_lineage(
-                parent_session_id=parent or key,
+                parent_session_id=run_root,
                 root_id=root,
                 origin_type="workflow_node",
                 origin_id=f"{req.run_id}:{req.node.id}:{req.iteration}",
