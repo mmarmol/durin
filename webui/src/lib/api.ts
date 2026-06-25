@@ -1556,8 +1556,18 @@ export interface DreamEvent {
   summary: string;
 }
 
+export interface DreamLastRun {
+  at_ms: number;
+  sessions: number;
+  entities: number;
+  merged: number;
+  skills_created: number;
+  skills_improved: number;
+}
+
 export interface DreamDigest {
   events: DreamEvent[];
+  last_run: DreamLastRun | null;
   last_run_at_ms: number | null;
 }
 
@@ -1570,8 +1580,10 @@ export async function fetchDreamDigest(
   if (limit != null) params.set("limit", String(limit));
   const qs = params.toString();
   const url = `${base}/api/v1/memory/dream/digest${qs ? `?${qs}` : ""}`;
-  const res = await request<{ data: DreamDigest }>(url, token);
-  return res.data;
+  // The endpoint returns the DreamDigest fields directly (no `data` envelope —
+  // same as flagged-pairs). Returning `res.data` here yielded `undefined`, so
+  // the digest never reached the UI no matter what the backend produced.
+  return request<DreamDigest>(url, token);
 }
 
 export type FlaggedPair = components["schemas"]["FlaggedPair"];

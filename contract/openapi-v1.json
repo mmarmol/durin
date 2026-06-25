@@ -890,7 +890,7 @@
         "type": "object"
       },
       "DreamDigest": {
-        "description": "List of recent dream events, newest first, capped at *limit*.",
+        "description": "Recent dream activity: the latest run's counts (headline) plus a\nnewest-first feed of prior runs and their activity, capped at *limit*.",
         "properties": {
           "events": {
             "items": {
@@ -898,6 +898,16 @@
             },
             "title": "Events",
             "type": "array"
+          },
+          "last_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DreamLastRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "last_run_at_ms": {
             "anyOf": [
@@ -913,6 +923,7 @@
         },
         "required": [
           "events",
+          "last_run",
           "last_run_at_ms"
         ],
         "title": "DreamDigest",
@@ -976,6 +987,45 @@
           "at_ms"
         ],
         "title": "DreamEvent",
+        "type": "object"
+      },
+      "DreamLastRun": {
+        "description": "Counts for the most recent dream run \u2014 drives the \"\u00faltima corrida\" card.\n\nThese are headline pass deltas for that one run (per-item detail is in the\nevents feed). All-zero is a valid, expected state: an idle run that found\nnothing new still reports 0/0/0/0 so the card always shows what the last run\ndid rather than going blank.",
+        "properties": {
+          "at_ms": {
+            "title": "At Ms",
+            "type": "integer"
+          },
+          "entities": {
+            "title": "Entities",
+            "type": "integer"
+          },
+          "merged": {
+            "title": "Merged",
+            "type": "integer"
+          },
+          "sessions": {
+            "title": "Sessions",
+            "type": "integer"
+          },
+          "skills_created": {
+            "title": "Skills Created",
+            "type": "integer"
+          },
+          "skills_improved": {
+            "title": "Skills Improved",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "at_ms",
+          "sessions",
+          "entities",
+          "merged",
+          "skills_created",
+          "skills_improved"
+        ],
+        "title": "DreamLastRun",
         "type": "object"
       },
       "ExtrasEnsureCommand": {

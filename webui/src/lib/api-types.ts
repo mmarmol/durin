@@ -1852,11 +1852,13 @@ export interface components {
         };
         /**
          * DreamDigest
-         * @description List of recent dream events, newest first, capped at *limit*.
+         * @description Recent dream activity: the latest run's counts (headline) plus a
+         *     newest-first feed of prior runs and their activity, capped at *limit*.
          */
         DreamDigest: {
             /** Events */
             events: components["schemas"]["DreamEvent"][];
+            last_run: components["schemas"]["DreamLastRun"] | null;
             /** Last Run At Ms */
             last_run_at_ms: number | null;
         };
@@ -1889,6 +1891,29 @@ export interface components {
             ref_kind: string | null;
             /** Summary */
             summary: string;
+        };
+        /**
+         * DreamLastRun
+         * @description Counts for the most recent dream run — drives the "última corrida" card.
+         *
+         *     These are headline pass deltas for that one run (per-item detail is in the
+         *     events feed). All-zero is a valid, expected state: an idle run that found
+         *     nothing new still reports 0/0/0/0 so the card always shows what the last run
+         *     did rather than going blank.
+         */
+        DreamLastRun: {
+            /** At Ms */
+            at_ms: number;
+            /** Entities */
+            entities: number;
+            /** Merged */
+            merged: number;
+            /** Sessions */
+            sessions: number;
+            /** Skills Created */
+            skills_created: number;
+            /** Skills Improved */
+            skills_improved: number;
         };
         /** ExtrasEnsureCommand */
         ExtrasEnsureCommand: {

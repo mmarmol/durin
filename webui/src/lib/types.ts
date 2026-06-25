@@ -298,6 +298,23 @@ export type InboundEvent =
     }
   | { event: "session_updated"; chat_id: string }
   | {
+      /** Live progress of a (manually triggered) memory-dream run, broadcast
+       * to every connection. ``run_started`` / ``run_finished`` drive the Dream
+       * view's "running" indicator; ``activity`` carries one digest item
+       * (``item``) to prepend to the live feed as the dream produces it. */
+      event: "dream_progress";
+      kind: "run_started" | "activity" | "run_finished";
+      item?: {
+        kind: string;
+        summary: string;
+        ref: string | null;
+        ref_kind: string | null;
+        at_ms: number;
+      };
+      /** On ``run_finished``: false when the consolidation passes errored. */
+      ok?: boolean;
+    }
+  | {
       /** Ack for a `secret_store` frame — the credential was written to
        * the local secret store (or rejected). Carries no secret value. */
       event: "secret_stored";

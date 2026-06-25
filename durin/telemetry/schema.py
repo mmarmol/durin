@@ -862,6 +862,23 @@ class MemoryDreamLearningsEvent(TypedDict):
     refs: list[str]  # the entity refs written
 
 
+class MemoryDreamRunSummaryEvent(TypedDict):
+    """A whole dream run finished — one summary entry per run.
+
+    Emitted by the cron dream handler after all passes complete so the Dream
+    feed always shows that a run happened and what it did, even when nothing
+    changed: an empty run still leaves a "ran — no new changes" entry instead of
+    silently updating only the last-run timestamp. Counts are the headline pass
+    stats; per-item detail comes from the individual memory.dream.* events.
+    """
+
+    sessions: int          # new sessions the extract pass processed
+    entities: int          # entity attribute updates written this run
+    merged: int            # entities auto-merged by the refine pass
+    skills_created: int    # NEW skills authored by the skill-extract pass
+    skills_improved: int   # existing skills edited by the curation pass
+
+
 class MemoryEntityRelationCapWarnedEvent(TypedDict):
     """An entity write took its relation count across the soft cap (50). The
     write proceeded (alert-only); this event lets dashboards spot mega-hub
@@ -1308,6 +1325,7 @@ EVENTS: dict[str, type] = {
     "memory.dream.patch_applied": MemoryDreamPatchAppliedEvent,
     "memory.dream.discover": MemoryDreamDiscoverEvent,
     "memory.dream.learnings": MemoryDreamLearningsEvent,
+    "memory.dream.run_summary": MemoryDreamRunSummaryEvent,
     "memory.dream.skill_extract": MemoryDreamSkillExtractEvent,
     "memory.dream.skill_signals": MemoryDreamSkillSignalsEvent,
     "memory.dream.max_seconds_reached": MemoryDreamMaxSecondsReachedEvent,
