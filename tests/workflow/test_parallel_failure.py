@@ -2,6 +2,9 @@
 node records a ``node_failed`` NodeRun for that unit and lets the others complete; the
 merged output notes the failures. Only when EVERY unit fails does the node abort the run."""
 
+from pathlib import Path
+
+from durin.workflow.condition import CommandOutcome
 from durin.workflow.engine import NodeRunResponse, WorkflowEngine
 from durin.workflow.spec import parse_workflow
 
@@ -90,3 +93,46 @@ def test_all_read_branches_failing_aborts(tmp_path):
                          run_id_factory=lambda: "r1").run(_read_parallel_wf(), "go")
     assert res.status == "aborted"
     assert "p" in (res.final_output or "")
+
+
+def _choose_wf():
+    return parse_workflow({"name": "w", "start": "fan", "nodes": [
+        {"id": "fan", "kind": "parallel", "branches": ["a", "b"],
+         "reconcile": "choose", "criteria": "best", "next": None},
+        {"id": "a", "kind": "work", "tools": "default"},
+        {"id": "b", "kind": "work", "tools": "default"}]})
+
+
+def test_choose_branch_failure_aborts_cleanly(tmp_path):
+    # choose/union reconcile is deliberately NOT per-branch isolated: a failed fork has no
+    # coherent changeset to merge, so a raising branch aborts the node (no tuple-arity
+    # crash, nothing applied) rather than recording a partial NodeRun.
+    def runner(req):
+        if req.node.id == "b":
+            raise RuntimeError("branch b boom")
+        Path(req.workspace_override, "result.txt").write_text("from a")
+        return NodeRunResponse(output="ok a", session_key=None)
+
+    res = WorkflowEngine(runner, run_id_factory=lambda: "r1", workspace=str(tmp_path),
+                         pick_runner=lambda c, o, m: 0).run(_choose_wf(), "go")
+    assert res.status == "aborted"
+    assert not (tmp_path / "result.txt").exists()   # nothing applied when a branch fails
+
+
+def test_command_node_has_no_session_status():
+    # A command node legitimately has no session; its NodeRun.status is 'no_session' so the
+    # trace distinguishes "no session by design" from a persist failure (overloaded None fix).
+    wf = parse_workflow({"name": "w", "start": "c", "nodes": [
+        {"id": "c", "kind": "decision", "command": "x", "on_pass": None, "on_fail": "fix"},
+        {"id": "fix", "kind": "work", "next": None}]})
+
+    def command_runner(command, *, cwd=None, timeout=30):
+        return CommandOutcome(passed=True, exit_code=0, output="ok")
+
+    res = WorkflowEngine(lambda req: NodeRunResponse(output="x"),
+                         run_id_factory=lambda: "r1",
+                         command_runner=command_runner).run(wf, "go")
+    assert res.status == "completed"
+    c = next(r for r in res.runs if r.node_id == "c")
+    assert c.session_key is None
+    assert c.status == "no_session"

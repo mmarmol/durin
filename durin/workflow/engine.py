@@ -290,7 +290,8 @@ class WorkflowEngine:
                     passed = outcome.passed
                     runs.append(NodeRun(node_id=node.id, iteration=iteration,
                                         output=output, session_key=None,
-                                        passed=passed if node.routes else None))
+                                        passed=passed if node.routes else None,
+                                        status="no_session"))
                 else:
                     # Agent body: run a full agent turn; for a multi-way node the
                     # verdict is a matched case label; for binary routing it is
