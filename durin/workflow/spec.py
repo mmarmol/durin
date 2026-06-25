@@ -215,6 +215,14 @@ def _build_node(raw: dict[str, Any]) -> Node:
                 f"node {node_id!r}: 'cases' requires an agent body — a command node cannot emit a label"
             )
         routes = binary_routing or cases is not None
+        # A routing node emits an independent verdict on its own output; a shared
+        # context buffer would feed it sibling conversations and bias that verdict,
+        # so the two are mutually exclusive.
+        if routes and context == "shared":
+            raise WorkflowError(
+                f"node {node_id!r}: a routing node ('on_pass'/'on_fail' or 'cases') cannot use "
+                f"context='shared'"
+            )
         mode_default = "explore" if routes else "build"
         mode = raw.get("mode", mode_default)
         if not isinstance(mode, str) or not mode:
@@ -279,6 +287,13 @@ def _build_node(raw: dict[str, Any]) -> Node:
         if raw.get("next") is not None and (on_pass is not None or on_fail is not None):
             raise WorkflowError(
                 f"node {node_id!r}: 'next' and routing ('on_pass'/'on_fail') are mutually exclusive"
+            )
+        # A routing node's verdict must stay independent of sibling conversations,
+        # so a shared context buffer is incompatible with routing (mirrors the work path).
+        if (on_pass is not None or on_fail is not None) and raw.get("context", "own") == "shared":
+            raise WorkflowError(
+                f"node {node_id!r}: a routing node ('on_pass'/'on_fail' or 'cases') cannot use "
+                f"context='shared'"
             )
         # Routing agent nodes default to explore mode (read-only) for independence.
         mode = raw.get("mode", "explore") if not command else raw.get("mode", "build")

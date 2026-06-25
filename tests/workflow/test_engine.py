@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from durin.workflow.condition import CommandOutcome
-from durin.workflow.engine import NodeRunRequest, NodeRunResponse, WorkflowEngine
+from durin.workflow.engine import (
+    _SHARED_CONTEXT_MAX_MESSAGES,
+    NodeRunRequest,
+    NodeRunResponse,
+    WorkflowEngine,
+)
 from durin.workflow.spec import parse_workflow
 
 
@@ -230,6 +235,34 @@ def test_shared_buffer_accumulates_across_shared_nodes():
     b_call = [c for c in calls if c.node.id == "b"][0]
     # b is the second shared node: it must receive a's appended message
     assert b_call.shared_context == [{"role": "assistant", "content": "out-a"}]
+
+
+def test_shared_buffer_is_capped_dropping_oldest(tmp_path):
+    wf = parse_workflow({
+        "name": "d", "start": "a",
+        "nodes": [
+            {"id": "a", "kind": "work", "context": "shared", "next": "b"},
+            {"id": "b", "kind": "work", "context": "shared", "next": None},
+        ],
+    })
+    overflow = _SHARED_CONTEXT_MAX_MESSAGES + 50
+    calls = []
+
+    def node_runner(req: NodeRunRequest) -> NodeRunResponse:
+        calls.append(req)
+        if req.node.id == "a":
+            # Emit more messages than the cap so the buffer must be trimmed.
+            msgs = [{"role": "assistant", "content": f"m{i}"} for i in range(overflow)]
+        else:
+            msgs = []
+        return NodeRunResponse(output="o", session_key=None, messages=msgs)
+
+    WorkflowEngine(node_runner, workspace=str(tmp_path)).run(wf, "t")
+    b_call = [c for c in calls if c.node.id == "b"][0]
+    # b sees only the most recent N of a's messages; the oldest are dropped.
+    assert len(b_call.shared_context) == _SHARED_CONTEXT_MAX_MESSAGES
+    assert b_call.shared_context[0] == {"role": "assistant", "content": "m50"}
+    assert b_call.shared_context[-1] == {"role": "assistant", "content": f"m{overflow - 1}"}
 
 
 def test_agent_routing_node_routes_on_its_own_verdict():

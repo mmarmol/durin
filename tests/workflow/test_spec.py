@@ -628,3 +628,26 @@ def test_max_turns_on_command_node_raises():
     with pytest.raises(WorkflowError, match="max_turns cannot be set on a command node"):
         parse_workflow({"name": "w", "start": "a",
                         "nodes": [{"id": "a", "kind": "work", "command": "pytest", "max_turns": 3}]})
+
+
+def test_routing_node_cannot_use_shared_context_binary():
+    with pytest.raises(WorkflowError, match="routing node.*cannot use context=.shared."):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "context": "shared", "criteria": "ok?",
+             "on_pass": "b", "on_fail": "a"},
+            {"id": "b", "kind": "work", "next": None}]})
+
+
+def test_routing_node_cannot_use_shared_context_cases():
+    with pytest.raises(WorkflowError, match="routing node.*cannot use context=.shared."):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "context": "shared",
+             "cases": {"x": "b", "default": None}},
+            {"id": "b", "kind": "work", "next": None}]})
+
+
+def test_non_routing_shared_node_still_parses():
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "context": "shared", "next": "b"},
+        {"id": "b", "kind": "work", "next": None}]})
+    assert wf.nodes["a"].context == "shared"

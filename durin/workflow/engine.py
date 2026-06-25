@@ -68,6 +68,11 @@ class NodeRunResponse:
 
 NodeRunner = Callable[[NodeRunRequest], NodeRunResponse]
 
+# Upper bound on messages carried in the running shared-context buffer. A long
+# chain of 'shared' nodes would otherwise grow this without limit and balloon the
+# prompt for every later node; keep only the most recent N messages.
+_SHARED_CONTEXT_MAX_MESSAGES = 200
+
 
 class WorkflowConfigError(RuntimeError):
     """The workflow is wired wrong (e.g. a subworkflow node but no subworkflow runner). A
@@ -322,6 +327,10 @@ class WorkflowEngine:
                                         passed=passed))
                     if node.context == "shared":
                         shared_context.extend(resp.messages)
+                        if len(shared_context) > _SHARED_CONTEXT_MAX_MESSAGES:
+                            # Keep only the most recent messages so a long shared chain
+                            # cannot grow the buffer (and every later node's prompt) unboundedly.
+                            del shared_context[:-_SHARED_CONTEXT_MAX_MESSAGES]
 
                 if node.cases is not None:
                     # Multi-way routing: match the agent's output against declared labels.
