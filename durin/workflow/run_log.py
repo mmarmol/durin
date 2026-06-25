@@ -34,6 +34,11 @@ def _wf_dir(workspace: str | Path, name: str) -> Path:
 # {run_id, workflow, status, ts, runs:[{node_id, iteration, passed}]}; readers tolerate them.
 SCHEMA = 2
 
+# A run still "running" this long after it started can only be one whose process died
+# before finalizing — the gateway's boot-time sweep (reconcile_running) flips it to
+# "crashed" so an auditor sees a truthful status. Generous: real runs finalize fast.
+RECONCILE_AGE_S = 6 * 3600
+
 
 def _node_records(result) -> list[dict]:
     """The per-node trace each manifest write embeds: every field an auditor or the
@@ -161,6 +166,37 @@ def runs_for_session(workspace: str | Path, root_session_key: str) -> list[dict]
                 out.append(rec)
     out.sort(key=lambda r: r.get("ts", 0.0), reverse=True)
     return out
+
+
+def reconcile_running(workspace: str | Path, *, now: float, max_age_s: float) -> int:
+    """Mark any ``running`` manifest whose ``started_at`` is older than *max_age_s* as
+    ``crashed`` (keeping its partial trace). A still-``running`` record long past its
+    start could only be a run whose process died before finalizing — this recovers it so
+    crash detection is observable. Returns how many records were reconciled. A malformed
+    record is skipped, never fatal."""
+    root = runs_root(workspace)
+    if not root.is_dir():
+        return 0
+    cutoff = now - max_age_s
+    count = 0
+    for wf_dir in root.iterdir():
+        if not wf_dir.is_dir():
+            continue
+        for f in wf_dir.glob("*.json"):
+            if f.name == ".cursor.json":
+                continue
+            try:
+                rec = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if rec.get("status") == "running" and rec.get("started_at", 0.0) < cutoff:
+                rec["status"] = "crashed"
+                try:
+                    f.write_text(json.dumps(rec), encoding="utf-8")
+                    count += 1
+                except OSError:
+                    continue
+    return count
 
 
 def read_runs_since(workspace: str | Path, name: str, cursor_ts: float = 0.0) -> list[dict]:

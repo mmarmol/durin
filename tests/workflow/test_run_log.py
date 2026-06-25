@@ -116,6 +116,35 @@ def test_runs_for_session_matches_root_newest_first(tmp_path):
     assert [r["run_id"] for r in got] == ["new", "old"]   # newest-first
 
 
+def test_reconcile_marks_stale_running_as_crashed(tmp_path):
+    run_log.start_run(tmp_path, "wf", "stale", root_session_key="s", started_at=0.0)
+    run_log.start_run(tmp_path, "wf", "fresh", root_session_key="s", started_at=1950.0)
+    run_log.finalize_run(tmp_path, "wf", _result("done"), root_session_key="s",
+                         started_at=0.0, finished_at=5.0)
+
+    n = run_log.reconcile_running(tmp_path, now=2000.0, max_age_s=100.0)
+    assert n == 1   # only the stale running one
+
+    assert run_log.read_manifest(tmp_path, "wf", "stale")["status"] == "crashed"
+    assert run_log.read_manifest(tmp_path, "wf", "fresh")["status"] == "running"
+    assert run_log.read_manifest(tmp_path, "wf", "done")["status"] == "completed"
+
+
+def test_reconcile_preserves_partial_runs_and_survives_malformed(tmp_path):
+    res = _result("stale", status="running", runs=[
+        NodeRun(node_id="a", iteration=1, output="o", session_key="workflow:stale:a:1"),
+    ])
+    run_log.start_run(tmp_path, "wf", "stale", root_session_key="s", started_at=0.0)
+    run_log.update_run(tmp_path, "wf", "stale", res)
+    # A malformed record must not crash the sweep.
+    (tmp_path / "workflows-runs" / "wf" / "junk.json").write_text("not json", encoding="utf-8")
+
+    run_log.reconcile_running(tmp_path, now=2000.0, max_age_s=100.0)
+    rec = run_log.read_manifest(tmp_path, "wf", "stale")
+    assert rec["status"] == "crashed"
+    assert rec["runs"][0]["session_key"] == "workflow:stale:a:1"   # partial trace kept
+
+
 def test_read_runs_since_tolerates_old_schema(tmp_path):
     # A v1 on-disk record (no schema/root_session_key field, as written before the
     # manifest) is still returned by read_runs_since without error.
