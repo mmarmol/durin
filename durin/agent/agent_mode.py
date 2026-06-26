@@ -235,6 +235,35 @@ def list_modes() -> list[AgentMode]:
     return list(_REGISTRY.values())
 
 
+def register_config_modes(modes: dict[str, Any]) -> None:
+    """Replace the registered custom modes with those defined in config.
+
+    Drops every non-builtin mode currently registered, then registers each
+    config entry (a ``ModeConfig``-shaped object keyed by mode name) as a custom
+    mode. An entry whose name collides with a built-in is ignored — built-ins
+    cannot be overridden. Idempotent: re-calling reflects the latest config, and
+    ``{}`` resets to the built-ins only. Safe to call after a config mutation.
+    """
+    for name in [n for n, m in list(_REGISTRY.items()) if not m.builtin]:
+        del _REGISTRY[name]
+    for name, mc in modes.items():
+        existing = _REGISTRY.get(name)
+        if existing is not None and existing.builtin:
+            continue  # never shadow a built-in
+        allowed = getattr(mc, "allowed", None)
+        register_mode(
+            AgentMode(
+                name=name,
+                description=getattr(mc, "description", "") or "",
+                allowed=frozenset(allowed) if allowed is not None else None,
+                denied=frozenset(getattr(mc, "denied", None) or ()),
+                prompt_suffix=getattr(mc, "prompt_suffix", "") or "",
+                icon=getattr(mc, "icon", None),
+                builtin=False,
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # Session helpers
 # ---------------------------------------------------------------------------

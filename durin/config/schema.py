@@ -734,6 +734,24 @@ class PersonaConfig(Base):
     description: str | None = None
 
 
+class ModeConfig(Base):
+    """A user-defined agent mode, persisted in config and registered into the
+    agent-mode registry at startup (the dict key is the mode name).
+
+    Mirrors ``AgentMode``'s data knobs: ``allowed`` of ``None`` means full
+    access (every tool) unless ``denied``; a list means only those tools are
+    allowed. ``denied`` always wins. ``prompt_suffix`` is appended to the system
+    prompt while the mode is active. ``icon`` is an optional glyph name for the
+    UI; the picker falls back to a generic glyph when it is unset.
+    """
+
+    description: str = ""
+    allowed: list[str] | None = None
+    denied: list[str] = Field(default_factory=list)
+    prompt_suffix: str = ""
+    icon: str | None = None
+
+
 class ModelCapabilityOverride(Base):
     """User-declared capability override for a specific model name.
 
@@ -1229,6 +1247,13 @@ class Config(BaseSettings):
         validation_alias=AliasChoices("modelPresets", "model_presets"),
     )
     personas: dict[str, PersonaConfig] = Field(default_factory=dict)
+    # User-defined agent modes, keyed by name. Registered into the agent-mode
+    # registry at startup alongside the built-ins (build/plan/explore). The
+    # built-ins are not stored here; they cannot be overridden by a config entry.
+    agent_modes: dict[str, ModeConfig] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("agentModes", "agent_modes"),
+    )
     # Per-model capability overrides — keyed by either the bare model
     # name (``glm-5-turbo``) or the provider-qualified form
     # (``custom/glm-5-turbo``). Provider-qualified keys win over bare

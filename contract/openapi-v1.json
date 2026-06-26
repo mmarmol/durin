@@ -2538,6 +2538,106 @@
         "title": "MemorySubgraphQuery",
         "type": "object"
       },
+      "ModeDeleteCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ModeDeleteCommand",
+        "type": "object"
+      },
+      "ModeDeleteResult": {
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "ModeDeleteResult",
+        "type": "object"
+      },
+      "ModeUpsertCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Allowed"
+          },
+          "denied": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Denied",
+            "type": "array"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Icon"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "prompt_suffix": {
+            "default": "",
+            "title": "Prompt Suffix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ModeUpsertCommand",
+        "type": "object"
+      },
+      "ModeUpsertResult": {
+        "properties": {
+          "mode": {
+            "additionalProperties": true,
+            "title": "Mode",
+            "type": "object"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "ModeUpsertResult",
+        "type": "object"
+      },
       "ModelCapabilitiesQuery": {
         "additionalProperties": false,
         "properties": {
@@ -6392,6 +6492,33 @@
       }
     },
     "/api/v1/modes": {
+      "delete": {
+        "operationId": "modes_delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModeDeleteCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModeDeleteResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Delete a custom agent mode",
+        "x-required-scope": "config:write"
+      },
       "get": {
         "operationId": "modes_list",
         "requestBody": {
@@ -6418,6 +6545,33 @@
         },
         "summary": "List registered agent modes (build/plan/explore plus custom)",
         "x-required-scope": "system:read"
+      },
+      "post": {
+        "operationId": "modes_upsert",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModeUpsertCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModeUpsertResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Create or update a custom agent mode",
+        "x-required-scope": "config:write"
       }
     },
     "/api/v1/oauth/codex": {
