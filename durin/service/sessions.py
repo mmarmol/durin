@@ -33,10 +33,6 @@ from durin.service.types import (
 )
 from durin.session.turn_lease import session_turn_lease
 
-# Session keys a read endpoint will drill into: user chats plus the task
-# sub-sessions the Tasks tray links to. Internal kinds (memory:, etc.) stay closed.
-_DRILLABLE_PREFIXES = ("websocket:", "subagent:", "workflow:")
-
 # ---------------------------------------------------------------------------
 # DTOs — sessions list
 # ---------------------------------------------------------------------------
@@ -168,7 +164,7 @@ class SessionsService:
         """
         principal.require(Scope.SESSIONS_READ)
         sm = self._require_manager()
-        if not query.key.startswith(_DRILLABLE_PREFIXES):
+        if not query.key.startswith("websocket:"):
             raise NotFoundError("session not found", details={"key": query.key})
         data = sm.read_session_file(query.key)
         if data is None:
@@ -208,7 +204,7 @@ class SessionsService:
         shim performs the adapter-specific side effect.
         """
         principal.require(Scope.SESSIONS_READ)
-        if not query.key.startswith(_DRILLABLE_PREFIXES):
+        if not query.key.startswith("websocket:"):
             raise NotFoundError("session not found", details={"key": query.key})
         # Sentinel — actual data is built by the shim (see docstring above).
         return WebuiThreadResult(data={})
