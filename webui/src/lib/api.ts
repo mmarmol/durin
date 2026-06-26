@@ -142,10 +142,10 @@ export async function fetchWebuiThread(
   base: string = "",
 ): Promise<WebuiThreadPersistedPayload | null> {
   const url = `${base}/api/v1/sessions/${encodeURIComponent(key)}/webui-thread`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    credentials: "same-origin",
-  });
+  // Route through fetchWithReauth so an expired bootstrap token mints a fresh
+  // one and retries, instead of surfacing an empty thread (the sidebar list
+  // already reauths via request(); this read must match it).
+  const res = await fetchWithReauth(url, token);
   if (res.status === 404) return null;
   if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
   const envelope = await res.json();
@@ -987,15 +987,12 @@ export async function saveSkillFile(
 ): Promise<SaveFileResult> {
   // 2xx carries the result in `data`; a 4xx (syntax / manual-gate) is problem+json
   // with the payload under `details`; only 5xx throws.
-  const res = await fetch(
+  const res = await fetchWithReauth(
     `${base}/api/v1/skills/${encodeURIComponent(name)}/file/save`,
+    token,
     {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, path, content }),
     });
   if (res.status >= 500) throw new ApiError(res.status, `HTTP ${res.status}`);
@@ -1500,10 +1497,7 @@ export async function fetchMemoryEntity(
   base: string = "",
 ): Promise<MemoryEntityDetail | null> {
   const url = `${base}/api/v1/memory/entity/${encodeURIComponent(ref)}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    credentials: "same-origin",
-  });
+  const res = await fetchWithReauth(url, token);
   if (res.status === 404) return null;
   if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
   const envelope = await res.json();
@@ -1677,10 +1671,7 @@ export async function fetchMemoryEntry(
   base: string = "",
 ): Promise<MemoryEntryDetail | null> {
   const url = `${base}/api/v1/memory/entry?uri=${encodeURIComponent(uri)}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    credentials: "same-origin",
-  });
+  const res = await fetchWithReauth(url, token);
   if (res.status === 404) return null;
   if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
   const envelope = await res.json();
@@ -1698,13 +1689,9 @@ export async function forgetMemoryEntry(
   base: string = "",
 ): Promise<{ result: string; detail?: string }> {
   const url = `${base}/api/v1/memory/entry`;
-  const res = await fetch(url, {
+  const res = await fetchWithReauth(url, token, {
     method: "DELETE",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ uri }),
   });
   // 2xx → {result: "archived"}; a 4xx is problem+json whose domain outcome is
@@ -1773,10 +1760,7 @@ export async function fetchMemorySession(
   base: string = "",
 ): Promise<MemorySessionDetail | null> {
   const url = `${base}/api/v1/memory/session/${encodeURIComponent(stem)}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    credentials: "same-origin",
-  });
+  const res = await fetchWithReauth(url, token);
   if (res.status === 404) return null;
   if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
   const envelope = await res.json();
