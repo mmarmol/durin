@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Check, ClipboardList, FileText, KeyRound } from "lucide-react";
+import { Check, ClipboardList, FileText, GitBranch, KeyRound, Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { MarkdownText } from "@/components/MarkdownText";
@@ -44,6 +44,8 @@ export function HoistedToolBlock({
       return <PlanBlock event={event} answered={answered} />;
     case "subagent_result":
       return <SubagentResultBlock event={event} />;
+    case "workflow_progress":
+      return <WorkflowProgressBlock event={event} />;
     default:
       return null;
   }
@@ -231,6 +233,30 @@ function SubagentResultBlock({ event }: { event: ToolProgressEvent }) {
           <MarkdownText className="text-[13px]">{body}</MarkdownText>
         </div>
       ) : null}
+    </BlockShell>
+  );
+}
+
+function WorkflowProgressBlock({ event }: { event: ToolProgressEvent }) {
+  const { t } = useTranslation();
+  const wf = (event.arguments as { workflow?: string } | undefined)?.workflow ?? "";
+  const nodes = event.nodes ?? [];
+  const icon = (s: string) =>
+    s === "done" ? <Check className="h-3 w-3 text-emerald-600" aria-hidden />
+    : s === "failed" ? <X className="h-3 w-3 text-destructive" aria-hidden />
+    : <Loader2 className="h-3 w-3 animate-spin text-amber-600" aria-hidden />;
+  return (
+    <BlockShell icon={<GitBranch className="h-3.5 w-3.5" aria-hidden />}>
+      <div className="mb-0.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        {t("message.workflow.title")}{wf ? ` · ${wf}` : ""}
+      </div>
+      <ul className="flex flex-col gap-1">
+        {nodes.map((n) => (
+          <li key={n.id} className="flex items-center gap-2 text-[12.5px]">
+            {icon(n.status)}<span>{n.id}</span>
+          </li>
+        ))}
+      </ul>
     </BlockShell>
   );
 }

@@ -1177,6 +1177,9 @@
     "subagent": {
       "title": "Subagente",
       "running": "{{steps}} pasos…"
+    },
+    "workflow": {
+      "title": "Workflow"
     }
   },
   "lightbox": {
