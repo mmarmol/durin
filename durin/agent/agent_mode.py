@@ -45,6 +45,12 @@ class AgentMode:
     ``prompt_suffix`` is appended to the system prompt when this mode is
     active, so the model knows what posture it should adopt. Keep it short —
     the goal is to set expectations, not to embed rules.
+
+    ``icon`` is an optional glyph name a mode may carry for the UI; when unset
+    the picker falls back to a generic mode glyph (so the icon is data, never
+    hardcoded per mode name). ``builtin`` marks the three shipped modes, which
+    the management UI shows read-only (duplicate to customise) — user-created
+    modes default to ``False``.
     """
 
     name: str
@@ -52,6 +58,8 @@ class AgentMode:
     allowed: frozenset[str] | None = None
     denied: frozenset[str] = frozenset()
     prompt_suffix: str = ""
+    icon: str | None = None
+    builtin: bool = False
 
     def is_tool_allowed(self, tool_name: str) -> bool:
         if tool_name in self.denied:
@@ -68,6 +76,7 @@ class AgentMode:
 BUILD_MODE = AgentMode(
     name="build",
     description="Default mode. Full access to all tools.",
+    builtin=True,
 )
 
 # In plan mode the agent is read-only EXCEPT for `exit_plan_mode`, which
@@ -113,6 +122,7 @@ PLAN_MODE_ALLOWED = frozenset({
 
 PLAN_MODE = AgentMode(
     name="plan",
+    builtin=True,
     description=(
         "Read-only planning mode. The agent investigates and proposes a "
         "plan but does not modify the workspace. Use /build (or the "
@@ -175,6 +185,7 @@ EXPLORE_MODE_ALLOWED = frozenset({
 EXPLORE_MODE = AgentMode(
     name="explore",
     description="Read-only mode for exploration sub-agents.",
+    builtin=True,
     allowed=EXPLORE_MODE_ALLOWED,
     prompt_suffix=(
         "\n\n## EXPLORE MODE — READ-ONLY (strict)\n"

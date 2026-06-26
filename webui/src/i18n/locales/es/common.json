@@ -1008,6 +1008,9 @@
         "high": "Alto",
         "max": "Máximo"
       },
+      "mode": {
+        "title": "Modo"
+      },
       "encoding": "Procesando…",
       "remove": "Quitar adjunto",
       "normalizedSizeHint": "{{orig}} → {{current}} (auto)",
