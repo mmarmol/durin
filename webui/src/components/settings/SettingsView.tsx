@@ -33,6 +33,7 @@ import {
   Settings,
   ShieldCheck,
   Sliders,
+  SlidersHorizontal,
   Sparkles,
   Triangle,
   Waves,
@@ -85,6 +86,7 @@ import { useClient } from "@/providers/ClientProvider";
 import type { SecretEntry, SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
 import { McpSettings } from "./McpSettings";
 import { PersonasSettings } from "./PersonasSettings";
+import { ModesSettings } from "./ModesSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 
 type SettingsSectionKey =
@@ -96,6 +98,7 @@ type SettingsSectionKey =
   | "transcription"
   | "skills-security"
   | "personas"
+  | "modes"
   | "mcp"
   | "cron"
   | "secrets"
@@ -432,6 +435,8 @@ export function SettingsView({
                 <SkillsSecuritySettings token={token} />
               ) : activeSection === "personas" ? (
                 <PersonasSettings token={token} />
+              ) : activeSection === "modes" ? (
+                <ModesSettings token={token} />
               ) : activeSection === "mcp" ? (
                 <McpSettings token={token} />
               ) : activeSection === "cron" ? (
@@ -510,6 +515,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "transcription", icon: Waves },
   { key: "skills-security", icon: ShieldCheck },
   { key: "personas", icon: Drama },
+  { key: "modes", icon: SlidersHorizontal },
   { key: "mcp", icon: Plug },
   { key: "cron", icon: Clock },
   { key: "secrets", icon: Lock },

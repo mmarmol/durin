@@ -75,6 +75,7 @@
       "transcription": "Voice",
       "skills-security": "Skills security",
       "personas": "Personas",
+      "modes": "Modes",
       "cron": "Cron",
       "logs": "Logs",
       "mcp": "MCP"
@@ -426,6 +427,38 @@
           "name": "Entity memory consolidation",
           "note": "Daily pass (3am local) plus reactive triggers (post-compaction / session-close) that processes recent sessions — extracts entity attributes, mines skills, deduplicates entities, and distills the always-on pin."
         }
+      }
+    },
+    "modes": {
+      "title": "Modes",
+      "subtitle": "Which tools the agent can use, and with what posture",
+      "new": "New mode",
+      "builtinBadge": "builtin",
+      "duplicate": "Duplicate",
+      "edit": "Edit",
+      "delete": "Delete",
+      "confirmDelete": "Delete",
+      "cancel": "Cancel",
+      "save": "Save mode",
+      "optional": "optional",
+      "nameRequired": "A mode name is required",
+      "removeTool": "Remove tool",
+      "fieldName": "Name",
+      "namePlaceholder": "reviewer",
+      "fieldDescription": "Description",
+      "descriptionPlaceholder": "Reads and comments, applies no changes",
+      "fieldAccess": "Access",
+      "fieldPrompt": "System instruction",
+      "promptPlaceholder": "Empty is fine. Describe the posture only when the tool filter cannot.",
+      "toolPlaceholder": "tool name, Enter to add",
+      "presetReadOnly": "Read-only",
+      "presetLikePlan": "Like plan",
+      "access": {
+        "full": "Full",
+        "except": "All except",
+        "only": "Only these",
+        "onlyCount": "restricted · {n}",
+        "exceptCount": "all except {n}"
       }
     },
     "personas": {

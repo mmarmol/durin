@@ -422,6 +422,13 @@ The registered modes are listed over `/api/v1/modes` (`ModesService`), which the
 webui composer's mode picker renders by `name`. The picker is mode-agnostic: it
 shows whatever the registry holds, so it follows new modes without UI changes.
 
+User-defined modes are persisted as `ModeConfig` entries under `agent_modes` in
+config and registered into the same registry at startup (`register_config_modes`,
+which never shadows a built-in). The same `ModesService` route handles
+`POST`/`DELETE` to create, edit, and remove them (the settings UI), re-registering
+after each mutation so a change takes effect without a restart; the three
+built-ins are immutable.
+
 ### Sessions
 
 A `Session` ([`durin/session/manager.py`](../../durin/session/manager.py)) is an
