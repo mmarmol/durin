@@ -19,19 +19,21 @@ from durin.service.types import Query, Result
 def _subagent_status(phase: str) -> str:
     if phase == "done":
         return "done"
-    if phase == "error":
+    if phase in ("error", "cancelled"):
         return "failed"
-    return "running"
+    return "running"  # initializing | awaiting_tools | tools_completed | final_response
 
 
 def _workflow_status(status: str) -> str:
-    if status in ("completed", "ok"):
+    # Run-level statuses: "running" (run_log), WorkflowResult.status literals
+    # ("completed" | "needs_input" | "exhausted" | "aborted"), and "crashed" (reconcile).
+    if status == "completed":
         return "done"
     if status == "needs_input":
         return "needs_input"
     if status == "running":
         return "running"
-    return "failed"  # exhausted | aborted | crashed | anything terminal-but-not-ok
+    return "failed"  # exhausted | aborted | crashed
 
 
 class BackgroundTask(Result):
@@ -83,7 +85,7 @@ class TasksService:
         from durin.workflow import run_log
         for rec in run_log.runs_for_session(self._workspace, query.session):
             node_runs = rec.get("runs") or []
-            drill = node_runs[-1].get("session_key") if node_runs else None
+            drill = node_runs[-1].get("session_key") if node_runs else None  # last node's session for drill-in; None for routing nodes that persist no session
             tasks.append(BackgroundTask(
                 kind="workflow", id=rec.get("run_id", ""),
                 label=rec.get("workflow", ""),

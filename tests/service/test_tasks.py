@@ -1,7 +1,7 @@
 import time
 import pytest
 from durin.service.principal import Principal
-from durin.service.tasks import TasksService, TasksListQuery
+from durin.service.tasks import TasksService, TasksListQuery, _subagent_status, _workflow_status
 
 
 class _Status:
@@ -49,3 +49,28 @@ async def test_status_mapping_and_no_manager(tmp_path):
     svc = TasksService(workspace=tmp_path, subagent_manager=None)
     res = await svc.list(TasksListQuery(session="websocket:chatA"), Principal.local())
     assert res.tasks == []   # no manager, no manifests → empty, no crash
+
+
+@pytest.mark.parametrize("phase,expected", [
+    ("initializing", "running"),
+    ("awaiting_tools", "running"),
+    ("tools_completed", "running"),
+    ("final_response", "running"),
+    ("done", "done"),
+    ("error", "failed"),
+    ("cancelled", "failed"),
+])
+def test_subagent_status_mapping(phase, expected):
+    assert _subagent_status(phase) == expected
+
+
+@pytest.mark.parametrize("status,expected", [
+    ("running", "running"),
+    ("completed", "done"),
+    ("needs_input", "needs_input"),
+    ("exhausted", "failed"),
+    ("aborted", "failed"),
+    ("crashed", "failed"),
+])
+def test_workflow_status_mapping(status, expected):
+    assert _workflow_status(status) == expected

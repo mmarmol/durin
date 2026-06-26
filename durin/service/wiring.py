@@ -30,6 +30,11 @@ def build_service_registry(
     the unified gateway passes one built from its live ``AgentLoop`` so MCP status
     is live; surfaces without a loop (the websocket channel's shim registry) leave
     it ``None`` and the MCP service reports config-only status.
+
+    ``subagent_manager`` is optional: the unified gateway passes the live
+    ``agent.subagents`` instance so the Tasks service can report running sub-agents;
+    the websocket channel's shim registry passes ``None`` and only workflow runs are
+    reported.
     """
     from durin.security.api_tokens import ApiTokenStore
     from durin.service.auth import AuthService
