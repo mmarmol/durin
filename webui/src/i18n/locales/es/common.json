@@ -74,6 +74,7 @@
       "memory": "Memoria",
       "transcription": "Voz",
       "skills-security": "Seguridad de skills",
+      "modes": "Modos",
       "cron": "Cron",
       "logs": "Registros",
       "mcp": "MCP"
@@ -425,6 +426,38 @@
           "name": "Consolidación de memoria de entidades",
           "note": "Pasada diaria (3am local) más disparadores reactivos (post-compactación / cierre de sesión) que procesa las sesiones recientes — extrae atributos de entidades, mina skills, deduplica entidades y destila el pin always-on."
         }
+      }
+    },
+    "modes": {
+      "title": "Modos",
+      "subtitle": "Qué herramientas puede usar el agente, y con qué postura",
+      "new": "Nuevo modo",
+      "builtinBadge": "builtin",
+      "duplicate": "Duplicar",
+      "edit": "Editar",
+      "delete": "Borrar",
+      "confirmDelete": "Borrar",
+      "cancel": "Cancelar",
+      "save": "Guardar modo",
+      "optional": "opcional",
+      "nameRequired": "El modo necesita un nombre",
+      "removeTool": "Quitar herramienta",
+      "fieldName": "Nombre",
+      "namePlaceholder": "revisor",
+      "fieldDescription": "Descripción",
+      "descriptionPlaceholder": "Lee y comenta, no aplica cambios",
+      "fieldAccess": "Acceso",
+      "fieldPrompt": "Instrucción de sistema",
+      "promptPlaceholder": "Vacío está bien. Escribí la postura solo si el filtro de tools no alcanza.",
+      "toolPlaceholder": "nombre de tool, Enter para agregar",
+      "presetReadOnly": "Solo lectura",
+      "presetLikePlan": "Como plan",
+      "access": {
+        "full": "Completo",
+        "except": "Todo excepto",
+        "only": "Solo estas",
+        "onlyCount": "restringido · {n}",
+        "exceptCount": "todo excepto {n}"
       }
     },
     "personas": {
@@ -1007,6 +1040,9 @@
         "medium": "Medio",
         "high": "Alto",
         "max": "Máximo"
+      },
+      "mode": {
+        "title": "Modo"
       },
       "encoding": "Procesando…",
       "remove": "Quitar adjunto",

@@ -7,8 +7,10 @@ import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { ApiStatusBanner } from "@/components/thread/ApiStatusBanner";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
+import type { OrbState } from "@/components/voice/VoiceOrb";
 import { useDurinStream, type SendImage } from "@/hooks/useDurinStream";
 import { useTranscriptionStatus } from "@/hooks/useTranscriptionStatus";
+import { useModes } from "@/hooks/useModes";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { listSlashCommands, getModelCapabilities } from "@/lib/api";
 import type { ChatSummary, SlashCommand, UIMessage } from "@/lib/types";
@@ -39,6 +41,12 @@ interface ThreadShellProps {
   hideSidebarToggleOnDesktop?: boolean;
   pendingPrompt?: string | null;
   onPromptConsumed?: () => void;
+  /** Enter (or toggle off) hands-free voice mode from the composer orb. When
+   *  omitted (voice unavailable) the composer hides the orb. */
+  onEnterVoice?: () => void;
+  voiceActive?: boolean;
+  voiceState?: OrbState;
+  voiceAmplitude?: number;
 }
 
 function toModelBadgeLabel(modelName: string | null): string | null {
@@ -77,6 +85,10 @@ export function ThreadShell({
   hideSidebarToggleOnDesktop = false,
   pendingPrompt = null,
   onPromptConsumed,
+  onEnterVoice,
+  voiceActive = false,
+  voiceState = "idle",
+  voiceAmplitude = 0,
 }: ThreadShellProps) {
   const { t } = useTranslation();
   const chatId = session?.chatId ?? null;
@@ -96,6 +108,7 @@ export function ThreadShell({
   const [canReason, setCanReason] = useState(false);
   const [localPendingPrompt, setLocalPendingPrompt] = useState<string | null>(null);
   const [agentMode, setAgentMode] = useState("build");
+  const modes = useModes();
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
   const messageCacheRef = useRef<Map<string, UIMessage[]>>(new Map());
   /** Last chatId we associated with the in-memory thread (for cache-on-switch). */
@@ -385,6 +398,13 @@ export function ThreadShell({
           canReason={canReason}
           pendingPrompt={pendingPrompt ?? localPendingPrompt}
           onPromptConsumed={() => { onPromptConsumed?.(); setLocalPendingPrompt(null); }}
+          modes={modes}
+          agentMode={agentMode}
+          onModeChange={handleModeChange}
+          onEnterVoice={onEnterVoice}
+          voiceActive={voiceActive}
+          voiceState={voiceState}
+          voiceAmplitude={voiceAmplitude}
         />
       ) : (
         <ThreadComposer
@@ -409,6 +429,13 @@ export function ThreadShell({
           canReason={canReason}
           pendingPrompt={pendingPrompt ?? localPendingPrompt}
           onPromptConsumed={() => { onPromptConsumed?.(); setLocalPendingPrompt(null); }}
+          modes={modes}
+          agentMode={agentMode}
+          onModeChange={handleModeChange}
+          onEnterVoice={onEnterVoice}
+          voiceActive={voiceActive}
+          voiceState={voiceState}
+          voiceAmplitude={voiceAmplitude}
         />
       )}
     </>
@@ -457,8 +484,6 @@ export function ThreadShell({
         onToggleTheme={onToggleTheme}
         hideSidebarToggleOnDesktop={hideSidebarToggleOnDesktop}
         minimal={!session && !loading}
-        agentMode={agentMode}
-        onModeChange={handleModeChange}
       />
       <ThreadViewport
         messages={displayMessages}

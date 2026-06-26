@@ -38,6 +38,7 @@ def build_service_registry(
     from durin.service.health import HealthService
     from durin.service.mcp import McpService
     from durin.service.memory import MemoryService
+    from durin.service.modes import ModesService
     from durin.service.oauth import OAuthService
     from durin.service.personas import PersonasService
     from durin.service.secrets import SecretsService
@@ -72,6 +73,7 @@ def build_service_registry(
     registry.register("mcp", McpService(mcp_runtime=mcp_runtime))
     registry.register("health", HealthService())
     registry.register("commands", CommandsService())
+    registry.register("modes", ModesService())
     registry.register("oauth", OAuthService())
     registry.register("auth", AuthService(ApiTokenStore()))
     registry.register("workflows", WorkflowsService(

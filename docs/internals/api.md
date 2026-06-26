@@ -262,8 +262,8 @@ carries no `@route` decorator on any method). Its configuration
 
 The route table is the authoritative source; the current operation set spans
 secrets, cron, sessions, settings, config, skills, memory, MCP servers, health,
-commands, OAuth flows, auth tokens, and personas/souls (`/api/v1/souls`,
-`/api/v1/personas`). Verbs in use: GET, POST, DELETE, and
+commands, agent modes (`/api/v1/modes`), OAuth flows, auth tokens, and
+personas/souls (`/api/v1/souls`, `/api/v1/personas`). Verbs in use: GET, POST, DELETE, and
 PATCH (used by `McpService.update` and `CronService` for partial updates).
 
 All mutations are POST/DELETE/PATCH with a JSON body; there are no

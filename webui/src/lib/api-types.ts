@@ -711,6 +711,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/modes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List registered agent modes (build/plan/explore plus custom) */
+        get: operations["modes_list"];
+        put?: never;
+        /** Create or update a custom agent mode */
+        post: operations["modes_upsert"];
+        /** Delete a custom agent mode */
+        delete: operations["modes_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/oauth/codex": {
         parameters: {
             query?: never;
@@ -2687,6 +2706,53 @@ export interface components {
             /** Ref */
             ref: string;
         };
+        /** ModeDeleteCommand */
+        ModeDeleteCommand: {
+            /** Name */
+            name: string;
+        };
+        /** ModeDeleteResult */
+        ModeDeleteResult: {
+            /** Ok */
+            ok: boolean;
+        };
+        /** ModeUpsertCommand */
+        ModeUpsertCommand: {
+            /**
+             * Allowed
+             * @default null
+             */
+            allowed: string[] | null;
+            /**
+             * Denied
+             * @default []
+             */
+            denied: string[];
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Icon
+             * @default null
+             */
+            icon: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Prompt Suffix
+             * @default
+             */
+            prompt_suffix: string;
+        };
+        /** ModeUpsertResult */
+        ModeUpsertResult: {
+            /** Mode */
+            mode: {
+                [key: string]: unknown;
+            };
+        };
         /** ModelCapabilitiesQuery */
         ModelCapabilitiesQuery: {
             /** Model */
@@ -2766,6 +2832,18 @@ export interface components {
             models: string[];
             /** Suggested */
             suggested: string[];
+        };
+        /**
+         * ModesListQuery
+         * @description No inputs — lists every registered agent mode.
+         */
+        ModesListQuery: Record<string, never>;
+        /** ModesResult */
+        ModesResult: {
+            /** Modes */
+            modes: {
+                [key: string]: unknown;
+            }[];
         };
         /**
          * OAuthDisconnectCommand
@@ -4984,6 +5062,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelsListResult"];
+                };
+            };
+        };
+    };
+    modes_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModesListQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModesResult"];
+                };
+            };
+        };
+    };
+    modes_upsert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModeUpsertCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModeUpsertResult"];
+                };
+            };
+        };
+    };
+    modes_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModeDeleteCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModeDeleteResult"];
                 };
             };
         };

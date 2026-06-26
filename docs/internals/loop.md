@@ -407,7 +407,8 @@ rules), the floor injection is skipped to avoid duplication.
 
 Modes ([`durin/agent/agent_mode.py`](../../durin/agent/agent_mode.py)) are pure
 data: a `name`, an optional `allowed` allowlist, a `denied` set, and a
-`prompt_suffix`. The loop has no `if plan_mode` branches. Instead the runner
+`prompt_suffix`, plus an optional `icon` and a `builtin` flag carried for the
+UI. The loop has no `if plan_mode` branches. Instead the runner
 calls a `mode_provider` callback each iteration to read the active mode (from
 `session.metadata["agent_mode"]`) and filters the tool definitions sent to the
 LLM. Because it is read per iteration, a mid-run `/plan` or `/build` takes effect
@@ -416,6 +417,17 @@ anyway (e.g. a cached name), `_run_tool` returns a synthetic "not available in
 this mode" result — tool-by-tool denial, not a stopped run. Built-ins:
 `build` (full access), `plan` (read-only plus `exit_plan_mode`), and `explore`
 (read-only, for sub-agents).
+
+The registered modes are listed over `/api/v1/modes` (`ModesService`), which the
+webui composer's mode picker renders by `name`. The picker is mode-agnostic: it
+shows whatever the registry holds, so it follows new modes without UI changes.
+
+User-defined modes are persisted as `ModeConfig` entries under `agent_modes` in
+config and registered into the same registry at startup (`register_config_modes`,
+which never shadows a built-in). The same `ModesService` route handles
+`POST`/`DELETE` to create, edit, and remove them (the settings UI), re-registering
+after each mutation so a change takes effect without a restart; the three
+built-ins are immutable.
 
 ### Sessions
 

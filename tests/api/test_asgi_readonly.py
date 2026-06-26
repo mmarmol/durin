@@ -212,3 +212,24 @@ def test_request_id_header_propagated(client):
 def test_request_id_forwarded_when_provided(client):
     r = client.get("/api/v1/health", headers={"X-Request-Id": "my-id-123"})
     assert r.headers["x-request-id"] == "my-id-123"
+
+
+# ---------------------------------------------------------------------------
+# Modes route — GET /api/v1/modes (composer mode picker, full HTTP stack)
+# ---------------------------------------------------------------------------
+
+
+def test_modes_route_lists_builtins(auth):
+    from durin.service.modes import ModesService
+
+    reg = ServiceRegistry()
+    reg.register("modes", ModesService())
+    reg.register("auth", auth)
+    app = build_api_app(reg, auth=auth, static_token=STATIC_TOKEN)
+    c = TestClient(app, raise_server_exceptions=False)
+
+    r = c.get("/api/v1/modes", headers={"Authorization": f"Bearer {STATIC_TOKEN}"})
+    assert r.status_code == 200
+    modes = {m["name"]: m for m in r.json()["modes"]}
+    assert {"build", "plan", "explore"} <= set(modes)
+    assert modes["build"]["builtin"] is True

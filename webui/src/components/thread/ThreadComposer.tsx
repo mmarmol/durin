@@ -43,10 +43,13 @@ import {
 } from "@/hooks/useAttachedImages";
 import { useAttachedAudio, type AttachedAudio } from "@/hooks/useAttachedAudio";
 import { MicButton } from "@/components/thread/MicButton";
+import { VoiceOrb, type OrbState } from "@/components/voice/VoiceOrb";
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import { usePromptHistory } from "@/hooks/usePromptHistory";
 import { ModelPickerPopover } from "@/components/thread/ModelPickerPopover";
+import { ModePicker } from "@/components/thread/ModePicker";
 import { ReasoningEffortPicker } from "@/components/thread/ReasoningEffortPicker";
+import type { ModeInfo } from "@/lib/api";
 import type { SendImage } from "@/hooks/useDurinStream";
 import type { SlashCommand, GoalStateWsPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -96,6 +99,17 @@ interface ThreadComposerProps {
   pendingPrompt?: string | null;
   /** Called when pendingPrompt has been loaded into the textarea. */
   onPromptConsumed?: () => void;
+  /** Registered agent modes (built-in + custom) for the mode picker. */
+  modes?: ModeInfo[];
+  /** Active agent mode name. */
+  agentMode?: string;
+  /** Called when the user switches the agent's execution mode. */
+  onModeChange?: (mode: string) => void;
+  /** Enter (or toggle off) hands-free voice mode. Omitted → no voice orb. */
+  onEnterVoice?: () => void;
+  voiceActive?: boolean;
+  voiceState?: OrbState;
+  voiceAmplitude?: number;
 }
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
@@ -418,6 +432,13 @@ export function ThreadComposer({
   canReason = true,
   pendingPrompt = null,
   onPromptConsumed,
+  modes = [],
+  agentMode = "build",
+  onModeChange,
+  onEnterVoice,
+  voiceActive = false,
+  voiceState = "idle",
+  voiceAmplitude = 0,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
@@ -1003,6 +1024,15 @@ export function ThreadComposer({
                 variant={isHero ? "hero" : "thread"}
               />
             ) : null}
+            {onEnterVoice ? (
+              <VoiceOrb
+                state={voiceActive ? voiceState : "idle"}
+                amplitude={voiceActive ? voiceAmplitude : 0}
+                size={isHero ? 34 : 30}
+                label={voiceActive ? t("settings.voice.orb.stop") : t("settings.voice.orb.start")}
+                onClick={onEnterVoice}
+              />
+            ) : null}
             {modelLabel ? (
               <div className="relative">
                 <button
@@ -1039,6 +1069,14 @@ export function ThreadComposer({
               <ReasoningEffortPicker
                 activeEffort={activeEffort}
                 onSelect={onEffortPick}
+                disabled={disabled}
+              />
+            ) : null}
+            {onModeChange ? (
+              <ModePicker
+                activeMode={agentMode}
+                modes={modes}
+                onSelect={onModeChange}
                 disabled={disabled}
               />
             ) : null}

@@ -10,6 +10,8 @@ import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { VoiceDock } from "@/components/voice/VoiceDock";
+import { useVoiceSession } from "@/components/voice/useVoiceSession";
+import { useVoiceConfig } from "@/hooks/useVoiceConfig";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 
 import { useSessions } from "@/hooks/useSessions";
@@ -286,7 +288,7 @@ function Shell({
   onLogout?: () => void;
 }) {
   const { t, i18n } = useTranslation();
-  const { client } = useClient();
+  const { client, token } = useClient();
   const { theme, toggle, palette, setPalette } = useTheme();
   const { sessions, loading, refresh, createChat, deleteChat, renameChat } = useSessions();
   const [activeKey, setActiveKey] = useState<string | null>(null);
@@ -360,6 +362,41 @@ function Shell({
     async () => (activeSession ? activeSession.chatId : await onCreateChat()),
     [activeSession, onCreateChat],
   );
+
+  // Voice session is owned here so both the composer's entry orb and the
+  // floating call panel (VoiceDock) drive the same session.
+  const voiceCfg = useVoiceConfig(token);
+  const {
+    state: voiceState,
+    amplitude: voiceAmplitude,
+    active: voiceActive,
+    toggle: voiceToggle,
+  } = useVoiceSession(client, activeSession?.chatId ?? null, {
+    vadThreshold: voiceCfg.vadThreshold,
+    endOfTurnSilenceMs: voiceCfg.endOfTurnSilenceMs,
+    idleTimeoutMs: voiceCfg.idleTimeoutMs,
+  });
+  const voicePendingStart = useRef(false);
+  // Deferred start: when we had to create+focus a chat first, start voice once
+  // its id has propagated in (so the session binds to the visible chat).
+  useEffect(() => {
+    if (voicePendingStart.current && activeSession?.chatId && !voiceActive) {
+      voicePendingStart.current = false;
+      voiceToggle();
+    }
+  }, [activeSession?.chatId, voiceActive, voiceToggle]);
+  const voiceAvailable = !voiceCfg.loading && voiceCfg.available;
+  const handleEnterVoice = useCallback(() => {
+    if (voiceActive || activeSession?.chatId) {
+      voiceToggle();
+      return;
+    }
+    // No active chat: create + focus one, then the effect above starts voice.
+    voicePendingStart.current = true;
+    void ensureVoiceChat().then((id) => {
+      if (!id) voicePendingStart.current = false;
+    });
+  }, [voiceActive, activeSession?.chatId, voiceToggle, ensureVoiceChat]);
 
   const onNewChat = useCallback(() => {
     setActiveKey(null);
@@ -577,6 +614,10 @@ function Shell({
             hideSidebarToggleOnDesktop={desktopSidebarOpen}
             pendingPrompt={pendingPrompt}
             onPromptConsumed={() => setPendingPrompt(null)}
+            onEnterVoice={voiceAvailable ? handleEnterVoice : undefined}
+            voiceActive={voiceActive}
+            voiceState={voiceState}
+            voiceAmplitude={voiceAmplitude}
           />
         </div>
         {view === "settings" && (
@@ -628,10 +669,11 @@ function Shell({
       </main>
 
       <VoiceDock
-        chatId={activeSession?.chatId ?? null}
+        state={voiceState}
+        amplitude={voiceAmplitude}
+        active={voiceActive}
         chatTitle={activeSession?.title ?? activeSession?.preview ?? null}
-        onEnsureChat={ensureVoiceChat}
-        hideWhenIdle={view !== "chat"}
+        onStop={voiceToggle}
       />
 
       <DeleteConfirm
