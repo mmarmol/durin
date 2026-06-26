@@ -9,7 +9,6 @@ import { WorkflowsView } from "@/components/WorkflowsView";
 import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
-import { VoiceDock } from "@/components/voice/VoiceDock";
 import { useVoiceSession } from "@/components/voice/useVoiceSession";
 import { useVoiceConfig } from "@/hooks/useVoiceConfig";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
@@ -363,12 +362,11 @@ function Shell({
     [activeSession, onCreateChat],
   );
 
-  // Voice session is owned here so both the composer's entry orb and the
-  // floating call panel (VoiceDock) drive the same session.
+  // Voice session is owned by the app shell; the composer's entry orb and its
+  // active-call strip both drive it.
   const voiceCfg = useVoiceConfig(token);
   const {
     state: voiceState,
-    amplitude: voiceAmplitude,
     active: voiceActive,
     toggle: voiceToggle,
   } = useVoiceSession(client, activeSession?.chatId ?? null, {
@@ -617,7 +615,6 @@ function Shell({
             onEnterVoice={voiceAvailable ? handleEnterVoice : undefined}
             voiceActive={voiceActive}
             voiceState={voiceState}
-            voiceAmplitude={voiceAmplitude}
           />
         </div>
         {view === "settings" && (
@@ -667,14 +664,6 @@ function Shell({
           </div>
         )}
       </main>
-
-      <VoiceDock
-        state={voiceState}
-        amplitude={voiceAmplitude}
-        active={voiceActive}
-        chatTitle={activeSession?.title ?? activeSession?.preview ?? null}
-        onStop={voiceToggle}
-      />
 
       <DeleteConfirm
         open={!!pendingDelete}
