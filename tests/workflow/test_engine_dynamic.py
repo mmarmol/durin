@@ -10,6 +10,38 @@ def _parse(raw):
     return parse_workflow(raw)
 
 
+class TestParseSubtasks:
+    """The fan-out list parser must find the JSON array even when a model wraps it in
+    prose — else it line-splits the prose into one bogus worker per sentence."""
+
+    def test_clean_array(self):
+        assert WorkflowEngine._parse_subtasks('["a", "b"]') == ["a", "b"]
+
+    def test_fenced_array(self):
+        assert WorkflowEngine._parse_subtasks('```json\n["a", "b"]\n```') == ["a", "b"]
+
+    def test_prose_wrapped_fenced_array(self):
+        # The real build-specs failure: a leading explanation + a numbered list before
+        # the fenced array made JSON parsing fail and the whole thing got line-split.
+        text = (
+            "The slice has two independent seams.\n"
+            "1. slugify\n2. truncate\n"
+            "Splitting further would be over-decomposition.\n"
+            '```json\n["slugify: a slug", "truncate: cut to n"]\n```'
+        )
+        assert WorkflowEngine._parse_subtasks(text) == ["slugify: a slug", "truncate: cut to n"]
+
+    def test_bare_array_in_prose(self):
+        assert WorkflowEngine._parse_subtasks('Here you go: ["x", "y", "z"] — done.') == ["x", "y", "z"]
+
+    def test_falls_back_to_lines_without_json(self):
+        assert WorkflowEngine._parse_subtasks("alpha\nbeta\ngamma") == ["alpha", "beta", "gamma"]
+
+    def test_capped_at_50(self):
+        import json
+        assert len(WorkflowEngine._parse_subtasks(json.dumps([str(i) for i in range(80)]))) == 50
+
+
 def _wf(extra_nodes=None):
     nodes = [
         {"id": "orch", "kind": "work", "next": "fan"},

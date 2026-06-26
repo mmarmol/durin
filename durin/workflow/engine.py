@@ -448,33 +448,38 @@ class WorkflowEngine:
     def _parse_subtasks(text: str) -> list[str]:
         """Parse a runtime list of subtasks from a node's output text.
 
-        Tries JSON first; if the parsed value is a list, returns each element
-        coerced to str.  Falls back to non-empty lines.  Capped at 50 items
-        to bound blast radius on pathological output.
-
-        A planner often wraps the array in a markdown code fence (```/```json);
-        strip a leading and trailing fence line before the JSON attempt so the
-        fenced array parses to its elements instead of falling through to the
-        line-split fallback (which would yield the literal fence lines).
+        The list is expected as a JSON array, but a model often wraps it in prose
+        and/or a markdown code fence (e.g. "These are the two seams: ```json [...] ```").
+        So extract the array even when embedded: try a fenced code block's body, then
+        the largest ``[ ... ]`` span, then the whole text — the first that parses as a
+        JSON list wins. Only if none do does it fall back to non-empty lines (a last
+        resort that, on prose, would otherwise split every sentence into a bogus
+        subtask). Capped at 50 items to bound blast radius on pathological output.
         """
         import json
+        import re
         candidate = text.strip()
-        lines = candidate.splitlines()
-        if lines and lines[0].lstrip().startswith("```"):
-            lines = lines[1:]
-            if lines and lines[-1].strip().startswith("```"):
-                lines = lines[:-1]
-            candidate = "\n".join(lines)
-        try:
-            parsed = json.loads(candidate)
+        # Most-specific candidate substrings first: a fenced block's body, then the
+        # widest bracketed span, then the whole text.
+        attempts: list[str] = []
+        fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", candidate)
+        if fence:
+            attempts.append(fence.group(1).strip())
+        arr = re.search(r"\[[\s\S]*\]", candidate)
+        if arr:
+            attempts.append(arr.group(0))
+        attempts.append(candidate)
+        for block in attempts:
+            try:
+                parsed = json.loads(block)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            # A parsed list wins — even if empty: an empty array means "no subtasks",
+            # which must not fall through to the line-split fallback.
             if isinstance(parsed, list):
-                items = [str(x) for x in parsed]
-                return items[:50]
-        except (json.JSONDecodeError, ValueError):
-            pass
-        # Fall back: non-empty lines (of the fence-stripped candidate, so a malformed
-        # fenced array doesn't leak its fence lines as bogus subtasks).
-        items = [line for line in candidate.splitlines() if line.strip()]
+                return [str(x) for x in parsed][:50]
+        # Last resort: a bare newline-separated list (no JSON array found at all).
+        items = [line.strip() for line in candidate.splitlines() if line.strip()]
         return items[:50]
 
     def _run_dynamic_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs):
