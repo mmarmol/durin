@@ -42,4 +42,22 @@ describe("ThreadComposer — voice orb entry", () => {
     // Ending the call is the orb (its label flips to stop while active).
     expect(screen.getByRole("button", { name: /stop voice/i })).toBeInTheDocument();
   });
+
+  it("suppresses the run/turn strip during a voice call (one strip, not two)", () => {
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        onEnterVoice={vi.fn()}
+        voiceActive
+        voiceState="listening"
+        runStartedAt={Math.floor(Date.now() / 1000)}
+        isStreaming
+        placeholder="Type a message..."
+      />,
+    );
+    // Only the voice strip remains; the run-elapsed strip is hidden while voicing.
+    const strips = screen.getAllByRole("status");
+    expect(strips).toHaveLength(1);
+    expect(strips[0]).toHaveTextContent(/listening/i);
+  });
 });
