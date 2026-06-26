@@ -921,6 +921,38 @@ function RunDetail({ result }: { result: WorkflowRunResult }) {
   );
 }
 
+// Workflow-level settings, shown in the side panel when no node/IO object is selected.
+// Today it carries the self-improvement mode: whether the dream pass may improve this
+// workflow (off / suggest-for-review / auto-apply). A clear, explicit choice, mirroring
+// how a skill exposes its own auto-vs-manual mode.
+function WorkflowSettingsPanel({
+  def,
+  onChange,
+}: {
+  def: WorkflowDef;
+  onChange: (patch: Partial<WorkflowDef>) => void;
+}) {
+  const { t } = useTranslation();
+  const mode = (def.improvement_mode as string) || "off";
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="text-sm font-medium">{t("workflows.settingsTitle")}</div>
+      <Field label={t("workflows.improvementMode")}>
+        <select
+          className={selectCls}
+          value={mode}
+          onChange={(e) => onChange({ improvement_mode: e.target.value })}
+        >
+          <option value="off">{t("workflows.improvementOff")}</option>
+          <option value="manual">{t("workflows.improvementManual")}</option>
+          <option value="auto">{t("workflows.improvementAuto")}</option>
+        </select>
+      </Field>
+      <p className="text-xs text-muted-foreground">{t(`workflows.improvementHint_${mode}`)}</p>
+    </div>
+  );
+}
+
 let _idSeq = 0;
 
 export function WorkflowsView() {
@@ -1603,6 +1635,12 @@ export function WorkflowsView() {
               onChange={(patch) => setIo(selectedIo, patch)}
               onRemove={() => removeIo(selectedIo)}
             />
+          </aside>
+        )}
+
+        {def && !selectedNode && !selectedIo && (
+          <aside className="w-96 shrink-0 flex flex-col h-full border-l p-3 overflow-y-auto">
+            <WorkflowSettingsPanel def={def} onChange={(patch) => mutate((d) => ({ ...d, ...patch }))} />
           </aside>
         )}
       </div>
