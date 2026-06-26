@@ -125,6 +125,10 @@ def run_workflow_improve_pass(workspace, *, llm_invoke=None, model=None) -> dict
         try:
             cursor = run_log.read_cursor(workspace, name)
             records = run_log.read_runs_since(workspace, name, cursor)
+            # Only terminal runs are diagnostic; skip in-flight ('running') and stale
+            # ('crashed') records, and don't advance the cursor past them so they are
+            # reprocessed once finalized (finalize advances their ts past started_at).
+            records = [r for r in records if r.get("status") not in ("running", "crashed")]
             if not records:
                 continue
             newest_ts = max(r.get("ts", 0.0) for r in records)

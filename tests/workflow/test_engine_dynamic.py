@@ -120,6 +120,28 @@ def test_dynamic_fanout_non_list_json_falls_back_to_lines(tmp_path):
     assert len(seen) == 1
 
 
+def test_dynamic_fanout_strips_markdown_code_fence(tmp_path):
+    """A JSON array wrapped in a ```json markdown fence parses to its elements,
+    not the literal fence lines. Built with explicit newlines so the test source
+    never embeds a raw triple-backtick string."""
+    fence = "`" * 3
+    fenced = "\n".join([f"{fence}json", '["a", "b", "c"]', fence])
+    seen = []
+
+    def runner(req):
+        if req.node.id == "orch":
+            return NodeRunResponse(output=fenced)
+        if req.node.id == "done":
+            return NodeRunResponse(output="fin")
+        seen.append(req.task)
+        return NodeRunResponse(output=f"did {req.task}")
+
+    wf = _wf()
+    res = WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "go")
+    assert res.status == "completed"
+    assert sorted(seen) == ["a", "b", "c"]
+
+
 def test_dynamic_fanout_cap_limits_concurrency(tmp_path):
     """max_concurrency=1 must serialize workers (no error, correct count)."""
     seen = []

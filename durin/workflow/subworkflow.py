@@ -52,7 +52,6 @@ class SubworkflowRunner:
         )
         engine = WorkflowEngine(
             node_runner=self.node_runner,
-            command_cwd=str(self.workspace),
             subworkflow_runner=nested,
             workspace=str(self.workspace),
             pick_runner=self.judge_runner.pick if self.judge_runner is not None else None,

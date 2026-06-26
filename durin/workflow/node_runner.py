@@ -22,9 +22,9 @@ from durin.agent.tools.file_state import FileStates
 from durin.agent.tools.loader import ToolLoader
 from durin.agent.tools.registry import ToolRegistry
 from durin.config.schema import ToolsConfig
-from durin.session.lineage import build_lineage, root_of
+from durin.session.lineage import ORIGIN_ID, ORIGIN_TYPE, build_lineage, root_of
 from durin.session.manager import Session, SessionManager
-from durin.workflow.engine import NodeRunRequest, NodeRunResponse
+from durin.workflow.engine import NodeExecutionError, NodeRunRequest, NodeRunResponse
 from durin.workflow.persona_resolve import resolve_persona
 
 
@@ -163,7 +163,7 @@ class AgentNodeRunner:
         suffix = get_mode(getattr(req.node, "mode", "build")).prompt_suffix
         if suffix:
             system = f"{system}{suffix}" if system else suffix.lstrip()
-        if getattr(req.node, "routes", False) and not getattr(req.node, "is_command", False):
+        if getattr(req.node, "routes", False):
             system = f"{system}{_VERDICT}" if system else _VERDICT.lstrip()
         messages: list[dict] = [{"role": "system", "content": system}]
         messages.extend(req.shared_context)
@@ -185,19 +185,83 @@ class AgentNodeRunner:
         # one of persona_model_ref and req.node.model is set at a time.
         model = persona_model_ref or req.node.model or self.default_model
 
-        result = asyncio.run(self.runner.run(AgentRunSpec(
-            initial_messages=messages,
-            tools=self._build_tools(req.node, req.workspace_override),
-            model=model,
-            max_iterations=self.max_iterations,
-            max_tool_result_chars=self.max_tool_result_chars,
-        )))
+        node_max_turns = getattr(req.node, "max_turns", None)
+        if node_max_turns is not None:
+            # Prepend a budget note so the model knows to be efficient.
+            budget_note = (
+                f"\n\nYou have up to {node_max_turns} rounds of tool use. "
+                "Gather efficiently, then give your final answer."
+            )
+            system_msg = messages[0]
+            messages[0] = {**system_msg, "content": system_msg["content"] + budget_note}
+            run_max_iterations = node_max_turns
+        else:
+            run_max_iterations = self.max_iterations
 
-        session_key = self._persist(req, result.messages)
+        # If the agent turn raises (provider/MCP/tool error), the partial conversation
+        # would otherwise be lost and the failure would name no node. Persist whatever
+        # messages exist (status node_failed) and raise a typed error carrying the node
+        # identity and the persisted session key so the engine can record + name it.
+        try:
+            result = asyncio.run(self.runner.run(AgentRunSpec(
+                initial_messages=messages,
+                tools=self._build_tools(req.node, req.workspace_override),
+                model=model,
+                max_iterations=run_max_iterations,
+                max_tool_result_chars=self.max_tool_result_chars,
+            )))
+        except Exception as exc:  # noqa: BLE001 - persist + re-raise as a typed node failure
+            raise self._on_failure(req, messages, exc) from exc
+
+        # When the node exhausted its tool-round budget without finishing, make a
+        # second call with no tools so the model must emit a synthesis from what it
+        # gathered. This converts the canned "max iterations" outcome into a real
+        # answer and persists both runs' messages.
+        if node_max_turns is not None and result.stop_reason == "max_iterations":
+            synthesis_messages = list(result.messages) + [{
+                "role": "user",
+                "content": (
+                    "You have used all your tool rounds. Based solely on what you have "
+                    "gathered so far, give your best final answer now."
+                ),
+            }]
+            try:
+                synthesis_result = asyncio.run(self.runner.run(AgentRunSpec(
+                    initial_messages=synthesis_messages,
+                    tools=ToolRegistry(),   # no tools — model must emit text
+                    model=model,
+                    max_iterations=1,
+                    max_tool_result_chars=self.max_tool_result_chars,
+                )))
+            except Exception as exc:  # noqa: BLE001 - persist the gathered history, then re-raise typed
+                raise self._on_failure(req, list(result.messages), exc) from exc
+            # synthesis_result.messages is the superset (first-run history + synthesis turns)
+            all_messages = synthesis_result.messages
+            final_output = synthesis_result.final_content or ""
+            final_stop_reason = synthesis_result.stop_reason
+        else:
+            all_messages = list(result.messages)
+            final_output = result.final_content or ""
+            final_stop_reason = result.stop_reason
+
+        # A provider that exhausts its retries returns stop_reason="error" with a
+        # placeholder string instead of raising. Without this guard the node would be
+        # recorded a misleading 'ok' carrying that garbage (and downstream nodes would
+        # consume it); treat it as a node failure so it routes exactly like a raised one
+        # (sequential -> named abort; parallel worker -> isolated node_failed).
+        if final_stop_reason == "error":
+            raise self._on_failure(
+                req, all_messages,
+                RuntimeError(f"model error: {(final_output or 'no response').strip()[:200]}"))
+
+        session_key = self._persist(req, all_messages)
         return NodeRunResponse(
-            output=result.final_content or "",
+            output=final_output,
             session_key=session_key,
-            messages=list(result.messages),
+            messages=all_messages,
+            # This runner always persists; a None key means the save raised, not that
+            # the node had no session — surface that as a persist failure.
+            persist_failed=session_key is None,
         )
 
     def _persist(self, req: NodeRunRequest, messages: list[dict]) -> str | None:
@@ -206,14 +270,24 @@ class AgentNodeRunner:
         else:
             key = f"workflow:{req.run_id}:{req.node.id}:{req.iteration}"
         try:
-            parent = req.root_session_key
-            root = (
-                root_of(self.sessions.get_or_create(parent).metadata, default=parent)
-                if parent else key
-            )
+            # Headless runs (no calling session) would otherwise self-root each node
+            # session at its own key, leaving them as orphans. Root them all under a
+            # synthetic per-run session so children_of(run_root) finds every node.
+            run_root = req.root_session_key or f"workflow:{req.run_id}:root"
+            if not req.root_session_key and not self.sessions.exists(run_root):
+                # A top-level run-root: no parent lineage block (so children_of(run_root)
+                # returns the node sessions, not the root itself), just an origin marker.
+                # Concurrent fan-out workers can both pass this check; save() is an atomic
+                # locked replace, so the worst case is a harmless identical re-write.
+                stub = Session(key=run_root)
+                stub.metadata[ORIGIN_TYPE] = "workflow_run"
+                stub.metadata[ORIGIN_ID] = req.run_id
+                stub.metadata["title"] = f"workflow run: {req.run_id}"
+                self.sessions.save(stub)
+            root = root_of(self.sessions.get_or_create(run_root).metadata, default=run_root)
             session = Session(key=key, messages=list(messages))
             session.metadata.update(build_lineage(
-                parent_session_id=parent or key,
+                parent_session_id=run_root,
                 root_id=root,
                 origin_type="workflow_node",
                 origin_id=f"{req.run_id}:{req.node.id}:{req.iteration}",
@@ -224,3 +298,11 @@ class AgentNodeRunner:
         except Exception:
             logger.exception("workflow node session persist failed for {}", key)
             return None
+
+    def _on_failure(self, req: NodeRunRequest, messages: list[dict], cause: Exception) -> NodeExecutionError:
+        """Persist the node's partial conversation (best-effort) and build the typed
+        error the engine catches — so a failed node keeps a navigable session and the
+        aborted result can name it by id, iteration and session key."""
+        logger.exception("workflow node {} agent turn failed", req.node.id)
+        session_key = self._persist(req, messages)
+        return NodeExecutionError(req.node.id, req.iteration, session_key, cause)

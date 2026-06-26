@@ -6,6 +6,7 @@ from durin.service.principal import Principal
 from durin.service.types import NotFoundError, ValidationFailedError
 from durin.service.workflows import (
     WorkflowDeleteCommand,
+    WorkflowDuplicateCommand,
     WorkflowGetQuery,
     WorkflowRunCommand,
     WorkflowRunResult,
@@ -64,6 +65,46 @@ async def test_get_missing_raises_not_found(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_duplicate_copies_under_a_new_name(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    res = await svc.duplicate(WorkflowDuplicateCommand(name="wf", target="wf-copy"), p)
+    assert res.name == "wf-copy"
+    names = (await svc.list(WorkflowsListQuery(), p)).workflows
+    assert "wf" in names and "wf-copy" in names
+    got = await svc.get(WorkflowGetQuery(name="wf-copy"), p)
+    assert got.definition["name"] == "wf-copy"     # inner name updated to the new name
+    assert got.definition["start"] == "a"          # the rest of the graph copied verbatim
+
+
+@pytest.mark.asyncio
+async def test_duplicate_does_not_overwrite_an_existing_target(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    await svc.save(WorkflowSaveCommand(name="taken", definition={**_VALID, "name": "taken"}), p)
+    with pytest.raises(ValidationFailedError):
+        await svc.duplicate(WorkflowDuplicateCommand(name="wf", target="taken"), p)
+    # the existing target is left untouched
+    assert (await svc.get(WorkflowGetQuery(name="taken"), p)).definition["name"] == "taken"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_missing_source_raises_not_found(tmp_path):
+    with pytest.raises(NotFoundError):
+        await _svc(tmp_path).duplicate(
+            WorkflowDuplicateCommand(name="ghost", target="x"), Principal.local()
+        )
+
+
+@pytest.mark.asyncio
+async def test_duplicate_rejects_an_empty_target(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    with pytest.raises(ValidationFailedError):
+        await svc.duplicate(WorkflowDuplicateCommand(name="wf", target="  "), p)
+
+
+@pytest.mark.asyncio
 async def test_delete_missing_raises_not_found(tmp_path):
     with pytest.raises(NotFoundError):
         await _svc(tmp_path).delete(WorkflowDeleteCommand(name="ghost"), Principal.local())
@@ -78,6 +119,13 @@ def test_run_command_accepts_input_files():
     assert cmd_with.input_files == ["/tmp/a.txt", "/tmp/b.txt"]
 
 
+def test_run_command_accepts_an_output_format_override():
+    """WorkflowRunCommand accepts an optional call-time output_format (smoke test)."""
+    assert WorkflowRunCommand(name="wf", task="go").output_format == ""
+    cmd = WorkflowRunCommand(name="wf", task="go", output_format="a bulleted list")
+    assert cmd.output_format == "a bulleted list"
+
+
 def test_workflow_run_result_forwards_exhausted_node():
     """WorkflowRunResult carries exhausted_node from an engine WorkflowResult."""
     engine_result = WorkflowResult(
@@ -89,6 +137,7 @@ def test_workflow_run_result_forwards_exhausted_node():
     dto = WorkflowRunResult(
         status=engine_result.status,
         final_output=engine_result.final_output or "",
+        run_id=engine_result.run_id,
         runs=[
             {"node_id": r.node_id, "iteration": r.iteration, "passed": r.passed,
              "output": (r.output or "")[:2000]}
@@ -112,6 +161,7 @@ def test_workflow_run_result_exhausted_node_defaults_empty():
     dto = WorkflowRunResult(
         status=engine_result.status,
         final_output=engine_result.final_output or "",
+        run_id=engine_result.run_id,
         runs=[],
         output_dir=engine_result.output_dir or "",
         exhausted_node=engine_result.exhausted_node or "",

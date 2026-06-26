@@ -209,10 +209,42 @@ export async function deleteWorkflow(
   );
 }
 
+/** Copy a workflow to a new name (to use as a starting point). Returns the created name. */
+export async function duplicateWorkflow(
+  token: string,
+  name: string,
+  target: string,
+  base: string = "",
+): Promise<string> {
+  const body = await post<{ name: string }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}/duplicate`,
+    token,
+    { target },
+  );
+  return body.name;
+}
+
+// One per-node entry in a run's trace. The attribution fields make a run auditable:
+// session_key points at the fresh session that produced the row; worker_index/branch_id
+// identify a fan-out worker or a static parallel branch so concurrent units stay legible;
+// status is "ok" | "persist_failed" | "node_failed".
+export type WorkflowRunNode = {
+  node_id: string;
+  iteration: number;
+  passed: boolean | null;
+  output: string;
+  session_key: string | null;
+  worker_index: number | null;
+  branch_id?: string | null;
+  status: string;
+  route_label: string | null;
+};
+
 export type WorkflowRunResult = {
   status: string;
   final_output: string;
-  runs: Array<{ node_id: string; iteration: number; passed: boolean | null; output: string }>;
+  run_id: string;
+  runs: WorkflowRunNode[];
   output_dir?: string;
   exhausted_node?: string;
 };
@@ -222,10 +254,12 @@ export async function runWorkflow(
   name: string,
   task: string,
   inputFiles: string[] = [],
+  outputFormat: string = "",
   base: string = "",
 ): Promise<WorkflowRunResult> {
-  const body: { task: string; input_files?: string[] } = { task };
+  const body: { task: string; input_files?: string[]; output_format?: string } = { task };
   if (inputFiles.length > 0) body.input_files = inputFiles;
+  if (outputFormat.trim()) body.output_format = outputFormat.trim();
   return post<WorkflowRunResult>(
     `${base}/api/v1/workflows/${encodeURIComponent(name)}/run`,
     token,

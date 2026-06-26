@@ -16,7 +16,7 @@ _VALID = {
     "nodes": [
         {"id": "build", "kind": "work", "model": "fast", "context": "own",
          "prompt": "Write the code.", "next": "check"},
-        {"id": "check", "kind": "decision", "command": "true",
+        {"id": "check", "kind": "work", "prompt": "Is it correct?",
          "on_pass": None, "on_fail": "build"},
     ],
 }
@@ -31,9 +31,9 @@ def test_parse_valid_workflow():
     assert wf.nodes["build"].model == "fast"
     assert wf.nodes["build"].context == "own"
     assert wf.nodes["build"].next == "check"
-    # kind=decision with a command parses back-compatibly into a routing WorkNode
+    # the routing node: prompt holds the verdict criterion
     assert isinstance(wf.nodes["check"], WorkNode)
-    assert wf.nodes["check"].command == "true"
+    assert wf.nodes["check"].prompt == "Is it correct?"
     assert wf.nodes["check"].on_pass is None
     assert wf.nodes["check"].on_fail == "build"
 
@@ -212,86 +212,20 @@ def test_non_string_model_raises():
                         "nodes": [{"id": "a", "kind": "work", "model": 123}]})
 
 
-def test_decision_node_parses_criteria_and_judge_model():
-    # Legacy back-compat: kind=decision with criteria+judge_model still parses,
-    # now into a routing WorkNode with criteria->prompt and judge_model->model.
-    wf = parse_workflow({"name": "d", "start": "a", "nodes": [
-        {"id": "a", "kind": "work", "next": "g"},
-        {"id": "g", "kind": "decision", "criteria": "Is it correct?",
-         "judge_model": "deep", "on_pass": None, "on_fail": "a"},
-    ]})
-    g = wf.nodes["g"]
-    assert isinstance(g, WorkNode)
-    assert g.prompt == "Is it correct?"
-    assert g.model == "deep"
-    assert g.command == ""
-
-
-def test_decision_with_both_command_and_criteria_raises():
-    with pytest.raises(WorkflowError, match="exactly one"):
-        parse_workflow({"name": "d", "start": "g", "nodes": [
-            {"id": "g", "kind": "decision", "command": "true",
-             "criteria": "ok?", "on_pass": None, "on_fail": None},
-        ]})
-
-
-# test_decision_with_neither_command_nor_criteria: a decision node with neither
-# command nor criteria is now a routing WorkNode with empty prompt — that is valid
-# (the agent will use upstream context). The old "exactly one" rule only applies
-# when BOTH are set. This test is removed.
-
-
 def test_work_node_with_routing_is_a_routing_node():
     wf = parse_workflow({"name": "w", "start": "a", "nodes": [
         {"id": "a", "kind": "work", "prompt": "judge it", "on_pass": "b", "on_fail": "a"},
         {"id": "b", "kind": "work"},
     ]})
     a = wf.nodes["a"]
-    assert isinstance(a, WorkNode) and a.routes and not a.is_command
-    assert a.on_pass == "b" and a.on_fail == "a"
-
-
-def test_legacy_decision_criteria_maps_to_a_routing_work_node():
-    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
-        {"id": "a", "kind": "decision", "criteria": "is it good?", "on_pass": "b", "on_fail": "a"},
-        {"id": "b", "kind": "work"},
-    ]})
-    a = wf.nodes["a"]
     assert isinstance(a, WorkNode) and a.routes
-    assert a.prompt == "is it good?"        # criteria -> prompt
-    assert a.mode == "explore"              # routing agent nodes default read-only
-
-
-def test_legacy_decision_command_maps_to_a_command_routing_node():
-    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
-        {"id": "a", "kind": "decision", "command": "pytest -q", "on_pass": "b", "on_fail": "a"},
-        {"id": "b", "kind": "work"},
-    ]})
-    a = wf.nodes["a"]
-    assert a.is_command and a.command == "pytest -q" and a.routes
-
-
-def test_judge_model_is_accepted_and_dropped():
-    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
-        {"id": "a", "kind": "decision", "criteria": "ok?", "judge_model": "x", "on_pass": "b"},
-        {"id": "b", "kind": "work"},
-    ]})
-    assert wf.nodes["a"].model == "x"       # mapped to model since model was unset
-    assert not hasattr(wf.nodes["a"], "judge_model")
+    assert a.on_pass == "b" and a.on_fail == "a"
 
 
 def test_a_node_cannot_have_both_next_and_routing():
     with pytest.raises(WorkflowError):
         parse_workflow({"name": "w", "start": "a", "nodes": [
             {"id": "a", "kind": "work", "next": "b", "on_pass": "b"},
-            {"id": "b", "kind": "work"},
-        ]})
-
-
-def test_legacy_decision_cannot_have_both_next_and_routing():
-    with pytest.raises(WorkflowError):
-        parse_workflow({"name": "w", "start": "a", "nodes": [
-            {"id": "a", "kind": "decision", "criteria": "ok?", "next": "b", "on_pass": "b"},
             {"id": "b", "kind": "work"},
         ]})
 
@@ -418,18 +352,6 @@ def test_node_persona_defaults_none():
     assert a.persona is None
 
 
-def test_legacy_decision_node_persona_xor_model():
-    # the kind=decision alias honors persona the same way (read it; xor with model)
-    a = parse_workflow({"name": "w", "start": "a", "nodes": [
-        {"id": "a", "kind": "decision", "criteria": "ok?", "persona": "engineer",
-         "on_pass": "b", "on_fail": "a"}, {"id": "b", "kind": "work"}]}).nodes["a"]
-    assert a.persona == "engineer"
-    with pytest.raises(WorkflowError):     # persona + model on a decision → reject
-        parse_workflow({"name": "w", "start": "a", "nodes": [
-            {"id": "a", "kind": "decision", "criteria": "ok?", "persona": "engineer",
-             "model": "glm-5.2", "on_pass": "b"}, {"id": "b", "kind": "work"}]})
-
-
 def test_parallel_max_concurrency_defaults_2_and_parses():
     fan = parse_workflow({"name": "w", "start": "f", "nodes": [
         {"id": "f", "kind": "parallel", "branches": ["a"], "next": None},
@@ -479,3 +401,164 @@ def test_dynamic_parallel_worker_and_list_from_must_be_real_nodes():
         parse_workflow({"name": "w", "start": "orch", "nodes": [
             {"id": "orch", "kind": "work", "next": "fan"},
             {"id": "fan", "kind": "parallel", "worker": "ghost", "list_from": "orch", "next": None}]})
+
+
+# ── cases: multi-way routing spec tests ──────────────────────────────────────
+
+
+def _cases_wf(cases, extra_nodes=None):
+    """Build a minimal workflow with a single cases node for parse tests."""
+    nodes = [{"id": "a", "kind": "work", "cases": cases}]
+    if extra_nodes:
+        nodes.extend(extra_nodes)
+    return {"name": "w", "start": "a", "nodes": nodes}
+
+
+def test_cases_node_parses_and_cases_field_set():
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "cases": {"GROUNDED": None, "MISSING": "fix", "MISUSED": "fix"}},
+        {"id": "fix", "kind": "work"},
+    ]})
+    a = wf.nodes["a"]
+    assert isinstance(a, WorkNode)
+    assert a.cases == {"GROUNDED": None, "MISSING": "fix", "MISUSED": "fix"}
+
+
+def test_cases_node_routes_property_is_true():
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "cases": {"DONE": None, "RETRY": "a"}},
+    ]})
+    assert wf.nodes["a"].routes is True
+
+
+def test_cases_node_mode_defaults_explore():
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "cases": {"DONE": None}},
+    ]})
+    assert wf.nodes["a"].mode == "explore"
+
+
+def test_cases_and_next_are_mutually_exclusive():
+    with pytest.raises(WorkflowError, match="mutually exclusive"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "cases": {"DONE": None}, "next": "b"},
+            {"id": "b", "kind": "work"},
+        ]})
+
+
+def test_cases_and_on_pass_are_mutually_exclusive():
+    with pytest.raises(WorkflowError, match="mutually exclusive"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "cases": {"DONE": None}, "on_pass": "b"},
+            {"id": "b", "kind": "work"},
+        ]})
+
+
+
+def test_cases_empty_dict_raises():
+    with pytest.raises(WorkflowError, match="must not be empty"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "cases": {}},
+        ]})
+
+
+def test_cases_non_dict_raises():
+    with pytest.raises(WorkflowError, match="must be a dict"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "cases": ["DONE", "RETRY"]},
+        ]})
+
+
+def test_cases_unknown_target_caught_by_reachability():
+    with pytest.raises(WorkflowError, match="unknown node"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "cases": {"DONE": "ghost"}},
+        ]})
+
+
+def test_cases_null_target_is_valid():
+    # null target = end the run; should parse without error.
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "cases": {"DONE": None, "RETRY": "a"}},
+    ]})
+    assert wf.nodes["a"].cases["DONE"] is None
+
+
+def test_cases_default_label_is_valid():
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "cases": {"DONE": None, "default": "a"}},
+    ]})
+    assert "default" in wf.nodes["a"].cases
+
+
+def test_cases_duplicate_normalized_labels_raise():
+    # "DONE" and "done" both normalize to "DONE" — the spec must reject this to
+    # prevent a silent mis-route (parse_label uses the same normalization).
+    with pytest.raises(WorkflowError, match="normalize to the same form"):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "cases": {"DONE": None, "done": "a"}},
+        ]})
+
+
+# ── max_turns spec tests ──────────────────────────────────────────────────────
+
+
+def test_max_turns_defaults_none():
+    a = parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work"}]}).nodes["a"]
+    assert a.max_turns is None
+
+
+def test_max_turns_parses_valid_int():
+    a = parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "max_turns": 6}]}).nodes["a"]
+    assert a.max_turns == 6
+
+
+def test_max_turns_zero_raises():
+    with pytest.raises(WorkflowError, match="max_turns must be an int >= 1"):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "max_turns": 0}]})
+
+
+def test_max_turns_negative_raises():
+    with pytest.raises(WorkflowError, match="max_turns must be an int >= 1"):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "max_turns": -3}]})
+
+
+def test_max_turns_bool_rejected():
+    # bool is a subclass of int; True == 1 but must still be rejected.
+    with pytest.raises(WorkflowError, match="max_turns must be an int >= 1"):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "max_turns": True}]})
+
+
+def test_max_turns_string_raises():
+    with pytest.raises(WorkflowError, match="max_turns must be an int >= 1"):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "max_turns": "6"}]})
+
+
+
+def test_routing_node_cannot_use_shared_context_binary():
+    with pytest.raises(WorkflowError, match="routing node.*cannot use context=.shared."):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "context": "shared",
+             "on_pass": "b", "on_fail": "a"},
+            {"id": "b", "kind": "work", "next": None}]})
+
+
+def test_routing_node_cannot_use_shared_context_cases():
+    with pytest.raises(WorkflowError, match="routing node.*cannot use context=.shared."):
+        parse_workflow({"name": "w", "start": "a", "nodes": [
+            {"id": "a", "kind": "work", "context": "shared",
+             "cases": {"x": "b", "default": None}},
+            {"id": "b", "kind": "work", "next": None}]})
+
+
+def test_non_routing_shared_node_still_parses():
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
+        {"id": "a", "kind": "work", "context": "shared", "next": "b"},
+        {"id": "b", "kind": "work", "next": None}]})
+    assert wf.nodes["a"].context == "shared"

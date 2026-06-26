@@ -4573,6 +4573,38 @@
         "title": "WorkflowDeleteResult",
         "type": "object"
       },
+      "WorkflowDuplicateCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "target"
+        ],
+        "title": "WorkflowDuplicateCommand",
+        "type": "object"
+      },
+      "WorkflowDuplicateResult": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkflowDuplicateResult",
+        "type": "object"
+      },
       "WorkflowGetQuery": {
         "additionalProperties": false,
         "properties": {
@@ -4689,6 +4721,11 @@
             "title": "Name",
             "type": "string"
           },
+          "output_format": {
+            "default": "",
+            "title": "Output Format",
+            "type": "string"
+          },
           "task": {
             "title": "Task",
             "type": "string"
@@ -4699,6 +4736,39 @@
           "task"
         ],
         "title": "WorkflowRunCommand",
+        "type": "object"
+      },
+      "WorkflowRunManifestQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "run_id"
+        ],
+        "title": "WorkflowRunManifestQuery",
+        "type": "object"
+      },
+      "WorkflowRunManifestResult": {
+        "properties": {
+          "manifest": {
+            "additionalProperties": true,
+            "title": "Manifest",
+            "type": "object"
+          }
+        },
+        "required": [
+          "manifest"
+        ],
+        "title": "WorkflowRunManifestResult",
         "type": "object"
       },
       "WorkflowRunResult": {
@@ -4717,6 +4787,10 @@
             "title": "Output Dir",
             "type": "string"
           },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
           "runs": {
             "items": {
               "additionalProperties": true,
@@ -4733,6 +4807,7 @@
         "required": [
           "status",
           "final_output",
+          "run_id",
           "runs"
         ],
         "title": "WorkflowRunResult",
@@ -4769,6 +4844,37 @@
           "name"
         ],
         "title": "WorkflowSaveResult",
+        "type": "object"
+      },
+      "WorkflowSessionRunsQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "session": {
+            "title": "Session",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "WorkflowSessionRunsQuery",
+        "type": "object"
+      },
+      "WorkflowSessionRunsResult": {
+        "properties": {
+          "runs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "WorkflowSessionRunsResult",
         "type": "object"
       },
       "WorkflowsListQuery": {
@@ -7693,6 +7799,35 @@
         "x-required-scope": "workflows:read"
       }
     },
+    "/api/v1/workflows/runs": {
+      "get": {
+        "operationId": "workflows_session_runs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowSessionRunsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowSessionRunsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List the run manifests a session spawned (forward lineage), newest-first.",
+        "x-required-scope": "workflows:read"
+      }
+    },
     "/api/v1/workflows/{name}": {
       "delete": {
         "operationId": "workflows_delete",
@@ -7773,6 +7908,35 @@
           }
         },
         "summary": "Create or update a workflow definition.",
+        "x-required-scope": "workflows:write"
+      }
+    },
+    "/api/v1/workflows/{name}/duplicate": {
+      "post": {
+        "operationId": "workflows_duplicate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowDuplicateCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDuplicateResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Copy a workflow to a new name, to use as a starting point.",
         "x-required-scope": "workflows:write"
       }
     },
@@ -7861,6 +8025,35 @@
         },
         "summary": "Run a workflow on a task (no live MCP \u2014 that path is the agent's).",
         "x-required-scope": "workflows:write"
+      }
+    },
+    "/api/v1/workflows/{name}/runs/{run_id}": {
+      "get": {
+        "operationId": "workflows_run_manifest",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowRunManifestQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunManifestResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Read one run's manifest (status + per-node session trace).",
+        "x-required-scope": "workflows:read"
       }
     }
   }
