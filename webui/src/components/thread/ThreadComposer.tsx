@@ -43,7 +43,7 @@ import {
 } from "@/hooks/useAttachedImages";
 import { useAttachedAudio, type AttachedAudio } from "@/hooks/useAttachedAudio";
 import { MicButton } from "@/components/thread/MicButton";
-import { VoiceOrb, type OrbState } from "@/components/voice/VoiceOrb";
+import type { OrbState } from "@/components/voice/VoiceOrb";
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import { usePromptHistory } from "@/hooks/usePromptHistory";
 import { ModelPickerPopover } from "@/components/thread/ModelPickerPopover";
@@ -437,8 +437,6 @@ export function ThreadComposer({
   onModeChange,
   onEnterVoice,
   voiceActive = false,
-  voiceState = "idle",
-  voiceAmplitude = 0,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
@@ -1025,13 +1023,27 @@ export function ThreadComposer({
               />
             ) : null}
             {onEnterVoice ? (
-              <VoiceOrb
-                state={voiceActive ? voiceState : "idle"}
-                amplitude={voiceActive ? voiceAmplitude : 0}
-                size={isHero ? 34 : 30}
-                label={voiceActive ? t("settings.voice.orb.stop") : t("settings.voice.orb.start")}
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                aria-label={voiceActive ? t("settings.voice.orb.stop") : t("settings.voice.orb.start")}
+                title={voiceActive ? t("settings.voice.orb.stop") : t("settings.voice.orb.start")}
                 onClick={onEnterVoice}
-              />
+                className={cn(
+                  "rounded-full border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card",
+                  isHero ? "h-9 w-9" : "h-7.5 w-7.5",
+                )}
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    "rounded-full bg-primary ring-2 ring-primary/20",
+                    isHero ? "h-3.5 w-3.5" : "h-3 w-3",
+                    voiceActive && "ring-primary/45 motion-safe:animate-pulse",
+                  )}
+                />
+              </Button>
             ) : null}
             {modelLabel ? (
               <div className="relative">
