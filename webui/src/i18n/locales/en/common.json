@@ -1513,5 +1513,10 @@
     "transcribing": "Transcribing…",
     "transcriptPrefix": "transcript",
     "processing": "Processing…"
+  },
+  "goal": {
+    "banner": {
+      "label": "Active goal"
+    }
   }
 }

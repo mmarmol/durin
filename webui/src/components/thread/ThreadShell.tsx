@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { ThreadActionsProvider } from "@/components/thread/ThreadActionsContext";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
+import { GoalBanner } from "@/components/thread/GoalBanner";
 import { ApiStatusBanner } from "@/components/thread/ApiStatusBanner";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
@@ -481,6 +482,7 @@ export function ThreadShell({
         hideSidebarToggleOnDesktop={hideSidebarToggleOnDesktop}
         minimal={!session && !loading}
       />
+      <GoalBanner goal={goalState} />
       <ThreadViewport
         messages={displayMessages}
         isStreaming={isStreaming}

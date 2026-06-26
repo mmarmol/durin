@@ -1505,5 +1505,10 @@
       "persist_failed": "fallo al guardar",
       "node_failed": "falló"
     }
+  },
+  "goal": {
+    "banner": {
+      "label": "Objetivo activo"
+    }
   }
 }
