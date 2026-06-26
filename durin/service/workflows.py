@@ -78,6 +78,7 @@ class WorkflowRunCommand(Command):
     name: str
     task: str
     input_files: list[str] = []
+    output_format: str = ""   # optional: how to deliver the result this run (overrides the workflow's output contract)
 
 
 class WorkflowRunResult(Result):
@@ -268,7 +269,9 @@ class WorkflowsService:
             workspace=ws, pick_runner=judge.pick,
             max_node_visits=self._app_config.workflow.max_node_visits)
         result = await asyncio.to_thread(
-            engine.run, workflow, cmd.task, input_files=cmd.input_files or None
+            engine.run, workflow, cmd.task,
+            input_files=cmd.input_files or None,
+            output_format=cmd.output_format or None,
         )
         # The engine owns the run manifest (started→updated→finalized); no record write here.
         return WorkflowRunResult(

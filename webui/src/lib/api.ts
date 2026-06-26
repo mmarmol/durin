@@ -287,10 +287,12 @@ export async function runWorkflow(
   name: string,
   task: string,
   inputFiles: string[] = [],
+  outputFormat: string = "",
   base: string = "",
 ): Promise<WorkflowRunResult> {
-  const body: { task: string; input_files?: string[] } = { task };
+  const body: { task: string; input_files?: string[]; output_format?: string } = { task };
   if (inputFiles.length > 0) body.input_files = inputFiles;
+  if (outputFormat.trim()) body.output_format = outputFormat.trim();
   return post<WorkflowRunResult>(
     `${base}/api/v1/workflows/${encodeURIComponent(name)}/run`,
     token,

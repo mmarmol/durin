@@ -3674,6 +3674,11 @@ export interface components {
             input_files: string[];
             /** Name */
             name: string;
+            /**
+             * Output Format
+             * @default
+             */
+            output_format: string;
             /** Task */
             task: string;
         };

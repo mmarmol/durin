@@ -28,6 +28,15 @@ _PARAMETERS = {
             "type": "string",
             "description": "The task / input to run through the workflow.",
         },
+        "output_format": {
+            "type": "string",
+            "description": (
+                "Optional. How you want the result delivered THIS run — form, content, or "
+                "length (e.g. 'a bulleted list', 'JSON with fields title,summary', 'a 3-line "
+                "summary'). Overrides the workflow's default output contract for this call only. "
+                "Omit to use the workflow's own output description."
+            ),
+        },
     },
     "required": ["name", "task"],
 }
@@ -122,7 +131,7 @@ class RunWorkflowTool(Tool, ContextAware):
             "questions and call this tool again with the same task plus their answers."
         )
 
-    async def execute(self, name: str, task: str) -> str:  # type: ignore[override]
+    async def execute(self, name: str, task: str, output_format: str = "") -> str:  # type: ignore[override]
         from durin.agent.runner import AgentRunner
         from durin.providers.factory import make_provider
         from durin.workflow.engine import WorkflowEngine
@@ -164,6 +173,10 @@ class RunWorkflowTool(Tool, ContextAware):
             max_node_visits=self._app_config.workflow.max_node_visits,
         )
         root_session_key = self._session_key.get()
-        result = await asyncio.to_thread(engine.run, workflow, task, root_session_key=root_session_key)
+        result = await asyncio.to_thread(
+            engine.run, workflow, task,
+            root_session_key=root_session_key,
+            output_format=output_format or None,
+        )
         # The engine owns the run manifest (started→updated→finalized); no record write here.
         return _format_result(result)

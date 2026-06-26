@@ -823,6 +823,8 @@
     "removeIo": "remove",
     "inputFilesLabel": "input files (one path per line)",
     "inputFilesPlaceholder": "/abs/path/to/file",
+    "outputFormatLabel": "deliver as (optional, overrides the output for this run)",
+    "outputFormatPlaceholder": "e.g. a bulleted list, JSON with fields x,y, a 3-line summary",
     "outputDir": "output folder",
     "expand": "expand",
     "collapse": "collapse",

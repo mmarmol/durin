@@ -119,6 +119,13 @@ def test_run_command_accepts_input_files():
     assert cmd_with.input_files == ["/tmp/a.txt", "/tmp/b.txt"]
 
 
+def test_run_command_accepts_an_output_format_override():
+    """WorkflowRunCommand accepts an optional call-time output_format (smoke test)."""
+    assert WorkflowRunCommand(name="wf", task="go").output_format == ""
+    cmd = WorkflowRunCommand(name="wf", task="go", output_format="a bulleted list")
+    assert cmd.output_format == "a bulleted list"
+
+
 def test_workflow_run_result_forwards_exhausted_node():
     """WorkflowRunResult carries exhausted_node from an engine WorkflowResult."""
     engine_result = WorkflowResult(

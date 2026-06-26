@@ -37,6 +37,11 @@ is a lightweight contract: the engine frames every node's task with the input de
 run received) and the output description (what it must deliver), so the agents are steered and the
 interface is documented — it is a hint, not enforced.
 
+A caller may also pass a per-run **`output_format`** (the `run_workflow` tool, the run command):
+a delivery instruction for THIS call — "a bulleted list", "JSON with fields x,y", "a 3-line
+summary" — that overrides the workflow's default output description in the framing, so one
+workflow can deliver its result in whatever shape the caller needs without being edited.
+
 **A node runs its body, then optionally routes.** `WorkflowEngine.run`
 (`durin/workflow/engine.py`) walks the graph from `start`. For an agent node it calls a
 `NodeRunner` — by default `AgentNodeRunner` (`durin/workflow/node_runner.py`), which

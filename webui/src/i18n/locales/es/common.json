@@ -1440,6 +1440,8 @@
     "removeIo": "quitar",
     "inputFilesLabel": "archivos de entrada (una ruta por línea)",
     "inputFilesPlaceholder": "/ruta/absoluta/al/archivo",
+    "outputFormatLabel": "entregar como (opcional, sobreescribe la salida en esta corrida)",
+    "outputFormatPlaceholder": "ej. una lista, JSON con campos x,y, un resumen de 3 líneas",
     "outputDir": "carpeta de salida",
     "expand": "expandir",
     "collapse": "contraer",

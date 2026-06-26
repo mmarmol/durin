@@ -601,3 +601,32 @@ def test_cases_null_target_completes_and_final_output_is_producer():
     assert res.status == "completed"
     # The cases node routed to null; 'build' was the last non-routing producer.
     assert res.final_output == "producer-output"
+
+
+def test_frame_task_output_format_overrides_the_workflow_output_description():
+    # A call-time output_format replaces the workflow's default deliverable hint for this run.
+    wf = parse_workflow({
+        "name": "w", "start": "a",
+        "output": {"text": True, "description": "a cited prose answer"},
+        "nodes": [{"id": "a", "kind": "work"}],
+    })
+    framed = WorkflowEngine._frame_task(wf, "the question", output_format="a 3-bullet list")
+    assert "a 3-bullet list" in framed
+    assert "a cited prose answer" not in framed   # the override wins for this run
+
+
+def test_frame_task_without_override_uses_the_workflow_output_description():
+    wf = parse_workflow({
+        "name": "w", "start": "a",
+        "output": {"text": True, "description": "a cited prose answer"},
+        "nodes": [{"id": "a", "kind": "work"}],
+    })
+    framed = WorkflowEngine._frame_task(wf, "q")
+    assert "a cited prose answer" in framed
+
+
+def test_frame_task_output_format_works_without_a_declared_output():
+    # Even a workflow with no output descriptor honors a call-time delivery instruction.
+    wf = parse_workflow({"name": "w", "start": "a", "nodes": [{"id": "a", "kind": "work"}]})
+    framed = WorkflowEngine._frame_task(wf, "q", output_format="JSON with fields x,y")
+    assert "JSON with fields x,y" in framed

@@ -4721,6 +4721,11 @@
             "title": "Name",
             "type": "string"
           },
+          "output_format": {
+            "default": "",
+            "title": "Output Format",
+            "type": "string"
+          },
           "task": {
             "title": "Task",
             "type": "string"

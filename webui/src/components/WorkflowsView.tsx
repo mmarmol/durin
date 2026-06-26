@@ -948,6 +948,7 @@ export function WorkflowsView() {
   const [dupName, setDupName] = useState("");
   const [personas, setPersonas] = useState<PersonaItem[]>([]);
   const [inputPaths, setInputPaths] = useState("");
+  const [outFmt, setOutFmt] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [runnerOpen, setRunnerOpen] = useState(false);
 
@@ -1227,7 +1228,7 @@ export function WorkflowsView() {
     setRunResult(null);
     try {
       const files = inputPaths.split("\n").map((s) => s.trim()).filter(Boolean);
-      const result = await runWorkflow(token, selected, task, files);
+      const result = await runWorkflow(token, selected, task, files, outFmt);
       setRunResult(result);
       // Newest-first; de-dupe by run_id so a re-render never doubles an entry.
       setRunHistory((prev) => [result, ...prev.filter((r) => r.run_id !== result.run_id)]);
@@ -1236,7 +1237,7 @@ export function WorkflowsView() {
     } finally {
       setRunning(false);
     }
-  }, [selected, task, token, inputPaths]);
+  }, [selected, task, token, inputPaths, outFmt]);
 
   const onApplyRec = useCallback(
     async (id: string) => {
@@ -1513,6 +1514,17 @@ export function WorkflowsView() {
                       />
                     </div>
                   )}
+                  <div className="mb-2 flex flex-col gap-1">
+                    <span className="text-xs text-muted-foreground">
+                      {t("workflows.outputFormatLabel")}
+                    </span>
+                    <Input
+                      value={outFmt}
+                      onChange={(e) => setOutFmt(e.target.value)}
+                      placeholder={t("workflows.outputFormatPlaceholder")}
+                      className="text-xs"
+                    />
+                  </div>
                   <div className="flex items-start gap-2">
                     <Textarea
                       rows={3}

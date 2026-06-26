@@ -123,6 +123,7 @@ class WorkflowEngine:
         *,
         root_session_key: str | None = None,
         input_files: list[str] | None = None,
+        output_format: str | None = None,
     ) -> WorkflowResult:
         """Run the workflow. A node-execution failure (provider/MCP/tool error) does not
         propagate — it ends the run as a typed ``aborted`` result carrying the partial
@@ -148,7 +149,7 @@ class WorkflowEngine:
 
         try:
             result = self._walk(
-                workflow, self._frame_task(workflow, task), run_id, runs,
+                workflow, self._frame_task(workflow, task, output_format), run_id, runs,
                 root_session_key=root_session_key,
                 input_files=input_files,
                 update_manifest=_update,
@@ -209,18 +210,20 @@ class WorkflowEngine:
             logger.exception("workflow run manifest finalize failed for {}", workflow.name)
 
     @staticmethod
-    def _frame_task(workflow: Workflow, task: str) -> str:
+    def _frame_task(workflow: Workflow, task: str, output_format: str | None = None) -> str:
         """Frame the task with the workflow's optional I/O descriptions: the input
         description as a prefix (what the workflow received) and the output description
         as a suffix (what it must ultimately deliver). Both are free-text hints that
-        steer the node agents and document the interface — they are not enforced. When
-        neither is set the task is returned unchanged."""
+        steer the node agents and document the interface — they are not enforced. A
+        call-time ``output_format`` (the caller's delivery instruction for THIS run)
+        overrides the workflow's default output description. When neither an output
+        nor an input applies the task is returned unchanged."""
         def _desc(d: object) -> str | None:
             text = d.get("description") if isinstance(d, dict) else None
             text = str(text).strip() if text else ""
             return text or None
         intro = _desc(workflow.input)
-        goal = _desc(workflow.output)
+        goal = (output_format or "").strip() or _desc(workflow.output)
         prefix = f"This workflow's input is: {intro}\n\n" if intro else ""
         suffix = f"\n\nThe workflow's final deliverable should be: {goal}" if goal else ""
         return f"{prefix}{task}{suffix}" if (prefix or suffix) else task
