@@ -56,10 +56,9 @@ const KIND_RING: Record<string, string> = {
 };
 
 // Maps a stored node kind to the i18n key suffix used for display labels.
-// Both "work" and the legacy "decision" alias present as "work" to the user;
-// routing is shown only by the presence of pass/fail edges, never by a badge.
+// Routing is shown only by the presence of pass/fail edges, never by a badge.
 export function kindLabelKey(kind: string): string {
-  if (kind === "decision" || kind === "work") return "work";
+  if (kind === "work") return "work";
   if (kind === "subworkflow") return "subflow";
   return kind; // "parallel"
 }
@@ -132,7 +131,6 @@ function IOCard({ data, selected }: NodeProps) {
 
 const nodeTypes = {
   work: NodeCard,
-  decision: NodeCard,
   parallel: NodeCard,
   subworkflow: NodeCard,
   input_obj: IOCard,
@@ -408,7 +406,7 @@ function NodeConfigPanel({
         )}
       </div>
 
-      {(node.kind === "work" || node.kind === "decision") && (
+      {node.kind === "work" && (
         <>
           {/* Runs as: default model / specific model / personas */}
               <Field label={t("workflows.runsAs")}>
@@ -1153,7 +1151,7 @@ export function WorkflowsView() {
           if (n.cases != null) return n;
           // A node with on_pass/on_fail (binary routing) — fill the empty slot first.
           const isRouting = n.on_pass != null || n.on_fail != null;
-          if (n.kind === "decision" || isRouting) {
+          if (isRouting) {
             return n.on_pass ? { ...n, on_fail: c.target } : { ...n, on_pass: c.target };
           }
           if (n.kind === "parallel") {

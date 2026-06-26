@@ -7,7 +7,7 @@ import type { Edge, Node } from "@xyflow/react";
 
 export type WorkflowNodeDef = {
   id: string;
-  kind: "work" | "decision" | "parallel" | "subworkflow";
+  kind: "work" | "parallel" | "subworkflow";
   next?: string | null;
   on_pass?: string | null;
   on_fail?: string | null;
@@ -80,22 +80,13 @@ function computeDepths(def: WorkflowDef): Record<string, number> {
   return depth;
 }
 
-// A node "routes" when it has on_pass/on_fail (binary) or cases (multi-way) set,
-// regardless of kind. Both legacy kind:"decision" nodes and kind:"work" nodes with
-// routing fields render with labeled output edges.
+// A node "routes" when it has on_pass/on_fail (binary) or cases (multi-way) set.
+// Routing is a config of a work node, not a separate node type; a routing node
+// renders with labeled output edges.
 function nodeRoutes(n: WorkflowNodeDef): boolean {
   // Detect routing by KEY PRESENCE: a routing branch may legitimately be null (ends at the
   // workflow output), so a freshly-enabled binary node (both edges null) still routes.
   return n.on_pass !== undefined || n.on_fail !== undefined || (n.cases != null && Object.keys(n.cases).length > 0);
-}
-
-// Resolve the React Flow node type for component selection: routing nodes resolve
-// to "decision" so the correct React Flow node component is used. Both "decision"
-// and "work" map to NodeCard — this is an internal discriminator, not a user-facing
-// label. The type does not imply a visual ring; that concept was removed.
-function resolveNodeType(n: WorkflowNodeDef): string {
-  if (nodeRoutes(n)) return "decision";
-  return n.kind;
 }
 
 // Find the terminal nodes whose completion ends the workflow — these connect to the
@@ -167,7 +158,7 @@ export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[]
     const stored = def.ui?.positions?.[n.id];
     return {
       id: n.id,
-      type: resolveNodeType(n),
+      type: n.kind,
       position: stored ?? { x: col * COL, y: row * ROW },
       data: { node: n, isStart: n.id === def.start } satisfies FlowNodeData,
     };
@@ -194,7 +185,7 @@ export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[]
         add(n.id, target, label);
       }
     } else if (n.on_pass !== undefined || n.on_fail !== undefined) {
-      // Binary routing node (kind:"work" with on_pass/on_fail OR legacy kind:"decision")
+      // Binary routing node (kind:"work" with on_pass/on_fail)
       add(n.id, n.on_pass, "pass");
       add(n.id, n.on_fail, "fail");
     } else if (n.kind === "parallel") {

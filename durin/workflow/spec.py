@@ -5,10 +5,6 @@ and optionally route the flow on a pass/fail verdict. A node runs an agent turn 
 produces an output. Routing is opt-in: set on_pass/on_fail to make a node emit a
 verdict; omit them and the node uses a single next edge. The parsed form is plain
 dataclasses the engine walks deterministically.
-
-The ``kind: "decision"`` JSON field is a back-compat alias for a routing WorkNode:
-``criteria`` maps to ``prompt``, ``judge_model`` maps to ``model`` (if model is
-unset). No data migration required.
 """
 
 from __future__ import annotations
@@ -247,51 +243,6 @@ def _build_node(raw: dict[str, Any]) -> Node:
             cases=cases,
             max_visits=node_max_visits,
             max_turns=node_max_turns,
-        )
-    if kind == "decision":
-        # Back-compat alias: kind=decision maps to a routing WorkNode.
-        # 'criteria' maps to 'prompt'; 'judge_model' maps to 'model' when model is unset.
-        criteria = raw.get("criteria", "")
-        model = raw.get("model")
-        if model is None:                       # map judge_model only when model is unset
-            model = raw.get("judge_model")
-        persona = raw.get("persona")
-        if persona is not None and not isinstance(persona, str):
-            raise WorkflowError(
-                f"node {node_id!r}: persona must be a string or omitted, got {persona!r}"
-            )
-        if persona is not None and model is not None:
-            raise WorkflowError(
-                f"node {node_id!r}: persona and model are mutually exclusive — set one or neither"
-            )
-        on_pass = raw.get("on_pass")
-        on_fail = raw.get("on_fail")
-        if raw.get("next") is not None and (on_pass is not None or on_fail is not None):
-            raise WorkflowError(
-                f"node {node_id!r}: 'next' and routing ('on_pass'/'on_fail') are mutually exclusive"
-            )
-        # A routing node's verdict must stay independent of sibling conversations,
-        # so a shared context buffer is incompatible with routing (mirrors the work path).
-        if (on_pass is not None or on_fail is not None) and raw.get("context", "own") == "shared":
-            raise WorkflowError(
-                f"node {node_id!r}: a routing node ('on_pass'/'on_fail') cannot use "
-                f"context='shared'"
-            )
-        # Routing agent nodes default to explore mode (read-only) for independence.
-        mode = raw.get("mode", "explore")
-        return WorkNode(
-            id=node_id,
-            model=model,
-            persona=persona,
-            context=raw.get("context", "own"),
-            prompt=criteria,
-            next=raw.get("next"),
-            mode=mode,
-            tools=raw.get("tools", "none"),
-            skills=_str_list(raw.get("skills", []), node_id, "skills"),
-            mcps=_str_list(raw.get("mcps", []), node_id, "mcps"),
-            on_pass=on_pass,
-            on_fail=on_fail,
         )
     if kind == "subworkflow":
         workflow = raw.get("workflow", "")

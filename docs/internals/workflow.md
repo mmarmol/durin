@@ -25,8 +25,7 @@ model (or the default), a context policy (`own` vs `shared` session), a tool set
 vs `default`), a prompt, optional skills/MCP, and either a single `next` edge or — when it
 **routes** — a pair of targets (`on_pass`, `on_fail`). A `None` target ends the run. The parser
 validates that the start and every edge target name a real node, and that `next` and
-routing are not both set. (`kind: "decision"` is accepted as a back-compat alias for a
-routing node — `criteria` maps to the node's `prompt`.)
+routing are not both set.
 
 **Workflow I/O is first-class.** A `Workflow` carries optional `input` (`{text?, file?, description?}`)
 and `output` descriptors — rendered as distinct **Input** and **Output** objects on the canvas. The text
@@ -344,7 +343,7 @@ End-to-end for a single `run_workflow` call:
 
 | Symbol | File | Role |
 |---|---|---|
-| `Workflow`, `WorkNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator (one node type; routing optional; `kind:"decision"` back-compat alias; structural-equivalence guard). |
+| `Workflow`, `WorkNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator (one work-node type; routing optional; structural-equivalence guard). |
 | `parse_verdict`, `parse_label` | `durin/workflow/verdict.py` | The verdict contracts: `parse_verdict` returns the binary `PASS`/`FAIL` from a routing agent node's output (default `FAIL`); `parse_label` matches the last non-empty line of a multi-way node's output against the declared case labels (case-insensitive, punctuation-tolerant). |
 | `artifact_dir`, `prune_runs` | `durin/workflow/artifacts.py` | The per-node file hand-off folder keyed by run/node/iteration (self-gitignored, pruned to recent runs). |
 | `AgentJudgeRunner` | `durin/workflow/judge.py` | The branch-pick reviewer: `pick` chooses the best of N outputs for a parallel `choose` reconcile. |

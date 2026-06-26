@@ -7,7 +7,7 @@ const DEF: WorkflowDef = {
   start: "draft",
   nodes: [
     { id: "draft", kind: "work", next: "gate" },
-    { id: "gate", kind: "decision", on_pass: null, on_fail: "draft" },
+    { id: "gate", kind: "work", on_pass: null, on_fail: "draft" },
   ],
 };
 
@@ -90,21 +90,7 @@ describe("workflowToFlow", () => {
     expect(fromA[0].label).toBeUndefined();
   });
 
-  it("a legacy kind:decision node still renders with pass/fail edges", () => {
-    const { edges } = workflowToFlow({
-      name: "legacy",
-      start: "prod",
-      nodes: [
-        { id: "prod", kind: "work", next: "gate" },
-        { id: "gate", kind: "decision", on_pass: "done", on_fail: "prod" },
-        { id: "done", kind: "work" },
-      ],
-    });
-    expect(edges.find((e) => e.source === "gate" && e.label === "pass")?.target).toBe("done");
-    expect(edges.find((e) => e.source === "gate" && e.label === "fail")?.target).toBe("prod");
-  });
-
-  it("a routing kind:work node resolves to the internal 'decision' flow-type (component selection)", () => {
+  it("a routing kind:work node still renders as a work node (routing is a config, not a type)", () => {
     const { nodes } = workflowToFlow({
       name: "ring",
       start: "gate",
@@ -114,7 +100,7 @@ describe("workflowToFlow", () => {
       ],
     });
     const gate = nodes.find((n) => n.id === "gate")!;
-    expect(gate.type).toBe("decision");
+    expect(gate.type).toBe("work");
   });
 
   it("a non-routing kind:work node type stays 'work'", () => {
@@ -270,7 +256,7 @@ describe("workflowToFlow", () => {
     expect(toOutput).toEqual(["fix", "router"]);
   });
 
-  it("a cases node resolves to the 'decision' flow-type for visual consistency", () => {
+  it("a cases (multi-way) node still renders as a work node", () => {
     const { nodes } = workflowToFlow({
       name: "mwtype",
       start: "router",
@@ -280,7 +266,7 @@ describe("workflowToFlow", () => {
       ],
     });
     const router = nodes.find((n) => n.id === "router")!;
-    expect(router.type).toBe("decision");
+    expect(router.type).toBe("work");
   });
 
   it("uses def.ui.positions for a node when present", () => {
@@ -325,13 +311,14 @@ describe("workflowToFlow", () => {
   it("a routing node with BOTH branches null (freshly-enabled binary) routes and connects to OUTPUT", () => {
     // Checking the 'routes' toggle seeds on_pass=null and on_fail=null. Detection must be by
     // key presence, not value: a `!= null` test would mis-read both-null as non-routing.
-    const { nodes, edges } = workflowToFlow({
+    const { edges } = workflowToFlow({
       name: "enabled",
       start: "gate",
       output: { text: true },
       nodes: [{ id: "gate", kind: "work", on_pass: null, on_fail: null }],
     });
-    expect(nodes.find((n) => n.id === "gate")!.type).toBe("decision");
+    // Detected as routing → both-null branches make it a terminal that connects to OUTPUT.
+    // (A non-routing both-null node would have no next and draw no output edge.)
     expect(edges.some((e) => e.source === "gate" && e.target === "__output__")).toBe(true);
   });
 });

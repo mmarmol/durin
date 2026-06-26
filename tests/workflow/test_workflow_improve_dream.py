@@ -8,8 +8,7 @@ from durin.workflow.loader import workflows_dir
 from durin.workflow.result import NodeRun, WorkflowResult
 from durin.workflow.workflow_improve_dream import run_workflow_improve_pass
 
-# Node 'g' uses a routing WorkNode with on_pass/on_fail (back-compat: kind="decision" parses
-# to WorkNode; prompt is the editable field after criteria was folded into prompt).
+# Node 'g' is a routing WorkNode with on_pass/on_fail (its prompt is the verdict criterion).
 _WF = {
     "name": "wf", "start": "a", "improvement_mode": "manual",
     "nodes": [

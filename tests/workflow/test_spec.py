@@ -16,7 +16,7 @@ _VALID = {
     "nodes": [
         {"id": "build", "kind": "work", "model": "fast", "context": "own",
          "prompt": "Write the code.", "next": "check"},
-        {"id": "check", "kind": "decision", "criteria": "Is it correct?",
+        {"id": "check", "kind": "work", "prompt": "Is it correct?",
          "on_pass": None, "on_fail": "build"},
     ],
 }
@@ -31,7 +31,7 @@ def test_parse_valid_workflow():
     assert wf.nodes["build"].model == "fast"
     assert wf.nodes["build"].context == "own"
     assert wf.nodes["build"].next == "check"
-    # kind=decision with criteria parses back-compatibly into a routing WorkNode
+    # the routing node: prompt holds the verdict criterion
     assert isinstance(wf.nodes["check"], WorkNode)
     assert wf.nodes["check"].prompt == "Is it correct?"
     assert wf.nodes["check"].on_pass is None
@@ -212,21 +212,6 @@ def test_non_string_model_raises():
                         "nodes": [{"id": "a", "kind": "work", "model": 123}]})
 
 
-def test_decision_node_parses_criteria_and_judge_model():
-    # Legacy back-compat: kind=decision with criteria+judge_model still parses,
-    # now into a routing WorkNode with criteria->prompt and judge_model->model.
-    wf = parse_workflow({"name": "d", "start": "a", "nodes": [
-        {"id": "a", "kind": "work", "next": "g"},
-        {"id": "g", "kind": "decision", "criteria": "Is it correct?",
-         "judge_model": "deep", "on_pass": None, "on_fail": "a"},
-    ]})
-    g = wf.nodes["g"]
-    assert isinstance(g, WorkNode)
-    assert g.prompt == "Is it correct?"
-    assert g.model == "deep"
-
-
-
 def test_work_node_with_routing_is_a_routing_node():
     wf = parse_workflow({"name": "w", "start": "a", "nodes": [
         {"id": "a", "kind": "work", "prompt": "judge it", "on_pass": "b", "on_fail": "a"},
@@ -237,39 +222,10 @@ def test_work_node_with_routing_is_a_routing_node():
     assert a.on_pass == "b" and a.on_fail == "a"
 
 
-def test_legacy_decision_criteria_maps_to_a_routing_work_node():
-    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
-        {"id": "a", "kind": "decision", "criteria": "is it good?", "on_pass": "b", "on_fail": "a"},
-        {"id": "b", "kind": "work"},
-    ]})
-    a = wf.nodes["a"]
-    assert isinstance(a, WorkNode) and a.routes
-    assert a.prompt == "is it good?"        # criteria -> prompt
-    assert a.mode == "explore"              # routing agent nodes default read-only
-
-
-
-def test_judge_model_is_accepted_and_dropped():
-    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
-        {"id": "a", "kind": "decision", "criteria": "ok?", "judge_model": "x", "on_pass": "b"},
-        {"id": "b", "kind": "work"},
-    ]})
-    assert wf.nodes["a"].model == "x"       # mapped to model since model was unset
-    assert not hasattr(wf.nodes["a"], "judge_model")
-
-
 def test_a_node_cannot_have_both_next_and_routing():
     with pytest.raises(WorkflowError):
         parse_workflow({"name": "w", "start": "a", "nodes": [
             {"id": "a", "kind": "work", "next": "b", "on_pass": "b"},
-            {"id": "b", "kind": "work"},
-        ]})
-
-
-def test_legacy_decision_cannot_have_both_next_and_routing():
-    with pytest.raises(WorkflowError):
-        parse_workflow({"name": "w", "start": "a", "nodes": [
-            {"id": "a", "kind": "decision", "criteria": "ok?", "next": "b", "on_pass": "b"},
             {"id": "b", "kind": "work"},
         ]})
 
@@ -394,18 +350,6 @@ def test_node_persona_defaults_none():
     a = parse_workflow({"name": "w", "start": "a",
                         "nodes": [{"id": "a", "kind": "work"}]}).nodes["a"]
     assert a.persona is None
-
-
-def test_legacy_decision_node_persona_xor_model():
-    # the kind=decision alias honors persona the same way (read it; xor with model)
-    a = parse_workflow({"name": "w", "start": "a", "nodes": [
-        {"id": "a", "kind": "decision", "criteria": "ok?", "persona": "engineer",
-         "on_pass": "b", "on_fail": "a"}, {"id": "b", "kind": "work"}]}).nodes["a"]
-    assert a.persona == "engineer"
-    with pytest.raises(WorkflowError):     # persona + model on a decision → reject
-        parse_workflow({"name": "w", "start": "a", "nodes": [
-            {"id": "a", "kind": "decision", "criteria": "ok?", "persona": "engineer",
-             "model": "glm-5.2", "on_pass": "b"}, {"id": "b", "kind": "work"}]})
 
 
 def test_parallel_max_concurrency_defaults_2_and_parses():
@@ -600,7 +544,7 @@ def test_max_turns_string_raises():
 def test_routing_node_cannot_use_shared_context_binary():
     with pytest.raises(WorkflowError, match="routing node.*cannot use context=.shared."):
         parse_workflow({"name": "w", "start": "a", "nodes": [
-            {"id": "a", "kind": "work", "context": "shared", "criteria": "ok?",
+            {"id": "a", "kind": "work", "context": "shared",
              "on_pass": "b", "on_fail": "a"},
             {"id": "b", "kind": "work", "next": None}]})
 

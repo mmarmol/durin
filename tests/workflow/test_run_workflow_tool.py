@@ -75,7 +75,7 @@ async def test_judgment_workflow_runs_end_to_end(tmp_path):
         "name": "reviewed", "start": "make",
         "nodes": [
             {"id": "make", "kind": "work", "next": "review"},
-            {"id": "review", "kind": "decision", "criteria": "Is it good?",
+            {"id": "review", "kind": "work", "prompt": "Is it good?",
              "on_pass": None, "on_fail": "make"},
         ],
     })
