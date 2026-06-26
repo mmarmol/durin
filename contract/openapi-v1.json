@@ -1,6 +1,63 @@
 {
   "components": {
     "schemas": {
+      "BackgroundTask": {
+        "properties": {
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "session_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Key"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "number"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "label",
+          "status",
+          "started_at",
+          "ended_at",
+          "session_key"
+        ],
+        "title": "BackgroundTask",
+        "type": "object"
+      },
       "ChannelsListQuery": {
         "additionalProperties": false,
         "description": "No inputs \u2014 lists all discovered channels with their enabled state.",
@@ -4575,6 +4632,36 @@
         "title": "SoulUpsertResult",
         "type": "object"
       },
+      "TasksListQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "session": {
+            "title": "Session",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session"
+        ],
+        "title": "TasksListQuery",
+        "type": "object"
+      },
+      "TasksListResult": {
+        "properties": {
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/BackgroundTask"
+            },
+            "title": "Tasks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tasks"
+        ],
+        "title": "TasksListResult",
+        "type": "object"
+      },
       "TokenMetadata": {
         "properties": {
           "created_at": {
@@ -7975,6 +8062,35 @@
         },
         "summary": "Create or overwrite a SOUL personality file",
         "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/tasks": {
+      "get": {
+        "operationId": "tasks_list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TasksListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TasksListResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List background tasks (sub-agents + workflow runs) for a chat session",
+        "x-required-scope": "sessions:read"
       }
     },
     "/api/v1/workflows": {

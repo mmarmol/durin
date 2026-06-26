@@ -1419,6 +1419,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List background tasks (sub-agents + workflow runs) for a chat session */
+        get: operations["tasks_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows": {
         parameters: {
             query?: never;
@@ -1561,6 +1578,23 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** BackgroundTask */
+        BackgroundTask: {
+            /** Ended At */
+            ended_at: number | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Label */
+            label: string;
+            /** Session Key */
+            session_key: string | null;
+            /** Started At */
+            started_at: number;
+            /** Status */
+            status: string;
+        };
         /**
          * ChannelsListQuery
          * @description No inputs — lists all discovered channels with their enabled state.
@@ -3648,6 +3682,16 @@ export interface components {
         /** SoulUpsertResult */
         SoulUpsertResult: {
             soul: components["schemas"]["SoulItem"];
+        };
+        /** TasksListQuery */
+        TasksListQuery: {
+            /** Session */
+            session: string;
+        };
+        /** TasksListResult */
+        TasksListResult: {
+            /** Tasks */
+            tasks: components["schemas"]["BackgroundTask"][];
         };
         /** TokenMetadata */
         TokenMetadata: {
@@ -6310,6 +6354,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SoulDeleteResult"];
+                };
+            };
+        };
+    };
+    tasks_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TasksListQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TasksListResult"];
                 };
             };
         };

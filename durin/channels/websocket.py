@@ -528,6 +528,7 @@ class WebSocketChannel(BaseChannel):
             session_manager=self._session_manager,
             cron_service=self._cron_service,
             bus=bus,
+            subagent_manager=None,
         )
 
     def _endpoint_workspace(self) -> Path:
