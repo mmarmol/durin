@@ -53,10 +53,19 @@ class SubagentStatus:
 class _SubagentHook(AgentHook):
     """Hook for subagent execution — logs tool calls and updates status."""
 
-    def __init__(self, task_id: str, status: SubagentStatus | None = None) -> None:
+    def __init__(
+        self,
+        task_id: str,
+        status: SubagentStatus | None = None,
+        *,
+        bus: Any | None = None,
+        origin: dict | None = None,
+    ) -> None:
         super().__init__()
         self._task_id = task_id
         self._status = status
+        self._bus = bus
+        self._origin = origin or {}
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
         for tool_call in context.tool_calls:
@@ -74,6 +83,35 @@ class _SubagentHook(AgentHook):
         self._status.usage = dict(context.usage)
         if context.error:
             self._status.error = str(context.error)
+        # Live progress: emit a running frame the webui merges into the
+        # sub-agent block by call_id (same call_id/name as the final result).
+        # Best-effort: a publish failure must never break the sub-agent run.
+        if self._bus is not None and self._origin.get("chat_id"):
+            try:
+                from durin.bus.events import OutboundMessage
+                last_tool = None
+                if context.tool_events:
+                    te = context.tool_events[-1]
+                    last_tool = te.get("name") if isinstance(te, dict) else None
+                ev = {
+                    "version": 1,
+                    "phase": "running",
+                    "call_id": f"subagent:{self._task_id}",
+                    "name": "subagent_result",
+                    "arguments": {
+                        "label": self._status.label,
+                        "task": self._status.task_description,
+                    },
+                    "progress": {"iteration": context.iteration, "tool": last_tool},
+                }
+                await self._bus.publish_outbound(OutboundMessage(
+                    channel=self._origin.get("channel", "websocket"),
+                    chat_id=self._origin["chat_id"],
+                    content="",
+                    metadata={"_progress": True, "_tool_hint": True, "_tool_events": [ev]},
+                ))
+            except Exception:
+                logger.debug("Subagent [{}] progress emit failed (suppressed)", self._task_id)
 
 
 class SubagentManager:
@@ -269,7 +307,7 @@ class SubagentManager:
                 provider=subagent_provider,
                 max_iterations=self.max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
-                hook=_SubagentHook(task_id, status),
+                hook=_SubagentHook(task_id, status, bus=self.bus, origin=origin),
                 max_iterations_message="Task completed but no final response was generated.",
                 error_message=None,
                 fail_on_tool_error=True,
