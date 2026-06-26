@@ -7,10 +7,13 @@ import type { Edge, Node } from "@xyflow/react";
 
 export type WorkflowNodeDef = {
   id: string;
-  kind: "work" | "decision" | "parallel" | "subworkflow";
+  kind: "work" | "parallel" | "subworkflow";
   next?: string | null;
   on_pass?: string | null;
   on_fail?: string | null;
+  // Multi-way routing: label -> target node id (null = end / workflow output).
+  // Mutually exclusive with next and on_pass/on_fail.
+  cases?: Record<string, string | null>;
   branches?: string[];
   // parallel dynamic mode fields
   worker?: string | null;
@@ -52,6 +55,11 @@ function targetsOf(n: WorkflowNodeDef): string[] {
   for (const t of [n.next, n.on_pass, n.on_fail, n.worker, n.list_from, ...(n.branches ?? [])]) {
     if (typeof t === "string") out.push(t);
   }
+  if (n.cases) {
+    for (const t of Object.values(n.cases)) {
+      if (typeof t === "string") out.push(t);
+    }
+  }
   return out;
 }
 
@@ -72,20 +80,13 @@ function computeDepths(def: WorkflowDef): Record<string, number> {
   return depth;
 }
 
-// A node "routes" when it has on_pass or on_fail set, regardless of kind.
-// This means both legacy kind:"decision" nodes and new kind:"work" nodes with
-// routing fields render identically (pass/fail edges + handles).
+// A node "routes" when it has on_pass/on_fail (binary) or cases (multi-way) set.
+// Routing is a config of a work node, not a separate node type; a routing node
+// renders with labeled output edges.
 function nodeRoutes(n: WorkflowNodeDef): boolean {
-  return n.on_pass != null || n.on_fail != null;
-}
-
-// Resolve the React Flow node type for component selection: routing nodes resolve
-// to "decision" so the correct React Flow node component is used. Both "decision"
-// and "work" map to NodeCard — this is an internal discriminator, not a user-facing
-// label. The type does not imply a visual ring; that concept was removed.
-function resolveNodeType(n: WorkflowNodeDef): string {
-  if (nodeRoutes(n)) return "decision";
-  return n.kind;
+  // Detect routing by KEY PRESENCE: a routing branch may legitimately be null (ends at the
+  // workflow output), so a freshly-enabled binary node (both edges null) still routes.
+  return n.on_pass !== undefined || n.on_fail !== undefined || (n.cases != null && Object.keys(n.cases).length > 0);
 }
 
 // Find the terminal nodes whose completion ends the workflow — these connect to the
@@ -106,8 +107,18 @@ function findTerminals(def: WorkflowDef, byId: Map<string, WorkflowNodeDef>): st
     for (const b of n.branches ?? []) if (typeof b === "string") fanMembers.add(b);
   }
   const valid = (t: unknown) => typeof t === "string" && byId.has(t);
-  const endsFlow = (n: WorkflowNodeDef) =>
-    nodeRoutes(n) ? !valid(n.on_pass) || !valid(n.on_fail) : !valid(n.next);
+  const endsFlow = (n: WorkflowNodeDef) => {
+    if (n.cases != null) {
+      // A cases node ends the flow if any case target is null (routes to workflow output).
+      return Object.values(n.cases).some((t) => !valid(t));
+    }
+    // A non-routing node connects to the workflow output only when `next` explicitly ends
+    // the flow (null) or dangles (points at a deleted node). An UNSET next (undefined) means
+    // "not wired yet" — a brand-new node — so it stays unconnected, no spurious output edge.
+    return nodeRoutes(n)
+      ? !valid(n.on_pass) || !valid(n.on_fail)
+      : n.next !== undefined && !valid(n.next);
+  };
   return def.nodes
     .filter((n) => reachable.has(n.id) && !fanMembers.has(n.id) && endsFlow(n))
     .map((n) => n.id);
@@ -147,7 +158,7 @@ export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[]
     const stored = def.ui?.positions?.[n.id];
     return {
       id: n.id,
-      type: resolveNodeType(n),
+      type: n.kind,
       position: stored ?? { x: col * COL, y: row * ROW },
       data: { node: n, isStart: n.id === def.start } satisfies FlowNodeData,
     };
@@ -167,8 +178,14 @@ export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[]
   }
 
   for (const n of def.nodes) {
-    if (nodeRoutes(n)) {
-      // Routing node (kind:"work" with on_pass/on_fail OR legacy kind:"decision")
+    if (n.cases != null) {
+      // Multi-way routing: one edge per case, using the label as the edge label.
+      // Null targets (end-of-flow) are not drawn here; the terminal logic handles them.
+      for (const [label, target] of Object.entries(n.cases)) {
+        add(n.id, target, label);
+      }
+    } else if (n.on_pass !== undefined || n.on_fail !== undefined) {
+      // Binary routing node (kind:"work" with on_pass/on_fail)
       add(n.id, n.on_pass, "pass");
       add(n.id, n.on_fail, "fail");
     } else if (n.kind === "parallel") {

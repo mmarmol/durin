@@ -10,11 +10,9 @@ from durin.utils.helpers import seed_workflows
 from durin.workflow.spec import parse_workflow
 
 _SEED_NAMES = [
-    "evaluator-optimizer",
-    "concurrent-review",
-    "orchestrate-dev",
-    "routing-triage",
-    "build-test-fix",
+    "research-to-answer",
+    "brainstorming",
+    "writing-plans",
 ]
 
 
@@ -37,7 +35,7 @@ def test_seed_parses(name: str):
     assert wf.name == name
 
 
-def test_seed_workflows_copies_all_five(tmp_path: Path):
+def test_seed_workflows_copies_all(tmp_path: Path):
     added = seed_workflows(tmp_path)
     dest = tmp_path / "workflows"
     for name in _SEED_NAMES:
@@ -54,7 +52,22 @@ def test_seed_workflows_idempotent(tmp_path: Path):
 
 def test_seed_workflows_does_not_overwrite_existing(tmp_path: Path):
     seed_workflows(tmp_path)
-    target = tmp_path / "workflows" / "evaluator-optimizer.json"
+    target = tmp_path / "workflows" / "research-to-answer.json"
     target.write_text("USER_CONTENT", encoding="utf-8")
     seed_workflows(tmp_path)
     assert target.read_text(encoding="utf-8") == "USER_CONTENT"
+
+
+@pytest.mark.parametrize("name", _SEED_NAMES)
+def test_seed_does_not_hardcode_a_model_or_persona(name: str):
+    # A seed must not pin a specific model/judge_model/persona: those are user-
+    # environment choices. Omitting them lets every node inherit the engine default,
+    # so a seed runs on whatever provider the user has configured (a hardcoded
+    # 'glm-4.7' would simply fail for a user without that provider).
+    data = json.loads(_seed_path(name).read_text(encoding="utf-8"))
+    for node in data.get("nodes", []):
+        for field in ("model", "judge_model", "persona"):
+            assert field not in node, (
+                f"seed {name!r} node {node.get('id')!r} hardcodes {field!r}="
+                f"{node.get(field)!r}; omit it so the node uses the default"
+            )

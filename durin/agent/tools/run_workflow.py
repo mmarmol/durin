@@ -14,8 +14,6 @@ import asyncio
 from contextvars import ContextVar
 from typing import Any
 
-from loguru import logger
-
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 
@@ -30,6 +28,15 @@ _PARAMETERS = {
             "type": "string",
             "description": "The task / input to run through the workflow.",
         },
+        "output_format": {
+            "type": "string",
+            "description": (
+                "Optional. How you want the result delivered THIS run — form, content, or "
+                "length (e.g. 'a bulleted list', 'JSON with fields title,summary', 'a 3-line "
+                "summary'). Overrides the workflow's default output contract for this call only. "
+                "Omit to use the workflow's own output description."
+            ),
+        },
     },
     "required": ["name", "task"],
 }
@@ -38,7 +45,16 @@ _PARAMETERS = {
 def _format_result(result: Any) -> str:
     lines = [f"Workflow run {result.run_id}: {result.status}"]
 
-    if result.status != "completed":
+    if result.status == "needs_input":
+        lines.append(
+            "The workflow needs more information before it can finish — it did NOT fail. "
+            "You own the conversation with the user, so ask them the questions below "
+            "(via ask_user_question or just in your reply), then call this workflow again "
+            "with the SAME task plus the user's answers appended."
+        )
+        if result.final_output:
+            lines.append(f"\nNeeds clarification:\n{result.final_output}")
+    elif result.status != "completed":
         if result.status == "exhausted" and result.exhausted_node:
             lines.append(
                 f"The workflow did not complete: node '{result.exhausted_node}' was retried "
@@ -59,7 +75,13 @@ def _format_result(result: Any) -> str:
 
     for r in result.runs:
         if r.passed is not None:
-            lines.append(f"  [{r.node_id}#{r.iteration}] decision: {'pass' if r.passed else 'fail'}")
+            # A routing/decision node: surface its verdict and, when it ran as an agent
+            # turn (so the verdict is auditable), the session key. A command gate has no
+            # session and renders the verdict alone.
+            line = f"  [{r.node_id}#{r.iteration}] decision: {'pass' if r.passed else 'fail'}"
+            if r.session_key:
+                line += f" -> {r.session_key}"
+            lines.append(line)
         else:
             lines.append(f"  [{r.node_id}#{r.iteration}] -> {r.session_key or '(no session)'}")
 
@@ -104,10 +126,12 @@ class RunWorkflowTool(Tool, ContextAware):
             "Run a user-defined workflow on a task. The workflow is a flow graph of "
             "nodes (defined in <workspace>/workflows/<name>.json); a node does the work "
             "and, when it has routing set (on_pass/on_fail), routes the flow on its "
-            "verdict. Returns a run summary."
+            "verdict. Returns a run summary. If the summary says the workflow needs more "
+            "information, it paused with questions instead of failing — ask the user those "
+            "questions and call this tool again with the same task plus their answers."
         )
 
-    async def execute(self, name: str, task: str) -> str:  # type: ignore[override]
+    async def execute(self, name: str, task: str, output_format: str = "") -> str:  # type: ignore[override]
         from durin.agent.runner import AgentRunner
         from durin.providers.factory import make_provider
         from durin.workflow.engine import WorkflowEngine
@@ -143,20 +167,16 @@ class RunWorkflowTool(Tool, ContextAware):
         subworkflow_runner = SubworkflowRunner(self._workspace, node_runner, judge_runner)
         engine = WorkflowEngine(
             node_runner=node_runner,
-            command_cwd=self._workspace,
             subworkflow_runner=subworkflow_runner,
             workspace=self._workspace,
             pick_runner=judge_runner.pick,
             max_node_visits=self._app_config.workflow.max_node_visits,
         )
         root_session_key = self._session_key.get()
-        result = await asyncio.to_thread(engine.run, workflow, task, root_session_key=root_session_key)
-
-        # Record the run's diagnostic trace for dream self-improvement (best-effort).
-        try:
-            from durin.workflow.run_log import write_run
-            write_run(self._workspace, name, result)
-        except Exception:  # noqa: BLE001 - a record failure must not break the run
-            logger.exception("workflow run-record write failed for {}", name)
-
+        result = await asyncio.to_thread(
+            engine.run, workflow, task,
+            root_session_key=root_session_key,
+            output_format=output_format or None,
+        )
+        # The engine owns the run manifest (started→updated→finalized); no record write here.
         return _format_result(result)

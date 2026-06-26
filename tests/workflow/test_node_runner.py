@@ -344,6 +344,7 @@ def test_node_persona_applies_soul_and_model(monkeypatch):
     class R:
         final_content = "ok"
         messages = []
+        stop_reason = "completed"
 
     class Runner:
         async def run(self, spec):
@@ -367,6 +368,7 @@ def test_node_persona_degrades_gracefully_without_app_config():
     class R:
         final_content = "ok"
         messages = []
+        stop_reason = "completed"
 
     class Runner:
         async def run(self, spec):
@@ -378,3 +380,198 @@ def test_node_persona_degrades_gracefully_without_app_config():
     node = WorkNode(id="a", persona="engineer")
     nr(NodeRunRequest(node=node, task="t", upstream_output=None, shared_context=[], run_id="r", iteration=1, root_session_key=None))
     assert captured["model"] == "m"   # fell back to default; no crash
+
+
+# ── max_turns node runner tests ───────────────────────────────────────────────
+
+
+def test_max_turns_injects_budget_note_into_system_prompt(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(final_content="done", messages=[])
+    nr = _runner(sessions, fake)
+    req = NodeRunRequest(
+        node=WorkNode(id="a", prompt="Do the work.", next=None, max_turns=4),
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    nr(req)
+    spec = nr.runner.run.call_args.args[0]
+    system = [m for m in spec.initial_messages if m["role"] == "system"][0]["content"]
+    assert "Do the work." in system
+    assert "4" in system
+    assert "rounds of tool use" in system
+
+
+def test_max_turns_sets_run_max_iterations(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(final_content="done", messages=[])
+    nr = _runner(sessions, fake)
+    req = NodeRunRequest(
+        node=WorkNode(id="a", next=None, max_turns=7),
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    nr(req)
+    spec = nr.runner.run.call_args.args[0]
+    assert spec.max_iterations == 7
+
+
+def test_no_max_turns_uses_global_max_iterations(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(final_content="done", messages=[])
+    from durin.agent.runner import AgentRunner
+    from durin.providers.base import LLMProvider
+    ar = AgentRunner(MagicMock(spec=LLMProvider))
+    ar.run = AsyncMock(return_value=fake)
+    nr = AgentNodeRunner(ar, sessions, default_model="m", max_iterations=50)
+    req = NodeRunRequest(
+        node=WorkNode(id="a", next=None),   # no max_turns
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    nr(req)
+    spec = nr.runner.run.call_args.args[0]
+    assert spec.max_iterations == 50
+
+
+def test_max_turns_exhausted_triggers_synthesis_call(tmp_path):
+    # First run hits max_iterations; second run synthesizes with no tools.
+    sessions = SessionManager(workspace=tmp_path)
+    first_result = AgentRunResult(
+        final_content="partial",
+        messages=[
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": "partial"},
+        ],
+        stop_reason="max_iterations",
+    )
+    synthesis_result = AgentRunResult(
+        final_content="synthesized answer",
+        messages=[
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": "partial"},
+            {"role": "user", "content": "give your best final answer"},
+            {"role": "assistant", "content": "synthesized answer"},
+        ],
+        stop_reason="completed",
+    )
+    from durin.agent.runner import AgentRunner
+    from durin.providers.base import LLMProvider
+    ar = AgentRunner(MagicMock(spec=LLMProvider))
+    ar.run = AsyncMock(side_effect=[first_result, synthesis_result])
+    nr = AgentNodeRunner(ar, sessions, default_model="m")
+
+    req = NodeRunRequest(
+        node=WorkNode(id="a", next=None, max_turns=3),
+        task="task", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    resp = nr(req)
+
+    assert ar.run.call_count == 2
+    # Second call must use an empty tool registry and max_iterations=1.
+    second_spec = ar.run.call_args_list[1].args[0]
+    assert second_spec.max_iterations == 1
+    assert not second_spec.tools.tool_names   # empty ToolRegistry
+    assert "final answer" in second_spec.initial_messages[-1]["content"].lower()
+    # Output comes from the synthesis, not the canned "max_iterations" string.
+    assert resp.output == "synthesized answer"
+
+
+def test_empty_synthesis_yields_empty_output_not_canned_message(tmp_path):
+    # When synthesis run returns empty final_content, node output must be ""
+    # not the first run's canned "max iterations reached" string.
+    sessions = SessionManager(workspace=tmp_path)
+    first_result = AgentRunResult(
+        final_content="max iterations reached",
+        messages=[{"role": "user", "content": "task"}],
+        stop_reason="max_iterations",
+    )
+    synthesis_result = AgentRunResult(
+        final_content="",
+        messages=[
+            {"role": "user", "content": "task"},
+            {"role": "user", "content": "give your best final answer"},
+        ],
+        stop_reason="completed",
+    )
+    from durin.agent.runner import AgentRunner
+    ar = AgentRunner(MagicMock(spec=LLMProvider))
+    ar.run = AsyncMock(side_effect=[first_result, synthesis_result])
+    nr = AgentNodeRunner(ar, sessions, default_model="m")
+
+    req = NodeRunRequest(
+        node=WorkNode(id="a", next=None, max_turns=3),
+        task="task", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    resp = nr(req)
+
+    assert resp.output == ""
+    assert "max iterations" not in resp.output
+
+
+def test_max_turns_within_budget_no_second_call(tmp_path):
+    # First run completes within budget (stop_reason != max_iterations).
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(
+        final_content="done within budget",
+        messages=[{"role": "assistant", "content": "done within budget"}],
+        stop_reason="completed",
+    )
+    nr = _runner(sessions, fake)
+    req = NodeRunRequest(
+        node=WorkNode(id="a", next=None, max_turns=6),
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    resp = nr(req)
+    # Only one runner.run call — no synthesis step needed.
+    assert nr.runner.run.call_count == 1
+    assert resp.output == "done within budget"
+
+
+def test_no_max_turns_never_triggers_synthesis_even_on_max_iterations(tmp_path):
+    # Without max_turns the node runner must behave exactly as before this feature.
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(
+        final_content="hit limit",
+        messages=[],
+        stop_reason="max_iterations",
+    )
+    nr = _runner(sessions, fake)
+    req = NodeRunRequest(
+        node=WorkNode(id="a", next=None),   # no max_turns
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    resp = nr(req)
+    assert nr.runner.run.call_count == 1
+    assert resp.output == "hit limit"
+
+
+def test_model_error_stop_reason_is_treated_as_a_node_failure(tmp_path):
+    # A provider that exhausts its retries returns stop_reason="error" + a placeholder
+    # WITHOUT raising. The node runner must treat it as a node failure (persist the
+    # partial session, then raise the typed error) so it is never recorded as a
+    # misleading 'ok' carrying the placeholder string.
+    import pytest
+
+    from durin.workflow.engine import NodeExecutionError
+    sessions = SessionManager(workspace=tmp_path)
+    fake = AgentRunResult(
+        final_content="[Assistant reply unavailable due to model error.]",
+        messages=[{"role": "user", "content": "t"}],
+        stop_reason="error",
+    )
+    nr = _runner(sessions, fake)
+    req = NodeRunRequest(
+        node=WorkNode(id="plan", prompt="Plan it.", next=None),
+        task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    with pytest.raises(NodeExecutionError) as ei:
+        nr(req)
+    assert ei.value.node_id == "plan"
+    assert ei.value.session_key   # the failed node's partial conversation was persisted
+    SessionManager(workspace=tmp_path).get_or_create(ei.value.session_key)

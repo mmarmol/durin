@@ -45,45 +45,6 @@ async def test_missing_workflow_returns_error(tmp_path):
     assert "ghost" in out
 
 
-@pytest.mark.asyncio
-async def test_runs_command_only_workflow_end_to_end(tmp_path):
-    # A decision-only workflow needs no LLM: it runs a command and routes to the end.
-    _write_workflow(tmp_path, "checker", {
-        "name": "checker", "start": "gate",
-        "nodes": [{"id": "gate", "kind": "decision", "command": "true",
-                   "on_pass": None, "on_fail": None}],
-    })
-    tool = _tool(tmp_path)
-    fake_provider = MagicMock(spec=LLMProvider)
-    fake_provider.get_default_model.return_value = "test-model"
-    with patch("durin.providers.factory.make_provider", return_value=fake_provider):
-        out = await tool.execute(name="checker", task="check it")
-    assert "completed" in out.lower()
-    assert "gate" in out
-
-
-@pytest.mark.asyncio
-async def test_run_writes_a_diagnostic_record(tmp_path):
-    # Each run persists a per-run record (the dream self-improvement diagnostic source).
-    _write_workflow(tmp_path, "checker", {
-        "name": "checker", "start": "gate",
-        "nodes": [{"id": "gate", "kind": "decision", "command": "true",
-                   "on_pass": None, "on_fail": None}],
-    })
-    tool = _tool(tmp_path)
-    fake_provider = MagicMock(spec=LLMProvider)
-    fake_provider.get_default_model.return_value = "test-model"
-    with patch("durin.providers.factory.make_provider", return_value=fake_provider):
-        await tool.execute(name="checker", task="check it")
-    from durin.workflow import run_log
-    recs = run_log.read_runs_since(tmp_path, "checker")
-    assert len(recs) == 1
-    assert recs[0]["status"] == "completed"
-    assert any(r["node_id"] == "gate" for r in recs[0]["runs"])
-    # the record lives under workflows-runs/, not in the versioned workflows/ dir
-    assert (tmp_path / "workflows-runs" / "checker").is_dir()
-    assert [p.name for p in workflows_dir(tmp_path).glob("*.json")] == ["checker.json"]
-
 
 @pytest.mark.asyncio
 async def test_work_node_runs_through_to_thread_boundary(tmp_path):
@@ -114,7 +75,7 @@ async def test_judgment_workflow_runs_end_to_end(tmp_path):
         "name": "reviewed", "start": "make",
         "nodes": [
             {"id": "make", "kind": "work", "next": "review"},
-            {"id": "review", "kind": "decision", "criteria": "Is it good?",
+            {"id": "review", "kind": "work", "prompt": "Is it good?",
              "on_pass": None, "on_fail": "make"},
         ],
     })
@@ -203,18 +164,32 @@ def test_completed_run_format_unchanged():
         final_output="the final answer",
         runs=[
             NodeRun(node_id="make", iteration=1, output="draft", session_key="ws:s1"),
-            NodeRun(node_id="review", iteration=1, output="pass", passed=True),
+            NodeRun(node_id="review", iteration=1, output="pass", passed=True, session_key="ws:s2"),
         ],
     )
     text = _format_result(result)
     assert "did not complete" not in text.lower()
-    # byte-exact regression guard: a completed run must render exactly as before
+    # byte-exact regression guard: a routing node now also surfaces its session key
     assert text == (
         "Workflow run run-xyz: completed\n"
         "  [make#1] -> ws:s1\n"
-        "  [review#1] decision: pass\n"
+        "  [review#1] decision: pass -> ws:s2\n"
         "\nFinal output:\nthe final answer"
     )
+
+
+def test_routing_node_without_session_renders_decision_only():
+    result = WorkflowResult(
+        status="completed",
+        run_id="run-cmd",
+        exhausted_node=None,
+        final_output="ok",
+        runs=[
+            NodeRun(node_id="gate", iteration=1, output="", passed=True, session_key=None),
+        ],
+    )
+    text = _format_result(result)
+    assert "  [gate#1] decision: pass\n" in text + "\n"
 
 
 def test_aborted_run_renders_gracefully():

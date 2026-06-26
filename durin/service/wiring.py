@@ -76,4 +76,17 @@ def build_service_registry(
     registry.register("auth", AuthService(ApiTokenStore()))
     registry.register("workflows", WorkflowsService(
         workspace=_workspace(), app_config=config, sessions=session_manager))
+
+    # Crash recovery: the gateway is the long-lived process, so its boot is the natural
+    # point to reconcile run manifests still "running" from a previous process that died
+    # before finalizing them. Best-effort — a sweep failure must not block startup.
+    try:
+        import time
+
+        from durin.workflow import run_log
+
+        run_log.reconcile_running(
+            _workspace(), now=time.time(), max_age_s=run_log.RECONCILE_AGE_S)
+    except Exception:  # noqa: BLE001 - crash reconciliation is best-effort
+        pass
     return registry

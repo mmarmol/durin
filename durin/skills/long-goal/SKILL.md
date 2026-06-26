@@ -1,9 +1,14 @@
 ---
 name: long-goal
-description: Sustained objectives via long_task / complete_goal — idempotent goal wording, project-style modular work, early web/doc research, Runtime Context metadata.
+description: OPTIONAL deeper guidance for long_task / complete_goal — project-style modular work and research-first habits. The core (call promptly, idempotent goal wording) is already inline in the tools; load this only for execution-phase depth.
 ---
 
 # Long-running objectives (`long_task` / `complete_goal`)
+
+> This skill is **optional**. The essentials — call `long_task` promptly, and write an
+> idempotent, compaction-safe goal — are stated inline in the tool descriptions, so you do
+> not need this skill to use the tools well. Load it only for the deeper execution-phase
+> guidance below (project-shaped work, research-first).
 
 Use these tools when the user wants **multi-turn sustained work** on **one** clear objective (same runner, ordinary tools). Not for trivial one-shot questions.
 

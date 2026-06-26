@@ -18,8 +18,9 @@ def test_write_and_read_run_round_trips(tmp_path):
     assert len(got) == 1
     rec = got[0]
     assert rec["run_id"] == "r1" and rec["status"] == "completed"
-    assert {"node_id": "a", "iteration": 2, "passed": None} in rec["runs"]
-    assert {"node_id": "g", "iteration": 1, "passed": False} in rec["runs"]
+    by_node = {(r["node_id"], r["iteration"]): r for r in rec["runs"]}
+    assert by_node[("a", 2)]["passed"] is None
+    assert by_node[("g", 1)]["passed"] is False
 
 
 def test_records_land_beside_workflows_not_inside(tmp_path):
@@ -54,3 +55,106 @@ def test_no_runs_is_empty(tmp_path):
     assert run_log.read_runs_since(tmp_path, "nope") == []
     assert run_log.read_cursor(tmp_path, "nope") == 0.0
     assert run_log.workflow_names_with_runs(tmp_path) == []
+
+
+# --- live manifest (B1) -----------------------------------------------------
+
+
+def test_start_run_writes_running_manifest(tmp_path):
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key="sess:1", started_at=100.0)
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec is not None
+    assert rec["status"] == "running"
+    assert rec["runs"] == []
+    assert rec["root_session_key"] == "sess:1"
+    assert rec["run_id"] == "r1"
+    assert rec["started_at"] == 100.0
+
+
+def test_update_run_reflects_node_records(tmp_path):
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key="sess:1", started_at=100.0)
+    res = _result("r1", status="running", runs=[
+        NodeRun(node_id="a", iteration=1, output="o", session_key="workflow:r1:a:1", status="ok"),
+        NodeRun(node_id="g", iteration=1, output="", passed=False,
+                session_key="workflow:r1:g:1", status="ok"),
+    ])
+    run_log.update_run(tmp_path, "wf", "r1", res)
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["status"] == "running"
+    assert rec["root_session_key"] == "sess:1"   # preserved across update
+    assert rec["started_at"] == 100.0            # preserved across update
+    by_node = {r["node_id"]: r for r in rec["runs"]}
+    assert by_node["a"]["session_key"] == "workflow:r1:a:1"
+    assert by_node["a"]["status"] == "ok"
+    assert by_node["g"]["passed"] is False
+
+
+def test_finalize_run_writes_terminal_status(tmp_path):
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key="sess:1", started_at=100.0)
+    res = _result("r1", status="completed", runs=[
+        NodeRun(node_id="a", iteration=1, output="o", session_key="workflow:r1:a:1"),
+    ])
+    run_log.finalize_run(tmp_path, "wf", res, root_session_key="sess:1",
+                         started_at=100.0, finished_at=130.0)
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["status"] == "completed"
+    assert rec["finished_at"] == 130.0
+    assert rec["runs"][0]["session_key"] == "workflow:r1:a:1"
+    # the finalized record is dream-visible via read_runs_since (ts == finished_at)
+    got = run_log.read_runs_since(tmp_path, "wf")
+    assert [r["run_id"] for r in got] == ["r1"]
+
+
+def test_runs_for_session_matches_root_newest_first(tmp_path):
+    run_log.finalize_run(tmp_path, "wf", _result("old"), root_session_key="sess:1",
+                         started_at=1.0, finished_at=2.0)
+    run_log.finalize_run(tmp_path, "wf", _result("new"), root_session_key="sess:1",
+                         started_at=10.0, finished_at=20.0)
+    run_log.finalize_run(tmp_path, "other", _result("nope"), root_session_key="sess:2",
+                         started_at=5.0, finished_at=6.0)
+    got = run_log.runs_for_session(tmp_path, "sess:1")
+    assert [r["run_id"] for r in got] == ["new", "old"]   # newest-first
+
+
+def test_reconcile_marks_stale_running_as_crashed(tmp_path):
+    run_log.start_run(tmp_path, "wf", "stale", root_session_key="s", started_at=0.0)
+    run_log.start_run(tmp_path, "wf", "fresh", root_session_key="s", started_at=1950.0)
+    run_log.finalize_run(tmp_path, "wf", _result("done"), root_session_key="s",
+                         started_at=0.0, finished_at=5.0)
+
+    n = run_log.reconcile_running(tmp_path, now=2000.0, max_age_s=100.0)
+    assert n == 1   # only the stale running one
+
+    assert run_log.read_manifest(tmp_path, "wf", "stale")["status"] == "crashed"
+    assert run_log.read_manifest(tmp_path, "wf", "fresh")["status"] == "running"
+    assert run_log.read_manifest(tmp_path, "wf", "done")["status"] == "completed"
+
+
+def test_reconcile_preserves_partial_runs_and_survives_malformed(tmp_path):
+    res = _result("stale", status="running", runs=[
+        NodeRun(node_id="a", iteration=1, output="o", session_key="workflow:stale:a:1"),
+    ])
+    run_log.start_run(tmp_path, "wf", "stale", root_session_key="s", started_at=0.0)
+    run_log.update_run(tmp_path, "wf", "stale", res)
+    # A malformed record must not crash the sweep.
+    (tmp_path / "workflows-runs" / "wf" / "junk.json").write_text("not json", encoding="utf-8")
+
+    run_log.reconcile_running(tmp_path, now=2000.0, max_age_s=100.0)
+    rec = run_log.read_manifest(tmp_path, "wf", "stale")
+    assert rec["status"] == "crashed"
+    assert rec["runs"][0]["session_key"] == "workflow:stale:a:1"   # partial trace kept
+
+
+def test_read_runs_since_tolerates_old_schema(tmp_path):
+    # A v1 on-disk record (no schema/root_session_key field, as written before the
+    # manifest) is still returned by read_runs_since without error.
+    import json
+    d = tmp_path / "workflows-runs" / "wf"
+    d.mkdir(parents=True)
+    (d / "legacy.json").write_text(json.dumps({
+        "run_id": "legacy", "workflow": "wf", "status": "completed", "ts": 50.0,
+        "runs": [{"node_id": "a", "iteration": 1, "passed": None}],
+    }), encoding="utf-8")
+    got = run_log.read_runs_since(tmp_path, "wf")
+    assert [r["run_id"] for r in got] == ["legacy"]
+    assert "root_session_key" not in got[0]

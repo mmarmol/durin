@@ -7,7 +7,7 @@ const DEF: WorkflowDef = {
   start: "draft",
   nodes: [
     { id: "draft", kind: "work", next: "gate" },
-    { id: "gate", kind: "decision", on_pass: null, on_fail: "draft" },
+    { id: "gate", kind: "work", on_pass: null, on_fail: "draft" },
   ],
 };
 
@@ -90,21 +90,7 @@ describe("workflowToFlow", () => {
     expect(fromA[0].label).toBeUndefined();
   });
 
-  it("a legacy kind:decision node still renders with pass/fail edges", () => {
-    const { edges } = workflowToFlow({
-      name: "legacy",
-      start: "prod",
-      nodes: [
-        { id: "prod", kind: "work", next: "gate" },
-        { id: "gate", kind: "decision", on_pass: "done", on_fail: "prod" },
-        { id: "done", kind: "work" },
-      ],
-    });
-    expect(edges.find((e) => e.source === "gate" && e.label === "pass")?.target).toBe("done");
-    expect(edges.find((e) => e.source === "gate" && e.label === "fail")?.target).toBe("prod");
-  });
-
-  it("a routing kind:work node resolves to the internal 'decision' flow-type (component selection)", () => {
+  it("a routing kind:work node still renders as a work node (routing is a config, not a type)", () => {
     const { nodes } = workflowToFlow({
       name: "ring",
       start: "gate",
@@ -114,7 +100,7 @@ describe("workflowToFlow", () => {
       ],
     });
     const gate = nodes.find((n) => n.id === "gate")!;
-    expect(gate.type).toBe("decision");
+    expect(gate.type).toBe("work");
   });
 
   it("a non-routing kind:work node type stays 'work'", () => {
@@ -235,6 +221,54 @@ describe("workflowToFlow", () => {
     expect(toOutput).toEqual(["synthesize"]);
   });
 
+  it("a cases node produces one labeled edge per entry; null targets are omitted from edges (no target node to connect to)", () => {
+    const { edges } = workflowToFlow({
+      name: "mw",
+      start: "router",
+      nodes: [
+        { id: "router", kind: "work", cases: { approve: "done", reject: "fix", escalate: null } },
+        { id: "done", kind: "work" },
+        { id: "fix", kind: "work" },
+      ],
+    });
+    const fromRouter = edges.filter((e) => e.source === "router");
+    // approve -> done, reject -> fix; escalate is null so no edge is drawn
+    expect(fromRouter).toHaveLength(2);
+    expect(fromRouter.find((e) => e.target === "done")?.label).toBe("approve");
+    expect(fromRouter.find((e) => e.target === "fix")?.label).toBe("reject");
+    // no edge for escalate — a null target only connects to __output__ when the workflow
+    // declares an output descriptor; without one, no terminal edge is emitted either
+    expect(fromRouter.find((e) => e.label === "escalate")).toBeUndefined();
+  });
+
+  it("a cases node with a null target is a terminal and connects to OUTPUT", () => {
+    const { edges } = workflowToFlow({
+      name: "mw2",
+      start: "router",
+      output: { text: true },
+      nodes: [
+        { id: "router", kind: "work", cases: { approve: null, reject: "fix" } },
+        { id: "fix", kind: "work", next: null },
+      ],
+    });
+    const toOutput = edges.filter((e) => e.target === "__output__").map((e) => e.source).sort();
+    // both router (approve: null) and fix (next: null) are terminals
+    expect(toOutput).toEqual(["fix", "router"]);
+  });
+
+  it("a cases (multi-way) node still renders as a work node", () => {
+    const { nodes } = workflowToFlow({
+      name: "mwtype",
+      start: "router",
+      nodes: [
+        { id: "router", kind: "work", cases: { a: "done", b: null } },
+        { id: "done", kind: "work" },
+      ],
+    });
+    const router = nodes.find((n) => n.id === "router")!;
+    expect(router.type).toBe("work");
+  });
+
   it("uses def.ui.positions for a node when present", () => {
     const { nodes } = workflowToFlow({ name: "p", start: "a", ui: { positions: { a: { x: 500, y: 40 } } }, nodes: [{ id: "a", kind: "work", next: null }] });
     const a = nodes.find((n) => n.id === "a")!;
@@ -256,6 +290,36 @@ describe("workflowToFlow", () => {
     expect(toOutput).toEqual(["analysis", "code"]);
     // classify routes to both, it is not itself a terminal.
     expect(edges.some((e) => e.source === "classify" && e.target === "__output__")).toBe(false);
+  });
+
+  it("a brand-new node with UNSET next (undefined) stays unconnected — no spurious OUTPUT edge", () => {
+    // A freshly-added node has no `next` key at all (undefined). It must NOT be treated as a
+    // terminal: only an explicit null (or a dangling target) ends the flow. `next: null` here
+    // would draw an edge to OUTPUT; `next` absent must not.
+    const { edges } = workflowToFlow({
+      name: "fresh",
+      start: "a",
+      output: { text: true },
+      nodes: [
+        { id: "a", kind: "work", next: "b" },
+        { id: "b", kind: "work" }, // brand-new node: no next key
+      ],
+    });
+    expect(edges.some((e) => e.source === "b" && e.target === "__output__")).toBe(false);
+  });
+
+  it("a routing node with BOTH branches null (freshly-enabled binary) routes and connects to OUTPUT", () => {
+    // Checking the 'routes' toggle seeds on_pass=null and on_fail=null. Detection must be by
+    // key presence, not value: a `!= null` test would mis-read both-null as non-routing.
+    const { edges } = workflowToFlow({
+      name: "enabled",
+      start: "gate",
+      output: { text: true },
+      nodes: [{ id: "gate", kind: "work", on_pass: null, on_fail: null }],
+    });
+    // Detected as routing → both-null branches make it a terminal that connects to OUTPUT.
+    // (A non-routing both-null node would have no next and draw no output edge.)
+    expect(edges.some((e) => e.source === "gate" && e.target === "__output__")).toBe(true);
   });
 });
 
