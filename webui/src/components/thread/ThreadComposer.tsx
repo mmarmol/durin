@@ -109,7 +109,6 @@ interface ThreadComposerProps {
   onEnterVoice?: () => void;
   voiceActive?: boolean;
   voiceState?: OrbState;
-  voiceAmplitude?: number;
 }
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
@@ -437,6 +436,7 @@ export function ThreadComposer({
   onModeChange,
   onEnterVoice,
   voiceActive = false,
+  voiceState = "idle",
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
@@ -948,6 +948,25 @@ export function ThreadComposer({
         || goalState?.mode
         || goalState?.pending_question ? (
           <RunElapsedStrip startedAt={runStartedAt} goalState={goalState} />
+        ) : null}
+        {voiceActive ? (
+          <div
+            role="status"
+            className="flex min-h-[36px] items-center gap-2 border-b border-black/[0.04] px-3 py-2 dark:border-white/[0.06]"
+          >
+            <span
+              aria-hidden
+              className="h-2.5 w-2.5 flex-none rounded-full bg-primary ring-2 ring-primary/30 motion-safe:animate-pulse"
+            />
+            <span className="text-[12px] font-medium text-foreground/80">
+              {t(`settings.voice.orb.${voiceState}`)}
+            </span>
+            {voiceState === "speaking" ? (
+              <span className="text-[11px] text-muted-foreground">
+                · {t("settings.voice.orb.bargeHint")}
+              </span>
+            ) : null}
+          </div>
         ) : null}
         <textarea
           ref={textareaRef}

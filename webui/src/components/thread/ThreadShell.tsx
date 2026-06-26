@@ -46,7 +46,6 @@ interface ThreadShellProps {
   onEnterVoice?: () => void;
   voiceActive?: boolean;
   voiceState?: OrbState;
-  voiceAmplitude?: number;
 }
 
 function toModelBadgeLabel(modelName: string | null): string | null {
@@ -88,7 +87,6 @@ export function ThreadShell({
   onEnterVoice,
   voiceActive = false,
   voiceState = "idle",
-  voiceAmplitude = 0,
 }: ThreadShellProps) {
   const { t } = useTranslation();
   const chatId = session?.chatId ?? null;
@@ -404,7 +402,6 @@ export function ThreadShell({
           onEnterVoice={onEnterVoice}
           voiceActive={voiceActive}
           voiceState={voiceState}
-          voiceAmplitude={voiceAmplitude}
         />
       ) : (
         <ThreadComposer
@@ -435,7 +432,6 @@ export function ThreadShell({
           onEnterVoice={onEnterVoice}
           voiceActive={voiceActive}
           voiceState={voiceState}
-          voiceAmplitude={voiceAmplitude}
         />
       )}
     </>

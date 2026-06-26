@@ -26,4 +26,20 @@ describe("ThreadComposer — voice orb entry", () => {
     render(<ThreadComposer onSend={vi.fn()} placeholder="Type a message..." />);
     expect(screen.queryByRole("button", { name: /start voice/i })).toBeNull();
   });
+
+  it("shows the active-call strip with the live state; the orb is the only stop", () => {
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        onEnterVoice={vi.fn()}
+        voiceActive
+        voiceState="listening"
+        placeholder="Type a message..."
+      />,
+    );
+    // The strip reflects the state and carries no stop button of its own.
+    expect(screen.getByRole("status")).toHaveTextContent(/listening/i);
+    // Ending the call is the orb (its label flips to stop while active).
+    expect(screen.getByRole("button", { name: /stop voice/i })).toBeInTheDocument();
+  });
 });
