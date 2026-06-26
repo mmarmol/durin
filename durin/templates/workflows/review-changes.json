@@ -1,0 +1,41 @@
+{
+  "name": "review-changes",
+  "improvement_mode": "manual",
+  "input": {"text": true, "files": true, "description": "a set of changes to review (a diff, or the changed files), plus optional context on intent"},
+  "output": {"text": true, "description": "a prioritized review: confirmed findings grouped by severity, each with file, why it matters, and a suggested fix"},
+  "start": "frame",
+  "nodes": [
+    {
+      "id": "frame",
+      "kind": "work",
+      "mode": "explore",
+      "tools": "default",
+      "prompt": "Read the changes under review and decide which review LENSES actually matter for this diff — only the ones with real surface area here. Choose from correctness, security, performance, error-handling, tests, API/contract, readability — or name a more specific one. Output ONLY a JSON array of self-contained strings, each naming one lens and what to scrutinize for it in THESE changes. Nothing else.",
+      "next": "reviews"
+    },
+    {
+      "id": "reviews",
+      "kind": "parallel",
+      "worker": "lens",
+      "list_from": "frame",
+      "reconcile": "read",
+      "max_concurrency": 4,
+      "next": "synthesize"
+    },
+    {
+      "id": "lens",
+      "kind": "work",
+      "mode": "explore",
+      "tools": "default",
+      "prompt": "Review the changes through the SINGLE lens you were given. Read the changed code and enough of its surroundings to judge it in context. Report concrete findings only — each with the file and location, why it matters under this lens, and a suggested fix. Be specific and skeptical; if the code is sound under your lens, say so plainly rather than inventing issues. Output just your lens's findings."
+    },
+    {
+      "id": "synthesize",
+      "kind": "work",
+      "mode": "explore",
+      "tools": "none",
+      "prompt": "Merge the per-lens findings above into ONE prioritized review. Drop duplicates and anything that on reflection isn't a real problem. Group what remains by severity (blocking / should-fix / nice-to-have); for each give the file, the issue, why it matters, and a concrete suggested fix. If nothing blocks, say so clearly.",
+      "next": null
+    }
+  ]
+}
