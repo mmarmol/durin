@@ -324,14 +324,28 @@ export async function listSlashCommands(
     }));
 }
 
-/** A registered agent mode (built-in or user-defined) for the composer picker.
- *  `icon` is optional mode-supplied data; the picker falls back to a generic
- *  glyph when it is null, so nothing is hardcoded per mode name. */
+/** A registered agent mode (built-in or user-defined). `icon` is optional
+ *  mode-supplied data; the picker falls back to a generic glyph when it is null,
+ *  so nothing is hardcoded per mode name. `allowed === null` means full access
+ *  (subject to `denied`); a list means only those tools. `builtin` modes are
+ *  read-only in the settings UI. */
 export interface ModeInfo {
   name: string;
   description: string;
   icon: string | null;
   builtin: boolean;
+  allowed: string[] | null;
+  denied: string[];
+  prompt_suffix: string;
+}
+
+export interface ModeUpsert {
+  name: string;
+  description?: string;
+  allowed?: string[] | null;
+  denied?: string[];
+  prompt_suffix?: string;
+  icon?: string | null;
 }
 
 export async function listModes(
@@ -340,6 +354,24 @@ export async function listModes(
 ): Promise<ModeInfo[]> {
   const body = await request<{ modes: ModeInfo[] }>(`${base}/api/v1/modes`, token);
   return body.modes;
+}
+
+export async function upsertMode(
+  token: string,
+  mode: ModeUpsert,
+  base: string = "",
+): Promise<ModeInfo> {
+  const body = await post<{ mode: ModeInfo }>(`${base}/api/v1/modes`, token, mode);
+  return body.mode;
+}
+
+export async function deleteMode(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<boolean> {
+  const body = await del<{ ok: boolean }>(`${base}/api/v1/modes`, token, { name });
+  return body.ok;
 }
 
 export async function updateSettings(
