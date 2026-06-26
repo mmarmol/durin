@@ -630,3 +630,32 @@ def test_frame_task_output_format_works_without_a_declared_output():
     wf = parse_workflow({"name": "w", "start": "a", "nodes": [{"id": "a", "kind": "work"}]})
     framed = WorkflowEngine._frame_task(wf, "q", output_format="JSON with fields x,y")
     assert "JSON with fields x,y" in framed
+
+
+def test_sequential_nodes_share_one_working_dir(tmp_path):
+    # Every sequential node — looping or hand-off — reads and writes ONE shared per-run
+    # folder, so files accumulate in one place and each stage sees the prior work. (Before,
+    # per-node/per-iteration folders scattered a self-loop's files and broke collaboration.)
+    seen: dict = {}
+    labels = iter(["MORE", "MORE", "DONE"])
+
+    def runner(req):
+        seen.setdefault(req.node.id, []).append(req.output_dir)
+        out = next(labels) if req.node.id == "loop" else "ok"
+        return NodeRunResponse(output=out, session_key="k", messages=[])
+
+    eng = WorkflowEngine(node_runner=runner, run_id_factory=lambda: "r1", workspace=str(tmp_path))
+    wf = parse_workflow({
+        "name": "w", "start": "loop", "max_visits": 6,
+        "nodes": [
+            {"id": "loop", "kind": "work", "tools": "default",
+             "cases": {"MORE": "loop", "DONE": "done"}},
+            {"id": "done", "kind": "work", "tools": "default", "next": None},
+        ],
+    })
+    eng.run(wf, "go")
+
+    all_dirs = seen["loop"] + seen["done"]
+    assert len(seen["loop"]) == 3                    # the loop still looped three times
+    assert len(set(all_dirs)) == 1                   # every node + iteration shares one dir
+    assert all_dirs[0].endswith("/work")             # the run's shared working folder

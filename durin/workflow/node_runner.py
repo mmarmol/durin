@@ -170,14 +170,13 @@ class AgentNodeRunner:
         user = req.task
         if req.upstream_output:
             user = f"{req.task}\n\n--- Output of the previous step ---\n{req.upstream_output}"
-        if getattr(req.node, "tools", "none") == "default":
-            lines = []
-            if req.upstream_artifact_dir:
-                lines.append(f"Files from the previous step are in: {req.upstream_artifact_dir}")
-            if req.output_dir:
-                lines.append(f"Write any files you produce into: {req.output_dir}")
-            if lines:
-                user = f"{user}\n\n--- Files ---\n" + "\n".join(lines)
+        if getattr(req.node, "tools", "none") == "default" and req.output_dir:
+            user = (
+                f"{user}\n\n--- Working directory ---\n"
+                f"Your working directory for this run is: {req.output_dir}\n"
+                "Earlier steps' files are here; create and edit files here so the steps "
+                "after you see them."
+            )
         messages.append({"role": "user", "content": user})
 
         # Persona model when a persona is set, else the node's explicit model, else
