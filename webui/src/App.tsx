@@ -6,6 +6,7 @@ import { MemoryGraphView } from "@/components/MemoryGraphView";
 import { DreamView } from "@/components/DreamView";
 import { SkillsView } from "@/components/SkillsView";
 import { WorkflowsView } from "@/components/WorkflowsView";
+import { TasksView } from "@/components/TasksView";
 import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
@@ -43,7 +44,7 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "durin-webui.sidebar";
 const RESTART_STARTED_KEY = "durin-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
-type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows" | "dream";
+type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows" | "dream" | "tasks";
 
 function AuthForm({
   failed,
@@ -436,6 +437,11 @@ function Shell({
     setMobileSidebarOpen(false);
   }, []);
 
+  const onOpenTasks = useCallback(() => {
+    setView("tasks");
+    setMobileSidebarOpen(false);
+  }, []);
+
   const onBackToChat = useCallback(() => {
     setView("chat");
     setMobileSidebarOpen(false);
@@ -549,6 +555,8 @@ function Shell({
     workflowsActive: view === "workflows",
     onOpenDream,
     dreamActive: view === "dream",
+    onOpenTasks,
+    tasksActive: view === "tasks",
   };
   const showMainSidebar = view !== "settings";
 
@@ -661,6 +669,11 @@ function Shell({
         {view === "dream" && (
           <div className="absolute inset-0 flex flex-col">
             <DreamView onOpenSkills={onOpenSkills} />
+          </div>
+        )}
+        {view === "tasks" && (
+          <div className="absolute inset-0 flex flex-col">
+            <TasksView session={activeKey} onOpenSession={(key) => { setActiveKey(key); setView("chat"); }} />
           </div>
         )}
       </main>

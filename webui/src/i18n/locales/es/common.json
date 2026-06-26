@@ -1510,5 +1510,11 @@
     "banner": {
       "label": "Objetivo activo"
     }
+  },
+  "tasks": {
+    "title": "Tareas",
+    "empty": "Sin tareas en segundo plano",
+    "finished": "Finalizadas {{count}}",
+    "status": { "running": "Corriendo", "needs_input": "Necesita input", "done": "Hecho", "failed": "Falló" }
   }
 }

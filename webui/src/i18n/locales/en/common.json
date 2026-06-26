@@ -1518,5 +1518,11 @@
     "banner": {
       "label": "Active goal"
     }
+  },
+  "tasks": {
+    "title": "Tasks",
+    "empty": "No background tasks",
+    "finished": "Finished {{count}}",
+    "status": { "running": "Running", "needs_input": "Needs input", "done": "Done", "failed": "Failed" }
   }
 }

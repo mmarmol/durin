@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import {
+  ListTodo,
   Menu,
   Moon,
   Network,
@@ -35,6 +36,8 @@ interface SidebarProps {
   workflowsActive?: boolean;
   onOpenDream?: () => void;
   dreamActive?: boolean;
+  onOpenTasks?: () => void;
+  tasksActive?: boolean;
   onCollapse: () => void;
 }
 
@@ -214,6 +217,18 @@ export function Sidebar(props: SidebarProps) {
           >
             <Moon className="h-3.5 w-3.5" aria-hidden />
             {t("dream.title")}
+          </Button>
+        </div>
+      ) : null}
+      {props.onOpenTasks ? (
+        <div className="px-2.5 pb-2">
+          <Button type="button" variant="ghost" onClick={props.onOpenTasks}
+            className={cn("h-8 w-full justify-start gap-2 rounded-full px-2.5 text-[12.5px] font-medium",
+              props.tasksActive ? "bg-sidebar-accent/80 text-sidebar-foreground"
+                : "text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground")}
+            aria-pressed={!!props.tasksActive}>
+            <ListTodo className="h-3.5 w-3.5" aria-hidden />
+            {t("tasks.title")}
           </Button>
         </div>
       ) : null}
