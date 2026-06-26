@@ -66,8 +66,10 @@ def test_pass_records_a_recommendation_for_a_looping_node(tmp_path):
     assert again == {"workflows": 0, "proposals": 0}
 
 
-def test_off_mode_workflow_is_ignored(tmp_path):
-    data = dict(_WF, improvement_mode="off")
+def test_auto_mode_is_skipped_until_autoapply(tmp_path):
+    # Two states only (manual/auto). auto-apply is not built yet, so an auto workflow is
+    # skipped (logged) and produces no proposals — manual is what proposes for review.
+    data = dict(_WF, improvement_mode="auto")
     _write_wf(tmp_path, data)
     _seed_runs(tmp_path, n=3)
     invoke = _fake_invoke({"target_id": "a", "field": "prompt", "proposed": "x", "reason": "y"})

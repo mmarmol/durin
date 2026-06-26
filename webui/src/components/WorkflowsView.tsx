@@ -921,38 +921,6 @@ function RunDetail({ result }: { result: WorkflowRunResult }) {
   );
 }
 
-// Workflow-level settings, shown in the side panel when no node/IO object is selected.
-// Today it carries the self-improvement mode: whether the dream pass may improve this
-// workflow (off / suggest-for-review / auto-apply). A clear, explicit choice, mirroring
-// how a skill exposes its own auto-vs-manual mode.
-function WorkflowSettingsPanel({
-  def,
-  onChange,
-}: {
-  def: WorkflowDef;
-  onChange: (patch: Partial<WorkflowDef>) => void;
-}) {
-  const { t } = useTranslation();
-  const mode = (def.improvement_mode as string) || "off";
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="text-sm font-medium">{t("workflows.settingsTitle")}</div>
-      <Field label={t("workflows.improvementMode")}>
-        <select
-          className={selectCls}
-          value={mode}
-          onChange={(e) => onChange({ improvement_mode: e.target.value })}
-        >
-          <option value="off">{t("workflows.improvementOff")}</option>
-          <option value="manual">{t("workflows.improvementManual")}</option>
-          <option value="auto">{t("workflows.improvementAuto")}</option>
-        </select>
-      </Field>
-      <p className="text-xs text-muted-foreground">{t(`workflows.improvementHint_${mode}`)}</p>
-    </div>
-  );
-}
-
 let _idSeq = 0;
 
 export function WorkflowsView() {
@@ -1458,6 +1426,22 @@ export function WorkflowsView() {
                     </Button>
                   </div>
                 )}
+                {/* Self-improvement mode — two states (manual/auto) like a skill's, always
+                    visible (not hidden behind a deselected canvas). */}
+                <div
+                  className="flex items-center gap-1"
+                  title={t(`workflows.improvementHint_${(def.improvement_mode as string) || "manual"}`)}
+                >
+                  <span className="text-xs text-muted-foreground">{t("workflows.improvementMode")}</span>
+                  <select
+                    className="h-8 rounded-md border border-border bg-background px-2 text-sm"
+                    value={(def.improvement_mode as string) || "manual"}
+                    onChange={(e) => mutate((d) => ({ ...d, improvement_mode: e.target.value }))}
+                  >
+                    <option value="manual">{t("workflows.improvementManual")}</option>
+                    <option value="auto">{t("workflows.improvementAuto")}</option>
+                  </select>
+                </div>
                 {dirty && (
                   <Button size="sm" onClick={onSave} disabled={saving}>
                     {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("workflows.save")}
@@ -1635,12 +1619,6 @@ export function WorkflowsView() {
               onChange={(patch) => setIo(selectedIo, patch)}
               onRemove={() => removeIo(selectedIo)}
             />
-          </aside>
-        )}
-
-        {def && !selectedNode && !selectedIo && (
-          <aside className="w-96 shrink-0 flex flex-col h-full border-l p-3 overflow-y-auto">
-            <WorkflowSettingsPanel def={def} onChange={(patch) => mutate((d) => ({ ...d, ...patch }))} />
           </aside>
         )}
       </div>
