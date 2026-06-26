@@ -711,6 +711,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/modes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List registered agent modes (build/plan/explore plus custom) */
+        get: operations["modes_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/oauth/codex": {
         parameters: {
             query?: never;
@@ -2766,6 +2783,18 @@ export interface components {
             models: string[];
             /** Suggested */
             suggested: string[];
+        };
+        /**
+         * ModesListQuery
+         * @description No inputs — lists every registered agent mode.
+         */
+        ModesListQuery: Record<string, never>;
+        /** ModesResult */
+        ModesResult: {
+            /** Modes */
+            modes: {
+                [key: string]: unknown;
+            }[];
         };
         /**
          * OAuthDisconnectCommand
@@ -4984,6 +5013,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelsListResult"];
+                };
+            };
+        };
+    };
+    modes_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModesListQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModesResult"];
                 };
             };
         };

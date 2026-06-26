@@ -324,6 +324,24 @@ export async function listSlashCommands(
     }));
 }
 
+/** A registered agent mode (built-in or user-defined) for the composer picker.
+ *  `icon` is optional mode-supplied data; the picker falls back to a generic
+ *  glyph when it is null, so nothing is hardcoded per mode name. */
+export interface ModeInfo {
+  name: string;
+  description: string;
+  icon: string | null;
+  builtin: boolean;
+}
+
+export async function listModes(
+  token: string,
+  base: string = "",
+): Promise<ModeInfo[]> {
+  const body = await request<{ modes: ModeInfo[] }>(`${base}/api/v1/modes`, token);
+  return body.modes;
+}
+
 export async function updateSettings(
   token: string,
   update: SettingsUpdate,
