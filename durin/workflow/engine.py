@@ -105,6 +105,7 @@ class WorkflowEngine:
         workspace: str | None = None,
         pick_runner: Callable[[str, list[str], "str | None"], int] | None = None,
         max_node_visits: int = 1000,
+        progress_emit: Callable[[dict], None] | None = None,
     ) -> None:
         self._node_runner = node_runner
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex[:12])
@@ -115,6 +116,10 @@ class WorkflowEngine:
         self._workspace = workspace
         self._pick_runner = pick_runner
         self._max_node_visits = max_node_visits
+        # Optional callback for live per-node progress; called after each node record.
+        # Best-effort: exceptions in the callback are silently swallowed so they cannot
+        # interrupt a run. None means no progress signalling (CLI/test callers).
+        self._progress_emit = progress_emit
 
     def run(
         self,
@@ -413,6 +418,23 @@ class WorkflowEngine:
             # in-flight run is observable before the next node starts.
             if update_manifest is not None:
                 update_manifest()
+            if self._progress_emit is not None:
+                nodes = [
+                    {
+                        "id": r.node_id,
+                        "status": (
+                            "failed"
+                            if r.status in ("node_failed", "persist_failed")
+                            else "done"
+                        ),
+                        "route_label": r.route_label,
+                    }
+                    for r in runs
+                ]
+                try:
+                    self._progress_emit({"run_id": run_id, "nodes": nodes, "done": False})
+                except Exception:  # noqa: BLE001 - progress is best-effort; never break the run
+                    pass
 
         return WorkflowResult(
             status="completed", final_output=final_output, runs=runs, run_id=run_id,

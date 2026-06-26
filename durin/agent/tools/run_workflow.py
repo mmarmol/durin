@@ -95,15 +95,18 @@ def _format_result(result: Any) -> str:
 class RunWorkflowTool(Tool, ContextAware):
     """Run a user-defined workflow (a flow graph of nodes) on a task."""
 
-    def __init__(self, workspace: str, sessions: Any, app_config: Any, live_tool_registry: Any = None) -> None:
+    def __init__(self, workspace: str, sessions: Any, app_config: Any, live_tool_registry: Any = None, bus: Any = None) -> None:
         self._workspace = workspace
         self._sessions = sessions
         self._app_config = app_config
         self._live_tool_registry = live_tool_registry
+        self._bus = bus
         self._session_key: ContextVar[str | None] = ContextVar("run_workflow_session_key", default=None)
+        self._chat_id: ContextVar[str | None] = ContextVar("run_workflow_chat_id", default=None)
 
     def set_context(self, ctx: RequestContext) -> None:
         self._session_key.set(ctx.session_key)
+        self._chat_id.set(ctx.chat_id)
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
@@ -114,6 +117,7 @@ class RunWorkflowTool(Tool, ContextAware):
         return cls(
             workspace=ctx.workspace, sessions=ctx.sessions, app_config=ctx.app_config,
             live_tool_registry=getattr(ctx, "live_tool_registry", None),
+            bus=getattr(ctx, "bus", None),
         )
 
     @property
@@ -165,12 +169,40 @@ class RunWorkflowTool(Tool, ContextAware):
         )
         judge_runner = AgentJudgeRunner(runner, default_model=provider.get_default_model())
         subworkflow_runner = SubworkflowRunner(self._workspace, node_runner, judge_runner)
+        bus = self._bus
+        run_chat_id = self._chat_id.get()
+        progress_emit = None
+        if bus is not None and run_chat_id is not None:
+            def _emit_progress(payload: dict) -> None:
+                from durin.bus.events import OutboundMessage
+                ev = {
+                    "version": 1,
+                    "phase": "end" if payload.get("done") else "running",
+                    "call_id": f"workflow:{payload['run_id']}",
+                    "name": "workflow_progress",
+                    "arguments": {"workflow": name},
+                    "nodes": payload["nodes"],
+                }
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        bus.publish_outbound(OutboundMessage(
+                            channel="websocket",
+                            chat_id=run_chat_id,
+                            content="",
+                            metadata={"_progress": True, "_tool_hint": True, "_tool_events": [ev]},
+                        )),
+                        main_loop,
+                    )
+                except Exception:  # noqa: BLE001 - best-effort; never break the run
+                    pass
+            progress_emit = _emit_progress
         engine = WorkflowEngine(
             node_runner=node_runner,
             subworkflow_runner=subworkflow_runner,
             workspace=self._workspace,
             pick_runner=judge_runner.pick,
             max_node_visits=self._app_config.workflow.max_node_visits,
+            progress_emit=progress_emit,
         )
         root_session_key = self._session_key.get()
         result = await asyncio.to_thread(
