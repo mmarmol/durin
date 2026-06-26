@@ -290,8 +290,10 @@ Every error response is RFC 9457 `application/problem+json` with
   `Scope` enum.
 - **TUI** — calls service methods in-process via `Principal.local()` with
   `{ADMIN}` authority; chat flows through the `MessageBus` / `AgentLoop`.
-- **TypeScript webui** — `webui/src/lib/api.ts` adds the bearer token header on
-  every request and retries once with a fresh bootstrap token on a 401.
+- **TypeScript webui** — every authenticated call routes through
+  `fetchWithReauth` (`webui/src/lib/http.ts`), which adds the bearer token header
+  and retries once with a fresh bootstrap token on a 401. A guard test keeps any
+  other module from calling `fetch` directly and bypassing that retry.
 
 ---
 
