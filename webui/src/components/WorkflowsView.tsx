@@ -508,7 +508,7 @@ function NodeConfigPanel({
                   </button>
                 </div>
                 <Textarea
-                  className="flex-1 resize-none"
+                  className="flex-1 resize-y min-h-[16rem] font-mono text-sm leading-relaxed"
                   value={(node.prompt as string) ?? ""}
                   onChange={(e) => onChange({ prompt: e.target.value })}
                 />
@@ -813,7 +813,7 @@ function IOConfigPanel({
       <div className="flex-1 min-h-0 flex flex-col gap-1">
         <span className="text-xs text-muted-foreground">{t("workflows.ioDescription")}</span>
         <Textarea
-          className="flex-1 resize-none"
+          className="flex-1 resize-y min-h-[7rem]"
           value={desc.description ?? ""}
           placeholder={t("workflows.ioDescriptionPlaceholder")}
           onChange={(e) => onChange({ ...desc, description: e.target.value || undefined })}
