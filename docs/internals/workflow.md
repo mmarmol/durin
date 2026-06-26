@@ -5,7 +5,7 @@
 The workflow engine lets a user define a multi-step process as a **flow graph** and
 run a task through it. Instead of a single agent turn, a task moves through a graph
 of **nodes** the user draws. A node does a piece of the task — a real agent turn with
-its own model, tools, and session, or a shell command — and **optionally routes** the
+its own model, tools, and session — and **optionally routes** the
 flow (continue, branch, or loop back) on a pass/fail verdict. Routing is opt-in, not a
 separate node type. The graph is a plain JSON
 document under `<workspace>/workflows/<name>.json`, so it can be authored by a human,
@@ -23,8 +23,7 @@ node's work is a persisted, searchable session rather than ephemeral state.
 per-node visit cap (`max_visits`). There is **one node type** (`WorkNode`): it carries a
 model (or the default), a context policy (`own` vs `shared` session), a tool set (`none`
 vs `default`), a prompt, optional skills/MCP, and either a single `next` edge or — when it
-**routes** — a pair of targets (`on_pass`, `on_fail`). A node whose body is a shell
-`command` runs that instead of an agent turn. A `None` target ends the run. The parser
+**routes** — a pair of targets (`on_pass`, `on_fail`). A `None` target ends the run. The parser
 validates that the start and every edge target name a real node, and that `next` and
 routing are not both set. (`kind: "decision"` is accepted as a back-compat alias for a
 routing node — `criteria` maps to the node's `prompt`.)
@@ -70,12 +69,11 @@ runs. (Real deliverables a node writes into the workspace proper are the separat
 already-shared filesystem channel — unchanged.) **When a node routes**, the engine derives a verdict from what the node produced
 and follows an edge. A node may route in one of two shapes:
 
-**Binary routing** (`on_pass`/`on_fail`): a **command** node passes iff its shell command exits 0
-(`durin/workflow/condition.py`, run in the workflow's workspace so it sees files earlier nodes
-wrote); an **agent** node ends its own reply with a `PASS`/`FAIL` line the engine parses
-(`durin/workflow/verdict.py`) — so a routing agent node can *verify* (read the diff, run the
-tests) before ruling, not just read text. The engine routes to `on_pass` or `on_fail`; on a fail
-the node's feedback is threaded into the loop-back so the producer re-runs knowing what to fix.
+**Binary routing** (`on_pass`/`on_fail`): a routing node ends its own reply with a `PASS`/`FAIL`
+line the engine parses (`durin/workflow/verdict.py`) — so a routing node can *verify* (read
+the diff, run the tests) before ruling, not just read text. The engine routes to `on_pass` or
+`on_fail`; on a fail the node's feedback is threaded into the loop-back so the producer re-runs
+knowing what to fix.
 
 **Multi-way routing** (`cases`): an agent node declares a set of labeled outcomes
 (`{"GROUNDED": null, "MISSING": "plan", "MISUSED": "synthesize"}`). It ends its reply with
@@ -87,8 +85,7 @@ node and the sorted list of expected labels. Like binary fail-edges, the node's 
 threaded as reviewer feedback before routing to a non-terminal target. The matched label is
 recorded in the `NodeRun` trace (`route_label`); `passed` is `None` (pass/fail does not apply).
 Binary `on_pass`/`on_fail` is the 2-way special case of this pattern; `cases`, `on_pass`/`on_fail`,
-and `next` are mutually exclusive. A command node cannot use `cases` (its verdict is an exit code,
-not a text label). Routing agent nodes default to **explore** (read-only) mode.
+and `next` are mutually exclusive. Routing nodes default to **explore** (read-only) mode.
 
 **Independence is a graph rule, not a node type:** the
 parser rejects a routing agent node that is *structurally identical* (same model, mode,
@@ -134,8 +131,8 @@ runner surface it gracefully (the node, its last FAIL reason, and the best parti
 caller learns it did not complete and why instead of treating a partial as done.
 
 **`max_turns`** (distinct from `max_visits`) caps how many tool-use rounds the model gets
-within a single node execution. When set on a `WorkNode` (agent nodes only; command nodes
-reject it), the node runner (1) prepends a budget note to the node's system prompt ("You
+within a single node execution. When set on a `WorkNode`, the node runner (1) prepends a
+budget note to the node's system prompt ("You
 have up to N rounds of tool use. Gather efficiently, then give your final answer."),
 (2) runs the agent with `max_iterations = max_turns` instead of the global default, and
 (3) if the run ends because the budget was exhausted, makes a second call with no tools
@@ -160,7 +157,7 @@ flowchart TD
     B --> C[parse_workflow to Workflow]
     C --> D[WorkflowEngine.run\nvia asyncio.to_thread]
     D --> MANIFEST_START[start_run manifest\nstatus='running']
-    MANIFEST_START --> E[execute node body\nagent turn or shell command]
+    MANIFEST_START --> E[execute node body (agent turn)]
     E --> UPDATE[update_run manifest\nper-node trace]
     UPDATE --> F{node routes?}
     F -->|no / next| G[output becomes\nnext upstream_output]
@@ -208,10 +205,10 @@ The per-node entries in the manifest's `runs` array carry:
 |---|---|
 | `node_id` | the node's id in the graph |
 | `iteration` | how many times this node has executed (loop-back counting) |
-| `session_key` | the persisted session containing the node's conversation (`workflow:<run_id>:<node_id>:<iteration>`, or with a `:<worker_index>` suffix for fan-out workers; `null` for command nodes) |
+| `session_key` | the persisted session containing the node's conversation (`workflow:<run_id>:<node_id>:<iteration>`, or with a `:<worker_index>` suffix for fan-out workers) |
 | `worker_index` | fan-out worker index (0-based; `null` for non-fan-out nodes) |
 | `branch_id` | static-parallel branch node id (`null` for non-branch nodes) |
-| `status` | `"ok"` / `"no_session"` (command) / `"persist_failed"` (save raised) / `"node_failed"` (agent turn raised) |
+| `status` | `"ok"` / `"persist_failed"` (save raised) / `"node_failed"` (agent turn raised) |
 | `passed` | binary routing verdict (`true`/`false`/`null` for non-binary nodes) |
 | `route_label` | matched case label for multi-way nodes (`null` otherwise) |
 
@@ -265,9 +262,8 @@ the merged output). The run is only aborted when every unit failed. **`choose` a
 workspace forks and a half-failed fork has no coherent state to merge, so a branch
 failure in those modes propagates and aborts the run.
 
-`NodeRun.status` values: `"ok"` (agent node persisted), `"no_session"` (command node,
-by design), `"persist_failed"` (session save raised but the run continued), `"node_failed"`
-(the node's agent turn raised).
+`NodeRun.status` values: `"ok"` (node persisted), `"persist_failed"` (session save raised
+but the run continued), `"node_failed"` (the node's agent turn raised).
 
 ### 4d. Verdict asymmetry
 
@@ -329,12 +325,11 @@ End-to-end for a single `run_workflow` call:
    `AgentJudgeRunner` (used only to **pick** a winner for parallel `choose`), and a
    `SubworkflowRunner` (for sub-workflow nodes) into the `WorkflowEngine`.
 3. **Run.** The engine runs under `asyncio.to_thread`. It walks the graph: a node runs
-   its body (an agent turn — persisting a lineage'd node session — or a shell command)
-   and its output threads to the next node; a **routing** node branches on its command's
-   exit code or the `PASS`/`FAIL` verdict in its own agent output (threading the feedback
-   into the loop-back on fail); a sub-workflow node runs a nested workflow; a failed gate
-   loops back, re-running the target node as the next iteration (a sibling node session),
-   capped by `max_visits`.
+   its body (an agent turn — persisting a lineage'd node session) and its output threads
+   to the next node; a **routing** node branches on the `PASS`/`FAIL` verdict in its own
+   agent output (threading the feedback into the loop-back on fail); a sub-workflow node
+   runs a nested workflow; a failed gate loops back, re-running the target node as the
+   next iteration (a sibling node session), capped by `max_visits`.
 4. **Return.** The run produces a typed `WorkflowResult` (status + final output +
    per-node trace, including each node's `session_key`). The engine finalizes the run
    manifest before returning; neither the tool nor the service writes an additional
@@ -352,7 +347,6 @@ End-to-end for a single `run_workflow` call:
 | `Workflow`, `WorkNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator (one node type; routing optional; `kind:"decision"` back-compat alias; structural-equivalence guard). |
 | `parse_verdict`, `parse_label` | `durin/workflow/verdict.py` | The verdict contracts: `parse_verdict` returns the binary `PASS`/`FAIL` from a routing agent node's output (default `FAIL`); `parse_label` matches the last non-empty line of a multi-way node's output against the declared case labels (case-insensitive, punctuation-tolerant). |
 | `artifact_dir`, `prune_runs` | `durin/workflow/artifacts.py` | The per-node file hand-off folder keyed by run/node/iteration (self-gitignored, pruned to recent runs). |
-| `run_command`, `CommandOutcome` | `durin/workflow/condition.py` | The shell-exit-code condition a command node routes on. |
 | `AgentJudgeRunner` | `durin/workflow/judge.py` | The branch-pick reviewer: `pick` chooses the best of N outputs for a parallel `choose` reconcile. |
 | `fork`, `diff`, `conflicts`, `apply` | `durin/workflow/workspace_fork.py` | Per-branch workspace isolation + reconciliation (choose/union) for writing-in-parallel. |
 | `WorkflowVersionStore` | `durin/workflow/version_store.py` | Git versioning of workflow definitions: each run snapshots them; `history` reads the timeline. |
@@ -424,7 +418,7 @@ End-to-end for a single `run_workflow` call:
   `union` reconciliation (private copy per branch + content-aware conflict detection);
   per-node **work mode** (build/plan/explore) / **model or persona** (SOUL + model,
   mutually exclusive) / context / tools; **optional routing** in two shapes — **binary**
-  (`on_pass`/`on_fail`: shell exit code or `PASS`/`FAIL` verdict, feedback-threaded loop-back)
+  (`on_pass`/`on_fail`: `PASS`/`FAIL` verdict from the agent, feedback-threaded loop-back)
   and **multi-way** (`cases`: agent emits one of N declared labels, last-line match,
   `default` fallback, aborts clearly when no label matched), with an anti-Goodhart guard
   that a routing node not be structurally identical to its producer; a multi-way case may

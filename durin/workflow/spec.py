@@ -1,11 +1,10 @@
 """The workflow definition: a flow graph of nodes, parsed from a JSON-style dict.
 
 A workflow is NOT a linear pipeline. It is a graph the user draws: nodes do a task
-and optionally route the flow on a pass/fail verdict. A node has either an agent
-body (runs a model turn) or a command body (runs a shell command, exit 0 = pass).
-Routing is opt-in: set on_pass/on_fail to make a node emit a verdict; omit them
-and the node uses a single next edge. The parsed form is plain dataclasses the
-engine walks deterministically.
+and optionally route the flow on a pass/fail verdict. A node runs an agent turn and
+produces an output. Routing is opt-in: set on_pass/on_fail to make a node emit a
+verdict; omit them and the node uses a single next edge. The parsed form is plain
+dataclasses the engine walks deterministically.
 
 The ``kind: "decision"`` JSON field is a back-compat alias for a routing WorkNode:
 ``criteria`` maps to ``prompt``, ``judge_model`` maps to ``model`` (if model is
@@ -32,12 +31,11 @@ class WorkflowError(ValueError):
 
 @dataclass(frozen=True)
 class WorkNode:
-    """A node that runs an agent turn (or a shell command) and produces an output.
+    """A node that runs an agent turn and produces an output.
 
     Routing is optional. When on_pass or on_fail is set the node emits a verdict
-    after executing its body: an agent node's output is parsed for a PASS/FAIL
-    line; a command node uses the exit code (0 = pass). Without routing the node
-    follows next unconditionally.
+    after executing its body: the agent's output is parsed for a PASS/FAIL line.
+    Without routing the node follows next unconditionally.
     """
 
     id: str
@@ -50,9 +48,8 @@ class WorkNode:
     tools: Literal["none", "default"] = "none"   # "default" = standard tool set
     skills: tuple[str, ...] = ()          # named skills to inject into this node only
     mcps: tuple[str, ...] = ()            # MCP servers (already configured) whose tools this node may use
-    command: str = ""                     # non-empty => command body; the agent turn is skipped
-    on_pass: str | None = None           # routing: next node on pass/exit-0; set => this node routes
-    on_fail: str | None = None           # routing: next node on fail/non-zero exit
+    on_pass: str | None = None           # routing: next node on pass; set => this node routes
+    on_fail: str | None = None           # routing: next node on fail
     cases: dict[str, str | None] | None = None  # multi-way routing: label -> target node id (null = end)
     max_visits: int | None = None        # per-node loop cap (None = inherit workflow default)
     max_turns: int | None = None         # agentic tool-round budget for this node (None = global default)
@@ -62,11 +59,6 @@ class WorkNode:
     def routes(self) -> bool:
         """True when this node emits a verdict and branches: binary (on_pass/on_fail) or multi-way (cases)."""
         return self.on_pass is not None or self.on_fail is not None or self.cases is not None
-
-    @property
-    def is_command(self) -> bool:
-        """True when this node runs a shell command rather than an agent turn."""
-        return bool(self.command)
 
 
 @dataclass(frozen=True)
@@ -214,12 +206,6 @@ def _build_node(raw: dict[str, Any]) -> Node:
             raise WorkflowError(
                 f"node {node_id!r}: 'next' and routing ('on_pass'/'on_fail') are mutually exclusive"
             )
-        # A command node's verdict is its exit code; it cannot emit a label.
-        command = raw.get("command", "")
-        if cases is not None and command:
-            raise WorkflowError(
-                f"node {node_id!r}: 'cases' requires an agent body — a command node cannot emit a label"
-            )
         routes = binary_routing or cases is not None
         # A routing node emits an independent verdict on its own output; a shared
         # context buffer would feed it sibling conversations and bias that verdict,
@@ -245,10 +231,6 @@ def _build_node(raw: dict[str, Any]) -> Node:
                 raise WorkflowError(
                     f"node {node_id!r}: max_turns must be an int >= 1, got {node_max_turns!r}"
                 )
-            if command:
-                raise WorkflowError(
-                    f"node {node_id!r}: max_turns cannot be set on a command node"
-                )
         return WorkNode(
             id=node_id,
             model=model,
@@ -260,7 +242,6 @@ def _build_node(raw: dict[str, Any]) -> Node:
             tools=tools,
             skills=skills,
             mcps=mcps,
-            command=command,
             on_pass=on_pass,
             on_fail=on_fail,
             cases=cases,
@@ -270,12 +251,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
     if kind == "decision":
         # Back-compat alias: kind=decision maps to a routing WorkNode.
         # 'criteria' maps to 'prompt'; 'judge_model' maps to 'model' when model is unset.
-        command = raw.get("command", "")
         criteria = raw.get("criteria", "")
-        if command and criteria:
-            raise WorkflowError(
-                f"node {node_id!r}: a decision node needs exactly one of 'command' or 'criteria'"
-            )
         model = raw.get("model")
         if model is None:                       # map judge_model only when model is unset
             model = raw.get("judge_model")
@@ -302,7 +278,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
                 f"context='shared'"
             )
         # Routing agent nodes default to explore mode (read-only) for independence.
-        mode = raw.get("mode", "explore") if not command else raw.get("mode", "build")
+        mode = raw.get("mode", "explore")
         return WorkNode(
             id=node_id,
             model=model,
@@ -314,7 +290,6 @@ def _build_node(raw: dict[str, Any]) -> Node:
             tools=raw.get("tools", "none"),
             skills=_str_list(raw.get("skills", []), node_id, "skills"),
             mcps=_str_list(raw.get("mcps", []), node_id, "mcps"),
-            command=command,
             on_pass=on_pass,
             on_fail=on_fail,
         )
@@ -449,13 +424,13 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
             if target is not None and target in predecessor_map:
                 predecessor_map[target].append(src_node.id)
     for j in nodes.values():
-        if not (isinstance(j, WorkNode) and j.routes and not j.is_command):
+        if not (isinstance(j, WorkNode) and j.routes):
             continue
         for pred_id in predecessor_map[j.id]:
             if pred_id == j.id:
                 continue
             p = nodes[pred_id]
-            if isinstance(p, WorkNode) and not p.is_command:
+            if isinstance(p, WorkNode):
                 if (p.model, p.mode, p.prompt) == (j.model, j.mode, j.prompt):
                     raise WorkflowError(
                         f"node {j.id!r}: a routing node must not be structurally identical to its "

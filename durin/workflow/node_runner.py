@@ -163,7 +163,7 @@ class AgentNodeRunner:
         suffix = get_mode(getattr(req.node, "mode", "build")).prompt_suffix
         if suffix:
             system = f"{system}{suffix}" if system else suffix.lstrip()
-        if getattr(req.node, "routes", False) and not getattr(req.node, "is_command", False):
+        if getattr(req.node, "routes", False):
             system = f"{system}{_VERDICT}" if system else _VERDICT.lstrip()
         messages: list[dict] = [{"role": "system", "content": system}]
         messages.extend(req.shared_context)

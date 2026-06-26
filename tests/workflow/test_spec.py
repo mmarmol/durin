@@ -16,7 +16,7 @@ _VALID = {
     "nodes": [
         {"id": "build", "kind": "work", "model": "fast", "context": "own",
          "prompt": "Write the code.", "next": "check"},
-        {"id": "check", "kind": "decision", "command": "true",
+        {"id": "check", "kind": "decision", "criteria": "Is it correct?",
          "on_pass": None, "on_fail": "build"},
     ],
 }
@@ -31,9 +31,9 @@ def test_parse_valid_workflow():
     assert wf.nodes["build"].model == "fast"
     assert wf.nodes["build"].context == "own"
     assert wf.nodes["build"].next == "check"
-    # kind=decision with a command parses back-compatibly into a routing WorkNode
+    # kind=decision with criteria parses back-compatibly into a routing WorkNode
     assert isinstance(wf.nodes["check"], WorkNode)
-    assert wf.nodes["check"].command == "true"
+    assert wf.nodes["check"].prompt == "Is it correct?"
     assert wf.nodes["check"].on_pass is None
     assert wf.nodes["check"].on_fail == "build"
 
@@ -224,21 +224,7 @@ def test_decision_node_parses_criteria_and_judge_model():
     assert isinstance(g, WorkNode)
     assert g.prompt == "Is it correct?"
     assert g.model == "deep"
-    assert g.command == ""
 
-
-def test_decision_with_both_command_and_criteria_raises():
-    with pytest.raises(WorkflowError, match="exactly one"):
-        parse_workflow({"name": "d", "start": "g", "nodes": [
-            {"id": "g", "kind": "decision", "command": "true",
-             "criteria": "ok?", "on_pass": None, "on_fail": None},
-        ]})
-
-
-# test_decision_with_neither_command_nor_criteria: a decision node with neither
-# command nor criteria is now a routing WorkNode with empty prompt — that is valid
-# (the agent will use upstream context). The old "exactly one" rule only applies
-# when BOTH are set. This test is removed.
 
 
 def test_work_node_with_routing_is_a_routing_node():
@@ -247,7 +233,7 @@ def test_work_node_with_routing_is_a_routing_node():
         {"id": "b", "kind": "work"},
     ]})
     a = wf.nodes["a"]
-    assert isinstance(a, WorkNode) and a.routes and not a.is_command
+    assert isinstance(a, WorkNode) and a.routes
     assert a.on_pass == "b" and a.on_fail == "a"
 
 
@@ -261,14 +247,6 @@ def test_legacy_decision_criteria_maps_to_a_routing_work_node():
     assert a.prompt == "is it good?"        # criteria -> prompt
     assert a.mode == "explore"              # routing agent nodes default read-only
 
-
-def test_legacy_decision_command_maps_to_a_command_routing_node():
-    wf = parse_workflow({"name": "w", "start": "a", "nodes": [
-        {"id": "a", "kind": "decision", "command": "pytest -q", "on_pass": "b", "on_fail": "a"},
-        {"id": "b", "kind": "work"},
-    ]})
-    a = wf.nodes["a"]
-    assert a.is_command and a.command == "pytest -q" and a.routes
 
 
 def test_judge_model_is_accepted_and_dropped():
@@ -484,9 +462,9 @@ def test_dynamic_parallel_worker_and_list_from_must_be_real_nodes():
 # ── cases: multi-way routing spec tests ──────────────────────────────────────
 
 
-def _cases_wf(cases, extra_nodes=None, command=""):
+def _cases_wf(cases, extra_nodes=None):
     """Build a minimal workflow with a single cases node for parse tests."""
-    nodes = [{"id": "a", "kind": "work", "cases": cases, "command": command}]
+    nodes = [{"id": "a", "kind": "work", "cases": cases}]
     if extra_nodes:
         nodes.extend(extra_nodes)
     return {"name": "w", "start": "a", "nodes": nodes}
@@ -531,12 +509,6 @@ def test_cases_and_on_pass_are_mutually_exclusive():
             {"id": "b", "kind": "work"},
         ]})
 
-
-def test_cases_and_command_are_mutually_exclusive():
-    with pytest.raises(WorkflowError, match="command"):
-        parse_workflow({"name": "w", "start": "a", "nodes": [
-            {"id": "a", "kind": "work", "cases": {"DONE": None}, "command": "pytest"},
-        ]})
 
 
 def test_cases_empty_dict_raises():
@@ -623,11 +595,6 @@ def test_max_turns_string_raises():
         parse_workflow({"name": "w", "start": "a",
                         "nodes": [{"id": "a", "kind": "work", "max_turns": "6"}]})
 
-
-def test_max_turns_on_command_node_raises():
-    with pytest.raises(WorkflowError, match="max_turns cannot be set on a command node"):
-        parse_workflow({"name": "w", "start": "a",
-                        "nodes": [{"id": "a", "kind": "work", "command": "pytest", "max_turns": 3}]})
 
 
 def test_routing_node_cannot_use_shared_context_binary():

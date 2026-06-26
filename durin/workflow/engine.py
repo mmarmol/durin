@@ -5,11 +5,10 @@ the injected ``node_runner`` and its output passes along the edge to the next no
 a 'shared'-context node also reads/extends a running shared-context buffer, while an
 'own'-context node is isolated (it sees only the upstream output). A routing node
 derives a verdict from its own output and follows the matching edge: a binary node
-(on_pass/on_fail) routes on a PASS/FAIL verdict (agent: first-line parse_verdict;
-command: exit code); a multi-way node (cases) routes on which declared label the agent
-emits (parse_label) — to that label's target, to "default", or aborting if neither. A
-per-node visit cap guards against infinite loop-backs. The run returns a typed
-WorkflowResult.
+(on_pass/on_fail) routes on a PASS/FAIL verdict (first-line parse_verdict); a multi-way
+node (cases) routes on which declared label the agent emits (parse_label) — to that
+label's target, to "default", or aborting if neither. A per-node visit cap guards
+against infinite loop-backs. The run returns a typed WorkflowResult.
 
 The graph logic is decoupled from real LLM execution: ``node_runner`` is injectable
 so this engine is fully unit-testable with a mock. The default runner that wraps
@@ -30,7 +29,6 @@ from loguru import logger
 
 from durin.workflow import run_log, workspace_fork
 from durin.workflow.artifacts import artifact_dir, prune_runs
-from durin.workflow.condition import CommandOutcome, run_command
 from durin.workflow.result import NodeRun, WorkflowResult
 from durin.workflow.spec import NEEDS_INPUT_TARGET, ParallelNode, SubworkflowNode, WorkNode, Workflow
 from durin.workflow.verdict import parse_label, parse_verdict
@@ -50,7 +48,7 @@ class NodeRunRequest:
     workspace_override: str | None = None
     # Engine-provided keyed output folder for this node (write here) and the folder
     # the producing predecessor wrote into (read from). Both None when the engine has
-    # no workspace or for command nodes.
+    # no workspace or for a no-tools node (which produces no files).
     output_dir: str | None = None
     upstream_artifact_dir: str | None = None
     # Index within a dynamic fan-out batch (0, 1, 2, …). When set, the session-persist
@@ -103,8 +101,6 @@ class WorkflowEngine:
         node_runner: NodeRunner,
         *,
         run_id_factory: Callable[[], str] | None = None,
-        command_runner: Callable[..., CommandOutcome] = run_command,
-        command_cwd: str | None = None,
         subworkflow_runner: Callable[..., str] | None = None,
         workspace: str | None = None,
         pick_runner: Callable[[str, list[str], "str | None"], int] | None = None,
@@ -112,8 +108,6 @@ class WorkflowEngine:
     ) -> None:
         self._node_runner = node_runner
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex[:12])
-        self._command_runner = command_runner
-        self._command_cwd = command_cwd
         self._subworkflow_runner = subworkflow_runner
         # The real workspace (writing-parallel forks/applies here) and a runner that
         # picks the winning branch for 'choose' reconciliation. Both optional: a
@@ -270,12 +264,12 @@ class WorkflowEngine:
             iteration = visits[current]
 
             if isinstance(node, WorkNode):
-                # Compute an artifact folder only for a node that can do file I/O — an
-                # agent body with file tools — and when a workspace is available. A
-                # command node or a no-tools node produces no files, gets no folder, and
-                # nils the chain for the next node (below).
+                # Compute an artifact folder only for a node that can do file I/O — one
+                # with file tools — and when a workspace is available. A no-tools node
+                # produces no files, gets no folder, and nils the chain for the next node
+                # (below).
                 out_dir: str | None = None
-                if not node.is_command and node.tools == "default" and self._workspace is not None:
+                if node.tools == "default" and self._workspace is not None:
                     out_dir = str(artifact_dir(self._workspace, run_id, node.id, iteration))
 
                 req = NodeRunRequest(
@@ -292,50 +286,39 @@ class WorkflowEngine:
                     upstream_artifact_dir=upstream_artifact_dir,
                 )
 
-                if node.is_command:
-                    # Command body: run the shell command; verdict is the exit code.
-                    outcome = self._command_runner(node.command, cwd=self._command_cwd)
-                    output = outcome.output
-                    passed = outcome.passed
+                # Run a full agent turn; for a multi-way node the verdict is a matched
+                # case label; for binary routing it is PASS/FAIL from the first non-empty
+                # line; for a linear node there is no verdict.
+                try:
+                    resp = self._node_runner(req)
+                except NodeExecutionError as exc:
+                    # The node's turn raised: record an attributable node_failed run
+                    # (with the persisted session key) so the manifest captures it,
+                    # then re-raise to abort the walk — run() names the node.
                     runs.append(NodeRun(node_id=node.id, iteration=iteration,
-                                        output=output, session_key=None,
-                                        passed=passed if node.routes else None,
-                                        status="no_session"))
+                                        output="", session_key=exc.session_key,
+                                        status="node_failed", error=str(exc.cause)))
+                    if update_manifest is not None:
+                        update_manifest()
+                    raise
+                output = resp.output
+                if node.cases is not None:
+                    # Multi-way: label matching replaces pass/fail.
+                    passed = None
+                elif node.routes:
+                    passed = parse_verdict(output)
                 else:
-                    # Agent body: run a full agent turn; for a multi-way node the
-                    # verdict is a matched case label; for binary routing it is
-                    # PASS/FAIL from the first non-empty line; for a linear node
-                    # there is no verdict.
-                    try:
-                        resp = self._node_runner(req)
-                    except NodeExecutionError as exc:
-                        # The node's turn raised: record an attributable node_failed run
-                        # (with the persisted session key) so the manifest captures it,
-                        # then re-raise to abort the walk — run() names the node.
-                        runs.append(NodeRun(node_id=node.id, iteration=iteration,
-                                            output="", session_key=exc.session_key,
-                                            status="node_failed", error=str(exc.cause)))
-                        if update_manifest is not None:
-                            update_manifest()
-                        raise
-                    output = resp.output
-                    if node.cases is not None:
-                        # Multi-way: label matching replaces pass/fail.
-                        passed = None
-                    elif node.routes:
-                        passed = parse_verdict(output)
-                    else:
-                        passed = None
-                    runs.append(NodeRun(node_id=node.id, iteration=iteration,
-                                        output=output, session_key=resp.session_key,
-                                        passed=passed,
-                                        status="persist_failed" if resp.persist_failed else "ok"))
-                    if node.context == "shared":
-                        shared_context.extend(resp.messages)
-                        if len(shared_context) > _SHARED_CONTEXT_MAX_MESSAGES:
-                            # Keep only the most recent messages so a long shared chain
-                            # cannot grow the buffer (and every later node's prompt) unboundedly.
-                            del shared_context[:-_SHARED_CONTEXT_MAX_MESSAGES]
+                    passed = None
+                runs.append(NodeRun(node_id=node.id, iteration=iteration,
+                                    output=output, session_key=resp.session_key,
+                                    passed=passed,
+                                    status="persist_failed" if resp.persist_failed else "ok"))
+                if node.context == "shared":
+                    shared_context.extend(resp.messages)
+                    if len(shared_context) > _SHARED_CONTEXT_MAX_MESSAGES:
+                        # Keep only the most recent messages so a long shared chain
+                        # cannot grow the buffer (and every later node's prompt) unboundedly.
+                        del shared_context[:-_SHARED_CONTEXT_MAX_MESSAGES]
 
                 if node.cases is not None:
                     # Multi-way routing: match the agent's output against declared labels.

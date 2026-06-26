@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from durin.workflow.condition import CommandOutcome
 from durin.workflow.engine import (
     _SHARED_CONTEXT_MAX_MESSAGES,
     NodeRunRequest,
@@ -14,11 +13,10 @@ from durin.workflow.engine import (
 from durin.workflow.spec import parse_workflow
 
 
-def _engine(node_outputs, command_results):
-    """Engine with a scripted node runner + scripted command results.
+def _engine(node_outputs):
+    """Engine with a scripted node runner.
 
     node_outputs: dict node_id -> output string.
-    command_results: list of bool (pass/fail), consumed in decision order.
     """
     calls = []
 
@@ -30,15 +28,9 @@ def _engine(node_outputs, command_results):
             messages=[{"role": "assistant", "content": node_outputs[req.node.id]}],
         )
 
-    results = iter(command_results)
-
-    def command_runner(command, *, cwd=None, timeout=30):
-        return CommandOutcome(passed=next(results), exit_code=0, output="")
-
     eng = WorkflowEngine(
         node_runner=node_runner,
         run_id_factory=lambda: "r1",
-        command_runner=command_runner,
     )
     return eng, calls
 
@@ -51,7 +43,7 @@ def test_linear_two_nodes_complete():
             {"id": "b", "kind": "work", "next": None},
         ],
     })
-    eng, calls = _engine({"a": "out-a", "b": "out-b"}, [])
+    eng, calls = _engine({"a": "out-a", "b": "out-b"})
     res = eng.run(wf, "do it")
     assert res.status == "completed"
     assert res.final_output == "out-b"
@@ -67,7 +59,7 @@ def test_output_passes_downstream():
             {"id": "b", "kind": "work", "next": None},
         ],
     })
-    eng, calls = _engine({"a": "out-a", "b": "out-b"}, [])
+    eng, calls = _engine({"a": "out-a", "b": "out-b"})
     eng.run(wf, "do it")
     # b received a's output as upstream_output
     b_call = [c for c in calls if c.node.id == "b"][0]
@@ -81,7 +73,7 @@ def test_io_descriptions_frame_the_task():
         "output": {"text": True, "description": "a markdown report"},
         "nodes": [{"id": "a", "kind": "work", "next": None}],
     })
-    eng, calls = _engine({"a": "out-a"}, [])
+    eng, calls = _engine({"a": "out-a"})
     eng.run(wf, "do it")
     task = calls[0].task
     assert "a CSV of sales" in task
@@ -95,84 +87,10 @@ def test_task_unchanged_without_io_descriptions():
         "input": {"file": True},  # declared, but no description
         "nodes": [{"id": "a", "kind": "work", "next": None}],
     })
-    eng, calls = _engine({"a": "out-a"}, [])
+    eng, calls = _engine({"a": "out-a"})
     eng.run(wf, "do it")
     assert calls[0].task == "do it"
 
-
-def test_decision_pass_continues():
-    wf = parse_workflow({
-        "name": "d", "start": "a",
-        "nodes": [
-            {"id": "a", "kind": "work", "next": "gate"},
-            {"id": "gate", "kind": "decision", "command": "x", "on_pass": "b", "on_fail": "a"},
-            {"id": "b", "kind": "work", "next": None},
-        ],
-    })
-    eng, calls = _engine({"a": "out-a", "b": "out-b"}, [True])
-    res = eng.run(wf, "t")
-    assert res.status == "completed"
-    assert [r.node_id for r in res.runs] == ["a", "gate", "b"]
-    gate_run = [r for r in res.runs if r.node_id == "gate"][0]
-    assert gate_run.passed is True
-    b_call = [c for c in calls if c.node.id == "b"][0]
-    assert b_call.upstream_output == "out-a"
-
-
-def test_decision_fail_loops_back_then_passes():
-    wf = parse_workflow({
-        "name": "d", "start": "a", "max_visits": 3,
-        "nodes": [
-            {"id": "a", "kind": "work", "next": "gate"},
-            {"id": "gate", "kind": "decision", "command": "x", "on_pass": None, "on_fail": "a"},
-        ],
-    })
-    eng, _ = _engine({"a": "out-a"}, [False, True])  # fail once, then pass
-    res = eng.run(wf, "t")
-    assert res.status == "completed"
-    # a runs twice (iteration 1, then 2 after loop-back), gate twice
-    assert [r.node_id for r in res.runs] == ["a", "gate", "a", "gate"]
-    a_runs = [r for r in res.runs if r.node_id == "a"]
-    assert [r.iteration for r in a_runs] == [1, 2]
-
-
-def test_command_decision_runs_in_configured_cwd():
-    wf = parse_workflow({
-        "name": "d", "start": "a",
-        "nodes": [
-            {"id": "a", "kind": "work", "next": "gate"},
-            {"id": "gate", "kind": "decision", "command": "x", "on_pass": None, "on_fail": "a"},
-        ],
-    })
-    seen_cwd = []
-
-    def node_runner(req):
-        return NodeRunResponse(output="out", session_key=None, messages=[])
-
-    def command_runner(command, *, cwd=None, timeout=30):
-        seen_cwd.append(cwd)
-        return CommandOutcome(passed=True, exit_code=0, output="")
-
-    eng = WorkflowEngine(node_runner=node_runner, run_id_factory=lambda: "r1",
-                         command_runner=command_runner, command_cwd="/ws")
-    eng.run(wf, "t")
-    # the command gate runs in the workflow's workspace, not the engine's process cwd,
-    # so a command can see files the work nodes wrote.
-    assert seen_cwd == ["/ws"]
-
-
-def test_max_visits_aborts_infinite_loop():
-    wf = parse_workflow({
-        "name": "d", "start": "a", "max_visits": 2,
-        "nodes": [
-            {"id": "a", "kind": "work", "next": "gate"},
-            {"id": "gate", "kind": "decision", "command": "x", "on_pass": None, "on_fail": "a"},
-        ],
-    })
-    eng, _ = _engine({"a": "out-a"}, [False, False, False, False])  # never passes
-    res = eng.run(wf, "t")
-    assert res.status == "exhausted"
-    assert res.exhausted_node is not None
 
 
 def test_per_node_max_visits_overrides_workflow_default():
@@ -183,7 +101,7 @@ def test_per_node_max_visits_overrides_workflow_default():
             {"id": "a", "kind": "work", "max_visits": 2, "on_pass": None, "on_fail": "a"},
         ],
     })
-    eng, calls = _engine({"a": "FAIL keep going"}, [])  # always FAIL → loops back to itself
+    eng, calls = _engine({"a": "FAIL keep going"})  # always FAIL → loops back to itself
     res = eng.run(wf, "t")
     assert res.status == "exhausted"
     assert res.exhausted_node == "a"
@@ -195,9 +113,9 @@ def test_global_ceiling_clamps_a_higher_per_node_value():
         "name": "d", "start": "a", "max_visits": 50,
         "nodes": [{"id": "a", "kind": "work", "max_visits": 50, "on_pass": None, "on_fail": "a"}],
     })
-    eng, calls = _engine({"a": "FAIL"}, [])
+    eng, calls = _engine({"a": "FAIL"})
     eng2 = WorkflowEngine(node_runner=eng._node_runner, run_id_factory=lambda: "r1",
-                          command_runner=eng._command_runner, max_node_visits=3)
+                          max_node_visits=3)
     res = eng2.run(wf, "t")
     assert res.status == "exhausted"
     assert len([c for c in calls if c.node.id == "a"]) == 3  # clamped to the ceiling of 3
@@ -211,7 +129,7 @@ def test_shared_vs_own_context():
             {"id": "b", "kind": "work", "context": "own", "next": None},
         ],
     })
-    eng, calls = _engine({"a": "out-a", "b": "out-b"}, [])
+    eng, calls = _engine({"a": "out-a", "b": "out-b"})
     eng.run(wf, "t")
     a_call = [c for c in calls if c.node.id == "a"][0]
     b_call = [c for c in calls if c.node.id == "b"][0]
@@ -230,7 +148,7 @@ def test_shared_buffer_accumulates_across_shared_nodes():
             {"id": "b", "kind": "work", "context": "shared", "next": None},
         ],
     })
-    eng, calls = _engine({"a": "out-a", "b": "out-b"}, [])
+    eng, calls = _engine({"a": "out-a", "b": "out-b"})
     eng.run(wf, "t")
     b_call = [c for c in calls if c.node.id == "b"][0]
     # b is the second shared node: it must receive a's appended message
@@ -308,22 +226,6 @@ def test_agent_routing_node_fail_threads_feedback():
     # second run of 'prod' must have received reviewer feedback in its upstream_output
     assert any(inp and "need more detail" in inp for inp in seen_inputs)
 
-
-def test_command_routing_node_routes_on_exit_code():
-    """A command routing node (is_command=True) routes on the command's exit code."""
-    def runner(req):
-        return NodeRunResponse(output="built")
-
-    def cmd(command, cwd=None):
-        return CommandOutcome(passed=True, output="ok", exit_code=0)
-
-    wf = parse_workflow({"name": "w", "start": "prod", "nodes": [
-        {"id": "prod", "kind": "work", "next": "gate"},
-        {"id": "gate", "kind": "decision", "command": "true", "on_pass": "done", "on_fail": "prod"},
-        {"id": "done", "kind": "work"},
-    ]})
-    res = WorkflowEngine(runner, command_runner=cmd).run(wf, "t")
-    assert res.status == "completed"
 
 
 def test_subworkflow_node_runs_and_threads_output():

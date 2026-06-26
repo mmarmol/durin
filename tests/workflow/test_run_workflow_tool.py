@@ -45,45 +45,6 @@ async def test_missing_workflow_returns_error(tmp_path):
     assert "ghost" in out
 
 
-@pytest.mark.asyncio
-async def test_runs_command_only_workflow_end_to_end(tmp_path):
-    # A decision-only workflow needs no LLM: it runs a command and routes to the end.
-    _write_workflow(tmp_path, "checker", {
-        "name": "checker", "start": "gate",
-        "nodes": [{"id": "gate", "kind": "decision", "command": "true",
-                   "on_pass": None, "on_fail": None}],
-    })
-    tool = _tool(tmp_path)
-    fake_provider = MagicMock(spec=LLMProvider)
-    fake_provider.get_default_model.return_value = "test-model"
-    with patch("durin.providers.factory.make_provider", return_value=fake_provider):
-        out = await tool.execute(name="checker", task="check it")
-    assert "completed" in out.lower()
-    assert "gate" in out
-
-
-@pytest.mark.asyncio
-async def test_run_writes_a_diagnostic_record(tmp_path):
-    # Each run persists a per-run record (the dream self-improvement diagnostic source).
-    _write_workflow(tmp_path, "checker", {
-        "name": "checker", "start": "gate",
-        "nodes": [{"id": "gate", "kind": "decision", "command": "true",
-                   "on_pass": None, "on_fail": None}],
-    })
-    tool = _tool(tmp_path)
-    fake_provider = MagicMock(spec=LLMProvider)
-    fake_provider.get_default_model.return_value = "test-model"
-    with patch("durin.providers.factory.make_provider", return_value=fake_provider):
-        await tool.execute(name="checker", task="check it")
-    from durin.workflow import run_log
-    recs = run_log.read_runs_since(tmp_path, "checker")
-    assert len(recs) == 1
-    assert recs[0]["status"] == "completed"
-    assert any(r["node_id"] == "gate" for r in recs[0]["runs"])
-    # the record lives under workflows-runs/, not in the versioned workflows/ dir
-    assert (tmp_path / "workflows-runs" / "checker").is_dir()
-    assert [p.name for p in workflows_dir(tmp_path).glob("*.json")] == ["checker.json"]
-
 
 @pytest.mark.asyncio
 async def test_work_node_runs_through_to_thread_boundary(tmp_path):
@@ -224,7 +185,6 @@ def test_routing_node_without_session_renders_decision_only():
         exhausted_node=None,
         final_output="ok",
         runs=[
-            # A command gate routes on its exit code and has no session.
             NodeRun(node_id="gate", iteration=1, output="", passed=True, session_key=None),
         ],
     )

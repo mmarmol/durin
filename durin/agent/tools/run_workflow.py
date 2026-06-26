@@ -158,7 +158,6 @@ class RunWorkflowTool(Tool, ContextAware):
         subworkflow_runner = SubworkflowRunner(self._workspace, node_runner, judge_runner)
         engine = WorkflowEngine(
             node_runner=node_runner,
-            command_cwd=self._workspace,
             subworkflow_runner=subworkflow_runner,
             workspace=self._workspace,
             pick_runner=judge_runner.pick,

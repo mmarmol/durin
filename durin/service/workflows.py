@@ -227,7 +227,7 @@ class WorkflowsService:
         judge = AgentJudgeRunner(runner, default_model=provider.get_default_model())
         ws = str(self._workspace)
         engine = WorkflowEngine(
-            node_runner=node_runner, command_cwd=ws,
+            node_runner=node_runner,
             subworkflow_runner=SubworkflowRunner(ws, node_runner, judge),
             workspace=ws, pick_runner=judge.pick,
             max_node_visits=self._app_config.workflow.max_node_visits)

@@ -5,7 +5,6 @@ merged output notes the failures. Only when EVERY unit fails does the node abort
 from pathlib import Path
 
 from durin.workflow import run_log
-from durin.workflow.condition import CommandOutcome
 from durin.workflow.engine import NodeRunResponse, WorkflowEngine
 from durin.workflow.spec import parse_workflow
 
@@ -119,24 +118,6 @@ def test_choose_branch_failure_aborts_cleanly(tmp_path):
     assert res.status == "aborted"
     assert not (tmp_path / "result.txt").exists()   # nothing applied when a branch fails
 
-
-def test_command_node_has_no_session_status():
-    # A command node legitimately has no session; its NodeRun.status is 'no_session' so the
-    # trace distinguishes "no session by design" from a persist failure (overloaded None fix).
-    wf = parse_workflow({"name": "w", "start": "c", "nodes": [
-        {"id": "c", "kind": "decision", "command": "x", "on_pass": None, "on_fail": "fix"},
-        {"id": "fix", "kind": "work", "next": None}]})
-
-    def command_runner(command, *, cwd=None, timeout=30):
-        return CommandOutcome(passed=True, exit_code=0, output="ok")
-
-    res = WorkflowEngine(lambda req: NodeRunResponse(output="x"),
-                         run_id_factory=lambda: "r1",
-                         command_runner=command_runner).run(wf, "go")
-    assert res.status == "completed"
-    c = next(r for r in res.runs if r.node_id == "c")
-    assert c.session_key is None
-    assert c.status == "no_session"
 
 
 def test_persist_failure_marks_node_not_silently_ok(tmp_path):

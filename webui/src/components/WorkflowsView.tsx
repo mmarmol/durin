@@ -65,7 +65,6 @@ export function kindLabelKey(kind: string): string {
 }
 
 function nodeSummary(node: WorkflowNodeDef): string {
-  if (node.command != null) return "command";
   if (node.kind === "parallel") return node.worker ? "dynamic · ×N" : `${((node.branches as string[]) ?? []).length} branches`;
   if (node.kind === "subworkflow") return String(node.workflow ?? "");
   return `${(node.mode as string) ?? "build"} · ${(node.model as string) ?? "default"}`;
@@ -350,8 +349,6 @@ function NodeConfigPanel({
         ? "multiway"
         : "none";
   const routes = routingShape !== "none";
-  // body: "command" if the command field is present, else "agent"
-  const body: "agent" | "command" = node.command != null ? "command" : "agent";
 
   // Determine the current "runs as" picker value.
   // Persona takes precedence; if a model string is set, show model entry; else default.
@@ -364,18 +361,6 @@ function NodeConfigPanel({
     runsAsValue = RUNS_AS_MODEL;
   } else {
     runsAsValue = RUNS_AS_DEFAULT;
-  }
-
-  function handleBodyToggle(newBody: "agent" | "command") {
-    if (newBody === "command") {
-      // Switch to command: set command to empty string, clear agent-only fields.
-      // Also clear multi-way cases — a command node routes only on its exit code
-      // (binary on_pass/on_fail), never on an emitted label.
-      onChange({ command: "", mode: undefined, model: undefined, persona: undefined, prompt: undefined, cases: undefined });
-    } else {
-      // Switch to agent: clear command, restore agent defaults.
-      onChange({ command: undefined, mode: "build" });
-    }
   }
 
   function handleRunsAsChange(val: string) {
@@ -425,29 +410,7 @@ function NodeConfigPanel({
 
       {(node.kind === "work" || node.kind === "decision") && (
         <>
-          {/* Body toggle: agent vs command */}
-          <Field label={t("workflows.body")}>
-            <select
-              className={selectCls}
-              value={body}
-              onChange={(e) => handleBodyToggle(e.target.value as "agent" | "command")}
-            >
-              <option value="agent">{t("workflows.bodyAgent")}</option>
-              <option value="command">{t("workflows.bodyCommand")}</option>
-            </select>
-          </Field>
-
-          {body === "command" ? (
-            <Field label={t("workflows.command")}>
-              <Textarea
-                rows={3}
-                value={(node.command as string) ?? ""}
-                onChange={(e) => onChange({ command: e.target.value })}
-              />
-            </Field>
-          ) : (
-            <>
-              {/* Runs as: default model / specific model / personas */}
+          {/* Runs as: default model / specific model / personas */}
               <Field label={t("workflows.runsAs")}>
                 <select
                   className={selectCls}
@@ -524,8 +487,6 @@ function NodeConfigPanel({
                   onClose={() => setPromptModalOpen(false)}
                 />
               )}
-            </>
-          )}
 
           {/* Routing toggle — use explicit id/htmlFor to avoid any label nesting issue,
               and a div wrapper so no outer label can capture the click. */}
@@ -553,10 +514,7 @@ function NodeConfigPanel({
                 onChange={(e) => switchRoutingShape(e.target.value as "binary" | "multiway")}
               >
                 <option value="binary">{t("workflows.routingShapeBinary")}</option>
-                {/* A command node routes only on its exit code, so multi-way (label-based) is agent-only. */}
-                {body !== "command" && (
-                  <option value="multiway">{t("workflows.routingShapeMultiway")}</option>
-                )}
+                <option value="multiway">{t("workflows.routingShapeMultiway")}</option>
               </select>
             </Field>
           )}
