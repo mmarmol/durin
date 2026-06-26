@@ -1131,6 +1131,9 @@
         "high": "High",
         "max": "Max"
       },
+      "mode": {
+        "title": "Mode"
+      },
       "tools": {
         "search": "Search",
         "reason": "Reason",

@@ -1,4 +1,4 @@
-import { ChevronDown, Menu, Moon, Sun } from "lucide-react";
+import { Menu, Moon, Sun } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -11,8 +11,6 @@ interface ThreadHeaderProps {
   onToggleTheme: () => void;
   hideSidebarToggleOnDesktop?: boolean;
   minimal?: boolean;
-  agentMode?: string;
-  onModeChange?: (mode: string) => void;
 }
 
 export function ThreadHeader({
@@ -22,8 +20,6 @@ export function ThreadHeader({
   onToggleTheme,
   hideSidebarToggleOnDesktop = false,
   minimal = false,
-  agentMode = "build",
-  onModeChange,
 }: ThreadHeaderProps) {
   const { t } = useTranslation();
   if (minimal) {
@@ -67,25 +63,6 @@ export function ThreadHeader({
       </div>
 
       <div className="flex items-center gap-2">
-        {onModeChange ? (
-          <div className="relative">
-            <select
-              value={agentMode}
-              onChange={(e) => onModeChange(e.target.value)}
-              className="appearance-none rounded-md border border-border/60 bg-card px-2 py-1 pr-6 text-[11px] font-medium text-muted-foreground hover:bg-accent/35 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label={t("thread.header.agentMode")}
-            >
-              <option value="build">build</option>
-              <option value="plan">plan</option>
-              <option value="explore">explore</option>
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-1 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-          </div>
-        ) : (
-          <span className="rounded-md border border-border/40 bg-card/60 px-2 py-1 text-[11px] font-medium text-muted-foreground/70">
-            {agentMode}
-          </span>
-        )}
         <ThemeButton theme={theme} onToggleTheme={onToggleTheme} label={t("thread.header.toggleTheme")} />
       </div>
 

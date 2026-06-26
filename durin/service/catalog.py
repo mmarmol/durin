@@ -36,6 +36,7 @@ from durin.service.cron import CronService
 from durin.service.health import HealthService
 from durin.service.mcp import McpService
 from durin.service.memory import MemoryService
+from durin.service.modes import ModesService
 from durin.service.oauth import OAuthService
 from durin.service.personas import PersonasService
 from durin.service.registry import ServiceRegistry
@@ -57,6 +58,7 @@ SERVICE_CLASSES: list[type] = [
     McpService,
     HealthService,
     CommandsService,
+    ModesService,
     OAuthService,
     AuthService,
     WorkflowsService,
@@ -82,6 +84,7 @@ def build_catalog_registry() -> ServiceRegistry:
     registry.register("mcp", McpService())
     registry.register("health", HealthService())
     registry.register("commands", CommandsService())
+    registry.register("modes", ModesService())
     registry.register("oauth", OAuthService())
     registry.register("auth", AuthService(store=None))
     registry.register("workflows", WorkflowsService(workspace=Path("/")))

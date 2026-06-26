@@ -2718,6 +2718,30 @@
         "title": "ModelsListResult",
         "type": "object"
       },
+      "ModesListQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 lists every registered agent mode.",
+        "properties": {},
+        "title": "ModesListQuery",
+        "type": "object"
+      },
+      "ModesResult": {
+        "properties": {
+          "modes": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Modes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "modes"
+        ],
+        "title": "ModesResult",
+        "type": "object"
+      },
       "OAuthDisconnectCommand": {
         "additionalProperties": false,
         "description": "Command for ``GET /api/oauth/codex/disconnect``.",
@@ -6365,6 +6389,35 @@
         },
         "summary": "Model catalog filtered by provider and/or capability",
         "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/modes": {
+      "get": {
+        "operationId": "modes_list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModesListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModesResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List registered agent modes (build/plan/explore plus custom)",
+        "x-required-scope": "system:read"
       }
     },
     "/api/v1/oauth/codex": {
