@@ -43,6 +43,7 @@ import {
 } from "@/hooks/useAttachedImages";
 import { useAttachedAudio, type AttachedAudio } from "@/hooks/useAttachedAudio";
 import { MicButton } from "@/components/thread/MicButton";
+import { VoiceOrb, type OrbState } from "@/components/voice/VoiceOrb";
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import { usePromptHistory } from "@/hooks/usePromptHistory";
 import { ModelPickerPopover } from "@/components/thread/ModelPickerPopover";
@@ -104,6 +105,11 @@ interface ThreadComposerProps {
   agentMode?: string;
   /** Called when the user switches the agent's execution mode. */
   onModeChange?: (mode: string) => void;
+  /** Enter (or toggle off) hands-free voice mode. Omitted → no voice orb. */
+  onEnterVoice?: () => void;
+  voiceActive?: boolean;
+  voiceState?: OrbState;
+  voiceAmplitude?: number;
 }
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
@@ -429,6 +435,10 @@ export function ThreadComposer({
   modes = [],
   agentMode = "build",
   onModeChange,
+  onEnterVoice,
+  voiceActive = false,
+  voiceState = "idle",
+  voiceAmplitude = 0,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
@@ -1012,6 +1022,15 @@ export function ThreadComposer({
                 onRecorded={handleAudioFile}
                 disabled={disabled || audioAttachments.length > 0}
                 variant={isHero ? "hero" : "thread"}
+              />
+            ) : null}
+            {onEnterVoice ? (
+              <VoiceOrb
+                state={voiceActive ? voiceState : "idle"}
+                amplitude={voiceActive ? voiceAmplitude : 0}
+                size={isHero ? 34 : 30}
+                label={voiceActive ? t("settings.voice.orb.stop") : t("settings.voice.orb.start")}
+                onClick={onEnterVoice}
               />
             ) : null}
             {modelLabel ? (
