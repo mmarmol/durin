@@ -1294,7 +1294,8 @@
       "more": "+{{count}} more"
     },
     "subagent": {
-      "title": "Subagent"
+      "title": "Subagent",
+      "running": "{{steps}} steps…"
     }
   },
   "lightbox": {

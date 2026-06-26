@@ -88,6 +88,7 @@ export interface ToolProgressEvent {
   error?: unknown;
   files?: unknown[];
   embeds?: unknown[];
+  progress?: { iteration?: number; tool?: string | null };
 }
 
 export interface ChatSummary {

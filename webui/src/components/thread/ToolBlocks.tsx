@@ -194,7 +194,10 @@ function SubagentResultBlock({ event }: { event: ToolProgressEvent }) {
   const a = args(event);
   const label = typeof a.label === "string" ? a.label : "";
   const task = typeof a.task === "string" ? a.task : "";
+  const running = event.phase === "running";
   const failed = event.phase === "error";
+  const steps = event.progress?.iteration ?? 0;
+  const tool = event.progress?.tool ?? "";
   const body =
     typeof event.error === "string" && failed
       ? event.error
@@ -213,7 +216,12 @@ function SubagentResultBlock({ event }: { event: ToolProgressEvent }) {
           </span>
         ) : null}
       </div>
-      {body ? (
+      {running ? (
+        <span className="text-[12px] text-muted-foreground">
+          {t("message.subagent.running", { steps })}
+          {tool ? ` · ${tool}` : ""}
+        </span>
+      ) : body ? (
         <div
           className={cn(
             "max-h-72 overflow-y-auto scrollbar-thin",
