@@ -66,7 +66,7 @@ export function ModePicker({
           role="listbox"
           aria-label={t("thread.composer.mode.title")}
           className={cn(
-            "absolute bottom-full left-0 z-50 mb-2 w-[244px]",
+            "absolute bottom-full left-0 z-50 mb-2 w-[180px]",
             "rounded-xl border border-border/70 bg-popover shadow-xl",
             "animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-200",
           )}
@@ -82,31 +82,18 @@ export function ModePicker({
                   aria-selected={selected}
                   onClick={() => handleSelect(mode.name)}
                   className={cn(
-                    "flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors",
-                    selected ? "bg-accent/55" : "hover:bg-muted/60",
+                    "flex w-full items-center justify-between px-3 py-1.5 text-left text-[12px] transition-colors",
+                    selected
+                      ? "bg-accent/60 font-medium text-accent-foreground"
+                      : "text-foreground/85 hover:bg-muted/60",
                   )}
                 >
-                  <span
-                    aria-hidden
-                    className={cn(
-                      "mt-0.5 grid h-3.5 w-3.5 flex-none place-items-center rounded-full border",
-                      selected ? "border-primary" : "border-border",
-                    )}
-                  >
-                    {selected ? (
-                      <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-                    ) : null}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[12px] font-medium text-foreground">
-                      {mode.name}
+                  <span className="truncate">{mode.name}</span>
+                  {selected ? (
+                    <span className="ml-2 text-[10px] text-emerald-500" aria-hidden>
+                      ●
                     </span>
-                    {mode.description ? (
-                      <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">
-                        {mode.description}
-                      </span>
-                    ) : null}
-                  </span>
+                  ) : null}
                 </button>
               );
             })}
