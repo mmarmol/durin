@@ -1453,6 +1453,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/{name}/duplicate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Copy a workflow to a new name, to use as a starting point. */
+        post: operations["workflows_duplicate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{name}/recommendations": {
         parameters: {
             query?: never;
@@ -3592,6 +3609,18 @@ export interface components {
         WorkflowDeleteResult: {
             /** Deleted */
             deleted: boolean;
+        };
+        /** WorkflowDuplicateCommand */
+        WorkflowDuplicateCommand: {
+            /** Name */
+            name: string;
+            /** Target */
+            target: string;
+        };
+        /** WorkflowDuplicateResult */
+        WorkflowDuplicateResult: {
+            /** Name */
+            name: string;
         };
         /** WorkflowGetQuery */
         WorkflowGetQuery: {
@@ -6246,6 +6275,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowDeleteResult"];
+                };
+            };
+        };
+    };
+    workflows_duplicate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowDuplicateCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowDuplicateResult"];
                 };
             };
         };

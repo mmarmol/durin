@@ -4573,6 +4573,38 @@
         "title": "WorkflowDeleteResult",
         "type": "object"
       },
+      "WorkflowDuplicateCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "target"
+        ],
+        "title": "WorkflowDuplicateCommand",
+        "type": "object"
+      },
+      "WorkflowDuplicateResult": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkflowDuplicateResult",
+        "type": "object"
+      },
       "WorkflowGetQuery": {
         "additionalProperties": false,
         "properties": {
@@ -7871,6 +7903,35 @@
           }
         },
         "summary": "Create or update a workflow definition.",
+        "x-required-scope": "workflows:write"
+      }
+    },
+    "/api/v1/workflows/{name}/duplicate": {
+      "post": {
+        "operationId": "workflows_duplicate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowDuplicateCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDuplicateResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Copy a workflow to a new name, to use as a starting point.",
         "x-required-scope": "workflows:write"
       }
     },

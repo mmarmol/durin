@@ -6,6 +6,7 @@ from durin.service.principal import Principal
 from durin.service.types import NotFoundError, ValidationFailedError
 from durin.service.workflows import (
     WorkflowDeleteCommand,
+    WorkflowDuplicateCommand,
     WorkflowGetQuery,
     WorkflowRunCommand,
     WorkflowRunResult,
@@ -61,6 +62,46 @@ async def test_save_rejects_an_invalid_workflow(tmp_path):
 async def test_get_missing_raises_not_found(tmp_path):
     with pytest.raises(NotFoundError):
         await _svc(tmp_path).get(WorkflowGetQuery(name="ghost"), Principal.local())
+
+
+@pytest.mark.asyncio
+async def test_duplicate_copies_under_a_new_name(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    res = await svc.duplicate(WorkflowDuplicateCommand(name="wf", target="wf-copy"), p)
+    assert res.name == "wf-copy"
+    names = (await svc.list(WorkflowsListQuery(), p)).workflows
+    assert "wf" in names and "wf-copy" in names
+    got = await svc.get(WorkflowGetQuery(name="wf-copy"), p)
+    assert got.definition["name"] == "wf-copy"     # inner name updated to the new name
+    assert got.definition["start"] == "a"          # the rest of the graph copied verbatim
+
+
+@pytest.mark.asyncio
+async def test_duplicate_does_not_overwrite_an_existing_target(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    await svc.save(WorkflowSaveCommand(name="taken", definition={**_VALID, "name": "taken"}), p)
+    with pytest.raises(ValidationFailedError):
+        await svc.duplicate(WorkflowDuplicateCommand(name="wf", target="taken"), p)
+    # the existing target is left untouched
+    assert (await svc.get(WorkflowGetQuery(name="taken"), p)).definition["name"] == "taken"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_missing_source_raises_not_found(tmp_path):
+    with pytest.raises(NotFoundError):
+        await _svc(tmp_path).duplicate(
+            WorkflowDuplicateCommand(name="ghost", target="x"), Principal.local()
+        )
+
+
+@pytest.mark.asyncio
+async def test_duplicate_rejects_an_empty_target(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    with pytest.raises(ValidationFailedError):
+        await svc.duplicate(WorkflowDuplicateCommand(name="wf", target="  "), p)
 
 
 @pytest.mark.asyncio

@@ -65,6 +65,15 @@ class WorkflowDeleteResult(Result):
     deleted: bool
 
 
+class WorkflowDuplicateCommand(Command):
+    name: str      # the source workflow to copy (path param)
+    target: str    # the new workflow name (must not already exist)
+
+
+class WorkflowDuplicateResult(Result):
+    name: str      # the name of the created copy
+
+
 class WorkflowRunCommand(Command):
     name: str
     task: str
@@ -191,6 +200,33 @@ class WorkflowsService:
         with cross_process_lock(self._lock_target()):
             path.unlink()
         return WorkflowDeleteResult(deleted=True)
+
+    @route(
+        "POST", "/api/v1/workflows/{name}/duplicate",
+        scope=Scope.WORKFLOWS_WRITE.value,
+        request_model=WorkflowDuplicateCommand, response_model=WorkflowDuplicateResult,
+        summary="Copy a workflow to a new name, to use as a starting point.",
+    )
+    async def duplicate(self, cmd: WorkflowDuplicateCommand, principal: Principal) -> WorkflowDuplicateResult:
+        principal.require(Scope.WORKFLOWS_WRITE)
+        target = cmd.target.strip()
+        if not target:
+            raise ValidationFailedError("a duplicate needs a non-empty target name")
+        src = self._dir() / f"{cmd.name}.json"
+        if not src.is_file():
+            raise NotFoundError(f"workflow {cmd.name!r} not found")
+        try:
+            definition = json.loads(src.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValidationFailedError(f"workflow {cmd.name!r} is unreadable: {exc}")
+        definition["name"] = target          # keep the inner name consistent with the file name
+        parse_workflow(definition)            # the copy must still be a valid graph
+        dest = self._dir() / f"{target}.json"
+        with cross_process_lock(self._lock_target()):
+            if dest.exists():
+                raise ValidationFailedError(f"workflow {target!r} already exists")
+            atomic_write_text(dest, json.dumps(definition, indent=2, ensure_ascii=False))
+        return WorkflowDuplicateResult(name=target)
 
     @route(
         "POST", "/api/v1/workflows/{name}/run",

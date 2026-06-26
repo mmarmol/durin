@@ -242,10 +242,25 @@ export async function deleteWorkflow(
   );
 }
 
+/** Copy a workflow to a new name (to use as a starting point). Returns the created name. */
+export async function duplicateWorkflow(
+  token: string,
+  name: string,
+  target: string,
+  base: string = "",
+): Promise<string> {
+  const body = await post<{ name: string }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}/duplicate`,
+    token,
+    { target },
+  );
+  return body.name;
+}
+
 // One per-node entry in a run's trace. The attribution fields make a run auditable:
 // session_key points at the fresh session that produced the row; worker_index/branch_id
 // identify a fan-out worker or a static parallel branch so concurrent units stay legible;
-// status is "ok" | "no_session" | "persist_failed" | "node_failed".
+// status is "ok" | "persist_failed" | "node_failed".
 export type WorkflowRunNode = {
   node_id: string;
   iteration: number;

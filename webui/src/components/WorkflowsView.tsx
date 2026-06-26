@@ -23,6 +23,7 @@ import {
   ApiError,
   applyWorkflowRecommendation,
   deleteWorkflow,
+  duplicateWorkflow,
   getWorkflow,
   getWorkflowRecommendations,
   listWorkflows,
@@ -943,6 +944,8 @@ export function WorkflowsView() {
   const [runHistory, setRunHistory] = useState<WorkflowRunResult[]>([]);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  const [duplicating, setDuplicating] = useState(false);
+  const [dupName, setDupName] = useState("");
   const [personas, setPersonas] = useState<PersonaItem[]>([]);
   const [inputPaths, setInputPaths] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -1107,6 +1110,29 @@ export function WorkflowsView() {
     },
     [token, selected],
   );
+
+  // Copy the open workflow under a new name and open the copy, to use as a starting point.
+  const onDuplicate = useCallback(async () => {
+    const target = dupName.trim();
+    if (!target || !selected) return;
+    if (names.includes(target)) {
+      setError(t("workflows.nameExists"));
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const created = await duplicateWorkflow(token, selected, target);
+      setNames((ns) => Array.from(new Set([...ns, created])).sort());
+      setDuplicating(false);
+      setDupName("");
+      setSelected(created); // the [selected] effect loads the copy and renders it
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [dupName, selected, names, token, t]);
 
   const deleteNode = useCallback(
     (id: string) => {
@@ -1367,6 +1393,37 @@ export function WorkflowsView() {
                   <Button size="sm" variant="outline" onClick={() => addIo("output")}>
                     <Plus className="h-3.5 w-3.5" /> {t("workflows.addOutput")}
                   </Button>
+                )}
+                {!duplicating ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => { setDuplicating(true); setDupName(`${selected}-copy`); }}
+                    title={t("workflows.duplicateHint")}
+                  >
+                    <Copy className="h-3.5 w-3.5" /> {t("workflows.duplicate")}
+                  </Button>
+                ) : (
+                  <div className="flex items-center gap-1">
+                    <Input
+                      autoFocus
+                      value={dupName}
+                      onChange={(e) => setDupName(e.target.value)}
+                      disabled={saving}
+                      placeholder={t("workflows.duplicateNamePlaceholder")}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void onDuplicate();
+                        if (e.key === "Escape") { setDuplicating(false); setDupName(""); }
+                      }}
+                      className="h-8 w-44 text-sm"
+                    />
+                    <Button size="sm" onClick={() => void onDuplicate()} disabled={saving}>
+                      {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => { setDuplicating(false); setDupName(""); }}>
+                      {t("workflows.cancel")}
+                    </Button>
+                  </div>
                 )}
                 {dirty && (
                   <Button size="sm" onClick={onSave} disabled={saving}>
