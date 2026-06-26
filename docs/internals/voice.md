@@ -112,7 +112,7 @@ The assistant reply reaches the WebSocket channel as a stream of deltas, not a s
 | `_speak` | `durin/channels/websocket.py` | Builds the spoken rendition, synthesizes, emits `voice_audio` |
 | `_warmup_speech` | `durin/channels/manager.py` | Background warm of STT/TTS at gateway start |
 | `useVoiceSession` | `webui/src/components/voice/useVoiceSession.ts` | Browser thin client: VAD capture, playback, audio-reactive amplitude |
-| `VoiceDock` / `VoiceOrb` | `webui/src/components/voice/` | The floating voice control and its animated orb |
+| `VoiceDock` / `VoiceOrb` | `webui/src/components/voice/` | The animated orb (reused as the composer's entry button and the in-call panel) and the floating in-call status panel |
 
 ## 6. Configuration and surfaces
 
@@ -163,7 +163,7 @@ Gateway → client:
 
 ### Extras and the webui
 
-Local STT needs the `[stt]` extra; local TTS needs `[tts]` (the `supertonic` package + `onnxruntime`). Both are opt-in — installed during `durin onboard` if the user enables voice, or from the settings pane's install button. Cloud providers need only an API key. The "Voz" settings pane configures provider, engine/voice, language, the conversational toggles, and the long-reply mode, and shows whether each extra is installed. The floating orb (`VoiceDock`) is the in-chat control; it binds to the active chat's `chat_id`, closes itself after the idle timeout, and re-establishes its session automatically after a socket reconnect.
+Local STT needs the `[stt]` extra; local TTS needs `[tts]` (the `supertonic` package + `onnxruntime`). Both are opt-in — installed during `durin onboard` if the user enables voice, or from the settings pane's install button. Cloud providers need only an API key. The "Voz" settings pane configures provider, engine/voice, language, the conversational toggles, and the long-reply mode, and shows whether each extra is installed. Voice is entered from an **orb button in the composer** (next to the mic, which does dictation); the voice session is owned by the app shell, so that orb and the floating in-call panel (`VoiceDock`) drive the same session. It binds to the active chat's `chat_id`, closes itself after the idle timeout, and re-establishes its session automatically after a socket reconnect. `VoiceDock` shows only while a call is active, so switching views never hides or interrupts it.
 
 ## 7. Rationale
 

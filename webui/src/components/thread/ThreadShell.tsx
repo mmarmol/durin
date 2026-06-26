@@ -7,6 +7,7 @@ import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { ApiStatusBanner } from "@/components/thread/ApiStatusBanner";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
+import type { OrbState } from "@/components/voice/VoiceOrb";
 import { useDurinStream, type SendImage } from "@/hooks/useDurinStream";
 import { useTranscriptionStatus } from "@/hooks/useTranscriptionStatus";
 import { useModes } from "@/hooks/useModes";
@@ -40,6 +41,12 @@ interface ThreadShellProps {
   hideSidebarToggleOnDesktop?: boolean;
   pendingPrompt?: string | null;
   onPromptConsumed?: () => void;
+  /** Enter (or toggle off) hands-free voice mode from the composer orb. When
+   *  omitted (voice unavailable) the composer hides the orb. */
+  onEnterVoice?: () => void;
+  voiceActive?: boolean;
+  voiceState?: OrbState;
+  voiceAmplitude?: number;
 }
 
 function toModelBadgeLabel(modelName: string | null): string | null {
@@ -78,6 +85,10 @@ export function ThreadShell({
   hideSidebarToggleOnDesktop = false,
   pendingPrompt = null,
   onPromptConsumed,
+  onEnterVoice,
+  voiceActive = false,
+  voiceState = "idle",
+  voiceAmplitude = 0,
 }: ThreadShellProps) {
   const { t } = useTranslation();
   const chatId = session?.chatId ?? null;
@@ -390,6 +401,10 @@ export function ThreadShell({
           modes={modes}
           agentMode={agentMode}
           onModeChange={handleModeChange}
+          onEnterVoice={onEnterVoice}
+          voiceActive={voiceActive}
+          voiceState={voiceState}
+          voiceAmplitude={voiceAmplitude}
         />
       ) : (
         <ThreadComposer
@@ -417,6 +432,10 @@ export function ThreadShell({
           modes={modes}
           agentMode={agentMode}
           onModeChange={handleModeChange}
+          onEnterVoice={onEnterVoice}
+          voiceActive={voiceActive}
+          voiceState={voiceState}
+          voiceAmplitude={voiceAmplitude}
         />
       )}
     </>
