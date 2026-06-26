@@ -45,6 +45,7 @@ from typing import Any
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.storage import load_entry
+from durin.session.manager import is_workflow_session_file
 
 __all__ = ["build_memory_graph", "build_entity_subgraph"]
 
@@ -198,6 +199,10 @@ def build_memory_graph(
     # the consolidator surfaced as "this session was about X").
     if include_sessions and sessions_root.is_dir():
         for jsonl_path in sorted(sessions_root.glob("*.jsonl")):
+            # Workflow node/run sessions are internal execution traces, not user chats —
+            # no node in the memory graph (the .jsonl stays on disk for the run-detail view).
+            if is_workflow_session_file(jsonl_path):
+                continue
             stem = jsonl_path.stem
             sess_ref = f"session:{stem}"
             title, message_count = _read_session_summary(jsonl_path)
