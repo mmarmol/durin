@@ -673,7 +673,7 @@ function Shell({
         )}
         {view === "tasks" && (
           <div className="absolute inset-0 flex flex-col">
-            <TasksView session={activeKey} onOpenSession={(key) => { setActiveKey(key); setView("chat"); }} />
+            <TasksView session={activeKey} />
           </div>
         )}
       </main>

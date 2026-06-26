@@ -12,10 +12,7 @@ function statusTone(status: BackgroundTask["status"]): string {
   return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
 }
 
-export function TasksView({ session, onOpenSession }: {
-  session: string | null;
-  onOpenSession: (key: string) => void;
-}) {
+export function TasksView({ session }: { session: string | null }) {
   const { token } = useClient();
   const { t } = useTranslation();
   const [tasks, setTasks] = useState<BackgroundTask[]>([]);
@@ -34,18 +31,16 @@ export function TasksView({ session, onOpenSession }: {
   const finished = tasks.filter((x) => x.status === "done" || x.status === "failed");
 
   const Row = (x: BackgroundTask) => (
-    <button
+    <div
       key={`${x.kind}:${x.id}`}
-      type="button"
-      onClick={() => x.session_key && onOpenSession(x.session_key)}
-      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-muted/60"
+      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px]"
     >
       {x.kind === "subagent" ? <Bot className="h-3.5 w-3.5" aria-hidden /> : <GitBranch className="h-3.5 w-3.5" aria-hidden />}
       <span className="truncate font-medium">{x.label}</span>
       <span className={cn("ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px]", statusTone(x.status))}>
         {t(`tasks.status.${x.status}`)}
       </span>
-    </button>
+    </div>
   );
 
   if (!session) return <div className="p-4 text-[12.5px] text-muted-foreground">{t("tasks.empty")}</div>;

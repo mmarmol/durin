@@ -1,5 +1,4 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TasksView } from "@/components/TasksView";
 import * as api from "@/lib/api";
@@ -20,16 +19,16 @@ function wrap(node: React.ReactNode) {
 }
 
 describe("TasksView", () => {
-  it("lists tasks and drills into a session on click", async () => {
+  it("renders running and finished tasks with their labels and status chips", async () => {
     vi.mocked(api.listBackgroundTasks).mockResolvedValue([
       { kind: "subagent", id: "t1", label: "research", status: "running",
         started_at: 1, ended_at: null, session_key: "subagent:t1" },
+      { kind: "workflow", id: "w1", label: "build pipeline", status: "done",
+        started_at: 1, ended_at: 2, session_key: "workflow:w1" },
     ]);
-    const onOpenSession = vi.fn();
-    render(wrap(<TasksView session="websocket:chatA" onOpenSession={onOpenSession} />));
+    render(wrap(<TasksView session="websocket:chatA" />));
 
-    const row = await screen.findByText("research");
-    await userEvent.click(row);
-    expect(onOpenSession).toHaveBeenCalledWith("subagent:t1");
+    expect(await screen.findByText("research")).toBeInTheDocument();
+    expect(screen.getByText("Finished 1")).toBeInTheDocument();
   });
 });
