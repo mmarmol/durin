@@ -4,11 +4,16 @@ import {
   deleteSession,
   disconnectCodex,
   fetchDreamDigest,
+  fetchMemoryEntity,
+  fetchMemoryEntry,
+  fetchMemorySession,
   fetchModelPicker,
   fetchSettings,
   fetchWebuiThread,
+  forgetMemoryEntry,
   listSessions,
   listSlashCommands,
+  saveSkillFile,
   setApiReauthHandler,
   startCodexLoopbackAuth,
   updateProviderSettings,
@@ -264,5 +269,56 @@ describe("webui API helpers", () => {
     expect(out).toBeDefined();
     expect(out.last_run).toEqual(digest.last_run);
     expect(out.events).toEqual([]);
+  });
+
+  it("re-bootstraps and retries once when fetching webui-thread gets 401", async () => {
+    // Regression: the bootstrap token expires (~5 min); clicking an old session
+    // afterwards must mint a fresh token and retry, not surface an empty thread.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 401 } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { messages: [{ id: "m1" }] } }),
+      } as Response);
+    vi.stubGlobal("fetch", fetchMock);
+    setApiReauthHandler(async () => "fresh-token");
+
+    const out = await fetchWebuiThread("stale-token", "websocket:chat-1");
+
+    // First call used the stale token, the retry used the fresh one.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("Bearer stale-token");
+    expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe("Bearer fresh-token");
+    expect(out?.messages?.[0]?.id).toBe("m1");
+    setApiReauthHandler(null);
+  });
+
+  // Same defect class as webui-thread: these data fetchers used raw fetch() and
+  // so bypassed the 401 reauth-retry every request()-based call gets.
+  it.each([
+    ["fetchMemoryEntity", () => fetchMemoryEntity("stale-token", "ref")],
+    ["fetchMemoryEntry", () => fetchMemoryEntry("stale-token", "mem://x")],
+    ["fetchMemorySession", () => fetchMemorySession("stale-token", "stem")],
+    ["forgetMemoryEntry", () => forgetMemoryEntry("stale-token", "mem://x")],
+    ["saveSkillFile", () => saveSkillFile("stale-token", "s", "SKILL.md", "b")],
+  ])("re-bootstraps and retries once when %s gets 401", async (_name, call) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({}) } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: {}, result: "ok", details: {} }),
+      } as Response);
+    vi.stubGlobal("fetch", fetchMock);
+    setApiReauthHandler(async () => "fresh-token");
+
+    await call();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe("Bearer fresh-token");
+    setApiReauthHandler(null);
   });
 });
