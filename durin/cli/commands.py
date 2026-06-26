@@ -73,6 +73,7 @@ class SafeFileHistory(FileHistory):
     def store_string(self, string: str) -> None:
         super().store_string(_sanitize_surrogates(string))
 from durin.cli.stream import StreamRenderer, ThinkingSpinner
+from durin.agent.agent_mode import register_config_modes
 from durin.config.paths import get_workspace_path, is_default_workspace
 from durin.config.schema import Config
 from durin.personas import seed_example_personas
@@ -919,6 +920,7 @@ def serve(
     timeout = timeout if timeout is not None else api_cfg.timeout
     sync_workspace_templates(runtime_config.workspace_path)
     seed_example_personas()  # one-time: example personas into config (marker-guarded)
+    register_config_modes(runtime_config.agent_modes)  # custom modes → agent-mode registry
     bus = MessageBus()
     session_manager = SessionManager(runtime_config.workspace_path)
     try:
@@ -1265,6 +1267,7 @@ def _run_gateway(
     console.print(f"{__logo__} Starting durin gateway version {__version__} on port {port}...")
     sync_workspace_templates(config.workspace_path)
     seed_example_personas()  # one-time: example personas into config (marker-guarded)
+    register_config_modes(config.agent_modes)  # custom modes → agent-mode registry
     bus = MessageBus()
     try:
         provider_snapshot = build_provider_snapshot(config)
@@ -2047,6 +2050,7 @@ def agent(
     config = _load_runtime_config(config, workspace)
     sync_workspace_templates(config.workspace_path)
     seed_example_personas()  # one-time: example personas into config (marker-guarded)
+    register_config_modes(config.agent_modes)  # custom modes → agent-mode registry
 
     bus = MessageBus()
 
