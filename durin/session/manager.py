@@ -80,6 +80,22 @@ def _message_preview_text(message: dict[str, Any]) -> str:
     return _text_preview(content)
 
 
+def is_workflow_session(key: str) -> bool:
+    """A workflow node/run session (keyed ``workflow:<run_id>:...``) is internal
+    execution machinery — the per-node conversation, persisted only so the run-detail
+    view can show it. It is NOT a user chat: excluded from the session list, the FTS
+    index, and the memory graph/entity dream (the run-detail view reaches it by key, not
+    via the list or a search). The .jsonl stays on disk; it just earns no .md/index entry."""
+    return key.startswith("workflow:")
+
+
+def is_workflow_session_file(path: "str | Path") -> bool:
+    """``is_workflow_session`` for an on-disk session file: the key→file mapping turns
+    ':' into '_', so a ``workflow:`` session is stored as a ``workflow_…`` stem. Used by
+    the memory passes that glob ``sessions/*.jsonl`` directly."""
+    return Path(path).stem.startswith("workflow_")
+
+
 @dataclass
 class Session:
     """A conversation session."""
@@ -634,33 +650,33 @@ class SessionManager:
                 )
 
             # Regenerate the navigable `<key>.md` view alongside the jsonl so
-            # memory entries can reference specific turns by markdown anchor.
-            # Best-effort: a regeneration failure must not bring down the
-            # session save — jsonl is the durable surface.
-            try:
-                from durin.memory.session_md import regenerate_session_md
-
-                regenerate_session_md(path)
-            except Exception:
-                logger.warning(
-                    "Failed to regenerate session markdown view for {}",
-                    session.key,
-                )
-            else:
-                # Incrementally FTS-index the new turns so the session is
-                # lexically searchable as it happens (the memory file
-                # watcher only covers memory/, not sessions/). Best-effort
-                # for the same reason as above.
+            # memory entries can reference specific turns by markdown anchor, then
+            # FTS-index it. Skipped for workflow node/run sessions: they are internal
+            # execution traces, not user chats, so they earn no .md, no lexical index,
+            # and (since the entity dream reads the .md) no place in the memory graph.
+            # Best-effort: a regeneration/index failure must not bring down the session
+            # save — the jsonl is the durable surface.
+            if not is_workflow_session(session.key):
                 try:
-                    from durin.memory.indexer import reindex_session_file
+                    from durin.memory.session_md import regenerate_session_md
 
-                    reindex_session_file(
-                        self.workspace, path.with_suffix(".md"),
-                    )
+                    regenerate_session_md(path)
                 except Exception:
                     logger.warning(
-                        "Failed to index session turns for {}", session.key,
+                        "Failed to regenerate session markdown view for {}",
+                        session.key,
                     )
+                else:
+                    try:
+                        from durin.memory.indexer import reindex_session_file
+
+                        reindex_session_file(
+                            self.workspace, path.with_suffix(".md"),
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to index session turns for {}", session.key,
+                        )
 
         self._cache[session.key] = session
 
@@ -807,6 +823,12 @@ class SessionManager:
 
         for path in self.sessions_dir.glob("*.jsonl"):
             fallback_key = path.stem.replace("_", ":", 1)
+            # Workflow node/run sessions are internal execution traces, not user chats —
+            # keep them out of the listing (the run-detail view reaches them by key). The
+            # key→file mapping turns ':' into '_', so the restored fallback_key carries the
+            # 'workflow:' prefix even before the file is read.
+            if is_workflow_session(fallback_key):
+                continue
             try:
                 # Read the metadata line and a small preview for WebUI/session lists.
                 with open(path, encoding="utf-8") as f:

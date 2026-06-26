@@ -106,7 +106,7 @@ class Workflow:
     max_visits: int = 3                  # max times a single node may run (loop guard)
     # dream-driven self-improvement: 'off' = never touched; 'manual' = dream leaves a
     # recommendation to review; 'auto' = dream applies edits directly (later slice).
-    improvement_mode: Literal["off", "manual", "auto"] = "off"
+    improvement_mode: Literal["manual", "auto"] = "manual"
     input: dict | None = None            # workflow I/O descriptors (e.g. {text: bool, file: bool})
     output: dict | None = None
 
@@ -392,10 +392,10 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
     if isinstance(max_visits, bool) or not isinstance(max_visits, int) or max_visits < 1:
         raise WorkflowError(f"max_visits must be an int >= 1, got {max_visits!r}")
 
-    mode = data.get("improvement_mode", "off")
-    if mode not in ("off", "manual", "auto"):
+    mode = data.get("improvement_mode", "manual")
+    if mode not in ("manual", "auto"):
         raise WorkflowError(
-            f"improvement_mode must be 'off', 'manual' or 'auto', got {mode!r}"
+            f"improvement_mode must be 'manual' or 'auto', got {mode!r}"
         )
 
     wf_input = data.get("input")

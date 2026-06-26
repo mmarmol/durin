@@ -29,9 +29,9 @@ routing are not both set.
 
 **Workflow I/O is first-class.** A `Workflow` carries optional `input` (`{text?, file?, description?}`)
 and `output` descriptors — rendered as distinct **Input** and **Output** objects on the canvas. The text
-input becomes the start node's task; input files are placed in an input folder the start node reads
-as its "previous step's files" (reusing the artifact channel). Multiple input files pair naturally
-with dynamic fan-out (a worker per file). The terminal node's text output and output folder are
+input becomes the start node's task; input files are placed in the run's shared working folder, so the
+start node (and every later step) reads them there. Multiple input files pair naturally
+with dynamic fan-out (a worker per file). The terminal node's text output and the shared working folder are
 exposed in the run result. Absent ⇒ today's text-task behavior. The optional free-text `description`
 is a lightweight contract: the engine frames every node's task with the input description (what the
 run received) and the output description (what it must deliver), so the agents are steered and the
@@ -49,10 +49,15 @@ runs one `AgentRunner` turn with that node's model and tool registry, then persi
 the node's conversation as a session keyed `workflow:<run_id>:<node_id>:<iteration>`
 with lineage (`origin_type="workflow_node"`). A node is configured independently and
 focused by default. Its **work mode** is an `AgentMode` (`durin/agent/agent_mode.py`) —
-`build` (default, full access), `plan`/`explore` (read-only), or a registered custom
-mode — that sets the node's posture (a prompt suffix) and filters its tool registry to
-what the mode allows, so a read-only node literally cannot write regardless of what the
-model attempts. Besides the mode, a node carries its model, context and built-in
+for nodes, `build` (full access, neutral posture) for steps that create or edit files and
+`read` (read-only, neutral posture) for steps that inspect, analyse, or judge; or a
+registered custom mode — that sets the node's posture (a prompt suffix) and filters its
+tool registry to what the mode allows, so a read-only node literally cannot write
+regardless of what the model attempts. The interactive `plan`/`explore` modes also exist
+but carry conversation/sub-agent framing (exit_plan_mode, "the parent should /build",
+fail-fast-if-modification) that derails a workflow node — e.g. a `verify` gate told it is
+a read-only sub-agent that should bail stops emitting its verdict; nodes use the neutral
+`build`/`read` instead. Besides the mode, a node carries its model, context and built-in
 `tools`, plus the **skills** to inject into its own prompt (loaded the same way the main
 agent loads a skill) and the **MCP servers** whose tools it may use — a scoped subset of
 the already-configured servers, reused from the gateway's live connections (no per-node
@@ -61,16 +66,17 @@ session lives). Skills/MCP default empty, so a node sees only what its job needs
 as the next node's input. A `shared`-context node reads and extends a running
 conversation buffer; an `own`-context node is isolated and receives only the upstream
 output. **Output travels two channels.** The **text** of a node's output is the edge — it
-becomes the next node's input (above). For **files**, each agent node with file tools is
-also given a keyed **output folder** (`<workspace>/.workflow/<run>/<node>/<iteration>/`,
-`durin/workflow/artifacts.py`) and is told both where to write its own files and where the
-previous step's folder is, so a produced file can be handed onward without the path being
-guessed. The folder is keyed by run/node/iteration, so it never collides across loop-back
-re-iterations or concurrent/repeated invocations, and it follows the same edge-threading as
-the text (a passing judge's empty folder never replaces the producer's). The `.workflow` tree
-gitignores itself, is excluded from parallel-fork reconciliation, and is pruned to recent
-runs. (Real deliverables a node writes into the workspace proper are the separate,
-already-shared filesystem channel — unchanged.) **When a node routes**, the engine derives a verdict from what the node produced
+becomes the next node's input (above). For **files**, every sequential agent node with file
+tools shares ONE **working folder** for the run (`<workspace>/.workflow/<run>/work/`,
+`durin/workflow/artifacts.py`) — it reads earlier steps' files there and writes its own there.
+Because it is one shared folder, created and edited files accumulate in a single place and
+each stage (including a loop's re-iterations) sees the prior work, so stages can collaborate
+on an evolving fileset (e.g. a debug loop's reproduction test, code, and fix) rather than
+hand a copy down a chain. Parallel branches are the exception: each writing branch forks a
+private copy and its changes are reconciled back (choose/union, with conflict detection), so
+concurrent writers can't clobber each other. The `.workflow` tree gitignores itself, is
+excluded from parallel-fork reconciliation, and is pruned to recent runs. (Real deliverables
+a node writes into the workspace proper are the separate, already-shared filesystem channel.) **When a node routes**, the engine derives a verdict from what the node produced
 and follows an edge. A node may route in one of two shapes:
 
 **Binary routing** (`on_pass`/`on_fail`): a routing node ends its own reply with a `PASS`/`FAIL`
@@ -350,7 +356,7 @@ End-to-end for a single `run_workflow` call:
 |---|---|---|
 | `Workflow`, `WorkNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator (one work-node type; routing optional; structural-equivalence guard). |
 | `parse_verdict`, `parse_label` | `durin/workflow/verdict.py` | The verdict contracts: `parse_verdict` returns the binary `PASS`/`FAIL` from a routing agent node's output (default `FAIL`); `parse_label` matches the last non-empty line of a multi-way node's output against the declared case labels (case-insensitive, punctuation-tolerant). |
-| `artifact_dir`, `prune_runs` | `durin/workflow/artifacts.py` | The per-node file hand-off folder keyed by run/node/iteration (self-gitignored, pruned to recent runs). |
+| `artifact_dir`, `prune_runs` | `durin/workflow/artifacts.py` | The run's shared working folder (one per run; every sequential node reads/writes it) plus per-branch fork folders for writing-in-parallel — self-gitignored, pruned to recent runs. |
 | `AgentJudgeRunner` | `durin/workflow/judge.py` | The branch-pick reviewer: `pick` chooses the best of N outputs for a parallel `choose` reconcile. |
 | `fork`, `diff`, `conflicts`, `apply` | `durin/workflow/workspace_fork.py` | Per-branch workspace isolation + reconciliation (choose/union) for writing-in-parallel. |
 | `WorkflowVersionStore` | `durin/workflow/version_store.py` | Git versioning of workflow definitions: each run snapshots them; `history` reads the timeline. |
@@ -387,8 +393,8 @@ End-to-end for a single `run_workflow` call:
   `…/recommendations/{id}/apply`). This is the surface the webui visual editor uses.
 - **Lineage:** node sessions reuse the lineage metadata on the open session document
   (`durin/session/lineage.py`), so no schema migration is involved.
-- **Self-improvement** (per-workflow `improvement_mode`: `off` default / `manual` /
-  `auto`). Each run writes a diagnostic record (`run_log.py`, beside `workflows/`). A
+- **Self-improvement** (per-workflow `improvement_mode`, two states like a skill's:
+  `manual` default / `auto`). Each run writes a diagnostic record (`run_log.py`, beside `workflows/`). A
   dream pass (`run_workflow_improve_pass`, wired into the `memory_dream` cron) reduces
   those to recurring trouble (a node that loops, a gate that keeps failing —
   `diagnostics.py`), shows a model the definition + that diagnostic + the change history
@@ -411,16 +417,25 @@ End-to-end for a single `run_workflow` call:
   | `research-to-answer` | plan → dynamic fan-out (search × N) → synthesize → verify, a **tolerant** per-claim grounding gate (multi-way: GROUNDED ends — a summary intro and minor gaps are acceptable / MISSING → re-plan / MISUSED → re-synthesize) |
   | `brainstorming` | clarify gate (routes `NEED_INFO` to the reserved `__needs_input__` terminal → asks the caller for info) → frame angles → parallel explore → synthesize a design **spec** |
   | `writing-plans` | intake gate (`__needs_input__` on a thin brief) → draft a step-by-step plan → parallel critique (gaps / risks / verifiability / scope) → revise → a tolerant verifiability gate (GAPS loops back) → a `/build`-ready plan with a `## Verification` section |
+  | `build-specs` | intake gate (`__needs_input__` on an underspecified slice) → frame the independent components → dynamic fan-out (a detailed spec per component) → assemble one handoff spec |
+  | `execute-plan` | implement (build, **self-loop** on a `MORE`/`DONE` verdict, one plan step per turn) → review; the shared working folder lets each step build on the last (subagent-driven execution of a plan) |
+  | `debug` | reproduce a failing check → diagnose the root cause → fix in place → verify gate (`PASS` ends / `FAIL` loops back to diagnose); the steps collaborate on the shared working folder (reproduction, code, and fix together) |
+  | `review-changes` | frame the review lenses that matter for this diff → dynamic fan-out (one reviewer per lens) → synthesize a severity-grouped review |
 
-  Each is a deliberately small, live-verified exemplar — orchestrator-workers +
-  evaluator-optimizer, plus the consultative `needs_input` shape (see "Current scope").
-  More seeds are added one trustworthy example at a time, never as stubs.
+  Each is a deliberately small, live-verified exemplar. The first three are knowledge work
+  (orchestrator-workers + evaluator-optimizer + the consultative `needs_input` shape); the
+  rest are development workflows, and `execute-plan`/`debug` exercise the shared working
+  folder where stages collaborate on one evolving fileset. More seeds are added one
+  trustworthy example at a time, never as stubs.
 
 - **Current scope.** Today: sequential execution with **concurrent parallel** branches —
   static (fixed `branches` list) or **dynamic** (`worker` template mapped over a runtime
   list, bounded by `max_concurrency` default 2); read-only or **writing** with `choose` /
-  `union` reconciliation (private copy per branch + content-aware conflict detection);
-  per-node **work mode** (build/plan/explore) / **model or persona** (SOUL + model,
+  `union` reconciliation (private copy per branch + content-aware conflict detection); a
+  **shared working folder** per run that sequential nodes read and write, so file-producing
+  stages collaborate on one evolving fileset (and a self-loop accumulates) instead of handing
+  copies down a chain — parallel branches fork it as above;
+  per-node **work mode** (`build`/`read` neutral postures for nodes; `plan`/`explore` carry interactive framing) / **model or persona** (SOUL + model,
   mutually exclusive) / context / tools; **optional routing** in two shapes — **binary**
   (`on_pass`/`on_fail`: `PASS`/`FAIL` verdict from the agent, feedback-threaded loop-back)
   and **multi-way** (`cases`: agent emits one of N declared labels, last-line match,

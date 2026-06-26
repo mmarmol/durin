@@ -27,6 +27,7 @@ from durin.memory.embedding import FastembedProvider
 from durin.memory.extract_runner import run_extract_for_session
 from durin.memory.refine_dream import run_refine
 from durin.memory.vector_index import VectorIndex, vector_index_available
+from durin.session.manager import is_workflow_session_file
 
 __all__ = [
     "run_extract_pass", "run_skill_extract_pass", "run_refine_pass",
@@ -114,6 +115,8 @@ def run_extract_pass(
                            "skill_signals": 0, "errors": [], "yielded": False}
     if sessions_dir.is_dir():
         for jsonl_path in sorted(sessions_dir.glob("*.jsonl")):
+            if is_workflow_session_file(jsonl_path):
+                continue   # internal workflow execution trace — not mined into memory
             if max_seconds and (time.perf_counter() - t0) >= max_seconds:
                 out["yielded"] = True
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
@@ -175,6 +178,8 @@ def run_derived_from_pass(
     out: dict[str, Any] = {"sessions": 0, "links": 0, "errors": [], "yielded": False}
     if sessions_dir.is_dir():
         for jsonl_path in sorted(sessions_dir.glob("*.jsonl")):
+            if is_workflow_session_file(jsonl_path):
+                continue   # internal workflow execution trace — not mined into memory
             if max_seconds and (time.perf_counter() - t0) >= max_seconds:
                 out["yielded"] = True
                 break
@@ -349,7 +354,10 @@ def _recent_sessions_text(workspace: Path, max_sessions: int) -> str:
     sdir = Path(workspace) / "sessions"
     if not sdir.is_dir():
         return ""
-    files = sorted(sdir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(
+        (p for p in sdir.glob("*.jsonl") if not is_workflow_session_file(p)),
+        key=lambda p: p.stat().st_mtime, reverse=True,
+    )
     blocks: list[str] = []
     for jsonl in files[:max_sessions]:
         _meta, msgs = load_session(jsonl)

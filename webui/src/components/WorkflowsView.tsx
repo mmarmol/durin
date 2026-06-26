@@ -13,7 +13,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Check, Copy, Lightbulb, Loader2, Play, Plus, Trash2, Workflow as WorkflowIcon } from "lucide-react";
+import { Check, Copy, Lightbulb, Loader2, Play, Plus, Sparkles, Trash2, Workflow as WorkflowIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -921,38 +921,6 @@ function RunDetail({ result }: { result: WorkflowRunResult }) {
   );
 }
 
-// Workflow-level settings, shown in the side panel when no node/IO object is selected.
-// Today it carries the self-improvement mode: whether the dream pass may improve this
-// workflow (off / suggest-for-review / auto-apply). A clear, explicit choice, mirroring
-// how a skill exposes its own auto-vs-manual mode.
-function WorkflowSettingsPanel({
-  def,
-  onChange,
-}: {
-  def: WorkflowDef;
-  onChange: (patch: Partial<WorkflowDef>) => void;
-}) {
-  const { t } = useTranslation();
-  const mode = (def.improvement_mode as string) || "off";
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="text-sm font-medium">{t("workflows.settingsTitle")}</div>
-      <Field label={t("workflows.improvementMode")}>
-        <select
-          className={selectCls}
-          value={mode}
-          onChange={(e) => onChange({ improvement_mode: e.target.value })}
-        >
-          <option value="off">{t("workflows.improvementOff")}</option>
-          <option value="manual">{t("workflows.improvementManual")}</option>
-          <option value="auto">{t("workflows.improvementAuto")}</option>
-        </select>
-      </Field>
-      <p className="text-xs text-muted-foreground">{t(`workflows.improvementHint_${mode}`)}</p>
-    </div>
-  );
-}
-
 let _idSeq = 0;
 
 export function WorkflowsView() {
@@ -1407,64 +1375,97 @@ export function WorkflowsView() {
           )}
           <div className="relative flex-1">
             {def && (
-              <div className="absolute left-2 top-2 z-10 flex items-center gap-2">
-                <Button size="sm" variant="outline" onClick={addNode}>
-                  <Plus className="h-3.5 w-3.5" /> {t("workflows.addWork")}
-                </Button>
-                <Button size="sm" variant="outline" onClick={addParallelNode}>
-                  <Plus className="h-3.5 w-3.5" /> {t("workflows.addParallel")}
-                </Button>
-                <Button size="sm" variant="outline" onClick={addSubflowNode}>
-                  <Plus className="h-3.5 w-3.5" /> {t("workflows.addSubflow")}
-                </Button>
-                {!def.input && (
-                  <Button size="sm" variant="outline" onClick={() => addIo("input")}>
-                    <Plus className="h-3.5 w-3.5" /> {t("workflows.addInput")}
+              <div className="pointer-events-none absolute inset-x-2 top-2 z-10 flex items-start justify-between gap-2">
+                {/* Palette — add nodes to the canvas (one grouped control) */}
+                <div className="pointer-events-auto inline-flex items-center gap-0.5 rounded-md border border-border bg-background p-0.5">
+                  <Button size="sm" variant="ghost" className="h-7 gap-1 px-2" onClick={addNode}>
+                    <Plus className="h-3.5 w-3.5" /> {t("workflows.addWork")}
                   </Button>
-                )}
-                {!def.output && (
-                  <Button size="sm" variant="outline" onClick={() => addIo("output")}>
-                    <Plus className="h-3.5 w-3.5" /> {t("workflows.addOutput")}
+                  <span className="h-4 w-px bg-border" />
+                  <Button size="sm" variant="ghost" className="h-7 gap-1 px-2" onClick={addParallelNode}>
+                    <Plus className="h-3.5 w-3.5" /> {t("workflows.addParallel")}
                   </Button>
-                )}
-                {!duplicating ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => { setDuplicating(true); setDupName(`${selected}-copy`); }}
-                    title={t("workflows.duplicateHint")}
+                  <span className="h-4 w-px bg-border" />
+                  <Button size="sm" variant="ghost" className="h-7 gap-1 px-2" onClick={addSubflowNode}>
+                    <Plus className="h-3.5 w-3.5" /> {t("workflows.addSubflow")}
+                  </Button>
+                  {!def.input && (
+                    <>
+                      <span className="h-4 w-px bg-border" />
+                      <Button size="sm" variant="ghost" className="h-7 gap-1 px-2" onClick={() => addIo("input")}>
+                        <Plus className="h-3.5 w-3.5" /> {t("workflows.addInput")}
+                      </Button>
+                    </>
+                  )}
+                  {!def.output && (
+                    <>
+                      <span className="h-4 w-px bg-border" />
+                      <Button size="sm" variant="ghost" className="h-7 gap-1 px-2" onClick={() => addIo("output")}>
+                        <Plus className="h-3.5 w-3.5" /> {t("workflows.addOutput")}
+                      </Button>
+                    </>
+                  )}
+                </div>
+
+                {/* Workflow-level — self-improvement setting + actions */}
+                <div className="pointer-events-auto flex items-center gap-2">
+                  {/* Self-improvement — two states (manual/auto) like a skill's, as one cohesive control. */}
+                  <label
+                    className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground"
+                    title={t(`workflows.improvementHint_${(def.improvement_mode as string) || "manual"}`)}
                   >
-                    <Copy className="h-3.5 w-3.5" /> {t("workflows.duplicate")}
-                  </Button>
-                ) : (
-                  <div className="flex items-center gap-1">
-                    <Input
-                      autoFocus
-                      value={dupName}
-                      onChange={(e) => setDupName(e.target.value)}
-                      disabled={saving}
-                      placeholder={t("workflows.duplicateNamePlaceholder")}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void onDuplicate();
-                        if (e.key === "Escape") { setDuplicating(false); setDupName(""); }
-                      }}
-                      className="h-8 w-44 text-sm"
-                    />
-                    <Button size="sm" onClick={() => void onDuplicate()} disabled={saving}>
-                      {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                    <Sparkles className="h-3.5 w-3.5" />
+                    <span>{t("workflows.improvementMode")}</span>
+                    <select
+                      className="cursor-pointer bg-transparent text-sm text-foreground outline-none"
+                      value={(def.improvement_mode as string) || "manual"}
+                      onChange={(e) => mutate((d) => ({ ...d, improvement_mode: e.target.value }))}
+                    >
+                      <option value="manual">{t("workflows.improvementManual")}</option>
+                      <option value="auto">{t("workflows.improvementAuto")}</option>
+                    </select>
+                  </label>
+                  {!duplicating ? (
+                    <Button
+                      size="icon"
+                      variant="outline"
+                      className="h-8 w-8"
+                      onClick={() => { setDuplicating(true); setDupName(`${selected}-copy`); }}
+                      title={t("workflows.duplicateHint")}
+                      aria-label={t("workflows.duplicate")}
+                    >
+                      <Copy className="h-3.5 w-3.5" />
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => { setDuplicating(false); setDupName(""); }}>
-                      {t("workflows.cancel")}
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <Input
+                        autoFocus
+                        value={dupName}
+                        onChange={(e) => setDupName(e.target.value)}
+                        disabled={saving}
+                        placeholder={t("workflows.duplicateNamePlaceholder")}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void onDuplicate();
+                          if (e.key === "Escape") { setDuplicating(false); setDupName(""); }
+                        }}
+                        className="h-8 w-44 text-sm"
+                      />
+                      <Button size="sm" className="h-8" onClick={() => void onDuplicate()} disabled={saving}>
+                        {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                      </Button>
+                      <Button size="sm" variant="ghost" className="h-8" onClick={() => { setDuplicating(false); setDupName(""); }}>
+                        {t("workflows.cancel")}
+                      </Button>
+                    </div>
+                  )}
+                  {dirty && (
+                    <Button size="sm" className="h-8" onClick={onSave} disabled={saving}>
+                      {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("workflows.save")}
                     </Button>
-                  </div>
-                )}
-                {dirty && (
-                  <Button size="sm" onClick={onSave} disabled={saving}>
-                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("workflows.save")}
-                  </Button>
-                )}
-                {notice && <span className="text-sm text-emerald-600">{notice}</span>}
-                {error && <span className="text-sm text-destructive">{error}</span>}
+                  )}
+                  {notice && <span className="text-sm text-emerald-600">{notice}</span>}
+                  {error && <span className="text-sm text-destructive">{error}</span>}
+                </div>
               </div>
             )}
             {def ? (
@@ -1635,12 +1636,6 @@ export function WorkflowsView() {
               onChange={(patch) => setIo(selectedIo, patch)}
               onRemove={() => removeIo(selectedIo)}
             />
-          </aside>
-        )}
-
-        {def && !selectedNode && !selectedIo && (
-          <aside className="w-96 shrink-0 flex flex-col h-full border-l p-3 overflow-y-auto">
-            <WorkflowSettingsPanel def={def} onChange={(patch) => mutate((d) => ({ ...d, ...patch }))} />
           </aside>
         )}
       </div>
