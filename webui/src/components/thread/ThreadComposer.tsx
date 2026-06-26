@@ -943,10 +943,11 @@ export function ThreadComposer({
             ))}
           </div>
         ) : null}
-        {runStartedAt != null
-        || goalState?.active
-        || goalState?.mode
-        || goalState?.pending_question ? (
+        {!voiceActive
+        && (runStartedAt != null
+          || goalState?.active
+          || goalState?.mode
+          || goalState?.pending_question) ? (
           <RunElapsedStrip startedAt={runStartedAt} goalState={goalState} />
         ) : null}
         {voiceActive ? (
