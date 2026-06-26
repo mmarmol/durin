@@ -49,10 +49,15 @@ runs one `AgentRunner` turn with that node's model and tool registry, then persi
 the node's conversation as a session keyed `workflow:<run_id>:<node_id>:<iteration>`
 with lineage (`origin_type="workflow_node"`). A node is configured independently and
 focused by default. Its **work mode** is an `AgentMode` (`durin/agent/agent_mode.py`) —
-`build` (default, full access), `plan`/`explore` (read-only), or a registered custom
-mode — that sets the node's posture (a prompt suffix) and filters its tool registry to
-what the mode allows, so a read-only node literally cannot write regardless of what the
-model attempts. Besides the mode, a node carries its model, context and built-in
+for nodes, `build` (full access, neutral posture) for steps that create or edit files and
+`read` (read-only, neutral posture) for steps that inspect, analyse, or judge; or a
+registered custom mode — that sets the node's posture (a prompt suffix) and filters its
+tool registry to what the mode allows, so a read-only node literally cannot write
+regardless of what the model attempts. The interactive `plan`/`explore` modes also exist
+but carry conversation/sub-agent framing (exit_plan_mode, "the parent should /build",
+fail-fast-if-modification) that derails a workflow node — e.g. a `verify` gate told it is
+a read-only sub-agent that should bail stops emitting its verdict; nodes use the neutral
+`build`/`read` instead. Besides the mode, a node carries its model, context and built-in
 `tools`, plus the **skills** to inject into its own prompt (loaded the same way the main
 agent loads a skill) and the **MCP servers** whose tools it may use — a scoped subset of
 the already-configured servers, reused from the gateway's live connections (no per-node
@@ -430,7 +435,7 @@ End-to-end for a single `run_workflow` call:
   **shared working folder** per run that sequential nodes read and write, so file-producing
   stages collaborate on one evolving fileset (and a self-loop accumulates) instead of handing
   copies down a chain — parallel branches fork it as above;
-  per-node **work mode** (build/plan/explore) / **model or persona** (SOUL + model,
+  per-node **work mode** (`build`/`read` neutral postures for nodes; `plan`/`explore` carry interactive framing) / **model or persona** (SOUL + model,
   mutually exclusive) / context / tools; **optional routing** in two shapes — **binary**
   (`on_pass`/`on_fail`: `PASS`/`FAIL` verdict from the agent, feedback-threaded loop-back)
   and **multi-way** (`cases`: agent emits one of N declared labels, last-line match,

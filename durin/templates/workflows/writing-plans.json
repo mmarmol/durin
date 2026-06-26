@@ -9,7 +9,7 @@
     {
       "id": "intake",
       "kind": "work",
-      "mode": "plan",
+      "mode": "read",
       "tools": "default",
       "prompt": "You are about to write a detailed implementation plan from the given spec or brief. FIRST decide whether it is concrete enough to plan against, or whether something ESSENTIAL is missing — the scope, which area or files the work touches, what 'done' looks like, or a hard constraint. Read available context (code, files) to resolve what you can yourself before asking.\n\nEnd your reply with EXACTLY one of these labels on its own final line:\nREADY     — the spec is concrete enough to plan.\nNEED_INFO — something essential is missing. BEFORE the label, list 2-4 SPECIFIC blocking questions the user must answer — only genuine blockers, not things you could decide yourself.",
       "cases": {"READY": "draft", "NEED_INFO": "__needs_input__"}
@@ -17,7 +17,7 @@
     {
       "id": "draft",
       "kind": "work",
-      "mode": "plan",
+      "mode": "read",
       "tools": "default",
       "prompt": "Write a detailed implementation plan from the spec. Read the relevant code first so steps name REAL files. Break the work into ordered, bite-sized steps; for EACH step state what to do, which files/area it touches, and — critically — a `verify:` line stating how its success is checked (a command to run, an observable condition, or a test that must pass). End the plan with a `## Verification` section describing how the whole change is validated. Be concrete and MINIMAL — no speculative scope, no steps you cannot verify.",
       "next": "frame_review"
@@ -25,7 +25,7 @@
     {
       "id": "frame_review",
       "kind": "work",
-      "mode": "plan",
+      "mode": "read",
       "tools": "none",
       "prompt": "You are setting up an independent review of the draft plan above. Produce 3-4 review lenses, each a self-contained instruction to critique the plan from one distinct angle — for example: missing or out-of-order steps and unstated assumptions; risks, edge cases and failure modes; whether every step is genuinely VERIFIABLE (has a real check); and over-scope / speculative work that should be cut (YAGNI). Output ONLY a JSON array of these instruction strings — nothing else.",
       "next": "review"
@@ -41,7 +41,7 @@
     {
       "id": "critic",
       "kind": "work",
-      "mode": "explore",
+      "mode": "read",
       "tools": "default",
       "max_turns": 4,
       "prompt": "Review the draft plan from the single lens you were given. Read code if you need to check a claim. Return concise, SPECIFIC findings — concrete gaps, risks, unverifiable steps, or scope to cut, each tied to the step it concerns. Do not rewrite the plan and do not pad: if the plan is solid on your lens, say so briefly."
@@ -49,7 +49,7 @@
     {
       "id": "revise",
       "kind": "work",
-      "mode": "plan",
+      "mode": "read",
       "tools": "none",
       "prompt": "Revise the draft plan to address the review findings: fix gaps and ordering, add the missing checks so every step is verifiable, and cut speculative scope. Keep the bite-sized step structure, each step with its `verify:` line, and a final `## Verification` section. Produce the FULL revised plan, ready for approval — concrete and minimal.",
       "next": "verify"
@@ -57,7 +57,7 @@
     {
       "id": "verify",
       "kind": "work",
-      "mode": "explore",
+      "mode": "read",
       "tools": "none",
       "prompt": "Check the revised plan, not all-or-nothing. A good plan is one whose steps are ordered, concrete, and each has a real way to be checked, with a `## Verification` section for the whole. Tolerate minor polish. Give a one-line reason, then end with EXACTLY one of these labels on its own final line:\nREADY  — the plan is actionable and verifiable; it is ready for the user to approve and build.\nGAPS   — one or more substantive steps are missing, unverifiable, or out of order. Name specifically which, so they can be fixed.",
       "cases": {"READY": null, "GAPS": "revise"}

@@ -16,7 +16,7 @@
     {
       "id": "diagnose",
       "kind": "work",
-      "mode": "explore",
+      "mode": "read",
       "tools": "default",
       "max_visits": 8,
       "prompt": "Find the ROOT CAUSE of the failing reproduction. Trace from the symptom back through the code to the specific line(s) responsible — read, don't guess. If an earlier fix attempt failed, use what its rerun showed to revise the hypothesis rather than repeating it. State the root cause precisely and the minimal change that would fix it. Do not edit code yet.",
@@ -34,10 +34,10 @@
     {
       "id": "verify",
       "kind": "work",
-      "mode": "explore",
+      "mode": "build",
       "tools": "default",
       "max_visits": 8,
-      "prompt": "Rerun the reproduction check from the working directory and judge the result independently — do not assume the fix worked. End your reply with EXACTLY one word on its own final line:\nPASS — the reproduction now succeeds and the bug is gone.\nFAIL — it still fails (or a new failure appeared). Before the label, describe precisely what you observed so the next diagnosis can use it.",
+      "prompt": "Rerun the reproduction check from the working directory (actually execute it) and judge the result independently — do not assume the fix worked. Do NOT edit the code yourself; you only rerun and judge — a FAIL routes back to diagnosis. End your reply with EXACTLY one word on its own final line:\nPASS — the reproduction now succeeds and the bug is gone.\nFAIL — it still fails (or a new failure appeared). Before the label, describe precisely what you observed so the next diagnosis can use it.",
       "cases": {"PASS": null, "FAIL": "diagnose"}
     }
   ]

@@ -17,7 +17,7 @@
     {
       "id": "review",
       "kind": "work",
-      "mode": "explore",
+      "mode": "read",
       "tools": "default",
       "prompt": "Inspect the working directory and check it against the plan. For each step, confirm the files exist and are consistent, and run any verification the plan named. Give a task-by-task summary of what was built and flag anything missing, wrong, or that deviated from the plan. Do not modify files."
     }
