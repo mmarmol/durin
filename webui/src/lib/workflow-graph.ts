@@ -84,7 +84,9 @@ function computeDepths(def: WorkflowDef): Record<string, number> {
 // regardless of kind. Both legacy kind:"decision" nodes and kind:"work" nodes with
 // routing fields render with labeled output edges.
 function nodeRoutes(n: WorkflowNodeDef): boolean {
-  return n.on_pass != null || n.on_fail != null || (n.cases != null && Object.keys(n.cases).length > 0);
+  // Detect routing by KEY PRESENCE: a routing branch may legitimately be null (ends at the
+  // workflow output), so a freshly-enabled binary node (both edges null) still routes.
+  return n.on_pass !== undefined || n.on_fail !== undefined || (n.cases != null && Object.keys(n.cases).length > 0);
 }
 
 // Resolve the React Flow node type for component selection: routing nodes resolve
@@ -119,7 +121,12 @@ function findTerminals(def: WorkflowDef, byId: Map<string, WorkflowNodeDef>): st
       // A cases node ends the flow if any case target is null (routes to workflow output).
       return Object.values(n.cases).some((t) => !valid(t));
     }
-    return nodeRoutes(n) ? !valid(n.on_pass) || !valid(n.on_fail) : !valid(n.next);
+    // A non-routing node connects to the workflow output only when `next` explicitly ends
+    // the flow (null) or dangles (points at a deleted node). An UNSET next (undefined) means
+    // "not wired yet" — a brand-new node — so it stays unconnected, no spurious output edge.
+    return nodeRoutes(n)
+      ? !valid(n.on_pass) || !valid(n.on_fail)
+      : n.next !== undefined && !valid(n.next);
   };
   return def.nodes
     .filter((n) => reachable.has(n.id) && !fanMembers.has(n.id) && endsFlow(n))
@@ -186,7 +193,7 @@ export function workflowToFlow(def: WorkflowDef): { nodes: Node[]; edges: Edge[]
       for (const [label, target] of Object.entries(n.cases)) {
         add(n.id, target, label);
       }
-    } else if (n.on_pass != null || n.on_fail != null) {
+    } else if (n.on_pass !== undefined || n.on_fail !== undefined) {
       // Binary routing node (kind:"work" with on_pass/on_fail OR legacy kind:"decision")
       add(n.id, n.on_pass, "pass");
       add(n.id, n.on_fail, "fail");

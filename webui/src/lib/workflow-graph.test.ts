@@ -305,6 +305,35 @@ describe("workflowToFlow", () => {
     // classify routes to both, it is not itself a terminal.
     expect(edges.some((e) => e.source === "classify" && e.target === "__output__")).toBe(false);
   });
+
+  it("a brand-new node with UNSET next (undefined) stays unconnected — no spurious OUTPUT edge", () => {
+    // A freshly-added node has no `next` key at all (undefined). It must NOT be treated as a
+    // terminal: only an explicit null (or a dangling target) ends the flow. `next: null` here
+    // would draw an edge to OUTPUT; `next` absent must not.
+    const { edges } = workflowToFlow({
+      name: "fresh",
+      start: "a",
+      output: { text: true },
+      nodes: [
+        { id: "a", kind: "work", next: "b" },
+        { id: "b", kind: "work" }, // brand-new node: no next key
+      ],
+    });
+    expect(edges.some((e) => e.source === "b" && e.target === "__output__")).toBe(false);
+  });
+
+  it("a routing node with BOTH branches null (freshly-enabled binary) routes and connects to OUTPUT", () => {
+    // Checking the 'routes' toggle seeds on_pass=null and on_fail=null. Detection must be by
+    // key presence, not value: a `!= null` test would mis-read both-null as non-routing.
+    const { nodes, edges } = workflowToFlow({
+      name: "enabled",
+      start: "gate",
+      output: { text: true },
+      nodes: [{ id: "gate", kind: "work", on_pass: null, on_fail: null }],
+    });
+    expect(nodes.find((n) => n.id === "gate")!.type).toBe("decision");
+    expect(edges.some((e) => e.source === "gate" && e.target === "__output__")).toBe(true);
+  });
 });
 
 describe("safeSubflowTargets", () => {

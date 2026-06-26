@@ -339,10 +339,14 @@ function NodeConfigPanel({
   }, [node.kind, allWorkflowNames, token]);
 
   // Determine the active routing shape: "binary" (on_pass/on_fail), "multiway" (cases), or "none" (next).
+  // Detect by KEY PRESENCE (!== undefined), not value: a routing branch may legitimately be
+  // null (= ends at the workflow output), and a freshly-enabled binary node has both edges
+  // null — so a `!= null` test would mis-read it as "none" and the routing toggle would
+  // un-check itself the moment it is checked.
   const routingShape: "binary" | "multiway" | "none" =
-    node.on_pass != null || node.on_fail != null
+    node.on_pass !== undefined || node.on_fail !== undefined
       ? "binary"
-      : node.cases != null
+      : node.cases !== undefined
         ? "multiway"
         : "none";
   const routes = routingShape !== "none";
@@ -1055,7 +1059,9 @@ export function WorkflowsView() {
 
   const addNode = useCallback(() => {
     const id = `node-${++_idSeq}`;
-    const node: WorkflowNodeDef = { id, kind: "work", mode: "build", prompt: "", next: null };
+    // next is left UNSET (undefined), not null: a brand-new node starts UNCONNECTED — no
+    // edge to the workflow output — until the user wires it. (null means "ends the flow".)
+    const node: WorkflowNodeDef = { id, kind: "work", mode: "build", prompt: "" };
     mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
     setSelectedNodeId(id);
   }, [mutate]);
