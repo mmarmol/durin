@@ -46,11 +46,11 @@ class NodeRunRequest:
     # When set, the node's file tools operate here (a private branch copy) instead of
     # the shared workspace — used by writing-in-parallel so branches don't collide.
     workspace_override: str | None = None
-    # Engine-provided keyed output folder for this node (write here) and the folder
-    # the producing predecessor wrote into (read from). Both None when the engine has
-    # no workspace or for a no-tools node (which produces no files).
+    # Engine-provided working folder for this node: read earlier steps' files here and
+    # write yours here. Under the run's one shared working folder this is the same path
+    # for every sequential node, so files accumulate and each stage sees the prior work.
+    # None when the engine has no workspace or for a no-tools node (which does no file I/O).
     output_dir: str | None = None
-    upstream_artifact_dir: str | None = None
     # Index within a dynamic fan-out batch (0, 1, 2, …). When set, the session-persist
     # key includes this suffix so each worker gets a distinct session rather than
     # all workers overwriting the same key.
@@ -242,18 +242,22 @@ class WorkflowEngine:
         shared_context: list[dict] = []
         visits: dict[str, int] = {}
         upstream_output: str | None = None
-        upstream_artifact_dir: str | None = None
-        terminal_output_dir: str | None = None
+        # One shared working folder per run: every sequential node reads and writes here,
+        # so created/edited files accumulate in one place and each stage sees the prior
+        # work (collaboration). Parallel branches fork this and reconcile (see _run_parallel).
+        work_dir: str | None = (
+            str(artifact_dir(self._workspace, run_id, "work", None))
+            if self._workspace is not None else None
+        )
+        terminal_output_dir: str | None = work_dir
         final_output: str | None = None
         current: str | None = workflow.start
 
-        # Seed an input folder for the start node when input_files are given and a
-        # workspace is available — the start node reads them as "previous step's files".
-        if input_files and self._workspace is not None:
-            input_folder = artifact_dir(self._workspace, run_id, "__input__", 0)
+        # Seed input_files into the shared working folder so the start node reads them as
+        # the run's starting files.
+        if input_files and work_dir is not None:
             for path in input_files:
-                shutil.copy(path, input_folder / Path(path).name)
-            upstream_artifact_dir = str(input_folder)
+                shutil.copy(path, Path(work_dir) / Path(path).name)
 
         while current is not None:
             visits[current] = visits.get(current, 0) + 1
@@ -267,13 +271,9 @@ class WorkflowEngine:
             iteration = visits[current]
 
             if isinstance(node, WorkNode):
-                # Compute an artifact folder only for a node that can do file I/O — one
-                # with file tools — and when a workspace is available. A no-tools node
-                # produces no files, gets no folder, and nils the chain for the next node
-                # (below).
-                out_dir: str | None = None
-                if node.tools == "default" and self._workspace is not None:
-                    out_dir = str(artifact_dir(self._workspace, run_id, node.id, iteration))
+                # A node with file tools works in the run's shared working folder; a
+                # no-tools node does no file I/O and gets none.
+                out_dir: str | None = work_dir if node.tools == "default" else None
 
                 req = NodeRunRequest(
                     node=node,
@@ -286,7 +286,6 @@ class WorkflowEngine:
                     iteration=iteration,
                     root_session_key=root_session_key,
                     output_dir=out_dir,
-                    upstream_artifact_dir=upstream_artifact_dir,
                 )
 
                 # Run a full agent turn; for a multi-way node the verdict is a matched
@@ -373,19 +372,9 @@ class WorkflowEngine:
                         upstream_output = (
                             f"{prior}\n\nReviewer feedback (address this):\n{output}"
                         )
-                    # Do NOT advance upstream_artifact_dir here: a routing judge's
-                    # (empty) folder must never replace the producing node's folder
-                    # for the on_pass target — mirrors upstream_output's update rule.
                     current = node.on_pass if passed else node.on_fail
                 else:
                     upstream_output = output
-                    # Mirrors upstream_output. A node that can't produce files (a command
-                    # node, or an agent node without file tools) has out_dir=None, so it
-                    # nils the chain for the next node — consistent with it also replacing
-                    # the text output.
-                    upstream_artifact_dir = out_dir
-                    if out_dir is not None:
-                        terminal_output_dir = out_dir
                     final_output = output
                     current = node.next
 
@@ -439,7 +428,6 @@ class WorkflowEngine:
             run_id=run_id, iteration=iteration, root_session_key=root_key,
             workspace_override=workspace_override,
             output_dir=out_dir,
-            upstream_artifact_dir=None,
         ))
 
     @staticmethod
@@ -460,33 +448,38 @@ class WorkflowEngine:
     def _parse_subtasks(text: str) -> list[str]:
         """Parse a runtime list of subtasks from a node's output text.
 
-        Tries JSON first; if the parsed value is a list, returns each element
-        coerced to str.  Falls back to non-empty lines.  Capped at 50 items
-        to bound blast radius on pathological output.
-
-        A planner often wraps the array in a markdown code fence (```/```json);
-        strip a leading and trailing fence line before the JSON attempt so the
-        fenced array parses to its elements instead of falling through to the
-        line-split fallback (which would yield the literal fence lines).
+        The list is expected as a JSON array, but a model often wraps it in prose
+        and/or a markdown code fence (e.g. "These are the two seams: ```json [...] ```").
+        So extract the array even when embedded: try a fenced code block's body, then
+        the largest ``[ ... ]`` span, then the whole text — the first that parses as a
+        JSON list wins. Only if none do does it fall back to non-empty lines (a last
+        resort that, on prose, would otherwise split every sentence into a bogus
+        subtask). Capped at 50 items to bound blast radius on pathological output.
         """
         import json
+        import re
         candidate = text.strip()
-        lines = candidate.splitlines()
-        if lines and lines[0].lstrip().startswith("```"):
-            lines = lines[1:]
-            if lines and lines[-1].strip().startswith("```"):
-                lines = lines[:-1]
-            candidate = "\n".join(lines)
-        try:
-            parsed = json.loads(candidate)
+        # Most-specific candidate substrings first: a fenced block's body, then the
+        # widest bracketed span, then the whole text.
+        attempts: list[str] = []
+        fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", candidate)
+        if fence:
+            attempts.append(fence.group(1).strip())
+        arr = re.search(r"\[[\s\S]*\]", candidate)
+        if arr:
+            attempts.append(arr.group(0))
+        attempts.append(candidate)
+        for block in attempts:
+            try:
+                parsed = json.loads(block)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            # A parsed list wins — even if empty: an empty array means "no subtasks",
+            # which must not fall through to the line-split fallback.
             if isinstance(parsed, list):
-                items = [str(x) for x in parsed]
-                return items[:50]
-        except (json.JSONDecodeError, ValueError):
-            pass
-        # Fall back: non-empty lines (of the fence-stripped candidate, so a malformed
-        # fenced array doesn't leak its fence lines as bogus subtasks).
-        items = [line for line in candidate.splitlines() if line.strip()]
+                return [str(x) for x in parsed][:50]
+        # Last resort: a bare newline-separated list (no JSON array found at all).
+        items = [line.strip() for line in candidate.splitlines() if line.strip()]
         return items[:50]
 
     def _run_dynamic_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs):

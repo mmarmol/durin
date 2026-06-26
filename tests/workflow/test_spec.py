@@ -122,17 +122,22 @@ def test_parallel_union_parses():
     assert fan.reconcile == "union"
 
 
-def test_improvement_mode_defaults_off_and_parses():
+def test_improvement_mode_defaults_manual_and_parses():
+    # Two states only (auto/manual), mirroring a skill's self-improvement mode; default manual.
     wf = parse_workflow({"name": "d", "start": "a", "nodes": [{"id": "a", "kind": "work"}]})
-    assert wf.improvement_mode == "off"
-    wf2 = parse_workflow({"name": "d", "start": "a", "improvement_mode": "manual",
+    assert wf.improvement_mode == "manual"
+    wf2 = parse_workflow({"name": "d", "start": "a", "improvement_mode": "auto",
                           "nodes": [{"id": "a", "kind": "work"}]})
-    assert wf2.improvement_mode == "manual"
+    assert wf2.improvement_mode == "auto"
 
 
 def test_invalid_improvement_mode_raises():
     with pytest.raises(WorkflowError, match="improvement_mode must be"):
         parse_workflow({"name": "d", "start": "a", "improvement_mode": "yes",
+                        "nodes": [{"id": "a", "kind": "work"}]})
+    # "off" was removed (two states only) — it is now rejected, not silently accepted.
+    with pytest.raises(WorkflowError, match="improvement_mode must be"):
+        parse_workflow({"name": "d", "start": "a", "improvement_mode": "off",
                         "nodes": [{"id": "a", "kind": "work"}]})
 
 

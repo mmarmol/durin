@@ -1,0 +1,25 @@
+{
+  "name": "execute-plan",
+  "improvement_mode": "manual",
+  "input": {"text": true, "description": "an implementation plan with ordered, bite-sized steps (e.g. the output of writing-plans)"},
+  "output": {"text": true, "description": "a task-by-task summary of what was built, and any deviations from the plan"},
+  "start": "implement",
+  "nodes": [
+    {
+      "id": "implement",
+      "kind": "work",
+      "mode": "build",
+      "tools": "default",
+      "max_visits": 20,
+      "prompt": "You are executing an implementation plan ONE step at a time — fresh each turn, so you must orient from the workspace, not memory. FIRST list the files in your working directory and read enough of them to see which plan steps are already DONE. Then carry out the SINGLE next not-yet-done step: create or edit exactly the files that step calls for, and keep every earlier step's work intact. Run a quick check if the step is verifiable. Do NOT do more than one step. End your reply with EXACTLY one word on its own final line:\nMORE — you completed a step and at least one step still remains.\nDONE — every step in the plan is now complete.",
+      "cases": {"MORE": "implement", "DONE": "review"}
+    },
+    {
+      "id": "review",
+      "kind": "work",
+      "mode": "read",
+      "tools": "default",
+      "prompt": "Inspect the working directory and check it against the plan. For each step, confirm the files exist and are consistent, and run any verification the plan named. Give a task-by-task summary of what was built and flag anything missing, wrong, or that deviated from the plan. Do not modify files."
+    }
+  ]
+}

@@ -19,6 +19,7 @@ from durin.agent.agent_mode import (
     DEFAULT_MODE,
     EXPLORE_MODE,
     PLAN_MODE,
+    READ_MODE,
     SESSION_MODE_KEY,
     SESSION_PRE_PLAN_KEY,
     AgentMode,
@@ -66,6 +67,25 @@ class TestAgentMode:
         # Explore mode (for subagents) does not include exit_plan_mode
         assert not EXPLORE_MODE.is_tool_allowed("exit_plan_mode")
         assert EXPLORE_MODE.is_tool_allowed("read_file")
+
+    def test_read_mode_is_read_only_and_neutral(self):
+        # `read` shares explore's read-only surface...
+        assert READ_MODE.is_tool_allowed("read_file")
+        assert READ_MODE.is_tool_allowed("grep")
+        assert READ_MODE.is_tool_allowed("web_search")
+        assert not READ_MODE.is_tool_allowed("edit_file")
+        assert not READ_MODE.is_tool_allowed("exec")
+        assert not READ_MODE.is_tool_allowed("exit_plan_mode")
+        assert READ_MODE.builtin
+        # ...but its posture is NEUTRAL: none of the interactive/sub-agent framing that
+        # derails a workflow node (no "bail", no "exit_plan_mode", no "parent agent").
+        suffix = READ_MODE.prompt_suffix.lower()
+        for forbidden in ("exit_plan_mode", "sub-agent", "parent agent", "cannot complete"):
+            assert forbidden not in suffix
+
+    def test_read_mode_is_registered_builtin(self):
+        assert get_mode("read") is READ_MODE
+        assert READ_MODE in list_modes()
 
     def test_denied_wins_over_allowed(self):
         custom = AgentMode(

@@ -1,0 +1,44 @@
+{
+  "name": "debug",
+  "improvement_mode": "manual",
+  "input": {"text": true, "files": true, "description": "a bug report — the symptom, how to trigger it, and the code or files involved"},
+  "output": {"text": true, "description": "the root cause, the fix applied, and proof the reproduction now passes"},
+  "start": "reproduce",
+  "nodes": [
+    {
+      "id": "reproduce",
+      "kind": "work",
+      "mode": "build",
+      "tools": "default",
+      "prompt": "Reproduce the reported bug as a concrete, minimal failing check IN THE WORKING DIRECTORY — a small test or script that triggers the symptom. Read the relevant code first. Run it and confirm it FAILS for the reported reason (not a setup error). Leave that check in place; later steps will rerun it. Summarize what fails and the exact observed behavior.",
+      "next": "diagnose"
+    },
+    {
+      "id": "diagnose",
+      "kind": "work",
+      "mode": "read",
+      "tools": "default",
+      "max_visits": 8,
+      "prompt": "Find the ROOT CAUSE of the failing reproduction. Trace from the symptom back through the code to the specific line(s) responsible — read, don't guess. If an earlier fix attempt failed, use what its rerun showed to revise the hypothesis rather than repeating it. State the root cause precisely and the minimal change that would fix it. Do not edit code yet.",
+      "next": "fix"
+    },
+    {
+      "id": "fix",
+      "kind": "work",
+      "mode": "build",
+      "tools": "default",
+      "max_visits": 8,
+      "prompt": "Apply the MINIMAL fix for the diagnosed root cause by editing the actual code in the working directory in place. Change only what the root cause requires — no refactoring, no unrelated cleanup. Keep the reproduction check intact. Summarize exactly what you changed and why it addresses the cause.",
+      "next": "verify"
+    },
+    {
+      "id": "verify",
+      "kind": "work",
+      "mode": "build",
+      "tools": "default",
+      "max_visits": 8,
+      "prompt": "Rerun the reproduction check from the working directory (actually execute it) and judge the result independently — do not assume the fix worked. Do NOT edit the code yourself; you only rerun and judge — a FAIL routes back to diagnosis. End your reply with EXACTLY one word on its own final line:\nPASS — the reproduction now succeeds and the bug is gone.\nFAIL — it still fails (or a new failure appeared). Before the label, describe precisely what you observed so the next diagnosis can use it.",
+      "cases": {"PASS": null, "FAIL": "diagnose"}
+    }
+  ]
+}

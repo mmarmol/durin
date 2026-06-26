@@ -13,6 +13,10 @@ _SEED_NAMES = [
     "research-to-answer",
     "brainstorming",
     "writing-plans",
+    "build-specs",
+    "execute-plan",
+    "debug",
+    "review-changes",
 ]
 
 

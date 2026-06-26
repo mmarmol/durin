@@ -206,6 +206,30 @@ EXPLORE_MODE = AgentMode(
     ),
 )
 
+# Read-only mode with a NEUTRAL posture. Same read-only tool surface as `explore`,
+# but without the interactive sub-agent framing (no "bail / the parent should
+# exit_plan_mode" script). That framing is right for a spawned exploration agent
+# but actively derails a workflow node — e.g. a `verify` gate told it is "read-only
+# and should bail" stops emitting its verdict and starts apologising. `read` lets the
+# node's own prompt drive: read, search, and produce the requested output. It is the
+# default posture for workflow nodes that inspect, analyse, or judge (vs `build` for
+# nodes that create or edit files).
+READ_MODE = AgentMode(
+    name="read",
+    description=(
+        "Read-only mode with a neutral posture: reads and searches but does "
+        "not modify the workspace or run commands, and carries no interactive "
+        "framing. For nodes that inspect, analyse, or judge rather than build."
+    ),
+    builtin=True,
+    allowed=EXPLORE_MODE_ALLOWED,
+    prompt_suffix=(
+        "\n\n## READ-ONLY\n"
+        "In this step you do not modify the workspace or run commands. Work "
+        "read-only and produce exactly the output your instructions ask for."
+    ),
+)
+
 
 # ---------------------------------------------------------------------------
 # Registry
@@ -215,6 +239,7 @@ _REGISTRY: dict[str, AgentMode] = {
     BUILD_MODE.name: BUILD_MODE,
     PLAN_MODE.name: PLAN_MODE,
     EXPLORE_MODE.name: EXPLORE_MODE,
+    READ_MODE.name: READ_MODE,
 }
 
 

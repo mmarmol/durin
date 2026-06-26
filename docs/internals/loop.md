@@ -415,8 +415,9 @@ LLM. Because it is read per iteration, a mid-run `/plan` or `/build` takes effec
 on the very next iteration. If the model emits a tool call for a denied tool
 anyway (e.g. a cached name), `_run_tool` returns a synthetic "not available in
 this mode" result — tool-by-tool denial, not a stopped run. Built-ins:
-`build` (full access), `plan` (read-only plus `exit_plan_mode`), and `explore`
-(read-only, for sub-agents).
+`build` (full access), `plan` (read-only plus `exit_plan_mode`), `explore`
+(read-only, for sub-agents), and `read` (read-only with a neutral posture — no
+interactive framing, for workflow nodes that inspect or judge).
 
 The registered modes are listed over `/api/v1/modes` (`ModesService`), which the
 webui composer's mode picker renders by `name`. The picker is mode-agnostic: it
@@ -490,7 +491,7 @@ messages back to the bus and clears the per-session latency entry.
 | `resolve_persona` / `persona_names` | [`durin/config/schema.py`](../../durin/config/schema.py) | Resolver (by name from the `personas` map) and listing method on `Config`. |
 | `resolve_active_persona_name` | [`durin/personas/resolve.py`](../../durin/personas/resolve.py) | Precedence resolver: per-conversation metadata → global default → None. |
 | `SEED_PERSONAS` / `seed_example_personas` | [`durin/personas/builtin.py`](../../durin/personas/builtin.py) | Example personas (`researcher`, `engineer`, `tutor`) seeded once into config on first run as ordinary editable/deletable entries. |
-| `AgentMode` | [`durin/agent/agent_mode.py`](../../durin/agent/agent_mode.py) | Permission-as-data tool filter (build / plan / explore). |
+| `AgentMode` | [`durin/agent/agent_mode.py`](../../durin/agent/agent_mode.py) | Permission-as-data tool filter (build / plan / explore / read). |
 | `AgentHook` / `CompositeHook` | [`durin/agent/hook.py`](../../durin/agent/hook.py) | Per-iteration lifecycle callbacks with fan-out and error isolation. |
 | `AgentProgressHook` | [`durin/agent/progress_hook.py`](../../durin/agent/progress_hook.py) | The hook wired on every turn (streaming, tool hints, iteration count). |
 | `Consolidator` | [`durin/agent/memory.py`](../../durin/agent/memory.py) | Memory archival; advances `last_consolidated` under a per-session lock. |
