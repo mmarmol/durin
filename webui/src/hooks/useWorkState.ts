@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { listBackgroundTasks } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
@@ -178,6 +178,11 @@ export function useWorkState(
     const unsub = client.onChat(chatId, handle);
     return () => {
       unsub();
+      // Clear live items when switching to a different chat so the new session
+      // does not briefly show the previous chat's workflow items before the poll
+      // result arrives.
+      liveRef.current = new Map();
+      setLiveVersion((v) => v + 1);
     };
   }, [chatId, client]);
 
@@ -218,7 +223,10 @@ export function useWorkState(
   }, [token, sessionKey, pollTrigger]);
 
   // Merge: live items win for any id present in both.
-  const merged = useCallback((): WorkItem[] => {
+  // useMemo so the merged array is computed once per render, not called separately.
+  // liveVersion triggers re-computation when the live map changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const all = useMemo((): WorkItem[] => {
     const live = liveRef.current;
     const byId = new Map<string, WorkItem>();
 
@@ -233,11 +241,7 @@ export function useWorkState(
     }
 
     return Array.from(byId.values());
-  // liveVersion triggers re-computation when the live map changes.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [polled, liveVersion]);
-
-  const all = merged();
   const active = all.filter(
     (w) => w.status === "running" || w.status === "needs_input",
   );

@@ -191,6 +191,8 @@ describe("useWorkState", () => {
       const item = result.current.active.find((w) => w.id === "run2");
       expect(item).toBeDefined();
       expect(item!.status).toBe("running");
+      // Partition assertion: an id must appear in exactly one of active/finished.
+      expect(result.current.finished.find((w) => w.id === "run2")).toBeUndefined();
     });
   });
 
@@ -261,6 +263,29 @@ describe("useWorkState", () => {
       const item = result.current.finished.find((w) => w.id === "wf1");
       expect(item).toBeDefined();
       expect(item!.nodes?.[0].id).toBe("plan");
+    });
+  });
+
+  it("clears live items when chatId changes (no stale bleed)", async () => {
+    const { result, emit } = renderUseWorkState("c1", "websocket:c1");
+
+    // Emit a live running item on chat c1.
+    act(() => {
+      emit(workflowProgressFrame("run-stale", [{ id: "n1", status: "running" }]));
+    });
+
+    await waitFor(() => {
+      expect(result.current.active.find((w) => w.id === "run-stale")).toBeDefined();
+    });
+
+    // Re-render with a different chatId — the stale live item must not survive.
+    const { result: result2 } = renderHook(() =>
+      useWorkState("c2", "websocket:c2"),
+    );
+
+    await waitFor(() => {
+      expect(result2.current.active.find((w) => w.id === "run-stale")).toBeUndefined();
+      expect(result2.current.finished.find((w) => w.id === "run-stale")).toBeUndefined();
     });
   });
 
