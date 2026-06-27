@@ -9,10 +9,40 @@ dataclasses the engine walks deterministically.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal, Union
 
 from durin.workflow.verdict import normalize_label
+
+
+# ---------------------------------------------------------------------------
+# Human-readable node label helpers
+# ---------------------------------------------------------------------------
+
+def _first_sentence(prompt: str, *, max_chars: int = 80) -> str:
+    s = (prompt or "").strip()
+    if not s:
+        return ""
+    first = re.split(r"(?<=[.!?])\s|\n", s, maxsplit=1)[0].strip().rstrip(".")
+    if len(first) > max_chars:
+        first = first[:max_chars].rsplit(" ", 1)[0] + "…"
+    return first
+
+
+def _prettify_id(node_id: str) -> str:
+    s = node_id.replace("_", " ").replace("-", " ").strip()
+    return (s[:1].upper() + s[1:]) if s else node_id
+
+
+def node_label(node: Any) -> str:
+    """Human label for a node: author title, else the first sentence of its role
+    prompt, else a prettified id. Used by the live progress emit and the tasks API."""
+    title = (getattr(node, "title", "") or "").strip()
+    if title:
+        return title
+    sent = _first_sentence(getattr(node, "prompt", "") or "")
+    return sent or _prettify_id(node.id)
 
 # Reserved multi-way routing target: a node whose matched case routes here ends the
 # run asking the caller for more information (status "needs_input", the node's output
@@ -35,6 +65,7 @@ class WorkNode:
     """
 
     id: str
+    title: str = ""                       # optional human label (overrides prompt-derived label)
     model: str | None = None              # None = engine default
     persona: str | None = None            # named persona (xor model; None = no persona)
     context: Literal["own", "shared"] = "own"
@@ -62,6 +93,7 @@ class SubworkflowNode:
     """A node that runs another workflow and uses its output."""
 
     id: str
+    title: str = ""                  # optional human label (overrides prettified id)
     workflow: str = ""               # name of the workflow to run
     next: str | None = None          # next node id; None = end
     kind: Literal["subworkflow"] = "subworkflow"
@@ -82,6 +114,7 @@ class ParallelNode:
     """
 
     id: str
+    title: str = ""                        # optional human label (overrides prettified id)
     branches: tuple[str, ...] = ()
     next: str | None = None
     reconcile: Literal["read", "choose", "union"] = "read"
@@ -229,6 +262,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
                 )
         return WorkNode(
             id=node_id,
+            title=raw.get("title", ""),
             model=model,
             persona=persona,
             context=context,
@@ -250,7 +284,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
             raise WorkflowError(
                 f"node {node_id!r}: a subworkflow node needs a non-empty 'workflow' name"
             )
-        return SubworkflowNode(id=node_id, workflow=workflow, next=raw.get("next"))
+        return SubworkflowNode(id=node_id, title=raw.get("title", ""), workflow=workflow, next=raw.get("next"))
     if kind == "parallel":
         worker = raw.get("worker")
         list_from = raw.get("list_from")
@@ -298,7 +332,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
                 f"node {node_id!r}: max_concurrency must be an int >= 1, got {max_concurrency!r}"
             )
         return ParallelNode(
-            id=node_id, branches=branches, next=raw.get("next"),
+            id=node_id, title=raw.get("title", ""), branches=branches, next=raw.get("next"),
             reconcile=reconcile, criteria=criteria, judge_model=raw.get("judge_model"),
             max_concurrency=max_concurrency, worker=worker, list_from=list_from,
         )

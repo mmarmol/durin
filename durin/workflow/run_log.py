@@ -67,6 +67,7 @@ def _record_path(workspace: str | Path, name: str, run_id: str) -> Path:
 def start_run(
     workspace: str | Path, name: str, run_id: str, *,
     root_session_key: str | None, started_at: float,
+    task: str | None = None,
 ) -> Path:
     """Write the ``running`` manifest before the walk begins. Returns the record path."""
     record = {
@@ -77,6 +78,7 @@ def start_run(
         "root_session_key": root_session_key,
         "started_at": started_at,
         "ts": started_at,   # cursor field; finalize bumps it to finished_at
+        "task": task,
         "runs": [],
     }
     path = _record_path(workspace, name, run_id)
@@ -99,6 +101,7 @@ def update_run(
         "root_session_key": base.get("root_session_key"),
         "started_at": base.get("started_at"),
         "ts": base.get("ts", base.get("started_at")),
+        "task": base.get("task"),
         "runs": _node_records(result),
     }
     path.write_text(json.dumps(record), encoding="utf-8")
@@ -107,9 +110,17 @@ def update_run(
 def finalize_run(
     workspace: str | Path, name: str, result, *,
     root_session_key: str | None, started_at: float, finished_at: float,
+    task: str | None = None,
 ) -> Path:
     """Terminal write: the run's final status, ``finished_at``, and full per-node trace.
     ``ts`` advances to ``finished_at`` so the dream cursor consumes the completed run."""
+    # Preserve the task from the running manifest when the caller does not supply one
+    # (the engine's _finalize_manifest does not hold the task; reading it here keeps
+    # finalize_run safe without requiring the engine to carry the value separately).
+    effective_task = task
+    if effective_task is None:
+        prior = read_manifest(workspace, name, result.run_id) or {}
+        effective_task = prior.get("task")
     record = {
         "schema": SCHEMA,
         "run_id": result.run_id,
@@ -119,6 +130,7 @@ def finalize_run(
         "started_at": started_at,
         "finished_at": finished_at,
         "ts": finished_at,
+        "task": effective_task,
         # The terminal output (the answer, the plan, or — on needs_input — the questions),
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],

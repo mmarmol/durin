@@ -14,6 +14,7 @@
   "nodes": [
     {
       "id": "plan",
+      "title": "Plan research angles",
       "kind": "work",
       "mode": "read",
       "tools": "none",
@@ -22,6 +23,7 @@
     },
     {
       "id": "gather",
+      "title": "Gather sources",
       "kind": "parallel",
       "worker": "search",
       "list_from": "plan",
@@ -30,6 +32,7 @@
     },
     {
       "id": "search",
+      "title": "Search the web",
       "kind": "work",
       "mode": "read",
       "tools": "default",
@@ -38,6 +41,7 @@
     },
     {
       "id": "synthesize",
+      "title": "Synthesize the answer",
       "kind": "work",
       "mode": "read",
       "tools": "none",
@@ -46,6 +50,7 @@
     },
     {
       "id": "verify",
+      "title": "Verify grounding",
       "kind": "work",
       "mode": "read",
       "tools": "none",

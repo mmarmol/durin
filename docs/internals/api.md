@@ -262,9 +262,21 @@ carries no `@route` decorator on any method). Its configuration
 
 The route table is the authoritative source; the current operation set spans
 secrets, cron, sessions, settings, config, skills, memory, MCP servers, health,
-commands, agent modes (`/api/v1/modes`), OAuth flows, auth tokens, and
-personas/souls (`/api/v1/souls`, `/api/v1/personas`). Verbs in use: GET, POST, DELETE, and
-PATCH (used by `McpService.update` and `CronService` for partial updates).
+commands, agent modes (`/api/v1/modes`), OAuth flows, auth tokens,
+personas/souls (`/api/v1/souls`, `/api/v1/personas`), and background tasks
+(`/api/v1/tasks`). Verbs in use: GET, POST, DELETE, and PATCH (used by
+`McpService.update` and `CronService` for partial updates).
+
+**`GET /api/v1/tasks?session=<key>`** (scope `sessions:read`) returns the
+per-chat list of background tasks associated with a session. The response merges
+two sources: in-flight sub-agent statuses from the in-process status manager
+(with finished ones reconstructed durably from session lineage via
+`children_of`) and workflow run manifests whose `root_session_key` matches the
+session. Each task entry includes an optional `nodes` array (the workflow node
+list for workflow-kind tasks) used by the work panel to render per-node and
+per-branch progress. See the generated OpenAPI contract
+(`contract/openapi-v1.json`) and `TasksService` (`durin/service/tasks.py`) for
+the authoritative field definitions.
 
 All mutations are POST/DELETE/PATCH with a JSON body; there are no
 GET-with-query mutations. Responses use snake_case field names

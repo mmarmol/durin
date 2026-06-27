@@ -236,6 +236,22 @@ def _parse_inbound_payload(raw: str) -> str | None:
 _CHAT_ID_RE = re.compile(r"^[A-Za-z0-9_:-]{1,64}$")
 
 
+def _is_live_progress_only(payload: dict[str, Any]) -> bool:
+    """Return True when every tool_event in the payload has phase 'running'.
+
+    Running frames are streamed live to open connections for inline block
+    updates but are reconstructable from the terminal frame, so they do not
+    need to be persisted to the webui transcript.  A mixed frame (at least one
+    non-running event) or a frame with no tool_events still persists.
+    """
+    te = payload.get("tool_events")
+    return (
+        isinstance(te, list)
+        and len(te) > 0
+        and all(isinstance(e, dict) and e.get("phase") == "running" for e in te)
+    )
+
+
 def _is_valid_chat_id(value: Any) -> bool:
     return isinstance(value, str) and _CHAT_ID_RE.match(value) is not None
 
@@ -528,6 +544,7 @@ class WebSocketChannel(BaseChannel):
             session_manager=self._session_manager,
             cron_service=self._cron_service,
             bus=bus,
+            subagent_manager=None,
         )
 
     def _endpoint_workspace(self) -> Path:
@@ -1720,7 +1737,8 @@ class WebSocketChannel(BaseChannel):
             payload["kind"] = "tool_hint"
         elif msg.metadata.get("_progress"):
             payload["kind"] = "progress"
-        self._try_append_webui_transcript(msg.chat_id, payload)
+        if not _is_live_progress_only(payload):
+            self._try_append_webui_transcript(msg.chat_id, payload)
         raw = json.dumps(payload, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" ")

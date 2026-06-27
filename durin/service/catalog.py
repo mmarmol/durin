@@ -23,6 +23,7 @@ registry.  Each class's dep handling:
 - ``CommandsService``  — no deps.
 - ``OAuthService``     — no deps.
 - ``AuthService``      — ``store=None`` → creates a default ``ApiTokenStore`` (safe to do).
+- ``TasksService``     — ``workspace=Path("/")`` (stored, never touched), ``subagent_manager=None``.
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ from durin.service.secrets import SecretsService
 from durin.service.sessions import SessionsService
 from durin.service.settings import SettingsService
 from durin.service.skills import SkillsService
+from durin.service.tasks import TasksService
 from durin.service.workflows import WorkflowsService
 
 SERVICE_CLASSES: list[type] = [
@@ -61,6 +63,7 @@ SERVICE_CLASSES: list[type] = [
     ModesService,
     OAuthService,
     AuthService,
+    TasksService,
     WorkflowsService,
 ]
 
@@ -87,5 +90,6 @@ def build_catalog_registry() -> ServiceRegistry:
     registry.register("modes", ModesService())
     registry.register("oauth", OAuthService())
     registry.register("auth", AuthService(store=None))
+    registry.register("tasks", TasksService(workspace=Path("/")))
     registry.register("workflows", WorkflowsService(workspace=Path("/")))
     return registry

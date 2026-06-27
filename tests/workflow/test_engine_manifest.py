@@ -105,3 +105,17 @@ def test_no_manifest_without_workspace(tmp_path):
     res = WorkflowEngine(runner, run_id_factory=lambda: "r1").run(_two_node_wf(), "go")
     assert res.status == "completed"
     assert not (tmp_path / "workflows-runs").exists()
+
+def test_manifest_task_persists_through_lifecycle(tmp_path):
+    """The workflow task propagates from run() into the finalized manifest."""
+    def runner(req):
+        return NodeRunResponse(output='x', session_key='sk')
+
+    engine = WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: 'r1')
+    res = engine.run(_two_node_wf(), 'process the annual budget', root_session_key='sess:1')
+    assert res.status == 'completed'
+
+    rec = run_log.read_manifest(tmp_path, 'w', 'r1')
+    assert rec is not None
+    assert rec['task'] == 'process the annual budget'
+

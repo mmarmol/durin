@@ -1918,6 +1918,7 @@ def _run_gateway(
                     cron_service=cron,
                     bus=bus,
                     mcp_runtime=_McpRuntime(agent),
+                    subagent_manager=agent.subagents,
                 )
                 # Static token lives on the websocket channel config.
                 _ws_cfg_u = getattr(config.channels, "websocket", None)

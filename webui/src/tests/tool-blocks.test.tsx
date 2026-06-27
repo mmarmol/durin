@@ -134,7 +134,7 @@ describe("ToolChipRow", () => {
 });
 
 describe("HoistedToolBlock — subagent_result", () => {
-  it("renders the subagent card with label, task and result", async () => {
+  it("renders a compact work chip (not a full card) with the label", () => {
     render(
       <HoistedToolBlock
         answered={false}
@@ -147,12 +147,16 @@ describe("HoistedToolBlock — subagent_result", () => {
         }}
       />,
     );
+    // Label shown in the chip
     expect(screen.getByText(/research/)).toBeInTheDocument();
-    expect(screen.getByText(/find docs/)).toBeInTheDocument();
-    expect(await screen.findByText("3 docs", {}, { timeout: 10_000 })).toBeInTheDocument();
+    // Inline task text and result are gone — detail is in the work panel
+    expect(screen.queryByText(/find docs/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/3 docs/)).not.toBeInTheDocument();
+    // Renders as a button chip
+    expect(screen.getByRole("button")).toBeInTheDocument();
   });
 
-  it("marks failed subagents with the error tone", () => {
+  it("renders a compact work chip for failed subagents (no inline error)", () => {
     render(
       <HoistedToolBlock
         answered={false}
@@ -166,6 +170,8 @@ describe("HoistedToolBlock — subagent_result", () => {
       />,
     );
     expect(screen.getByText(/deploy/)).toBeInTheDocument();
-    expect(screen.getByText(/Error: boom/)).toBeInTheDocument();
+    // Error detail is in the work panel, not inline
+    expect(screen.queryByText(/Error: boom/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button")).toBeInTheDocument();
   });
 });

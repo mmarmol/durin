@@ -3,7 +3,7 @@ import { createContext, useContext } from "react";
 /** Actions a deeply-nested message component can take on the active
  *  thread without prop-drilling through the viewport → list → bubble
  *  chain: answering an `ask_user_question`, satisfying a
- *  `request_secret`. */
+ *  `request_secret`, opening the work panel. */
 export interface ThreadActions {
   /** Submit `text` as the user's next message in the current thread. */
   sendUserMessage: (text: string) => void;
@@ -16,6 +16,8 @@ export interface ThreadActions {
     value: string;
     scope?: string[];
   }) => Promise<void>;
+  /** Open the side work panel (workflow / sub-agent detail). */
+  openWorkPanel?: () => void;
 }
 
 const ThreadActionsContext = createContext<ThreadActions | null>(null);

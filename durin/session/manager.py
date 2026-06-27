@@ -925,6 +925,7 @@ class SessionManager:
                     "origin_id": meta.get(ORIGIN_ID),
                     "created_at": data.get("created_at"),
                     "path": str(path),
+                    "title": meta.get("title"),
                 })
             except Exception:
                 continue

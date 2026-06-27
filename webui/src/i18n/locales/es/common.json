@@ -1003,6 +1003,7 @@
       "newChat": "Iniciar un nuevo chat",
       "settings": "Abrir configuración",
       "toggleTheme": "Cambiar tema",
+      "togglePanel": "Panel de trabajo",
       "agentMode": "Modo del agente"
     },
     "composer": {
@@ -1175,7 +1176,14 @@
       "more": "+{{count}} más"
     },
     "subagent": {
-      "title": "Subagente"
+      "title": "Subagente",
+      "running": "{{steps}} pasos…"
+    },
+    "workflow": {
+      "title": "Workflow"
+    },
+    "workChip": {
+      "openPanel": "Abrir panel de trabajo"
     }
   },
   "lightbox": {
@@ -1505,5 +1513,22 @@
       "persist_failed": "fallo al guardar",
       "node_failed": "falló"
     }
+  },
+  "goal": {
+    "banner": {
+      "label": "Objetivo activo"
+    }
+  },
+  "tasks": {
+    "status": { "needs_input": "Necesita input" }
+  },
+  "work": {
+    "steps": "{{count}} pasos",
+    "steps_one": "1 paso",
+    "panelTitle": "Trabajo",
+    "inProgress": "En curso",
+    "finished": "Finalizadas ({{count}})",
+    "empty": "Sin trabajo activo",
+    "close": "Cerrar panel de trabajo"
   }
 }
