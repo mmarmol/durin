@@ -9,6 +9,32 @@ import type { InboundEvent, ToolProgressEvent, WorkBranch, WorkItem, WorkNode } 
 // ---------------------------------------------------------------------------
 
 /**
+ * Map a raw node array (from either live WS frames or polled BackgroundTask)
+ * into WorkNode[]. Nodes with null/absent branches map to WorkNode with no
+ * branches property.
+ */
+function toWorkNodes(
+  raw: Array<{
+    id: string;
+    status: string;
+    branches?: Array<{ id: string; status: string }> | null;
+  }> | null | undefined,
+): WorkNode[] {
+  if (!raw) return [];
+  return raw.map((n) => {
+    const branches: WorkBranch[] | undefined = n.branches?.map((b) => ({
+      id: b.id,
+      status: b.status as WorkBranch["status"],
+    }));
+    return {
+      id: n.id,
+      status: n.status as WorkNode["status"],
+      ...(branches && branches.length > 0 ? { branches } : {}),
+    };
+  });
+}
+
+/**
  * Parse a `workflow_progress` tool event into a WorkItem.
  * The call_id convention is "workflow:<run_id>".
  */
@@ -34,17 +60,7 @@ function workItemFromWorkflowEvent(
   const args = e.arguments as { workflow?: string } | undefined;
   const label = args?.workflow ?? runId;
 
-  const nodes: WorkNode[] = (e.nodes ?? []).map((n) => {
-    const branches: WorkBranch[] | undefined = n.branches?.map((b) => ({
-      id: b.id,
-      status: b.status,
-    }));
-    return {
-      id: n.id,
-      status: n.status,
-      ...(branches && branches.length > 0 ? { branches } : {}),
-    };
-  });
+  const nodes: WorkNode[] = toWorkNodes(e.nodes);
 
   return {
     kind: "workflow",
@@ -182,6 +198,7 @@ export function useWorkState(
             status: r.status,
             startedAt: r.started_at,
             endedAt: r.ended_at,
+            nodes: toWorkNodes(r.nodes),
           }));
           setPolled(items);
         })

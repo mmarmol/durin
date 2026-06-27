@@ -234,6 +234,36 @@ describe("useWorkState", () => {
     await waitFor(() => expect(mockListBackgroundTasks).toHaveBeenCalledTimes(2));
   });
 
+  it("polled workflow with nodes surfaces nodes on the finished item", async () => {
+    const { client } = makeFakeClient();
+    mockUseClient.mockReturnValue({
+      client: client as unknown as ReturnType<typeof useClient>["client"],
+      token: "tok",
+      modelName: null,
+      modelPreset: null,
+    });
+    mockListBackgroundTasks.mockResolvedValue([
+      {
+        kind: "workflow",
+        id: "wf1",
+        label: "My workflow",
+        status: "done",
+        started_at: 1000,
+        ended_at: 2000,
+        session_key: null,
+        nodes: [{ id: "plan", status: "done", branches: null }],
+      },
+    ]);
+
+    const { result } = renderHook(() => useWorkState("c1", "websocket:c1"));
+
+    await waitFor(() => {
+      const item = result.current.finished.find((w) => w.id === "wf1");
+      expect(item).toBeDefined();
+      expect(item!.nodes?.[0].id).toBe("plan");
+    });
+  });
+
   it("null chatId yields empty result and no subscription", async () => {
     const fakeclient = { onChat: vi.fn() };
     mockUseClient.mockReturnValue({

@@ -110,6 +110,7 @@ export interface BackgroundTask {
   started_at: number;
   ended_at: number | null;
   session_key: string | null;
+  nodes?: Array<{ id: string; status: string; branches?: Array<{ id: string; status: string }> | null }> | null;
 }
 
 export async function listBackgroundTasks(
