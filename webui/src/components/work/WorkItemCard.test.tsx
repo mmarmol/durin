@@ -65,8 +65,8 @@ describe("WorkItemCard", () => {
       />,
     );
     expect(screen.getByText("my-agent")).toBeInTheDocument();
-    // "7 steps" rendered via i18n key work.steps
-    expect(screen.getByText(/7/)).toBeInTheDocument();
+    // work.steps with count=7 renders as "7 steps"
+    expect(screen.getByText("7 steps")).toBeInTheDocument();
   });
 
   it("renders failed status with error tone", () => {
@@ -99,5 +99,6 @@ describe("WorkItemCard", () => {
     };
     render(<WorkItemCard item={item} />);
     expect(screen.getByText("waiting")).toBeInTheDocument();
+    expect(screen.getByText("Needs input")).toBeInTheDocument();
   });
 });

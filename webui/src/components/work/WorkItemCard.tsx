@@ -43,7 +43,7 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
         </span>
         {item.status === "needs_input" && (
           <span className="text-[11px] text-amber-500">
-            {t("work.needsInput")}
+            {t("tasks.status.needs_input")}
           </span>
         )}
         <ItemStatusIcon status={item.status} />

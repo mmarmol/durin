@@ -1523,7 +1523,6 @@
   },
   "work": {
     "steps": "{{count}} pasos",
-    "steps_one": "1 paso",
-    "needsInput": "Necesita input"
+    "steps_one": "1 paso"
   }
 }

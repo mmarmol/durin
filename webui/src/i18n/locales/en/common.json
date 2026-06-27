@@ -1531,7 +1531,6 @@
   },
   "work": {
     "steps": "{{count}} steps",
-    "steps_one": "1 step",
-    "needsInput": "Needs input"
+    "steps_one": "1 step"
   }
 }
