@@ -12,6 +12,7 @@ exactly like a subagent session. Persistence is best-effort.
 from __future__ import annotations
 
 import asyncio
+import json
 
 from loguru import logger
 
@@ -253,6 +254,16 @@ class AgentNodeRunner:
                 req, all_messages,
                 RuntimeError(f"model error: {(final_output or 'no response').strip()[:200]}"))
 
+        # A routing node's verdict comes from a forced `route` tool call (deterministic: the
+        # model must pick one label from this node's own enum), not from parsing free text.
+        # On any failure this is None and the engine falls back to text-parse + default.
+        route_label = None
+        node_cases = getattr(req.node, "cases", None)
+        if node_cases:
+            route_label = self._derive_route_label(all_messages, list(node_cases.keys()), model)
+        elif getattr(req.node, "routes", False):
+            route_label = self._derive_route_label(all_messages, ["PASS", "FAIL"], model)
+
         session_key = self._persist(req, all_messages)
         return NodeRunResponse(
             output=final_output,
@@ -261,7 +272,41 @@ class AgentNodeRunner:
             # This runner always persists; a None key means the save raised, not that
             # the node had no session — surface that as a persist failure.
             persist_failed=session_key is None,
+            route_label=route_label,
         )
+
+    def _derive_route_label(self, messages: list[dict], labels: list[str], model: str | None) -> str | None:
+        """Deterministic routing verdict via a forced `route` tool call: the model picks exactly
+        one label from this node's enum. Returns the chosen label, or None on any failure (the
+        engine then falls back to parsing the node's text output)."""
+        tool = {"type": "function", "function": {
+            "name": "route",
+            "description": "Record your final routing verdict for this step.",
+            "parameters": {"type": "object", "properties": {
+                "label": {"type": "string", "enum": labels,
+                          "description": "Your verdict — exactly one of the allowed values."},
+                "reason": {"type": "string", "description": "One short line explaining the verdict."},
+            }, "required": ["label"]}}}
+        route_messages = list(messages) + [{
+            "role": "user",
+            "content": ("Record your verdict for this step now by calling the `route` tool with "
+                        "exactly one of: " + ", ".join(labels) + "."),
+        }]
+        try:
+            resp = asyncio.run(self.runner.provider.chat(
+                messages=route_messages, tools=[tool], tool_choice="required", model=model))
+            for tc in (getattr(resp, "tool_calls", None) or []):
+                args = getattr(tc, "arguments", None)
+                if args is None:
+                    args = getattr(tc, "input", None) or getattr(tc, "args", None)
+                if isinstance(args, str):
+                    args = json.loads(args)
+                label = (args or {}).get("label")
+                if label in labels:
+                    return label
+        except Exception:  # noqa: BLE001 - any failure → fall back to text-parse in the engine
+            logger.opt(exception=True).debug("route-tool verdict failed; falling back to text parse")
+        return None
 
     def _persist(self, req: NodeRunRequest, messages: list[dict]) -> str | None:
         if req.worker_index is not None:
