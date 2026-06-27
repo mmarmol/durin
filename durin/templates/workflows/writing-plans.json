@@ -1,5 +1,6 @@
 {
   "name": "writing-plans",
+  "description": "Turn a spec or brief into a step-by-step, build-ready implementation plan — critiqued in parallel for gaps/risks/verifiability/scope, then revised.",
   "start": "intake",
   "max_visits": 3,
   "improvement_mode": "manual",

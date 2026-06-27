@@ -1,5 +1,6 @@
 {
   "name": "review-changes",
+  "description": "Review a diff across the lenses that matter — one independent reviewer per lens — and synthesize a severity-grouped review.",
   "improvement_mode": "manual",
   "input": {"text": true, "files": true, "description": "a set of changes to review (a diff, or the changed files), plus optional context on intent"},
   "output": {"text": true, "description": "a prioritized review: confirmed findings grouped by severity, each with file, why it matters, and a suggested fix"},

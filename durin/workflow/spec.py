@@ -142,6 +142,7 @@ class Workflow:
     improvement_mode: Literal["manual", "auto"] = "manual"
     input: dict | None = None            # workflow I/O descriptors (e.g. {text: bool, file: bool})
     output: dict | None = None
+    description: str | None = None       # one-line "what it does + when to use it" (for discovery)
 
 
 def _str_list(value: Any, node_id: str, field: str) -> tuple[str, ...]:
@@ -442,4 +443,5 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
     return Workflow(
         name=name, start=start, nodes=nodes, max_visits=max_visits, improvement_mode=mode,
         input=wf_input, output=wf_output,
+        description=data.get("description"),
     )
