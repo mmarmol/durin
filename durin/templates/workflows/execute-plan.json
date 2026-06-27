@@ -1,5 +1,6 @@
 {
   "name": "execute-plan",
+  "description": "Execute an ordered implementation plan one step at a time, accumulating work in the shared folder, then review it against the plan.",
   "improvement_mode": "manual",
   "input": {"text": true, "description": "an implementation plan with ordered, bite-sized steps (e.g. the output of writing-plans)"},
   "output": {"text": true, "description": "a task-by-task summary of what was built, and any deviations from the plan"},

@@ -1,5 +1,6 @@
 {
   "name": "research-to-answer",
+  "description": "Answer a question that needs several web sources: fan out searches over independent angles, synthesize one source-cited answer, and check it is grounded.",
   "start": "plan",
   "max_visits": 3,
   "improvement_mode": "manual",

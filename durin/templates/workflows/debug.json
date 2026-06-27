@@ -1,5 +1,6 @@
 {
   "name": "debug",
+  "description": "Reproduce a bug as a failing check, diagnose the root cause, fix it in place, and verify the reproduction now passes.",
   "improvement_mode": "manual",
   "input": {"text": true, "files": true, "description": "a bug report — the symptom, how to trigger it, and the code or files involved"},
   "output": {"text": true, "description": "the root cause, the fix applied, and proof the reproduction now passes"},
