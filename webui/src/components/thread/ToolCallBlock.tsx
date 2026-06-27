@@ -85,14 +85,20 @@ export function ToolCallBlock({ event }: ToolCallBlockProps) {
   const name = event.name || "tool";
   const summary = summaryLine(event);
 
+  // run_workflow's result is a multi-line node→session dump; that per-node
+  // detail now lives in the work panel, so collapse the chat preview to the
+  // first line (the "Workflow run … : status" summary). The full body stays
+  // behind the expand toggle.
+  const previewLines = name === "run_workflow" ? 1 : PREVIEW_LINES;
+
   // The interactive tools get a panel of their own instead of the
   // static preview body.
   const isAskUser = name === "ask_user_question";
   const isReqSecret = name === "request_secret";
   const bodyLines = isAskUser || isReqSecret ? [] : renderBodyLines(event);
   const total = bodyLines.length;
-  const truncated = !expanded && total > PREVIEW_LINES;
-  const visible = truncated ? bodyLines.slice(0, PREVIEW_LINES) : bodyLines;
+  const truncated = !expanded && total > previewLines;
+  const visible = truncated ? bodyLines.slice(0, previewLines) : bodyLines;
 
   return (
     <div
@@ -111,7 +117,7 @@ export function ToolCallBlock({ event }: ToolCallBlockProps) {
         {summary && (
           <span className="min-w-0 truncate font-mono text-muted-foreground/80">{summary}</span>
         )}
-        {total > PREVIEW_LINES && (
+        {total > previewLines && (
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
@@ -119,7 +125,7 @@ export function ToolCallBlock({ event }: ToolCallBlockProps) {
           >
             {expanded
               ? t("message.toolBody.collapse")
-              : t("message.toolBody.more", { count: total - PREVIEW_LINES })}
+              : t("message.toolBody.more", { count: total - previewLines })}
           </button>
         )}
       </div>
