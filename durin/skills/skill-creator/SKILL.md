@@ -50,8 +50,10 @@ authoring a skill — the default is **not** "a skill":
   itself: domain facts, conventions, a decision procedure, when-to-do-what guidance.
 
 Closed computation → code. Orchestration with fan-out / verification / determinism →
-workflow. Knowledge or judgment → skill. Only a skill belongs here; for the other two,
-stop and use the right tool.
+workflow. Knowledge or judgment → skill. **These compose** — a skill may *bundle* a script
+or a workflow as its mechanism (ship the definition in the skill and install it on first
+use; see the `workflows` skill). What does not belong here is a prose-only skill that
+merely narrates a process a workflow should run.
 
 ## Core Principles
 

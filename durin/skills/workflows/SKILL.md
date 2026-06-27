@@ -65,6 +65,8 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
 
 ## How to invoke and author
 
+- **Discover:** call `list_workflows` to see what this workspace offers — each entry carries
+  its description and I/O — before picking one to run (or to confirm one already exists).
 - **Run:** `run_workflow(name, task)` — optionally `output_format` to shape this call's
   result. It loads the named JSON, runs the graph, and returns a per-node trace. **If the
   result says it needs input**, the workflow did not fail — it paused with questions; ask the
@@ -72,6 +74,20 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
 - **Author:** write the JSON under `<workspace>/workflows/<name>.json` (you can write a graph
   on demand for a user's repeatable process), or use the web editor. Compose larger processes
   from `subworkflow` nodes — but only where each stage genuinely needs the structure above.
+
+## Bundling a workflow inside a skill
+
+A skill and a workflow are not either/or — a skill whose core mechanism is an
+orchestration can **bundle** the workflow, the same way it bundles a script. Ship the
+definition as `<skill>/workflow.json` and install-on-first-use:
+
+1. If `<workspace>/workflows/<name>.json` does not exist, copy the skill's bundled
+   `workflow.json` there — `run_workflow` only loads from the workspace's `workflows/` dir.
+2. Then `run_workflow(<name>, task)`.
+
+The skill carries the **trigger and the knowledge** (when and why to run it); the bundled
+workflow carries the **orchestration** (the fan-out, the gates). Reach for this only when
+the skill's real mechanism is a multi-step graph — not for a prose-only skill.
 
 ## Example — `research-to-answer` (a coverage workflow)
 
