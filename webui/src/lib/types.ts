@@ -89,7 +89,40 @@ export interface ToolProgressEvent {
   files?: unknown[];
   embeds?: unknown[];
   progress?: { iteration?: number; tool?: string | null };
-  nodes?: Array<{ id: string; status: "running" | "done" | "failed"; route_label?: string | null }>;
+  nodes?: Array<{
+    id: string;
+    status: "running" | "done" | "failed";
+    route_label?: string | null;
+    branches?: Array<{ id: string; status: "running" | "done" | "failed" }>;
+  }>;
+}
+
+// ---------------------------------------------------------------------------
+// Work-panel types (useWorkState hook)
+// ---------------------------------------------------------------------------
+
+export interface WorkBranch {
+  id: string;
+  status: "running" | "done" | "failed";
+}
+
+export interface WorkNode {
+  id: string;
+  status: "running" | "done" | "failed" | "pending";
+  branches?: WorkBranch[];
+}
+
+export interface WorkItem {
+  kind: "workflow" | "subagent";
+  id: string;
+  label: string;
+  status: "running" | "needs_input" | "done" | "failed";
+  /** Workflow node tree; live frames override polled history. */
+  nodes?: WorkNode[];
+  /** Sub-agent live step count from progress.iteration. */
+  steps?: number;
+  startedAt: number;
+  endedAt: number | null;
 }
 
 export interface ChatSummary {
