@@ -20,6 +20,8 @@ const HOISTED = new Set([
   "exit_plan_mode",
   // Synthetic event emitted by SubagentManager._announce_result.
   "subagent_result",
+  // Synthetic event emitted by the workflow engine on each node completion.
+  "workflow_progress",
 ]);
 
 const CHIPPED = new Set([

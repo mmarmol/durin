@@ -321,6 +321,30 @@ The `WorkflowsService` exposes read routes for run manifests:
 The `POST /api/v1/workflows/{name}/run` response carries `run_id` and a per-node trace
 with `session_key`, `worker_index`, `status`, and `route_label` for each entry.
 
+### 4g. Background mode and live progress
+
+**Background mode.** `run_workflow` runs in the background by default — the
+engine launches the walk in a detached task and returns immediately, so the
+calling agent continues its turn while the workflow runs concurrently. The agent
+passes `background=false` only when it needs the result in the same turn. When
+the walk finishes, its result (or a `needs_input` status carrying the gate's
+questions) is injected back into the calling session via `session_key_override`,
+using the same announce path as a completing sub-agent, so the calling agent can
+act on the outcome without polling. The `background` flag applies only to
+`run_workflow` invocations from inside an agent turn; the HTTP
+`POST /api/v1/workflows/{name}/run` surface is always synchronous.
+
+**Live per-node and per-branch progress.** The engine emits a progress frame at
+the start of each node (status `running`) and another when the node finishes.
+For parallel nodes, each branch (static or dynamic fan-out worker) emits its own
+start and finish frames independently, so the work panel can show branch-level
+progress live as branches complete at different times. Because the graph walk
+executes on a worker thread (`asyncio.to_thread`), frames are marshalled back to
+the gateway's event loop via
+`asyncio.run_coroutine_threadsafe(bus.publish_outbound(...), main_loop)` before
+being published on the message bus. The WebSocket channel propagates them as
+`tool_events` frames that the work panel consumes in real time.
+
 ## 5. How it works
 
 End-to-end for a single `run_workflow` call:

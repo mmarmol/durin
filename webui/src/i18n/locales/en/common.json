@@ -1121,6 +1121,7 @@
       "toggleSidebar": "Toggle sidebar",
       "newChat": "Start a new chat",
       "toggleTheme": "Toggle theme from header",
+      "togglePanel": "Work panel",
       "settings": "Open settings",
       "agentMode": "Agent mode"
     },
@@ -1294,7 +1295,14 @@
       "more": "+{{count}} more"
     },
     "subagent": {
-      "title": "Subagent"
+      "title": "Subagent",
+      "running": "{{steps}} steps…"
+    },
+    "workflow": {
+      "title": "Workflow"
+    },
+    "workChip": {
+      "openPanel": "Open work panel"
     }
   },
   "lightbox": {
@@ -1513,5 +1521,22 @@
     "transcribing": "Transcribing…",
     "transcriptPrefix": "transcript",
     "processing": "Processing…"
+  },
+  "goal": {
+    "banner": {
+      "label": "Active goal"
+    }
+  },
+  "tasks": {
+    "status": { "needs_input": "Needs input" }
+  },
+  "work": {
+    "steps": "{{count}} steps",
+    "steps_one": "1 step",
+    "panelTitle": "Work",
+    "inProgress": "In progress",
+    "finished": "Finished ({{count}})",
+    "empty": "No active work",
+    "close": "Close work panel"
   }
 }

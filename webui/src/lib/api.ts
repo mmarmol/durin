@@ -102,6 +102,30 @@ export async function listSessions(
   }));
 }
 
+export interface BackgroundTask {
+  kind: "subagent" | "workflow";
+  id: string;
+  label: string;
+  status: "running" | "needs_input" | "done" | "failed";
+  started_at: number;
+  ended_at: number | null;
+  session_key: string | null;
+  nodes?: Array<{ id: string; label?: string; status: string; branches?: Array<{ id: string; label?: string; status: string }> | null }> | null;
+  task?: string | null;
+}
+
+export async function listBackgroundTasks(
+  token: string,
+  session: string,
+  base: string = "",
+): Promise<BackgroundTask[]> {
+  const body = await request<{ tasks: BackgroundTask[] }>(
+    `${base}/api/v1/tasks?session=${encodeURIComponent(session)}`,
+    token,
+  );
+  return body.tasks;
+}
+
 /** Disk-backed WebUI display thread snapshot (separate from agent session). */
 export async function fetchWebuiThread(
   token: string,

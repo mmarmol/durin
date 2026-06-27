@@ -63,7 +63,7 @@ async def test_work_node_runs_through_to_thread_boundary(tmp_path):
     )
     with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
          patch("durin.agent.runner.AgentRunner.run", AsyncMock(return_value=fake_result)):
-        out = await tool.execute(name="doer", task="do it")
+        out = await tool.execute(name="doer", task="do it", background=False)
     assert "completed" in out.lower()
     assert "did the work" in out
 
@@ -89,7 +89,7 @@ async def test_judgment_workflow_runs_end_to_end(tmp_path):
     ])
     with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
          patch("durin.agent.runner.AgentRunner.run", AsyncMock(side_effect=lambda *a, **k: next(results))):
-        out = await tool.execute(name="reviewed", task="do it")
+        out = await tool.execute(name="reviewed", task="do it", background=False)
     assert "completed" in out.lower()
     assert "review" in out
 
@@ -111,7 +111,7 @@ async def test_subworkflow_runs_end_to_end(tmp_path):
     with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
          patch("durin.agent.runner.AgentRunner.run",
                AsyncMock(return_value=AgentRunResult(final_content="child did it", messages=[]))):
-        out = await tool.execute(name="parent", task="go")
+        out = await tool.execute(name="parent", task="go", background=False)
     assert "completed" in out.lower()
     assert "callchild" in out
 
@@ -133,7 +133,7 @@ async def test_run_anchors_node_sessions_to_invoking_session(tmp_path):
     with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
          patch("durin.agent.runner.AgentRunner.run",
                AsyncMock(return_value=AgentRunResult(final_content="x", messages=[{"role": "assistant", "content": "x"}]))):
-        await tool.execute(name="w", task="t")
+        await tool.execute(name="w", task="t", background=False)
     kids = sessions.children_of("websocket:abc")
     assert kids and kids[0]["origin_type"] == "workflow_node"
 

@@ -30,7 +30,7 @@ from loguru import logger
 from durin.workflow import run_log, workspace_fork
 from durin.workflow.artifacts import artifact_dir, prune_runs
 from durin.workflow.result import NodeRun, WorkflowResult
-from durin.workflow.spec import NEEDS_INPUT_TARGET, ParallelNode, SubworkflowNode, WorkNode, Workflow
+from durin.workflow.spec import NEEDS_INPUT_TARGET, ParallelNode, SubworkflowNode, WorkNode, Workflow, node_label
 from durin.workflow.verdict import parse_label, parse_verdict
 
 
@@ -105,6 +105,7 @@ class WorkflowEngine:
         workspace: str | None = None,
         pick_runner: Callable[[str, list[str], "str | None"], int] | None = None,
         max_node_visits: int = 1000,
+        progress_emit: Callable[[dict], None] | None = None,
     ) -> None:
         self._node_runner = node_runner
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex[:12])
@@ -115,6 +116,10 @@ class WorkflowEngine:
         self._workspace = workspace
         self._pick_runner = pick_runner
         self._max_node_visits = max_node_visits
+        # Optional callback for live per-node progress; called after each node record.
+        # Best-effort: exceptions in the callback are silently swallowed so they cannot
+        # interrupt a run. None means no progress signalling (CLI/test callers).
+        self._progress_emit = progress_emit
 
     def run(
         self,
@@ -142,7 +147,7 @@ class WorkflowEngine:
         # manifest records that same key or runs_for_session can't find the run.
         effective_root = root_session_key or f"workflow:{run_id}:root"
         started_at = time.time()
-        self._start_manifest(workflow, run_id, effective_root, started_at)
+        self._start_manifest(workflow, run_id, effective_root, started_at, task)
 
         def _update() -> None:
             self._update_manifest(workflow, run_id, runs)
@@ -181,12 +186,13 @@ class WorkflowEngine:
         self._finalize_manifest(workflow, result, effective_root, started_at)
         return result
 
-    def _start_manifest(self, workflow, run_id, root_session_key, started_at) -> None:
+    def _start_manifest(self, workflow, run_id, root_session_key, started_at, task=None) -> None:
         if self._workspace is None:
             return
         try:
             run_log.start_run(self._workspace, workflow.name, run_id,
-                              root_session_key=root_session_key, started_at=started_at)
+                              root_session_key=root_session_key, started_at=started_at,
+                              task=task)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest start failed for {}", workflow.name)
 
@@ -269,6 +275,31 @@ class WorkflowEngine:
                     run_id=run_id, exhausted_node=current,
                 )
             iteration = visits[current]
+
+            # Emit a "node started" frame so the caller can show a spinner on
+            # the in-flight node before it finishes.  Fires for every node type
+            # (work, parallel, subworkflow) so all appear as "running" before they
+            # execute.  Prior nodes carry their finished status; the current node
+            # appears as "running".  Best-effort only — a crashing emit must never
+            # abort the run.
+            if self._progress_emit is not None:
+                started = [
+                    {"id": r.node_id,
+                     "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
+                     "status": ("failed" if r.status in ("node_failed", "persist_failed") else "done"),
+                     "route_label": r.route_label}
+                    for r in runs
+                ]
+                started.append({
+                    "id": node.id,
+                    "label": node_label(node),
+                    "status": "running",
+                    "route_label": None,
+                })
+                try:
+                    self._progress_emit({"run_id": run_id, "nodes": started, "done": False})
+                except Exception:  # noqa: BLE001 - best-effort
+                    pass
 
             if isinstance(node, WorkNode):
                 # A node with file tools works in the run's shared working folder; a
@@ -413,6 +444,24 @@ class WorkflowEngine:
             # in-flight run is observable before the next node starts.
             if update_manifest is not None:
                 update_manifest()
+            if self._progress_emit is not None:
+                nodes = [
+                    {
+                        "id": r.node_id,
+                        "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
+                        "status": (
+                            "failed"
+                            if r.status in ("node_failed", "persist_failed")
+                            else "done"
+                        ),
+                        "route_label": r.route_label,
+                    }
+                    for r in runs
+                ]
+                try:
+                    self._progress_emit({"run_id": run_id, "nodes": nodes, "done": False})
+                except Exception:  # noqa: BLE001 - progress is best-effort; never break the run
+                    pass
 
         return WorkflowResult(
             status="completed", final_output=final_output, runs=runs, run_id=run_id,
@@ -555,9 +604,49 @@ class WorkflowEngine:
         applied); 'choose'/'union' branches each run against a private copy and their
         file changes are reconciled back. Each branch is appended to ``runs`` so its
         session stays attributable in the trace.
+
+        Per-branch progress is emitted via ``_progress_emit`` as branches start and
+        finish.  The parallel node's entry in the frame carries a ``"branches"`` list
+        with each branch's current status ("running", "done", or "failed").  Emits are
+        best-effort — a crashing emit never alters the run or its result.
         """
+        import threading
+
         branches = node.branches
         workers = max(1, min(len(branches), node.max_concurrency))
+
+        # Shared branch-status map, guarded by a lock because branches run in
+        # ThreadPoolExecutor workers concurrently.
+        branch_status: dict[str, str] = {bid: "running" for bid in branches}
+        _branch_lock = threading.Lock()
+
+        def _emit_branches() -> None:
+            """Emit a progress frame with the current per-branch statuses.  The frame
+            carries prior finished nodes plus the parallel node itself (status 'running')
+            annotated with a snapshot of each branch's live status."""
+            if self._progress_emit is None:
+                return
+            prior = [
+                {"id": r.node_id,
+                 "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
+                 "status": ("failed" if r.status in ("node_failed", "persist_failed") else "done"),
+                 "route_label": r.route_label}
+                for r in runs
+            ]
+            with _branch_lock:
+                branch_list = [
+                    {"id": bid, "label": node_label(workflow.nodes[bid]) if bid in workflow.nodes else bid, "status": st}
+                    for bid, st in branch_status.items()
+                ]
+            prior.append({"id": node.id, "label": node_label(node), "status": "running", "route_label": None,
+                          "branches": branch_list})
+            try:
+                self._progress_emit({"run_id": run_id, "nodes": prior, "done": False})
+            except Exception:  # noqa: BLE001 - best-effort; must never alter the run
+                pass
+
+        # Emit once with all branches "running" so the UI shows them immediately.
+        _emit_branches()
 
         if node.reconcile == "read":
             def _run(bid):
@@ -566,10 +655,19 @@ class WorkflowEngine:
                 try:
                     resp = self._run_one_branch(
                         workflow.nodes[bid], task, upstream, run_id, iteration, root_key, None)
+                    with _branch_lock:
+                        branch_status[bid] = "done"
+                    _emit_branches()
                     return bid, resp.output, resp.session_key, None, resp.persist_failed
                 except NodeExecutionError as exc:
+                    with _branch_lock:
+                        branch_status[bid] = "failed"
+                    _emit_branches()
                     return bid, "", exc.session_key, str(exc.cause), False
                 except Exception as exc:  # noqa: BLE001 - isolate a single branch's failure
+                    with _branch_lock:
+                        branch_status[bid] = "failed"
+                    _emit_branches()
                     return bid, "", None, str(exc), False
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
                 results = list(ex.map(_run, branches))
@@ -589,10 +687,19 @@ class WorkflowEngine:
         def _run(bid):
             fork_dir = workspace_fork.fork(self._workspace)
             forks.append(fork_dir)
-            resp = self._run_one_branch(
-                workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
-                str(fork_dir), fork_dir=fork_dir)
-            return bid, resp.output, resp.session_key, workspace_fork.diff(base, fork_dir)
+            try:
+                resp = self._run_one_branch(
+                    workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
+                    str(fork_dir), fork_dir=fork_dir)
+                with _branch_lock:
+                    branch_status[bid] = "done"
+                _emit_branches()
+                return bid, resp.output, resp.session_key, workspace_fork.diff(base, fork_dir)
+            except Exception:
+                with _branch_lock:
+                    branch_status[bid] = "failed"
+                _emit_branches()
+                raise
 
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:

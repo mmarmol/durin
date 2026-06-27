@@ -158,6 +158,34 @@ Metadata flags on `OutboundMessage` route behavior at each surface:
 | `_turn_end` | Carries latency and goal-state; triggers WS `turn_end` frame |
 | `render_as="text"` | Render as a plain system bubble instead of an assistant bubble |
 
+### Work-visibility surfaces (WebUI)
+
+Three surfaces make background work visible inside a chat without navigating
+away from it.
+
+**Goal banner.** A pinned strip at the top of the chat thread renders the
+session's `goal_state` — the agent-maintained description of what it is trying
+to accomplish for this turn. The banner is persistent: it stays visible while
+the agent runs and is cleared when the turn ends with no active goal. It draws
+from the `_turn_end` frame's `goal_state` field.
+
+**Work panel.** A collapsible side panel docked to the right of the chat thread,
+toggled from a button in the chat header (next to the theme toggle). A badge on
+the toggle button lights up while any work is active. The panel lists in-progress
+work items — workflow nodes with nested parallel branches and sub-agent steps —
+and a collapsible "Finished" fold below (collapsed by default). Each item is a
+`WorkItem` fetched from `GET /api/v1/tasks?session=<key>`. Sub-agent and workflow
+detail is shown in the panel, not inline in the thread; the chat itself shows only
+a compact **work chip** (running or done) that opens the panel when clicked.
+Provider-retry status renders inside the run strip, not as a separate banner.
+The panel is durable across a page reload: finished items are reconstructed from
+session lineage and workflow run manifests.
+
+**Work chip.** A compact inline indicator in the message thread shows that
+background work is running or has finished. Clicking it opens the work panel.
+Per-node detail and sub-agent steps are not expanded inline — they live in the
+panel.
+
 ### Config flow
 
 `load_config()` detects the layout (split directory or legacy monolith) and
