@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { render, screen, act } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TasksView } from "@/components/TasksView";
 import * as api from "@/lib/api";
 import { ClientProvider } from "@/providers/ClientProvider";
@@ -30,5 +30,25 @@ describe("TasksView", () => {
 
     expect(await screen.findByText("research")).toBeInTheDocument();
     expect(screen.getByText("Finished 1")).toBeInTheDocument();
+  });
+
+  it("polls listBackgroundTasks again after 4 seconds", async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.listBackgroundTasks).mockResolvedValue([
+      { kind: "subagent", id: "t1", label: "research", status: "running",
+        started_at: 1, ended_at: null, session_key: "subagent:t1" },
+    ]);
+
+    render(wrap(<TasksView session="websocket:chatA" />));
+
+    // Let the initial fetch(es) resolve (StrictMode may invoke the effect twice)
+    await act(async () => { await Promise.resolve(); });
+    const callsAfterMount = vi.mocked(api.listBackgroundTasks).mock.calls.length;
+
+    // Advance past the poll interval — must fire at least one more call
+    await act(async () => { vi.advanceTimersByTime(4000); await Promise.resolve(); });
+    expect(vi.mocked(api.listBackgroundTasks).mock.calls.length).toBeGreaterThan(callsAfterMount);
+
+    vi.useRealTimers();
   });
 });

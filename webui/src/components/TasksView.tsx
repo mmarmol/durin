@@ -21,10 +21,14 @@ export function TasksView({ session }: { session: string | null }) {
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
-    listBackgroundTasks(token, session)
-      .then((rows) => { if (!cancelled) setTasks(rows); })
-      .catch(() => { if (!cancelled) setTasks([]); });
-    return () => { cancelled = true; };
+    const load = () => {
+      listBackgroundTasks(token, session)
+        .then((rows) => { if (!cancelled) setTasks(rows); })
+        .catch(() => { if (!cancelled) setTasks([]); });
+    };
+    load();
+    const id = setInterval(load, 4000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [token, session]);
 
   const live = tasks.filter((x) => x.status === "running" || x.status === "needs_input");
