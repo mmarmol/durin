@@ -86,7 +86,8 @@ def build_service_registry(
         workspace=_workspace(), app_config=config, sessions=session_manager))
     from durin.service.tasks import TasksService
     registry.register("tasks", TasksService(
-        workspace=_workspace(), subagent_manager=subagent_manager))
+        workspace=_workspace(), subagent_manager=subagent_manager,
+        sessions=session_manager))
 
     # Crash recovery: the gateway is the long-lived process, so its boot is the natural
     # point to reconcile run manifests still "running" from a previous process that died

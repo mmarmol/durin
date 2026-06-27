@@ -9,7 +9,25 @@ converted to wall-clock here so they sort against the workflow manifests' time.t
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from typing import Any
+
+
+def _iso_to_epoch(s: str | None) -> float:
+    """Parse an ISO 8601 string (with or without timezone) to a UTC epoch float.
+
+    Returns 0.0 on None or any parse error so missing timestamps sort to the bottom.
+    """
+    if not s:
+        return 0.0
+    try:
+        # Python 3.11+ handles Z; older versions need manual replacement.
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return 0.0
 
 from durin.service.principal import Principal, Scope
 from durin.service.registry import route
@@ -55,9 +73,10 @@ class TasksListResult(Result):
 
 
 class TasksService:
-    def __init__(self, *, workspace: Any, subagent_manager: Any | None = None) -> None:
+    def __init__(self, *, workspace: Any, subagent_manager: Any | None = None, sessions: Any | None = None) -> None:
         self._workspace = workspace
         self._subagents = subagent_manager
+        self._sessions = sessions
 
     @route(
         "GET",
@@ -94,6 +113,26 @@ class TasksService:
                 ended_at=rec.get("finished_at"),
                 session_key=drill,
             ))
+
+        # Reconstruct finished sub-agents from persisted session lineage so the tray
+        # history survives a gateway restart (the LRU is in-memory; children_of reads
+        # line-0 metadata from disk). The LRU takes precedence: if a sub-agent is already
+        # listed (running or recently finished), skip the persisted entry.
+        if self._sessions is not None and hasattr(self._sessions, "children_of"):
+            seen = {t.id for t in tasks if t.kind == "subagent"}
+            for c in self._sessions.children_of(query.session):
+                if c.get("origin_type") != "subagent":
+                    continue
+                tid = c.get("origin_id")
+                if not tid or tid in seen:
+                    continue  # LRU (running/recent) already has it
+                title = c.get("title") or ""
+                label = title.split(":", 1)[1].strip() if ":" in title else (title or tid)
+                tasks.append(BackgroundTask(
+                    kind="subagent", id=tid, label=label, status="done",
+                    started_at=_iso_to_epoch(c.get("created_at")),
+                    ended_at=None, session_key=c.get("key"),
+                ))
 
         tasks.sort(key=lambda t: t.started_at, reverse=True)
         return TasksListResult(tasks=tasks)
