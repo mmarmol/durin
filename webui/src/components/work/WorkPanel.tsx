@@ -7,7 +7,7 @@ import type { WorkItem } from "@/lib/types";
 import { WorkItemCard } from "./WorkItemCard";
 
 /**
- * Collapsible right-side work panel — presentational only. The Shell (App.tsx)
+ * Collapsible right-side work panel — presentational only. ThreadShell
  * owns the single useWorkState() subscription and passes active/finished down.
  *
  * When open=false the panel renders nothing so the chat takes full width.

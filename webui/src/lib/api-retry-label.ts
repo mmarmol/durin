@@ -19,13 +19,3 @@ export function resolveTitle(status: ApiRetryStatus, t: TFunction): string {
   return t("apiStatus.retrying", { attemptLabel });
 }
 
-/** Build the optional body line for a provider retry event. */
-export function resolveBody(status: ApiRetryStatus, t: TFunction): string | null {
-  if (status.kind === "giving_up") {
-    return t("apiStatus.givingUpBody");
-  }
-  if (status.kind === "exhausted_persistent") {
-    return t("apiStatus.exhaustedBody");
-  }
-  return t("apiStatus.transientBody");
-}

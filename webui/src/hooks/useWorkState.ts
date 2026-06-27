@@ -84,16 +84,20 @@ function workItemFromSubagentEvent(
   const e = ev as {
     call_id?: string;
     phase?: string;
+    arguments?: unknown;
     progress?: { iteration?: number; tool?: string | null };
   };
 
   const taskId = e.call_id?.replace(/^subagent:/, "");
   if (!taskId) return null;
 
+  const args = e.arguments as { label?: string } | undefined;
+  const label = args?.label ?? taskId;
+
   return {
     kind: "subagent",
     id: taskId,
-    label: taskId,
+    label,
     status: e.phase === "end" ? "done" : "running",
     steps: e.progress?.iteration,
     startedAt: now,
@@ -180,9 +184,12 @@ export function useWorkState(
       unsub();
       // Clear live items when switching to a different chat so the new session
       // does not briefly show the previous chat's workflow items before the poll
-      // result arrives.
+      // result arrives. Also clear polled state so finished items from the
+      // previous session do not flash until the first poll for the new session
+      // resolves.
       liveRef.current = new Map();
       setLiveVersion((v) => v + 1);
+      setPolled([]);
     };
   }, [chatId, client]);
 

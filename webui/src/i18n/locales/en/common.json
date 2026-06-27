@@ -1528,10 +1528,7 @@
     }
   },
   "tasks": {
-    "title": "Tasks",
-    "empty": "No background tasks",
-    "finished": "Finished {{count}}",
-    "status": { "running": "Running", "needs_input": "Needs input", "done": "Done", "failed": "Failed" }
+    "status": { "needs_input": "Needs input" }
   },
   "work": {
     "steps": "{{count}} steps",

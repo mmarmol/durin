@@ -71,6 +71,7 @@ function subagentResultFrame(
   taskId: string,
   iteration: number,
   phase: "running" | "end" = "running",
+  label?: string,
 ): InboundEvent {
   return {
     event: "message",
@@ -82,6 +83,7 @@ function subagentResultFrame(
         call_id: `subagent:${taskId}`,
         name: "subagent_result",
         phase,
+        ...(label !== undefined ? { arguments: { label } } : {}),
         progress: { iteration, tool: null },
       },
     ],
@@ -207,6 +209,32 @@ describe("useWorkState", () => {
       const item = result.current.active.find((w) => w.id === "agent1");
       expect(item).toBeDefined();
       expect(item!.steps).toBe(5);
+    });
+  });
+
+  it("subagent_result uses arguments.label when present, falls back to taskId", async () => {
+    const { result, emit } = renderUseWorkState("c1", "websocket:c1");
+
+    // Frame with a label in arguments.
+    act(() => {
+      emit(subagentResultFrame("agent-labeled", 1, "running", "My sub-agent"));
+    });
+
+    await waitFor(() => {
+      const item = result.current.active.find((w) => w.id === "agent-labeled");
+      expect(item).toBeDefined();
+      expect(item!.label).toBe("My sub-agent");
+    });
+
+    // Frame without arguments — label falls back to the taskId.
+    act(() => {
+      emit(subagentResultFrame("agent-nolabel", 1));
+    });
+
+    await waitFor(() => {
+      const item = result.current.active.find((w) => w.id === "agent-nolabel");
+      expect(item).toBeDefined();
+      expect(item!.label).toBe("agent-nolabel");
     });
   });
 
