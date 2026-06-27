@@ -1181,6 +1181,9 @@
     },
     "workflow": {
       "title": "Workflow"
+    },
+    "workChip": {
+      "openPanel": "Abrir panel de trabajo"
     }
   },
   "lightbox": {

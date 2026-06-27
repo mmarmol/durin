@@ -2,8 +2,10 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { HoistedToolBlock } from "@/components/thread/ToolBlocks";
 
+/** subagent_result now renders a compact WorkChip, not an inline detail block.
+ *  All detail (progress, result, error) is in the work panel. */
 describe("SubagentResultBlock live", () => {
-  it("shows running progress with step count", () => {
+  it("shows label chip while running (no step count inline)", () => {
     render(
       <HoistedToolBlock
         answered={false}
@@ -20,10 +22,12 @@ describe("SubagentResultBlock live", () => {
       />,
     );
     expect(screen.getByText(/research/)).toBeInTheDocument();
-    expect(screen.getByText(/3/)).toBeInTheDocument();
+    // Step count and task text are not shown inline — they live in the work panel
+    expect(screen.queryByText(/do x/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button")).toBeInTheDocument();
   });
 
-  it("shows the result when ended", () => {
+  it("shows label chip when ended (result not inline)", () => {
     render(
       <HoistedToolBlock
         answered={false}
@@ -39,6 +43,9 @@ describe("SubagentResultBlock live", () => {
         }
       />,
     );
-    expect(screen.getByText("all done")).toBeInTheDocument();
+    expect(screen.getByText(/research/)).toBeInTheDocument();
+    // Result text is not shown inline — it lives in the work panel
+    expect(screen.queryByText("all done")).not.toBeInTheDocument();
+    expect(screen.getByRole("button")).toBeInTheDocument();
   });
 });

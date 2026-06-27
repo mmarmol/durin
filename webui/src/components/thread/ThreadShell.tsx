@@ -337,6 +337,7 @@ export function ThreadShell({
         value: string;
         scope?: string[];
       }) => client.storeSecret({ ...input, chatId: chatId ?? undefined }),
+      openWorkPanel: () => setPanelOpen(true),
     }),
     [handleThreadSend, client, chatId],
   );

@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
-import { Check, ClipboardList, FileText, GitBranch, KeyRound, Loader2, X } from "lucide-react";
+import { Check, ClipboardList, FileText, KeyRound } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { MarkdownText } from "@/components/MarkdownText";
 import { useThreadActions } from "@/components/thread/ThreadActionsContext";
+import { WorkChip } from "@/components/thread/WorkChip";
 import { AskUserAnswer, RequestSecretPanel } from "@/components/thread/ToolCallBlock";
 import { cn } from "@/lib/utils";
 import type { ToolProgressEvent } from "@/lib/types";
@@ -43,9 +44,8 @@ export function HoistedToolBlock({
     case "exit_plan_mode":
       return <PlanBlock event={event} answered={answered} />;
     case "subagent_result":
-      return <SubagentResultBlock event={event} />;
     case "workflow_progress":
-      return <WorkflowProgressBlock event={event} />;
+      return <WorkChip event={event} />;
     default:
       return null;
   }
@@ -187,76 +187,6 @@ function PlanBlock({
           </span>
         </div>
       ) : null}
-    </BlockShell>
-  );
-}
-
-function SubagentResultBlock({ event }: { event: ToolProgressEvent }) {
-  const { t } = useTranslation();
-  const a = args(event);
-  const label = typeof a.label === "string" ? a.label : "";
-  const task = typeof a.task === "string" ? a.task : "";
-  const running = event.phase === "running";
-  const failed = event.phase === "error";
-  const steps = event.progress?.iteration ?? 0;
-  const tool = event.progress?.tool ?? "";
-  const body =
-    typeof event.error === "string" && failed
-      ? event.error
-      : typeof event.result === "string"
-        ? event.result
-        : "";
-  return (
-    <BlockShell icon={<span aria-hidden>{failed ? "🛑" : "🤖"}</span>}>
-      <div className="mb-0.5 flex flex-wrap items-baseline gap-x-2">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-          {t("message.subagent.title")} · {label}
-        </span>
-        {task ? (
-          <span className="min-w-0 truncate text-[11.5px] text-muted-foreground/80">
-            {task}
-          </span>
-        ) : null}
-      </div>
-      {running ? (
-        <span className="text-[12px] text-muted-foreground">
-          {t("message.subagent.running", { steps })}
-          {tool ? ` · ${tool}` : ""}
-        </span>
-      ) : body ? (
-        <div
-          className={cn(
-            "max-h-72 overflow-y-auto scrollbar-thin",
-            failed && "text-red-500/90",
-          )}
-        >
-          <MarkdownText className="text-[13px]">{body}</MarkdownText>
-        </div>
-      ) : null}
-    </BlockShell>
-  );
-}
-
-function WorkflowProgressBlock({ event }: { event: ToolProgressEvent }) {
-  const { t } = useTranslation();
-  const wf = (event.arguments as { workflow?: string } | undefined)?.workflow ?? "";
-  const nodes = event.nodes ?? [];
-  const icon = (s: string) =>
-    s === "done" ? <Check className="h-3 w-3 text-emerald-600" aria-hidden />
-    : s === "failed" ? <X className="h-3 w-3 text-destructive" aria-hidden />
-    : <Loader2 className="h-3 w-3 animate-spin text-amber-600" aria-hidden />;
-  return (
-    <BlockShell icon={<GitBranch className="h-3.5 w-3.5" aria-hidden />}>
-      <div className="mb-0.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        {t("message.workflow.title")}{wf ? ` · ${wf}` : ""}
-      </div>
-      <ul className="flex flex-col gap-1">
-        {nodes.map((n) => (
-          <li key={n.id} className="flex items-center gap-2 text-[12.5px]">
-            {icon(n.status)}<span>{n.id}</span>
-          </li>
-        ))}
-      </ul>
     </BlockShell>
   );
 }
