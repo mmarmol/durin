@@ -131,3 +131,73 @@ async def test_workflow_task_none_when_absent(tmp_path):
     wf = [t for t in res.tasks if t.kind == 'workflow'][0]
     assert wf.task is None
 
+
+# ---------------------------------------------------------------------------
+# Node label tests
+# ---------------------------------------------------------------------------
+
+import json
+
+
+def _write_wf_def(workspace, name, nodes_raw):
+    """Write a minimal workflow definition JSON under <workspace>/workflows/."""
+    wf_dir = workspace / "workflows"
+    wf_dir.mkdir(parents=True, exist_ok=True)
+    data = {"name": name, "start": nodes_raw[0]["id"], "nodes": nodes_raw}
+    (wf_dir / f"{name}.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_node_tree_label_from_workflow_def(tmp_path):
+    """Node tree entries carry labels derived from the workflow definition."""
+    _write_wf_def(tmp_path, "my-wf", [
+        {"id": "plan", "title": "Break into research angles", "kind": "work", "next": "gather"},
+        {"id": "gather", "prompt": "Collect and synthesize results.", "kind": "work", "next": None},
+    ])
+    result = WorkflowResult(
+        status="completed", final_output="done", run_id="r_lbl",
+        runs=[
+            NodeRun(node_id="plan", iteration=0, output="planned", session_key="sk-plan", status="ok"),
+            NodeRun(node_id="gather", iteration=0, output="gathered", session_key="sk-gather", status="ok"),
+        ],
+    )
+    run_log.finalize_run(
+        tmp_path, "my-wf", result,
+        root_session_key="websocket:clbl", started_at=1.0, finished_at=2.0,
+    )
+    svc = TasksService(workspace=tmp_path)
+    res = await svc.list(TasksListQuery(session="websocket:clbl"), _principal())
+    wf = [t for t in res.tasks if t.kind == "workflow"][0]
+    by_id = {n["id"]: n for n in wf.nodes}
+    assert by_id["plan"]["label"] == "Break into research angles"
+    assert by_id["gather"]["label"] == "Collect and synthesize results"
+
+
+@pytest.mark.asyncio
+async def test_node_tree_label_fallback_when_no_def(tmp_path):
+    """When the workflow definition is absent, nodes fall back to prettified ids."""
+    result = WorkflowResult(
+        status="completed", final_output="done", run_id="r_nolbl",
+        runs=[
+            NodeRun(node_id="gather_results", iteration=0, output="x", session_key="sk", status="ok"),
+        ],
+    )
+    run_log.finalize_run(
+        tmp_path, "missing-wf", result,
+        root_session_key="websocket:cnolbl", started_at=1.0, finished_at=2.0,
+    )
+    svc = TasksService(workspace=tmp_path)
+    res = await svc.list(TasksListQuery(session="websocket:cnolbl"), _principal())
+    wf = [t for t in res.tasks if t.kind == "workflow"][0]
+    assert wf.nodes[0]["label"] == "Gather results"
+
+
+@pytest.mark.asyncio
+async def test_node_tree_all_entries_have_label(tmp_workspace_with_manifest):
+    """Every node entry in the tree carries a 'label' key (even without a def file)."""
+    svc = TasksService(workspace=tmp_workspace_with_manifest)
+    res = await svc.list(TasksListQuery(session="websocket:c1"), _principal())
+    wf = [t for t in res.tasks if t.kind == "workflow"][0]
+    for node in wf.nodes:
+        assert "label" in node, f"node {node['id']!r} missing 'label'"
+

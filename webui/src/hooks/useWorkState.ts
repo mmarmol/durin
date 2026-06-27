@@ -16,18 +16,21 @@ import type { InboundEvent, ToolProgressEvent, WorkBranch, WorkItem, WorkNode } 
 function toWorkNodes(
   raw: Array<{
     id: string;
+    label?: string;
     status: string;
-    branches?: Array<{ id: string; status: string }> | null;
+    branches?: Array<{ id: string; label?: string; status: string }> | null;
   }> | null | undefined,
 ): WorkNode[] {
   if (!raw) return [];
   return raw.map((n) => {
     const branches: WorkBranch[] | undefined = n.branches?.map((b) => ({
       id: b.id,
+      ...(b.label ? { label: b.label } : {}),
       status: b.status as WorkBranch["status"],
     }));
     return {
       id: n.id,
+      ...(n.label ? { label: n.label } : {}),
       status: n.status as WorkNode["status"],
       ...(branches && branches.length > 0 ? { branches } : {}),
     };
@@ -48,9 +51,10 @@ function workItemFromWorkflowEvent(
     arguments?: unknown;
     nodes?: Array<{
       id: string;
+      label?: string;
       status: "running" | "done" | "failed";
       route_label?: string | null;
-      branches?: Array<{ id: string; status: "running" | "done" | "failed" }>;
+      branches?: Array<{ id: string; label?: string; status: "running" | "done" | "failed" }>;
     }>;
   };
 

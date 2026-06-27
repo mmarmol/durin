@@ -139,4 +139,60 @@ describe("WorkItemCard", () => {
     );
     expect(screen.getByText("my-workflow")).toBeInTheDocument();
   });
+
+  it("renders node label instead of raw id when label is present", () => {
+    render(
+      <WorkItemCard
+        item={{
+          kind: "workflow",
+          id: "r4",
+          label: "research-to-answer",
+          status: "running",
+          nodes: [
+            {
+              id: "plan",
+              label: "Break the question into research angles",
+              status: "done",
+            },
+            {
+              id: "gather",
+              label: "Collect and synthesize results",
+              status: "running",
+              branches: [
+                { id: "br1", label: "Search angle A", status: "done" },
+                { id: "br2", label: "Search angle B", status: "running" },
+              ],
+            },
+          ],
+          startedAt: 0,
+          endedAt: null,
+        }}
+      />,
+    );
+    // labels are rendered instead of raw ids
+    expect(screen.getByText("Break the question into research angles")).toBeInTheDocument();
+    expect(screen.getByText("Collect and synthesize results")).toBeInTheDocument();
+    expect(screen.getByText("Search angle A")).toBeInTheDocument();
+    expect(screen.getByText("Search angle B")).toBeInTheDocument();
+    // raw ids must NOT be rendered
+    expect(screen.queryByText("plan")).not.toBeInTheDocument();
+    expect(screen.queryByText("gather")).not.toBeInTheDocument();
+  });
+
+  it("falls back to node id when label is absent", () => {
+    render(
+      <WorkItemCard
+        item={{
+          kind: "workflow",
+          id: "r5",
+          label: "wf",
+          status: "done",
+          nodes: [{ id: "step1", status: "done" }],
+          startedAt: 0,
+          endedAt: 10,
+        }}
+      />,
+    );
+    expect(screen.getByText("step1")).toBeInTheDocument();
+  });
 });

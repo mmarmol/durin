@@ -30,7 +30,7 @@ from loguru import logger
 from durin.workflow import run_log, workspace_fork
 from durin.workflow.artifacts import artifact_dir, prune_runs
 from durin.workflow.result import NodeRun, WorkflowResult
-from durin.workflow.spec import NEEDS_INPUT_TARGET, ParallelNode, SubworkflowNode, WorkNode, Workflow
+from durin.workflow.spec import NEEDS_INPUT_TARGET, ParallelNode, SubworkflowNode, WorkNode, Workflow, node_label
 from durin.workflow.verdict import parse_label, parse_verdict
 
 
@@ -285,11 +285,17 @@ class WorkflowEngine:
             if self._progress_emit is not None:
                 started = [
                     {"id": r.node_id,
+                     "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
                      "status": ("failed" if r.status in ("node_failed", "persist_failed") else "done"),
                      "route_label": r.route_label}
                     for r in runs
                 ]
-                started.append({"id": node.id, "status": "running", "route_label": None})
+                started.append({
+                    "id": node.id,
+                    "label": node_label(node),
+                    "status": "running",
+                    "route_label": None,
+                })
                 try:
                     self._progress_emit({"run_id": run_id, "nodes": started, "done": False})
                 except Exception:  # noqa: BLE001 - best-effort
@@ -442,6 +448,7 @@ class WorkflowEngine:
                 nodes = [
                     {
                         "id": r.node_id,
+                        "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
                         "status": (
                             "failed"
                             if r.status in ("node_failed", "persist_failed")
@@ -621,13 +628,17 @@ class WorkflowEngine:
                 return
             prior = [
                 {"id": r.node_id,
+                 "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
                  "status": ("failed" if r.status in ("node_failed", "persist_failed") else "done"),
                  "route_label": r.route_label}
                 for r in runs
             ]
             with _branch_lock:
-                branch_list = [{"id": bid, "status": st} for bid, st in branch_status.items()]
-            prior.append({"id": node.id, "status": "running", "route_label": None,
+                branch_list = [
+                    {"id": bid, "label": node_label(workflow.nodes[bid]) if bid in workflow.nodes else bid, "status": st}
+                    for bid, st in branch_status.items()
+                ]
+            prior.append({"id": node.id, "label": node_label(node), "status": "running", "route_label": None,
                           "branches": branch_list})
             try:
                 self._progress_emit({"run_id": run_id, "nodes": prior, "done": False})

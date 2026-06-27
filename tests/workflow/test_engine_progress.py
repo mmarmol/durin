@@ -130,3 +130,77 @@ def test_parallel_node_emits_branch_progress():
         for b in (n.get("branches") or [])
     }
     assert "done" in statuses, f"expected 'done' in branch statuses; got {statuses}"
+
+
+def test_engine_progress_nodes_carry_label():
+    """Each node dict in progress frames must carry a 'label' key derived from the
+    node's title or prompt or prettified id."""
+    calls = []
+    wf = parse_workflow({
+        "name": "labels-test", "start": "plan",
+        "nodes": [
+            {"id": "plan", "title": "Break into angles", "kind": "work", "next": "gather"},
+            {"id": "gather", "prompt": "Collect the results.", "kind": "work", "next": None},
+        ],
+    })
+    eng = WorkflowEngine(
+        node_runner=_make_runner({"plan": "planned", "gather": "gathered"}),
+        run_id_factory=lambda: "r-lbl",
+        progress_emit=lambda p: calls.append(p),
+    )
+    result = eng.run(wf, "do it", root_session_key="websocket:chatX")
+    assert result.status == "completed"
+    assert calls, "progress_emit never called"
+
+    # Every node dict across every frame must have a 'label'.
+    for call in calls:
+        for node in call["nodes"]:
+            assert "label" in node, f"node {node['id']!r} missing 'label' in frame {call!r}"
+
+    # The last frame carries both nodes; check their label values.
+    last = calls[-1]
+    by_id = {n["id"]: n for n in last["nodes"]}
+    assert by_id["plan"]["label"] == "Break into angles"
+    assert by_id["gather"]["label"] == "Collect the results"
+
+
+def test_parallel_branches_carry_label():
+    """Branch dicts inside parallel nodes must carry a 'label' key."""
+    frames = []
+    wf = parse_workflow({
+        "name": "br-labels", "start": "pre",
+        "nodes": [
+            {"id": "pre", "title": "Prepare context", "kind": "work", "next": "gather"},
+            {"id": "gather", "kind": "parallel", "branches": ["br1", "br2"], "next": None},
+            {"id": "br1", "title": "Search angle A", "kind": "work"},
+            {"id": "br2", "prompt": "Search from B perspective.", "kind": "work"},
+        ],
+    })
+    eng = WorkflowEngine(
+        node_runner=_make_runner({"pre": "ctx", "br1": "out1", "br2": "out2"}),
+        run_id_factory=lambda: "r-brlbl",
+        progress_emit=frames.append,
+    )
+    result = eng.run(wf, "x", root_session_key=None)
+    assert result.status == "completed"
+
+    branch_frames = [
+        f for f in frames
+        for n in f["nodes"]
+        if n.get("branches")
+    ]
+    assert branch_frames, "expected at least one frame with branches"
+
+    # Every branch dict must have a 'label'.
+    for frame in branch_frames:
+        for node in frame["nodes"]:
+            for b in node.get("branches") or []:
+                assert "label" in b, f"branch {b['id']!r} missing 'label'"
+
+    # Check one known label.
+    last_branch_frame = branch_frames[-1]
+    for node in last_branch_frame["nodes"]:
+        if node.get("branches"):
+            branch_by_id = {b["id"]: b for b in node["branches"]}
+            assert branch_by_id["br1"]["label"] == "Search angle A"
+            assert branch_by_id["br2"]["label"] == "Search from B perspective"

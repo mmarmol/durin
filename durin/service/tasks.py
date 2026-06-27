@@ -58,16 +58,20 @@ def _node_run_status(s: str) -> str:
     return "failed" if s in ("node_failed", "persist_failed") else "done"
 
 
-def _node_tree(node_runs: list[dict]) -> list[dict]:
+def _node_tree(node_runs: list[dict], label_map: dict[str, str] | None = None) -> list[dict]:
     """Group manifest node runs by node id (first-seen order). A node id that
-    recurs across iterations collapses to one entry showing its latest status."""
+    recurs across iterations collapses to one entry showing its latest status.
+    label_map maps node id → human label; absent ids fall back to a prettified id."""
+    from durin.workflow.spec import _prettify_id
+
     order: list[str] = []
     latest: dict[str, dict] = {}
     for r in node_runs:
         nid = r.get("node_id") or ""
         if nid not in latest:
             order.append(nid)
-        latest[nid] = {"id": nid, "status": _node_run_status(r.get("status", "ok")), "branches": None}
+        label = (label_map or {}).get(nid) or _prettify_id(nid)
+        latest[nid] = {"id": nid, "label": label, "status": _node_run_status(r.get("status", "ok")), "branches": None}
     return [latest[nid] for nid in order]
 
 
@@ -121,17 +125,29 @@ class TasksService:
                 ))
 
         from durin.workflow import run_log
+        from durin.workflow.loader import WorkflowNotFound, load_workflow
+        from durin.workflow.spec import WorkflowError, node_label
         for rec in run_log.runs_for_session(self._workspace, query.session):
             node_runs = rec.get("runs") or []
             drill = node_runs[-1].get("session_key") if node_runs else None  # last node's session for drill-in; None for routing nodes that persist no session
+            # Build a label map from the workflow definition. Best-effort: if the
+            # definition file is missing or malformed, nodes fall back to prettified ids.
+            label_map: dict[str, str] | None = None
+            wf_name = rec.get("workflow", "")
+            if wf_name:
+                try:
+                    wf_def = load_workflow(self._workspace, wf_name)
+                    label_map = {nid: node_label(node) for nid, node in wf_def.nodes.items()}
+                except (WorkflowNotFound, WorkflowError, Exception):
+                    pass
             tasks.append(BackgroundTask(
                 kind="workflow", id=rec.get("run_id", ""),
-                label=rec.get("workflow", ""),
+                label=wf_name,
                 status=_workflow_status(rec.get("status", "")),
                 started_at=float(rec.get("started_at") or 0.0),
                 ended_at=rec.get("finished_at"),
                 session_key=drill,
-                nodes=_node_tree(node_runs),
+                nodes=_node_tree(node_runs, label_map),
                 task=rec.get("task"),
             ))
 

@@ -91,9 +91,10 @@ export interface ToolProgressEvent {
   progress?: { iteration?: number; tool?: string | null };
   nodes?: Array<{
     id: string;
+    label?: string;
     status: "running" | "done" | "failed";
     route_label?: string | null;
-    branches?: Array<{ id: string; status: "running" | "done" | "failed" }>;
+    branches?: Array<{ id: string; label?: string; status: "running" | "done" | "failed" }>;
   }>;
 }
 
@@ -103,11 +104,13 @@ export interface ToolProgressEvent {
 
 export interface WorkBranch {
   id: string;
+  label?: string;
   status: "running" | "done" | "failed";
 }
 
 export interface WorkNode {
   id: string;
+  label?: string;
   status: "running" | "done" | "failed" | "pending";
   branches?: WorkBranch[];
 }

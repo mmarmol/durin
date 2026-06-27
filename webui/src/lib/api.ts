@@ -110,7 +110,7 @@ export interface BackgroundTask {
   started_at: number;
   ended_at: number | null;
   session_key: string | null;
-  nodes?: Array<{ id: string; status: string; branches?: Array<{ id: string; status: string }> | null }> | null;
+  nodes?: Array<{ id: string; label?: string; status: string; branches?: Array<{ id: string; label?: string; status: string }> | null }> | null;
   task?: string | null;
 }
 

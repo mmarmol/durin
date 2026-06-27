@@ -72,7 +72,7 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
                     node.status === "pending" && "text-muted-foreground/60",
                   )}
                 >
-                  {node.id}
+                  {node.label ?? node.id}
                 </span>
               </div>
               {/* Parallel branches: indented beneath the node with a left rail */}
@@ -87,7 +87,7 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
                           branch.status === "failed" && "text-destructive",
                         )}
                       >
-                        {branch.id}
+                        {branch.label ?? branch.id}
                       </span>
                     </li>
                   ))}
