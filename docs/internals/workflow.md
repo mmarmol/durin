@@ -400,6 +400,7 @@ End-to-end for a single `run_workflow` call:
 | `load_workflow` | `durin/workflow/loader.py` | Load and parse a workflow by name from the workspace. |
 | `WorkflowResult`, `NodeRun` | `durin/workflow/result.py` | The typed run outcome and per-node trace. |
 | `RunWorkflowTool` | `durin/agent/tools/run_workflow.py` | The `run_workflow` LLM tool (core scope) that loads, runs, summarizes a workflow, and records its run. |
+| `ListWorkflowsTool` | `durin/agent/tools/list_workflows.py` | The `list_workflows` LLM tool (core scope, read-only) that lists the workspace's workflows with their `description` and I/O for discovery; an optional `query` filters by name/description. |
 | `start_run`, `update_run`, `finalize_run`, `read_manifest`, `runs_for_session`, `reconcile_running`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
 | `NodeExecutionError` | `durin/workflow/engine.py` | Typed error raised by the node runner when an agent turn fails; carries `node_id`, `iteration`, and `session_key` so the engine can record an attributable `NodeRun` before aborting. |
 | `compute_diagnostics` | `durin/workflow/diagnostics.py` | Reduces run records to recurring per-node trouble (loop-backs, gate fails) → improvement candidates. |
@@ -412,6 +413,12 @@ End-to-end for a single `run_workflow` call:
   directory is a small local git repo (`durin/workflow/version_store.py`, via the
   shared `GitRepo`); every run snapshots the current definitions, so there is a
   navigable version history of how each workflow changed and which version a run used.
+- **Discovery:** an optional top-level workflow `description` (one line — what it does and
+  when to use it) is the discovery hint, surfaced by the `list_workflows` LLM tool —
+  auto-discovered into the agent's tool registry at core scope, read-only. It lists the
+  workspace's local workflows (name, `description`, and I/O), with an optional `query` that
+  filters by name/description, so the agent can pick which one to run; `run_workflow` runs it.
+  The field is optional and backward-compatible — a workflow without it parses and runs fine.
 - **Surface:** the `run_workflow(name, task)` LLM tool — auto-discovered into the
   agent's tool registry at core scope (see [tools.md](tools.md)). A node with
   `tools: "default"` receives the user's configured tool set; `tools: "none"` (the

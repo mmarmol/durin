@@ -1,5 +1,6 @@
 {
   "name": "build-specs",
+  "description": "Decompose an underspecified slice into its independent components and write a detailed handoff spec per component (one per fan-out worker).",
   "improvement_mode": "manual",
   "input": {"text": true, "description": "a plan slice or feature to elaborate into detailed, implementable specs"},
   "output": {"text": true, "description": "a handoff spec: one precise spec per component, with contracts, acceptance criteria, and exact values"},

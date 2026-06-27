@@ -39,6 +39,17 @@ def test_seed_parses(name: str):
     assert wf.name == name
 
 
+@pytest.mark.parametrize("name", _SEED_NAMES)
+def test_seed_has_description(name: str):
+    # Every seed carries a non-empty top-level one-line description: it is the
+    # discovery hint list_workflows surfaces so an agent can pick which to run.
+    data = json.loads(_seed_path(name).read_text(encoding="utf-8"))
+    desc = data.get("description")
+    assert isinstance(desc, str) and desc.strip(), (
+        f"seed {name!r} is missing a non-empty top-level 'description'"
+    )
+
+
 def test_seed_workflows_copies_all(tmp_path: Path):
     added = seed_workflows(tmp_path)
     dest = tmp_path / "workflows"

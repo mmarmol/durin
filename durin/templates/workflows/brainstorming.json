@@ -1,5 +1,6 @@
 {
   "name": "brainstorming",
+  "description": "Think a design or idea through before building: explore independent angles in parallel, then synthesize a design spec (approach, requirements, alternatives, open questions).",
   "start": "clarify",
   "max_visits": 3,
   "improvement_mode": "manual",
