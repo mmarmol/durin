@@ -26,7 +26,8 @@ memory** rather than cold recall. (See your Memory instructions for the full
 routing — search first to extend an entity instead of duplicating it.)
 `memory_upsert_entity` **appends** the `body` by default (adds, never loses);
 pass `body_mode="replace"` only to rewrite the whole body to correct it, with
-the full current body in context.
+the full current body in context. Read a whole entity page with
+`memory_read_entity`, and remove a fact that is wrong with `memory_forget`.
 
 ## SOUL.md
 
