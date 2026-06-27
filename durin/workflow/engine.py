@@ -66,6 +66,10 @@ class NodeRunResponse:
     # lost). Lets the engine record a truthful 'persist_failed' status instead of a
     # misleading 'ok' with a silently-absent session.
     persist_failed: bool = False
+    # The routing verdict the node recorded via the forced `route` tool call (a deterministic
+    # label from the node's own enum). None when the node does not route or the route call could
+    # not produce a valid label — the engine then falls back to parsing the node's text output.
+    route_label: str | None = None
 
 
 NodeRunner = Callable[[NodeRunRequest], NodeRunResponse]
@@ -335,11 +339,12 @@ class WorkflowEngine:
                         update_manifest()
                     raise
                 output = resp.output
+                route_label = getattr(resp, "route_label", None)
                 if node.cases is not None:
                     # Multi-way: label matching replaces pass/fail.
                     passed = None
                 elif node.routes:
-                    passed = parse_verdict(output)
+                    passed = (route_label == "PASS") if route_label is not None else parse_verdict(output)
                 else:
                     passed = None
                 runs.append(NodeRun(node_id=node.id, iteration=iteration,
@@ -356,7 +361,7 @@ class WorkflowEngine:
                 if node.cases is not None:
                     # Multi-way routing: match the agent's output against declared labels.
                     _UNSET = object()
-                    label = parse_label(output, node.cases)
+                    label = route_label if route_label in node.cases else parse_label(output, node.cases)
                     if label is not None:
                         target = node.cases[label]
                     else:
