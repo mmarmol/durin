@@ -40,12 +40,11 @@ _PARAMETERS = {
         "background": {
             "type": "boolean",
             "description": (
-                "Optional (default false). When true, run the workflow in the BACKGROUND: "
-                "this returns immediately and you keep working; the workflow's result is "
-                "delivered to you as a follow-up message when it finishes. Use it when you "
-                "do NOT need the result to continue right now. When false, the call blocks "
-                "until the workflow finishes and returns its result directly — use that when "
-                "you need the answer before doing anything else."
+                "Optional (default TRUE — runs in the BACKGROUND). A background run returns "
+                "immediately and you keep working; the workflow's result is delivered to you "
+                "as a follow-up message when it finishes. Pass background=false ONLY when you "
+                "need the result to keep reasoning in THIS turn (it then blocks and returns the "
+                "result directly). Default to background so the chat is never blocked."
             ),
         },
     },
@@ -147,8 +146,10 @@ class RunWorkflowTool(Tool, ContextAware):
             "and, when it has routing set (on_pass/on_fail), routes the flow on its verdict. "
             "Returns a run summary. If the summary says the workflow needs more information, "
             "it ENDED asking for clarification (it did not fail) — ask the user those questions "
-            "and call this tool again with the same task plus their answers. Pass background=true "
-            "to run it without blocking and receive the result as a follow-up message."
+            "and call this tool again with the same task plus their answers. "
+            "Pass background=false to block and get the result inline only when you need it "
+            "to continue right now; otherwise it runs in the background and its result is "
+            "delivered as a follow-up message."
         )
 
     async def _inject_result(self, summary: str, *, name: str, inject_target: dict) -> None:
@@ -184,7 +185,7 @@ class RunWorkflowTool(Tool, ContextAware):
         except Exception:  # noqa: BLE001 - best-effort; the run already persisted its manifest
             pass
 
-    async def execute(self, name: str, task: str, output_format: str = "", background: bool = False) -> str:  # type: ignore[override]
+    async def execute(self, name: str, task: str, output_format: str = "", background: bool = True) -> str:  # type: ignore[override]
         from durin.agent.runner import AgentRunner
         from durin.providers.factory import make_provider
         from durin.workflow.engine import WorkflowEngine
