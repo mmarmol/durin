@@ -1,7 +1,9 @@
 """Tests for WorkflowEngine progress_emit callback.
 
 The engine calls ``progress_emit`` after each node record (and update_manifest)
-so the caller can observe partial run state in real time.
+so the caller can observe partial run state in real time.  For parallel nodes it
+also emits per-branch progress frames so the UI can show each branch advancing
+live rather than waiting for all branches to finish.
 """
 
 from durin.workflow.engine import NodeRunRequest, NodeRunResponse, WorkflowEngine
@@ -81,3 +83,50 @@ def test_engine_progress_emit_exception_does_not_break_run():
     )
     result = eng.run(wf, "do it")
     assert result.status == "completed"
+
+
+def test_parallel_node_emits_branch_progress():
+    """A parallel node must emit frames with per-branch status as branches finish.
+
+    Specifically:
+    - At least one frame must carry a 'branches' list on the parallel node entry.
+    - The final branch statuses must include 'done' (branches completed).
+    """
+    frames = []
+
+    # A minimal workflow: one work node feeds into a parallel gather node with two
+    # branches (reconcile='read' is the simplest path — no workspace needed).
+    wf = parse_workflow({
+        "name": "br-prog", "start": "pre",
+        "nodes": [
+            {"id": "pre", "kind": "work", "next": "gather"},
+            {"id": "gather", "kind": "parallel", "branches": ["br1", "br2"], "next": None},
+            {"id": "br1", "kind": "work"},
+            {"id": "br2", "kind": "work"},
+        ],
+    })
+
+    eng = WorkflowEngine(
+        node_runner=_make_runner({"pre": "ctx", "br1": "out1", "br2": "out2"}),
+        run_id_factory=lambda: "r1",
+        progress_emit=frames.append,
+    )
+    result = eng.run(wf, "x", root_session_key=None)
+    assert result.status == "completed"
+
+    # At least one frame must carry branches on the parallel node.
+    branch_frames = [
+        f for f in frames
+        for n in f["nodes"]
+        if n.get("branches")
+    ]
+    assert branch_frames, "expected at least one frame carrying a node's 'branches' list"
+
+    # Collect all branch statuses across all branch-carrying frames.
+    statuses = {
+        b["status"]
+        for f in branch_frames
+        for n in f["nodes"]
+        for b in (n.get("branches") or [])
+    }
+    assert "done" in statuses, f"expected 'done' in branch statuses; got {statuses}"

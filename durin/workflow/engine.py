@@ -596,9 +596,45 @@ class WorkflowEngine:
         applied); 'choose'/'union' branches each run against a private copy and their
         file changes are reconciled back. Each branch is appended to ``runs`` so its
         session stays attributable in the trace.
+
+        Per-branch progress is emitted via ``_progress_emit`` as branches start and
+        finish.  The parallel node's entry in the frame carries a ``"branches"`` list
+        with each branch's current status ("running", "done", or "failed").  Emits are
+        best-effort — a crashing emit never alters the run or its result.
         """
+        import threading
+
         branches = node.branches
         workers = max(1, min(len(branches), node.max_concurrency))
+
+        # Shared branch-status map, guarded by a lock because branches run in
+        # ThreadPoolExecutor workers concurrently.
+        branch_status: dict[str, str] = {bid: "running" for bid in branches}
+        _branch_lock = threading.Lock()
+
+        def _emit_branches() -> None:
+            """Emit a progress frame with the current per-branch statuses.  The frame
+            carries prior finished nodes plus the parallel node itself (status 'running')
+            annotated with a snapshot of each branch's live status."""
+            if self._progress_emit is None:
+                return
+            prior = [
+                {"id": r.node_id,
+                 "status": ("failed" if r.status in ("node_failed", "persist_failed") else "done"),
+                 "route_label": r.route_label}
+                for r in runs
+            ]
+            with _branch_lock:
+                branch_list = [{"id": bid, "status": st} for bid, st in branch_status.items()]
+            prior.append({"id": node.id, "status": "running", "route_label": None,
+                          "branches": branch_list})
+            try:
+                self._progress_emit({"run_id": run_id, "nodes": prior, "done": False})
+            except Exception:  # noqa: BLE001 - best-effort; must never alter the run
+                pass
+
+        # Emit once with all branches "running" so the UI shows them immediately.
+        _emit_branches()
 
         if node.reconcile == "read":
             def _run(bid):
@@ -607,10 +643,19 @@ class WorkflowEngine:
                 try:
                     resp = self._run_one_branch(
                         workflow.nodes[bid], task, upstream, run_id, iteration, root_key, None)
+                    with _branch_lock:
+                        branch_status[bid] = "done"
+                    _emit_branches()
                     return bid, resp.output, resp.session_key, None, resp.persist_failed
                 except NodeExecutionError as exc:
+                    with _branch_lock:
+                        branch_status[bid] = "failed"
+                    _emit_branches()
                     return bid, "", exc.session_key, str(exc.cause), False
                 except Exception as exc:  # noqa: BLE001 - isolate a single branch's failure
+                    with _branch_lock:
+                        branch_status[bid] = "failed"
+                    _emit_branches()
                     return bid, "", None, str(exc), False
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
                 results = list(ex.map(_run, branches))
@@ -630,10 +675,19 @@ class WorkflowEngine:
         def _run(bid):
             fork_dir = workspace_fork.fork(self._workspace)
             forks.append(fork_dir)
-            resp = self._run_one_branch(
-                workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
-                str(fork_dir), fork_dir=fork_dir)
-            return bid, resp.output, resp.session_key, workspace_fork.diff(base, fork_dir)
+            try:
+                resp = self._run_one_branch(
+                    workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
+                    str(fork_dir), fork_dir=fork_dir)
+                with _branch_lock:
+                    branch_status[bid] = "done"
+                _emit_branches()
+                return bid, resp.output, resp.session_key, workspace_fork.diff(base, fork_dir)
+            except Exception:
+                with _branch_lock:
+                    branch_status[bid] = "failed"
+                _emit_branches()
+                raise
 
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
