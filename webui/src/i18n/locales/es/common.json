@@ -1520,5 +1520,10 @@
     "empty": "Sin tareas en segundo plano",
     "finished": "Finalizadas {{count}}",
     "status": { "running": "Corriendo", "needs_input": "Necesita input", "done": "Hecho", "failed": "Falló" }
+  },
+  "work": {
+    "steps": "{{count}} pasos",
+    "steps_one": "1 paso",
+    "needsInput": "Necesita input"
   }
 }
