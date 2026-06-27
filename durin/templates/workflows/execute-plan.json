@@ -4,16 +4,24 @@
   "improvement_mode": "manual",
   "input": {"text": true, "description": "an implementation plan with ordered, bite-sized steps (e.g. the output of writing-plans)"},
   "output": {"text": true, "description": "a task-by-task summary of what was built, and any deviations from the plan"},
-  "start": "implement",
+  "start": "intake",
   "nodes": [
+    {
+      "id": "intake",
+      "kind": "work",
+      "mode": "read",
+      "tools": "default",
+      "prompt": "You are about to execute an implementation plan. Before any work begins, review it critically. Read whatever context the working directory already has, then decide whether the plan is concrete and complete enough to carry out step by step — or whether something ESSENTIAL is broken or missing that only the user can resolve: a step with no clear action, a contradiction, a missing prerequisite, or a critical gap that blocks starting.\n\nEnd your reply with EXACTLY one of these labels on its own final line:\nREADY     — the plan is clear and executable; proceed.\nNEED_INFO — there is a blocking gap or ambiguity you cannot resolve yourself. BEFORE the label, list the SPECIFIC questions or fixes the user must resolve — each one a real blocker to starting, not a nice-to-have.",
+      "cases": {"READY": "implement", "NEED_INFO": "__needs_input__"}
+    },
     {
       "id": "implement",
       "kind": "work",
       "mode": "build",
       "tools": "default",
       "max_visits": 20,
-      "prompt": "You are executing an implementation plan ONE step at a time — fresh each turn, so you must orient from the workspace, not memory. FIRST list the files in your working directory and read enough of them to see which plan steps are already DONE. Then carry out the SINGLE next not-yet-done step: create or edit exactly the files that step calls for, and keep every earlier step's work intact. Run a quick check if the step is verifiable. Do NOT do more than one step. End your reply with EXACTLY one word on its own final line:\nMORE — you completed a step and at least one step still remains.\nDONE — every step in the plan is now complete.",
-      "cases": {"MORE": "implement", "DONE": "review"}
+      "prompt": "You are executing an implementation plan ONE step at a time — fresh each turn, so you must orient from the workspace, not memory. FIRST list the files in your working directory and read enough of them to see which plan steps are already DONE. Then carry out the SINGLE next not-yet-done step: create or edit exactly the files that step calls for, and keep every earlier step's work intact. Run a quick check if the step is verifiable. Do NOT do more than one step, and do NOT guess past a real obstacle. End your reply with EXACTLY one word on its own final line:\nMORE    — you completed a step and at least one step still remains.\nDONE    — every step in the plan is now complete.\nBLOCKED — you cannot proceed without help (a prerequisite is missing, a check keeps failing for a reason you cannot resolve, or the next step is genuinely ambiguous). BEFORE the label, state precisely what is blocking you and what you need to continue.",
+      "cases": {"MORE": "implement", "DONE": "review", "BLOCKED": "__needs_input__"}
     },
     {
       "id": "review",
