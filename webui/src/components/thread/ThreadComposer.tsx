@@ -11,6 +11,7 @@ import {
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
 import {
   Activity,
+  AlertTriangle,
   ArrowUp,
   BookOpen,
   Check,
@@ -51,7 +52,8 @@ import { ModePicker } from "@/components/thread/ModePicker";
 import { ReasoningEffortPicker } from "@/components/thread/ReasoningEffortPicker";
 import type { ModeInfo } from "@/lib/api";
 import type { SendImage } from "@/hooks/useDurinStream";
-import type { SlashCommand, GoalStateWsPayload } from "@/lib/types";
+import type { SlashCommand, GoalStateWsPayload, ApiRetryStatus } from "@/lib/types";
+import { resolveTitle } from "@/lib/api-retry-label";
 import { cn } from "@/lib/utils";
 
 /** ``<input accept>``: aligned with the server's MIME whitelist. SVG is
@@ -109,6 +111,10 @@ interface ThreadComposerProps {
   onEnterVoice?: () => void;
   voiceActive?: boolean;
   voiceState?: OrbState;
+  /** Live provider-retry status. Rendered inside the run strip when a run is
+   * active; hidden automatically once the run ends. */
+  apiStatus?: ApiRetryStatus | null;
+  onDismissApiStatus?: () => void;
 }
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
@@ -190,12 +196,16 @@ function buildGoalMarkdownBody(summary: string, objective: string): string {
   return o || s;
 }
 
-function RunElapsedStrip({
+export function RunElapsedStrip({
   startedAt,
   goalState,
+  apiStatus,
+  onDismissApiStatus,
 }: {
   startedAt: number | null;
   goalState?: GoalStateWsPayload;
+  apiStatus?: ApiRetryStatus | null;
+  onDismissApiStatus?: () => void;
 }) {
   const { t } = useTranslation();
   const [goalPanelOpen, setGoalPanelOpen] = useState(false);
@@ -408,6 +418,42 @@ function RunElapsedStrip({
           </button>
         ) : null}
       </div>
+      {/* Provider-retry row: only shown while a run is active (showTimer).
+          A stale apiStatus from a previous turn is hidden once startedAt
+          clears, so the strip can never appear "hung". */}
+      {showTimer && apiStatus ? (
+        <div
+          className={cn(
+            "flex items-center gap-2 border-b border-black/[0.04] px-3 py-1.5 dark:border-white/[0.06]",
+            apiStatus.final
+              ? "text-destructive"
+              : "text-muted-foreground",
+          )}
+          aria-live="polite"
+        >
+          {apiStatus.final ? (
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          ) : (
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
+          )}
+          <span className="min-w-0 flex-1 truncate text-[11.5px]">
+            {resolveTitle(apiStatus, t)}
+          </span>
+          {onDismissApiStatus ? (
+            <button
+              type="button"
+              onClick={onDismissApiStatus}
+              aria-label={t("common.dismiss")}
+              className={cn(
+                "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full",
+                "hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              )}
+            >
+              <X className="h-3 w-3" aria-hidden />
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -437,6 +483,8 @@ export function ThreadComposer({
   onEnterVoice,
   voiceActive = false,
   voiceState = "idle",
+  apiStatus = null,
+  onDismissApiStatus,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
@@ -948,7 +996,12 @@ export function ThreadComposer({
           || goalState?.active
           || goalState?.mode
           || goalState?.pending_question) ? (
-          <RunElapsedStrip startedAt={runStartedAt} goalState={goalState} />
+          <RunElapsedStrip
+            startedAt={runStartedAt}
+            goalState={goalState}
+            apiStatus={apiStatus}
+            onDismissApiStatus={onDismissApiStatus}
+          />
         ) : null}
         {voiceActive ? (
           <div

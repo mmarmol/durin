@@ -5,7 +5,6 @@ import { ThreadActionsProvider } from "@/components/thread/ThreadActionsContext"
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { GoalBanner } from "@/components/thread/GoalBanner";
-import { ApiStatusBanner } from "@/components/thread/ApiStatusBanner";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { WorkPanel } from "@/components/work/WorkPanel";
@@ -372,12 +371,6 @@ export function ThreadShell({
           onDismiss={dismissStreamError}
         />
       ) : null}
-      {apiStatus ? (
-        <ApiStatusBanner
-          status={apiStatus}
-          onDismiss={dismissApiStatus}
-        />
-      ) : null}
       {session ? (
         <ThreadComposer
           onSend={handleThreadSend}
@@ -408,6 +401,8 @@ export function ThreadShell({
           onEnterVoice={onEnterVoice}
           voiceActive={voiceActive}
           voiceState={voiceState}
+          apiStatus={apiStatus}
+          onDismissApiStatus={dismissApiStatus}
         />
       ) : (
         <ThreadComposer
@@ -438,6 +433,8 @@ export function ThreadShell({
           onEnterVoice={onEnterVoice}
           voiceActive={voiceActive}
           voiceState={voiceState}
+          apiStatus={apiStatus}
+          onDismissApiStatus={dismissApiStatus}
         />
       )}
     </>
