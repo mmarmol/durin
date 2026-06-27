@@ -31,6 +31,30 @@ fully possess.
 3. Domain expertise - Company-specific knowledge, schemas, business logic
 4. Bundled resources - Scripts, references, and assets for complex and repetitive tasks
 
+## Before building: is a skill even the right tool?
+
+durin has three ways to capture a repeatable capability. Decide which fits *before*
+authoring a skill — the default is **not** "a skill":
+
+- **Code (a script)** — when the work is deterministic with closed branches (a fixed
+  transform, a validation, a lookup). Prefer it wherever it applies: a script is exact,
+  free to run, and cannot drift. The scriptability test below decides script-vs-prose
+  *inside* a skill, but apply the same instinct first — if the whole capability is closed,
+  it is a script, not a skill.
+- **A workflow** — when it is a multi-step *agent* process whose value is fan-out over many
+  independent items, independent verification (producer ≠ checker), or determinism across
+  steps — the things one prompt handles badly. Use durin's workflow engine, not a skill;
+  read the `workflows` skill. Do **not** write a skill that merely narrates a multi-step
+  process that should be a workflow.
+- **A skill (prose)** — when it is reusable knowledge or runtime judgment the agent applies
+  itself: domain facts, conventions, a decision procedure, when-to-do-what guidance.
+
+Closed computation → code. Orchestration with fan-out / verification / determinism →
+workflow. Knowledge or judgment → skill. **These compose** — a skill may *bundle* a script
+or a workflow as its mechanism (ship the definition in the skill and install it on first
+use; see the `workflows` skill). What does not belong here is a prose-only skill that
+merely narrates a process a workflow should run.
+
 ## Core Principles
 
 ### Concise is Key
