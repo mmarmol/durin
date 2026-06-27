@@ -174,13 +174,13 @@ flowchart TD
     G --> H{next is None?}
     H -->|no| E
     H -->|yes| Z[WorkflowResult completed\nfinalize_run manifest]
-    F -->|binary on_pass/on_fail| I[parse_verdict\nfirst non-empty line]
+    F -->|binary on_pass/on_fail| I[route tool verdict\nfallback parse_verdict]
     I --> J{passed?}
     J -->|yes| K[route on_pass]
     J -->|no| L[route on_fail / loop back\nthread reviewer feedback]
     K --> H
     L --> H
-    F -->|multi-way cases| MW[parse_label\nlast matching line from end]
+    F -->|multi-way cases| MW[route tool verdict\nfallback parse_label]
     MW --> MWT{label target?}
     MWT -->|node id| E
     MWT -->|null / none| Z
@@ -275,22 +275,31 @@ failure in those modes propagates and aborts the run.
 `NodeRun.status` values: `"ok"` (node persisted), `"persist_failed"` (session save raised
 but the run continued), `"node_failed"` (the node's agent turn raised).
 
-### 4d. Verdict asymmetry
+### 4d. The routing verdict — a forced tool call, text-parse as fallback
 
-Binary and multi-way routing read the agent's output differently:
+A routing node's verdict is **deterministic by construction**. After the node's work turn,
+the node runner makes one **forced `route` tool call** (`tool_choice="required"`) whose
+`label` parameter is an **enum of that node's own labels** — the `cases` keys for a multi-way
+node, or `PASS`/`FAIL` for a binary one. The model can only return a value from that enum, so
+the verdict is always a valid label instead of a fragile free-text line that a stray word can
+derail. The call runs as a separate `provider.chat` (the runner reaches the provider via
+`AgentRunner.provider`) with the node's full conversation as context, and is wrapped so **any
+failure yields no label** (`route_label=None`) — the run never breaks on it.
 
-- **`parse_verdict` (binary)** reads the **first non-empty line** of the output and returns
-  `True` iff it starts with `PASS` (case-insensitive). Default is `False` (FAIL) — an
-  empty output or an unparseable answer loops back, never silently passes.
-- **`parse_label` (multi-way)** scans lines **from the end** for a line whose full
-  stripped, de-punctuated text equals one of the declared case labels (case-insensitive).
-  It returns the **last** matching line.
+When the tool call did not produce a valid label — it errored, or the provider did not honour
+the forced call — the engine **falls back to parsing the node's text output**:
 
-**Practical implication:** a binary routing node must put its `PASS`/`FAIL` verdict on
-the very first line of its reply. Placing it at the end of a long response causes
-`parse_verdict` to read an earlier content line and default to `FAIL`, looping back
-unexpectedly. Multi-way `parse_label` has the opposite convention — it reads from the
-end — so a label buried mid-reply is ignored in favour of the last matching line.
+- **`parse_verdict` (binary)** reads the **first non-empty line** and returns `True` iff it
+  starts with `PASS` (case-insensitive). Default is `False` (FAIL) — an empty or unparseable
+  answer loops back, never silently passes.
+- **`parse_label` (multi-way)** scans lines **from the end** for one whose full stripped,
+  de-punctuated text equals a declared case label (case-insensitive); it returns the **last**
+  match.
+
+**Practical implication (fallback path only):** the tool call makes label placement in the
+text irrelevant in the normal case. It still matters when the fallback runs — a binary node's
+`PASS`/`FAIL` should be its first line, a multi-way label its last — so a verdict still
+survives if the forced tool call is ever unavailable.
 
 ### 4e. Context vs. session
 
@@ -379,7 +388,7 @@ End-to-end for a single `run_workflow` call:
 | Symbol | File | Role |
 |---|---|---|
 | `Workflow`, `WorkNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator (one work-node type; routing optional; structural-equivalence guard). |
-| `parse_verdict`, `parse_label` | `durin/workflow/verdict.py` | The verdict contracts: `parse_verdict` returns the binary `PASS`/`FAIL` from a routing agent node's output (default `FAIL`); `parse_label` matches the last non-empty line of a multi-way node's output against the declared case labels (case-insensitive, punctuation-tolerant). |
+| `parse_verdict`, `parse_label` | `durin/workflow/verdict.py` | The verdict contracts: `parse_verdict` returns the binary `PASS`/`FAIL` from a routing agent node's output (default `FAIL`); `parse_label` matches the last non-empty line of a multi-way node's output against the declared case labels (case-insensitive, punctuation-tolerant). They are the text-parse **fallback** used when the forced `route` tool call did not return a label. |
 | `artifact_dir`, `prune_runs` | `durin/workflow/artifacts.py` | The run's shared working folder (one per run; every sequential node reads/writes it) plus per-branch fork folders for writing-in-parallel — self-gitignored, pruned to recent runs. |
 | `AgentJudgeRunner` | `durin/workflow/judge.py` | The branch-pick reviewer: `pick` chooses the best of N outputs for a parallel `choose` reconcile. |
 | `fork`, `diff`, `conflicts`, `apply` | `durin/workflow/workspace_fork.py` | Per-branch workspace isolation + reconciliation (choose/union) for writing-in-parallel. |
