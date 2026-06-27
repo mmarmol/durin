@@ -1,9 +1,9 @@
 """Tests for the node-started progress_emit frame.
 
-Before a WorkNode executes, the engine emits a progress frame with prior
-nodes as done/failed plus the about-to-run node as ``status:"running"``.
-This frame lets the frontend show a spinner on the in-flight node before
-it finishes.
+Before any node executes (WorkNode, ParallelNode, SubworkflowNode), the engine
+emits a progress frame with prior nodes as done/failed plus the about-to-run
+node as ``status:"running"``.  This frame lets the frontend show a spinner on
+the in-flight node before it finishes.
 """
 
 from durin.workflow.engine import NodeRunRequest, NodeRunResponse, WorkflowEngine
@@ -76,3 +76,92 @@ def test_node_started_emit_carries_running_status_before_noderun_appended():
         n["id"] == "b" and n["status"] == "done" for n in b_running_frame["nodes"]
     )
     assert not b_done_in_frame, "Node 'b' must not be 'done' in its own running frame"
+
+
+def test_node_started_emit_fires_for_parallel_node():
+    """progress_emit must fire with status='running' for a ParallelNode before it executes."""
+    emit_calls = []
+
+    # workflow: work node → parallel node (start=parallel so work node is skipped,
+    # keeping the fixture minimal).
+    wf = parse_workflow({
+        "name": "parallel-spinner", "start": "pre",
+        "nodes": [
+            {"id": "pre", "kind": "work", "next": "fan"},
+            {"id": "fan", "kind": "parallel", "branches": ["br"], "next": None},
+            {"id": "br", "kind": "work"},
+        ],
+    })
+
+    # Track which emit_calls existed at the moment the parallel node starts
+    # executing.  We detect "fan starts" via a flag set inside br's runner
+    # (the branch runner fires only after the parallel node has begun).
+    # Better: wrap the emit to capture the snapshot at the right moment.
+    #
+    # The parallel node does NOT go through the node_runner, so we capture
+    # the emit state just before "br" runs (which is inside the parallel
+    # execution).  Any "running" frame for "fan" that precedes br's first
+    # emit counts.
+    running_frames_for_fan = []
+
+    def capturing_emit(payload):
+        emit_calls.append(payload)
+        # Collect frames that mark "fan" as running.
+        if any(n["id"] == "fan" and n["status"] == "running" for n in payload["nodes"]):
+            running_frames_for_fan.append(payload)
+
+    def runner(req: NodeRunRequest) -> NodeRunResponse:
+        return NodeRunResponse(
+            output=f"out-{req.node.id}",
+            session_key=f"workflow:{req.run_id}:{req.node.id}:{req.iteration}",
+            messages=[],
+        )
+
+    eng = WorkflowEngine(
+        node_runner=runner,
+        run_id_factory=lambda: "r1",
+        progress_emit=capturing_emit,
+    )
+    result = eng.run(wf, "do it", root_session_key="websocket:chatA")
+    assert result.status == "completed"
+
+    assert running_frames_for_fan, (
+        "Expected at least one progress_emit with ParallelNode 'fan' as 'running'; "
+        f"all emit calls: {emit_calls}"
+    )
+
+
+def test_node_started_work_node_emits_exactly_once_per_execution():
+    """Moving the emit out of the WorkNode branch must not cause a double-emit."""
+    emit_calls = []
+
+    wf = parse_workflow({
+        "name": "double-check", "start": "a",
+        "nodes": [
+            {"id": "a", "kind": "work", "next": None},
+        ],
+    })
+
+    def runner(req: NodeRunRequest) -> NodeRunResponse:
+        return NodeRunResponse(
+            output="out",
+            session_key=f"workflow:{req.run_id}:{req.node.id}:{req.iteration}",
+            messages=[],
+        )
+
+    eng = WorkflowEngine(
+        node_runner=runner,
+        run_id_factory=lambda: "r1",
+        progress_emit=lambda p: emit_calls.append(p),
+    )
+    result = eng.run(wf, "do it", root_session_key="websocket:chatA")
+    assert result.status == "completed"
+
+    running_frames_for_a = [
+        c for c in emit_calls
+        if any(n["id"] == "a" and n["status"] == "running" for n in c["nodes"])
+    ]
+    assert len(running_frames_for_a) == 1, (
+        f"Expected exactly 1 'running' frame for node 'a', got {len(running_frames_for_a)}: "
+        f"{running_frames_for_a}"
+    )
