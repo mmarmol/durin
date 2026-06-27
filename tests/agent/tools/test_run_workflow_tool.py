@@ -13,6 +13,7 @@ from durin.config.schema import ToolsConfig, WorkflowConfig
 from durin.providers.base import LLMProvider
 from durin.session.manager import SessionManager
 from durin.workflow.loader import workflows_dir
+from durin.workflow.result import WorkflowResult
 
 
 class _Bus:
@@ -64,16 +65,21 @@ def _fake_provider():
 
 @pytest.mark.asyncio
 async def test_background_is_the_default(tmp_path):
-    tool = _make_tool(tmp_path, bus=_Bus())
+    bus = _Bus()
+    tool = _make_tool(tmp_path, bus=bus)
+    # Patch WorkflowEngine.run with a plain synchronous MagicMock so asyncio.to_thread
+    # drives it correctly in a worker thread — no AsyncMock, no leaked coroutine.
+    # The patch must remain active through the background task's execution (not just the
+    # execute() call), so it wraps both the launch and the sleep.
+    canned = WorkflowResult(status="completed", final_output="ok", runs=[], run_id="r1")
     with patch("durin.providers.factory.make_provider", return_value=_fake_provider()), \
-         patch("durin.agent.runner.AgentRunner.run",
-               AsyncMock(return_value=AgentRunResult(
-                   final_content="done", messages=[{"role": "assistant", "content": "done"}]
-               ))):
+         patch("durin.workflow.engine.WorkflowEngine.run", MagicMock(return_value=canned)):
         out = await tool.execute(name="noop", task="hi")
-    assert "started in the background" in out
-    # Let the background task complete so it does not leak across tests.
-    await asyncio.sleep(0.05)
+        assert "started in the background" in out
+        # Let the background task complete so the result is injected.
+        await asyncio.sleep(0.05)
+    # Confirm the background path ran and injected its result back into the bus.
+    assert bus.injected, "background workflow did not inject its result into the bus"
 
 
 @pytest.mark.asyncio
