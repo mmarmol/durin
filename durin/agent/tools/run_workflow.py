@@ -37,6 +37,17 @@ _PARAMETERS = {
                 "Omit to use the workflow's own output description."
             ),
         },
+        "background": {
+            "type": "boolean",
+            "description": (
+                "Optional (default false). When true, run the workflow in the BACKGROUND: "
+                "this returns immediately and you keep working; the workflow's result is "
+                "delivered to you as a follow-up message when it finishes. Use it when you "
+                "do NOT need the result to continue right now. When false, the call blocks "
+                "until the workflow finishes and returns its result directly — use that when "
+                "you need the answer before doing anything else."
+            ),
+        },
     },
     "required": ["name", "task"],
 }
@@ -103,10 +114,14 @@ class RunWorkflowTool(Tool, ContextAware):
         self._bus = bus
         self._session_key: ContextVar[str | None] = ContextVar("run_workflow_session_key", default=None)
         self._chat_id: ContextVar[str | None] = ContextVar("run_workflow_chat_id", default=None)
+        self._channel: ContextVar[str | None] = ContextVar("run_workflow_channel", default=None)
+        # Strong-reference set so background tasks aren't GC'd mid-flight.
+        self._bg_tasks: set = set()
 
     def set_context(self, ctx: RequestContext) -> None:
         self._session_key.set(ctx.session_key)
         self._chat_id.set(ctx.chat_id)
+        self._channel.set(ctx.channel)
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
@@ -129,13 +144,47 @@ class RunWorkflowTool(Tool, ContextAware):
         return (
             "Run a user-defined workflow on a task. The workflow is a flow graph of "
             "nodes (defined in <workspace>/workflows/<name>.json); a node does the work "
-            "and, when it has routing set (on_pass/on_fail), routes the flow on its "
-            "verdict. Returns a run summary. If the summary says the workflow needs more "
-            "information, it paused with questions instead of failing — ask the user those "
-            "questions and call this tool again with the same task plus their answers."
+            "and, when it has routing set (on_pass/on_fail), routes the flow on its verdict. "
+            "Returns a run summary. If the summary says the workflow needs more information, "
+            "it ENDED asking for clarification (it did not fail) — ask the user those questions "
+            "and call this tool again with the same task plus their answers. Pass background=true "
+            "to run it without blocking and receive the result as a follow-up message."
         )
 
-    async def execute(self, name: str, task: str, output_format: str = "") -> str:  # type: ignore[override]
+    async def _inject_result(self, summary: str, *, name: str, inject_target: dict) -> None:
+        """Inject a finished background-workflow result back to the agent.
+
+        Mirrors SubagentManager._announce_result: a system InboundMessage whose
+        session_key_override routes it into the parent session's pending queue so
+        the agent picks it up mid-turn (or as its next turn) and acts on it —
+        including a needs_input result, which carries its own ask-and-re-run guidance.
+        """
+        if self._bus is None:
+            return
+        from durin.bus.events import InboundMessage
+        channel = inject_target.get("channel") or "websocket"
+        chat_id = inject_target.get("chat_id") or ""
+        override = inject_target.get("session_key") or f"{channel}:{chat_id}"
+        content = (
+            f"[Background workflow '{name}' finished]\n\n{summary}\n\n"
+            "Summarize the outcome for the user. If it says the workflow needs more "
+            "information, ask the user those questions and re-run the workflow with the "
+            "same task plus their answers."
+        )
+        msg = InboundMessage(
+            channel="system",
+            sender_id="workflow_background",
+            chat_id=f"{channel}:{chat_id}",
+            content=content,
+            session_key_override=override,
+            metadata={"injected_event": "workflow_background_result", "workflow": name},
+        )
+        try:
+            await self._bus.publish_inbound(msg)
+        except Exception:  # noqa: BLE001 - best-effort; the run already persisted its manifest
+            pass
+
+    async def execute(self, name: str, task: str, output_format: str = "", background: bool = False) -> str:  # type: ignore[override]
         from durin.agent.runner import AgentRunner
         from durin.providers.factory import make_provider
         from durin.workflow.engine import WorkflowEngine
@@ -205,10 +254,38 @@ class RunWorkflowTool(Tool, ContextAware):
             progress_emit=progress_emit,
         )
         root_session_key = self._session_key.get()
+        inject_target = {
+            "channel": self._channel.get() or "websocket",
+            "chat_id": self._chat_id.get() or "",
+            "session_key": root_session_key,
+        }
+
+        if background:
+            async def _run_and_inject() -> None:
+                try:
+                    result = await asyncio.to_thread(
+                        engine.run, workflow, task,
+                        root_session_key=root_session_key,
+                        output_format=output_format or None,
+                    )
+                    summary = _format_result(result)
+                except Exception as exc:  # noqa: BLE001
+                    summary = f"Workflow run failed in background: {exc}"
+                await self._inject_result(summary, name=name, inject_target=inject_target)
+
+            task_handle = asyncio.create_task(_run_and_inject())
+            # Keep a reference so the task isn't garbage-collected mid-flight.
+            self._bg_tasks.add(task_handle)
+            task_handle.add_done_callback(self._bg_tasks.discard)
+            return (
+                f"Workflow '{name}' started in the background. You can keep working; "
+                "I'll deliver its result to you as a follow-up when it finishes."
+            )
+
+        # The engine owns the run manifest (started→updated→finalized); no record write here.
         result = await asyncio.to_thread(
             engine.run, workflow, task,
             root_session_key=root_session_key,
             output_format=output_format or None,
         )
-        # The engine owns the run manifest (started→updated→finalized); no record write here.
         return _format_result(result)
