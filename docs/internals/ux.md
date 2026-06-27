@@ -169,29 +169,22 @@ to accomplish for this turn. The banner is persistent: it stays visible while
 the agent runs and is cleared when the turn ends with no active goal. It draws
 from the `_turn_end` frame's `goal_state` field.
 
-**Tasks tray.** A per-session view mirrors all background tasks associated with
-the current session. It polls `GET /api/v1/tasks?session=<key>` every few
-seconds and displays a live section (running tasks) and a finished fold
-(completed, failed, or needs-input tasks). The list is durable across a page
-reload or gateway restart: finished sub-agent sessions are reconstructed from
-session lineage (`children_of`) and workflow results from run manifests, so the
-tray reflects the full history of the chat's background work, not just what
-happened since the last page load. **Task detail is shown inline** — sub-agent
-and workflow results are surfaced directly in the thread; the tray does not open
-a separate chat for the child session. Drilling into a child session as a new
-chat was deliberately dropped in favour of keeping all context in one place.
+**Work panel.** A collapsible side panel docked to the right of the chat thread,
+toggled from a button in the chat header (next to the theme toggle). A badge on
+the toggle button lights up while any work is active. The panel lists in-progress
+work items — workflow nodes with nested parallel branches and sub-agent steps —
+and a collapsible "Finished" fold below (collapsed by default). Each item is a
+`WorkItem` fetched from `GET /api/v1/tasks?session=<key>`. Sub-agent and workflow
+detail is shown in the panel, not inline in the thread; the chat itself shows only
+a compact **work chip** (running or done) that opens the panel when clicked.
+Provider-retry status renders inside the run strip, not as a separate banner.
+The panel is durable across a page reload: finished items are reconstructed from
+session lineage and workflow run manifests.
 
-**Inline live blocks.** Background tasks also appear as live blocks in the
-message thread itself:
-
-- A **sub-agent block** shows the sub-agent's announced goal and streams its
-  status (`running` → result text) as frames arrive, then folds to a compact
-  summary when the sub-agent completes.
-- A **workflow block** shows the node list and advances each node's indicator
-  (`running` → `done`/`failed`) as the engine emits per-node progress frames
-  (see [workflow.md](workflow.md) §4g). Both block types are rendered from
-  `tool_events` frames on the WebSocket channel and persist in the thread after
-  the turn ends.
+**Work chip.** A compact inline indicator in the message thread shows that
+background work is running or has finished. Clicking it opens the work panel.
+Per-node detail and sub-agent steps are not expanded inline — they live in the
+panel.
 
 ### Config flow
 

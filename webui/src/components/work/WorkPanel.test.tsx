@@ -38,10 +38,15 @@ describe("WorkPanel", () => {
     expect(screen.queryByText("research-to-answer")).not.toBeInTheDocument();
   });
 
-  it("lists finished items in the Finalizadas section", () => {
+  it("hides finished items by default and shows them after clicking the header", async () => {
+    const user = userEvent.setup();
     render(
       <WorkPanel active={[]} finished={[finishedItem]} open onClose={() => {}} />,
     );
+    // Collapsed by default — the item label is not rendered
+    expect(screen.queryByText("done-workflow")).not.toBeInTheDocument();
+    // Click the collapsible header to expand
+    await user.click(screen.getByRole("button", { name: /finished/i }));
     expect(screen.getByText("done-workflow")).toBeInTheDocument();
   });
 

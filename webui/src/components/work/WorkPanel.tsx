@@ -1,4 +1,5 @@
-import { X } from "lucide-react";
+import { ChevronDown, ChevronUp, X } from "lucide-react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,8 @@ import { WorkItemCard } from "./WorkItemCard";
  *
  * When open=false the panel renders nothing so the chat takes full width.
  * When open=true it docks as a flex sibling after <main> in the outer row.
+ *
+ * The "Finalizadas" section is collapsed by default and expands on click.
  */
 export function WorkPanel({
   active,
@@ -24,6 +27,7 @@ export function WorkPanel({
   onClose: () => void;
 }): JSX.Element {
   const { t } = useTranslation();
+  const [finishedOpen, setFinishedOpen] = useState(false);
 
   if (!open) return <></>;
 
@@ -67,17 +71,29 @@ export function WorkPanel({
           )}
         </section>
 
-        {/* Finished section — only shown when there are finished items */}
+        {/* Finished section — collapsible, collapsed by default */}
         {finished.length > 0 && (
           <section>
-            <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              {t("work.finished", { count: finished.length })}
-            </p>
-            <div className="flex flex-col gap-2">
-              {finished.map((item) => (
-                <WorkItemCard key={item.id} item={item} />
-              ))}
-            </div>
+            <button
+              type="button"
+              className="mb-1.5 flex w-full items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground hover:text-foreground"
+              onClick={() => setFinishedOpen((prev) => !prev)}
+              aria-expanded={finishedOpen}
+            >
+              <span>{t("work.finished", { count: finished.length })}</span>
+              {finishedOpen ? (
+                <ChevronUp className="h-3 w-3" />
+              ) : (
+                <ChevronDown className="h-3 w-3" />
+              )}
+            </button>
+            {finishedOpen && (
+              <div className="flex flex-col gap-2">
+                {finished.map((item) => (
+                  <WorkItemCard key={item.id} item={item} />
+                ))}
+              </div>
+            )}
           </section>
         )}
       </div>

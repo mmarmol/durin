@@ -272,11 +272,11 @@ per-chat list of background tasks associated with a session. The response merges
 two sources: in-flight sub-agent statuses from the in-process status manager
 (with finished ones reconstructed durably from session lineage via
 `children_of`) and workflow run manifests whose `root_session_key` matches the
-session. Each task entry carries `kind` (`subagent` or `workflow`), `id`,
-`label`, `status` (`running`, `needs_input`, `done`, or `failed`),
-`started_at`, `ended_at`, and `session_key`. See the OpenAPI contract and
-`TasksService` (`durin/service/tasks.py`) for the authoritative field
-definitions.
+session. Each task entry includes an optional `nodes` array (the workflow node
+list for workflow-kind tasks) used by the work panel to render per-node and
+per-branch progress. See the generated OpenAPI contract
+(`contract/openapi-v1.json`) and `TasksService` (`durin/service/tasks.py`) for
+the authoritative field definitions.
 
 All mutations are POST/DELETE/PATCH with a JSON body; there are no
 GET-with-query mutations. Responses use snake_case field names
