@@ -35,12 +35,21 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
 
   return (
     <div className="w-full rounded-lg border border-border/60 bg-muted/25 px-3 py-2">
-      {/* Header: label + status icon */}
+      {/* Header: task (or label fallback) as title + workflow name tag + status icon */}
       <div className="flex items-center gap-2">
         <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
-          {item.label}
-        </span>
+        <div className="min-w-0 flex-1">
+          {item.kind === "workflow" && item.task ? (
+            <>
+              <div className="text-[11px] text-muted-foreground leading-tight">{item.label}</div>
+              <div className="truncate text-[13px] font-medium text-foreground leading-snug">
+                {item.task}
+              </div>
+            </>
+          ) : (
+            <span className="truncate text-[13px] font-medium text-foreground">{item.label}</span>
+          )}
+        </div>
         {item.status === "needs_input" && (
           <span className="text-[11px] text-amber-500">
             {t("tasks.status.needs_input")}

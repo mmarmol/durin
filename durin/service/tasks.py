@@ -80,6 +80,7 @@ class BackgroundTask(Result):
     ended_at: float | None
     session_key: str | None  # for drill-in into the chat thread view
     nodes: list[dict] | None = None  # workflow node tree; None for sub-agents
+    task: str | None = None  # workflow run task (the input given to this run); None for sub-agents
 
 
 class TasksListQuery(Query):
@@ -131,6 +132,7 @@ class TasksService:
                 ended_at=rec.get("finished_at"),
                 session_key=drill,
                 nodes=_node_tree(node_runs),
+                task=rec.get("task"),
             ))
 
         # Reconstruct finished sub-agents from persisted session lineage so the tray

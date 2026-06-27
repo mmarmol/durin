@@ -101,4 +101,42 @@ describe("WorkItemCard", () => {
     expect(screen.getByText("waiting")).toBeInTheDocument();
     expect(screen.getByText("Needs input")).toBeInTheDocument();
   });
+
+  it("renders task as prominent title with workflow name as secondary tag", () => {
+    render(
+      <WorkItemCard
+        item={{
+          kind: "workflow",
+          id: "r2",
+          label: "research-workflow",
+          task: "summarise the quarterly earnings report",
+          status: "running",
+          nodes: [],
+          startedAt: 0,
+          endedAt: null,
+        }}
+      />,
+    );
+    // task text is the title
+    expect(screen.getByText("summarise the quarterly earnings report")).toBeInTheDocument();
+    // workflow name is the secondary tag
+    expect(screen.getByText("research-workflow")).toBeInTheDocument();
+  });
+
+  it("falls back to workflow name as title when task is absent", () => {
+    render(
+      <WorkItemCard
+        item={{
+          kind: "workflow",
+          id: "r3",
+          label: "my-workflow",
+          status: "done",
+          nodes: [],
+          startedAt: 0,
+          endedAt: 100,
+        }}
+      />,
+    );
+    expect(screen.getByText("my-workflow")).toBeInTheDocument();
+  });
 });

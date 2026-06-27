@@ -57,8 +57,9 @@ function workItemFromWorkflowEvent(
   const runId = e.call_id?.replace(/^workflow:/, "");
   if (!runId) return null;
 
-  const args = e.arguments as { workflow?: string } | undefined;
+  const args = e.arguments as { workflow?: string; task?: string } | undefined;
   const label = args?.workflow ?? runId;
+  const task = args?.task ?? undefined;
 
   const nodes: WorkNode[] = toWorkNodes(e.nodes);
 
@@ -66,6 +67,7 @@ function workItemFromWorkflowEvent(
     kind: "workflow",
     id: runId,
     label,
+    ...(task !== undefined ? { task } : {}),
     status: e.phase === "end" ? "done" : "running",
     nodes,
     startedAt: now,
@@ -208,6 +210,7 @@ export function useWorkState(
             id: r.id,
             label: r.label,
             status: r.status,
+            ...(r.task != null ? { task: r.task } : {}),
             startedAt: r.started_at,
             endedAt: r.ended_at,
             nodes: toWorkNodes(r.nodes),

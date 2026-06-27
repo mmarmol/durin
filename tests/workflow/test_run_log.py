@@ -145,6 +145,36 @@ def test_reconcile_preserves_partial_runs_and_survives_malformed(tmp_path):
     assert rec["runs"][0]["session_key"] == "workflow:stale:a:1"   # partial trace kept
 
 
+
+def test_task_persists_through_start_update_finalize(tmp_path):
+    """The task written by start_run survives update_run and finalize_run."""
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key="sess:1",
+                      started_at=100.0, task="summarise the quarterly report")
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["task"] == "summarise the quarterly report"
+
+    res = _result("r1", status="running", runs=[
+        NodeRun(node_id="a", iteration=1, output="o", session_key="sk", status="ok"),
+    ])
+    run_log.update_run(tmp_path, "wf", "r1", res)
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["task"] == "summarise the quarterly report"
+
+    run_log.finalize_run(tmp_path, "wf", _result("r1", runs=[
+        NodeRun(node_id="a", iteration=1, output="o", session_key="sk"),
+    ]), root_session_key="sess:1", started_at=100.0, finished_at=130.0)
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["task"] == "summarise the quarterly report"
+    assert rec["status"] == "completed"
+
+
+def test_task_none_when_omitted(tmp_path):
+    """start_run without task defaults to None, no task key in the record."""
+    run_log.start_run(tmp_path, "wf", "r2", root_session_key=None, started_at=1.0)
+    rec = run_log.read_manifest(tmp_path, "wf", "r2")
+    assert rec.get("task") is None
+
+
 def test_read_runs_since_tolerates_old_schema(tmp_path):
     # A v1 on-disk record (no schema/root_session_key field, as written before the
     # manifest) is still returned by read_runs_since without error.

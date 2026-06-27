@@ -230,7 +230,7 @@ class RunWorkflowTool(Tool, ContextAware):
                     "phase": "end" if payload.get("done") else "running",
                     "call_id": f"workflow:{payload['run_id']}",
                     "name": "workflow_progress",
-                    "arguments": {"workflow": name},
+                    "arguments": {"workflow": name, "task": task},
                     "nodes": payload["nodes"],
                 }
                 try:

@@ -60,6 +60,18 @@
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Task"
           }
         },
         "required": [

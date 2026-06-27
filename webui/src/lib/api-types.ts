@@ -1601,6 +1601,11 @@ export interface components {
             started_at: number;
             /** Status */
             status: string;
+            /**
+             * Task
+             * @default null
+             */
+            task: string | null;
         };
         /**
          * ChannelsListQuery

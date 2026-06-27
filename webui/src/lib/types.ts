@@ -121,6 +121,8 @@ export interface WorkItem {
   nodes?: WorkNode[];
   /** Sub-agent live step count from progress.iteration. */
   steps?: number;
+  /** The task (user input) given to this workflow run; absent for sub-agents and older runs. */
+  task?: string;
   startedAt: number;
   endedAt: number | null;
 }

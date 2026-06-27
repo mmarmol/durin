@@ -96,3 +96,38 @@ async def test_node_failed_status_maps_to_failed(tmp_path):
     node_map = {n["id"]: n for n in wf.nodes}
     assert node_map["plan"]["status"] == "done"
     assert node_map["work"]["status"] == "failed"
+
+@pytest.mark.asyncio
+async def test_workflow_task_carries_task_field(tmp_path):
+    """A workflow BackgroundTask exposes the run task when the manifest has one."""
+    result = WorkflowResult(
+        status='completed', final_output='done', run_id='r_task',
+        runs=[NodeRun(node_id='a', iteration=0, output='x', session_key='sk', status='ok')],
+    )
+    run_log.finalize_run(
+        tmp_path, 'my-wf', result,
+        root_session_key='websocket:c9', started_at=1.0, finished_at=2.0,
+        task='write a report on renewable energy',
+    )
+    svc = TasksService(workspace=tmp_path)
+    res = await svc.list(TasksListQuery(session='websocket:c9'), _principal())
+    wf = [t for t in res.tasks if t.kind == 'workflow'][0]
+    assert wf.task == 'write a report on renewable energy'
+
+
+@pytest.mark.asyncio
+async def test_workflow_task_none_when_absent(tmp_path):
+    """A workflow BackgroundTask has task=None when the manifest has no task."""
+    result = WorkflowResult(
+        status='completed', final_output='done', run_id='r_notask',
+        runs=[NodeRun(node_id='a', iteration=0, output='x', session_key='sk', status='ok')],
+    )
+    run_log.finalize_run(
+        tmp_path, 'my-wf', result,
+        root_session_key='websocket:c10', started_at=1.0, finished_at=2.0,
+    )
+    svc = TasksService(workspace=tmp_path)
+    res = await svc.list(TasksListQuery(session='websocket:c10'), _principal())
+    wf = [t for t in res.tasks if t.kind == 'workflow'][0]
+    assert wf.task is None
+

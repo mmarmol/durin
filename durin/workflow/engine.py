@@ -147,7 +147,7 @@ class WorkflowEngine:
         # manifest records that same key or runs_for_session can't find the run.
         effective_root = root_session_key or f"workflow:{run_id}:root"
         started_at = time.time()
-        self._start_manifest(workflow, run_id, effective_root, started_at)
+        self._start_manifest(workflow, run_id, effective_root, started_at, task)
 
         def _update() -> None:
             self._update_manifest(workflow, run_id, runs)
@@ -186,12 +186,13 @@ class WorkflowEngine:
         self._finalize_manifest(workflow, result, effective_root, started_at)
         return result
 
-    def _start_manifest(self, workflow, run_id, root_session_key, started_at) -> None:
+    def _start_manifest(self, workflow, run_id, root_session_key, started_at, task=None) -> None:
         if self._workspace is None:
             return
         try:
             run_log.start_run(self._workspace, workflow.name, run_id,
-                              root_session_key=root_session_key, started_at=started_at)
+                              root_session_key=root_session_key, started_at=started_at,
+                              task=task)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest start failed for {}", workflow.name)
 
