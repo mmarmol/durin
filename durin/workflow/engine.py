@@ -293,6 +293,23 @@ class WorkflowEngine:
                     output_dir=out_dir,
                 )
 
+                # Emit a "node started" frame so the caller can show a spinner on
+                # the in-flight node before it finishes.  Prior nodes carry their
+                # finished status; the current node appears as "running".  Best-effort
+                # only — a crashing emit must never abort the run.
+                if self._progress_emit is not None:
+                    started = [
+                        {"id": r.node_id,
+                         "status": ("failed" if r.status in ("node_failed", "persist_failed") else "done"),
+                         "route_label": r.route_label}
+                        for r in runs
+                    ]
+                    started.append({"id": node.id, "status": "running", "route_label": None})
+                    try:
+                        self._progress_emit({"run_id": run_id, "nodes": started, "done": False})
+                    except Exception:  # noqa: BLE001 - best-effort
+                        pass
+
                 # Run a full agent turn; for a multi-way node the verdict is a matched
                 # case label; for binary routing it is PASS/FAIL from the first non-empty
                 # line; for a linear node there is no verdict.
