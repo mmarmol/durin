@@ -6,7 +6,7 @@ import { MemoryGraphView } from "@/components/MemoryGraphView";
 import { DreamView } from "@/components/DreamView";
 import { SkillsView } from "@/components/SkillsView";
 import { WorkflowsView } from "@/components/WorkflowsView";
-import { TasksView } from "@/components/TasksView";
+import { WorkPanel } from "@/components/work/WorkPanel";
 import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
@@ -15,6 +15,7 @@ import { useVoiceConfig } from "@/hooks/useVoiceConfig";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 
 import { useSessions } from "@/hooks/useSessions";
+import { useWorkState } from "@/hooks/useWorkState";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
 import { setApiReauthHandler } from "@/lib/api";
@@ -44,7 +45,7 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "durin-webui.sidebar";
 const RESTART_STARTED_KEY = "durin-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
-type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows" | "dream" | "tasks";
+type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows" | "dream";
 
 function AuthForm({
   failed,
@@ -297,6 +298,7 @@ function Shell({
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<{
     key: string;
     label: string;
@@ -322,6 +324,9 @@ function Shell({
     if (!activeKey) return null;
     return sessions.find((s) => s.key === activeKey) ?? null;
   }, [sessions, activeKey]);
+
+  // Single subscription for the work panel + sidebar badge; WorkPanel is presentational.
+  const work = useWorkState(activeSession?.chatId ?? null, activeKey);
 
   const closeDesktopSidebar = useCallback(() => {
     setDesktopSidebarOpen(false);
@@ -438,7 +443,7 @@ function Shell({
   }, []);
 
   const onOpenTasks = useCallback(() => {
-    setView("tasks");
+    setPanelOpen((o) => !o);
     setMobileSidebarOpen(false);
   }, []);
 
@@ -556,7 +561,8 @@ function Shell({
     onOpenDream,
     dreamActive: view === "dream",
     onOpenTasks,
-    tasksActive: view === "tasks",
+    tasksActive: panelOpen,
+    tasksBadge: work.active.length > 0,
   };
   const showMainSidebar = view !== "settings";
 
@@ -671,12 +677,14 @@ function Shell({
             <DreamView onOpenSkills={onOpenSkills} />
           </div>
         )}
-        {view === "tasks" && (
-          <div className="absolute inset-0 flex flex-col">
-            <TasksView session={activeKey} />
-          </div>
-        )}
       </main>
+
+      <WorkPanel
+        active={work.active}
+        finished={work.finished}
+        open={panelOpen}
+        onClose={() => setPanelOpen(false)}
+      />
 
       <DeleteConfirm
         open={!!pendingDelete}

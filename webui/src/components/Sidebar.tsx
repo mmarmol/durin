@@ -38,6 +38,7 @@ interface SidebarProps {
   dreamActive?: boolean;
   onOpenTasks?: () => void;
   tasksActive?: boolean;
+  tasksBadge?: boolean;
   onCollapse: () => void;
 }
 
@@ -229,6 +230,9 @@ export function Sidebar(props: SidebarProps) {
             aria-pressed={!!props.tasksActive}>
             <ListTodo className="h-3.5 w-3.5" aria-hidden />
             {t("tasks.title")}
+            {props.tasksBadge && (
+              <span className="ml-auto h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />
+            )}
           </Button>
         </div>
       ) : null}

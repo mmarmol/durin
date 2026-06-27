@@ -1523,6 +1523,11 @@
   },
   "work": {
     "steps": "{{count}} pasos",
-    "steps_one": "1 paso"
+    "steps_one": "1 paso",
+    "panelTitle": "Trabajo",
+    "inProgress": "En curso",
+    "finished": "Finalizadas ({{count}})",
+    "empty": "Sin trabajo activo",
+    "close": "Cerrar panel de trabajo"
   }
 }
