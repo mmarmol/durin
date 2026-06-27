@@ -54,6 +54,23 @@ def _workflow_status(status: str) -> str:
     return "failed"  # exhausted | aborted | crashed
 
 
+def _node_run_status(s: str) -> str:
+    return "failed" if s in ("node_failed", "persist_failed") else "done"
+
+
+def _node_tree(node_runs: list[dict]) -> list[dict]:
+    """Group manifest node runs by node id (first-seen order). A node id that
+    recurs across iterations collapses to one entry showing its latest status."""
+    order: list[str] = []
+    latest: dict[str, dict] = {}
+    for r in node_runs:
+        nid = r.get("node_id") or ""
+        if nid not in latest:
+            order.append(nid)
+        latest[nid] = {"id": nid, "status": _node_run_status(r.get("status", "ok")), "branches": None}
+    return [latest[nid] for nid in order]
+
+
 class BackgroundTask(Result):
     kind: str  # "subagent" | "workflow"
     id: str
@@ -62,6 +79,7 @@ class BackgroundTask(Result):
     started_at: float  # wall-clock epoch seconds
     ended_at: float | None
     session_key: str | None  # for drill-in into the chat thread view
+    nodes: list[dict] | None = None  # workflow node tree; None for sub-agents
 
 
 class TasksListQuery(Query):
@@ -112,6 +130,7 @@ class TasksService:
                 started_at=float(rec.get("started_at") or 0.0),
                 ended_at=rec.get("finished_at"),
                 session_key=drill,
+                nodes=_node_tree(node_runs),
             ))
 
         # Reconstruct finished sub-agents from persisted session lineage so the tray

@@ -1588,6 +1588,13 @@ export interface components {
             kind: string;
             /** Label */
             label: string;
+            /**
+             * Nodes
+             * @default null
+             */
+            nodes: {
+                [key: string]: unknown;
+            }[] | null;
             /** Session Key */
             session_key: string | null;
             /** Started At */

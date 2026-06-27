@@ -26,6 +26,22 @@
             "title": "Label",
             "type": "string"
           },
+          "nodes": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Nodes"
+          },
           "session_key": {
             "anyOf": [
               {
