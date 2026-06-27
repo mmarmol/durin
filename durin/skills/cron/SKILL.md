@@ -32,10 +32,14 @@ The `mode` parameter (default `reminder`) controls what happens when the job fir
 Use `tz` with `cron_expr` for a specific IANA timezone. Without `tz`, the server's local
 timezone is used.
 
-## Optional: per-job model
+## Optional: run as a specific model or persona
 
-`model` runs that job with a specific model preset/ref (omit to use the agent's default
-model). Useful for routing a heavy recurring task to a cheaper or stronger model.
+Run the job as a specific **model** *or* a **persona** — mutually exclusive, set one or neither:
+
+- `model` — a model preset/ref (route a heavy recurring task to a cheaper or stronger model).
+- `persona` — a named persona (its SOUL + model), so the job runs with that voice and model.
+
+Omit both to use the agent's default. (For `update`, providing one switches the job to it.)
 
 ## Examples
 
