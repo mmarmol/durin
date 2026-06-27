@@ -158,6 +158,41 @@ Metadata flags on `OutboundMessage` route behavior at each surface:
 | `_turn_end` | Carries latency and goal-state; triggers WS `turn_end` frame |
 | `render_as="text"` | Render as a plain system bubble instead of an assistant bubble |
 
+### Work-visibility surfaces (WebUI)
+
+Three surfaces make background work visible inside a chat without navigating
+away from it.
+
+**Goal banner.** A pinned strip at the top of the chat thread renders the
+session's `goal_state` — the agent-maintained description of what it is trying
+to accomplish for this turn. The banner is persistent: it stays visible while
+the agent runs and is cleared when the turn ends with no active goal. It draws
+from the `_turn_end` frame's `goal_state` field.
+
+**Tasks tray.** A per-chat panel mirrors all background tasks associated with
+the current session. It polls `GET /api/v1/tasks?session=<key>` every few
+seconds and displays a live section (running tasks) and a finished fold
+(completed, failed, or needs-input tasks). The list is durable across a page
+reload or gateway restart: finished sub-agent sessions are reconstructed from
+session lineage (`children_of`) and workflow results from run manifests, so the
+tray reflects the full history of the chat's background work, not just what
+happened since the last page load. **Task detail is shown inline** — sub-agent
+and workflow results are surfaced directly in the thread; the tray does not open
+a separate chat for the child session. Drilling into a child session as a new
+chat was deliberately dropped in favour of keeping all context in one place.
+
+**Inline live blocks.** Background tasks also appear as live blocks in the
+message thread itself:
+
+- A **sub-agent block** shows the sub-agent's announced goal and streams its
+  status (`running` → result text) as frames arrive, then folds to a compact
+  summary when the sub-agent completes.
+- A **workflow block** shows the node list and advances each node's indicator
+  (`running` → `done`/`failed`) as the engine emits per-node progress frames
+  (see [workflow.md](workflow.md) §4g). Both block types are rendered from
+  `tool_events` frames on the WebSocket channel and persist in the thread after
+  the turn ends.
+
 ### Config flow
 
 `load_config()` detects the layout (split directory or legacy monolith) and
