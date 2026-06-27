@@ -6,7 +6,6 @@ import { MemoryGraphView } from "@/components/MemoryGraphView";
 import { DreamView } from "@/components/DreamView";
 import { SkillsView } from "@/components/SkillsView";
 import { WorkflowsView } from "@/components/WorkflowsView";
-import { WorkPanel } from "@/components/work/WorkPanel";
 import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
@@ -15,7 +14,6 @@ import { useVoiceConfig } from "@/hooks/useVoiceConfig";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 
 import { useSessions } from "@/hooks/useSessions";
-import { useWorkState } from "@/hooks/useWorkState";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
 import { setApiReauthHandler } from "@/lib/api";
@@ -298,7 +296,6 @@ function Shell({
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<{
     key: string;
     label: string;
@@ -324,9 +321,6 @@ function Shell({
     if (!activeKey) return null;
     return sessions.find((s) => s.key === activeKey) ?? null;
   }, [sessions, activeKey]);
-
-  // Single subscription for the work panel + sidebar badge; WorkPanel is presentational.
-  const work = useWorkState(activeSession?.chatId ?? null, activeKey);
 
   const closeDesktopSidebar = useCallback(() => {
     setDesktopSidebarOpen(false);
@@ -439,11 +433,6 @@ function Shell({
 
   const onOpenDream = useCallback(() => {
     setView("dream");
-    setMobileSidebarOpen(false);
-  }, []);
-
-  const onOpenTasks = useCallback(() => {
-    setPanelOpen((o) => !o);
     setMobileSidebarOpen(false);
   }, []);
 
@@ -560,9 +549,6 @@ function Shell({
     workflowsActive: view === "workflows",
     onOpenDream,
     dreamActive: view === "dream",
-    onOpenTasks,
-    tasksActive: panelOpen,
-    tasksBadge: work.active.length > 0,
   };
   const showMainSidebar = view !== "settings";
 
@@ -678,13 +664,6 @@ function Shell({
           </div>
         )}
       </main>
-
-      <WorkPanel
-        active={work.active}
-        finished={work.finished}
-        open={panelOpen}
-        onClose={() => setPanelOpen(false)}
-      />
 
       <DeleteConfirm
         open={!!pendingDelete}

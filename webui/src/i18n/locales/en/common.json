@@ -1121,6 +1121,7 @@
       "toggleSidebar": "Toggle sidebar",
       "newChat": "Start a new chat",
       "toggleTheme": "Toggle theme from header",
+      "togglePanel": "Work panel",
       "settings": "Open settings",
       "agentMode": "Agent mode"
     },

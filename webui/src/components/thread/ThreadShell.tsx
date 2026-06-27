@@ -8,11 +8,13 @@ import { GoalBanner } from "@/components/thread/GoalBanner";
 import { ApiStatusBanner } from "@/components/thread/ApiStatusBanner";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
+import { WorkPanel } from "@/components/work/WorkPanel";
 import type { OrbState } from "@/components/voice/VoiceOrb";
 import { useDurinStream, type SendImage } from "@/hooks/useDurinStream";
 import { useTranscriptionStatus } from "@/hooks/useTranscriptionStatus";
 import { useModes } from "@/hooks/useModes";
 import { useSessionHistory } from "@/hooks/useSessions";
+import { useWorkState } from "@/hooks/useWorkState";
 import { listSlashCommands, getModelCapabilities } from "@/lib/api";
 import type { ChatSummary, SlashCommand, UIMessage } from "@/lib/types";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
@@ -92,6 +94,8 @@ export function ThreadShell({
   const { t } = useTranslation();
   const chatId = session?.chatId ?? null;
   const historyKey = session?.key ?? null;
+  const [panelOpen, setPanelOpen] = useState(false);
+  const work = useWorkState(chatId, historyKey);
   const {
     messages: historical,
     loading,
@@ -481,18 +485,31 @@ export function ThreadShell({
         onToggleTheme={onToggleTheme}
         hideSidebarToggleOnDesktop={hideSidebarToggleOnDesktop}
         minimal={!session && !loading}
+        onTogglePanel={session ? () => setPanelOpen((o) => !o) : undefined}
+        panelOpen={panelOpen}
+        panelHasActiveWork={work.active.length > 0}
       />
-      <GoalBanner goal={goalState} />
-      <ThreadViewport
-        messages={displayMessages}
-        isStreaming={isStreaming}
-        emptyState={emptyState}
-        composer={composer}
-        scrollToBottomSignal={scrollToBottomSignal}
-        conversationKey={historyKey}
-        onRetryLast={handleRetryLast}
-        onEditLastUser={handleEditLastUser}
-      />
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <GoalBanner goal={goalState} />
+          <ThreadViewport
+            messages={displayMessages}
+            isStreaming={isStreaming}
+            emptyState={emptyState}
+            composer={composer}
+            scrollToBottomSignal={scrollToBottomSignal}
+            conversationKey={historyKey}
+            onRetryLast={handleRetryLast}
+            onEditLastUser={handleEditLastUser}
+          />
+        </div>
+        <WorkPanel
+          active={work.active}
+          finished={work.finished}
+          open={panelOpen}
+          onClose={() => setPanelOpen(false)}
+        />
+      </div>
     </section>
     </ThreadActionsProvider>
   );
