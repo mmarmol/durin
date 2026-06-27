@@ -337,7 +337,7 @@ HTTP `POST /api/v1/workflows/{name}/run` surface is always synchronous.
 each node (status `running`) and another when the node finishes. Because the
 engine's graph walk executes on a worker thread (`asyncio.to_thread`), these
 frames are marshalled back to the gateway's event loop via
-`loop.call_soon_threadsafe` before being published on the message bus. The
+`asyncio.run_coroutine_threadsafe(bus.publish_outbound(...), main_loop)` before being published on the message bus. The
 WebSocket channel propagates them as `tool_events` frames so the webui can
 advance the node list in real time. Frame shape follows the same `progress_emit`
 payload already used by other async operations.

@@ -169,7 +169,7 @@ to accomplish for this turn. The banner is persistent: it stays visible while
 the agent runs and is cleared when the turn ends with no active goal. It draws
 from the `_turn_end` frame's `goal_state` field.
 
-**Tasks tray.** A per-chat panel mirrors all background tasks associated with
+**Tasks tray.** A per-session view mirrors all background tasks associated with
 the current session. It polls `GET /api/v1/tasks?session=<key>` every few
 seconds and displays a live section (running tasks) and a finished fold
 (completed, failed, or needs-input tasks). The list is durable across a page
