@@ -105,7 +105,7 @@ class _SubagentHook(AgentHook):
                     "progress": {"iteration": context.iteration, "tool": last_tool},
                 }
                 await self._bus.publish_outbound(OutboundMessage(
-                    channel=self._origin.get("channel", "websocket"),
+                    channel=self._origin["channel"],
                     chat_id=self._origin["chat_id"],
                     content="",
                     metadata={"_progress": True, "_tool_hint": True, "_tool_events": [ev]},

@@ -10,26 +10,6 @@ from durin.workflow.engine import NodeRunRequest, NodeRunResponse, WorkflowEngin
 from durin.workflow.spec import parse_workflow
 
 
-def _make_recording_runner(outputs: dict, emit_snapshots: list):
-    """Return a node runner that records the most-recent progress-emit nodes at call time.
-
-    ``emit_snapshots`` is a mutable list; the runner reads its own reference to
-    capture whatever progress_emit has seen so far, but we need the emit
-    snapshots recorded *at the moment the runner is invoked* — we do this by
-    capturing the snapshot list inside the runner.
-    """
-    def runner(req: NodeRunRequest) -> NodeRunResponse:
-        # Record the latest snapshot seen when this node's runner is called.
-        # (emit_snapshots is populated by the lambda below; we copy whatever
-        # is already there so we can assert the running frame arrived first.)
-        return NodeRunResponse(
-            output=outputs[req.node.id],
-            session_key=f"workflow:{req.run_id}:{req.node.id}:{req.iteration}",
-            messages=[],
-        )
-    return runner
-
-
 def test_node_started_emit_carries_running_status_before_noderun_appended():
     """progress_emit must be called with the current node as 'running' before it finishes."""
     emit_calls = []

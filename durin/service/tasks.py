@@ -12,6 +12,10 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from durin.service.principal import Principal, Scope
+from durin.service.registry import route
+from durin.service.types import Query, Result
+
 
 def _iso_to_epoch(s: str | None) -> float:
     """Parse an ISO 8601 string (with or without timezone) to a UTC epoch float.
@@ -28,10 +32,6 @@ def _iso_to_epoch(s: str | None) -> float:
         return dt.timestamp()
     except Exception:
         return 0.0
-
-from durin.service.principal import Principal, Scope
-from durin.service.registry import route
-from durin.service.types import Query, Result
 
 
 def _subagent_status(phase: str) -> str:
