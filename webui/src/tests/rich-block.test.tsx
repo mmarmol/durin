@@ -30,4 +30,9 @@ describe("RichBlock", () => {
     const iframe = container.querySelector("iframe")!;
     expect(iframe.getAttribute("srcdoc")).toContain("<svg>");
   });
+
+  it("offers an expand control", () => {
+    render(<RichBlock language="html" code="<b>x</b>" />);
+    expect(screen.getByRole("button", { name: "Expand" })).toBeInTheDocument();
+  });
 });

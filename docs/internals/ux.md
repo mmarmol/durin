@@ -158,6 +158,27 @@ Metadata flags on `OutboundMessage` route behavior at each surface:
 | `_turn_end` | Carries latency and goal-state; triggers WS `turn_end` frame |
 | `render_as="text"` | Render as a plain system bubble instead of an assistant bubble |
 
+### WebUI message rendering
+
+**Math.** Inline `$…$` and display `$$…$$` expressions are rendered via KaTeX.
+Each rendered formula exposes two per-formula actions: *Copy LaTeX* (puts the raw
+LaTeX source on the clipboard) and *Copy for Word* (puts MathML on the clipboard
+for paste-as-editable-equation into Word or Google Docs). The composer toolbar
+contains a visual equation editor (MathLive) that lets the user build a formula
+with point-and-click; confirming inserts a `$…$` delimited expression into the
+draft, and a live preview updates as the user types `$…$` or `$$…$$` markers
+directly in the composer.
+
+**Rich fenced blocks.** Code blocks tagged `html`, `svg`, `mermaid`, or
+`vega-lite` render inline as a `RichBlock`. Each block shows a header strip with
+three controls: a code⇄preview toggle, an expand button, and a copy button. The
+preview is the default view; the toggle reveals the raw source. The expand button
+opens a full-screen dialog so large diagrams or charts fill the viewport. HTML and
+SVG previews run in a sandboxed iframe with `allow-scripts` and a
+`Content-Security-Policy` that blocks all network requests, so embedded content
+cannot load external resources. Mermaid diagrams and Vega-Lite charts are rendered
+by bundled lazy-loaded modules so they do not add to the initial bundle.
+
 ### Work-visibility surfaces (WebUI)
 
 Three surfaces make background work visible inside a chat without navigating
