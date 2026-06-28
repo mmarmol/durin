@@ -1,8 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Mic, Square } from "lucide-react";
 
 import { pickAudioMime } from "@/lib/audioMime";
 import { cn } from "@/lib/utils";
+
+/** Imperative handle so a parent (the voice dropdown) can start dictation
+ *  without the user clicking the mic glyph directly. */
+export interface MicButtonHandle {
+  startRecording: () => void;
+}
 
 /** Microphone recorder button (spec §5.2).
  *
@@ -21,7 +27,10 @@ interface MicButtonProps {
   variant?: "hero" | "thread";
 }
 
-export function MicButton({ onRecorded, disabled, variant = "thread" }: MicButtonProps) {
+export const MicButton = forwardRef<MicButtonHandle, MicButtonProps>(function MicButton(
+  { onRecorded, disabled, variant = "thread" },
+  ref,
+) {
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -31,6 +40,16 @@ export function MicButton({ onRecorded, disabled, variant = "thread" }: MicButto
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const supported = typeof MediaRecorder !== "undefined";
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      startRecording: () => {
+        if (!recording && supported && !disabled) void start();
+      },
+    }),
+    [recording, supported, disabled],
+  );
 
   async function start() {
     setError(null);
@@ -147,4 +166,4 @@ export function MicButton({ onRecorded, disabled, variant = "thread" }: MicButto
       )}
     </span>
   );
-}
+});

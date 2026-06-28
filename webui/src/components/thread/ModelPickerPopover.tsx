@@ -1,11 +1,25 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Search, Loader2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Search, Zap } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { fetchModelPicker, type PickerEntry } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
+
+/** Reasoning-effort levels. Uniform across reasoning-capable models today; the
+ *  drill-in only appears when the active model supports reasoning. */
+export const EFFORT_LEVELS = [
+  { value: "", labelKey: "thread.composer.effort.default" },
+  { value: "none", labelKey: "thread.composer.effort.off" },
+  { value: "high", labelKey: "thread.composer.effort.high" },
+  { value: "max", labelKey: "thread.composer.effort.max" },
+] as const;
+
+export function effortLabelKey(activeEffort: string | null | undefined): string {
+  const match = EFFORT_LEVELS.find((l) => l.value === (activeEffort ?? ""));
+  return (match ?? EFFORT_LEVELS[0]).labelKey;
+}
 
 const RECENTS_KEY = "durin.recentModels";
 
@@ -52,18 +66,37 @@ interface ModelPickerPopoverProps {
    *  this element, so it escapes overflow-clipping ancestors (e.g. the scrollable
    *  settings panel). Without it, the popover stays absolutely positioned. */
   anchorRef?: React.RefObject<HTMLElement | null>;
+  /** Whether the active model supports reasoning. Gates the effort drill-in:
+   *  with no reasoning, the effort row is hidden entirely. */
+  canReason?: boolean;
+  /** Active reasoning effort (drives the drill-in's current label/selection). */
+  activeEffort?: string | null;
+  /** Pick a reasoning effort. When present (and `canReason`), the popover shows
+   *  an "Effort ›" drill-in scoped to the active model. */
+  onEffortSelect?: (effort: string) => void;
 }
 
-export function ModelPickerPopover({ open, onClose, onSelect, activeModel, anchorRef }: ModelPickerPopoverProps) {
+export function ModelPickerPopover({
+  open,
+  onClose,
+  onSelect,
+  activeModel,
+  anchorRef,
+  canReason = false,
+  activeEffort = null,
+  onEffortSelect,
+}: ModelPickerPopoverProps) {
   const { t } = useTranslation();
   const { token } = useClient();
   const [query, setQuery] = useState("");
   const [entries, setEntries] = useState<PickerEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [page, setPage] = useState<"models" | "effort">("models");
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null);
+  const showEffort = !!onEffortSelect && canReason;
 
   useEffect(() => {
     if (!open || loaded) return;
@@ -80,6 +113,7 @@ export function ModelPickerPopover({ open, onClose, onSelect, activeModel, ancho
   useEffect(() => {
     if (open) {
       setQuery("");
+      setPage("models");
       requestAnimationFrame(() => inputRef.current?.focus());
     }
   }, [open]);
@@ -180,43 +214,98 @@ export function ModelPickerPopover({ open, onClose, onSelect, activeModel, ancho
         "animate-in fade-in-0 zoom-in-95 duration-200",
       )}
     >
-      <div className="flex items-center gap-2 border-b border-border/50 px-3 py-2.5">
-        <Search className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
-        <input
-          ref={inputRef}
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={t("thread.composer.modelPicker.search")}
-          className="flex-1 bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
-        />
-        {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : null}
-      </div>
-      <div className="max-h-[280px] overflow-y-auto py-1">
-        {groups.map((g) => (
-          <div key={g.group}>
-            <p className="px-3 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-              {g.group}
-            </p>
-            {g.items.map((entry) => (
-              <ModelRow
-                key={`${entry.provider}:${entry.name}`}
-                entry={entry}
-                active={entry.name === activeModel}
-                onSelect={handleSelect}
-              />
+      {page === "models" ? (
+        <>
+          <div className="flex items-center gap-2 border-b border-border/50 px-3 py-2.5">
+            <Search className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+            <input
+              ref={inputRef}
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={t("thread.composer.modelPicker.search")}
+              className="flex-1 bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none"
+            />
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : null}
+          </div>
+          <div className="max-h-[280px] overflow-y-auto py-1">
+            {groups.map((g) => (
+              <div key={g.group}>
+                <p className="px-3 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                  {g.group}
+                </p>
+                {g.items.map((entry) => (
+                  <ModelRow
+                    key={`${entry.provider}:${entry.name}`}
+                    entry={entry}
+                    active={entry.name === activeModel}
+                    onSelect={handleSelect}
+                  />
+                ))}
+              </div>
             ))}
+            {empty ? (
+              <div className="px-3 py-4 text-center text-[12px] text-muted-foreground">
+                {query.trim()
+                  ? t("thread.composer.modelPicker.noMatch")
+                  : t("thread.composer.modelPicker.empty")}
+              </div>
+            ) : null}
           </div>
-        ))}
-        {empty ? (
-          <div className="px-3 py-4 text-center text-[12px] text-muted-foreground">
-            {query.trim()
-              ? t("thread.composer.modelPicker.noMatch")
-              : t("thread.composer.modelPicker.empty")}
+          {showEffort ? (
+            <button
+              type="button"
+              onClick={() => setPage("effort")}
+              className="flex w-full items-center justify-between gap-2 border-t border-border/50 px-3 py-2.5 text-[12.5px] text-foreground/85 transition-colors hover:bg-muted/60"
+            >
+              <span className="flex items-center gap-2">
+                <Zap className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+                {t("thread.composer.effort.title")}
+              </span>
+              <span className="flex items-center gap-1 text-muted-foreground">
+                <span>{t(effortLabelKey(activeEffort))}</span>
+                <ChevronRight className="h-3.5 w-3.5" aria-hidden />
+              </span>
+            </button>
+          ) : null}
+        </>
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={() => setPage("models")}
+            className="flex w-full items-center gap-2 border-b border-border/50 px-3 py-2.5 text-[12.5px] font-medium text-foreground/85 transition-colors hover:bg-muted/60"
+          >
+            <ChevronLeft className="h-4 w-4 text-muted-foreground" aria-hidden />
+            {t("thread.composer.effort.title")}
+          </button>
+          <div className="py-1">
+            {EFFORT_LEVELS.map((level) => {
+              const active = level.value === (activeEffort ?? "");
+              return (
+                <button
+                  key={level.value}
+                  type="button"
+                  onClick={() => {
+                    onEffortSelect?.(level.value);
+                    onClose();
+                  }}
+                  className={cn(
+                    "flex w-full items-center justify-between px-3 py-1.5 text-left text-[12.5px] transition-colors",
+                    active
+                      ? "bg-accent/60 font-medium text-accent-foreground"
+                      : "text-foreground/85 hover:bg-muted/60",
+                  )}
+                >
+                  <span>{t(level.labelKey)}</span>
+                  {active ? <span className="text-[10px] text-emerald-500">●</span> : null}
+                </button>
+              );
+            })}
           </div>
-        ) : null}
-      </div>
+        </>
+      )}
     </div>
   );
 
