@@ -21,13 +21,6 @@ class TestMemoryStoreBasicIO:
         store.write_soul("soul content")
         assert store.read_soul() == "soul content"
 
-    def test_read_user_returns_empty_when_missing(self, store):
-        assert store.read_user() == ""
-
-    def test_write_and_read_user(self, store):
-        store.write_user("user content")
-        assert store.read_user() == "user content"
-
 
 class TestHistoryWithCursor:
     def test_append_history_returns_cursor(self, store):
@@ -227,22 +220,22 @@ class TestDreamCursor:
 
     def test_git_restore_rolls_back_dream_cursor(self, tmp_path):
         store = MemoryStore(tmp_path)
-        store.write_user("before")
+        store.write_soul("before")
         store.set_last_dream_cursor(1)
         assert store.git.init() is True
 
-        store.write_user("after")
+        store.write_soul("after")
         store.set_last_dream_cursor(2)
         dream_sha = store.git.auto_commit("dream: update")
         assert dream_sha is not None
 
-        store.write_user("newer")
+        store.write_soul("newer")
         store.set_last_dream_cursor(3)
 
         restore_sha = store.git.revert(dream_sha)
 
         assert restore_sha is not None
-        assert store.read_user() == "before"
+        assert store.read_soul() == "before"
         assert store.get_last_dream_cursor() == 1
 
 
