@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ChannelSecretField } from "@/components/settings/secrets/ChannelSecretField";
+import { useClient } from "@/providers/ClientProvider";
 import { getConfig, listChannels, setConfigValue, type ChannelField, type ChannelInfo } from "@/lib/api";
 
 const GROUP_ORDER = ["consent", "imap", "smtp", "behavior", "security", "attachments", ""];
@@ -285,6 +286,7 @@ function ChannelRow({
  *  Enabling from scratch is config the generic form can't create. */
 export function ChannelsSettings({ token }: { token: string }) {
   const { t } = useTranslation();
+  const { client } = useClient();
   const [channels, setChannels] = useState<ChannelInfo[]>([]);
   const [configValues, setConfigValues] = useState<Record<string, Record<string, unknown>>>({});
   const [loading, setLoading] = useState(true);
@@ -327,6 +329,12 @@ export function ChannelsSettings({ token }: { token: string }) {
       try {
         if (channel.credential_field && credential.trim()) {
           const name = secretName(channel.name, channel.credential_field);
+          await client.storeSecret({
+            name,
+            value: credential.trim(),
+            service: `channel:${channel.name}`,
+            scope: [`channel:${channel.name}`],
+          });
           await setConfigValue(
             token,
             `channels.${channel.name}.${channel.credential_field}`,
@@ -341,7 +349,7 @@ export function ChannelsSettings({ token }: { token: string }) {
         setBusy(null);
       }
     },
-    [token, load, t],
+    [token, load, t, client],
   );
 
   const disable = useCallback(
