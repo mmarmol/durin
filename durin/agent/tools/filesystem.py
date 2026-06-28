@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
+from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.file_state import FileStates, _hash_file, current_file_states
 from durin.agent.tools.path_utils import resolve_workspace_path
 from durin.agent.tools.post_edit_check import run_post_edit_check
@@ -23,7 +24,7 @@ from durin.utils.atomic_write import atomic_write_bytes, atomic_write_text
 from durin.utils.helpers import build_image_content_blocks, detect_image_mime
 
 
-class _FsTool(Tool):
+class _FsTool(Tool, ContextAware):
     """Shared base for filesystem tools — common init and path resolution."""
 
     def __init__(
@@ -44,6 +45,24 @@ class _FsTool(Tool):
         # current async task, which keeps shared tool instances session-safe.
         self._explicit_file_states = file_states
         self._fallback_file_states = FileStates()
+        self._request_ctx: RequestContext | None = None
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._request_ctx = ctx
+
+    def _work_dir(self) -> Path | None:
+        """Return the per-session work directory path, or None when no session is set.
+
+        Pure path computation — does NOT create the directory. The directory is
+        created lazily by the write utilities (atomic_write_text/bytes call
+        parent.mkdir before writing), so read-only sessions never litter the
+        workspace with empty work/<session>/ directories.
+        """
+        sk = self._request_ctx.session_key if self._request_ctx else None
+        if not sk or self._workspace is None:
+            return None
+        from durin.agent.tools.work_area import session_work_dir
+        return session_work_dir(self._workspace, sk)
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -75,6 +94,7 @@ class _FsTool(Tool):
             self._workspace,
             self._allowed_dir,
             self._extra_allowed_dirs,
+            work_dir=self._work_dir(),
         )
 
     def _display_path(self, fp: Path) -> str:

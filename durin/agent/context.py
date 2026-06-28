@@ -5,7 +5,6 @@ import logging
 import mimetypes
 import platform
 from contextlib import suppress
-from importlib.resources import files as pkg_files
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -105,7 +104,10 @@ class ContextBuilder:
     # USER.md dropped — the user profile lives in the principal person
     # entity (pinned context), not a bootstrap file. SOUL.md is now
     # persona-driven (rendered as a dedicated soul block, not a bootstrap file).
-    BOOTSTRAP_FILES = ["AGENTS.md", "TOOLS.md"]
+    # TOOLS.md dropped — tool names, descriptions, and parameter schemas reach
+    # the model through the function-calling channel (the authoritative source,
+    # generated from the tool registry); a hand-written prose mirror only drifts.
+    BOOTSTRAP_FILES = ["AGENTS.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
     _MAX_RECENT_HISTORY = 50
     _MAX_HISTORY_CHARS = 32_000  # hard cap on recent history section size
@@ -409,15 +411,6 @@ class ContextBuilder:
                 parts.append(f"## {filename}\n\n{content}")
 
         return "\n\n".join(parts) if parts else ""
-
-    @staticmethod
-    def _is_template_content(content: str, template_path: str) -> bool:
-        """Check if *content* is identical to the bundled template (user hasn't customized it)."""
-        with suppress(Exception):
-            tpl = pkg_files("durin") / "templates" / template_path
-            if tpl.is_file():
-                return content.strip() == tpl.read_text(encoding="utf-8").strip()
-        return False
 
     def build_messages(
         self,
