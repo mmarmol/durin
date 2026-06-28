@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -97,6 +98,9 @@ class DurinApp(App[None]):
         # here so the event loop keeps a strong reference and can't GC them
         # mid-flight (RUF006).
         self._background_tasks: set[asyncio.Task] = set()
+        # Per-turn wall-clock timing: set on user submit, cleared at turn end.
+        self._turn_started_at: float | None = None
+        self._last_latency_ms: float | None = None
         self._palette = "ithildin"
         self._mode = "dark"
         self._apply_durin_theme()
@@ -170,9 +174,7 @@ class DurinApp(App[None]):
                     workspace=Path(self._agent_loop.workspace) if self._agent_loop else None,
                 )
                 yield FooterBar(
-                    payload_getter=lambda: payload_from_loop(
-                        self._agent_loop, self._cli_channel, self._cli_chat_id
-                    ),
+                    payload_getter=self._footer_payload,
                 )
 
     def _compute_session_meta(self) -> str:
@@ -487,6 +489,7 @@ class DurinApp(App[None]):
             return
         # Spinner: shows "thinking…" between submit and first delta.
         self._show_working_indicator()
+        self._turn_started_at = time.monotonic()
         task = asyncio.create_task(self._publish_inbound(value, media))
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
@@ -1244,12 +1247,14 @@ class DurinApp(App[None]):
             # Belt-and-suspenders: if a turn ends without any content
             # (rare error path), make sure the spinner doesn't linger.
             self._dismiss_working_indicator()
+            self._record_turn_latency()
             return
 
         if meta.get("_streamed"):
             # End-of-turn signal; UI already streamed via deltas.
             self._finalize_cluster()
             self._dismiss_working_indicator()
+            self._record_turn_latency()
             return
 
         content = msg.content or ""
@@ -1279,6 +1284,26 @@ class DurinApp(App[None]):
             chat.add_message(role, content)
 
     # ---- helpers ----------------------------------------------------------
+
+    def _record_turn_latency(self) -> None:
+        """Compute wall-clock latency for the completed turn and refresh the footer."""
+        if self._turn_started_at is not None:
+            self._last_latency_ms = (time.monotonic() - self._turn_started_at) * 1000
+            self._turn_started_at = None
+        try:
+            self.query_one(FooterBar).refresh_now()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _footer_payload(self) -> dict | None:
+        """Build the footer payload, augmented with mode and last-turn latency."""
+        base = payload_from_loop(self._agent_loop, self._cli_channel, self._cli_chat_id)
+        if base is None:
+            base = {}
+        base["mode"] = self._get_agent_mode()
+        if self._last_latency_ms is not None:
+            base["latency_ms"] = self._last_latency_ms
+        return base or None
 
     def _refresh_chrome(self) -> None:
         """Update Header + Footer reactive surfaces after a session switch."""

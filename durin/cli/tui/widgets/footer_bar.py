@@ -143,6 +143,16 @@ def _render(p: dict[str, Any]) -> str:
         extras.append(f"[dim]infra:[/dim]{infra_pct}%")
     extras_part = (" · " + " · ".join(extras)) if extras else ""
 
+    mode = p.get("mode")
+    mode_part = f" · [bold]{mode}[/bold]" if mode else ""
+
+    latency_ms = p.get("latency_ms")
+    latency_part = (
+        f" · ⏱ {latency_ms / 1000:.1f}s"
+        if isinstance(latency_ms, (int, float)) and latency_ms > 0
+        else ""
+    )
+
     # Footer is for *current-conversation* state. Memory totals & vector
     # availability are install-level info — they belong in the startup
     # banner, not in a per-tick status line.
@@ -153,6 +163,8 @@ def _render(p: dict[str, Any]) -> str:
         f"[green]{model}[/green] · "
         f"[dim]{session_label}[/dim]"
         f"{extras_part}"
+        f"{mode_part}"
+        f"{latency_part}"
     )
 
 
