@@ -1,7 +1,7 @@
 # Skills
 
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
-Unavailable skills need dependencies installed first — you can try installing them with apt/brew.
+The following skills extend your capabilities. To use a skill, load it with the `skill_view` tool (`skill_view(name)`) — it returns the skill's instructions, a map of its bundled files, and any missing setup. Reading the `SKILL.md` file directly with `read_file` also works.
+Unavailable skills need dependencies installed first — `skill_view` reports what is missing and which tool installs it (`skill_install_deps` for CLIs, `request_secret` for environment variables).
 
 The skills above are your **most-used working set**, not the whole catalog. Skills are searchable memory: if nothing above covers the task, search (`memory_search` with `kind="skill"`) **before** proceeding or concluding that no skill exists. It returns matching procedures as `kind="skill"` hits (rendered under `=== SKILL: <name> ===`) — follow them as steps, don't cite them as facts.
 
