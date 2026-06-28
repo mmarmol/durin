@@ -15,6 +15,7 @@ from loguru import logger
 from pydantic import Field
 
 from durin.agent.tools.base import Tool, tool_parameters
+from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.sandbox import wrap_command
 from durin.agent.tools.schema import (
     BooleanSchema,
@@ -73,7 +74,7 @@ class ExecToolConfig(Base):
         required=["command"],
     )
 )
-class ExecTool(Tool):
+class ExecTool(Tool, ContextAware):
     """Tool to execute shell commands."""
     _scopes = {"core", "subagent"}
 
@@ -117,6 +118,7 @@ class ExecTool(Tool):
         self.timeout = timeout
         self._process_config = process_config
         self.working_dir = working_dir
+        self._request_ctx: RequestContext | None = None
         self.sandbox = sandbox
         self.deny_patterns = (deny_patterns or []) + [
             r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
@@ -141,6 +143,24 @@ class ExecTool(Tool):
         self.restrict_to_workspace = restrict_to_workspace
         self.path_append = path_append
         self.allowed_env_keys = allowed_env_keys or []
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._request_ctx = ctx
+
+    def _work_dir(self) -> Path | None:
+        """Return the per-session work directory, creating it if necessary.
+
+        A subprocess cannot start in a non-existent directory, so this method
+        creates the directory before returning it. Returns None when no session
+        context is set or no workspace is configured.
+        """
+        sk = self._request_ctx.session_key if self._request_ctx else None
+        if not sk or not self.working_dir:
+            return None
+        from durin.agent.tools.work_area import session_work_dir
+        work = session_work_dir(Path(self.working_dir), sk)
+        work.mkdir(parents=True, exist_ok=True)
+        return work
 
     @property
     def name(self) -> str:
@@ -204,7 +224,7 @@ class ExecTool(Tool):
         self, command: str, working_dir: str | None = None,
         timeout: int | None = None, background: bool = False, **kwargs: Any,
     ) -> str:
-        cwd = working_dir or self.working_dir or os.getcwd()
+        cwd = working_dir or str(self._work_dir() or self.working_dir or os.getcwd())
 
         # Prevent an LLM-supplied working_dir from escaping the configured
         # workspace when restrict_to_workspace is enabled. Without this
