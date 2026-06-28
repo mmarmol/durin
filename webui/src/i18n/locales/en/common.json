@@ -929,7 +929,10 @@
         "curation": "Curation",
         "import": "Import",
         "system": "System"
-      }
+      },
+      "diffLoading": "Loading changes…",
+      "diffEmpty": "No file changes in this commit.",
+      "showChanges": "Show changes"
     },
     "noFindings": "No security findings.",
     "scanClean": "Scan found no risks.",
@@ -1539,7 +1542,9 @@
     }
   },
   "tasks": {
-    "status": { "needs_input": "Needs input" }
+    "status": {
+      "needs_input": "Needs input"
+    }
   },
   "work": {
     "steps": "{{count}} steps",

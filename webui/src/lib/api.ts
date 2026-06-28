@@ -1083,6 +1083,18 @@ export async function getSkillHistory(
   return res.data;
 }
 
+export async function fetchSkillCommitDiff(
+  token: string,
+  name: string,
+  sha: string,
+  base: string = "",
+): Promise<{ sha: string; patch: string }> {
+  return request<{ sha: string; patch: string }>(
+    `${base}/api/v1/skills/${encodeURIComponent(name)}/commit/${encodeURIComponent(sha)}/diff`,
+    token,
+  );
+}
+
 export interface ModelTestResult {
   status: "ok" | "warn" | "fail";
   message: string;

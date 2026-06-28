@@ -817,7 +817,10 @@
         "curation": "Curación",
         "import": "Importación",
         "system": "Sistema"
-      }
+      },
+      "diffLoading": "Cargando cambios…",
+      "diffEmpty": "Este commit no cambió archivos.",
+      "showChanges": "Ver cambios"
     },
     "noFindings": "Sin hallazgos de seguridad.",
     "scanClean": "Scan sin riesgos detectados.",
@@ -1531,7 +1534,9 @@
     }
   },
   "tasks": {
-    "status": { "needs_input": "Necesita input" }
+    "status": {
+      "needs_input": "Necesita input"
+    }
   },
   "work": {
     "steps": "{{count}} pasos",
