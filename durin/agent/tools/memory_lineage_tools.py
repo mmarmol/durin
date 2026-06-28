@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re as _re
-from datetime import datetime, timezone as _tz
+from datetime import datetime
+from datetime import timezone as _tz
 from pathlib import Path
 from typing import Any
 
@@ -13,8 +14,13 @@ from durin.memory.extract_runner import load_session
 _READ_PARAMS = tool_parameters_schema(
     ref=StringSchema("Entity ref '<type>:<slug>' (e.g. 'place:torrent')."),
     required=["ref"],
-    description="Read a memory entity's FULL page (frontmatter + attributes + "
-                "relations + provenance + body). Use to inspect an entity in detail.",
+    description=(
+        "Read one entity's COMPLETE page (frontmatter + attributes + relations "
+        "+ provenance + body). Reach for this after memory_search points you at "
+        "an entity and you need the whole structured page, not just the search "
+        "preview. (For a quick body-only follow-up on a preview hit, "
+        "memory_drill is enough.)"
+    ),
 )
 
 
@@ -62,9 +68,12 @@ class MemoryReadEntityTool(Tool):
 _LINEAGE_PARAMS = tool_parameters_schema(
     ref=StringSchema("Entity ref '<type>:<slug>'."),
     required=["ref"],
-    description="Git history of a memory entity: who changed it, when, and the "
-                "commit reason (incl. absorb/merge commits). Use to judge lineage "
-                "— is this an established entity or a fresh one; was it merged before.",
+    description=(
+        "The git history of an entity: who changed it, when, and why (including "
+        "absorb/merge commits). Use to gauge an entity before you rely on or "
+        "edit it — is it long-established or freshly created, has it been merged "
+        "from others."
+    ),
 )
 
 
@@ -116,9 +125,12 @@ class MemoryEntityLineageTool(Tool):
 _SRC_PARAMS = tool_parameters_schema(
     ref=StringSchema("Entity ref '<type>:<slug>'."),
     required=["ref"],
-    description="Read the conversation turns a memory entity was distilled from "
-                "(its provenance source_refs + derived_from). Use to see the original "
-                "context behind an entity's facts.",
+    description=(
+        "Read the original conversation turns an entity was distilled from (its "
+        "provenance source_refs + derived_from). Use when a fact looks off, or "
+        "when you need the exact wording and context that produced it, not the "
+        "summary."
+    ),
 )
 _SRC_RE = _re.compile(r"\[\[sessions/(.+?)\.md#turn-(\d+)\]\]")
 

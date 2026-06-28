@@ -111,15 +111,32 @@ This is the ONLY correct way to delete a memory entry — never rm or move files
 Pass `uri` exactly as memory_search returned it. Refuses entity pages (memory/entities/...): those have their own absorb/revert lifecycle.
 ```
 
+### 3.7 `memory_read_entity`
+
+```
+Read one entity's COMPLETE page (frontmatter + attributes + relations + provenance + body). Reach for this after memory_search points you at an entity and you need the whole structured page, not just the search preview. (For a quick body-only follow-up on a preview hit, memory_drill is enough.)
+```
+
+### 3.8 `memory_entity_lineage`
+
+```
+The git history of an entity: who changed it, when, and why (including absorb/merge commits). Use to gauge an entity before you rely on or edit it — is it long-established or freshly created, has it been merged from others.
+```
+
+### 3.9 `memory_source_session`
+
+```
+Read the original conversation turns an entity was distilled from (its provenance source_refs + derived_from). Use when a fact looks off, or when you need the exact wording and context that produced it, not the summary.
+```
+
 ---
 
 ## 4. Architecture diagram
 
 ```mermaid
 flowchart TD
-    A["Agent turn"] --> B["identity.md\n## Memory + ## Memory writing\n(stable prompt tier)"]
+    A["Agent turn"] --> B["identity.md\n## Memory (Recalling + Recording)\n(stable prompt tier)"]
     A --> C["Tool descriptions\nMemorySearchTool.description\nand siblings\n(LLM tool-selection)"]
-    A --> CP["_MEMORY_CAPTURE_SECTION\ncontext.py\n(unconditional, stable tier)"]
 
     D["Dream cron / reactive trigger"] --> E["Extract pass\nbuild_extract_prompt\nextract_dream.py"]
     D --> G["Skill-extract pass\n_SKILL_EXTRACT_PROMPT\ndream_passes.py\n(agentic sub-agent)"]
@@ -146,32 +163,11 @@ flowchart TD
 
 ### 5.1 Agent identity prompt
 
-`durin/templates/agent/identity.md` is the persistent identity file injected into every agent turn inside the stable prompt tier. It contains three memory-related sections.
+`durin/templates/agent/identity.md` is the persistent identity file injected into every agent turn inside the stable prompt tier. It contains one consolidated `## Memory` section with two subsections.
 
-**`## Memory`** describes the four memory tools and the four content types (entity pages, references, session summaries, skills). It instructs the agent to call `memory_search` rather than answering from cold recall, to state sources, and to issue 2–3 searches for compound questions.
+**`### Recalling`** covers hit-consumption: search rather than answering from cold recall, issue 2–3 searches for compound questions, use `memory_drill` only on preview hits, inspect entities via `memory_read_entity` / `memory_entity_lineage` / `memory_source_session`, read every hit, reconcile by timestamp, enumerate every distinct item, state sources, never invent identifiers.
 
-**`## Working with search results`** (a peer `##` section at the same level as `## Memory`) provides hit-consumption guidelines: read every hit, verify the entity, combine facts across hits, do not reframe, answer multi-part questions partially, never invent identifiers, follow skill hits rather than citing them, and search for skills not in the working set.
-
-**`## Memory writing`** routes by information type: entity facts go to `memory_upsert_entity`, whole documents go to `memory_ingest`, raw interactions require nothing (the session is already recorded). It instructs the agent to search before authoring to avoid duplicates.
-
-The two `## Memory writing` rules about `body_mode` and `derived_from` are embedded inline in the `memory_upsert_entity` tool description (§3.5 and §5.2) and summarized here.
-
-### 5.7 Always-present capture directive
-
-`_MEMORY_CAPTURE_SECTION` (`durin/agent/context.py`) is a short Markdown section injected unconditionally into the stable prompt tier on every turn, immediately after the operating floor. It is not part of `identity.md`; it is assembled programmatically so it is always present regardless of SOUL or persona configuration.
-
-**What it instructs.** The directive tells the agent to capture durable learnings in the moment — before acknowledging — rather than waiting to be asked. The salience criterion is: *save what stops the user from having to steer, correct, or re-explain later*. Concrete trigger: before writing an acknowledgement like "got it" or "noted", save the thing first.
-
-**Entity taxonomy.** Each learning is authored as an entity via `memory_upsert_entity`:
-- Corrections, preferences, and standing constraints on how to work → `feedback`, `stance`, or `practice` entity. The body must state WHY the preference matters and HOW to apply it, so the agent can judge edge cases rather than apply it blindly.
-- Durable facts about who the user is (role, goals, stable personal context) → update the user's `person` entity.
-- Work context or subject matter → a `project` or `topic` entity.
-
-**Exclusions.** The directive explicitly excludes: content derivable from the code, repo, or git history; task progress and transient state; ephemeral artifacts (PR numbers, commit SHAs, today's status).
-
-**Correct in place.** When the user corrects something already recorded, the agent updates that entity (overwrites the stale value) rather than stacking a contradicting entry on top.
-
-**Expressivity.** The agent briefly tells the user what it saved ("noted — you prefer X"). When a recalled memory materially shaped a decision, it says so ("doing it this way because I recall you prefer Y") so the user can catch and correct a stale memory on the spot. Trivial recalls are not narrated.
+**`### Recording — capture as you go`** covers the write path: capture before acknowledging, author via `memory_upsert_entity`, route documents through `memory_ingest`, use `memory_forget` to retire entries, correct in place rather than stacking contradictions, briefly say what was saved. The type rule links to the "Known types" block in the hot layer: `feedback` / `stance` / `practice` are pin-eligible; `person` is always pinned; all other types are open vocabulary retrieved on demand. Standard types (person, place, project, topic, event, artifact) are listed inline.
 
 ### 5.2 Tool descriptions
 
@@ -179,7 +175,7 @@ Each tool class exposes a `description` property that delegates to `_PARAMETERS[
 
 The sync test (`tests/memory/test_tool_description_sync.py`) asserts that each tool's `.description` property matches the string in `_PARAMETERS["description"]`.
 
-The six memory tools and their descriptions:
+The active memory tools and their descriptions:
 
 | Tool | Status | Key framing |
 |---|---|---|
@@ -188,6 +184,9 @@ The six memory tools and their descriptions:
 | `memory_ingest` | Active | Whole documents, idempotent hash-based id, returns `reference:<slug>` for linking |
 | `memory_drill` | Active | Fetch full body of a `(preview N/M)` hit; do not drill `(complete)` hits |
 | `memory_forget` | Active | Archive-only removal; never use shell to delete memory files |
+| `memory_read_entity` | Active | Full page of one entity (attributes + relations + provenance + body) when the search preview isn't enough |
+| `memory_entity_lineage` | Active | Git history of an entity — established vs fresh, prior merges |
+| `memory_source_session` | Active | The conversation turns an entity was distilled from |
 | `memory_store` | Disabled | `MemoryStoreTool.enabled()` returns False; description kept in sync but LLM never sees it |
 
 ### 5.3 Dream pass prompts
@@ -234,7 +233,9 @@ Up to `max_retries` (default 2) re-attempts are made on parse failure; each retr
 
 ### 5.5 Hot layer
 
-`durin/memory/hot_layer.py` eagerly assembles a memory context block that is injected into the stable prompt tier on every turn without any tool call. It renders five sections in order: Identity (from `memory/stable/IDENTITY.md`), Canonical pages (top 12 entity pages by `updated_at` desc), Recent fragments (top 8 post-cursor episodic/stable entries by `valid_from` desc), Key Points (top 12 headlines), and Known Entities (up to 50 entity URIs). Each section has a hard character budget; the total is approximately 1 900 tokens, sized to stay within a single prompt-cache window between Dream passes.
+`durin/memory/hot_layer.py` eagerly assembles a memory context block that is injected into the stable prompt tier on every turn without any tool call. It renders these sections in order: Identity (from `memory/stable/IDENTITY.md`), Canonical pages (top 12 entity pages by `updated_at` desc), Recent fragments (top 8 post-cursor episodic/stable entries by `valid_from` desc), Key Points (top 12 headlines), Known Entities (up to 50 entity URIs), and Known types. Each section has a hard character budget; the total is approximately 1 900 tokens, sized to stay within a single prompt-cache window between Dream passes.
+
+**`## Memory: Known types`** lists the distinct entity-type subdirectories of `memory/entities/` that contain at least one page, rendered alphabetically. The list is derived from the same disk walk as the rest of the hot layer. It is capped at 100 entries; a count past the cap is logged as a warning so it surfaces in the gateway log rather than silently bloating the prompt. The purpose is type vocabulary: the agent reads this before authoring or updating an entity and reuses an existing type instead of coining a near-synonym. Sections with zero entries are omitted.
 
 Canonical pages are wrapped in `=== CANONICAL: <uri> (consolidated <ts>) ===` markers; fragments in `=== FRAGMENT: <path> (ts <ts>) ===`. The intro sentence above the fragments section ("Reconcile with the canonical above using the timestamps.") cues the LLM to treat fragments as recent amendments rather than authoritative rewrites.
 
@@ -277,7 +278,7 @@ Sections with zero hits are omitted entirely.
 | `_load_template` | `durin/memory/absorb_judge.py` | Extracts the largest fenced code block from `absorb_judge.md`; raises `JudgeError` if no block found |
 | `_render_page_block` | `durin/memory/absorb_judge.py` | Renders one entity page for the judge: mtime, aliases, identifiers, body |
 | `MemorySearchTool.description` | `durin/agent/tools/memory_search.py` | LLM-visible tool description; delegates to `_PARAMETERS["description"]`; guarded by sync test |
-| `read_hot_layer` | `durin/memory/hot_layer.py` | Assembles the stable-tier memory block from disk on every prompt build; five sections with hard char budgets |
+| `read_hot_layer` | `durin/memory/hot_layer.py` | Assembles the stable-tier memory block from disk on every prompt build; sections with hard char budgets |
 
 ---
 
