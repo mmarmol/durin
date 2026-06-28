@@ -9,7 +9,7 @@ import "./diff-viewer.css";
 function normalizePatch(patch: string): string {
   if (patch.startsWith("diff --git")) return patch;
   return patch.replace(
-    /^(--- ([^\n]+)\n\+\+\+ ([^\n]+))/m,
+    /^(--- ([^\n]+)\n\+\+\+ ([^\n]+))/gm,
     (_, block, oldRaw, newRaw) => {
       const strip = (p: string) => p.replace(/^[ab]\//, "");
       const a = strip(oldRaw.trim());

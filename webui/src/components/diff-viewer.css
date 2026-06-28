@@ -17,7 +17,7 @@
   background: hsl(var(--primary) / 0.06);
 }
 .durin-diff .diff-code-insert {
-  color: hsl(142 60% 30%);
+  color: color-mix(in srgb, hsl(var(--primary)) 80%, black);
 }
 .durin-diff .diff-code-delete,
 .durin-diff .diff-gutter-delete {
@@ -27,5 +27,5 @@
   color: hsl(var(--destructive));
 }
 .dark .durin-diff .diff-code-insert {
-  color: hsl(142 50% 65%);
+  color: color-mix(in srgb, hsl(var(--primary)) 80%, white);
 }
