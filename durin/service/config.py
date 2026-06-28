@@ -635,7 +635,7 @@ class ConfigService:
                 {
                     "name": name,
                     "display_name": getattr(cls, "display_name", name),
-                    "enabled": enabled or always_on,
+                    "enabled": enabled,
                     "always_on": always_on,
                     "description": getattr(cls, "channel_description", ""),
                     "credential_field": credential_field,

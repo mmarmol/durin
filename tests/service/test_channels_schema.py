@@ -33,7 +33,9 @@ async def test_websocket_always_on_when_webui_enabled(monkeypatch):
     result = await svc.channels_list(query=ChannelsListQuery(), principal=_principal())
     ws = next(c for c in result.channels if c["name"] == "websocket")
     assert ws["always_on"] is True
-    assert ws["enabled"] is True
+    # enabled reflects the literal config value (websocket not explicitly enabled
+    # in the test config); always_on is what the webui uses to show "always active"
+    assert ws["enabled"] is False
     assert ws["description"]
     token = next(f for f in ws["fields"] if f["name"] == "token")
     assert token["type"] == "secret"

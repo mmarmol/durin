@@ -31,7 +31,13 @@ export function ChannelSecretField({
   }, [token]);
 
   // Already wired to a secret → show masked badge with rotate/disconnect.
-  const current = secretRef?.replace(/^\$\{secret:(.+)\}$/, "$1") ?? "";
+  // Only extract the name when the value is actually a ${secret:...} reference.
+  // A non-matching value (e.g. a masked "***" or a historical plaintext token)
+  // must fall through to the choose/create select so the user can replace it.
+  const current =
+    secretRef && secretRef.startsWith("${secret:")
+      ? secretRef.replace(/^\$\{secret:(.+)\}$/, "$1")
+      : "";
   if (current) {
     return (
       <div className="space-y-1">
