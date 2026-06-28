@@ -7,6 +7,9 @@ import { DreamDrawer, type DrawerTarget } from "@/components/DreamDrawer";
 import {
   fetchDreamDigest,
   fetchFlaggedPairs,
+  fetchSkillSuggestions,
+  acceptSkillSuggestion,
+  rejectSkillSuggestion,
   listQuarantine,
   resolveFlaggedPair,
   runCronJob,
@@ -15,7 +18,9 @@ import {
   type DreamLastRun,
   type FlaggedPair,
   type QuarantineRow,
+  type SkillSuggestion,
 } from "@/lib/api";
+import { DiffViewer } from "./DiffViewer";
 import { useClient } from "@/providers/ClientProvider";
 
 function relativeTime(ms: number): string {
@@ -277,6 +282,117 @@ function QuarantineCard({ skill, onOpen, onOpenSkills }: QuarantineCardProps) {
   );
 }
 
+export function SkillSuggestionsSection({
+  token,
+  onCountChange,
+}: {
+  token: string;
+  onCountChange: (n: number) => void;
+}) {
+  const { t } = useTranslation();
+  const [items, setItems] = useState<SkillSuggestion[]>([]);
+  const [busy, setBusy] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchSkillSuggestions(token).then((s) => {
+      if (!cancelled) {
+        setItems(s);
+        onCountChange(s.length);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  const resolve = useCallback(
+    async (id: string, action: "accept" | "reject") => {
+      setBusy((p) => new Set(p).add(id));
+      setError(null);
+      try {
+        if (action === "accept") await acceptSkillSuggestion(token, id);
+        else await rejectSkillSuggestion(token, id);
+        setItems((prev) => {
+          const next = prev.filter((s) => s.id !== id);
+          onCountChange(next.length);
+          return next;
+        });
+      } catch {
+        setError(t("dream.bandeja.suggestionError"));
+      } finally {
+        setBusy((p) => {
+          const n = new Set(p);
+          n.delete(id);
+          return n;
+        });
+      }
+    },
+    [token, onCountChange, t],
+  );
+
+  return (
+    <section>
+      <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {t("dream.bandeja.suggestionsTitle")}
+      </h2>
+      {error && (
+        <p className="mb-2 text-sm text-destructive">{error}</p>
+      )}
+      {items.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          {t("dream.bandeja.emptySuggestions")}
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {items.map((s) => (
+            <div
+              key={s.id}
+              className="flex flex-col gap-2 rounded-[8px] border border-border/40 bg-card px-4 py-3"
+            >
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[12px] font-medium text-foreground">{s.skill}</span>
+                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                  {t(`dream.bandeja.action.${s.type}`)}
+                </span>
+              </div>
+              <p className="text-[13px] text-muted-foreground">{s.reason}</p>
+              {s.patch ? <DiffViewer patch={s.patch} /> : null}
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="default"
+                  size="sm"
+                  className="text-[12px]"
+                  disabled={busy.has(s.id)}
+                  onClick={() => resolve(s.id, "accept")}
+                >
+                  {t("dream.bandeja.accept")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="text-[12px]"
+                  disabled={busy.has(s.id)}
+                  onClick={() => resolve(s.id, "reject")}
+                >
+                  {t("dream.bandeja.reject")}
+                </Button>
+                <span className="ml-auto text-[11px] text-muted-foreground">
+                  {t("dream.bandeja.rejectHint")}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 interface BandejaTabProps {
   onOpen: (target: DrawerTarget) => void;
   onOpenSkills?: () => void;
@@ -289,6 +405,7 @@ function BandejaTab({ onOpen, onOpenSkills, onCountChange }: BandejaTabProps) {
 
   const [pairs, setPairs] = useState<FlaggedPair[]>([]);
   const [quarantine, setQuarantine] = useState<QuarantineRow[]>([]);
+  const [suggestionsCount, setSuggestionsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [resolvingKeys, setResolvingKeys] = useState<Set<string>>(new Set());
   const [resolveError, setResolveError] = useState<string | null>(null);
@@ -301,7 +418,7 @@ function BandejaTab({ onOpen, onOpenSkills, onCountChange }: BandejaTabProps) {
         if (!cancelled) {
           setPairs(p);
           setQuarantine(q);
-          onCountChange(p.length + q.length);
+          onCountChange(p.length + q.length + suggestionsCount);
         }
       })
       .finally(() => {
@@ -323,7 +440,7 @@ function BandejaTab({ onOpen, onOpenSkills, onCountChange }: BandejaTabProps) {
         await resolveFlaggedPair(token, { ref_a: pair.ref_a, ref_b: pair.ref_b, action });
         setPairs((prev) => {
           const next = prev.filter((p) => !(p.ref_a === pair.ref_a && p.ref_b === pair.ref_b));
-          onCountChange(next.length + quarantine.length);
+          onCountChange(next.length + quarantine.length + suggestionsCount);
           return next;
         });
       } catch {
@@ -336,7 +453,15 @@ function BandejaTab({ onOpen, onOpenSkills, onCountChange }: BandejaTabProps) {
         });
       }
     },
-    [token, quarantine.length, onCountChange, t],
+    [token, quarantine.length, suggestionsCount, onCountChange, t],
+  );
+
+  const handleSuggestionsCount = useCallback(
+    (n: number) => {
+      setSuggestionsCount(n);
+      onCountChange(pairs.length + quarantine.length + n);
+    },
+    [pairs.length, quarantine.length, onCountChange],
   );
 
   if (loading) {
@@ -395,6 +520,8 @@ function BandejaTab({ onOpen, onOpenSkills, onCountChange }: BandejaTabProps) {
           </div>
         )}
       </section>
+
+      <SkillSuggestionsSection token={token} onCountChange={handleSuggestionsCount} />
     </div>
   );
 }
@@ -441,9 +568,9 @@ export function DreamView({ onOpenSkills }: DreamViewProps) {
   // refetches and keeps the count live while it is open.
   useEffect(() => {
     let cancelled = false;
-    Promise.all([fetchFlaggedPairs(token), listQuarantine(token)])
-      .then(([p, q]) => {
-        if (!cancelled) setBandejaCount(p.length + q.length);
+    Promise.all([fetchFlaggedPairs(token), listQuarantine(token), fetchSkillSuggestions(token)])
+      .then(([p, q, s]) => {
+        if (!cancelled) setBandejaCount(p.length + q.length + s.length);
       })
       .catch(() => undefined);
     return () => {
