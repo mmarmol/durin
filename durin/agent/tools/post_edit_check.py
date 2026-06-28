@@ -28,6 +28,10 @@ from durin.utils.subprocess_cleanup import aclose_subprocess
 _DEFAULT_CHECKERS: dict[str, str] = {
     # ruff is durin's own linter; skipped silently when not installed.
     "py": "ruff check --output-format=concise {file}",
+    # json.tool ships with the stdlib, so this default works wherever python3
+    # is on PATH; on valid JSON it exits 0 (no noise), on broken JSON it exits
+    # non-zero with the parse error.
+    "json": "python3 -m json.tool {file}",
 }
 
 

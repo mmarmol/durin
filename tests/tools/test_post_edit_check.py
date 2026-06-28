@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import stat
 import sys
 from pathlib import Path
@@ -106,6 +107,33 @@ class TestRunPostEditCheck:
         cfg = PostEditCheckConfig()
         assert "py" in cfg.checkers
         assert "ruff" in cfg.checkers["py"]
+
+    def test_default_checkers_include_json(self):
+        cfg = PostEditCheckConfig()
+        assert "json" in cfg.checkers
+        assert "json.tool" in cfg.checkers["json"]
+
+    @pytest.mark.skipif(
+        shutil.which("python3") is None, reason="python3 not on PATH",
+    )
+    @pytest.mark.asyncio
+    async def test_default_json_checker_flags_invalid(self, tmp_path):
+        cfg = PostEditCheckConfig()  # default json -> python3 -m json.tool
+        target = tmp_path / "bad.json"
+        target.write_text('{"a": 1,}', encoding="utf-8")
+        result = await run_post_edit_check(target, cfg)
+        assert result is not None
+        assert "post-edit check" in result
+
+    @pytest.mark.skipif(
+        shutil.which("python3") is None, reason="python3 not on PATH",
+    )
+    @pytest.mark.asyncio
+    async def test_default_json_checker_accepts_valid(self, tmp_path):
+        cfg = PostEditCheckConfig()
+        target = tmp_path / "good.json"
+        target.write_text('{"a": 1}', encoding="utf-8")
+        assert await run_post_edit_check(target, cfg) is None
 
 
 # ---------------------------------------------------------------------------

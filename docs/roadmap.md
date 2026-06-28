@@ -121,11 +121,12 @@ skill's *bundled* scripts through Durin's exec gate; (#3) a real per-skill
 FS/network sandbox. (#3 is a large v2 — measure need first.)
 
 **Skill file editor — broaden validation + highlighting.** Save-time syntax lint
-(`durin/agent/skills_store.py::_lint_script`) and View highlighting
-(`webui/.../SkillsView.tsx`) cover only `.py`/`.sh`. Two independent slices:
-(1) extend the extension→language map (Prism already supports js/ts/json/yaml/…) —
-trivial, zero risk; (2) per-language syntax lints that degrade gracefully when the
-interpreter is absent (mirror the `bash -n` best-effort pattern).
+(`durin/agent/skills_store.py::_lint_script`) now covers `.py`/`.sh` plus the
+config formats `.json`/`.toml`/`.yaml` (in-process parsers, no new deps). View
+highlighting (`webui/.../SkillsView.tsx`) still covers only `.py`/`.sh`. Open:
+(1) extend the View extension→language map (Prism already supports js/ts/json/yaml/…) —
+trivial, zero risk; (2) optional `.js` lint via `node --check`, degrading gracefully
+when the interpreter is absent (mirror the `bash -n` best-effort pattern).
 
 **Unified GitHub credential section + connect UX.** GitHub recurs across skills
 (`skills.security.github_token_secret`), MCP discovery (`mcp_discovery.github_token_secret`), the
