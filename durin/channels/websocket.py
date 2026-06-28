@@ -89,7 +89,7 @@ class WebSocketConfig(Base):
     host: str = "127.0.0.1"
     port: int = 8765
     path: str = "/"
-    token: str = ""
+    token: str = Field(default="", json_schema_extra={"secret": True})
     token_issue_secret: str = ""
     token_ttl_s: int = Field(default=300, ge=30, le=86_400)
     webui_session_ttl_s: int = Field(default=604_800, ge=300, le=2_592_000)
@@ -671,6 +671,10 @@ class WebSocketChannel(BaseChannel):
     @classmethod
     def default_config(cls) -> dict[str, Any]:
         return WebSocketConfig().model_dump(by_alias=False)
+
+    @classmethod
+    def config_model(cls) -> type | None:
+        return WebSocketConfig
 
     def _expected_path(self) -> str:
         return _normalize_config_path(self.config.path)
