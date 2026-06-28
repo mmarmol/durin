@@ -1518,6 +1518,7 @@
       "accept": "Accept",
       "reject": "Reject",
       "rejectHint": "rejecting silences it for ~30 days",
+      "suggestionError": "Could not apply the suggestion — it may have already been processed. Refresh to see the current state.",
       "action": {
         "evolve": "improve",
         "retire": "retire",

@@ -20,4 +20,16 @@ describe("SkillSuggestionsSection", () => {
     await userEvent.click(screen.getByRole("button", { name: /accept/i }));
     await waitFor(() => expect(api.acceptSkillSuggestion).toHaveBeenCalledWith("tok", "a"));
   });
+
+  it("shows inline error and keeps item when accept fails", async () => {
+    vi.spyOn(api, "acceptSkillSuggestion").mockRejectedValue(new Error("409"));
+    render(<SkillSuggestionsSection token="tok" onCountChange={() => {}} />);
+    expect(await screen.findByText("commit-helper")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /accept/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/could not apply the suggestion/i)).toBeInTheDocument()
+    );
+    // Item must still be in the list — not removed on failure
+    expect(screen.getByText("commit-helper")).toBeInTheDocument();
+  });
 });

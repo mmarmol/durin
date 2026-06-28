@@ -1406,6 +1406,7 @@
       "accept": "Aceptar",
       "reject": "Rechazar",
       "rejectHint": "rechazar la silencia ~30 días",
+      "suggestionError": "No se pudo aplicar la sugerencia — es posible que ya haya sido procesada. Recargá para ver el estado actual.",
       "action": {
         "evolve": "mejorar",
         "retire": "retirar",

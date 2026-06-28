@@ -292,6 +292,7 @@ export function SkillSuggestionsSection({
   const { t } = useTranslation();
   const [items, setItems] = useState<SkillSuggestion[]>([]);
   const [busy, setBusy] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -310,6 +311,7 @@ export function SkillSuggestionsSection({
   const resolve = useCallback(
     async (id: string, action: "accept" | "reject") => {
       setBusy((p) => new Set(p).add(id));
+      setError(null);
       try {
         if (action === "accept") await acceptSkillSuggestion(token, id);
         else await rejectSkillSuggestion(token, id);
@@ -318,6 +320,8 @@ export function SkillSuggestionsSection({
           onCountChange(next.length);
           return next;
         });
+      } catch {
+        setError(t("dream.bandeja.suggestionError"));
       } finally {
         setBusy((p) => {
           const n = new Set(p);
@@ -326,7 +330,7 @@ export function SkillSuggestionsSection({
         });
       }
     },
-    [token, onCountChange],
+    [token, onCountChange, t],
   );
 
   return (
@@ -334,6 +338,9 @@ export function SkillSuggestionsSection({
       <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {t("dream.bandeja.suggestionsTitle")}
       </h2>
+      {error && (
+        <p className="mb-2 text-sm text-destructive">{error}</p>
+      )}
       {items.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           {t("dream.bandeja.emptySuggestions")}

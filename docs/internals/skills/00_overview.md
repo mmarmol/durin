@@ -211,14 +211,16 @@ described below.
 
 When `memory.dream.skill_suggestions_enabled` is on (the default), the daily
 curation pass also evaluates `mode=manual` workspace skills and, where it
-would propose `evolve`, `retire`, or `fuse`, enqueues the proposal as a
+would propose `evolve` or `retire`, enqueues the proposal as a
 **suggestion** in the dream bandeja rather than applying it directly. The user
 can accept or reject each suggestion from the webui; nothing is applied
-without explicit acceptance.
+without explicit acceptance. Fuse suggestions (merging two manual skills into
+one) are out of scope for the suggestion path for now; they remain an action
+type available only in the auto-curation pass.
 
 Each suggestion carries:
 - the proposed action and the judge's reasoning
-- for content changes (`evolve`/`fuse`), a unified-diff patch rendered by the
+- for content changes (`evolve`), a unified-diff patch rendered by the
   `DiffViewer` component in the webui — the reusable display seam for future
   history views as well
 

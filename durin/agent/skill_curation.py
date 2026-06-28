@@ -193,8 +193,7 @@ def suggest_manual_skills(workspace, *, judge: Callable[[str], str],
 
     selected = delta[:budget]
     catalog = {n: ss.read_skill_content(workspace, n) or "" for n in selected}
-    prompt = _build_prompt(catalog, usage or {}, None, [], [],
-                           so.active_principles(workspace))
+    prompt = _build_suggestion_prompt(catalog)
     try:
         parsed = json.loads(judge(prompt)) or {}
     except (ValueError, TypeError):
@@ -205,12 +204,9 @@ def suggest_manual_skills(workspace, *, judge: Callable[[str], str],
     suppressed = 0
     for a in actions:
         t = a.get("type")
-        if t not in ("evolve", "retire", "fuse"):
+        if t not in ("evolve", "retire"):
             continue
-        if t == "fuse":
-            if not set(a.get("sources", [])) <= set(selected):
-                continue
-        elif a.get("name") not in selected:
+        if a.get("name") not in selected:
             continue
         fp = sg.fingerprint(a)
         if sg.is_tombstoned(workspace, fp):
@@ -224,6 +220,12 @@ def suggest_manual_skills(workspace, *, judge: Callable[[str], str],
 
     return {"reviewed": len(selected), "suggested": suggested,
             "suppressed": suppressed}
+
+
+def _build_suggestion_prompt(catalog: dict) -> str:
+    from durin.utils.prompt_templates import render_template
+    return render_template("agent/skill_suggestions.md", strip=True,
+                           catalog_json=json.dumps(catalog, ensure_ascii=False))
 
 
 def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None,
