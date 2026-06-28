@@ -190,3 +190,27 @@ def test_toggle_switches_visibility():
     import asyncio
 
     asyncio.new_event_loop().run_until_complete(run())
+
+
+def test_update_work_tracks_active_and_renders():
+    panel = SidebarPanel()
+    panel.update_work({
+        "name": "workflow_progress", "phase": "running",
+        "call_id": "workflow:r1",
+        "arguments": {"workflow": "review-changes"},
+        "nodes": [{"id": "scan", "label": "scan", "status": "running", "route_label": None}],
+    })
+    assert panel.has_active_work is True
+    content = panel._format_content([], [], [], {})
+    assert "WORK" in content and "review-changes" in content
+
+
+def test_work_clears_when_finished():
+    panel = SidebarPanel()
+    panel.update_work({"name": "subagent_result", "phase": "running",
+                       "call_id": "subagent:t1", "label": "explore"})
+    assert panel.has_active_work is True
+    panel.update_work({"name": "subagent_result", "phase": "end",
+                       "call_id": "subagent:t1", "label": "explore",
+                       "result": "done"})
+    assert panel.has_active_work is False

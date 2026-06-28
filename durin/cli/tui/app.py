@@ -596,6 +596,23 @@ class DurinApp(App[None]):
             except Exception:  # noqa: BLE001
                 pass
 
+    def _route_work_event(self, event: dict[str, Any]) -> None:
+        """Send a workflow/subagent progress event to the sidebar WORK section.
+
+        The sidebar auto-opens and jumps to WORK the first time work starts in a
+        turn, so background progress is visible without the user toggling Ctrl+B.
+        """
+        try:
+            from durin.cli.tui.widgets import SidebarPanel
+
+            sidebar = self.query_one(SidebarPanel)
+        except Exception:  # noqa: BLE001
+            return
+        was_active = sidebar.has_active_work
+        sidebar.update_work(event)
+        if sidebar.has_active_work and not was_active:
+            sidebar.jump_to_work()
+
     async def _publish_inbound(self, value: str, media: list[str]) -> None:
         from durin.bus.events import InboundMessage
 
@@ -1128,7 +1145,10 @@ class DurinApp(App[None]):
             # from the event's arguments. Don't double-render it.
             self._dismiss_working_indicator()
             for event in tool_events:
-                self._render_tool_event(event)
+                if str(event.get("name") or "") in ("workflow_progress", "subagent_result"):
+                    self._route_work_event(event)
+                else:
+                    self._render_tool_event(event)
             return
 
         # ---- reasoning stream (model's internal monologue) --------------

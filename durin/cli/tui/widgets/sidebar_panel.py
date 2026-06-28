@@ -88,6 +88,14 @@ class SidebarPanel(Static):
     SidebarPanel .sidebar-disconnected {
         color: $error;
     }
+
+    SidebarPanel .work-header { color: $accent; text-style: bold; }
+    SidebarPanel .work-count { color: $text-muted; text-style: italic; }
+    SidebarPanel .work-finished-header { color: $text-muted; padding: 1 0 0 0; }
+    SidebarPanel .work-running { color: $accent; }
+    SidebarPanel .work-done { color: $success; }
+    SidebarPanel .work-failed { color: $error; }
+    SidebarPanel .work-pending { color: $text-muted; }
     """
 
     def __init__(self) -> None:
@@ -95,6 +103,9 @@ class SidebarPanel(Static):
         self._agent_loop: AgentLoop | None = None
         self._session_key: str | None = None
         self._timer: Any = None
+        from durin.cli.tui.widgets.work_state import WorkStore
+
+        self._work = WorkStore()
 
     def set_agent_loop(self, loop: AgentLoop | None) -> None:
         self._agent_loop = loop
@@ -121,6 +132,23 @@ class SidebarPanel(Static):
             self.hide_sidebar()
         else:
             self.show_sidebar()
+
+    def update_work(self, event: dict) -> None:
+        """Ingest one workflow/subagent progress event and re-render if visible."""
+        self._work.ingest(event)
+        if self.is_visible:
+            self.refresh_content()
+
+    @property
+    def has_active_work(self) -> bool:
+        return self._work.active_count() > 0
+
+    def jump_to_work(self) -> None:
+        """Make the sidebar visible so the WORK section is on screen."""
+        if not self.is_visible:
+            self.show_sidebar()
+        else:
+            self.refresh_content()
 
     @property
     def is_visible(self) -> bool:
@@ -264,6 +292,12 @@ class SidebarPanel(Static):
         info: dict[str, str] | None = None,
     ) -> str:
         lines: list[str] = []
+
+        # --- Work section (pushed; workflows + sub-agents) ---
+        work_markup = self._work.render_markup()
+        if work_markup:
+            lines.append(work_markup)
+            lines.append("")
 
         # --- Info section ---
         if info:
