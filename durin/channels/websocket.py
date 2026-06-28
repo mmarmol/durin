@@ -485,6 +485,10 @@ class WebSocketChannel(BaseChannel):
 
     name = "websocket"
     display_name = "WebSocket"
+    channel_description = (
+        "Transport for the web dashboard and any external WebSocket clients. "
+        "Always on while the dashboard is enabled."
+    )
 
     def __init__(
         self,

@@ -80,6 +80,7 @@ class EmailChannel(BaseChannel):
 
     name = "email"
     display_name = "Email"
+    channel_description = "Receive and reply to email via IMAP (inbound) and SMTP (outbound)."
     _IMAP_MONTHS = (
         "Jan",
         "Feb",
