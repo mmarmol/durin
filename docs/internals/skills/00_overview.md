@@ -56,7 +56,8 @@ any other.
 **Three retrieval tiers match context cost to need.** Always-tier (`always:
 true`) injects the full SKILL.md body into the stable system prompt every turn —
 high cost, maximum incentive. The hot-tier lists names and descriptions for the
-usage-ranked working set, letting the agent pull full bodies on demand. The
+usage-ranked working set, letting the agent pull full bodies on demand with the
+`skill_view` tool. The
 searchable tier indexes every skill as a memory class (FTS and vector) reachable
 via `memory_search(kind=skill)` — zero marginal cost until queried.
 
@@ -286,14 +287,16 @@ chat command (`/skills remove <name>`).
    injection that bypasses hot-tier and searchable logic.
 
 2. **Hot-tier.** `durin/agent/skill_usage.py::compute_working_set` aggregates
-   `skill_calls` from session sidecars — read events (`read_file` on a
-   `SKILL.md`) and edit events (`skill_edit`) — to produce a usage-ranked set
+   `skill_calls` from session sidecars — view events (`skill_view`), read
+   events (`read_file` on a `SKILL.md`), and edit events (`skill_edit`) — to produce a usage-ranked set
    of names. The set is split into a `frequent` slice (top N by call count over
    a 7-day window) and a `recent` slice (top N over 24 hours), deduped and
    filled with remaining candidates. Sizes are controlled by
    `agents.defaults.skills_hot_tier`. The hot tier injects names + descriptions
-   into `templates/agent/skills_section.md`; the agent fetches full bodies via
-   `read_file` on demand.
+   into `templates/agent/skills_section.md`; the agent loads full bodies on
+   demand with the `skill_view` tool (`durin/agent/tools/skill_view.py`), which
+   also returns the skill's bundled-file map and a readiness check, or a raw
+   `read_file`.
 
 3. **Searchable.** `durin/memory/skill_page.py::SkillPage` is the memory class
    for skills: it wraps the SKILL.md frontmatter and body for FTS and vector
