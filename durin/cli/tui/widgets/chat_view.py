@@ -301,8 +301,10 @@ class ChatView(VerticalScroll):
 
     def add_message(self, role: Role, body: str = "") -> MessageBubble:
         # Hide quick-action chips once the thread has real messages.
-        chips = self.query_one("#qa-chips", _QuickActionChips)
-        chips.display = False
+        # Don't hide for decorative roles (logo, banner).
+        if role in ("user", "assistant", "system", "tool", "reasoning"):
+            chips = self.query_one("#qa-chips", _QuickActionChips)
+            chips.display = False
         bubble = MessageBubble(role=role, body=body)
         self.mount(bubble)
         self.scroll_end(animate=False)

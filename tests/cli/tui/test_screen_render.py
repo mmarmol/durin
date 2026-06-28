@@ -77,3 +77,32 @@ def test_quick_actions_present() -> None:
     from durin.cli.tui.widgets.chat_view import ChatView
 
     assert ChatView.quick_actions() == ["Plan", "Analyze", "Brainstorm", "Code", "Summarize"]
+
+
+@pytest.mark.asyncio
+async def test_chips_visible_for_banner_messages() -> None:
+    """Chips should remain visible when adding decorative banner/logo messages."""
+    from durin.cli.tui.widgets.chat_view import ChatView
+
+    app = DurinApp(agent_loop=None)
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        chat = app.query_one(ChatView)
+        chips = chat.query_one("#qa-chips")
+        # Chips should be visible initially
+        assert chips.display is True
+        # Add banner message
+        chat.add_message("banner", "Welcome to durin")
+        await pilot.pause()
+        # Chips should still be visible after banner
+        assert chips.display is True
+        # Add logo message
+        chat.add_message("logo", "durin ASCII art")
+        await pilot.pause()
+        # Chips should still be visible after logo
+        assert chips.display is True
+        # Add real user message
+        chat.add_message("user", "hello")
+        await pilot.pause()
+        # Now chips should be hidden
+        assert chips.display is False
