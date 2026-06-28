@@ -218,7 +218,21 @@
       "noCredential": "No requiere credencial.",
       "reconfigure": "Reconfigurar",
       "save": "Guardar",
-      "saveError": "No se pudo guardar el canal."
+      "saveError": "No se pudo guardar el canal.",
+      "alwaysOn": "Siempre activo",
+      "cancel": "Cancelar",
+      "secretNone": "Ninguno",
+      "secretCreate": "Crear nuevo…",
+      "secretValuePlaceholder": "Valor para {{name}}",
+      "wsTokenHelp": "Opcional. Solo para clientes WebSocket externos — el panel no lo necesita.",
+      "consentLabel": "Autorizo a durin a leer este buzón",
+      "groupImap": "Entrada (IMAP)",
+      "groupSmtp": "Salida (SMTP)",
+      "groupBehavior": "Comportamiento",
+      "groupSecurity": "Anti-spoofing",
+      "groupAttachments": "Adjuntos",
+      "groupConsent": "Consentimiento",
+      "fieldHelpAllowFrom": "Quién puede escribir a este canal (direcciones/IDs). Vacío = nadie."
     },
     "config": {
       "description": "Cada configuración de durin, agrupada por sección. Editar un valor lo escribe directamente al config — igual que durin config set. Las listas y secrets gestionados son de solo lectura aquí.",

@@ -272,7 +272,21 @@
       "credentialPlaceholder": "{{field}}",
       "noCredential": "No credential needed.",
       "loadError": "Could not load channels.",
-      "saveError": "Could not save the channel."
+      "saveError": "Could not save the channel.",
+      "alwaysOn": "Always active",
+      "cancel": "Cancel",
+      "secretNone": "None",
+      "secretCreate": "Create new…",
+      "secretValuePlaceholder": "Value for {{name}}",
+      "wsTokenHelp": "Optional. Only for external WebSocket clients — the dashboard does not need it.",
+      "consentLabel": "I consent to durin reading this mailbox",
+      "groupImap": "Inbound (IMAP)",
+      "groupSmtp": "Outbound (SMTP)",
+      "groupBehavior": "Behavior",
+      "groupSecurity": "Anti-spoofing",
+      "groupAttachments": "Attachments",
+      "groupConsent": "Consent",
+      "fieldHelpAllowFrom": "Who may message this channel (addresses/IDs). Empty = nobody."
     },
     "memory": {
       "description": "Tune the memory subsystem — search reranking and dream auto-consolidation.",
