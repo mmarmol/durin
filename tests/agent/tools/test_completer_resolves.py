@@ -1,9 +1,8 @@
-"""Regression test for completer-offered workspace-relative paths resolving
-correctly even when a work_dir is active.
+"""Verify that resolve_workspace_path anchors managed-prefix paths to the workspace root.
 
-This pins the behavior from Task 2 (resolve_workspace_path with work_dir parameter).
-A managed-prefix path like "ingested/abc/source.md" must resolve to the workspace root,
-not to the work directory, preserving the anchored intent of the completer.
+When a work_dir is active, completer-offered workspace-relative paths with managed prefixes
+(like "ingested/abc/source.md") must still resolve to the workspace root, not to the work
+directory, preserving the anchored intent of the path completer.
 """
 
 from pathlib import Path
