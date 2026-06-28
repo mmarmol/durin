@@ -111,6 +111,24 @@ This is the ONLY correct way to delete a memory entry — never rm or move files
 Pass `uri` exactly as memory_search returned it. Refuses entity pages (memory/entities/...): those have their own absorb/revert lifecycle.
 ```
 
+### 3.7 `memory_read_entity`
+
+```
+Read one entity's COMPLETE page (frontmatter + attributes + relations + provenance + body). Reach for this after memory_search points you at an entity and you need the whole structured page, not just the search preview. (For a quick body-only follow-up on a preview hit, memory_drill is enough.)
+```
+
+### 3.8 `memory_entity_lineage`
+
+```
+The git history of an entity: who changed it, when, and why (including absorb/merge commits). Use to gauge an entity before you rely on or edit it — is it long-established or freshly created, has it been merged from others.
+```
+
+### 3.9 `memory_source_session`
+
+```
+Read the original conversation turns an entity was distilled from (its provenance source_refs + derived_from). Use when a fact looks off, or when you need the exact wording and context that produced it, not the summary.
+```
+
 ---
 
 ## 4. Architecture diagram
