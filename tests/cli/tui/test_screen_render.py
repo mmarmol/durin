@@ -71,3 +71,9 @@ def test_user_bubble_exposes_edit_payload() -> None:
 
     bubble = MessageBubble(role="user", body="original text")
     assert bubble.editable_text() == "original text"
+
+
+def test_quick_actions_present() -> None:
+    from durin.cli.tui.widgets.chat_view import ChatView
+
+    assert ChatView.quick_actions() == ["Plan", "Analyze", "Brainstorm", "Code", "Summarize"]

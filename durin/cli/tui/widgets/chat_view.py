@@ -214,6 +214,72 @@ class MessageBubble(Static):
         self.add_class("error")
 
 
+class _QuickActionChips(Static):
+    """Row of suggestion chips shown on an empty thread."""
+
+    DEFAULT_CSS = """
+    _QuickActionChips {
+        width: 100%;
+        padding: 1 2;
+        color: $text-muted;
+    }
+    _QuickActionChips .qa-chip {
+        background: $boost;
+        color: $text;
+        padding: 0 1;
+        margin: 0 1 0 0;
+    }
+    _QuickActionChips .qa-chip:hover {
+        background: $accent 40%;
+        color: $accent;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        for label in ChatView.quick_actions():
+            yield Static(label, classes="qa-chip", markup=False)
+
+    def on_click(self, event) -> None:  # noqa: ANN001
+        target = event.widget
+        if target is None or "qa-chip" not in target.classes:
+            return
+        try:
+            from durin.cli.tui.widgets import InputArea
+
+            inp = self.app.query_one(InputArea)
+        except Exception:  # noqa: BLE001
+            return
+        inp.value = target.renderable if isinstance(target.renderable, str) else str(target.renderable)
+        inp.cursor_position = len(inp.value)
+        inp.focus()
+
+
+class _ScrollToBottom(Static):
+    """Button that jumps to the end of the chat history."""
+
+    DEFAULT_CSS = """
+    _ScrollToBottom {
+        dock: bottom;
+        width: auto;
+        padding: 0 2;
+        background: $boost;
+        color: $text-muted;
+        display: none;
+    }
+    _ScrollToBottom:hover {
+        background: $accent 40%;
+        color: $accent;
+    }
+    """
+
+    def on_click(self, _event) -> None:  # noqa: ANN001
+        try:
+            chat = self.app.query_one(ChatView)
+            chat.scroll_end(animate=False)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 class ChatView(VerticalScroll):
     """Scrollable history. Append :class:`MessageBubble` instances to it."""
 
@@ -224,15 +290,32 @@ class ChatView(VerticalScroll):
     }
     """
 
+    @staticmethod
+    def quick_actions() -> list[str]:
+        """Labels for the suggestion chips shown on an empty thread."""
+        return ["Plan", "Analyze", "Brainstorm", "Code", "Summarize"]
+
     def compose(self) -> ComposeResult:
-        # ChatView's content is appended dynamically via add_message().
-        yield from ()
+        yield _QuickActionChips(id="qa-chips")
+        yield _ScrollToBottom("↓ Jump to bottom", id="scroll-to-bottom")
 
     def add_message(self, role: Role, body: str = "") -> MessageBubble:
+        # Hide quick-action chips once the thread has real messages.
+        chips = self.query_one("#qa-chips", _QuickActionChips)
+        chips.display = False
         bubble = MessageBubble(role=role, body=body)
         self.mount(bubble)
         self.scroll_end(animate=False)
         return bubble
+
+    def on_scroll_changed(self, _event) -> None:  # noqa: ANN001
+        """Show/hide the jump button based on scroll position."""
+        try:
+            btn = self.query_one("#scroll-to-bottom", _ScrollToBottom)
+            at_bottom = self.scroll_y >= self.max_scroll_y - 1
+            btn.display = not at_bottom
+        except Exception:  # noqa: BLE001
+            pass
 
     def replace_last(self, role: Role, body: str) -> None:
         """Replace the last bubble's role + body (used by /stop or errors)."""
