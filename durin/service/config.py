@@ -259,9 +259,12 @@ def _channel_field_schema(model: type) -> list[dict[str, Any]]:
         # token_issue_secret, …) stays out of the UI and in config.toml.
         if not group and not is_secret:
             continue
-        default = finfo.get_default(call_default_factory=True)
-        if isinstance(default, (set, frozenset)):
-            default = list(default)
+        if finfo.is_required():
+            default = None
+        else:
+            default = finfo.get_default(call_default_factory=True)
+            if isinstance(default, (set, frozenset)):
+                default = list(default)
         fields.append(
             {
                 "name": fname,

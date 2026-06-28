@@ -1,5 +1,7 @@
 """Tests for the per-channel field schema returned by ConfigService.channels_list."""
 
+import durin.config.loader as _loader
+
 from durin.service.config import ChannelsListQuery, ConfigService
 from durin.service.principal import Principal
 
@@ -22,11 +24,16 @@ async def test_email_returns_typed_field_schema():
     assert by_name["imap_host"]["group"] == "imap"
 
 
-async def test_websocket_always_on_when_webui_enabled():
+async def test_websocket_always_on_when_webui_enabled(monkeypatch):
+    cfg = _loader.load_config()
+    cfg.gateway.webui_enabled = True
+    monkeypatch.setattr(_loader, "load_config", lambda *a, **kw: cfg)
+
     svc = ConfigService()
     result = await svc.channels_list(query=ChannelsListQuery(), principal=_principal())
     ws = next(c for c in result.channels if c["name"] == "websocket")
-    assert "always_on" in ws
+    assert ws["always_on"] is True
+    assert ws["enabled"] is True
     assert ws["description"]
     token = next(f for f in ws["fields"] if f["name"] == "token")
     assert token["type"] == "secret"
