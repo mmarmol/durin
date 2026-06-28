@@ -845,7 +845,6 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
             workspace,
             tracked_files=[
                 "SOUL.md",
-                "USER.md",
             ],
         )
         gs.init()

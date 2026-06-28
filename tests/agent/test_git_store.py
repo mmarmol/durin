@@ -5,7 +5,7 @@ import pytest
 
 from durin.utils.gitstore import CommitInfo, GitStore
 
-TRACKED = ["SOUL.md", "USER.md", "memory/MEMORY.md"]
+TRACKED = ["SOUL.md", "AGENTS.md", "memory/MEMORY.md"]
 
 
 @pytest.fixture
