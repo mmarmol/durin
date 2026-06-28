@@ -1280,6 +1280,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/skills/{name}/commit/{sha}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Unified diff of one commit, scoped to the skill */
+        get: operations["skills_commit_diff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/skills/{name}/file": {
         parameters: {
             query?: never;
@@ -3584,6 +3601,26 @@ export interface components {
              * @default false
              */
             replace: boolean;
+        };
+        /**
+         * SkillCommitDiff
+         * @description Unified diff of one commit for a skill.
+         */
+        SkillCommitDiff: {
+            /** Patch */
+            patch: string;
+            /** Sha */
+            sha: string;
+        };
+        /**
+         * SkillCommitDiffQuery
+         * @description One commit's diff, scoped to a skill's subtree.
+         */
+        SkillCommitDiffQuery: {
+            /** Name */
+            name: string;
+            /** Sha */
+            sha: string;
         };
         /** SkillDescribeQuery */
         SkillDescribeQuery: {
@@ -6200,6 +6237,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SkillsResult"];
+                };
+            };
+        };
+    };
+    skills_commit_diff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillCommitDiffQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillCommitDiff"];
                 };
             };
         };

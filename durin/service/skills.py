@@ -119,6 +119,20 @@ class SkillJudgeQuery(Query):
     name: str
 
 
+class SkillCommitDiffQuery(Query):
+    """One commit's diff, scoped to a skill's subtree."""
+
+    name: str
+    sha: str
+
+
+class SkillCommitDiff(Result):
+    """Unified diff of one commit for a skill."""
+
+    sha: str
+    patch: str
+
+
 class SkillSuggestionsQuery(Query):
     """No inputs — returns the full pending-suggestion list."""
 
@@ -316,6 +330,25 @@ class SkillsService:
 
         status, payload = ss.web_history(self._workspace, query.name)
         return _skills_result(status, payload)
+
+    @route(
+        "GET",
+        "/api/v1/skills/{name}/commit/{sha}/diff",
+        scope=Scope.SKILLS_READ.value,
+        request_model=SkillCommitDiffQuery,
+        response_model=SkillCommitDiff,
+        summary="Unified diff of one commit, scoped to the skill",
+    )
+    async def commit_diff(
+        self, query: SkillCommitDiffQuery, principal: Principal
+    ) -> SkillCommitDiff:
+        principal.require(Scope.SKILLS_READ)
+        from durin.agent import skills_store as ss
+
+        status, payload = ss.web_commit_diff(self._workspace, query.name, query.sha)
+        if status != 200:
+            raise NotFoundError(payload.get("error", "commit not found"))
+        return SkillCommitDiff(sha=payload["sha"], patch=payload["patch"])
 
     @route(
         "GET",

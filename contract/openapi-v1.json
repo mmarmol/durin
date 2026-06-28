@@ -4272,6 +4272,45 @@
         "title": "SkillApproveCommand",
         "type": "object"
       },
+      "SkillCommitDiff": {
+        "description": "Unified diff of one commit for a skill.",
+        "properties": {
+          "patch": {
+            "title": "Patch",
+            "type": "string"
+          },
+          "sha": {
+            "title": "Sha",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha",
+          "patch"
+        ],
+        "title": "SkillCommitDiff",
+        "type": "object"
+      },
+      "SkillCommitDiffQuery": {
+        "additionalProperties": false,
+        "description": "One commit's diff, scoped to a skill's subtree.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "sha": {
+            "title": "Sha",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "sha"
+        ],
+        "title": "SkillCommitDiffQuery",
+        "type": "object"
+      },
       "SkillDescribeQuery": {
         "additionalProperties": false,
         "properties": {
@@ -7877,6 +7916,35 @@
         },
         "summary": "Approve a quarantined skill",
         "x-required-scope": "skills:write"
+      }
+    },
+    "/api/v1/skills/{name}/commit/{sha}/diff": {
+      "get": {
+        "operationId": "skills_commit_diff",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillCommitDiffQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillCommitDiff"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Unified diff of one commit, scoped to the skill",
+        "x-required-scope": "skills:read"
       }
     },
     "/api/v1/skills/{name}/file": {
