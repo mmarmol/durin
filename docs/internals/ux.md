@@ -128,7 +128,9 @@ tiers inside the lock; non-commands enter the agent path.
   render the structured payload directly (question panel with option chips,
   masked secret prompt, plan card, todo checklist). All other channels receive
   a serialized plain-text fallback at turn end from
-  `AgentLoop._maybe_publish_interaction_fallback`.
+  `AgentLoop._maybe_publish_interaction_fallback`. In the TUI the `exit_plan_mode`
+  bubble additionally renders inline `Approve` and `Refine` action rows; selecting
+  Approve publishes the `/build` command without requiring the user to type it.
 - **Blocking ask_user**: when `agents.defaults.ask_user_blocking` is true
   (the default), `ask_user_question` awaits the user's next plain-text reply
   *inside the same turn* via the `durin/agent/pending_answers.py` future
@@ -206,6 +208,23 @@ session lineage and workflow run manifests.
 background work is running or has finished. Clicking it opens the work panel.
 Per-node detail and sub-agent steps are not expanded inline — they live in the
 panel.
+
+### Work-visibility surfaces (TUI)
+
+The TUI sidebar (toggled with **Ctrl+B**) exposes a WORK section alongside the
+existing Todos, Files, and MCP tabs.
+
+**Sidebar WORK section.** When work becomes active in a turn — a running
+workflow or a spawned sub-agent — the sidebar auto-opens and switches to the
+WORK tab. The section renders each active workflow as a node tree, including
+nested parallel branches, with per-node status (running / done / failed). Active
+sub-agents appear as peer entries alongside workflow nodes. The section is fed
+from `workflow_progress` and `subagent_result` events on the outbound bus; no
+polling is involved.
+
+**Goal banner.** A sticky strip above the chat renders the session's
+active goal, drawn from the `goal_state` field of the `_turn_end` outbound
+event. The banner is hidden when there is no active goal.
 
 ### Config flow
 
@@ -285,6 +304,35 @@ operations are safe from both async channel handlers and sync CLI contexts.
 | Interactive CLI | `durin agent` |
 | Textual TUI | `durin agent --tui` |
 | WebUI (gateway) | `durin gateway` — serves WebSocket channel + SPA on `gateway.host:gateway.port` |
+
+### TUI features
+
+The Textual TUI (`durin agent --tui`) provides richer interaction affordances
+than the interactive CLI.
+
+**Keybindings**
+
+| Binding | Action |
+|---|---|
+| Ctrl+B | Toggle the sidebar (Todos / Files / MCP / WORK tabs) |
+| Ctrl+Shift+P | Open the persona picker modal |
+
+**Persona picker.** The Ctrl+Shift+P modal lists all configured personas, showing
+each persona's name, soul, and model. The currently active persona is marked.
+Selecting a persona publishes `/persona <name>` into the session.
+
+**Footer.** The footer displays the wall-clock duration of the last completed
+turn and the active agent mode.
+
+**Edit affordance.** Each user message in the thread carries an edit affordance.
+Clicking it reloads the message text into the composer input for revision. This
+is a refill only — it does not truncate history or automatically resend.
+
+**Empty-thread quick actions.** When the thread is empty, action chips
+(Plan / Analyze / Brainstorm / Code / Summarize) are shown in the chat area.
+Selecting a chip fills the composer with the corresponding starter prompt. A
+scroll-to-bottom control appears when the user has scrolled up from the latest
+message.
 
 ### Key config keys
 
