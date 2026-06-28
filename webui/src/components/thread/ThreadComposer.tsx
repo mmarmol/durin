@@ -9,6 +9,8 @@ import {
 } from "react";
 
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
+import { EquationEditorButton } from "@/components/math/EquationEditorButton";
+import { insertAtCursor } from "@/components/math/insert-at-cursor";
 import {
   Activity,
   AlertTriangle,
@@ -763,6 +765,22 @@ export function ThreadComposer({
   // Keep the audio callbacks (declared earlier) able to trigger a resize.
   resizeTextareaRef.current = resizeTextarea;
 
+  const onInsertEquation = useCallback(
+    (latex: string) => {
+      const el = textareaRef.current;
+      const start = el?.selectionStart ?? value.length;
+      const end = el?.selectionEnd ?? value.length;
+      const { next, caret } = insertAtCursor(value, start, end, latex);
+      setValue(next);
+      resizeTextareaRef.current();
+      requestAnimationFrame(() => {
+        el?.focus();
+        el?.setSelectionRange(caret, caret);
+      });
+    },
+    [value],
+  );
+
   const chooseSlashCommand = useCallback(
     (command: SlashCommand) => {
       setValue(command.argHint ? `${command.command} ` : command.command);
@@ -1057,6 +1075,11 @@ export function ThreadComposer({
             {inlineError}
           </div>
         ) : null}
+        {value.includes("$") ? (
+          <div className="border-t border-border/40 px-3 py-2 text-sm">
+            <MarkdownText>{value}</MarkdownText>
+          </div>
+        ) : null}
         <div
           className={cn(
             "flex items-center justify-between gap-2",
@@ -1088,6 +1111,7 @@ export function ThreadComposer({
             >
               <Paperclip className={cn(isHero ? "h-5 w-5" : "h-4 w-4")} />
             </Button>
+            <EquationEditorButton onInsert={onInsertEquation} />
             {audioInputAllowed ? (
               <MicButton
                 onRecorded={handleAudioFile}
