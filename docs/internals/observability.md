@@ -227,6 +227,17 @@ compression of rotated segments, and age-based deletion (default 7 days). Raw
 stdout/stderr go to a separate `gateway.boot.log` safety net for catastrophic
 pre-loguru errors.
 
+Not every subsystem logs through loguru directly — many (memory, security,
+several tools, telemetry) use stdlib `logging.getLogger(__name__)`. At CLI
+import `redirect_durin_logging` installs a bridge on the `durin` parent logger
+that forwards every `durin.*` record into loguru, so those records reach the
+same sinks (the stderr sink and, in daemon mode, the `gateway.log` JSONL sink).
+Without the bridge their INFO would be dropped by stdlib's default level and
+their WARNING/ERROR would fall through to stdout/stderr — i.e. `gateway.boot.log`,
+which the Logs panel excludes. Third-party libraries are bridged selectively
+instead, via `redirect_lib_logging` (e.g. `nio`, `botpy`, `Lark`, `websockets`),
+to keep their noise out of `gateway.log`.
+
 `daemon_status()` returns a `DaemonStatus` with `state ∈ {running, not_running,
 stale_pid}`. A stale PID is detected when the PID file exists but `os.kill(pid,
 0)` raises `ProcessLookupError`. The gateway also acquires an exclusive flock on

@@ -1,4 +1,21 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+
+// Content-addressed cache of rendered chart markup (SVG), keyed by spec
+// source. The transcript remounts message subtrees on streaming/poll
+// updates; without this cache each remount re-runs vega-embed and shows a
+// blank host for a frame — the visible flash. On a cache hit a layout
+// effect paints the stored SVG synchronously, before the browser shows the
+// empty frame. Bounded so a long session can't grow it without limit.
+const chartCache = new Map<string, string>();
+const CHART_CACHE_MAX = 60;
+
+function cacheChart(code: string, html: string): void {
+  if (chartCache.size >= CHART_CACHE_MAX) {
+    const oldest = chartCache.keys().next().value;
+    if (oldest !== undefined) chartCache.delete(oldest);
+  }
+  chartCache.set(code, html);
+}
 
 /**
  * Returns true if the parsed Vega/Vega-Lite spec object contains any property
@@ -25,7 +42,17 @@ export default function ChartPreview({ code }: { code: string }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState(false);
 
+  // Restore a cached render synchronously on (re)mount so a remount never
+  // shows a blank host frame before the async embed below resolves.
+  useLayoutEffect(() => {
+    const cached = chartCache.get(code);
+    if (cached != null && hostRef.current) hostRef.current.innerHTML = cached;
+  }, [code]);
+
   useEffect(() => {
+    // Already rendered and cached — the layout effect painted it; skip the
+    // expensive re-embed entirely.
+    if (chartCache.has(code)) return;
     let cancelled = false;
     let view: { finalize: () => void } | null = null;
     setError(false);
@@ -72,7 +99,16 @@ export default function ChartPreview({ code }: { code: string }) {
           // vega not directly importable as ESM; defense (a) is sufficient.
         }
 
-        view = await embed(hostRef.current, spec as object, { actions: false, ...loaderOpt });
+        // renderer "svg" (vs the default canvas) so the output is markup we
+        // can cache and restore as innerHTML on a later remount.
+        view = await embed(hostRef.current, spec as object, {
+          actions: false,
+          renderer: "svg",
+          ...loaderOpt,
+        });
+        if (!cancelled && hostRef.current) {
+          cacheChart(code, hostRef.current.innerHTML);
+        }
       } catch {
         if (!cancelled) setError(true);
       }
