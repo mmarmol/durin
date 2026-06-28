@@ -1,9 +1,8 @@
 """Lock the identity.md Memory section against prompt drift.
 
-If a future edit drifts the prompt out of sync with the canonical
-wording, this test breaks loudly. The v2 wording produced +12pp on
-single_hop and +3.9pp net on LoCoMo; changing it without bench
-evidence regresses.
+If a future edit drifts the prompt out of sync with the expected wording,
+this test breaks loudly. Update the phrases here when the block is
+intentionally rewritten.
 """
 
 from __future__ import annotations
@@ -25,26 +24,30 @@ def identity_text() -> str:
 # whole block (whitespace + Jinja interpolation make exact equality
 # brittle) but we lock the load-bearing sentences.
 _REQUIRED_PHRASES = (
-    "You have access to four memory tools",
-    # Tool list may wrap across lines in the file; normalise whitespace
-    # before comparing.
-    # (Checked separately below.)
-    # New model: entity pages + references replace canonical/fragments/
-    # ingested-chunks. The bench-validated anchors below are PRESERVED.
+    "Memory is how you persist what matters",
     "Entity pages",
     "References",
     "Session summaries",
-    "call memory_search rather than answering",
-    "from cold recall",
-    "State the source of any fact you cite",
-    "For compound or multi-part questions, issue 2-3 searches",
-    # H22 (2026-05-30) anti-hallucination bullets — these are
-    # production defaults that ship with durin and are read by the
-    # agent every turn. Drift = the production agent loses honesty
-    # signal across reframing / multi-part / identifier-invention.
-    "Don't reframe to fit the question",
-    "Answer multi-part questions partially when needed",
-    "Never invent identifiers",
+    "Fragments",
+    "search — don't answer from cold recall",
+    "issue 2-3 searches with different phrasings",
+    "reconcile disagreements by timestamp",
+    "enumerate every distinct item",
+    "State the source",
+    "never claim what isn't in the results",
+    "invent identifiers",
+    "capture as you go",
+    "Standard types: person, place, project, topic, event, artifact",
+    "Known types",
+    "Don't save",
+    "Correct in place",
+    "Say what you saved",
+)
+
+_ACTIVE_TOOLS = (
+    "memory_search", "memory_drill", "memory_read_entity",
+    "memory_entity_lineage", "memory_source_session",
+    "memory_upsert_entity", "memory_ingest", "memory_forget",
 )
 
 
@@ -60,12 +63,12 @@ def test_each_required_phrase_present(identity_text: str) -> None:
         "identity.md drifted from its expected content. "
         "Missing phrases:\n  - " + "\n  - ".join(missing)
     )
-    # The full tool name list must be present (in any whitespace
-    # arrangement).
-    assert (
-        "memory_search, memory_upsert_entity, memory_ingest, memory_drill"
-        in normalised
-    )
+
+
+def test_identity_names_all_active_memory_tools(identity_text: str) -> None:
+    """Every active memory tool is named in the identity Memory block."""
+    missing = [t for t in _ACTIVE_TOOLS if t not in identity_text]
+    assert not missing, f"identity.md no longer names: {missing}"
 
 
 def test_does_not_contain_dropped_v1_phrasing(identity_text: str) -> None:
