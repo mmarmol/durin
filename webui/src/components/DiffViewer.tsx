@@ -10,7 +10,7 @@ function normalizePatch(patch: string): string {
   if (patch.startsWith("diff --git")) return patch;
   return patch.replace(
     /^(--- ([^\n]+)\n\+\+\+ ([^\n]+))/gm,
-    (_, block, oldRaw, newRaw) => {
+    (_match, _block, oldRaw, newRaw) => {
       const strip = (p: string) => p.replace(/^[ab]\//, "");
       const a = strip(oldRaw.trim());
       const b = strip(newRaw.trim());
