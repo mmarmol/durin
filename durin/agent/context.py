@@ -105,7 +105,10 @@ class ContextBuilder:
     # USER.md dropped — the user profile lives in the principal person
     # entity (pinned context), not a bootstrap file. SOUL.md is now
     # persona-driven (rendered as a dedicated soul block, not a bootstrap file).
-    BOOTSTRAP_FILES = ["AGENTS.md", "TOOLS.md"]
+    # TOOLS.md dropped — tool names, descriptions, and parameter schemas reach
+    # the model through the function-calling channel (the authoritative source,
+    # generated from the tool registry); a hand-written prose mirror only drifts.
+    BOOTSTRAP_FILES = ["AGENTS.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
     _MAX_RECENT_HISTORY = 50
     _MAX_HISTORY_CHARS = 32_000  # hard cap on recent history section size

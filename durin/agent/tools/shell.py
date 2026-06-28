@@ -190,6 +190,8 @@ class ExecTool(Tool):
             "and grep/glob over shell find/grep. "
             "Use -y or --yes flags to avoid interactive prompts. "
             "Output is truncated at 10 000 chars; timeout defaults to 60s. "
+            "Destructive commands (rm -rf, dd, mkfs, format, shutdown) and "
+            "writes into memory/ or history files are blocked. "
             "Set background=true for long-lived commands (servers, builds) "
             "and manage them with the process tool."
         )
