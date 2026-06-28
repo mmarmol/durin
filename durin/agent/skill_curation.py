@@ -172,6 +172,60 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             "principles": len(so.active_principles(workspace))}
 
 
+def suggest_manual_skills(workspace, *, judge: Callable[[str], str],
+                          usage: dict | None = None,
+                          budget: int = DEFAULT_BUDGET) -> dict:
+    """Curation for MANUAL skills: run the same judge, but ENQUEUE its actions as
+    suggestions for user review instead of applying them. The auto path
+    (curate_catalog) is untouched. Conclusions covered by a live rejection
+    tombstone are suppressed. Evaluation state is tracked in a sidecar cursor so
+    manual skill files are never written."""
+    from durin.agent import skill_suggestions as sg
+
+    workspace = Path(workspace)
+    manual = [
+        s["name"] for s in ss.list_skills_info(workspace)
+        if s["mode"] == "manual" and s["source"] == "workspace"
+    ]
+    delta = [n for n in manual if sg.needs_suggestion(workspace, n)]
+    if not delta:
+        return {"reviewed": 0, "suggested": 0, "suppressed": 0}
+
+    selected = delta[:budget]
+    catalog = {n: ss.read_skill_content(workspace, n) or "" for n in selected}
+    prompt = _build_prompt(catalog, usage or {}, None, [], [],
+                           so.active_principles(workspace))
+    try:
+        parsed = json.loads(judge(prompt)) or {}
+    except (ValueError, TypeError):
+        parsed = {}
+    actions = parsed.get("actions", [])
+
+    suggested = 0
+    suppressed = 0
+    for a in actions:
+        t = a.get("type")
+        if t not in ("evolve", "retire", "fuse"):
+            continue
+        if t == "fuse":
+            if not set(a.get("sources", [])) <= set(selected):
+                continue
+        elif a.get("name") not in selected:
+            continue
+        fp = sg.fingerprint(a)
+        if sg.is_tombstoned(workspace, fp):
+            suppressed += 1
+            continue
+        sg.add_suggestion(workspace, a)
+        suggested += 1
+
+    for n in selected:
+        sg.mark_suggested(workspace, n)
+
+    return {"reviewed": len(selected), "suggested": suggested,
+            "suppressed": suppressed}
+
+
 def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None,
                   observations: list[dict] | None = None,
                   declined: list[dict] | None = None,
