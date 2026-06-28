@@ -204,7 +204,34 @@ near-duplicates via `dream_fuse_skills`), `retire` (delete via `remove_skill`,
 git-recoverable), `principle` (add a cross-cutting rule), or `retire_principle`
 actions. The judge receives OPEN observations as evidence and DECLINED history
 to prevent re-proposing rejected changes. Imported skills are `mode=manual` and
-are not auto-curated.
+are not auto-curated — instead, they are handled by the suggestion path
+described below.
+
+#### Skill suggestions (manual skills)
+
+When `memory.dream.skill_suggestions_enabled` is on (the default), the daily
+curation pass also evaluates `mode=manual` workspace skills and, where it
+would propose `evolve` or `retire`, enqueues the proposal as a
+**suggestion** in the dream bandeja rather than applying it directly. The user
+can accept or reject each suggestion from the webui; nothing is applied
+without explicit acceptance. Fuse suggestions (merging two manual skills into
+one) are out of scope for the suggestion path for now; they remain an action
+type available only in the auto-curation pass.
+
+Each suggestion carries:
+- the proposed action and the judge's reasoning
+- for content changes (`evolve`), a unified-diff patch rendered by the
+  `DiffViewer` component in the webui — the reusable display seam for future
+  history views as well
+
+Rejecting a suggestion writes an **expiring tombstone** (approximately 30 days)
+so the same conclusion is not re-proposed within that window. This is a
+time-limited signal, distinct from the `do_not_absorb` tombstone used by the
+refine pass, which is permanent. Once the tombstone expires the curation judge
+re-evaluates the skill normally on the next applicable run.
+
+Auto skills and the in-loop `skill_edit` path are unaffected: they are curated
+and applied as before.
 
 **Observation queue.** `durin/agent/skill_observations.py` persists live
 feedback from the `skill_observe` core tool (`correction`, `gap`,
@@ -334,6 +361,7 @@ to the scan report, and makes it inert for the agent. Approve re-gates through
 | `memory.dream.cron` | `"0 3 * * *"` | Schedule for the daily dream cron (all five passes + curate_catalog). |
 | `memory.dream.max_seconds_per_run` | 600 | Hard wall-clock cap per extract pass (yields after current session; cursor resumes on next trigger). |
 | `memory.dream.skill_signals_enabled` | `true` | Run `discover_skill_signals` over post-cursor session turns during the extract pass. |
+| `memory.dream.skill_suggestions_enabled` | `true` | When on, curation proposes actions for `mode=manual` skills as bandeja suggestions (accept/reject) rather than applying them directly. Disable to exclude manual skills from curation entirely. |
 
 ### CLI surfaces
 

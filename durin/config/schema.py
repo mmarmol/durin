@@ -266,6 +266,18 @@ class MemoryDreamConfig(Base):
         validation_alias=AliasChoices("learningsSweepEnabled", "learnings_sweep_enabled"),
     )
 
+    # Skill suggestions for MANUAL skills (curation that proposes, never applies).
+    # When ON, the daily curation also evaluates manual workspace skills and
+    # enqueues its actions as suggestions for user review in the dream bandeja
+    # (instead of discarding the analysis, as it did when manual skills were
+    # simply excluded). Auto skills are unaffected. ON by default: nothing is
+    # applied without explicit user acceptance.
+    skill_suggestions_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "skillSuggestionsEnabled", "skill_suggestions_enabled"),
+    )
+
     # Override the dream model (None → falls through to
     # agents.defaults.model used by ``durin memory dream``).
     model_override: str | None = Field(

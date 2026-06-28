@@ -1268,3 +1268,15 @@ def web_history(workspace: Path, name: str) -> tuple[int, dict]:
     if _resolve_skill_dir(workspace, name) is None:
         return 404, {"error": f"skill not found: {name}"}
     return 200, skill_history(workspace, name)
+
+
+def web_commit_diff(workspace: Path, name: str, sha: str) -> tuple[int, dict]:
+    """Unified diff of one commit, scoped to skill ``name``'s subtree."""
+    if not _safe_name(name):
+        return 404, {"error": "invalid skill name"}
+    store = _store(workspace)
+    res = store.commit_diff(sha, path=name)
+    if res is None:
+        return 404, {"error": "commit not found"}
+    info, patch = res
+    return 200, {"sha": info.sha, "patch": patch}
