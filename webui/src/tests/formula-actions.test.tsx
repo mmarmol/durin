@@ -53,5 +53,7 @@ describe("FormulaActions", () => {
     renderFormula();
     fireEvent.click(screen.getByRole("button", { name: "Copy for Word" }));
     expect(write).toHaveBeenCalledTimes(1);
+    const item = write.mock.calls[0][0][0] as { data: Record<string, unknown> };
+    expect(item.data["text/html"]).toBeTruthy();
   });
 });

@@ -1319,7 +1319,6 @@
   "formula": {
     "copyLatex": "Copy LaTeX",
     "copyWord": "Copy for Word",
-    "copied": "Copied",
     "actionsAria": "Formula actions"
   },
   "code": {
@@ -1567,7 +1566,6 @@
     "code": "Code",
     "preview": "Preview",
     "expand": "Expand",
-    "copy": "Copy",
-    "copied": "Copied"
+    "copy": "Copy"
   }
 }

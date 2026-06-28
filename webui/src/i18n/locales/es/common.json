@@ -1200,7 +1200,6 @@
   "formula": {
     "copyLatex": "Copiar LaTeX",
     "copyWord": "Copiar para Word",
-    "copied": "Copiado",
     "actionsAria": "Acciones de fórmula"
   },
   "code": {
@@ -1559,7 +1558,6 @@
     "code": "Código",
     "preview": "Vista",
     "expand": "Ampliar",
-    "copy": "Copiar",
-    "copied": "Copiado"
+    "copy": "Copiar"
   }
 }

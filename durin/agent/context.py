@@ -240,6 +240,14 @@ class ContextBuilder:
             breakdown["memory_pinned"] = pinned
             parts.append(pinned)
 
+        # Rich-output guidance is static (never changes turn-to-turn), so it
+        # belongs before memory_hot in the stable prefix to remain cache-hot
+        # even when the hot layer rotates daily under dream.
+        rich_output = render_template("agent/rich_output.md")
+        if rich_output:
+            breakdown["rich_output"] = rich_output
+            parts.append(rich_output)
+
         # Memory hot layer (Phase 1.9). Always-loaded snapshot of identity +
         # top headlines + known entities. Lives at the END of the stable
         # tier so the earlier (more stable) parts stay cache-hot when the
@@ -248,11 +256,6 @@ class ContextBuilder:
         if hot:
             breakdown["memory_hot"] = hot
             parts.append(hot)
-
-        rich_output = render_template("agent/rich_output.md")
-        if rich_output:
-            breakdown["rich_output"] = rich_output
-            parts.append(rich_output)
 
         self._last_layer_breakdown["stable"] = breakdown
         return "\n\n---\n\n".join(parts)

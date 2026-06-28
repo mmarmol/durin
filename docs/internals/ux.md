@@ -171,7 +171,7 @@ directly in the composer.
 
 **Rich fenced blocks.** Code blocks tagged `html`, `svg`, `mermaid`, or
 `vega-lite` render inline as a `RichBlock`. Each block shows a header strip with
-three controls: a code⇄preview toggle, an expand button, and a copy button. The
+a code⇄preview toggle, an expand button, and a copy button. The
 preview is the default view; the toggle reveals the raw source. The expand button
 opens a full-screen dialog so large diagrams or charts fill the viewport. HTML and
 SVG previews run in a sandboxed iframe with `allow-scripts` and a

@@ -1,11 +1,15 @@
 // webui/src/tests/chart-preview.test.tsx
 import { render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const embed = vi.fn().mockResolvedValue({ finalize: vi.fn() });
 vi.mock("vega-embed", () => ({ default: embed }));
 
 import ChartPreview from "@/components/rich/ChartPreview";
+
+beforeEach(() => {
+  embed.mockClear();
+});
 
 describe("ChartPreview", () => {
   it("embeds a parsed Vega-Lite spec", async () => {
@@ -18,5 +22,12 @@ describe("ChartPreview", () => {
   it("shows an error for invalid JSON", async () => {
     render(<ChartPreview code="{not json" />);
     await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+  });
+
+  it("rejects specs with a remote url and does not call embed", async () => {
+    const remoteSpec = '{"mark":"bar","data":{"url":"https://example.com/data.json"}}';
+    render(<ChartPreview code={remoteSpec} />);
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(embed).not.toHaveBeenCalled();
   });
 });
