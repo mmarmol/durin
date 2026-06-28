@@ -1197,6 +1197,11 @@
     "next": "Imagen siguiente",
     "close": "Cerrar vista previa"
   },
+  "formula": {
+    "copyLatex": "Copiar LaTeX",
+    "copyWord": "Copiar para Word",
+    "actionsAria": "Acciones de fórmula"
+  },
   "code": {
     "fallbackLanguage": "código",
     "copyAria": "Copiar código",
@@ -1335,7 +1340,10 @@
     "placeholder": "Escribe tu mensaje…",
     "inputAria": "Entrada de mensaje",
     "sendAria": "Enviar mensaje",
-    "hint": "Enter para enviar · Shift+Enter para nueva línea"
+    "hint": "Enter para enviar · Shift+Enter para nueva línea",
+    "equationEditor": "Editor de ecuaciones",
+    "insertEquation": "Insertar",
+    "equationDialogTitle": "Escribir una ecuación"
   },
   "empty": {
     "noChatsTitle": "Aún no hay chats",
@@ -1545,5 +1553,11 @@
     "finished": "Finalizadas ({{count}})",
     "empty": "Sin trabajo activo",
     "close": "Cerrar panel de trabajo"
+  },
+  "rich": {
+    "code": "Código",
+    "preview": "Vista",
+    "expand": "Ampliar",
+    "copy": "Copiar"
   }
 }

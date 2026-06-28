@@ -6,6 +6,9 @@ import remarkMath from "remark-math";
 import wikiLinkPlugin from "@flowershow/remark-wiki-link";
 
 import { CodeBlock } from "@/components/CodeBlock";
+import { RichBlock } from "@/components/rich/RichBlock";
+import { richKind } from "@/components/rich/rich-languages";
+import { FormulaActions } from "@/components/math/FormulaActions";
 import { cn } from "@/lib/utils";
 
 import "katex/dist/katex.min.css";
@@ -88,9 +91,12 @@ export default function MarkdownTextRenderer({
         rehypePlugins={[rehypeKatex]}
         components={{
           code({ className: cls, children: kids, ...props }) {
-            const match = /language-(\w+)/.exec(cls || "");
+            const match = /language-(\w[\w-]*)/.exec(cls || "");
             if (match) {
               const code = String(kids).replace(/\n$/, "");
+              if (richKind(match[1])) {
+                return <RichBlock language={match[1]} code={code} />;
+              }
               return <CodeBlock language={match[1]} code={code} className="my-3" />;
             }
             const raw = String(kids).replace(/\n$/, "");
@@ -125,8 +131,12 @@ export default function MarkdownTextRenderer({
           pre({ children: markdownChildren }) {
             const kids = Children.toArray(markdownChildren);
             const lone = kids.length === 1 ? kids[0] : null;
-            /** Highlighted fences render ``CodeBlock`` (block shell); skip invalid ``<pre><div>``. */
-            if (lone != null && isValidElement(lone) && lone.type === CodeBlock) {
+            /** Highlighted fences render ``CodeBlock`` or ``RichBlock`` (block shell); skip invalid ``<pre><div>``. */
+            if (
+              lone != null &&
+              isValidElement(lone) &&
+              (lone.type === CodeBlock || lone.type === RichBlock)
+            ) {
               return <>{markdownChildren}</>;
             }
             return (
@@ -139,6 +149,25 @@ export default function MarkdownTextRenderer({
               >
                 {markdownChildren}
               </pre>
+            );
+          },
+          span({ className: cls, children: kids, ...props }) {
+            const tokens = (cls || "").split(/\s+/);
+            // Wrap only the KaTeX root (token `katex`), not its inner spans
+            // (`katex-mathml`, `katex-html`, …) and not unrelated spans.
+            if (tokens.includes("katex")) {
+              return (
+                <FormulaActions>
+                  <span className={cls} {...props}>
+                    {kids}
+                  </span>
+                </FormulaActions>
+              );
+            }
+            return (
+              <span className={cls} {...props}>
+                {kids}
+              </span>
             );
           },
           a({ href, children: markdownChildren, ...props }) {
