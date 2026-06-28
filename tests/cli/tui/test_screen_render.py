@@ -73,6 +73,28 @@ def test_user_bubble_exposes_edit_payload() -> None:
     assert bubble.editable_text() == "original text"
 
 
+@pytest.mark.asyncio
+async def test_user_bubble_renders_text_and_stays_leaf() -> None:
+    """Regression: a user bubble must stay a leaf widget so its own text renders.
+
+    MessageBubble is a Static — it displays its renderable. Mounting a child
+    widget into it turns it into a container, and Textual's compositor then lays
+    out the child and stops drawing the Static's own text, so user messages
+    showed up blank. The edit affordance must NOT be a mounted child.
+    """
+    from durin.cli.tui.widgets.chat_view import ChatView, MessageBubble
+
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        chat = app.query_one(ChatView)
+        bubble = chat.add_message("user", "VISIBLE_USER_TEXT")
+        await pilot.pause()
+        assert isinstance(bubble, MessageBubble)
+        assert len(bubble.children) == 0, "user bubble must have no child widgets"
+        assert "VISIBLE_USER_TEXT" in str(bubble._Static__content)
+
+
 def test_quick_actions_present() -> None:
     from durin.cli.tui.widgets.chat_view import ChatView
 

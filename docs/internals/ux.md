@@ -325,9 +325,9 @@ Selecting a persona publishes `/persona <name>` into the session.
 **Footer.** The footer displays the wall-clock duration of the last completed
 turn and the active agent mode.
 
-**Edit affordance.** Each user message in the thread carries an edit affordance.
-Clicking it reloads the message text into the composer input for revision. This
-is a refill only — it does not truncate history or automatically resend.
+**Edit affordance.** Each user message carries a dim edit hint; clicking the
+message reloads its text into the composer input for revision. This is a refill
+only — it does not truncate history or automatically resend.
 
 **Empty-thread quick actions.** When the thread is empty, action chips
 (Plan / Analyze / Brainstorm / Code / Summarize) are shown in the chat area.

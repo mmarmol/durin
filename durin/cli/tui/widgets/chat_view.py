@@ -101,17 +101,6 @@ class MessageBubble(Static):
         padding: 1 2;
         margin: 1 2;
     }
-    MessageBubble > .mb-edit {
-        width: auto;
-        color: $text-muted;
-        text-style: underline;
-        padding: 0 0;
-        dock: right;
-    }
-    MessageBubble > .mb-edit:hover {
-        background: $accent 20%;
-        color: $accent;
-    }
     """
 
     body: reactive[str] = reactive("", init=False)
@@ -173,25 +162,24 @@ class MessageBubble(Static):
             self.update(text)
         else:
             # user (or any role without a prefix): plain text, no markup
-            # interpretation.
-            self.update(Text(body))
+            # interpretation. User messages carry a dim trailing edit hint;
+            # clicking anywhere on the bubble reloads the text into the input.
+            text = Text(body)
+            if self._role == "user":
+                text.append("  ✎", style="dim")
+            self.update(text)
 
     def editable_text(self) -> str:
         """The raw text to reload into the input when editing this message."""
         return self._raw_body or ""
 
-    def on_mount(self) -> None:
-        """Mount the [✎] edit affordance for user bubbles."""
-        if self._role == "user":
-            self.mount(Static("[✎]", classes="mb-edit", markup=False))
-
     def on_click(self, event) -> None:  # noqa: ANN001 — Textual Click event
-        """On [✎] click, reload this bubble's text into the input."""
-        try:
-            target = event.widget
-        except Exception:  # noqa: BLE001
-            return
-        if target is None or "mb-edit" not in target.classes:
+        """Clicking a user bubble reloads its text into the input for re-editing.
+
+        The whole bubble is the affordance — a separate child widget would turn
+        this Static into a container and stop its own text from rendering.
+        """
+        if self._role != "user":
             return
         try:
             from durin.cli.tui.widgets import InputArea
