@@ -25,15 +25,28 @@ def resolve_workspace_path(
     workspace: Path | None = None,
     allowed_dir: Path | None = None,
     extra_allowed_dirs: list[Path] | None = None,
+    work_dir: Path | None = None,
 ) -> Path:
-    """Resolve path against workspace and enforce allowed directory containment."""
+    """Resolve path against workspace (or the session work dir) and enforce
+    allowed-directory containment.
+
+    Relative paths anchor to ``work_dir`` unless their first segment is a
+    managed prefix (then to ``workspace``). With ``work_dir=None`` the original
+    workspace-relative behavior is preserved.
+    """
+    from durin.agent.tools.work_area import anchored_base
+
     p = Path(path).expanduser()
     if not p.is_absolute() and workspace:
-        p = workspace / p
+        first = p.parts[0] if p.parts else ""
+        base = anchored_base(first, workspace, work_dir)
+        p = base / p
     resolved = p.resolve()
     if allowed_dir:
         media_path = get_media_dir().resolve()
         all_dirs = [allowed_dir, media_path, *(extra_allowed_dirs or [])]
+        if work_dir is not None:
+            all_dirs.append(work_dir.resolve())
         if not any(is_under(resolved, d) for d in all_dirs):
             raise PermissionError(
                 f"Path {path} is outside allowed directory {allowed_dir}"
