@@ -12,18 +12,20 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 describe("ThreadComposer — voice orb entry", () => {
-  it("renders a voice orb that enters voice mode on click", () => {
+  it("enters hands-free voice from the mic dropdown", () => {
     const onEnterVoice = vi.fn();
     render(
       <ThreadComposer onSend={vi.fn()} onEnterVoice={onEnterVoice} placeholder="Type a message..." />,
     );
-    const orb = screen.getByRole("button", { name: /start voice/i });
-    fireEvent.click(orb);
+    // Idle: voice lives behind the mic's chevron, not a top-level orb.
+    fireEvent.click(screen.getByRole("button", { name: /voice input/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /hands-free voice/i }));
     expect(onEnterVoice).toHaveBeenCalledTimes(1);
   });
 
-  it("hides the voice orb when voice is unavailable (no onEnterVoice)", () => {
+  it("hides voice affordances when voice is unavailable (no onEnterVoice)", () => {
     render(<ThreadComposer onSend={vi.fn()} placeholder="Type a message..." />);
+    expect(screen.queryByRole("button", { name: /voice input/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /start voice/i })).toBeNull();
   });
 

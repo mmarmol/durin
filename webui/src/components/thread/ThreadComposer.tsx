@@ -24,7 +24,6 @@ import {
   ImageIcon,
   Loader2,
   Mic,
-  Paperclip,
   RotateCw,
   Sparkles,
   Square,
@@ -45,13 +44,16 @@ import {
   MAX_IMAGES_PER_MESSAGE,
 } from "@/hooks/useAttachedImages";
 import { useAttachedAudio, type AttachedAudio } from "@/hooks/useAttachedAudio";
-import { MicButton } from "@/components/thread/MicButton";
 import type { OrbState } from "@/components/voice/VoiceOrb";
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import { usePromptHistory } from "@/hooks/usePromptHistory";
-import { ModelPickerPopover } from "@/components/thread/ModelPickerPopover";
+import { ComposerAddMenu } from "@/components/thread/ComposerAddMenu";
+import {
+  ModelPickerPopover,
+  effortLabelKey,
+} from "@/components/thread/ModelPickerPopover";
 import { ModePicker } from "@/components/thread/ModePicker";
-import { ReasoningEffortPicker } from "@/components/thread/ReasoningEffortPicker";
+import { VoiceInputControl } from "@/components/thread/VoiceInputControl";
 import type { ModeInfo } from "@/lib/api";
 import type { SendImage } from "@/hooks/useDurinStream";
 import type { SlashCommand, GoalStateWsPayload, ApiRetryStatus } from "@/lib/types";
@@ -494,9 +496,15 @@ export function ThreadComposer({
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [equationOpen, setEquationOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const modelPillRef = useRef<HTMLButtonElement>(null);
+  // True only while a lone "/" was seeded by the "+" menu (not typed by the
+  // user), so cancelling the palette can clean it up without eating a "/" the
+  // user typed themselves.
+  const slashSeededRef = useRef(false);
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
   const isHero = variant === "hero";
   const promptHistory = usePromptHistory();
@@ -702,20 +710,6 @@ export function ThreadComposer({
     }
   }, [filteredSlashCommands.length, selectedCommandIndex]);
 
-  useEffect(() => {
-    if (!showSlashMenu) return;
-
-    const dismissOnPointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (target instanceof Node && formRef.current?.contains(target)) return;
-      setSlashMenuDismissed(true);
-    };
-
-    document.addEventListener("pointerdown", dismissOnPointerDown, true);
-    return () => {
-      document.removeEventListener("pointerdown", dismissOnPointerDown, true);
-    };
-  }, [showSlashMenu]);
 
   useLayoutEffect(() => {
     if (!showSlashMenu) return;
@@ -781,8 +775,45 @@ export function ThreadComposer({
     [value],
   );
 
+  // The "+" menu's slash entry: seed the input with "/" so the existing slash
+  // palette opens (same path as the user typing "/").
+  const openSlash = useCallback(() => {
+    slashSeededRef.current = true;
+    setValue("/");
+    setSlashMenuDismissed(false);
+    resizeTextarea();
+  }, [resizeTextarea]);
+
+  // Cancelling the palette (Escape / click-away) after seeding "/" from the "+"
+  // menu removes the lone "/" so it doesn't linger in the input.
+  const cancelSeededSlash = useCallback(() => {
+    if (!slashSeededRef.current) return;
+    slashSeededRef.current = false;
+    if ((textareaRef.current?.value ?? "") === "/") {
+      setValue("");
+      resizeTextarea();
+    }
+  }, [resizeTextarea]);
+
+  useEffect(() => {
+    if (!showSlashMenu) return;
+
+    const dismissOnPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && formRef.current?.contains(target)) return;
+      setSlashMenuDismissed(true);
+      cancelSeededSlash();
+    };
+
+    document.addEventListener("pointerdown", dismissOnPointerDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOnPointerDown, true);
+    };
+  }, [showSlashMenu, cancelSeededSlash]);
+
   const chooseSlashCommand = useCallback(
     (command: SlashCommand) => {
+      slashSeededRef.current = false;
       setValue(command.argHint ? `${command.command} ` : command.command);
       setSlashMenuDismissed(true);
       setInlineError(null);
@@ -813,6 +844,7 @@ export function ThreadComposer({
       if (e.key === "Escape") {
         e.preventDefault();
         setSlashMenuDismissed(true);
+        cancelSeededSlash();
         return;
       }
     }
@@ -880,7 +912,6 @@ export function ThreadComposer({
     [removeChip],
   );
 
-  const attachButtonDisabled = disabled || full;
   const showStopButton = isStreaming && !!onStop;
   const [queuedFlash, setQueuedFlash] = useState(false);
 
@@ -1044,6 +1075,8 @@ export function ThreadComposer({
           ref={textareaRef}
           value={value}
           onChange={(e) => {
+            // Once the user edits past the seeded "/", it's their text to keep.
+            if (e.target.value !== "/") slashSeededRef.current = false;
             setValue(e.target.value);
             setSlashMenuDismissed(false);
           }}
@@ -1095,92 +1128,6 @@ export function ThreadComposer({
               hidden
               onChange={onFilePick}
             />
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              disabled={attachButtonDisabled}
-              aria-label={t("thread.composer.attachImage")}
-              onClick={() => fileInputRef.current?.click()}
-              className={cn(
-                "rounded-full text-muted-foreground hover:text-foreground",
-                isHero
-                  ? "h-9 w-9 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card"
-                  : "h-7.5 w-7.5 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card",
-              )}
-            >
-              <Paperclip className={cn(isHero ? "h-5 w-5" : "h-4 w-4")} />
-            </Button>
-            <EquationEditorButton onInsert={onInsertEquation} />
-            {audioInputAllowed ? (
-              <MicButton
-                onRecorded={handleAudioFile}
-                disabled={disabled || audioAttachments.length > 0}
-                variant={isHero ? "hero" : "thread"}
-              />
-            ) : null}
-            {onEnterVoice ? (
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                aria-label={voiceActive ? t("settings.voice.orb.stop") : t("settings.voice.orb.start")}
-                title={voiceActive ? t("settings.voice.orb.stop") : t("settings.voice.orb.start")}
-                onClick={onEnterVoice}
-                className={cn(
-                  "rounded-full border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card",
-                  isHero ? "h-9 w-9" : "h-7.5 w-7.5",
-                )}
-              >
-                <span
-                  aria-hidden
-                  className={cn(
-                    "rounded-full bg-primary ring-2 ring-primary/20",
-                    isHero ? "h-3.5 w-3.5" : "h-3 w-3",
-                    voiceActive && "ring-primary/45 motion-safe:animate-pulse",
-                  )}
-                />
-              </Button>
-            ) : null}
-            {modelLabel ? (
-              <div className="relative">
-                <button
-                  type="button"
-                  disabled={!onModelPick}
-                  onClick={() => onModelPick && setModelPickerOpen((v) => !v)}
-                  title={modelLabel}
-                  className={cn(
-                    "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1",
-                    "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
-                    isHero
-                      ? "max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
-                      : "max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
-                    onModelPick && "cursor-pointer hover:bg-foreground/[0.06] transition-colors",
-                  )}
-                >
-                  <span
-                    aria-hidden
-                    className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-500/80"
-                  />
-                  <span className="truncate">{modelLabel}</span>
-                </button>
-                {onModelPick ? (
-                  <ModelPickerPopover
-                    open={modelPickerOpen}
-                    onClose={() => setModelPickerOpen(false)}
-                    onSelect={onModelPick}
-                    activeModel={modelLabel}
-                  />
-                ) : null}
-              </div>
-            ) : null}
-            {onEffortPick && canReason ? (
-              <ReasoningEffortPicker
-                activeEffort={activeEffort}
-                onSelect={onEffortPick}
-                disabled={disabled}
-              />
-            ) : null}
             {onModeChange ? (
               <ModePicker
                 activeMode={agentMode}
@@ -1189,43 +1136,111 @@ export function ThreadComposer({
                 disabled={disabled}
               />
             ) : null}
-            <span className="hidden select-none text-[10.5px] text-muted-foreground/60 sm:inline">
-              {t("thread.composer.sendHint")}
-            </span>
+            <ComposerAddMenu
+              onAttach={() => fileInputRef.current?.click()}
+              onSlash={openSlash}
+              onEquation={() => setEquationOpen(true)}
+              disabled={disabled}
+              attachDisabled={full}
+              variant={isHero ? "hero" : "thread"}
+            />
+            <EquationEditorButton
+              open={equationOpen}
+              onOpenChange={setEquationOpen}
+              onInsert={onInsertEquation}
+              hideTrigger
+            />
+            {audioInputAllowed || onEnterVoice ? (
+              <VoiceInputControl
+                onRecorded={handleAudioFile}
+                recordDisabled={disabled || audioAttachments.length > 0}
+                audioInputAllowed={audioInputAllowed}
+                onEnterVoice={onEnterVoice}
+                voiceActive={voiceActive}
+                variant={isHero ? "hero" : "thread"}
+              />
+            ) : null}
           </div>
-          <span className={cn(isHero ? "hidden" : "sm:hidden")} aria-hidden />
-          {queuedFlash ? (
-            <span className="mr-2 inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-              ⏳ {t("thread.composer.queued")}
-            </span>
-          ) : null}
-          {showStopButton && canSend ? (
+          <div className="flex flex-none items-center gap-2">
+            {queuedFlash ? (
+              <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                ⏳ {t("thread.composer.queued")}
+              </span>
+            ) : null}
+            {modelLabel ? (
+              <div className="relative">
+                <button
+                  ref={modelPillRef}
+                  type="button"
+                  disabled={!onModelPick}
+                  onClick={() => onModelPick && setModelPickerOpen((v) => !v)}
+                  title={modelLabel}
+                  className={cn(
+                    "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1",
+                    "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
+                    isHero
+                      ? "max-w-[16rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
+                      : "max-w-[13rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
+                    onModelPick && "cursor-pointer hover:bg-foreground/[0.06] transition-colors",
+                  )}
+                >
+                  <span
+                    aria-hidden
+                    className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-500/80"
+                  />
+                  <span className="truncate">{modelLabel}</span>
+                  {canReason ? (
+                    <>
+                      <span className="flex-none text-foreground/35" aria-hidden>
+                        ·
+                      </span>
+                      <span className="flex-none text-foreground/65">
+                        {t(effortLabelKey(activeEffort))}
+                      </span>
+                    </>
+                  ) : null}
+                </button>
+                {onModelPick ? (
+                  <ModelPickerPopover
+                    open={modelPickerOpen}
+                    onClose={() => setModelPickerOpen(false)}
+                    onSelect={onModelPick}
+                    activeModel={modelLabel}
+                    anchorRef={modelPillRef}
+                    canReason={canReason}
+                    activeEffort={activeEffort}
+                    onEffortSelect={onEffortPick}
+                  />
+                ) : null}
+              </div>
+            ) : null}
+            {showStopButton && canSend ? (
+              <Button
+                type="button"
+                size="icon"
+                disabled={disabled}
+                aria-label={t("thread.composer.stop")}
+                onClick={onStop}
+                className="rounded-full border border-border/70 bg-card text-foreground/85 shadow-[0_3px_10px_rgba(15,23,42,0.08)] hover:bg-muted/65 hover:text-foreground"
+              >
+                <Square className="h-2.5 w-2.5 fill-current stroke-current" />
+              </Button>
+            ) : null}
+            {isStreaming && canSend ? (
+              <Button
+                type="button"
+                size="icon"
+                disabled={disabled}
+                aria-label={t("thread.composer.steer")}
+                title={t("thread.composer.steer")}
+                onClick={steer}
+                className="rounded-full border border-border/70 bg-card text-foreground/85 shadow-[0_3px_10px_rgba(15,23,42,0.08)] hover:bg-muted/65 hover:text-foreground"
+              >
+                <Compass className="h-3.5 w-3.5" />
+              </Button>
+            ) : null}
             <Button
-              type="button"
-              size="icon"
-              disabled={disabled}
-              aria-label={t("thread.composer.stop")}
-              onClick={onStop}
-              className="mr-1 rounded-full border border-border/70 bg-card text-foreground/85 shadow-[0_3px_10px_rgba(15,23,42,0.08)] hover:bg-muted/65 hover:text-foreground"
-            >
-              <Square className="h-2.5 w-2.5 fill-current stroke-current" />
-            </Button>
-          ) : null}
-          {isStreaming && canSend ? (
-            <Button
-              type="button"
-              size="icon"
-              disabled={disabled}
-              aria-label={t("thread.composer.steer")}
-              title={t("thread.composer.steer")}
-              onClick={steer}
-              className="mr-1 rounded-full border border-border/70 bg-card text-foreground/85 shadow-[0_3px_10px_rgba(15,23,42,0.08)] hover:bg-muted/65 hover:text-foreground"
-            >
-              <Compass className="h-3.5 w-3.5" />
-            </Button>
-          ) : null}
-          <Button
-            type={showStopButton && !canSend ? "button" : "submit"}
+              type={showStopButton && !canSend ? "button" : "submit"}
             size="icon"
             disabled={showStopButton && !canSend ? disabled : !canSend}
             aria-label={showStopButton && !canSend ? t("thread.composer.stop") : t("thread.composer.send")}
@@ -1247,6 +1262,7 @@ export function ThreadComposer({
               <ArrowUp className={cn(isHero ? "h-4.5 w-4.5" : "h-4 w-4")} />
             )}
           </Button>
+          </div>
         </div>
       </div>
     </form>

@@ -1016,7 +1016,6 @@
       "placeholderOpening": "Abriendo un nuevo chat…",
       "placeholderStreaming": "El modelo está respondiendo…",
       "inputAria": "Entrada de mensaje",
-      "sendHint": "Enter para enviar · Shift+Enter para nueva línea",
       "runRuntimeTitle": "En ejecución · {{elapsed}}",
       "goalStateStrip": "Objetivo · {{label}}",
       "goalStateFallback": "Objetivo",
@@ -1048,6 +1047,17 @@
       },
       "mode": {
         "title": "Modo"
+      },
+      "add": {
+        "title": "Añadir",
+        "attach": "Subir archivo o foto",
+        "slash": "Comandos de barra",
+        "equation": "Insertar fórmula"
+      },
+      "voice": {
+        "title": "Entrada de voz",
+        "dictation": "Dictado a texto",
+        "handsFree": "Voz manos libres"
       },
       "encoding": "Procesando…",
       "remove": "Quitar adjunto",
