@@ -62,6 +62,7 @@ def test_readme_mentions_key_folders(tmp_path: Path) -> None:
         "memory/", "stable/", "episodic/", "corpus/",
         "session_summary/", "entities/", "archive/",
         "ingested/", ".durin/",
+        "souls/", "workflows/", "workflows-runs/", "cron/",
     ):
         assert folder in text, f"VAULT_README missing folder reference: {folder}"
 
