@@ -1316,6 +1316,12 @@
     "next": "Next image",
     "close": "Close image preview"
   },
+  "formula": {
+    "copyLatex": "Copy LaTeX",
+    "copyWord": "Copy for Word",
+    "copied": "Copied",
+    "actionsAria": "Formula actions"
+  },
   "code": {
     "fallbackLanguage": "code",
     "copyAria": "Copy code",

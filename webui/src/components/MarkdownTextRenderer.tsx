@@ -6,6 +6,7 @@ import remarkMath from "remark-math";
 import wikiLinkPlugin from "@flowershow/remark-wiki-link";
 
 import { CodeBlock } from "@/components/CodeBlock";
+import { FormulaActions } from "@/components/math/FormulaActions";
 import { cn } from "@/lib/utils";
 
 import "katex/dist/katex.min.css";
@@ -139,6 +140,25 @@ export default function MarkdownTextRenderer({
               >
                 {markdownChildren}
               </pre>
+            );
+          },
+          span({ className: cls, children: kids, ...props }) {
+            const tokens = (cls || "").split(/\s+/);
+            // Wrap only the KaTeX root (token `katex`), not its inner spans
+            // (`katex-mathml`, `katex-html`, …) and not unrelated spans.
+            if (tokens.includes("katex")) {
+              return (
+                <FormulaActions>
+                  <span className={cls} {...props}>
+                    {kids}
+                  </span>
+                </FormulaActions>
+              );
+            }
+            return (
+              <span className={cls} {...props}>
+                {kids}
+              </span>
             );
           },
           a({ href, children: markdownChildren, ...props }) {
