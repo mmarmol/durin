@@ -1542,9 +1542,7 @@
     }
   },
   "tasks": {
-    "status": {
-      "needs_input": "Needs input"
-    }
+    "status": { "needs_input": "Needs input" }
   },
   "work": {
     "steps": "{{count}} steps",

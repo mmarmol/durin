@@ -88,6 +88,9 @@ export function SkillHistory({ data, skillName, token }: { data: SkillHistoryDat
                     <Meta c={c} />
                   </div>
                   <span className="shrink-0 whitespace-nowrap text-[10px] text-muted-foreground">{c.timestamp}</span>
+                  <span className="shrink-0 self-center text-[10px] text-muted-foreground/60">
+                    {isOpen ? "▲" : `▼ ${t("skills.history.showChanges")}`}
+                  </span>
                 </button>
                 {isOpen && (
                   <div className="px-1 pb-3">

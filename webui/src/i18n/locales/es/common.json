@@ -1534,9 +1534,7 @@
     }
   },
   "tasks": {
-    "status": {
-      "needs_input": "Necesita input"
-    }
+    "status": { "needs_input": "Necesita input" }
   },
   "work": {
     "steps": "{{count}} pasos",
