@@ -3,12 +3,13 @@ name: skill-creator
 description: >-
   Create or update AgentSkills following the full process: understand, survey peers,
   plan with the scriptability test, init, edit, verify, package. Use whenever the user
-  wants to design, create, edit, improve, audit, fix, validate, test, or package a
+  wants to design, create, edit, improve, quality-audit (a skill's structure and
+  format — not its security, which is `skill_audit`), fix, validate, test, or package a
   skill, or mentions SKILL.md, skill scripts, skill references, or a skill description
   or triggering problem — even when the user does not say 'skill' explicitly but wants
   to capture a repeatable workflow for reuse. Trigger on these intents regardless of
   the language the user writes in. TRIGGERS: create a skill, modify a skill, improve
-  this skill, audit the skill, package the skill, the skill is not triggering, the
+  this skill, audit a skill's structure/quality, package the skill, the skill is not triggering, the
   skill fails, add this to the skill, turn this workflow into a skill.
 ---
 
