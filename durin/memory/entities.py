@@ -11,9 +11,17 @@ Examples valid:    ``person:marcelo``, ``project:durin``,
 ``topic:autocompaction``, ``artifact:settings.py``.
 
 The vocabulary of types is **open**: any well-formed type is accepted.
-:data:`SUGGESTED_TYPES` lists 8 broad types — these are hints for the
-consolidator/dream prompt, not an enforced enum. The LLM can introduce
-new types when content demands it (``agent:``, ``org:`` emerge naturally).
+:data:`SUGGESTED_TYPES` is the canonical set of broad discoverable
+types — used to render the dream discover prompt (single source of
+truth) and as hints for authors. Not enforced as an enum; the LLM can
+introduce new types when content demands it (``agent:``, ``org:``
+emerge naturally). ``feedback`` is intentionally absent: feedback/
+stance/practice are pin-eligible operating types, but ``feedback`` (a
+standing directive to the agent) is authored only via the capture path,
+never mechanically discovered — judging whether a correction is a
+standing rule needs in-context judgment the background pass lacks.
+``stance`` and ``practice`` are facts about the user and may be
+surfaced by the discover pass.
 
 Validation policy:
 
@@ -36,6 +44,7 @@ from unidecode import unidecode
 __all__ = [
     "ENTITY_REF_PATTERN",
     "SUGGESTED_TYPES",
+    "SUGGESTED_TYPES_ORDERED",
     "InvalidEntityRefError",
     "ParsedEntityRef",
     "is_valid_entity_ref",
@@ -51,20 +60,19 @@ __all__ = [
 ENTITY_REF_PATTERN = re.compile(r"^[a-z][a-z0-9_]*:[^\s].*$")
 
 
-# 8 broad types — Tulving/CoALA-grounded.
-# Open vocabulary: NOT enforced; types outside this set are welcome.
-SUGGESTED_TYPES: frozenset[str] = frozenset(
-    [
-        "person",
-        "place",
-        "project",
-        "topic",
-        "event",
-        "artifact",
-        "stance",
-        "practice",
-    ]
+# Canonical discoverable entity types, in render order so the dream discover
+# prompt can interpolate a stable list. Open vocabulary: NOT enforced — any
+# well-formed type validates. `feedback` is deliberately absent: feedback/stance/
+# practice are pin-eligible operating types, but `feedback` (a standing directive
+# to the agent) is authored only via the capture path, never mechanically
+# discovered — judging whether a correction is a standing rule needs in-context
+# judgment the background pass lacks. stance/practice are facts about the user,
+# so the discover pass may surface them.
+SUGGESTED_TYPES_ORDERED: tuple[str, ...] = (
+    "person", "place", "project", "topic", "organization",
+    "event", "artifact", "stance", "practice",
 )
+SUGGESTED_TYPES: frozenset[str] = frozenset(SUGGESTED_TYPES_ORDERED)
 
 
 class InvalidEntityRefError(ValueError):

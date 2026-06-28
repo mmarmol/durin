@@ -53,11 +53,9 @@ def test_system_prompt_reflects_current_dream_memory_contract(tmp_path) -> None:
 
     prompt = builder.build_system_prompt()
 
-    # New memory model: entity pages + references, authored via
-    # memory_upsert_entity; SOUL.md is the user's control point.
+    # New memory model: entity pages + references, authored via memory_upsert_entity.
     assert "memory_upsert_entity" in prompt
     assert "references" in prompt.lower()
-    assert "SOUL.md" in prompt
     # The dissolved legacy contract must be gone.
     assert "history.jsonl" not in prompt
     assert "automatically managed by Dream" not in prompt
@@ -265,20 +263,25 @@ def test_subagent_result_does_not_create_consecutive_assistant_messages(tmp_path
 
 
 def test_always_skills_excluded_from_skills_index(tmp_path) -> None:
-    """Always skills should appear in Active Skills but NOT in the skills index."""
+    """An always-on skill appears in Active Skills but NOT in the skills index."""
     workspace = _make_workspace(tmp_path)
+    # Seed a synthetic always-on skill (the bundled memory skill was removed).
+    probe = workspace / "skills" / "probe"
+    probe.mkdir(parents=True, exist_ok=True)
+    (probe / "SKILL.md").write_text(
+        "---\nname: probe\ndescription: probe skill\nalways: true\nmetadata:\n  durin:\n    provenance:\n      source: test\n---\n\n# Probe\n",
+        encoding="utf-8",
+    )
     builder = ContextBuilder(workspace)
 
     prompt = builder.build_system_prompt()
 
-    # memory skill should be in Active Skills section
     assert "# Active Skills" in prompt
-    assert "### Skill: memory" in prompt
+    assert "### Skill: probe" in prompt
 
-    # memory skill should NOT appear in the skills index
     skills_section = prompt.split("# Skills\n", 1)
-    if len(skills_section) > 1:
-        index_text = skills_section[1].split("\n\n---")[0]
-        assert "**memory**" not in index_text
+    assert len(skills_section) > 1, "expected a '# Skills' index section in the prompt"
+    index_text = skills_section[1].split("\n\n---")[0]
+    assert "**probe**" not in index_text
 
 

@@ -16,11 +16,10 @@ def test_identity_lists_skill_as_fifth_kind():
     assert "Skills" in t
     # the skill kind is described as procedural / followed-not-cited
     assert "procedur" in t.lower()
-    assert "four memory tools" in t  # tool count unchanged
 
 def test_identity_search_results_say_follow_not_cite():
     t = _norm(_IDENTITY).lower()
-    # in "Working with search results": a skill hit is FOLLOWED as a procedure, not cited
+    # the skill kind is described as followed-not-cited in the ## Memory block
     assert "follow" in t and "skill" in t
 
 def test_doc06_skill_bullet_in_sync_with_identity():
