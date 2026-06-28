@@ -25,6 +25,7 @@ export function SkillHistory({ data, skillName, token }: { data: SkillHistoryDat
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [patches, setPatches] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState<Set<string>>(new Set());
+  const [errors, setErrors] = useState<Set<string>>(new Set());
 
   async function toggle(sha: string) {
     setOpen((prev) => {
@@ -32,11 +33,18 @@ export function SkillHistory({ data, skillName, token }: { data: SkillHistoryDat
       next.has(sha) ? next.delete(sha) : next.add(sha);
       return next;
     });
-    if (!(sha in patches)) {
+    if (!(sha in patches) && !loading.has(sha)) {
       setLoading((prev) => new Set(prev).add(sha));
       try {
         const res = await fetchSkillCommitDiff(token, skillName, sha);
         setPatches((prev) => ({ ...prev, [sha]: res.patch }));
+        setErrors((prev) => {
+          const next = new Set(prev);
+          next.delete(sha);
+          return next;
+        });
+      } catch {
+        setErrors((prev) => new Set(prev).add(sha));
       } finally {
         setLoading((prev) => {
           const next = new Set(prev);
@@ -68,6 +76,7 @@ export function SkillHistory({ data, skillName, token }: { data: SkillHistoryDat
             const s = ACTOR_STYLE[c.actor] ?? ACTOR_STYLE.system;
             const isOpen = open.has(c.sha);
             const isLoading = loading.has(c.sha);
+            const hasError = errors.has(c.sha);
             const patch = patches[c.sha];
             return (
               <li key={c.sha} className="flex flex-col border-b border-border/20">
@@ -96,6 +105,8 @@ export function SkillHistory({ data, skillName, token }: { data: SkillHistoryDat
                   <div className="px-1 pb-3">
                     {isLoading ? (
                       <p className="text-[12px] text-muted-foreground">{t("skills.history.diffLoading")}</p>
+                    ) : hasError ? (
+                      <p className="text-[12px] text-destructive">{t("skills.history.diffError")}</p>
                     ) : patch === "" ? (
                       <p className="text-[12px] text-muted-foreground">{t("skills.history.diffEmpty")}</p>
                     ) : (

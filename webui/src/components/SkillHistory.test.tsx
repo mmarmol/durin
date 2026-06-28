@@ -23,4 +23,13 @@ describe("SkillHistory diff expand", () => {
     expect(await screen.findByText(/v2/)).toBeInTheDocument();
     expect(api.fetchSkillCommitDiff).toHaveBeenCalledWith("tok", "alpha", "abc1234");
   });
+
+  it("shows an inline error message when fetchSkillCommitDiff rejects", async () => {
+    vi.spyOn(api, "fetchSkillCommitDiff").mockRejectedValue(new Error("network error"));
+    render(<SkillHistory data={data} skillName="alpha" token="tok" />);
+    await userEvent.click(screen.getByText("edit alpha"));
+    expect(
+      await screen.findByText(/Could not load the changes/),
+    ).toBeInTheDocument();
+  });
 });

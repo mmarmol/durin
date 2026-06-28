@@ -932,7 +932,8 @@
       },
       "diffLoading": "Loading changes…",
       "diffEmpty": "No file changes in this commit.",
-      "showChanges": "Show changes"
+      "showChanges": "Show changes",
+      "diffError": "Could not load the changes. Collapse and expand again to retry."
     },
     "noFindings": "No security findings.",
     "scanClean": "Scan found no risks.",

@@ -820,7 +820,8 @@
       },
       "diffLoading": "Cargando cambios…",
       "diffEmpty": "Este commit no cambió archivos.",
-      "showChanges": "Ver cambios"
+      "showChanges": "Ver cambios",
+      "diffError": "No se pudieron cargar los cambios. Colapsa y vuelve a expandir para reintentar."
     },
     "noFindings": "Sin hallazgos de seguridad.",
     "scanClean": "Scan sin riesgos detectados.",
