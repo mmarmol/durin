@@ -137,6 +137,7 @@ can navigate the workspace without consulting source code.
 ├── workflows/               ← workflow definitions (the workflow engine)
 ├── workflows-runs/          ← per-run workflow artifacts
 ├── cron/                    ← scheduled-job definitions + run state
+├── work/<session>/          ← scratch the agent writes during a task (disposable)
 └── .durin/                  ← internal indices (FTS5 + LanceDB) — opaque
     └── index/
         ├── fts.sqlite       ← SQLite FTS5 lexical index
@@ -200,6 +201,8 @@ installing Obsidian.
 - **`memory/archive/`** — entries that Dream has absorbed into canonical
   pages. Kept around as a recovery surface (you can read the original
   fragment that contributed to a page). Safe to ignore for browsing.
+- **`work/<session>/`** — per-session scratch the agent writes during tasks.
+  Safe to delete wholesale; nothing durable lives here.
 
 ## Where to find more
 
