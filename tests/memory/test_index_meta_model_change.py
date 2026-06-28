@@ -35,15 +35,17 @@ def test_record_built_model_writes_and_tracks_previous(tmp_path):
     assert meta.schema_version == CURRENT_SCHEMA_VERSION
 
 
-def test_ensure_index_fresh_detects_model_change(tmp_path):
+def test_ensure_index_fresh_detects_model_change(tmp_path, embedding_model):
     # N5b: stored model differs from the configured one → rebuild + record.
+    # Forces a real vector rebuild, so it needs the embedding model loadable
+    # (the `embedding_model` fixture skips when it can't be downloaded).
     _entity(tmp_path)
     save_index_meta(tmp_path, IndexMeta(
         schema_version=CURRENT_SCHEMA_VERSION, embedding_model_id="old-model-x"))
-    out = ensure_index_fresh(tmp_path, embedding_model=MODEL)
+    out = ensure_index_fresh(tmp_path, embedding_model=embedding_model)
     assert out["rebuilt"] and "model" in out["reason"]
     meta = load_index_meta(tmp_path)
-    assert meta.embedding_model_id == MODEL                  # new model recorded
+    assert meta.embedding_model_id == embedding_model        # new model recorded
     assert "old-model-x" in meta.previous_models             # audit trail
 
 

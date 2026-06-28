@@ -25,6 +25,33 @@ def _compose_with_trailers(message: str, trailers: dict[str, str] | None) -> str
     return message.rstrip("\n") + "\n\n" + "\n".join(lines)
 
 
+def _filter_patch_by_path(patch: str, path: str) -> str:
+    """Keep only the per-file blocks of a unified diff under ``path/``.
+
+    Splits on the ``diff --git`` file headers dulwich emits and keeps a block
+    when its path (``a/<path>/...`` or ``b/<path>/...``) is under ``path``.
+    """
+    if not patch:
+        return patch
+    prefix = path.rstrip("/") + "/"
+    blocks: list[str] = []
+    current: list[str] = []
+    for line in patch.splitlines(keepends=True):
+        if line.startswith("diff --git "):
+            if current:
+                blocks.append("".join(current))
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        blocks.append("".join(current))
+    kept = [
+        b for b in blocks
+        if (f"a/{prefix}" in b.splitlines()[0]) or (f"b/{prefix}" in b.splitlines()[0])
+    ]
+    return "".join(kept)
+
+
 @dataclass
 class CommitInfo:
     sha: str  # Short SHA (8 chars)
@@ -431,6 +458,40 @@ class GitStore:
                     diff = ""
                 return c, diff
         return None
+
+    def commit_diff(self, short_sha: str, *, path: str | None = None,
+                    max_entries: int = 500) -> tuple["CommitInfo", str] | None:
+        """Return (commit, unified-diff) for one commit vs its git parent.
+
+        When ``path`` is given, keep only the per-file diff blocks whose path is
+        under ``path`` (the skills store is a subtree, so a skill's files appear
+        as ``<name>/...``). Returns None when the short sha matches no commit.
+        """
+        if not self.is_initialized():
+            return None
+        try:
+            from dulwich.repo import Repo
+
+            full = self._resolve_sha(short_sha)
+            if not full:
+                return None
+            with Repo(str(self._workspace)) as repo:
+                commit = repo[full]
+                if commit.type_name != b"commit":
+                    return None
+                parent = commit.parents[0] if commit.parents else None
+                ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(commit.commit_time))
+                msg = commit.message.decode("utf-8", errors="replace").strip()
+                info = CommitInfo(sha=full.hex()[:8], message=msg, timestamp=ts)
+            if parent is None:
+                return info, ""
+            patch = self.diff_commits(parent.hex(), full.hex())
+            if path is not None:
+                patch = _filter_patch_by_path(patch, path)
+            return info, patch
+        except Exception:
+            logger.exception("Git commit_diff failed")
+            return None
 
     # -- restore ---------------------------------------------------------------
 

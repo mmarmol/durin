@@ -817,7 +817,11 @@
         "curation": "Curación",
         "import": "Importación",
         "system": "Sistema"
-      }
+      },
+      "diffLoading": "Cargando cambios…",
+      "diffEmpty": "Este commit no cambió archivos.",
+      "showChanges": "Ver cambios",
+      "diffError": "No se pudieron cargar los cambios. Colapsa y vuelve a expandir para reintentar."
     },
     "noFindings": "Sin hallazgos de seguridad.",
     "scanClean": "Scan sin riesgos detectados.",
@@ -1400,7 +1404,18 @@
       "reviewInSkills": "Revisar en Skills",
       "emptyFlagged": "No hay pares de memoria marcados para revisión.",
       "emptyQuarantine": "No hay skills en cuarentena.",
-      "resolveError": "No se pudo resolver el par — es posible que ya haya sido procesado. Recargá para ver el estado actual."
+      "resolveError": "No se pudo resolver el par — es posible que ya haya sido procesado. Recargá para ver el estado actual.",
+      "suggestionsTitle": "Sugerencias de skills",
+      "emptySuggestions": "No hay sugerencias de skills por ahora.",
+      "accept": "Aceptar",
+      "reject": "Rechazar",
+      "rejectHint": "rechazar la silencia ~30 días",
+      "suggestionError": "No se pudo aplicar la sugerencia — es posible que ya haya sido procesada. Recargá para ver el estado actual.",
+      "action": {
+        "evolve": "mejorar",
+        "retire": "retirar",
+        "fuse": "fusionar"
+      }
     }
   },
   "workflows": {

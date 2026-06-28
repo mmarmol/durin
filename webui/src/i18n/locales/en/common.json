@@ -929,7 +929,11 @@
         "curation": "Curation",
         "import": "Import",
         "system": "System"
-      }
+      },
+      "diffLoading": "Loading changes…",
+      "diffEmpty": "No file changes in this commit.",
+      "showChanges": "Show changes",
+      "diffError": "Could not load the changes. Collapse and expand again to retry."
     },
     "noFindings": "No security findings.",
     "scanClean": "Scan found no risks.",
@@ -1512,7 +1516,18 @@
       "reviewInSkills": "Review in Skills",
       "emptyFlagged": "No memory pairs flagged for review.",
       "emptyQuarantine": "No skills in quarantine.",
-      "resolveError": "Could not resolve pair — it may have already been processed. Refresh to see the current state."
+      "resolveError": "Could not resolve pair — it may have already been processed. Refresh to see the current state.",
+      "suggestionsTitle": "Skill suggestions",
+      "emptySuggestions": "No skill suggestions right now.",
+      "accept": "Accept",
+      "reject": "Reject",
+      "rejectHint": "rejecting silences it for ~30 days",
+      "suggestionError": "Could not apply the suggestion — it may have already been processed. Refresh to see the current state.",
+      "action": {
+        "evolve": "improve",
+        "retire": "retire",
+        "fuse": "merge"
+      }
     }
   },
   "audio": {

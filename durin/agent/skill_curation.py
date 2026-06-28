@@ -172,6 +172,66 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             "principles": len(so.active_principles(workspace))}
 
 
+def suggest_manual_skills(workspace, *, judge: Callable[[str], str],
+                          usage: dict | None = None,
+                          budget: int = DEFAULT_BUDGET) -> dict:
+    """Curation for MANUAL skills: run the same judge, but ENQUEUE its actions as
+    suggestions for user review instead of applying them. The auto path
+    (curate_catalog) is untouched. Conclusions covered by a live rejection
+    tombstone are suppressed. Evaluation state is tracked in a sidecar cursor so
+    manual skill files are never written."""
+    from durin.agent import skill_suggestions as sg
+
+    workspace = Path(workspace)
+    manual = [
+        s["name"] for s in ss.list_skills_info(workspace)
+        if s["mode"] == "manual" and s["source"] == "workspace"
+    ]
+    delta = [n for n in manual if sg.needs_suggestion(workspace, n)]
+    if not delta:
+        return {"reviewed": 0, "suggested": 0, "suppressed": 0}
+
+    selected = delta[:budget]
+    catalog = {n: ss.read_skill_content(workspace, n) or "" for n in selected}
+    prompt = _build_suggestion_prompt(catalog)
+    try:
+        parsed = json.loads(judge(prompt)) or {}
+    except (ValueError, TypeError):
+        parsed = {}
+    actions = parsed.get("actions", [])
+
+    suggested = 0
+    suppressed = 0
+    for a in actions:
+        t = a.get("type")
+        if t not in ("evolve", "retire"):
+            # The suggestion pass only proposes evolve/retire for manual skills
+            # (fuse refuses manual sources; principles are cross-cutting). Log so
+            # an unexpected judge action type isn't dropped without a trace.
+            logger.debug("skill suggestions: dropping unsupported action type %r", t)
+            continue
+        if a.get("name") not in selected:
+            continue
+        fp = sg.fingerprint(a)
+        if sg.is_tombstoned(workspace, fp):
+            suppressed += 1
+            continue
+        sg.add_suggestion(workspace, a)
+        suggested += 1
+
+    for n in selected:
+        sg.mark_suggested(workspace, n)
+
+    return {"reviewed": len(selected), "suggested": suggested,
+            "suppressed": suppressed}
+
+
+def _build_suggestion_prompt(catalog: dict) -> str:
+    from durin.utils.prompt_templates import render_template
+    return render_template("agent/skill_suggestions.md", strip=True,
+                           catalog_json=json.dumps(catalog, ensure_ascii=False))
+
+
 def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None,
                   observations: list[dict] | None = None,
                   declined: list[dict] | None = None,

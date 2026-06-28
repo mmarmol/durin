@@ -198,12 +198,10 @@ def test_dream_transformed_entity_fully_searchable(tmp_path):
         assert _fts(tmp_path, q, "globex"), f"fts miss: {q}"
 
 
-def test_vector_search_finds_attributes_and_semantic(tmp_path):
+def test_vector_search_finds_attributes_and_semantic(tmp_path, embedding_model):
     # The embedding includes attributes/relations, and the vector path adds
-    # SEMANTIC recall the token paths miss. Guarded: needs the model.
-    from durin.memory.vector_index import vector_index_available
-    if not vector_index_available():
-        pytest.skip("vector index unavailable in this environment")
+    # SEMANTIC recall the token paths miss. The `embedding_model` fixture skips
+    # when the model is unavailable / can't be downloaded (infra, not a bug).
     from durin.memory.embedding import FastembedProvider
     from durin.memory.vector_index import VectorIndex
 
@@ -213,7 +211,7 @@ def test_vector_search_finds_attributes_and_semantic(tmp_path):
                              author="agent", source_ref="s", at=NOW)],
                  create=True, name="mxHERO")
     page = EntityPage.from_file(tmp_path / "memory/entities/company/mxhero.md")
-    vi = VectorIndex(tmp_path, FastembedProvider(model="intfloat/multilingual-e5-small"))
+    vi = VectorIndex(tmp_path, FastembedProvider(model=embedding_model))
     vi.upsert_entity_page(entity_ref="company:mxhero", name=page.name, aliases=list(page.aliases),
                           body=page.body, path=tmp_path / "memory/entities/company/mxhero.md",
                           attributes=dict(page.attributes), relations=list(page.relations))

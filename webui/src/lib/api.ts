@@ -1083,6 +1083,18 @@ export async function getSkillHistory(
   return res.data;
 }
 
+export async function fetchSkillCommitDiff(
+  token: string,
+  name: string,
+  sha: string,
+  base: string = "",
+): Promise<{ sha: string; patch: string }> {
+  return request<{ sha: string; patch: string }>(
+    `${base}/api/v1/skills/${encodeURIComponent(name)}/commit/${encodeURIComponent(sha)}/diff`,
+    token,
+  );
+}
+
 export interface ModelTestResult {
   status: "ok" | "warn" | "fail";
   message: string;
@@ -1677,6 +1689,43 @@ export async function resolveFlaggedPair(
     `${base}/api/v1/memory/flagged-pairs/resolve`,
     token,
     body,
+  );
+}
+
+export type SkillSuggestion = components["schemas"]["SkillSuggestion"];
+
+export async function fetchSkillSuggestions(
+  token: string,
+  base: string = "",
+): Promise<SkillSuggestion[]> {
+  const res = await request<{ suggestions: SkillSuggestion[] }>(
+    `${base}/api/v1/skills/suggestions`,
+    token,
+  );
+  return res.suggestions;
+}
+
+export async function acceptSkillSuggestion(
+  token: string,
+  id: string,
+  base: string = "",
+): Promise<{ ok: boolean }> {
+  return post<{ ok: boolean }>(
+    `${base}/api/v1/skills/suggestions/${encodeURIComponent(id)}/accept`,
+    token,
+    {},
+  );
+}
+
+export async function rejectSkillSuggestion(
+  token: string,
+  id: string,
+  base: string = "",
+): Promise<{ ok: boolean }> {
+  return post<{ ok: boolean }>(
+    `${base}/api/v1/skills/suggestions/${encodeURIComponent(id)}/reject`,
+    token,
+    {},
   );
 }
 
