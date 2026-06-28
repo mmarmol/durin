@@ -64,3 +64,101 @@ async def test_run_step_rejects_unknown_verb() -> None:
         await pilot.pause()
         with pytest.raises(ValueError):
             await run_step(pilot, "frobnicate:x")
+
+
+def test_user_bubble_exposes_edit_payload() -> None:
+    from durin.cli.tui.widgets.chat_view import MessageBubble
+
+    bubble = MessageBubble(role="user", body="original text")
+    assert bubble.editable_text() == "original text"
+
+
+@pytest.mark.asyncio
+async def test_user_bubble_renders_text_and_stays_leaf() -> None:
+    """Regression: a user bubble must stay a leaf widget so its own text renders.
+
+    MessageBubble is a Static — it displays its renderable. Mounting a child
+    widget into it turns it into a container, and Textual's compositor then lays
+    out the child and stops drawing the Static's own text, so user messages
+    showed up blank. The edit affordance must NOT be a mounted child.
+    """
+    from durin.cli.tui.widgets.chat_view import ChatView, MessageBubble
+
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        chat = app.query_one(ChatView)
+        bubble = chat.add_message("user", "VISIBLE_USER_TEXT")
+        await pilot.pause()
+        assert isinstance(bubble, MessageBubble)
+        assert len(bubble.children) == 0, "user bubble must have no child widgets"
+        assert "VISIBLE_USER_TEXT" in str(bubble._Static__content)
+
+
+def test_quick_actions_present() -> None:
+    from durin.cli.tui.widgets.chat_view import ChatView
+
+    assert ChatView.quick_actions() == ["Plan", "Analyze", "Brainstorm", "Code", "Summarize"]
+
+
+@pytest.mark.asyncio
+async def test_scroll_to_bottom_button_visibility() -> None:
+    """watch_scroll_y toggles the scroll button: visible when scrolled up, hidden at bottom."""
+    from durin.cli.tui.widgets.chat_view import ChatView, _ScrollToBottom
+
+    app = DurinApp(agent_loop=None)
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        chat = app.query_one(ChatView)
+
+        # Add enough messages to create scrollback.
+        for i in range(30):
+            chat.add_message("assistant", f"Message {i}: " + "x" * 60)
+        await pilot.pause()
+
+        # Scroll to bottom first so max_scroll_y is known.
+        chat.scroll_end(animate=False)
+        await pilot.pause()
+
+        # Simulate scrolling up: set scroll_y below max so the button should appear.
+        max_y = chat.max_scroll_y
+        if max_y > 2:
+            chat.scroll_y = 0
+            await pilot.pause()
+            btn = chat.query_one("#scroll-to-bottom", _ScrollToBottom)
+            assert btn.display is True, "button should be visible when scrolled up"
+
+        # Scroll back to bottom: button should hide.
+        chat.scroll_end(animate=False)
+        await pilot.pause()
+        btn = chat.query_one("#scroll-to-bottom", _ScrollToBottom)
+        assert btn.display is False, "button should be hidden when at bottom"
+
+
+@pytest.mark.asyncio
+async def test_chips_visible_for_banner_messages() -> None:
+    """Chips should remain visible when adding decorative banner/logo messages."""
+    from durin.cli.tui.widgets.chat_view import ChatView
+
+    app = DurinApp(agent_loop=None)
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        chat = app.query_one(ChatView)
+        chips = chat.query_one("#qa-chips")
+        # Chips should be visible initially
+        assert chips.display is True
+        # Add banner message
+        chat.add_message("banner", "Welcome to durin")
+        await pilot.pause()
+        # Chips should still be visible after banner
+        assert chips.display is True
+        # Add logo message
+        chat.add_message("logo", "durin ASCII art")
+        await pilot.pause()
+        # Chips should still be visible after logo
+        assert chips.display is True
+        # Add real user message
+        chat.add_message("user", "hello")
+        await pilot.pause()
+        # Now chips should be hidden
+        assert chips.display is False

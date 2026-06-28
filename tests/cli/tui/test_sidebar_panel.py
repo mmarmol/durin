@@ -155,11 +155,12 @@ def test_toggle_makes_panel_visible():
         app = _TestApp()
         async with app.run_test():
             panel = app.query_one(SidebarPanel)
-            assert not panel.is_visible
-            panel.show_sidebar()
+            # Open by default (on_mount calls show_sidebar).
             assert panel.is_visible
             panel.hide_sidebar()
             assert not panel.is_visible
+            panel.show_sidebar()
+            assert panel.is_visible
 
     import asyncio
 
@@ -190,3 +191,41 @@ def test_toggle_switches_visibility():
     import asyncio
 
     asyncio.new_event_loop().run_until_complete(run())
+
+
+def test_update_work_tracks_active_and_renders():
+    panel = SidebarPanel()
+    panel.update_work({
+        "name": "workflow_progress", "phase": "running",
+        "call_id": "workflow:r1",
+        "arguments": {"workflow": "review-changes"},
+        "nodes": [{"id": "scan", "label": "scan", "status": "running", "route_label": None}],
+    })
+    assert panel.has_active_work is True
+    content = panel._format_content([], [], [], {})
+    assert "WORK" in content and "review-changes" in content
+
+
+def test_work_clears_when_finished():
+    panel = SidebarPanel()
+    panel.update_work({"name": "subagent_result", "phase": "running",
+                       "call_id": "subagent:t1", "label": "explore"})
+    assert panel.has_active_work is True
+    panel.update_work({"name": "subagent_result", "phase": "end",
+                       "call_id": "subagent:t1", "label": "explore",
+                       "result": "done"})
+    assert panel.has_active_work is False
+
+
+def test_version_is_in_discreet_footer_not_an_info_section():
+    panel = SidebarPanel()
+    info = {"model": "glm-5.2", "mode": "build", "version": "v0.1.0a11",
+            "workdir": "/home/u/.durin/workspace"}
+    content = panel._format_content([], [], [], info)
+    # No INFO header; section order is WORK/TODO/FILES/MCP.
+    assert "INFO" not in content
+    assert content.index("TODO") < content.index("FILES") < content.index("MCP")
+    # Version + model/mode live in the dim footer at the end.
+    assert "sidebar-foot" in content
+    assert "v0.1.0a11" in content
+    assert content.rindex("v0.1.0a11") > content.index("MCP")

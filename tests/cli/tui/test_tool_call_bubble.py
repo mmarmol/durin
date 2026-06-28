@@ -636,3 +636,49 @@ async def test_todo_write_body_shows_checklist_from_arguments() -> None:
         assert "✔" in body and "A" in body
         assert "Doing B" in body
         assert "○" in body and "C" in body
+
+
+# ---------------------------------------------------------------------------
+# exit_plan_mode — inline Approve / Refine action rows
+# ---------------------------------------------------------------------------
+
+
+def test_exit_plan_mode_has_approve_rows() -> None:
+    """_plan_action_ids returns the two action row ids for exit_plan_mode."""
+    bubble = ToolCallBubble({
+        "name": "exit_plan_mode", "phase": "end", "call_id": "p1",
+        "arguments": {"plan": "1. do a thing\n2. do another"},
+    })
+    ids = bubble._plan_action_ids()
+    assert ids == ["tc-plan-approve", "tc-plan-refine"]
+
+
+def test_non_plan_tool_has_no_approve_rows() -> None:
+    """_plan_action_ids returns [] for any tool other than exit_plan_mode."""
+    bubble = ToolCallBubble({
+        "name": "exec", "phase": "end", "call_id": "e1",
+        "arguments": {"command": "ls"},
+    })
+    assert bubble._plan_action_ids() == []
+
+
+@pytest.mark.asyncio
+async def test_exit_plan_mode_bubble_has_approve_and_refine_widgets() -> None:
+    """The mounted bubble must contain Static rows with the expected ids."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        from textual.widgets import Static
+
+        chat = app.query_one(ChatView)
+        event = {
+            "version": 1, "phase": "end", "call_id": "pm1",
+            "name": "exit_plan_mode",
+            "arguments": {"plan": "1. step one\n2. step two"},
+        }
+        bubble = ToolCallBubble(event)
+        chat.mount(bubble)
+        await pilot.pause()
+        approve = bubble.query_one("#tc-plan-approve", Static)
+        refine = bubble.query_one("#tc-plan-refine", Static)
+        assert "Approve" in _static_plain(approve)
+        assert "Refine" in _static_plain(refine)

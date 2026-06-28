@@ -16,6 +16,11 @@ if TYPE_CHECKING:
 __all__ = ["SidebarPanel"]
 
 _REFRESH_INTERVAL = 5.0
+# Faster tick while work is in flight: advances the braille spinner so the panel
+# visibly "breathes" instead of looking frozen. Re-renders from cached data —
+# the expensive git/MCP gather still runs only on the slow interval.
+_ANIM_INTERVAL = 0.25
+_ANIM_TICKS_PER_GATHER = int(_REFRESH_INTERVAL / _ANIM_INTERVAL)
 
 
 class SidebarPanel(Static):
@@ -29,7 +34,7 @@ class SidebarPanel(Static):
         height: 1fr;
         display: none;
         background: $surface;
-        border-right: solid $accent;
+        border-left: solid $accent;
         padding: 0 1;
         color: $text;
     }
@@ -88,6 +93,20 @@ class SidebarPanel(Static):
     SidebarPanel .sidebar-disconnected {
         color: $error;
     }
+
+    SidebarPanel .work-header { color: $accent; text-style: bold; }
+    SidebarPanel .work-count { color: $text-muted; text-style: italic; }
+    SidebarPanel .work-finished-header { color: $text-muted; padding: 1 0 0 0; }
+    SidebarPanel .work-running { color: $accent; }
+    SidebarPanel .work-done { color: $success; }
+    SidebarPanel .work-failed { color: $error; }
+    SidebarPanel .work-pending { color: $text-muted; }
+
+    SidebarPanel .sidebar-foot {
+        color: $text-muted;
+        text-style: italic;
+        padding: 1 0 0 0;
+    }
     """
 
     def __init__(self) -> None:
@@ -95,12 +114,26 @@ class SidebarPanel(Static):
         self._agent_loop: AgentLoop | None = None
         self._session_key: str | None = None
         self._timer: Any = None
+        self._spin = 0
+        self._ticks = 0
+        # Last gathered (todos, files, mcp, info) — re-rendered on spinner ticks
+        # without re-running the expensive git/MCP gather.
+        self._cache: tuple[Any, Any, Any, Any] | None = None
+        from durin.cli.tui.widgets.work_state import WorkStore
+
+        self._work = WorkStore()
 
     def set_agent_loop(self, loop: AgentLoop | None) -> None:
         self._agent_loop = loop
 
     def set_session_key(self, key: str | None) -> None:
         self._session_key = key
+
+    def on_mount(self) -> None:
+        # The sidebar is open by default — it carries persistent context (work,
+        # todos, changed files, servers) the user wants visible, not just the
+        # current task. Ctrl+B still toggles it.
+        self.show_sidebar()
 
     def on_unmount(self) -> None:
         self._stop_timer()
@@ -122,6 +155,23 @@ class SidebarPanel(Static):
         else:
             self.show_sidebar()
 
+    def update_work(self, event: dict) -> None:
+        """Ingest one workflow/subagent progress event and re-render if visible."""
+        self._work.ingest(event)
+        if self.is_visible:
+            self.refresh_content()
+
+    @property
+    def has_active_work(self) -> bool:
+        return self._work.active_count() > 0
+
+    def jump_to_work(self) -> None:
+        """Make the sidebar visible so the WORK section is on screen."""
+        if not self.is_visible:
+            self.show_sidebar()
+        else:
+            self.refresh_content()
+
     @property
     def is_visible(self) -> bool:
         return self.has_class("--visible")
@@ -130,7 +180,9 @@ class SidebarPanel(Static):
 
     def _start_timer(self) -> None:
         self._stop_timer()
-        self._timer = self.set_interval(_REFRESH_INTERVAL, self.refresh_content)
+        # One fast interval: it advances the spinner and re-renders from cache
+        # every tick, and does a full (git/MCP) gather once every N ticks.
+        self._timer = self.set_interval(_ANIM_INTERVAL, self._tick)
 
     def _stop_timer(self) -> None:
         timer = getattr(self, "_timer", None)
@@ -138,14 +190,35 @@ class SidebarPanel(Static):
             timer.stop()
             self._timer = None
 
-    def refresh_content(self) -> None:
-        """Re-render the sidebar from live data sources."""
+    def _tick(self) -> None:
+        """Spinner tick: cheap re-render from cache, full gather every N ticks."""
         if not self.is_visible:
             return
-        todos = self._gather_todos(self._session_key)
-        files = self._gather_files()
-        mcp = self._gather_mcp()
-        info = self._gather_info()
+        self._ticks += 1
+        if self.has_active_work:
+            self._spin += 1
+        if self._ticks % _ANIM_TICKS_PER_GATHER == 0 or self._cache is None:
+            self.refresh_content()
+        elif self.has_active_work:
+            self._render_cached()
+
+    def refresh_content(self) -> None:
+        """Re-gather live data (git/MCP/todos) and re-render."""
+        if not self.is_visible:
+            return
+        self._cache = (
+            self._gather_todos(self._session_key),
+            self._gather_files(),
+            self._gather_mcp(),
+            self._gather_info(),
+        )
+        self._render_cached()
+
+    def _render_cached(self) -> None:
+        """Re-render from the last gathered data (cheap — no git/MCP gather)."""
+        if not self.is_visible or self._cache is None:
+            return
+        todos, files, mcp, info = self._cache
         self.update(self._format_content(todos, files, mcp, info))
 
     # ---- data gathering ----------------------------------------------------
@@ -265,22 +338,15 @@ class SidebarPanel(Static):
     ) -> str:
         lines: list[str] = []
 
-        # --- Info section ---
-        if info:
-            lines.append("[sidebar-section-header]INFO[/]")
-            if "mode" in info:
-                lines.append(f"[sidebar-item]Mode: [sidebar-active]{info['mode']}[/][/]")
-            if "model" in info:
-                lines.append(f"[sidebar-item]Model: {info['model']}[/]")
-            if "ctx" in info:
-                lines.append(f"[sidebar-item]Context: {info['ctx']}[/]")
-            if "version" in info:
-                lines.append(f"[sidebar-item]Version: {info['version']}[/]")
-            if "workdir" in info:
-                wd = info["workdir"]
-                if len(wd) > 30:
-                    wd = "…" + wd[-29:]
-                lines.append(f"[sidebar-item]Workdir: {wd}[/]")
+        # Section order is by dynamism: live work first, then the active task
+        # list, the changed files, server status, and finally a discreet footer
+        # of static reference info (model/mode/version/workspace — also in the
+        # bottom bar, kept here dim for a glance without leaving the panel).
+
+        # --- Work section (pushed; workflows + sub-agents; animated spinner) ---
+        work_markup = self._work.render_markup(self._spin)
+        if work_markup:
+            lines.append(work_markup)
             lines.append("")
 
         # --- Todos section ---
@@ -340,5 +406,20 @@ class SidebarPanel(Static):
                 cls = "sidebar-connected" if ok else "sidebar-disconnected"
                 dot = "\u25CF" if ok else "\u25CB"
                 lines.append(f"[{cls}]{dot} {name}[/]")
+
+        # --- Discreet footer: static reference info ---
+        if info:
+            model_mode = " \u00B7 ".join(
+                p for p in (info.get("model"), info.get("mode")) if p
+            )
+            wd = info.get("workdir", "")
+            if len(wd) > 26:
+                wd = "\u2026" + wd[-25:]
+            version_line = " \u00B7 ".join(p for p in (info.get("version"), wd) if p)
+            foot = [p for p in (model_mode, version_line) if p]
+            if foot:
+                lines.append("")
+                for line in foot:
+                    lines.append(f"[sidebar-foot]{line}[/]")
 
         return "\n".join(lines)

@@ -272,3 +272,21 @@ async def test_empty_sessions_shows_message(tmp_path) -> None:
         chat = app.query_one(ChatView)
         bubbles = [b for b in chat.query(MessageBubble) if b._role == "system"]
         assert any("No sessions" in b.body for b in bubbles)
+
+
+# ---------------------------------------------------------------------------
+# Persona picker
+# ---------------------------------------------------------------------------
+
+
+def test_persona_picker_builds_rows_and_marks_active():
+    from durin.cli.tui.screens.persona_picker import PersonaPickerScreen, PersonaRow
+
+    rows = [
+        PersonaRow(name="default", soul="default", model=None),
+        PersonaRow(name="reviewer", soul="critic", model="sonnet-4.6"),
+    ]
+    screen = PersonaPickerScreen(rows, active="reviewer")
+    labels = [screen._format_row(r) for r in rows]
+    assert any("reviewer" in lbl and "active" in lbl for lbl in labels)
+    assert any("critic" in lbl for lbl in labels)

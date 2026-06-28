@@ -11,11 +11,35 @@ runs in a worker thread with no active loop, which is valid.
 from __future__ import annotations
 
 import asyncio
+import uuid
 from contextvars import ContextVar
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
+
+
+def _terminal_progress_payload(workflow: Any, run_id: str, runs: Any) -> dict:
+    """Build the final ``workflow_progress`` payload (``done=True``) from the
+    completed node runs.
+
+    The engine only emits per-node ``done=False`` frames during the walk and
+    never a terminal frame, so without this the WORK panel (TUI + webui) leaves
+    a finished workflow stuck on "running". Emitted after the run completes,
+    keyed by the same ``run_id`` so it updates the existing work item.
+    """
+    from durin.workflow.spec import node_label
+
+    nodes = [
+        {
+            "id": r.node_id,
+            "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
+            "status": "failed" if r.status in ("node_failed", "persist_failed") else "done",
+            "route_label": getattr(r, "route_label", None),
+        }
+        for r in runs
+    ]
+    return {"run_id": run_id, "nodes": nodes, "done": True}
 
 _PARAMETERS = {
     "type": "object",
@@ -246,6 +270,10 @@ class RunWorkflowTool(Tool, ContextAware):
                 except Exception:  # noqa: BLE001 - best-effort; never break the run
                     pass
             progress_emit = _emit_progress
+        # Generate the run id here (instead of letting the engine mint it) so the
+        # terminal "done" frame emitted after the run carries the same id and
+        # updates the existing work item rather than creating a new one.
+        run_id = uuid.uuid4().hex[:12]
         engine = WorkflowEngine(
             node_runner=node_runner,
             subworkflow_runner=subworkflow_runner,
@@ -253,6 +281,7 @@ class RunWorkflowTool(Tool, ContextAware):
             pick_runner=judge_runner.pick,
             max_node_visits=self._app_config.workflow.max_node_visits,
             progress_emit=progress_emit,
+            run_id_factory=lambda: run_id,
         )
         root_session_key = self._session_key.get()
         inject_target = {
@@ -269,8 +298,13 @@ class RunWorkflowTool(Tool, ContextAware):
                         root_session_key=root_session_key,
                         output_format=output_format or None,
                     )
+                    if progress_emit is not None:
+                        progress_emit(_terminal_progress_payload(workflow, run_id, result.runs))
                     summary = _format_result(result)
                 except Exception as exc:  # noqa: BLE001
+                    # Clear the work item even on failure so it doesn't hang on "running".
+                    if progress_emit is not None:
+                        progress_emit({"run_id": run_id, "nodes": [], "done": True})
                     summary = f"Workflow run failed in background: {exc}"
                 await self._inject_result(summary, name=name, inject_target=inject_target)
 
@@ -289,4 +323,6 @@ class RunWorkflowTool(Tool, ContextAware):
             root_session_key=root_session_key,
             output_format=output_format or None,
         )
+        if progress_emit is not None:
+            progress_emit(_terminal_progress_payload(workflow, run_id, result.runs))
         return _format_result(result)
