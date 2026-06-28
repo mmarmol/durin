@@ -10,6 +10,7 @@ from durin.cli.tui.app import DurinApp
 from durin.cli.tui.widgets import (
     ChatView,
     MessageBubble,
+    SidebarPanel,
     WorkingIndicator,
 )
 
@@ -249,3 +250,23 @@ async def test_retry_wait_messages_are_silent() -> None:
             await asyncio.sleep(0.05)
         bubbles_after = len(list(chat.query(MessageBubble)))
         assert bubbles_after == bubbles_before, "retry-wait should not have added a bubble"
+
+
+@pytest.mark.asyncio
+async def test_work_event_opens_sidebar_and_renders():
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        sidebar = app.query_one(SidebarPanel)
+        # The sidebar is open by default; if the user hid it, a work event
+        # re-opens it (jump_to_work).
+        sidebar.hide_sidebar()
+        assert sidebar.is_visible is False
+        app._route_work_event({
+            "name": "workflow_progress", "phase": "running",
+            "call_id": "workflow:r1",
+            "arguments": {"workflow": "review-changes"},
+            "nodes": [{"id": "scan", "label": "scan", "status": "running", "route_label": None}],
+        })
+        await pilot.pause()
+        assert sidebar.is_visible is True
+        assert sidebar.has_active_work is True

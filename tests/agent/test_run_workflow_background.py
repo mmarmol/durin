@@ -42,3 +42,25 @@ async def test_inject_result_is_best_effort_when_bus_missing():
     # Must not raise even though there is no bus.
     await t._inject_result("x", name="qa",
                            inject_target={"channel": "websocket", "chat_id": "chatA", "session_key": None})
+
+
+def test_terminal_progress_payload_marks_workflow_done():
+    """The engine only emits per-node done=False frames; a terminal frame must be
+    built after the run so the WORK panel (TUI + webui) can mark the workflow
+    finished instead of leaving it stuck on 'running'."""
+    from types import SimpleNamespace
+
+    from durin.agent.tools.run_workflow import _terminal_progress_payload
+
+    # Empty `nodes` map -> label falls back to node_id (skips node_label).
+    workflow = SimpleNamespace(nodes={})
+    runs = [
+        SimpleNamespace(node_id="scan", status="passed", route_label="pass"),
+        SimpleNamespace(node_id="fix", status="node_failed", route_label=None),
+    ]
+    payload = _terminal_progress_payload(workflow, "run-1", runs)
+
+    assert payload["done"] is True
+    assert payload["run_id"] == "run-1"
+    statuses = {n["id"]: n["status"] for n in payload["nodes"]}
+    assert statuses == {"scan": "done", "fix": "failed"}
