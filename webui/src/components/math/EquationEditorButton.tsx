@@ -12,27 +12,17 @@ export function EquationEditorButton({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const [value, setValue] = useState("");
-  const fieldRef = useRef<HTMLElement>(null);
+  const fieldRef = useRef<HTMLElement & { value?: string }>(null);
 
   // Register the <math-field> custom element lazily when the dialog opens.
   useEffect(() => {
     if (open) void import("mathlive");
   }, [open]);
 
-  // Mirror the live MathLive element value into React state on every input event.
-  useEffect(() => {
-    const el = fieldRef.current as (HTMLElement & { value?: string }) | null;
-    if (!el) return;
-    const handler = () => setValue((el.value ?? "").toString());
-    el.addEventListener("input", handler);
-    return () => el.removeEventListener("input", handler);
-  }, [open]);
-
   const confirm = () => {
-    const tex = value.trim();
+    const el = fieldRef.current;
+    const tex = (el?.value ?? "").trim();
     if (tex) onInsert(`$${tex}$`);
-    setValue("");
     setOpen(false);
   };
 
@@ -58,16 +48,6 @@ export function EquationEditorButton({
           <Dialog.Title className="mb-3 text-sm font-medium">
             {t("composer.equationDialogTitle")}
           </Dialog.Title>
-          {/* The hidden input mirrors state and gives tests a real .value setter. */}
-          <input
-            aria-label="equation-field"
-            aria-hidden="true"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }}
-            tabIndex={-1}
-          />
-          {/* The real MathLive visual editor — inert in happy-dom tests. */}
           {createElement("math-field", {
             ref: fieldRef,
             "aria-label": t("composer.equationEditor"),
