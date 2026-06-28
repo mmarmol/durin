@@ -119,6 +119,27 @@ class SkillJudgeQuery(Query):
     name: str
 
 
+class SkillSuggestionsQuery(Query):
+    """No inputs — returns the full pending-suggestion list."""
+
+
+class SkillSuggestion(Result):
+    """One curation suggestion for a manual skill, awaiting user review."""
+
+    id: str
+    skill: str
+    type: str
+    reason: str
+    patch: str | None
+    created_at: str
+
+
+class SkillSuggestions(Result):
+    """All pending skill suggestions."""
+
+    suggestions: list[SkillSuggestion]
+
+
 # ---------------------------------------------------------------------------
 # Write DTOs
 # ---------------------------------------------------------------------------
@@ -153,6 +174,18 @@ class SkillApproveCommand(Command):
     override: bool = False
     replace: bool = False
     install_deps: bool = False
+
+
+class AcceptSuggestionCommand(Command):
+    """Apply a suggestion (replays the curation action), then dequeue it."""
+
+    id: str
+
+
+class RejectSuggestionCommand(Command):
+    """Reject a suggestion: write an expiring tombstone, then dequeue it."""
+
+    id: str
 
 
 class SkillInstallDepsCommand(Command):
@@ -493,6 +526,74 @@ class SkillsService:
 
         status, payload = ss.web_skill_reject(self._workspace, cmd.name)
         return _skills_result(status, payload)
+
+    @route(
+        "GET",
+        "/api/v1/skills/suggestions",
+        scope=Scope.SKILLS_READ.value,
+        request_model=SkillSuggestionsQuery,
+        response_model=SkillSuggestions,
+        summary="Pending curation suggestions for manual skills",
+    )
+    async def suggestions(
+        self, query: SkillSuggestionsQuery, principal: Principal
+    ) -> SkillSuggestions:
+        principal.require(Scope.SKILLS_READ)
+        from durin.agent import skill_suggestions as sg
+
+        items = [
+            SkillSuggestion(
+                id=r["id"],
+                skill=r.get("skill", ""),
+                type=r.get("type", ""),
+                reason=r.get("reason", ""),
+                patch=r.get("patch"),
+                created_at=r.get("created_at", ""),
+            )
+            for r in sg.read_suggestions(self._workspace)
+        ]
+        return SkillSuggestions(suggestions=items)
+
+    @route(
+        "POST",
+        "/api/v1/skills/suggestions/{id}/accept",
+        scope=Scope.SKILLS_WRITE.value,
+        request_model=AcceptSuggestionCommand,
+        response_model=SkillsResult,
+        summary="Accept a skill suggestion (apply it)",
+    )
+    async def accept_suggestion(
+        self, cmd: AcceptSuggestionCommand, principal: Principal
+    ) -> SkillsResult:
+        principal.require(Scope.SKILLS_WRITE)
+        from durin.agent import skill_suggestions as sg
+
+        rec = sg.get_suggestion(self._workspace, cmd.id)
+        if rec is None:
+            raise NotFoundError(f"suggestion {cmd.id!r} not found")
+        res = sg.apply_suggestion(self._workspace, rec["action"])
+        if res.get("error"):
+            raise ConflictError(str(res["error"]), details=res)
+        sg.remove_suggestion(self._workspace, cmd.id)
+        return _skills_result(200, {"ok": True})
+
+    @route(
+        "POST",
+        "/api/v1/skills/suggestions/{id}/reject",
+        scope=Scope.SKILLS_WRITE.value,
+        request_model=RejectSuggestionCommand,
+        response_model=SkillsResult,
+        summary="Reject a skill suggestion (tombstone it)",
+    )
+    async def reject_suggestion(
+        self, cmd: RejectSuggestionCommand, principal: Principal
+    ) -> SkillsResult:
+        principal.require(Scope.SKILLS_WRITE)
+        from durin.agent import skill_suggestions as sg
+
+        sg.add_tombstone(self._workspace, cmd.id)
+        sg.remove_suggestion(self._workspace, cmd.id)
+        return _skills_result(200, {"ok": True})
 
     @route(
         "DELETE",

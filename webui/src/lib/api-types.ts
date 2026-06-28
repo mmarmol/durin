@@ -1194,6 +1194,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/skills/suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pending curation suggestions for manual skills */
+        get: operations["skills_suggestions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/skills/suggestions/{id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept a skill suggestion (apply it) */
+        post: operations["skills_accept_suggestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/skills/suggestions/{id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject a skill suggestion (tombstone it) */
+        post: operations["skills_reject_suggestion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/skills/{name}": {
         parameters: {
             query?: never;
@@ -1578,6 +1629,14 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AcceptSuggestionCommand
+         * @description Apply a suggestion (replays the curation action), then dequeue it.
+         */
+        AcceptSuggestionCommand: {
+            /** Id */
+            id: string;
+        };
         /** BackgroundTask */
         BackgroundTask: {
             /** Ended At */
@@ -3252,6 +3311,14 @@ export interface components {
             provider: string;
         };
         /**
+         * RejectSuggestionCommand
+         * @description Reject a suggestion: write an expiring tombstone, then dequeue it.
+         */
+        RejectSuggestionCommand: {
+            /** Id */
+            id: string;
+        };
+        /**
          * ResolveFlaggedRequest
          * @description Resolve a flagged pair: merge the two entities or keep them separate.
          */
@@ -3613,6 +3680,37 @@ export interface components {
             /** Q */
             q: string;
         };
+        /**
+         * SkillSuggestion
+         * @description One curation suggestion for a manual skill, awaiting user review.
+         */
+        SkillSuggestion: {
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Patch */
+            patch: string | null;
+            /** Reason */
+            reason: string;
+            /** Skill */
+            skill: string;
+            /** Type */
+            type: string;
+        };
+        /**
+         * SkillSuggestions
+         * @description All pending skill suggestions.
+         */
+        SkillSuggestions: {
+            /** Suggestions */
+            suggestions: components["schemas"]["SkillSuggestion"][];
+        };
+        /**
+         * SkillSuggestionsQuery
+         * @description No inputs — returns the full pending-suggestion list.
+         */
+        SkillSuggestionsQuery: Record<string, never>;
         /** SkillUnreviewCommand */
         SkillUnreviewCommand: {
             /** Name */
@@ -5948,6 +6046,78 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SkillSearchQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillsResult"];
+                };
+            };
+        };
+    };
+    skills_suggestions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillSuggestionsQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillSuggestions"];
+                };
+            };
+        };
+    };
+    skills_accept_suggestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcceptSuggestionCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillsResult"];
+                };
+            };
+        };
+    };
+    skills_reject_suggestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RejectSuggestionCommand"];
             };
         };
         responses: {

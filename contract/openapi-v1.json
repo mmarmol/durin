@@ -1,6 +1,21 @@
 {
   "components": {
     "schemas": {
+      "AcceptSuggestionCommand": {
+        "additionalProperties": false,
+        "description": "Apply a suggestion (replays the curation action), then dequeue it.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "AcceptSuggestionCommand",
+        "type": "object"
+      },
       "BackgroundTask": {
         "properties": {
           "ended_at": {
@@ -3679,6 +3694,21 @@
         "title": "ProviderModelsResult",
         "type": "object"
       },
+      "RejectSuggestionCommand": {
+        "additionalProperties": false,
+        "description": "Reject a suggestion: write an expiring tombstone, then dequeue it.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "RejectSuggestionCommand",
+        "type": "object"
+      },
       "ResolveFlaggedRequest": {
         "additionalProperties": false,
         "description": "Resolve a flagged pair: merge the two entities or keep them separate.",
@@ -4483,6 +4513,76 @@
           "q"
         ],
         "title": "SkillSearchQuery",
+        "type": "object"
+      },
+      "SkillSuggestion": {
+        "description": "One curation suggestion for a manual skill, awaiting user review.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "patch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patch"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "skill": {
+            "title": "Skill",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "skill",
+          "type",
+          "reason",
+          "patch",
+          "created_at"
+        ],
+        "title": "SkillSuggestion",
+        "type": "object"
+      },
+      "SkillSuggestions": {
+        "description": "All pending skill suggestions.",
+        "properties": {
+          "suggestions": {
+            "items": {
+              "$ref": "#/components/schemas/SkillSuggestion"
+            },
+            "title": "Suggestions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "suggestions"
+        ],
+        "title": "SkillSuggestions",
+        "type": "object"
+      },
+      "SkillSuggestionsQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 returns the full pending-suggestion list.",
+        "properties": {},
+        "title": "SkillSuggestionsQuery",
         "type": "object"
       },
       "SkillUnreviewCommand": {
@@ -7605,6 +7705,93 @@
         },
         "summary": "Search configured registries (async off-thread)",
         "x-required-scope": "skills:read"
+      }
+    },
+    "/api/v1/skills/suggestions": {
+      "get": {
+        "operationId": "skills_suggestions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillSuggestionsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillSuggestions"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Pending curation suggestions for manual skills",
+        "x-required-scope": "skills:read"
+      }
+    },
+    "/api/v1/skills/suggestions/{id}/accept": {
+      "post": {
+        "operationId": "skills_accept_suggestion",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptSuggestionCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Accept a skill suggestion (apply it)",
+        "x-required-scope": "skills:write"
+      }
+    },
+    "/api/v1/skills/suggestions/{id}/reject": {
+      "post": {
+        "operationId": "skills_reject_suggestion",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectSuggestionCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Reject a skill suggestion (tombstone it)",
+        "x-required-scope": "skills:write"
       }
     },
     "/api/v1/skills/{name}": {
