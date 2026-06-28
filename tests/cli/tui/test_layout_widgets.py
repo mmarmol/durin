@@ -215,6 +215,23 @@ def test_footer_renders_latency_and_mode() -> None:
     assert "4.2s" in out
 
 
+def test_footer_mode_flanked_by_bullets() -> None:
+    from durin.cli.tui.widgets.footer_bar import _render
+
+    out = _render({"model": "opus-4.8", "mode": "build"})
+    # Mode is shown as "· build ·" — a bullet on each side, per spec.
+    assert "build[/bold] ·" in out
+
+
+def test_footer_omits_mode_and_latency_when_absent() -> None:
+    from durin.cli.tui.widgets.footer_bar import _render
+
+    out = _render({"model": "opus-4.8"})
+    assert "⏱" not in out
+    # No mode segment: the bold-wrapped mode marker must not appear.
+    assert "[bold]" not in out
+
+
 @pytest.mark.asyncio
 async def test_footer_silent_on_payload_failure() -> None:
     """A getter that raises must not blow up the footer."""

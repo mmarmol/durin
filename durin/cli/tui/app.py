@@ -1298,12 +1298,14 @@ class DurinApp(App[None]):
     def _footer_payload(self) -> dict | None:
         """Build the footer payload, augmented with mode and last-turn latency."""
         base = payload_from_loop(self._agent_loop, self._cli_channel, self._cli_chat_id)
-        if base is None:
-            base = {}
+        if not base:
+            # No live payload (agent loop inactive) — keep the footer empty
+            # rather than rendering a sparse line from stamped fields alone.
+            return None
         base["mode"] = self._get_agent_mode()
         if self._last_latency_ms is not None:
             base["latency_ms"] = self._last_latency_ms
-        return base or None
+        return base
 
     def _refresh_chrome(self) -> None:
         """Update Header + Footer reactive surfaces after a session switch."""

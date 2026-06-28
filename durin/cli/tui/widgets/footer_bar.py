@@ -144,7 +144,7 @@ def _render(p: dict[str, Any]) -> str:
     extras_part = (" · " + " · ".join(extras)) if extras else ""
 
     mode = p.get("mode")
-    mode_part = f" · [bold]{mode}[/bold]" if mode else ""
+    mode_part = f" · [bold]{mode}[/bold] ·" if mode else ""
 
     latency_ms = p.get("latency_ms")
     latency_part = (
