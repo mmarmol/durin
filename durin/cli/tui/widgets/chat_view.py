@@ -101,14 +101,14 @@ class MessageBubble(Static):
         padding: 1 2;
         margin: 1 2;
     }
-    MessageBubble > #mb-edit {
+    MessageBubble > .mb-edit {
         width: auto;
         color: $text-muted;
         text-style: underline;
         padding: 0 0;
         dock: right;
     }
-    MessageBubble > #mb-edit:hover {
+    MessageBubble > .mb-edit:hover {
         background: $accent 20%;
         color: $accent;
     }
@@ -183,7 +183,7 @@ class MessageBubble(Static):
     def on_mount(self) -> None:
         """Mount the [✎] edit affordance for user bubbles."""
         if self._role == "user":
-            self.mount(Static("[✎]", id="mb-edit", markup=False))
+            self.mount(Static("[✎]", classes="mb-edit", markup=False))
 
     def on_click(self, event) -> None:  # noqa: ANN001 — Textual Click event
         """On [✎] click, reload this bubble's text into the input."""
@@ -191,7 +191,7 @@ class MessageBubble(Static):
             target = event.widget
         except Exception:  # noqa: BLE001
             return
-        if getattr(target, "id", "") != "mb-edit":
+        if target is None or "mb-edit" not in target.classes:
             return
         try:
             from durin.cli.tui.widgets import InputArea
