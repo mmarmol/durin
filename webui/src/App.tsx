@@ -11,6 +11,8 @@ import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { useVoiceSession } from "@/components/voice/useVoiceSession";
 import { useVoiceConfig } from "@/hooks/useVoiceConfig";
+import { useTokenRefresh } from "@/hooks/useTokenRefresh";
+import { prefetchVoiceAssets } from "@/lib/voiceAssets";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 
 import { useSessions } from "@/hooks/useSessions";
@@ -32,6 +34,8 @@ type BootState =
       status: "ready";
       client: DurinClient;
       token: string;
+      // Bootstrap-token TTL (seconds); drives proactive refresh ahead of expiry.
+      expiresIn: number;
       modelName: string | null;
       modelPreset: string | null;
       // True when this deploy gates bootstrap on a setup secret. The
@@ -142,6 +146,7 @@ export default function App() {
             status: "ready",
             client,
             token: boot.token,
+            expiresIn: boot.expires_in,
             modelName: boot.model_name ?? null,
             modelPreset: boot.model_preset ?? null,
             requiresSecret: Boolean(boot.requires_secret),
@@ -200,6 +205,23 @@ export default function App() {
     });
     return () => setApiReauthHandler(null);
   }, []);
+
+  // Re-mint the token ahead of expiry so no request ever 401s on a stale token
+  // (which otherwise spams the console once per TTL). The reactive handler above
+  // remains the safety net for gateway restarts.
+  const refreshToken = useCallback(async () => {
+    try {
+      const boot = await fetchBootstrap("", "");
+      setState((s) => (s.status === "ready" ? { ...s, token: boot.token } : s));
+    } catch {
+      // Ignore: the reactive 401 handler still recovers if this refresh missed.
+    }
+  }, []);
+  useTokenRefresh(
+    state.status === "ready",
+    state.status === "ready" ? state.expiresIn : 0,
+    refreshToken,
+  );
 
   if (state.status === "loading") {
     return (
@@ -365,6 +387,23 @@ function Shell({
   // Voice session is owned by the app shell; the composer's entry orb and its
   // active-call strip both drive it.
   const voiceCfg = useVoiceConfig(token);
+  // Warm the VAD model + ONNX WASM during idle when conversational voice is
+  // enabled in config, so the first mic click doesn't stall on the multi-MB
+  // download. Gated on `enabled` (not `available`) so the assets preload even
+  // before the TTS/STT extras finish installing; wait for config to load so a
+  // voice-disabled deploy never prefetches. Idempotent.
+  useEffect(() => {
+    if (voiceCfg.loading || !voiceCfg.enabled) return;
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: () => void) => number;
+    }).requestIdleCallback;
+    if (ric) {
+      ric(() => prefetchVoiceAssets());
+      return;
+    }
+    const id = setTimeout(prefetchVoiceAssets, 1500);
+    return () => clearTimeout(id);
+  }, [voiceCfg.loading, voiceCfg.enabled]);
   const {
     state: voiceState,
     active: voiceActive,

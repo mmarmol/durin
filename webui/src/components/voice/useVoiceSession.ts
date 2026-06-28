@@ -69,37 +69,47 @@ export function useVoiceSession(client: DurinClient, chatId: string | null, cfg:
     if (active || !chatId) return;
     const ctx = new AudioContext(); ctxRef.current = ctx;
     const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const vad = await MicVAD.new({
-      positiveSpeechThreshold: cfg.vadThreshold,
-      negativeSpeechThreshold: Math.max(0, cfg.vadThreshold - 0.15),
-      redemptionMs: cfg.endOfTurnSilenceMs,
-      model: "v5",
-      baseAssetPath: VAD_BASE_ASSET_PATH,
-      onnxWASMBasePath: ONNX_WASM_BASE_PATH,
-      getStream: async () => {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
-        const src = ctx.createMediaStreamSource(stream);
-        const an = ctx.createAnalyser(); an.fftSize = 2048;
-        src.connect(an); // not to destination — avoids mic feedback
-        micAnalyserRef.current = an;
-        return stream;
-      },
-      onSpeechStart: () => {
-        if (stateRef.current === "speaking") {
-          audioRef.current?.pause();
-          client.sendVoiceBargeIn(chatId);
-          setState("listening");
-        }
-      },
-      onSpeechEnd: (audio: Float32Array) => {
-        const b64 = utils.arrayBufferToBase64(utils.encodeWAV(audio));
-        client.sendVoiceUtterance(chatId, `data:audio/wav;base64,${b64}`);
-      },
-    });
-    vadRef.current = vad;
-    vad.start();
+    try {
+      const vad = await MicVAD.new({
+        positiveSpeechThreshold: cfg.vadThreshold,
+        negativeSpeechThreshold: Math.max(0, cfg.vadThreshold - 0.15),
+        redemptionMs: cfg.endOfTurnSilenceMs,
+        model: "v5",
+        baseAssetPath: VAD_BASE_ASSET_PATH,
+        onnxWASMBasePath: ONNX_WASM_BASE_PATH,
+        getStream: async () => {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          });
+          const src = ctx.createMediaStreamSource(stream);
+          const an = ctx.createAnalyser(); an.fftSize = 2048;
+          src.connect(an); // not to destination — avoids mic feedback
+          micAnalyserRef.current = an;
+          return stream;
+        },
+        onSpeechStart: () => {
+          if (stateRef.current === "speaking") {
+            audioRef.current?.pause();
+            client.sendVoiceBargeIn(chatId);
+            setState("listening");
+          }
+        },
+        onSpeechEnd: (audio: Float32Array) => {
+          const b64 = utils.arrayBufferToBase64(utils.encodeWAV(audio));
+          client.sendVoiceUtterance(chatId, `data:audio/wav;base64,${b64}`);
+        },
+      });
+      vadRef.current = vad;
+      vad.start();
+    } catch {
+      // Mic permission denied or VAD model/WASM load failed: tear down the
+      // half-built session so the orb returns to idle and the user can retry.
+      // A leaked AudioContext would eventually hit the browser's per-page cap.
+      void ctx.close(); ctxRef.current = null;
+      micAnalyserRef.current = null;
+      setActive(false); setState("idle");
+      return;
+    }
     client.sendVoiceStart(chatId);
     setActive(true);
     setState("listening");
@@ -112,6 +122,10 @@ export function useVoiceSession(client: DurinClient, chatId: string | null, cfg:
     if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     void ctxRef.current?.close(); ctxRef.current = null;
     micAnalyserRef.current = null; playAnalyserRef.current = null;
+    // Drop the <audio> element too: an HTMLMediaElement can be wired to only
+    // one MediaElementSourceNode ever, so the next session must start fresh —
+    // reusing it makes createMediaElementSource throw InvalidStateError.
+    audioRef.current = null;
     setActive(false); setState("idle"); setAmplitude(0);
   }, [chatId, client]);
 
