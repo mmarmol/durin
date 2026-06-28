@@ -61,6 +61,7 @@ export function EquationEditorButton({
           {/* The hidden input mirrors state and gives tests a real .value setter. */}
           <input
             aria-label="equation-field"
+            aria-hidden="true"
             value={value}
             onChange={(e) => setValue(e.target.value)}
             style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }}
@@ -69,9 +70,7 @@ export function EquationEditorButton({
           {/* The real MathLive visual editor — inert in happy-dom tests. */}
           {createElement("math-field", {
             ref: fieldRef,
-            value,
-            onInput: (e: React.FormEvent<HTMLElement & { value?: string }>) =>
-              setValue(((e.currentTarget.value ?? "") as string).toString()),
+            "aria-label": t("composer.equationEditor"),
             style: { width: "100%", fontSize: "1.25rem", padding: "0.5rem" },
           })}
           <div className="mt-4 flex justify-end gap-2">
