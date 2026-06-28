@@ -151,7 +151,7 @@ def test_memory_read_entity_description_matches_doc(doc_text: str) -> None:
     expected = _extract_section_block(doc_text, "### 3.7 `memory_read_entity`")
     actual = _tool_description(MemoryReadEntityTool)
     assert _normalise(actual) == _normalise(expected), (
-        "memory_read_entity `.description` drifted from doc 06 §3.7."
+        "memory_read_entity `.description` property drifted from doc 06 §3.7."
     )
 
 
@@ -159,7 +159,7 @@ def test_memory_entity_lineage_description_matches_doc(doc_text: str) -> None:
     expected = _extract_section_block(doc_text, "### 3.8 `memory_entity_lineage`")
     actual = _tool_description(MemoryEntityLineageTool)
     assert _normalise(actual) == _normalise(expected), (
-        "memory_entity_lineage `.description` drifted from doc 06 §3.8."
+        "memory_entity_lineage `.description` property drifted from doc 06 §3.8."
     )
 
 
@@ -167,7 +167,7 @@ def test_memory_source_session_description_matches_doc(doc_text: str) -> None:
     expected = _extract_section_block(doc_text, "### 3.9 `memory_source_session`")
     actual = _tool_description(MemorySourceSessionTool)
     assert _normalise(actual) == _normalise(expected), (
-        "memory_source_session `.description` drifted from doc 06 §3.9."
+        "memory_source_session `.description` property drifted from doc 06 §3.9."
     )
 
 

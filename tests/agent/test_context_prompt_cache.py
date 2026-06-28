@@ -280,8 +280,8 @@ def test_always_skills_excluded_from_skills_index(tmp_path) -> None:
     assert "### Skill: probe" in prompt
 
     skills_section = prompt.split("# Skills\n", 1)
-    if len(skills_section) > 1:
-        index_text = skills_section[1].split("\n\n---")[0]
-        assert "**probe**" not in index_text
+    assert len(skills_section) > 1, "expected a '# Skills' index section in the prompt"
+    index_text = skills_section[1].split("\n\n---")[0]
+    assert "**probe**" not in index_text
 
 
