@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { MarkdownText } from "@/components/MarkdownText";
+import { EquationEditorButton } from "@/components/math/EquationEditorButton";
+import { insertAtCursor } from "@/components/math/insert-at-cursor";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -67,6 +70,18 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
   };
 
+  const onInsertEquation = (latex: string) => {
+    const el = textareaRef.current;
+    const start = el?.selectionStart ?? value.length;
+    const end = el?.selectionEnd ?? value.length;
+    const { next, caret } = insertAtCursor(value, start, end, latex);
+    setValue(next);
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(caret, caret);
+    });
+  };
+
   return (
     <form
       onSubmit={(e) => {
@@ -103,23 +118,31 @@ export function Composer({
             "disabled:cursor-not-allowed",
           )}
         />
+        {value.includes("$") && (
+          <div className="border-t border-border/40 px-3 py-2 text-sm">
+            <MarkdownText>{value}</MarkdownText>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-2 px-3 pb-2">
           <span className="hidden select-none text-[11px] text-muted-foreground/70 sm:inline">
             {t("composer.hint")}
           </span>
           <span className="sm:hidden" aria-hidden />
-          <Button
-            type="submit"
-            size="icon"
-            disabled={disabled || !value.trim()}
-            aria-label={t("composer.sendAria")}
-            className={cn(
-              "h-9 w-9 rounded-full shadow-sm transition-transform",
-              value.trim() && !disabled && "hover:scale-[1.03] active:scale-95",
-            )}
-          >
-            <ArrowUp className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-1">
+            <EquationEditorButton onInsert={onInsertEquation} />
+            <Button
+              type="submit"
+              size="icon"
+              disabled={disabled || !value.trim()}
+              aria-label={t("composer.sendAria")}
+              className={cn(
+                "h-9 w-9 rounded-full shadow-sm transition-transform",
+                value.trim() && !disabled && "hover:scale-[1.03] active:scale-95",
+              )}
+            >
+              <ArrowUp className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </div>
     </form>

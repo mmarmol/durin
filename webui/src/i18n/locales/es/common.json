@@ -1341,7 +1341,10 @@
     "placeholder": "Escribe tu mensaje…",
     "inputAria": "Entrada de mensaje",
     "sendAria": "Enviar mensaje",
-    "hint": "Enter para enviar · Shift+Enter para nueva línea"
+    "hint": "Enter para enviar · Shift+Enter para nueva línea",
+    "equationEditor": "Editor de ecuaciones",
+    "insertEquation": "Insertar",
+    "equationDialogTitle": "Escribir una ecuación"
   },
   "empty": {
     "noChatsTitle": "Aún no hay chats",
