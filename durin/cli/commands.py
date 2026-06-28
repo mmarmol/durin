@@ -37,6 +37,14 @@ _log_handler_id = logger.add(
     filter=lambda record: record["extra"].setdefault("channel", "-") or True,
 )
 
+# Route durin's own stdlib loggers (durin.*) into loguru so their records
+# reach every loguru sink — the stderr sink above and, in daemon mode, the
+# gateway.log JSONL file sink. Without this, modules that log via
+# logging.getLogger(__name__) bypass gateway.log entirely.
+from durin.utils.logging_bridge import redirect_durin_logging
+
+redirect_durin_logging()
+
 from prompt_toolkit import PromptSession, print_formatted_text
 from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.formatted_text import ANSI, HTML

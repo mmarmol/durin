@@ -426,7 +426,7 @@ export function TranscriptionSettings({ token }: { token: string }) {
               onClick={() =>
                 void onSave("transcription.enabled", !state.enabled)
               }
-              className="w-[68px] rounded-full"
+              className="min-w-[68px] rounded-full"
             >
               {state.enabled ? t("settings.config.on") : t("settings.config.off")}
             </Button>
