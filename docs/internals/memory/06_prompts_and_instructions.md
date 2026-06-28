@@ -233,7 +233,9 @@ Up to `max_retries` (default 2) re-attempts are made on parse failure; each retr
 
 ### 5.5 Hot layer
 
-`durin/memory/hot_layer.py` eagerly assembles a memory context block that is injected into the stable prompt tier on every turn without any tool call. It renders five sections in order: Identity (from `memory/stable/IDENTITY.md`), Canonical pages (top 12 entity pages by `updated_at` desc), Recent fragments (top 8 post-cursor episodic/stable entries by `valid_from` desc), Key Points (top 12 headlines), and Known Entities (up to 50 entity URIs). Each section has a hard character budget; the total is approximately 1 900 tokens, sized to stay within a single prompt-cache window between Dream passes.
+`durin/memory/hot_layer.py` eagerly assembles a memory context block that is injected into the stable prompt tier on every turn without any tool call. It renders these sections in order: Identity (from `memory/stable/IDENTITY.md`), Canonical pages (top 12 entity pages by `updated_at` desc), Recent fragments (top 8 post-cursor episodic/stable entries by `valid_from` desc), Key Points (top 12 headlines), Known Entities (up to 50 entity URIs), and Known types. Each section has a hard character budget; the total is approximately 1 900 tokens, sized to stay within a single prompt-cache window between Dream passes.
+
+**`## Memory: Known types`** lists the distinct entity-type subdirectories of `memory/entities/` that contain at least one page, rendered alphabetically. The list is derived from the same disk walk as the rest of the hot layer. It is capped at 100 entries; a count past the cap is logged as a warning so it surfaces in the gateway log rather than silently bloating the prompt. The purpose is type vocabulary: the agent reads this before authoring or updating an entity and reuses an existing type instead of coining a near-synonym. Sections with zero entries are omitted.
 
 Canonical pages are wrapped in `=== CANONICAL: <uri> (consolidated <ts>) ===` markers; fragments in `=== FRAGMENT: <path> (ts <ts>) ===`. The intro sentence above the fragments section ("Reconcile with the canonical above using the timestamps.") cues the LLM to treat fragments as recent amendments rather than authoritative rewrites.
 
@@ -276,7 +278,7 @@ Sections with zero hits are omitted entirely.
 | `_load_template` | `durin/memory/absorb_judge.py` | Extracts the largest fenced code block from `absorb_judge.md`; raises `JudgeError` if no block found |
 | `_render_page_block` | `durin/memory/absorb_judge.py` | Renders one entity page for the judge: mtime, aliases, identifiers, body |
 | `MemorySearchTool.description` | `durin/agent/tools/memory_search.py` | LLM-visible tool description; delegates to `_PARAMETERS["description"]`; guarded by sync test |
-| `read_hot_layer` | `durin/memory/hot_layer.py` | Assembles the stable-tier memory block from disk on every prompt build; five sections with hard char budgets |
+| `read_hot_layer` | `durin/memory/hot_layer.py` | Assembles the stable-tier memory block from disk on every prompt build; sections with hard char budgets |
 
 ---
 
