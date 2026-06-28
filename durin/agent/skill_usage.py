@@ -1,7 +1,8 @@
 """Extract skill-usage signal (`skill_calls`) from a turn's messages.
 
 A skill "call" is the agent touching a skill during a turn:
-- ``read``  — ``read_file`` on ``skills/<name>/SKILL.md`` (progressive load).
+- ``view``  — ``skill_view`` on a skill (the dedicated load tool).
+- ``read``  — ``read_file`` on ``skills/<name>/SKILL.md`` (raw-read fallback).
 - ``edit``  — ``skill_edit`` on a skill (E1 editor).
 
 Each record carries the 1-based ``turn`` index, so a hindsight pass can attribute
@@ -38,7 +39,11 @@ def extract_skill_calls(messages: list[dict]) -> list[dict]:
         turn = i + 1                       # messages[i] is turn i+1 (load_session)
         for tc in (message.get("tool_calls") or []):
             name, args = _tool_name_and_args(tc)
-            if name == "read_file":
+            if name == "skill_view":
+                skill = args.get("name")
+                if skill:
+                    calls.append({"skill": skill, "op": "view", "turn": turn})
+            elif name == "read_file":
                 m = _SKILL_PATH_RE.search(str(args.get("path", "")))
                 if m:
                     calls.append({"skill": m.group(1), "op": "read", "turn": turn})

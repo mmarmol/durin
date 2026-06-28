@@ -111,6 +111,90 @@ class SkillsLoader:
                 return path.read_text(encoding="utf-8")
         return None
 
+    def skill_dir(self, name: str) -> Path | None:
+        """Resolve a skill's directory (workspace shadows builtin); None if absent."""
+        for root in (self.workspace_skills, self.builtin_skills):
+            if root and (root / name / "SKILL.md").is_file():
+                return root / name
+        return None
+
+    def _linked_files(self, skill_dir: Path) -> dict[str, list[str]]:
+        """Map a skill's bundled files by kind (references/scripts/templates/assets)
+        to paths relative to the skill dir — the progressive-disclosure handle for
+        multi-file skills. Empty kinds are omitted."""
+        out: dict[str, list[str]] = {}
+        for sub in ("references", "scripts", "templates", "assets"):
+            d = skill_dir / sub
+            if not d.is_dir():
+                continue
+            files = []
+            for p in d.rglob("*"):
+                if not p.is_file():
+                    continue
+                rel = p.relative_to(skill_dir)
+                # Skip compiled-cache and hidden noise — not authored bundle files.
+                if "__pycache__" in rel.parts or p.suffix in (".pyc", ".pyo"):
+                    continue
+                files.append(str(rel))
+            if files:
+                out[sub] = sorted(files)
+        return out
+
+    def view_skill(self, name: str, file_path: str | None = None) -> dict | None:
+        """Assemble the ``skill_view`` payload for a skill: its body (frontmatter
+        stripped), a map of bundled files, and readiness (missing bins/env routed
+        to the tools that resolve them). With ``file_path``, returns one bundled
+        sub-file instead, traversal-guarded.
+
+        Returns None when the skill does not exist; a dict carrying an ``error``
+        key when ``file_path`` is outside the skill or not a file.
+        """
+        skill_dir = self.skill_dir(name)
+        if skill_dir is None:
+            return None
+        if file_path:
+            base = skill_dir.resolve()
+            target = (skill_dir / file_path).resolve()
+            if base not in target.parents or not target.is_file():
+                return {"name": name, "error": f"No bundled file '{file_path}' in skill '{name}'."}
+            try:
+                content = target.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                return {"name": name, "error": f"'{file_path}' is not a UTF-8 text file; run it with exec instead of reading it."}
+            return {"name": name, "file": file_path, "content": content}
+
+        content = self.load_skill(name) or ""
+        meta = self._get_skill_meta(name)
+        requires = meta.get("requires", {}) if isinstance(meta, dict) else {}
+        missing_bins = [b for b in (requires.get("bins") or []) if not shutil.which(b)]
+        missing_env = [e for e in (requires.get("env") or []) if not os.environ.get(e)]
+        readiness: dict[str, object] = {"ready": not (missing_bins or missing_env)}
+        if missing_bins:
+            readiness["missing_bins"] = missing_bins
+            readiness["install_hint"] = (
+                "Install the missing CLIs with the skill_install_deps tool before "
+                "running this skill's scripts."
+            )
+        if missing_env:
+            readiness["missing_env"] = missing_env
+            readiness["secret_hint"] = (
+                "Provide the missing environment variables with the request_secret tool."
+            )
+        payload: dict[str, object] = {
+            "name": name,
+            "skill_dir": str(skill_dir),
+            "content": self._strip_frontmatter(content),
+            "readiness": readiness,
+        }
+        linked = self._linked_files(skill_dir)
+        if linked:
+            payload["linked_files"] = linked
+            payload["usage_hint"] = (
+                "To read a bundled file, call skill_view again with file_path set to "
+                "one of the paths above. Run a script via the exec tool using skill_dir."
+            )
+        return payload
+
     def load_skills_for_context(self, skill_names: list[str]) -> str:
         """
         Load specific skills for inclusion in agent context.
