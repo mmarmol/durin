@@ -34,7 +34,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Input
 
 from durin import __version__ as DURIN_VERSION  # noqa: N812 — descriptive version alias
-from durin.cli.tui.widgets import ChatView, FooterBar, HeaderBar, InputArea, MessageBubble
+from durin.cli.tui.widgets import ChatView, FooterBar, GoalBanner, HeaderBar, InputArea, MessageBubble
 from durin.cli.tui.widgets.footer_bar import payload_from_loop
 
 __all__ = ["DurinApp", "run_durin_tui"]
@@ -167,6 +167,7 @@ class DurinApp(App[None]):
             yield SidebarPanel()
             with Vertical(id="main-layout"):
                 yield HeaderBar(session_label=session_label, session_meta=session_meta)
+                yield GoalBanner()
                 yield ChatView(id="chat")
                 yield CompletionsHint()
                 yield InputArea(
@@ -1157,6 +1158,18 @@ class DurinApp(App[None]):
         narrow try/except without losing the typed control flow.
         """
         meta = msg.metadata or {}
+
+        # ---- goal-state sync ----------------------------------------------
+        # goal_state rides every turn-end frame (turn_metadata["goal_state"])
+        # and also arrives as a dedicated push from long_task.py.
+        goal_state = meta.get("goal_state")
+        if goal_state is not None or meta.get("_goal_state_sync"):
+            blob = goal_state or {}
+            if blob.get("active"):
+                objective = str(blob.get("objective") or "").strip() or None
+            else:
+                objective = None
+            self.query_one(GoalBanner).set_goal(objective)
 
         # /resume routes here: the next inbound publish uses the new chat_id.
         switch_to = meta.get("_switch_chat_id")

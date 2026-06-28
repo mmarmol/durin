@@ -246,3 +246,14 @@ async def test_footer_silent_on_payload_failure() -> None:
         footer.refresh_now()
         await pilot.pause()
         assert footer.text == ""
+
+
+def test_goal_banner_shows_and_hides() -> None:
+    from durin.cli.tui.widgets.goal_banner import GoalBanner
+
+    banner = GoalBanner()
+    banner.set_goal("ship the work panel", "3/7")
+    assert banner.is_shown is True
+    assert "ship the work panel" in banner.render_text()
+    banner.set_goal(None)
+    assert banner.is_shown is False
