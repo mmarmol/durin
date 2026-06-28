@@ -249,6 +249,11 @@ class ContextBuilder:
             breakdown["memory_hot"] = hot
             parts.append(hot)
 
+        rich_output = render_template("agent/rich_output.md")
+        if rich_output:
+            breakdown["rich_output"] = rich_output
+            parts.append(rich_output)
+
         self._last_layer_breakdown["stable"] = breakdown
         return "\n\n---\n\n".join(parts)
 
