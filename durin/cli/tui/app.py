@@ -56,6 +56,7 @@ class DurinApp(App[None]):
         ("ctrl+y", "copy_last_assistant", "Copy"),
         ("ctrl+p", "open_command_palette", "Commands"),
         ("ctrl+shift+l", "open_variant_picker", "Effort"),
+        ("ctrl+shift+p", "open_persona_picker", "Persona"),
         ("ctrl+b", "toggle_sidebar", "Sidebar"),
         ("ctrl+r", "retry_last", "Retry"),
         ("ctrl+g", "steer", "Steer"),
@@ -756,6 +757,10 @@ class DurinApp(App[None]):
         """Ctrl+Shift+L: open the reasoning effort picker."""
         self._open_variant_picker()
 
+    def action_open_persona_picker(self) -> None:
+        """Ctrl+Shift+P: open the persona picker modal."""
+        self._open_persona_picker()
+
     def action_toggle_sidebar(self) -> None:
         """Ctrl+B: toggle the left sidebar (Todos / Files / MCP)."""
         from durin.cli.tui.widgets import SidebarPanel
@@ -1017,6 +1022,30 @@ class DurinApp(App[None]):
         presets[variant_name] = variant
         add_recent_model(variant_name)
         await self._publish_inbound(f"/model {variant_name}", [])
+
+    @work
+    async def _open_persona_picker(self) -> None:
+        """Ctrl+Shift+P — pick a persona from the configured list."""
+        from durin.cli.tui.screens import PersonaPickerScreen
+        from durin.cli.tui.screens.persona_picker import PersonaRow
+        from durin.config.loader import get_config_path, load_config
+
+        cfg = load_config(get_config_path())
+        rows = [
+            PersonaRow(name=name, soul=p.soul, model=p.model)
+            for name, p in sorted(cfg.personas.items())
+        ]
+        if not any(r.name == "default" for r in rows):
+            rows.insert(0, PersonaRow(name="default", soul="default", model=None))
+        active = cfg.agents.defaults.persona or "default"
+        if self._agent_loop is not None:
+            session_key = f"{self._cli_channel}:{self._cli_chat_id}"
+            session = self._agent_loop.sessions.get_or_create(session_key)
+            active = session.metadata.get("persona") or active
+        selected = await self.push_screen_wait(PersonaPickerScreen(rows, active=active))
+        if not selected or selected == active:
+            return
+        await self._publish_inbound(f"/persona {selected}", [])
 
     def _set_palette(self, name: str) -> None:
         """Switch the colour palette (the `/theme <name>` form)."""
