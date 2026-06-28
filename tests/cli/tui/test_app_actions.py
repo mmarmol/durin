@@ -257,6 +257,9 @@ async def test_work_event_opens_sidebar_and_renders():
     app = DurinApp(agent_loop=None)
     async with app.run_test() as pilot:
         sidebar = app.query_one(SidebarPanel)
+        # The sidebar is open by default; if the user hid it, a work event
+        # re-opens it (jump_to_work).
+        sidebar.hide_sidebar()
         assert sidebar.is_visible is False
         app._route_work_event({
             "name": "workflow_progress", "phase": "running",

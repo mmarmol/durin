@@ -164,7 +164,6 @@ class DurinApp(App[None]):
         session_label = f"{self._cli_channel}:{self._cli_chat_id}"
         session_meta = self._compute_session_meta()
         with Horizontal(id="app-layout"):
-            yield SidebarPanel()
             with Vertical(id="main-layout"):
                 yield HeaderBar(session_label=session_label, session_meta=session_meta)
                 yield GoalBanner()
@@ -177,6 +176,8 @@ class DurinApp(App[None]):
                 yield FooterBar(
                     payload_getter=self._footer_payload,
                 )
+            # Sidebar docked on the right; open by default (see SidebarPanel.on_mount).
+            yield SidebarPanel()
 
     def _compute_session_meta(self) -> str:
         """Return a short '47 msgs · 12h ago' string for the header.

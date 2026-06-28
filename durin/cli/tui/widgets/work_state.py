@@ -14,6 +14,13 @@ from dataclasses import dataclass, field
 __all__ = ["WorkStore"]
 
 _GLYPH = {"running": "○", "done": "✓", "failed": "✗", "pending": "○"}
+# Braille spinner frames — a running node cycles through these so the panel
+# shows motion while work is in flight.
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def _running_glyph(spin: int) -> str:
+    return _SPINNER[spin % len(_SPINNER)]
 _NODE_CLASS = {
     "running": "work-running",
     "done": "work-done",
@@ -86,7 +93,8 @@ class WorkStore:
     def is_empty(self) -> bool:
         return not self._order
 
-    def render_markup(self) -> str:
+    def render_markup(self, spin: int = 0) -> str:
+        """Render the WORK section. ``spin`` advances the running-node spinner."""
         if self.is_empty():
             return ""
         active = [self._items[c] for c in self._order if self._items[c].status == "running"]
@@ -95,34 +103,37 @@ class WorkStore:
             f"[work-header]WORK[/] [work-count]({len(active)} running)[/]"
         ]
         for item in active:
-            lines.extend(self._render_item(item))
+            lines.extend(self._render_item(item, spin=spin))
         if finished:
             lines.append(f"[work-finished-header]Finished ({len(finished)})[/]")
             for item in finished:
-                lines.extend(self._render_item(item, compact=True))
+                lines.extend(self._render_item(item, spin=spin, compact=True))
         return "\n".join(lines)
 
-    def _render_item(self, item: _Item, *, compact: bool = False) -> list[str]:
+    def _glyph(self, status: str, spin: int) -> str:
+        return _running_glyph(spin) if status == "running" else _GLYPH.get(status, "○")
+
+    def _render_item(self, item: _Item, *, spin: int = 0, compact: bool = False) -> list[str]:
         cls = _NODE_CLASS.get(item.status, "work-pending")
-        glyph = _GLYPH.get(item.status, "○")
+        glyph = self._glyph(item.status, spin)
         head = f"[{cls}]{glyph} {item.label}[/]"
         if item.kind == "subagent" and item.detail:
             head += f" [work-count]{item.detail}[/]"
         out = [head]
         if not compact and item.kind == "workflow":
             for node in item.nodes:
-                out.extend(self._render_node(node, indent=1))
+                out.extend(self._render_node(node, indent=1, spin=spin))
         return out
 
-    def _render_node(self, node: dict, indent: int) -> list[str]:
+    def _render_node(self, node: dict, indent: int, spin: int = 0) -> list[str]:
         """Render one workflow node, recursing into nested parallel ``branches``."""
         n_status = str(node.get("status") or "running")
         n_cls = _NODE_CLASS.get(n_status, "work-pending")
-        n_glyph = _GLYPH.get(n_status, "○")
+        n_glyph = self._glyph(n_status, spin)
         route = node.get("route_label")
         suffix = f" [work-count]{route}[/]" if route else ""
         pad = "  " * indent
         out = [f"{pad}[{n_cls}]{n_glyph} {node.get('label', '?')}[/]{suffix}"]
         for branch in node.get("branches") or []:
-            out.extend(self._render_node(branch, indent + 1))
+            out.extend(self._render_node(branch, indent + 1, spin=spin))
         return out

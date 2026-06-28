@@ -1,6 +1,19 @@
 from durin.cli.tui.widgets.work_state import WorkStore
 
 
+def test_running_node_glyph_advances_with_spin_frame():
+    store = WorkStore()
+    store.ingest({
+        "name": "subagent_result", "phase": "running",
+        "call_id": "subagent:t1", "label": "explore",
+    })
+    frame0 = store.render_markup(0)
+    frame1 = store.render_markup(1)
+    # The running spinner glyph differs between consecutive frames.
+    assert frame0 != frame1
+    assert "explore" in frame0 and "explore" in frame1
+
+
 def test_workflow_running_with_parallel_branches_then_finished():
     store = WorkStore()
     store.ingest({
