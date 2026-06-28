@@ -2,8 +2,16 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from durin.memory.entities import SUGGESTED_TYPES_ORDERED
 from durin.memory.entity_page import EntityPage
-from durin.memory.extract_dream import discover_entities, extract_entity, mine_learnings, parse_attributes, parse_discoveries
+from durin.memory.extract_dream import (
+    build_discover_prompt,
+    discover_entities,
+    extract_entity,
+    mine_learnings,
+    parse_attributes,
+    parse_discoveries,
+)
 from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import write_entity
 
@@ -234,3 +242,22 @@ def test_mine_learnings_emits_telemetry_event(tmp_path, monkeypatch):
     assert payload["proposed"] == 3
     assert payload["written"] == 2
     assert set(payload["refs"]) == {"feedback:pref-a", "stance:pref-b"}
+
+
+# ---------------------------------------------------------------------------
+# discover prompt wiring: SUGGESTED_TYPES_ORDERED is the single source
+# ---------------------------------------------------------------------------
+
+
+def test_discover_prompt_type_list_is_wired_from_suggested_types_ordered() -> None:
+    """The discover prompt's type list must equal '/'.join(SUGGESTED_TYPES_ORDERED).
+
+    This guards against re-hardcoding a divergent list: if SUGGESTED_TYPES_ORDERED
+    changes, the prompt changes with it automatically. The exact substring check
+    proves zero behavior change from the wiring refactor.
+    """
+    canonical = "/".join(SUGGESTED_TYPES_ORDERED)
+    # Exact substring: behavior is unchanged from before the wiring refactor
+    assert canonical == "person/place/project/topic/organization/event/artifact/stance/practice"
+    prompt = build_discover_prompt("dummy turns")
+    assert canonical in prompt

@@ -142,16 +142,17 @@ class TestNormalizeEntityRef:
 
 
 class TestSuggestedTypes:
-    """8 broad cross-profession types — these are hints, NOT enforced."""
+    """Broad discoverable types — hints, NOT enforced. feedback is capture-only."""
 
-    def test_contains_doc_18_set(self) -> None:
-        # The 8 broad cross-profession types
+    def test_contains_canonical_set(self) -> None:
+        # The broad discoverable types (organization added; feedback excluded by design)
         assert SUGGESTED_TYPES == frozenset(
             {
                 "person",
                 "place",
                 "project",
                 "topic",
+                "organization",
                 "event",
                 "artifact",
                 "stance",

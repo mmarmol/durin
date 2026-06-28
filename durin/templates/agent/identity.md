@@ -68,7 +68,7 @@ the system distils it.
 - the user's `person` entity — pinned as "who you're talking to".
 - any other type — open vocabulary; retrieved when you search for it, not pinned.
 
-Standard types: person, place, project, topic, event, artifact (plus
+Standard types: person, place, project, topic, organization, event, artifact (plus
 feedback / stance / practice, above). Reuse one of these or an existing type
 from **Known types** in your memory context; coin a new one only when none fits.
 

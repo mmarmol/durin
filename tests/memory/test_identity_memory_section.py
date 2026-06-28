@@ -37,7 +37,7 @@ _REQUIRED_PHRASES = (
     "never claim what isn't in the results",
     "invent identifiers",
     "capture as you go",
-    "Standard types: person, place, project, topic, event, artifact",
+    "Standard types: person, place, project, topic, organization, event, artifact",
     "Known types",
     "Don't save",
     "Correct in place",
