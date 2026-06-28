@@ -1554,5 +1554,12 @@
     "finished": "Finalizadas ({{count}})",
     "empty": "Sin trabajo activo",
     "close": "Cerrar panel de trabajo"
+  },
+  "rich": {
+    "code": "Código",
+    "preview": "Vista",
+    "expand": "Ampliar",
+    "copy": "Copiar",
+    "copied": "Copiado"
   }
 }

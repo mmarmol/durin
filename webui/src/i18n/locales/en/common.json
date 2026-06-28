@@ -1562,5 +1562,12 @@
     "finished": "Finished ({{count}})",
     "empty": "No active work",
     "close": "Close work panel"
+  },
+  "rich": {
+    "code": "Code",
+    "preview": "Preview",
+    "expand": "Expand",
+    "copy": "Copy",
+    "copied": "Copied"
   }
 }
