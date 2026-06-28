@@ -1512,7 +1512,17 @@
       "reviewInSkills": "Review in Skills",
       "emptyFlagged": "No memory pairs flagged for review.",
       "emptyQuarantine": "No skills in quarantine.",
-      "resolveError": "Could not resolve pair — it may have already been processed. Refresh to see the current state."
+      "resolveError": "Could not resolve pair — it may have already been processed. Refresh to see the current state.",
+      "suggestionsTitle": "Skill suggestions",
+      "emptySuggestions": "No skill suggestions right now.",
+      "accept": "Accept",
+      "reject": "Reject",
+      "rejectHint": "rejecting silences it for ~30 days",
+      "action": {
+        "evolve": "improve",
+        "retire": "retire",
+        "fuse": "merge"
+      }
     }
   },
   "audio": {
