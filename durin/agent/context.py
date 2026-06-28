@@ -5,7 +5,6 @@ import logging
 import mimetypes
 import platform
 from contextlib import suppress
-from importlib.resources import files as pkg_files
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -412,15 +411,6 @@ class ContextBuilder:
                 parts.append(f"## {filename}\n\n{content}")
 
         return "\n\n".join(parts) if parts else ""
-
-    @staticmethod
-    def _is_template_content(content: str, template_path: str) -> bool:
-        """Check if *content* is identical to the bundled template (user hasn't customized it)."""
-        with suppress(Exception):
-            tpl = pkg_files("durin") / "templates" / template_path
-            if tpl.is_file():
-                return content.strip() == tpl.read_text(encoding="utf-8").strip()
-        return False
 
     def build_messages(
         self,

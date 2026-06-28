@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import pytest
-
 from durin.agent.context import ContextBuilder
 from durin.session.goal_state import GOAL_STATE_KEY
 
@@ -135,30 +133,6 @@ class TestLoadBootstrapFiles:
         result = builder._load_bootstrap_files()
         assert "用中文回复" in result
 
-
-# ---------------------------------------------------------------------------
-# _is_template_content (static)
-# ---------------------------------------------------------------------------
-
-
-class TestIsTemplateContent:
-    def test_nonexistent_template_returns_false(self):
-        assert ContextBuilder._is_template_content("anything", "nonexistent/path.md") is False
-
-    def test_content_matching_template(self):
-        from importlib.resources import files as pkg_files
-        tpl = pkg_files("durin") / "templates" / "memory" / "MEMORY.md"
-        if not tpl.is_file():
-            pytest.skip("MEMORY.md template not bundled")
-        original = tpl.read_text(encoding="utf-8")
-        assert ContextBuilder._is_template_content(original, "memory/MEMORY.md") is True
-
-    def test_modified_content_returns_false(self):
-        from importlib.resources import files as pkg_files
-        tpl = pkg_files("durin") / "templates" / "memory" / "MEMORY.md"
-        if not tpl.is_file():
-            pytest.skip("MEMORY.md template not bundled")
-        assert ContextBuilder._is_template_content("totally different", "memory/MEMORY.md") is False
 
 
 # ---------------------------------------------------------------------------
