@@ -74,6 +74,21 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
 - **Author:** write the JSON under `<workspace>/workflows/<name>.json` (you can write a graph
   on demand for a user's repeatable process), or use the web editor. Compose larger processes
   from `subworkflow` nodes — but only where each stage genuinely needs the structure above.
+  **Before authoring, read the references below** so the JSON is complete and valid the first
+  time; do not write a graph from memory of this overview alone.
+
+## Authoring references — read on demand
+
+This overview is the *when/why*. The concrete *how* lives in two reference files (open them
+with `read_file` only when you are actually authoring a graph):
+
+- **[references/authoring.md](references/authoring.md)** — the full JSON schema: every
+  envelope and node field, its type, default, and the validation rules the parser enforces.
+- **[references/patterns.md](references/patterns.md)** — one small, parse-verified JSON
+  snippet per capability (sequential, binary/multi-way routing, `__needs_input__`, dynamic
+  fan-out, static parallel + reconcile, subworkflow, per-node knobs, the working folder, I/O).
+- **The seeds** in `<workspace>/workflows/*.json` — full end-to-end exemplars; read one whose
+  shape matches your task before writing your own.
 
 ## Bundling a workflow inside a skill
 
