@@ -223,8 +223,9 @@ from `workflow_progress` and `subagent_result` events on the outbound bus; no
 polling is involved.
 
 **Goal banner.** A sticky strip above the chat renders the session's
-active goal, drawn from the `goal_state` field of the `_turn_end` outbound
-event. The banner is hidden when there is no active goal.
+active goal, drawn from the `goal_state` blob carried on turn-end frames and
+on the dedicated goal-state sync push (`_goal_state_sync`). The banner is
+hidden when there is no active goal.
 
 ### Config flow
 

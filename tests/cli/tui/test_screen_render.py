@@ -80,6 +80,40 @@ def test_quick_actions_present() -> None:
 
 
 @pytest.mark.asyncio
+async def test_scroll_to_bottom_button_visibility() -> None:
+    """watch_scroll_y toggles the scroll button: visible when scrolled up, hidden at bottom."""
+    from durin.cli.tui.widgets.chat_view import ChatView, _ScrollToBottom
+
+    app = DurinApp(agent_loop=None)
+    async with app.run_test(size=(100, 32)) as pilot:
+        await pilot.pause()
+        chat = app.query_one(ChatView)
+
+        # Add enough messages to create scrollback.
+        for i in range(30):
+            chat.add_message("assistant", f"Message {i}: " + "x" * 60)
+        await pilot.pause()
+
+        # Scroll to bottom first so max_scroll_y is known.
+        chat.scroll_end(animate=False)
+        await pilot.pause()
+
+        # Simulate scrolling up: set scroll_y below max so the button should appear.
+        max_y = chat.max_scroll_y
+        if max_y > 2:
+            chat.scroll_y = 0
+            await pilot.pause()
+            btn = chat.query_one("#scroll-to-bottom", _ScrollToBottom)
+            assert btn.display is True, "button should be visible when scrolled up"
+
+        # Scroll back to bottom: button should hide.
+        chat.scroll_end(animate=False)
+        await pilot.pause()
+        btn = chat.query_one("#scroll-to-bottom", _ScrollToBottom)
+        assert btn.display is False, "button should be hidden when at bottom"
+
+
+@pytest.mark.asyncio
 async def test_chips_visible_for_banner_messages() -> None:
     """Chips should remain visible when adding decorative banner/logo messages."""
     from durin.cli.tui.widgets.chat_view import ChatView

@@ -237,7 +237,8 @@ class _QuickActionChips(Static):
 
     def compose(self) -> ComposeResult:
         for label in ChatView.quick_actions():
-            yield Static(label, classes="qa-chip", markup=False)
+            chip = Static(label, classes="qa-chip", markup=False, name=label)
+            yield chip
 
     def on_click(self, event) -> None:  # noqa: ANN001
         target = event.widget
@@ -249,7 +250,8 @@ class _QuickActionChips(Static):
             inp = self.app.query_one(InputArea)
         except Exception:  # noqa: BLE001
             return
-        inp.value = target.renderable if isinstance(target.renderable, str) else str(target.renderable)
+        label = target.name or (target.renderable if isinstance(target.renderable, str) else str(target.renderable))
+        inp.value = label
         inp.cursor_position = len(inp.value)
         inp.focus()
 
@@ -310,12 +312,12 @@ class ChatView(VerticalScroll):
         self.scroll_end(animate=False)
         return bubble
 
-    def on_scroll_changed(self, _event) -> None:  # noqa: ANN001
+    def watch_scroll_y(self, old: float, new: float) -> None:
         """Show/hide the jump button based on scroll position."""
+        super().watch_scroll_y(old, new)
         try:
             btn = self.query_one("#scroll-to-bottom", _ScrollToBottom)
-            at_bottom = self.scroll_y >= self.max_scroll_y - 1
-            btn.display = not at_bottom
+            btn.display = new < self.max_scroll_y - 1
         except Exception:  # noqa: BLE001
             pass
 

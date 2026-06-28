@@ -1166,7 +1166,11 @@ class DurinApp(App[None]):
         if goal_state is not None or meta.get("_goal_state_sync"):
             blob = goal_state or {}
             if blob.get("active"):
-                objective = str(blob.get("objective") or "").strip() or None
+                objective = (
+                    str(blob.get("ui_summary") or "").strip()
+                    or str(blob.get("objective") or "").strip()
+                    or None
+                )
             else:
                 objective = None
             self.query_one(GoalBanner).set_goal(objective)
