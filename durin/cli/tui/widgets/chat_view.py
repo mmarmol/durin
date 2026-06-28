@@ -101,6 +101,17 @@ class MessageBubble(Static):
         padding: 1 2;
         margin: 1 2;
     }
+    MessageBubble > #mb-edit {
+        width: auto;
+        color: $text-muted;
+        text-style: underline;
+        padding: 0 0;
+        dock: right;
+    }
+    MessageBubble > #mb-edit:hover {
+        background: $accent 20%;
+        color: $accent;
+    }
     """
 
     body: reactive[str] = reactive("", init=False)
@@ -116,16 +127,24 @@ class MessageBubble(Static):
     def __init__(self, role: Role, body: str = "") -> None:
         super().__init__("", classes=role)
         self._role: Role = role
+        self._raw_body: str = body
         self.body = body
         # `init=False` on the reactive means the line above didn't fire
         # `watch_body`. Push the initial body through the renderer so the
         # widget is consistent before mount.
         self._render_body()
 
-    def watch_body(self, _old: str, _new: str) -> None:
+    def watch_body(self, _old: str, new: str) -> None:
+        self._raw_body = new
         self._render_body()
 
     def _render_body(self) -> None:
+        try:
+            # No-op outside an active Textual app (e.g., unit tests that
+            # construct a bubble without running the app).
+            _ = self.app
+        except Exception:  # noqa: BLE001
+            return
         body = self.body or ""
         if not body:
             self.update("")
@@ -156,6 +175,33 @@ class MessageBubble(Static):
             # user (or any role without a prefix): plain text, no markup
             # interpretation.
             self.update(Text(body))
+
+    def editable_text(self) -> str:
+        """The raw text to reload into the input when editing this message."""
+        return self._raw_body or ""
+
+    def on_mount(self) -> None:
+        """Mount the [✎] edit affordance for user bubbles."""
+        if self._role == "user":
+            self.mount(Static("[✎]", id="mb-edit", markup=False))
+
+    def on_click(self, event) -> None:  # noqa: ANN001 — Textual Click event
+        """On [✎] click, reload this bubble's text into the input."""
+        try:
+            target = event.widget
+        except Exception:  # noqa: BLE001
+            return
+        if getattr(target, "id", "") != "mb-edit":
+            return
+        try:
+            from durin.cli.tui.widgets import InputArea
+
+            inp = self.app.query_one(InputArea)
+        except Exception:  # noqa: BLE001
+            return
+        inp.value = self.editable_text()
+        inp.cursor_position = len(inp.value)
+        inp.focus()
 
     def append(self, delta: str) -> None:
         """Streaming helper — append a delta to the body."""

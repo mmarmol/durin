@@ -64,3 +64,10 @@ async def test_run_step_rejects_unknown_verb() -> None:
         await pilot.pause()
         with pytest.raises(ValueError):
             await run_step(pilot, "frobnicate:x")
+
+
+def test_user_bubble_exposes_edit_payload() -> None:
+    from durin.cli.tui.widgets.chat_view import MessageBubble
+
+    bubble = MessageBubble(role="user", body="original text")
+    assert bubble.editable_text() == "original text"
