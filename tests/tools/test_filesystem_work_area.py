@@ -52,3 +52,23 @@ async def test_managed_prefix_resolves_to_workspace_even_with_session(tmp_path):
     # File must land at workspace root / managed prefix, not in the session work dir.
     assert (tmp_path / "memory" / "note.md").read_text() == "managed"
     assert not (tmp_path / "work" / "telegram_7" / "memory" / "note.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_read_does_not_create_work_dir(tmp_path):
+    """Resolving a read (even a managed-prefix path) must NOT create work/<session>/ on disk.
+
+    The work dir is created lazily on first write. A session that only reads
+    must never leave an empty directory in the workspace.
+    """
+    existing = tmp_path / "memory" / "note.md"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("data")
+
+    tool = ReadFileTool(workspace=tmp_path, allowed_dir=tmp_path)
+    tool.set_context(_ctx())
+    result = await tool.execute(path="memory/note.md")
+
+    assert "data" in result
+    # The work directory must not have been created by the read.
+    assert not (tmp_path / "work").exists()

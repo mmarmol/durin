@@ -51,18 +51,18 @@ class _FsTool(Tool, ContextAware):
         self._request_ctx = ctx
 
     def _work_dir(self) -> Path | None:
-        """Return the per-session work directory, or None when no session is set.
+        """Return the per-session work directory path, or None when no session is set.
 
-        When a session key is present, ensures the directory exists so that
-        writes into it never fail with a missing-parent error.
+        Pure path computation — does NOT create the directory. The directory is
+        created lazily by the write utilities (atomic_write_text/bytes call
+        parent.mkdir before writing), so read-only sessions never litter the
+        workspace with empty work/<session>/ directories.
         """
         sk = self._request_ctx.session_key if self._request_ctx else None
         if not sk or self._workspace is None:
             return None
         from durin.agent.tools.work_area import session_work_dir
-        wd = session_work_dir(self._workspace, sk)
-        wd.mkdir(parents=True, exist_ok=True)
-        return wd
+        return session_work_dir(self._workspace, sk)
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
