@@ -1135,7 +1135,6 @@
       "placeholderOpening": "Opening a new chat…",
       "placeholderStreaming": "Model is responding…",
       "inputAria": "Message input",
-      "sendHint": "Enter to send · Shift+Enter for newline",
       "runRuntimeTitle": "Running · {{elapsed}}",
       "goalStateStrip": "Goal · {{label}}",
       "goalStateFallback": "Goal",
@@ -1168,6 +1167,17 @@
       },
       "mode": {
         "title": "Mode"
+      },
+      "add": {
+        "title": "Add",
+        "attach": "Upload file or photo",
+        "slash": "Slash commands",
+        "equation": "Insert equation"
+      },
+      "voice": {
+        "title": "Voice input",
+        "dictation": "Dictate to text",
+        "handsFree": "Hands-free voice"
       },
       "tools": {
         "search": "Search",
