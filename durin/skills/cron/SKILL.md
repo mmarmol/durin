@@ -1,6 +1,6 @@
 ---
 name: cron
-description: Schedule reminders and recurring tasks.
+description: Schedule work to run later or on a repeating cadence — either a reminder delivered to the user, or a task the agent runs and reports back. Use when the user says things like "remind me to…", "every morning", "every Monday at 9", "each hour", "once at <time>", or otherwise wants a one-off or recurring scheduled job.
 ---
 
 # Cron
