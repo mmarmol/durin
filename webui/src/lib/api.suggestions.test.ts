@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchSkillSuggestions, acceptSkillSuggestion } from "./api";
+import { fetchSkillSuggestions, acceptSkillSuggestion, rejectSkillSuggestion } from "./api";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -21,6 +21,17 @@ describe("skill suggestions api", () => {
     await acceptSkillSuggestion("tok", "a");
     expect(spy).toHaveBeenCalledWith(
       expect.stringContaining("/api/v1/skills/suggestions/a/accept"),
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("posts to the reject endpoint", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    await rejectSkillSuggestion("tok", "a");
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/skills/suggestions/a/reject"),
       expect.objectContaining({ method: "POST" }),
     );
   });

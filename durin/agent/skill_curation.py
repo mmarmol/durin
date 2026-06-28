@@ -205,6 +205,10 @@ def suggest_manual_skills(workspace, *, judge: Callable[[str], str],
     for a in actions:
         t = a.get("type")
         if t not in ("evolve", "retire"):
+            # The suggestion pass only proposes evolve/retire for manual skills
+            # (fuse refuses manual sources; principles are cross-cutting). Log so
+            # an unexpected judge action type isn't dropped without a trace.
+            logger.debug("skill suggestions: dropping unsupported action type %r", t)
             continue
         if a.get("name") not in selected:
             continue

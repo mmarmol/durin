@@ -23,6 +23,7 @@ from durin.service.skills import (
 )
 
 
+@pytest.mark.asyncio
 async def test_list_accept_reject_roundtrip(tmp_path):
     ws = tmp_path
     (ws / "skills" / "x").mkdir(parents=True)
