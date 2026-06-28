@@ -1,0 +1,31 @@
+/* Re-skin react-diff-view's base styles with durin design tokens so the diff
+   reads as native to the dashboard in every palette + light/dark. */
+.durin-diff .diff {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12.5px;
+  background: transparent;
+}
+.durin-diff .diff-gutter {
+  color: hsl(var(--muted-foreground));
+  background: transparent;
+}
+.durin-diff .diff-code {
+  color: hsl(var(--foreground));
+}
+.durin-diff .diff-code-insert,
+.durin-diff .diff-gutter-insert {
+  background: hsl(var(--primary) / 0.06);
+}
+.durin-diff .diff-code-insert {
+  color: hsl(142 60% 30%);
+}
+.durin-diff .diff-code-delete,
+.durin-diff .diff-gutter-delete {
+  background: hsl(var(--destructive) / 0.08);
+}
+.durin-diff .diff-code-delete {
+  color: hsl(var(--destructive));
+}
+.dark .durin-diff .diff-code-insert {
+  color: hsl(142 50% 65%);
+}
