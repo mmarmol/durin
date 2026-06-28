@@ -188,7 +188,7 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
                     disabled={savingPath === "skills.discovery.registries"}
                     aria-label={t("settings.skillsSecurity.toggleRegistry", { name: label })}
                     onClick={() => toggleRegistry(i)}
-                    className="w-[68px] rounded-full"
+                    className="min-w-[68px] rounded-full"
                   >
                     {on ? t("settings.config.on") : t("settings.config.off")}
                   </Button>
