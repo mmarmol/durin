@@ -1680,6 +1680,43 @@ export async function resolveFlaggedPair(
   );
 }
 
+export type SkillSuggestion = components["schemas"]["SkillSuggestion"];
+
+export async function fetchSkillSuggestions(
+  token: string,
+  base: string = "",
+): Promise<SkillSuggestion[]> {
+  const res = await request<{ suggestions: SkillSuggestion[] }>(
+    `${base}/api/v1/skills/suggestions`,
+    token,
+  );
+  return res.suggestions;
+}
+
+export async function acceptSkillSuggestion(
+  token: string,
+  id: string,
+  base: string = "",
+): Promise<{ ok: boolean }> {
+  return post<{ ok: boolean }>(
+    `${base}/api/v1/skills/suggestions/${encodeURIComponent(id)}/accept`,
+    token,
+    {},
+  );
+}
+
+export async function rejectSkillSuggestion(
+  token: string,
+  id: string,
+  base: string = "",
+): Promise<{ ok: boolean }> {
+  return post<{ ok: boolean }>(
+    `${base}/api/v1/skills/suggestions/${encodeURIComponent(id)}/reject`,
+    token,
+    {},
+  );
+}
+
 export interface MemoryEdgeDetail {
   source: string;
   target: string;
