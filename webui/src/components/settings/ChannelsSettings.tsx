@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Mail, MessageCircle, Plug, Send, type LucideIcon } from "lucide-react";
+import { ChevronDown, Loader2, Mail, MessageCircle, Plug, Send, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -8,9 +8,13 @@ import { ChannelSecretField } from "@/components/settings/secrets/ChannelSecretF
 import { useClient } from "@/providers/ClientProvider";
 import { getConfig, listChannels, setConfigValue, type ChannelField, type ChannelInfo } from "@/lib/api";
 
-const GROUP_ORDER = ["consent", "imap", "smtp", "behavior", "security", "attachments", ""];
+// Groups that are always visible in the form.
+const ESSENTIAL_GROUPS = ["access", "imap", "smtp"] as const;
+// Groups hidden behind "Advanced" collapsible.
+const ADVANCED_GROUPS = ["behavior", "security", "attachments"] as const;
+
 const GROUP_LABEL: Record<string, string> = {
-  consent: "settings.channels.groupConsent",
+  access: "settings.channels.groupAccess",
   imap: "settings.channels.groupImap",
   smtp: "settings.channels.groupSmtp",
   behavior: "settings.channels.groupBehavior",
@@ -42,6 +46,16 @@ function ChannelIcon({ name }: { name: string }) {
   );
 }
 
+/** Green status pill matching the Providers "connected" pill. */
+function ActivePill({ label }: { label: string }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-emerald-500/12 px-2.5 py-0.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+      <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
+      {label}
+    </span>
+  );
+}
+
 /** One typed field → the right input. `value` is the channel's current value. */
 function FieldInput({
   channel, field, value, token, busy, onChange,
@@ -62,7 +76,6 @@ function FieldInput({
         secretRef={ref}
         secretName={name}
         serviceLabel={`channel:${channel.name}`}
-        help={field.name === "token" ? t("settings.channels.wsTokenHelp") : undefined}
         busy={busy}
         token={token}
         onSet={(r) => onChange(r)}
@@ -71,6 +84,20 @@ function FieldInput({
     );
   }
   if (field.type === "bool") {
+    // consent_granted gets a labelled checkbox so the consent text is always visible.
+    if (field.name === "consent_granted") {
+      return (
+        <label className="flex items-center gap-2 text-[13px] text-foreground/80">
+          <input
+            type="checkbox"
+            checked={Boolean(value)}
+            disabled={busy}
+            onChange={(e) => onChange(e.target.checked)}
+          />
+          {t("settings.channels.consentLabel")}
+        </label>
+      );
+    }
     return (
       <input
         type="checkbox"
@@ -120,6 +147,55 @@ function FieldInput({
   );
 }
 
+/** Renders one named group of fields with a header. */
+function FieldGroup({
+  groupKey,
+  channel,
+  channelValues,
+  token,
+  busy,
+  onFieldChange,
+}: {
+  groupKey: string;
+  channel: ChannelInfo;
+  channelValues: Record<string, unknown>;
+  token: string;
+  busy: boolean;
+  onFieldChange: (fieldName: string, value: unknown) => void;
+}) {
+  const { t } = useTranslation();
+  const groupFields = channel.fields.filter((f) => f.group === groupKey);
+  if (groupFields.length === 0) return null;
+  const labelKey = GROUP_LABEL[groupKey];
+  return (
+    <div className="space-y-2">
+      {labelKey ? (
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          {t(labelKey)}
+        </div>
+      ) : null}
+      {groupFields.map((field) => (
+        <div key={field.name} className="flex flex-wrap items-center gap-2">
+          {/* consent_granted renders its own inline label inside FieldInput */}
+          {field.name !== "consent_granted" ? (
+            <span className="w-[160px] shrink-0 text-[13px] text-foreground/80">
+              {t(`settings.channels.field.${field.name}`, field.name)}
+            </span>
+          ) : null}
+          <FieldInput
+            channel={channel}
+            field={field}
+            value={channelValues[field.name]}
+            token={token}
+            busy={busy}
+            onChange={(v) => onFieldChange(field.name, v)}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** One channel: rendered according to its schema type. */
 function ChannelRow({
   channel,
@@ -138,11 +214,22 @@ function ChannelRow({
   onDisable: () => void;
   onFieldChange: (fieldName: string, value: unknown) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(false);
   const [credential, setCredential] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const hasFields = channel.fields.length > 0;
+  const isActive = channel.enabled || channel.always_on;
+
+  // Prefer a localized description; fall back to the backend string.
+  const descKey = `settings.channels.desc.${channel.name}`;
+  const desc = i18n.exists(descKey) ? t(descKey) : channel.description;
+
+  // Whether this channel has any advanced-group fields.
+  const hasAdvancedFields = ADVANCED_GROUPS.some(
+    (g) => channel.fields.some((f) => f.group === g),
+  );
 
   return (
     <div className="px-4 py-3 sm:px-5">
@@ -153,13 +240,19 @@ function ChannelRow({
             <div className="text-[14px] font-medium text-foreground">
               {channel.display_name}
             </div>
-            <div className="text-[12px] text-muted-foreground">
-              {channel.always_on
-                ? t("settings.channels.alwaysOn")
-                : channel.enabled
-                  ? t("settings.channels.enabled")
-                  : t("settings.channels.disabled")}
-            </div>
+            {isActive ? (
+              <ActivePill
+                label={
+                  channel.always_on
+                    ? t("settings.channels.alwaysOn")
+                    : t("settings.channels.enabled")
+                }
+              />
+            ) : (
+              <div className="text-[12px] text-muted-foreground">
+                {t("settings.channels.disabled")}
+              </div>
+            )}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -206,42 +299,64 @@ function ChannelRow({
       </div>
 
       {/* description line for always_on and schema-driven channels */}
-      {(channel.always_on || hasFields) && channel.description ? (
-        <p className="mt-1 text-[12px] text-muted-foreground">{channel.description}</p>
+      {(channel.always_on || hasFields) && desc ? (
+        <p className="mt-1 text-[12px] text-muted-foreground">{desc}</p>
       ) : null}
 
       {/* Schema-driven grouped field form (websocket / email) */}
       {hasFields ? (
         <div className="mt-3 space-y-4">
-          {GROUP_ORDER.map((g) => {
-            const groupFields = channel.fields.filter((f) => f.group === g);
-            if (groupFields.length === 0) return null;
-            const label = GROUP_LABEL[g] ? t(GROUP_LABEL[g]) : null;
-            return (
-              <div key={g} className="space-y-2">
-                {label ? (
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    {label}
-                  </div>
-                ) : null}
-                {groupFields.map((field) => (
-                  <div key={field.name} className="flex flex-wrap items-center gap-2">
-                    <span className="w-[160px] shrink-0 text-[13px] text-foreground/80">
-                      {field.name}
-                    </span>
-                    <FieldInput
+          {ESSENTIAL_GROUPS.map((g) => (
+            <FieldGroup
+              key={g}
+              groupKey={g}
+              channel={channel}
+              channelValues={channelValues}
+              token={token}
+              busy={busy}
+              onFieldChange={onFieldChange}
+            />
+          ))}
+          {/* Ungrouped fields (group === "") */}
+          <FieldGroup
+            groupKey=""
+            channel={channel}
+            channelValues={channelValues}
+            token={token}
+            busy={busy}
+            onFieldChange={onFieldChange}
+          />
+          {hasAdvancedFields ? (
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={() => setAdvancedOpen((v) => !v)}
+                aria-expanded={advancedOpen}
+                className="flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground hover:text-foreground"
+              >
+                <ChevronDown
+                  className={`h-3.5 w-3.5 transition-transform ${advancedOpen ? "" : "-rotate-90"}`}
+                  aria-hidden
+                />
+                {t("settings.channels.advanced")}
+              </button>
+              {advancedOpen ? (
+                <div className="mt-3 space-y-4">
+                  {ADVANCED_GROUPS.map((g) => (
+                    <FieldGroup
+                      key={g}
+                      groupKey={g}
                       channel={channel}
-                      field={field}
-                      value={channelValues[field.name]}
+                      channelValues={channelValues}
                       token={token}
                       busy={busy}
-                      onChange={(v) => onFieldChange(field.name, v)}
+                      onFieldChange={onFieldChange}
                     />
-                  </div>
-                ))}
-              </div>
-            );
-          })}
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -278,6 +393,44 @@ function ChannelRow({
           </Button>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/** Card container shared by both Active and Available sections. */
+function ChannelSection({
+  channels,
+  configValues,
+  token,
+  busy,
+  onEnable,
+  onDisable,
+  onFieldChange,
+}: {
+  channels: ChannelInfo[];
+  configValues: Record<string, Record<string, unknown>>;
+  token: string;
+  busy: string | null;
+  onEnable: (channel: ChannelInfo, credential: string) => void;
+  onDisable: (channel: ChannelInfo) => void;
+  onFieldChange: (channel: ChannelInfo, fieldName: string, value: unknown) => void;
+}) {
+  return (
+    <div className="overflow-hidden rounded-[22px] border border-border/45 bg-card/86">
+      <div className="divide-y divide-border/45">
+        {channels.map((channel) => (
+          <ChannelRow
+            key={channel.name}
+            channel={channel}
+            channelValues={configValues[channel.name] ?? {}}
+            token={token}
+            busy={busy === channel.name}
+            onEnable={(credential) => onEnable(channel, credential)}
+            onDisable={() => onDisable(channel)}
+            onFieldChange={(fieldName, value) => onFieldChange(channel, fieldName, value)}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -393,6 +546,14 @@ export function ChannelsSettings({ token }: { token: string }) {
     );
   }
 
+  // Split into active (always_on || enabled) and available (the rest).
+  // Active: always_on first, then enabled.
+  const active = [
+    ...channels.filter((c) => c.always_on),
+    ...channels.filter((c) => !c.always_on && c.enabled),
+  ];
+  const available = channels.filter((c) => !c.always_on && !c.enabled);
+
   return (
     <div className="space-y-4">
       <p className="px-1 text-[13px] leading-5 text-muted-foreground">
@@ -403,22 +564,40 @@ export function ChannelsSettings({ token }: { token: string }) {
           {error}
         </div>
       ) : null}
-      <div className="overflow-hidden rounded-[22px] border border-border/45 bg-card/86">
-        <div className="divide-y divide-border/45">
-          {channels.map((channel) => (
-            <ChannelRow
-              key={channel.name}
-              channel={channel}
-              channelValues={configValues[channel.name] ?? {}}
-              token={token}
-              busy={busy === channel.name}
-              onEnable={(credential) => void enable(channel, credential)}
-              onDisable={() => void disable(channel)}
-              onFieldChange={(fieldName, value) => void handleFieldChange(channel, fieldName, value)}
-            />
-          ))}
+
+      {active.length > 0 ? (
+        <div>
+          <div className="mb-2 px-1 text-[12px] font-medium uppercase tracking-wide text-muted-foreground/80">
+            {t("settings.channels.sectionActive")}
+          </div>
+          <ChannelSection
+            channels={active}
+            configValues={configValues}
+            token={token}
+            busy={busy}
+            onEnable={enable}
+            onDisable={disable}
+            onFieldChange={handleFieldChange}
+          />
         </div>
-      </div>
+      ) : null}
+
+      {available.length > 0 ? (
+        <div>
+          <div className="mb-2 px-1 text-[12px] font-medium uppercase tracking-wide text-muted-foreground/80">
+            {t("settings.channels.sectionAvailable")} ({available.length})
+          </div>
+          <ChannelSection
+            channels={available}
+            configValues={configValues}
+            token={token}
+            busy={busy}
+            onEnable={enable}
+            onDisable={disable}
+            onFieldChange={handleFieldChange}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
