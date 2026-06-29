@@ -480,6 +480,32 @@ def replay_transcript_to_ui_messages(
     return messages
 
 
+def _extract_content_str(content_raw: Any) -> tuple[str, list[str]]:
+    """Return (text, image_url_list) from a raw OpenAI content field.
+
+    Handles both plain strings and list-of-parts (multimodal).  Image parts
+    are returned as raw URL strings; the caller decides how to surface them.
+    """
+    if isinstance(content_raw, str):
+        return content_raw, []
+    if not isinstance(content_raw, list):
+        return "", []
+    text_chunks: list[str] = []
+    image_parts: list[str] = []
+    for part in content_raw:
+        if not isinstance(part, dict):
+            continue
+        ptype = part.get("type", "")
+        if ptype == "text":
+            text_chunks.append(str(part.get("text") or ""))
+        elif ptype == "image_url":
+            url_blob = part.get("image_url")
+            url = (url_blob.get("url") if isinstance(url_blob, dict) else None) or ""
+            if url:
+                image_parts.append(url)
+    return "".join(text_chunks), image_parts
+
+
 def session_messages_to_ui_messages(
     messages: list[dict[str, Any]],
     *,
@@ -495,10 +521,15 @@ def session_messages_to_ui_messages(
     - ``user`` messages → one UIMessage per message; multimodal content lists
       are flattened (text extracted to ``content``, image parts to ``images``
       and, when ``augment_user_media`` is provided, to ``media``).
-    - ``assistant`` messages → one UIMessage; ``reasoning_content`` becomes
-      ``reasoning``; ``tool_calls`` seed ``toolEvents`` entries (phase=``start``).
-    - ``tool`` messages → folded into the most-recent assistant's ``toolEvents``
-      by ``tool_call_id`` (phase=``end``, ``result`` = content); never a
+    - ``assistant`` messages → one UIMessage for the text content (omitted when
+      empty and the turn is tool-only); ``reasoning_content`` becomes
+      ``reasoning``; ``tool_calls`` are emitted as a SEPARATE trace row
+      ``{role:"tool", kind:"trace", toolEvents:[…]}`` placed immediately after
+      the assistant content row.  This mirrors ``replay_transcript_to_ui_messages``
+      because ``MessageBubble.tsx`` renders ``toolEvents`` only when
+      ``kind === "trace"`` — a plain assistant row never reads them.
+    - ``tool`` messages → folded into the trace row's ``toolEvents`` by
+      ``tool_call_id`` (phase=``end``, ``result`` = content); never a
       standalone bubble.
     - Header dicts (contain ``_type`` but no ``role``) and ``system`` messages
       are skipped — they carry no displayable content.
@@ -510,9 +541,9 @@ def session_messages_to_ui_messages(
     _ts_base = int(time.time() * 1000)
     result: list[dict[str, Any]] = []
 
-    # Index of assistant UIMessage in ``result`` by tool_call_id, for later
-    # tool-result attachment.
-    _call_id_to_asst_idx: dict[str, int] = {}
+    # Index of the trace row in ``result`` by tool_call_id, so tool results
+    # can be folded in by call_id using merge_tool_events (same as replay).
+    _call_id_to_trace_idx: dict[str, int] = {}
 
     for idx, msg in enumerate(messages):
         if not isinstance(msg, dict):
@@ -527,26 +558,7 @@ def session_messages_to_ui_messages(
         msg_id = f"hist-{idx}"
 
         if role == "user":
-            content_raw = msg.get("content", "")
-            content_str = ""
-            image_parts: list[str] = []  # raw URLs / paths extracted from multimodal content
-
-            if isinstance(content_raw, str):
-                content_str = content_raw
-            elif isinstance(content_raw, list):
-                text_chunks: list[str] = []
-                for part in content_raw:
-                    if not isinstance(part, dict):
-                        continue
-                    ptype = part.get("type", "")
-                    if ptype == "text":
-                        text_chunks.append(str(part.get("text") or ""))
-                    elif ptype == "image_url":
-                        url_blob = part.get("image_url")
-                        url = (url_blob.get("url") if isinstance(url_blob, dict) else None) or ""
-                        if url:
-                            image_parts.append(url)
-                content_str = "".join(text_chunks)
+            content_str, image_parts = _extract_content_str(msg.get("content", ""))
 
             row: dict[str, Any] = {
                 "id": msg_id,
@@ -568,14 +580,13 @@ def session_messages_to_ui_messages(
             result.append(row)
 
         elif role == "assistant":
-            content_str = msg.get("content") or ""
-            if not isinstance(content_str, str):
-                content_str = ""
+            content_str, _ = _extract_content_str(msg.get("content") or "")
 
             reasoning = msg.get("reasoning_content")
 
+            tool_calls = msg.get("tool_calls") or []
             tool_events: list[dict[str, Any]] = []
-            for tc in (msg.get("tool_calls") or []):
+            for tc in tool_calls:
                 if not isinstance(tc, dict):
                     continue
                 call_id = tc.get("id") or ""
@@ -599,36 +610,58 @@ def session_messages_to_ui_messages(
                     "arguments": arguments,
                 }
                 tool_events.append(ev)
-                if call_id:
-                    _call_id_to_asst_idx[call_id] = len(result)
 
-            asst_row: dict[str, Any] = {
-                "id": msg_id,
-                "role": "assistant",
-                "content": content_str,
-                "createdAt": created_at,
-            }
-            if reasoning:
-                asst_row["reasoning"] = reasoning
+            has_content = bool(content_str.strip() or reasoning)
+
+            # Emit a content row only when the assistant actually said something.
+            # A tool-only turn with no text mirrors replay's prune_reasoning_only
+            # behaviour: the empty assistant bubble is dropped.
+            if has_content:
+                asst_row: dict[str, Any] = {
+                    "id": msg_id,
+                    "role": "assistant",
+                    "content": content_str,
+                    "createdAt": created_at,
+                }
+                if reasoning:
+                    asst_row["reasoning"] = reasoning
+                result.append(asst_row)
+
+            # Tool calls → a separate trace row so the frontend can render
+            # them (MessageBubble renders toolEvents only on kind=="trace").
             if tool_events:
-                asst_row["toolEvents"] = tool_events
-
-            result.append(asst_row)
+                trace_idx = len(result)
+                trace_row: dict[str, Any] = {
+                    "id": f"hist-{idx}-trace",
+                    "role": "tool",
+                    "kind": "trace",
+                    "content": "",
+                    "traces": [],
+                    "toolEvents": tool_events,
+                    "createdAt": created_at,
+                }
+                result.append(trace_row)
+                for ev in tool_events:
+                    call_id = ev.get("call_id") or ""
+                    if call_id:
+                        _call_id_to_trace_idx[call_id] = trace_idx
 
         elif role == "tool":
-            # Fold result into the matching assistant's toolEvents entry.
+            # Fold result into the trace row's toolEvents entry by call_id.
             call_id = msg.get("tool_call_id") or ""
             tool_content = msg.get("content") or ""
-            asst_idx = _call_id_to_asst_idx.get(call_id)
-            if asst_idx is not None and 0 <= asst_idx < len(result):
-                asst_row = result[asst_idx]
-                existing_events: list[dict[str, Any]] = list(asst_row.get("toolEvents") or [])
-                for i, ev in enumerate(existing_events):
-                    if ev.get("call_id") == call_id:
-                        existing_events[i] = {**ev, "phase": "end", "result": tool_content}
-                        break
-                asst_row = {**asst_row, "toolEvents": existing_events}
-                result[asst_idx] = asst_row
+            trace_idx = _call_id_to_trace_idx.get(call_id)
+            if trace_idx is not None and 0 <= trace_idx < len(result):
+                trace_row = result[trace_idx]
+                end_event: dict[str, Any] = {
+                    "call_id": call_id,
+                    "phase": "end",
+                    "result": tool_content,
+                }
+                result[trace_idx] = {
+                    **trace_row,
+                    "toolEvents": merge_tool_events(trace_row.get("toolEvents"), [end_event]),
+                }
 
     return result
 

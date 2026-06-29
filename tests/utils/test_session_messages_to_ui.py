@@ -42,9 +42,14 @@ def test_assistant_message_with_reasoning() -> None:
     assert m["createdAt"] == 1700000001000
 
 
-def test_tool_call_and_result_folded_into_assistant() -> None:
-    """An assistant tool_call + matching tool result folds into toolEvents on the assistant
-    message; the tool result does NOT appear as a standalone message."""
+def test_tool_call_emits_separate_trace_row() -> None:
+    """An assistant tool_call emits a SEPARATE kind='trace' row — not toolEvents on the assistant.
+
+    The frontend (MessageBubble.tsx) renders toolEvents only when kind=='trace'.
+    A plain assistant row never reads toolEvents, so placing them on the
+    assistant row produces a blank render.  The correct shape mirrors
+    replay_transcript_to_ui_messages: assistant content row + separate trace row.
+    """
     msgs = [
         {
             "role": "user",
@@ -72,19 +77,62 @@ def test_tool_call_and_result_folded_into_assistant() -> None:
         },
     ]
     result = session_messages_to_ui_messages(msgs)
-    # user + assistant; tool result folded in
-    assert len(result) == 2
-    assert result[0]["role"] == "user"
-    asst = result[1]
-    assert asst["role"] == "assistant"
-    tool_events = asst.get("toolEvents")
+    # user + trace row; tool-only assistant turn without content is pruned
+    roles = [m["role"] for m in result]
+    kinds = [m.get("kind") for m in result]
+    assert "user" in roles
+
+    # There must be a trace row carrying toolEvents
+    trace_rows = [m for m in result if m.get("kind") == "trace"]
+    assert len(trace_rows) == 1, f"expected 1 trace row, got {trace_rows}"
+    trace = trace_rows[0]
+    assert trace["role"] == "tool"
+    tool_events = trace.get("toolEvents")
     assert isinstance(tool_events, list)
-    assert len(tool_events) == 1
+    assert len(tool_events) >= 1
     ev = tool_events[0]
     assert ev["name"] == "read_file"
     assert ev["call_id"] == "call_abc"
-    # The result content must be attached
     assert ev.get("result") == "file contents"
+
+    # The assistant content row (if present) must NOT carry toolEvents
+    asst_content_rows = [m for m in result if m.get("role") == "assistant" and m.get("kind") != "trace"]
+    for row in asst_content_rows:
+        assert "toolEvents" not in row, "toolEvents must not appear on the assistant content row"
+
+
+def test_tool_call_with_assistant_content_keeps_assistant_row() -> None:
+    """When the assistant both calls a tool AND has content, both rows appear."""
+    msgs = [
+        {
+            "role": "assistant",
+            "content": "let me check",
+            "tool_calls": [
+                {
+                    "id": "call_xyz",
+                    "type": "function",
+                    "function": {"name": "web_search", "arguments": '{"query": "durin"}'},
+                }
+            ],
+            "timestamp": 1700000001.0,
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_xyz",
+            "name": "web_search",
+            "content": "results",
+            "timestamp": 1700000002.0,
+        },
+    ]
+    result = session_messages_to_ui_messages(msgs)
+    asst_rows = [m for m in result if m.get("role") == "assistant" and m.get("kind") != "trace"]
+    trace_rows = [m for m in result if m.get("kind") == "trace"]
+    assert len(asst_rows) == 1
+    assert asst_rows[0]["content"] == "let me check"
+    assert "toolEvents" not in asst_rows[0]
+    assert len(trace_rows) == 1
+    assert trace_rows[0]["toolEvents"][0]["name"] == "web_search"
+    assert trace_rows[0]["toolEvents"][0].get("result") == "results"
 
 
 def test_multimodal_user_content_extracts_text_and_images() -> None:
@@ -108,6 +156,27 @@ def test_multimodal_user_content_extracts_text_and_images() -> None:
     assert isinstance(images, list)
     assert len(images) == 1
     assert images[0]["url"] == "data:image/png;base64,abc"
+
+
+def test_assistant_list_content_extracts_text() -> None:
+    """An assistant message whose content is a list preserves the text parts.
+
+    Previously the converter coerced list content to '', losing the text.
+    """
+    msgs = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Here is my answer"},
+                {"type": "text", "text": " continued"},
+            ],
+            "timestamp": 1700000001.0,
+        }
+    ]
+    result = session_messages_to_ui_messages(msgs)
+    asst_rows = [m for m in result if m.get("role") == "assistant"]
+    assert len(asst_rows) == 1
+    assert asst_rows[0]["content"] == "Here is my answer continued"
 
 
 def test_system_messages_and_header_skipped() -> None:
