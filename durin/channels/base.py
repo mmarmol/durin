@@ -10,12 +10,7 @@ from loguru import logger
 
 from durin.bus.events import InboundMessage, OutboundMessage
 from durin.bus.queue import MessageBus
-from durin.pairing import (
-    PAIRING_CODE_META_KEY,
-    format_pairing_reply,
-    generate_code,
-    is_approved,
-)
+from durin.pairing import is_approved
 
 
 class BaseChannel(ABC):
@@ -221,45 +216,17 @@ class BaseChannel(ABC):
         session_key: str | None = None,
         is_dm: bool = False,
     ) -> None:
-        """Handle an incoming message: check permissions, issue pairing codes in DMs, or forward to bus."""
-        if not self.is_allowed(sender_id):
-            if is_dm:
-                code = generate_code(self.name, str(sender_id))
-                await self.send(
-                    OutboundMessage(
-                        channel=self.name,
-                        chat_id=str(chat_id),
-                        content=format_pairing_reply(code),
-                        metadata={PAIRING_CODE_META_KEY: code},
-                    )
-                )
-                self.logger.info(
-                    "Sent pairing code {} to sender {} in chat {}",
-                    code, sender_id, chat_id,
-                )
-            else:
-                self.logger.warning(
-                    "Access denied for sender {}. "
-                    "Add them to allowFrom list in config to grant access.",
-                    sender_id,
-                )
-            return
-
+        """Build the inbound event and publish it. Authorization + pairing are
+        enforced centrally at the bus ingress gate (ChannelManager), so every
+        channel — and any direct publisher — is gated uniformly and no channel
+        can bypass it."""
         meta = metadata or {}
         if self.supports_streaming:
             meta = {**meta, "_wants_stream": True}
-
-        msg = InboundMessage(
-            channel=self.name,
-            sender_id=str(sender_id),
-            chat_id=str(chat_id),
-            content=content,
-            media=media or [],
-            metadata=meta,
-            session_key_override=session_key,
-        )
-
-        await self.bus.publish_inbound(msg)
+        await self.bus.publish_inbound(InboundMessage(
+            channel=self.name, sender_id=str(sender_id), chat_id=str(chat_id),
+            content=content, media=media or [], metadata=meta,
+            session_key_override=session_key, is_dm=is_dm))
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:

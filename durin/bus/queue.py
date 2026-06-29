@@ -1,6 +1,7 @@
 """Async message queue for decoupled channel-agent communication."""
 
 import asyncio
+import inspect
 
 from durin.bus.events import InboundMessage, OutboundMessage
 
@@ -16,9 +17,23 @@ class MessageBus:
     def __init__(self):
         self.inbound: asyncio.Queue[InboundMessage] = asyncio.Queue()
         self.outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue()
+        self._inbound_authorizer = None
+
+    def set_inbound_authorizer(self, fn) -> None:
+        """Install a gate run on every inbound message before it is enqueued.
+
+        fn(msg) returns truthy to allow; falsy to drop (the gate handles any
+        side effect like sending a pairing reply). May be sync or async.
+        """
+        self._inbound_authorizer = fn
 
     async def publish_inbound(self, msg: InboundMessage) -> None:
         """Publish a message from a channel to the agent."""
+        if self._inbound_authorizer is not None:
+            res = self._inbound_authorizer(msg)
+            allowed = await res if inspect.isawaitable(res) else res
+            if not allowed:
+                return
         await self.inbound.put(msg)
 
     async def consume_inbound(self) -> InboundMessage:
