@@ -233,7 +233,7 @@ threaded through; it is `None` when the vector index is unavailable.
    pairs that share at least one alias, strongest signal first.
 2. When `vector_index` is provided, `EntityAbsorption.find_semantic_candidates`
    supplements the set with **embedding-near same-type pairs** whose L2 distance
-   falls within `semantic_distance_threshold` (default 0.20), deduped against the
+   falls within `semantic_distance_threshold` (default 0.30), deduped against the
    alias pairs. This catches duplicates that share no alias — same entity,
    different name — and feeds them through the same judge. When the vector index is
    unavailable this step is a no-op.
