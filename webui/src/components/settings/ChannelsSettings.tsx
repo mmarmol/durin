@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { ChannelSecretField } from "@/components/settings/secrets/ChannelSecretField";
 import { useClient } from "@/providers/ClientProvider";
 import { getConfig, listChannels, setConfigValue, type ChannelField, type ChannelInfo } from "@/lib/api";
+import { TelegramGuided } from "@/components/settings/channels/TelegramGuided";
 
 // Groups that are always visible in the form.
 const ESSENTIAL_GROUPS = ["access", "imap", "smtp"] as const;
@@ -205,6 +206,7 @@ function ChannelRow({
   onEnable,
   onDisable,
   onFieldChange,
+  onChanged,
 }: {
   channel: ChannelInfo;
   channelValues: Record<string, unknown>;
@@ -213,6 +215,7 @@ function ChannelRow({
   onEnable: (credential: string) => void;
   onDisable: () => void;
   onFieldChange: (fieldName: string, value: unknown) => void;
+  onChanged: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -319,8 +322,18 @@ function ChannelRow({
             <p className="mt-1 text-[12px] text-muted-foreground">{desc}</p>
           ) : null}
 
+          {/* Telegram gets its own guided/manual panel instead of the generic form */}
+          {channel.name === "telegram" ? (
+            <TelegramGuided
+              channel={channel}
+              channelValues={channelValues}
+              token={token}
+              onChanged={onChanged}
+            />
+          ) : null}
+
           {/* Schema-driven grouped field form (websocket / email) */}
-          {hasFields ? (
+          {hasFields && channel.name !== "telegram" ? (
             <div className="mt-3 space-y-4">
               {ESSENTIAL_GROUPS.map((g) => (
                 <FieldGroup
@@ -376,8 +389,8 @@ function ChannelRow({
             </div>
           ) : null}
 
-          {/* Legacy single-credential path: channels with empty fields (telegram/slack/discord) */}
-          {!hasFields ? (
+          {/* Legacy single-credential path: channels with empty fields (slack/discord/etc) */}
+          {!hasFields && channel.name !== "telegram" ? (
             <div className="mt-3 flex flex-wrap items-center gap-2">
               {channel.credential_field ? (
                 <Input
@@ -424,6 +437,7 @@ function ChannelSection({
   onEnable,
   onDisable,
   onFieldChange,
+  onChanged,
 }: {
   channels: ChannelInfo[];
   configValues: Record<string, Record<string, unknown>>;
@@ -432,6 +446,7 @@ function ChannelSection({
   onEnable: (channel: ChannelInfo, credential: string) => void;
   onDisable: (channel: ChannelInfo) => void;
   onFieldChange: (channel: ChannelInfo, fieldName: string, value: unknown) => void;
+  onChanged: () => void;
 }) {
   return (
     <div className="overflow-hidden rounded-[22px] border border-border/45 bg-card/86">
@@ -446,6 +461,7 @@ function ChannelSection({
             onEnable={(credential) => onEnable(channel, credential)}
             onDisable={() => onDisable(channel)}
             onFieldChange={(fieldName, value) => onFieldChange(channel, fieldName, value)}
+            onChanged={onChanged}
           />
         ))}
       </div>
@@ -596,6 +612,7 @@ export function ChannelsSettings({ token }: { token: string }) {
             onEnable={enable}
             onDisable={disable}
             onFieldChange={handleFieldChange}
+            onChanged={load}
           />
         </div>
       ) : null}
@@ -613,6 +630,7 @@ export function ChannelsSettings({ token }: { token: string }) {
             onEnable={enable}
             onDisable={disable}
             onFieldChange={handleFieldChange}
+            onChanged={load}
           />
         </div>
       ) : null}
