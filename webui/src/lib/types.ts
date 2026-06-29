@@ -406,6 +406,10 @@ export interface WebuiThreadPersistedPayload {
   sessionKey?: string;
   savedAt?: string;
   messages: UIMessage[];
+  /** True when the thread was built from the universal session history
+   *  (non-websocket channel) rather than the webui JSONL transcript.
+   *  The composer is disabled for these sessions — they are view-only. */
+  readOnly?: boolean;
 }
 
 export type Outbound =
