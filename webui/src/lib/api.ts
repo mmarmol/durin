@@ -2160,3 +2160,25 @@ export async function mcpOauthLogout(
 ): Promise<void> {
   await post<{ ok: boolean }>(`${base}${mcpPath(name, "/oauth/logout")}`, token, {});
 }
+
+// -- Telegram channel -------------------------------------------------------
+
+export interface TelegramTestResult { ok: boolean; username: string | null; id: number | null; error: string | null; }
+export interface PendingPairing { code: string; channel: string; sender_id: string; created_at: number; expires_at: number; }
+export interface TelegramPairing { pending: PendingPairing[]; approved: string[]; }
+
+export async function testTelegramToken(token: string, value: string, base = ""): Promise<TelegramTestResult> {
+  return post<TelegramTestResult>(`${base}/api/v1/channels/telegram/test`, token, { token: value });
+}
+export async function getTelegramPairing(token: string, base = ""): Promise<TelegramPairing> {
+  return request<TelegramPairing>(`${base}/api/v1/channels/telegram/pairing`, token);
+}
+export async function approveTelegramPairing(token: string, code: string, base = ""): Promise<{ ok: boolean }> {
+  return post(`${base}/api/v1/channels/telegram/pairing/approve`, token, { code });
+}
+export async function denyTelegramPairing(token: string, code: string, base = ""): Promise<{ ok: boolean }> {
+  return post(`${base}/api/v1/channels/telegram/pairing/deny`, token, { code });
+}
+export async function revokeTelegramPairing(token: string, senderId: string, base = ""): Promise<{ ok: boolean }> {
+  return post(`${base}/api/v1/channels/telegram/pairing/revoke`, token, { sender_id: senderId });
+}
