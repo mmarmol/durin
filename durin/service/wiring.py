@@ -36,6 +36,11 @@ def build_service_registry(
     ``agent.subagents`` instance so the Tasks service can report running sub-agents;
     the websocket channel's shim registry passes ``None`` and only workflow runs are
     reported.
+
+    ``channel_manager`` is optional: the unified gateway passes the live
+    ``ChannelManager`` so the channels-runtime service can hot-start/stop channels;
+    the websocket channel's shim registry passes ``None`` and those routes report
+    "channel_manager not available".
     """
     from durin.security.api_tokens import ApiTokenStore
     from durin.service.auth import AuthService

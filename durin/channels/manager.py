@@ -418,6 +418,15 @@ class ChannelManager:
             return
         from durin.config.loader import load_config
         self.config = load_config()
+        section = getattr(self.config.channels, name, None)
+        enabled = (
+            (section.get("enabled", False)
+             if isinstance(section, dict)
+             else getattr(section, "enabled", False))
+            if section is not None else False
+        )
+        if not enabled:
+            raise ValueError(f"Channel {name} is not enabled in config; refusing to hot-start")
         channel = self._make_channel(name)
         if channel is None:
             raise ValueError(f"Unknown or unconfigured channel: {name}")

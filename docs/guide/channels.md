@@ -190,6 +190,7 @@ without pairing, or leave it empty to require pairing for every new user.
 | `react_emoji` | `"👀"` | Reaction added while processing |
 | `streaming` | `true` | Edit the message in-place as the model streams |
 | `inline_keyboards` | `false` | Render choice buttons as inline keyboards |
+| `drop_pending_updates` | `true` | Drop messages queued while the bot was offline. Set to `false` to replay them on (re)start. |
 
 ---
 
