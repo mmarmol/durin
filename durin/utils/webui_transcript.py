@@ -480,6 +480,159 @@ def replay_transcript_to_ui_messages(
     return messages
 
 
+def session_messages_to_ui_messages(
+    messages: list[dict[str, Any]],
+    *,
+    augment_user_media: Callable[[list[str]], list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
+    """Convert an OpenAI-format session messages list to ``UIMessage``-shaped dicts.
+
+    Used as a fallback renderer for non-websocket sessions (Telegram, CLI,
+    subagent) that have no webui JSONL transcript.  The returned shape mirrors
+    ``replay_transcript_to_ui_messages`` so the frontend renders both paths
+    identically:
+
+    - ``user`` messages → one UIMessage per message; multimodal content lists
+      are flattened (text extracted to ``content``, image parts to ``images``
+      and, when ``augment_user_media`` is provided, to ``media``).
+    - ``assistant`` messages → one UIMessage; ``reasoning_content`` becomes
+      ``reasoning``; ``tool_calls`` seed ``toolEvents`` entries (phase=``start``).
+    - ``tool`` messages → folded into the most-recent assistant's ``toolEvents``
+      by ``tool_call_id`` (phase=``end``, ``result`` = content); never a
+      standalone bubble.
+    - Header dicts (contain ``_type`` but no ``role``) and ``system`` messages
+      are skipped — they carry no displayable content.
+
+    ``augment_user_media`` maps filesystem paths collected from image parts to
+    ``{kind, url, name}`` attachment dicts — same contract as
+    ``channel._augment_transcript_user_media``.
+    """
+    _ts_base = int(time.time() * 1000)
+    result: list[dict[str, Any]] = []
+
+    # Index of assistant UIMessage in ``result`` by tool_call_id, for later
+    # tool-result attachment.
+    _call_id_to_asst_idx: dict[str, int] = {}
+
+    for idx, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            continue
+        # Skip header lines (no role key, have _type) and system messages.
+        role = msg.get("role")
+        if not role or role == "system":
+            continue
+
+        ts_raw = msg.get("timestamp")
+        created_at = int(ts_raw * 1000) if isinstance(ts_raw, (int, float)) else (_ts_base + idx)
+        msg_id = f"hist-{idx}"
+
+        if role == "user":
+            content_raw = msg.get("content", "")
+            content_str = ""
+            image_parts: list[str] = []  # raw URLs / paths extracted from multimodal content
+
+            if isinstance(content_raw, str):
+                content_str = content_raw
+            elif isinstance(content_raw, list):
+                text_chunks: list[str] = []
+                for part in content_raw:
+                    if not isinstance(part, dict):
+                        continue
+                    ptype = part.get("type", "")
+                    if ptype == "text":
+                        text_chunks.append(str(part.get("text") or ""))
+                    elif ptype == "image_url":
+                        url_blob = part.get("image_url")
+                        url = (url_blob.get("url") if isinstance(url_blob, dict) else None) or ""
+                        if url:
+                            image_parts.append(url)
+                content_str = "".join(text_chunks)
+
+            row: dict[str, Any] = {
+                "id": msg_id,
+                "role": "user",
+                "content": content_str,
+                "createdAt": created_at,
+            }
+
+            if image_parts and augment_user_media is not None:
+                media_att = augment_user_media(image_parts)
+                if media_att:
+                    row["media"] = media_att
+                    row["images"] = [{"url": m.get("url"), "name": m.get("name")} for m in media_att]
+            elif image_parts:
+                # No augmenter — surface URLs as images directly so the UI
+                # can at least render inline previews for data: URLs.
+                row["images"] = [{"url": u} for u in image_parts]
+
+            result.append(row)
+
+        elif role == "assistant":
+            content_str = msg.get("content") or ""
+            if not isinstance(content_str, str):
+                content_str = ""
+
+            reasoning = msg.get("reasoning_content")
+
+            tool_events: list[dict[str, Any]] = []
+            for tc in (msg.get("tool_calls") or []):
+                if not isinstance(tc, dict):
+                    continue
+                call_id = tc.get("id") or ""
+                fn = tc.get("function") or {}
+                name = fn.get("name") if isinstance(fn, dict) else None
+                arguments_raw = fn.get("arguments") if isinstance(fn, dict) else None
+                # Parse JSON arguments string into a dict for structured display.
+                arguments: Any = None
+                if isinstance(arguments_raw, str) and arguments_raw.strip():
+                    try:
+                        arguments = json.loads(arguments_raw)
+                    except json.JSONDecodeError:
+                        arguments = arguments_raw
+                elif isinstance(arguments_raw, dict):
+                    arguments = arguments_raw
+
+                ev: dict[str, Any] = {
+                    "call_id": call_id,
+                    "phase": "start",
+                    "name": name,
+                    "arguments": arguments,
+                }
+                tool_events.append(ev)
+                if call_id:
+                    _call_id_to_asst_idx[call_id] = len(result)
+
+            asst_row: dict[str, Any] = {
+                "id": msg_id,
+                "role": "assistant",
+                "content": content_str,
+                "createdAt": created_at,
+            }
+            if reasoning:
+                asst_row["reasoning"] = reasoning
+            if tool_events:
+                asst_row["toolEvents"] = tool_events
+
+            result.append(asst_row)
+
+        elif role == "tool":
+            # Fold result into the matching assistant's toolEvents entry.
+            call_id = msg.get("tool_call_id") or ""
+            tool_content = msg.get("content") or ""
+            asst_idx = _call_id_to_asst_idx.get(call_id)
+            if asst_idx is not None and 0 <= asst_idx < len(result):
+                asst_row = result[asst_idx]
+                existing_events: list[dict[str, Any]] = list(asst_row.get("toolEvents") or [])
+                for i, ev in enumerate(existing_events):
+                    if ev.get("call_id") == call_id:
+                        existing_events[i] = {**ev, "phase": "end", "result": tool_content}
+                        break
+                asst_row = {**asst_row, "toolEvents": existing_events}
+                result[asst_idx] = asst_row
+
+    return result
+
+
 def build_webui_thread_response(
     session_key: str,
     *,
