@@ -68,7 +68,13 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
 - **Discover:** call `list_workflows` to see what this workspace offers — each entry carries
   its description and I/O — before picking one to run (or to confirm one already exists).
 - **Run:** `run_workflow(name, task)` — optionally `output_format` to shape this call's
-  result. It loads the named JSON, runs the graph, and returns a per-node trace. **If the
+  result, and `input_files` (a list of absolute paths) to hand the workflow files to work on:
+  each is seeded into the run's shared working folder before the start node runs, so every node
+  (including a dynamic fan-out of one worker per file) reads them there — use this instead of
+  pasting file contents into `task`. It loads the named JSON, runs the graph, and returns a
+  per-node trace plus the final text output. **Getting files back:** when the workflow
+  declares it outputs files (`output: {"file": true}`), the summary also reports the run's
+  working-folder path — read the produced files there with `read_file`. **If the
   result says it needs input**, the workflow did not fail — it paused with questions; ask the
   user those questions, then call `run_workflow` again with the SAME task plus their answers appended.
 - **Author:** write the JSON under `<workspace>/workflows/<name>.json` (you can write a graph

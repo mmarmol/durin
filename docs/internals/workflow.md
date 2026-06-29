@@ -40,7 +40,10 @@ interface is documented — it is a hint, not enforced.
 A caller may also pass a per-run **`output_format`** (the `run_workflow` tool, the run command):
 a delivery instruction for THIS call — "a bulleted list", "JSON with fields x,y", "a 3-line
 summary" — that overrides the workflow's default output description in the framing, so one
-workflow can deliver its result in whatever shape the caller needs without being edited.
+workflow can deliver its result in whatever shape the caller needs without being edited. The
+same callers may pass **`input_files`** (absolute paths) — seeded into the run's shared working
+folder before the start node runs — and read the terminal **`output_dir`** back from the result;
+both the `run_workflow` tool and the HTTP run surface accept files in and report the folder out.
 
 **A node runs its body, then optionally routes.** `WorkflowEngine.run`
 (`durin/workflow/engine.py`) walks the graph from `start`. For an agent node it calls a
@@ -434,8 +437,10 @@ End-to-end for a single `run_workflow` call:
   workspace's local workflows (name, `description`, and I/O), with an optional `query` that
   filters by name/description, so the agent can pick which one to run; `run_workflow` runs it.
   The field is optional and backward-compatible — a workflow without it parses and runs fine.
-- **Surface:** the `run_workflow(name, task)` LLM tool — auto-discovered into the
-  agent's tool registry at core scope (see [tools.md](tools.md)). A node with
+- **Surface:** the `run_workflow(name, task, output_format?, input_files?, background?)` LLM
+  tool — auto-discovered into the agent's tool registry at core scope (see [tools.md](tools.md)).
+  `input_files` (absolute paths) are seeded into the run's shared working folder so every node
+  can read them, and the terminal `output_dir` is reported back in the run summary. A node with
   `tools: "default"` receives the user's configured tool set; `tools: "none"` (the
   default) runs the node without tools. A node may also name `skills` (injected into
   its prompt) and `mcps` (a subset of the configured MCP servers, reused live).
