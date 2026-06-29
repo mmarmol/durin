@@ -205,7 +205,7 @@ a post-run summary:
 
 1. **Before the walk** — `start_run` writes `{status: "running", root_session_key, started_at, runs: []}`.
 2. **After each node** — `update_run` rewrites the file with the accumulated per-node trace and `status: "running"`, so an in-flight run is observable by reading the file.
-3. **On every exit path** (normal completion, exhaustion, abort, or config error) — `finalize_run` writes the terminal status (`completed`/`exhausted`/`aborted`), `finished_at`, and the full trace.
+3. **On every exit path** (normal completion, exhaustion, abort, cancellation, or config error) — `finalize_run` writes the terminal status (`completed`/`exhausted`/`aborted`/`cancelled`), `finished_at`, and the full trace.
 
 Each file is keyed by `run_id` and owned by a single writer, so full-file rewrites per update are safe with no RMW lock. Manifest writes are best-effort — a write failure is logged but never interrupts the run.
 
@@ -342,6 +342,21 @@ using the same announce path as a completing sub-agent, so the calling agent can
 act on the outcome without polling. The `background` flag applies only to
 `run_workflow` invocations from inside an agent turn; the HTTP
 `POST /api/v1/workflows/{name}/run` surface is always synchronous.
+
+A background launch returns the run's `run_id` (pre-generated and passed to the
+engine as its `run_id_factory`) so the agent can observe or cancel the run
+through the unified `tasks` tool — `tasks(action='status', id=…)` reads the run
+manifest, `tasks(action='stop', id=…)` requests cancellation. The same merge of
+sub-agents and workflow runs that backs `GET /api/v1/tasks`
+(`durin/agent/background_tasks.py`) is what `tasks` renders.
+
+**Cooperative cancellation.** `tasks(action='stop', …)` marks the `run_id` in a
+process-global registry (`durin/workflow/cancellation.py`); the engine polls it
+via a `cancel_check` callback at the top of its node walk. A cancel therefore
+takes effect **between** nodes — a node already executing finishes first
+(best-effort, the same contract as cancelling a sub-agent). The run ends with the
+terminal status `cancelled`, carrying the partial per-node trace, and its result
+is still injected back like any other completion.
 
 **Live per-node and per-branch progress.** The engine emits a progress frame at
 the start of each node (status `running`) and another when the node finishes.

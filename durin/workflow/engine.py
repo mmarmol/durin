@@ -110,6 +110,7 @@ class WorkflowEngine:
         pick_runner: Callable[[str, list[str], "str | None"], int] | None = None,
         max_node_visits: int = 1000,
         progress_emit: Callable[[dict], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> None:
         self._node_runner = node_runner
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex[:12])
@@ -124,6 +125,10 @@ class WorkflowEngine:
         # Best-effort: exceptions in the callback are silently swallowed so they cannot
         # interrupt a run. None means no progress signalling (CLI/test callers).
         self._progress_emit = progress_emit
+        # Optional cooperative-cancel poll, checked at the top of the node walk so a
+        # background run can be stopped between nodes. None means the run is never
+        # cancelled from outside (CLI/test callers).
+        self._cancel_check = cancel_check
 
     def run(
         self,
@@ -270,6 +275,14 @@ class WorkflowEngine:
                 shutil.copy(path, Path(work_dir) / Path(path).name)
 
         while current is not None:
+            # Cooperative cancel: a background run asked to stop ends here, between
+            # nodes, carrying the partial trace so far. A node already executing
+            # finishes first — best-effort, like cancelling a sub-agent.
+            if self._cancel_check is not None and self._cancel_check():
+                return WorkflowResult(
+                    status="cancelled", final_output=final_output, runs=runs,
+                    run_id=run_id,
+                )
             visits[current] = visits.get(current, 0) + 1
             node = workflow.nodes[current]
             budget = min(getattr(node, "max_visits", None) or workflow.max_visits, self._max_node_visits)

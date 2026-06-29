@@ -287,7 +287,7 @@ controls which MCP tools are registered.
 | Memory | `memory_search`, `memory_store`, `memory_forget`, `memory_ingest`, `memory_drill`, `memory_upsert_entity` |
 | Session & planning | `session_search`, `todo_write`, `enter_plan_mode`, `exit_plan_mode`, `note_decision` |
 | Agent control | `ask_user_question`, `long_task`, `complete_goal`, `sleep`, `message` |
-| Sub-agents | `spawn`, `subagent_list`, `subagent_status`, `subagent_stop`, `subagent_output`, `subagent_monitor` |
+| Background work | `spawn`, `run_workflow`, `tasks` (list / status / stop, over sub-agents + workflow runs), `subagent_monitor`, `subagent_output` |
 | Skills | `skills_list`, `skill_search`, `skill_import`, `skill_write`, `skill_edit`, `skill_audit`, `skill_observe`, `skill_acquire_seed`, `skill_install_deps` |
 | MCP management | `mcp_manage`, `mcp_search` |
 | Capability bridges | `interpret_image`, `interpret_audio`, `execute_code`, `notebook_edit` |

@@ -217,8 +217,12 @@ function chipLabel(event: ToolProgressEvent): string {
   switch (event.name) {
     case "spawn":
       return `🤖 spawn ${s("name") || s("task").slice(0, 40)}`.trim();
-    case "subagent_stop":
-      return `🛑 subagent ${s("name")}`.trim();
+    case "tasks": {
+      const action = s("action") || "list";
+      const id = s("id");
+      const icon = action === "stop" ? "🛑" : "📋";
+      return `${icon} tasks ${action}${id ? ` ${id.slice(0, 12)}` : ""}`.trim();
+    }
     case "cron":
       return `⏰ cron ${s("action")} ${s("name")}`.trim();
     case "message":
