@@ -1757,13 +1757,15 @@ class FeishuChannel(BaseChannel):
                 file_path, content_text = await self._download_and_save_media(
                     msg_type, content_json, message_id
                 )
-                if file_path:
-                    media_paths.append(file_path)
-
+                transcribed = False
                 if msg_type == "audio" and file_path:
                     transcription = await self.transcribe_audio(file_path)
                     if transcription:
                         content_text = f"[transcription: {transcription}]"
+                        transcribed = True  # drop the path; transcript is the payload
+
+                if file_path and not transcribed:
+                    media_paths.append(file_path)
 
                 content_parts.append(content_text)
 
