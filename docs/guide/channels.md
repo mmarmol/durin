@@ -83,15 +83,22 @@ Approved senders persist in `~/.durin/pairing.json` across restarts.
 ## Web / dashboard (WebSocket)
 
 The built-in dashboard and all browser-based clients connect via the
-WebSocket channel.
+WebSocket channel. This channel is **always on while the dashboard is
+enabled** (`gateway.webui_enabled = true`) — there is no separate enable
+toggle for it.
+
+The dashboard itself authenticates via short-lived bootstrap tokens issued
+at page load; it never uses the static `token` field. The `token` field is
+only needed for **external WebSocket clients** (scripts, integrations) that
+connect without going through the dashboard bootstrap flow. When set, store
+it as a durin secret and reference it with `${secret:…}`.
 
 ```toml
 [channels.websocket]
-enabled = true
 host = "127.0.0.1"      # bind address; use "0.0.0.0" only with a token set
 port = 8765
 path = "/"
-token = "${secret:WEBUI_TOKEN}"          # static shared secret (optional)
+token = "${secret:WEBUI_TOKEN}"          # optional; external clients only
 token_issue_secret = ""                  # reverse-proxy auth (optional)
 websocket_requires_token = true
 streaming = true
@@ -104,7 +111,7 @@ streaming = true
 | `host` | `127.0.0.1` | Binding to `0.0.0.0` or `::` requires either `token` or `token_issue_secret` to be set |
 | `port` | `8765` | WebSocket listen port |
 | `path` | `"/"` | URL path prefix |
-| `token` | _(empty)_ | Static secret; clients pass it as `?token=…` |
+| `token` | _(empty)_ | Optional static secret for external clients; stored as a durin secret |
 | `token_issue_secret` | _(empty)_ | Bearer secret for `GET /webui/bootstrap`; used with reverse proxies |
 | `websocket_requires_token` | `true` | Reject connections that present no valid token |
 | `streaming` | `true` | Send incremental text deltas while the model is generating |
@@ -209,7 +216,19 @@ group_policy = "mention"  # "open", "mention", or "allowlist"
 
 ## Email
 
-Email uses **IMAP polling** for inbound and **SMTP** for outbound.
+Email uses **IMAP polling** for inbound and **SMTP** for outbound. The full
+channel can be configured from the webui **Channels** tab without editing
+`config.toml` directly.
+
+The IMAP and SMTP passwords are stored as durin secrets. When configuring
+via the webui, the password fields save directly to the secret store and
+write `${secret:…}` references into the channel config. When configuring
+manually, set the secrets first and reference them:
+
+```sh
+durin secret set EMAIL_IMAP_PASSWORD
+durin secret set EMAIL_SMTP_PASSWORD
+```
 
 ```toml
 [channels.email]
@@ -239,15 +258,15 @@ allow_from = ["trusted@example.com"]
 |---|---|---|
 | `consent_granted` | `false` | Must be `true` or the channel will not start |
 | `imap_host` / `imap_port` | _(required)_ | IMAP server and port (default 993) |
-| `imap_username` / `imap_password` | _(required)_ | IMAP credentials |
+| `imap_username` / `imap_password` | _(required)_ | IMAP credentials; password stored as a durin secret |
 | `imap_mailbox` | `"INBOX"` | Mailbox to poll |
 | `imap_use_ssl` | `true` | Use SSL/TLS for IMAP |
 | `smtp_host` / `smtp_port` | _(required)_ | SMTP server and port (default 587) |
-| `smtp_username` / `smtp_password` | _(required)_ | SMTP credentials |
+| `smtp_username` / `smtp_password` | _(required)_ | SMTP credentials; password stored as a durin secret |
 | `smtp_use_tls` | `true` | Use STARTTLS |
 | `smtp_use_ssl` | `false` | Use direct SSL (mutually exclusive with `smtp_use_tls`) |
 | `from_address` | _(required)_ | The `From:` address on replies |
-| `allow_from` | `[]` | Allowed sender addresses (glob patterns supported) |
+| `allow_from` | `[]` | Allowed sender addresses (glob patterns supported); must be set for the channel to authorize mail |
 | `poll_interval_seconds` | `30` | How often to poll IMAP (minimum 5 s) |
 | `verify_dkim` | `true` | Require `dkim=pass` in `Authentication-Results` |
 | `verify_spf` | `true` | Require `spf=pass` in `Authentication-Results` |
@@ -256,7 +275,9 @@ allow_from = ["trusted@example.com"]
 
 > The `consent_granted` flag is a deliberate gate: the email channel reads
 > your mailbox and replies on your behalf. Set it to `true` only after you
-> have reviewed and accepted that behaviour.
+> have reviewed and accepted that behaviour. Both `consent_granted` and a
+> non-empty `allow_from` list must be set for the channel to receive and
+> authorize mail.
 
 ---
 

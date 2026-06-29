@@ -1260,11 +1260,23 @@ export async function testPersona(
   );
 }
 
+export interface ChannelField {
+  name: string;
+  type: "string" | "int" | "bool" | "string_list" | "secret";
+  secret: boolean;
+  group: string;
+  required: boolean;
+  default: unknown;
+}
+
 export interface ChannelInfo {
   name: string;
   display_name: string;
   enabled: boolean;
+  always_on: boolean;
+  description: string;
   credential_field: string | null;
+  fields: ChannelField[];
 }
 
 export async function listChannels(
