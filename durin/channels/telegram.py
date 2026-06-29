@@ -800,13 +800,26 @@ class TelegramChannel(BaseChannel):
         buf.message_id = sent.message_id
         buf.text = tail
 
+    async def _deny_or_pair(self, message: Any, sender_id: str) -> None:
+        """Unauthorized sender. In a DM, route through the base so it issues a
+        pairing code; in a group, log the denial. Each handler previously returned
+        early here and silently dropped DMs, so pairing never fired."""
+        await self._handle_message(
+            sender_id=sender_id,
+            chat_id=str(message.chat_id),
+            content="",
+            is_dm=message.chat.type == "private",
+        )
+
     async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
         if not update.message or not update.effective_user:
             return
 
         user = update.effective_user
-        if not self.is_allowed(self._sender_id(user)):
+        sender_id = self._sender_id(user)
+        if not self.is_allowed(sender_id):
+            await self._deny_or_pair(update.message, sender_id)
             return
         await update.message.reply_text(
             f"👋 Hi {user.first_name}! I'm durin.\n\n"
@@ -1011,6 +1024,7 @@ class TelegramChannel(BaseChannel):
         user = update.effective_user
         sender_id = self._sender_id(user)
         if not self.is_allowed(sender_id):
+            await self._deny_or_pair(message, sender_id)
             return
         self._remember_thread_context(message)
 
@@ -1041,6 +1055,7 @@ class TelegramChannel(BaseChannel):
         chat_id = message.chat_id
         sender_id = self._sender_id(user)
         if not self.is_allowed(sender_id):
+            await self._deny_or_pair(message, sender_id)
             return
         self._remember_thread_context(message)
 

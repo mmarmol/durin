@@ -1375,9 +1375,13 @@ async def test_on_message_ignores_unauthorized_user_before_side_effects() -> Non
 
     await channel._on_message(_make_telegram_update(text="hello", chat_type="private"), None)
 
+    # Unauthorized DMs route through _handle_message so the base can issue a
+    # pairing code — but side effects (typing indicator, reaction) must not fire.
     assert started_typing == []
     channel._add_reaction.assert_not_awaited()
-    assert handled == []
+    assert len(handled) == 1
+    assert handled[0]["sender_id"] == "12345|alice"
+    assert handled[0]["is_dm"] is True
 
 
 @pytest.mark.asyncio
