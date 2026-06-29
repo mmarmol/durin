@@ -233,7 +233,12 @@ function ChannelRow({
 
   return (
     <div className="px-4 py-3 sm:px-5">
-      <div className="flex items-center justify-between gap-3">
+      {/* Accordion header — clicking anywhere here toggles open, except the action buttons */}
+      <div
+        className="flex cursor-pointer items-center justify-between gap-3"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
         <div className="flex min-w-0 items-center gap-3">
           <ChannelIcon name={channel.name} />
           <div className="min-w-0">
@@ -255,7 +260,11 @@ function ChannelRow({
             )}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        {/* Action buttons + chevron — stopPropagation keeps buttons independent of accordion */}
+        <div
+          className="flex shrink-0 items-center gap-2"
+          onClick={(e) => e.stopPropagation()}
+        >
           {channel.always_on ? null : (
             <>
               {channel.enabled ? (
@@ -295,102 +304,111 @@ function ChannelRow({
               ) : null}
             </>
           )}
+          <ChevronDown
+            className={`h-4 w-4 transition-transform text-muted-foreground ${open ? "" : "-rotate-90"}`}
+            aria-hidden
+          />
         </div>
       </div>
 
-      {/* description line for always_on and schema-driven channels */}
-      {(channel.always_on || hasFields) && desc ? (
-        <p className="mt-1 text-[12px] text-muted-foreground">{desc}</p>
-      ) : null}
+      {/* Accordion body — description + config form, gated by open */}
+      {open ? (
+        <div>
+          {/* description line for always_on and schema-driven channels */}
+          {(channel.always_on || hasFields) && desc ? (
+            <p className="mt-1 text-[12px] text-muted-foreground">{desc}</p>
+          ) : null}
 
-      {/* Schema-driven grouped field form (websocket / email) */}
-      {hasFields ? (
-        <div className="mt-3 space-y-4">
-          {ESSENTIAL_GROUPS.map((g) => (
-            <FieldGroup
-              key={g}
-              groupKey={g}
-              channel={channel}
-              channelValues={channelValues}
-              token={token}
-              busy={busy}
-              onFieldChange={onFieldChange}
-            />
-          ))}
-          {/* Ungrouped fields (group === "") */}
-          <FieldGroup
-            groupKey=""
-            channel={channel}
-            channelValues={channelValues}
-            token={token}
-            busy={busy}
-            onFieldChange={onFieldChange}
-          />
-          {hasAdvancedFields ? (
-            <div className="mt-3">
-              <button
-                type="button"
-                onClick={() => setAdvancedOpen((v) => !v)}
-                aria-expanded={advancedOpen}
-                className="flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground hover:text-foreground"
-              >
-                <ChevronDown
-                  className={`h-3.5 w-3.5 transition-transform ${advancedOpen ? "" : "-rotate-90"}`}
-                  aria-hidden
+          {/* Schema-driven grouped field form (websocket / email) */}
+          {hasFields ? (
+            <div className="mt-3 space-y-4">
+              {ESSENTIAL_GROUPS.map((g) => (
+                <FieldGroup
+                  key={g}
+                  groupKey={g}
+                  channel={channel}
+                  channelValues={channelValues}
+                  token={token}
+                  busy={busy}
+                  onFieldChange={onFieldChange}
                 />
-                {t("settings.channels.advanced")}
-              </button>
-              {advancedOpen ? (
-                <div className="mt-3 space-y-4">
-                  {ADVANCED_GROUPS.map((g) => (
-                    <FieldGroup
-                      key={g}
-                      groupKey={g}
-                      channel={channel}
-                      channelValues={channelValues}
-                      token={token}
-                      busy={busy}
-                      onFieldChange={onFieldChange}
+              ))}
+              {/* Ungrouped fields (group === "") */}
+              <FieldGroup
+                groupKey=""
+                channel={channel}
+                channelValues={channelValues}
+                token={token}
+                busy={busy}
+                onFieldChange={onFieldChange}
+              />
+              {hasAdvancedFields ? (
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={() => setAdvancedOpen((v) => !v)}
+                    aria-expanded={advancedOpen}
+                    className="flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    <ChevronDown
+                      className={`h-3.5 w-3.5 transition-transform ${advancedOpen ? "" : "-rotate-90"}`}
+                      aria-hidden
                     />
-                  ))}
+                    {t("settings.channels.advanced")}
+                  </button>
+                  {advancedOpen ? (
+                    <div className="mt-3 space-y-4">
+                      {ADVANCED_GROUPS.map((g) => (
+                        <FieldGroup
+                          key={g}
+                          groupKey={g}
+                          channel={channel}
+                          channelValues={channelValues}
+                          token={token}
+                          busy={busy}
+                          onFieldChange={onFieldChange}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
           ) : null}
-        </div>
-      ) : null}
 
-      {/* Legacy single-credential path: channels with empty fields (telegram/slack/discord) */}
-      {!hasFields && open ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {channel.credential_field ? (
-            <Input
-              type="password"
-              value={credential}
-              onChange={(e) => setCredential(e.target.value)}
-              placeholder={t("settings.channels.credentialPlaceholder", {
-                field: channel.credential_field,
-              })}
-              className="w-[280px]"
-            />
-          ) : (
-            <span className="text-[12px] text-muted-foreground">
-              {t("settings.channels.noCredential")}
-            </span>
-          )}
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            onClick={() => {
-              onEnable(credential);
-              setCredential("");
-              setOpen(false);
-            }}
-            className="rounded-full"
-          >
-            {t("settings.channels.save")}
-          </Button>
+          {/* Legacy single-credential path: channels with empty fields (telegram/slack/discord) */}
+          {!hasFields ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {channel.credential_field ? (
+                <Input
+                  type="password"
+                  value={credential}
+                  onChange={(e) => setCredential(e.target.value)}
+                  placeholder={t("settings.channels.credentialPlaceholder", {
+                    field: channel.credential_field,
+                  })}
+                  className="w-[280px]"
+                />
+              ) : (
+                <span className="text-[12px] text-muted-foreground">
+                  {t("settings.channels.noCredential")}
+                </span>
+              )}
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  onEnable(credential);
+                  setCredential("");
+                  setOpen(false);
+                }}
+                className="rounded-full"
+              >
+                {t("settings.channels.save")}
+              </Button>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
