@@ -1761,8 +1761,11 @@ class FeishuChannel(BaseChannel):
                 if msg_type == "audio" and file_path:
                     transcription = await self.transcribe_audio(file_path)
                     if transcription:
-                        content_text = f"[transcription: {transcription}]"
-                        transcribed = True  # drop the path; transcript is the payload
+                        # Bare transcript as the user's message (no marker, path
+                        # dropped) so the model treats it as spoken input, not a
+                        # transcript of a separate audio file. Matches WhatsApp.
+                        content_text = transcription
+                        transcribed = True
 
                 if file_path and not transcribed:
                     media_paths.append(file_path)

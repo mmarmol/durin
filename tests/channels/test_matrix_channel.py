@@ -1806,4 +1806,5 @@ async def test_audio_transcription_drops_media(monkeypatch, tmp_path) -> None:
     channel._handle_message.assert_awaited_once()
     kwargs = channel._handle_message.await_args.kwargs
     assert kwargs["media"] == []
-    assert "[transcription: hi there]" in kwargs["content"]
+    assert "hi there" in kwargs["content"]
+    assert "[transcription:" not in kwargs["content"]

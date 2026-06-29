@@ -1278,7 +1278,8 @@ async def test_voice_transcription_drops_media_path() -> None:
     inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1.0)
 
     assert (inbound.media or []) == []
-    assert "[voice] transcribed text" in inbound.content
+    assert "transcribed text" in inbound.content
+    assert "[voice]" not in inbound.content
 
 
 @pytest.mark.asyncio
