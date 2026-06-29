@@ -1329,21 +1329,36 @@ async def test_on_help_includes_restart_command() -> None:
 
 
 @pytest.mark.asyncio
-async def test_on_start_ignores_unauthorized_user_silently() -> None:
+async def test_on_start_routes_unauthorized_dm_through_gate() -> None:
+    """_on_start publishes to the bus unconditionally; unauthorized DMs are paired by the gate.
+
+    No reply_text is sent directly — the agent loop (or gate pairing) handles the response.
+    """
     channel = TelegramChannel(
         TelegramConfig(enabled=True, token="123:abc", allow_from=["999"], group_policy="open"),
         MessageBus(),
     )
+    handled: list[dict] = []
+
+    async def capture_handle(**kwargs) -> None:
+        handled.append(kwargs)
+
+    channel._handle_message = capture_handle
     update = _make_telegram_update(text="/start", chat_type="private")
     update.message.reply_text = AsyncMock()
 
     await channel._on_start(update, None)
 
     update.message.reply_text.assert_not_awaited()
+    assert len(handled) == 1
+    assert handled[0]["sender_id"] == "12345|alice"
+    assert handled[0]["is_dm"] is True
+    assert handled[0]["content"] == "/start"
 
 
 @pytest.mark.asyncio
-async def test_on_help_ignores_unauthorized_user_silently() -> None:
+async def test_on_help_serves_all_users() -> None:
+    """_on_help serves the help text to any sender; no auth gate on informational commands."""
     channel = TelegramChannel(
         TelegramConfig(enabled=True, token="123:abc", allow_from=["999"], group_policy="open"),
         MessageBus(),
@@ -1353,32 +1368,32 @@ async def test_on_help_ignores_unauthorized_user_silently() -> None:
 
     await channel._on_help(update, None)
 
-    update.message.reply_text.assert_not_awaited()
+    update.message.reply_text.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_on_message_ignores_unauthorized_user_before_side_effects() -> None:
+async def test_on_message_passes_is_dm_for_unauthorized_private_chat() -> None:
+    """Unauthorized private-chat messages are published with is_dm=True so the gate can pair them.
+
+    Side effects (typing indicator, reaction) fire because Telegram is pure transport —
+    auth is enforced centrally by the gate, not per-channel.
+    """
     channel = TelegramChannel(
         TelegramConfig(enabled=True, token="123:abc", allow_from=["999"], group_policy="open"),
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
-    started_typing: list[str] = []
     handled: list[dict] = []
-    channel._start_typing = lambda chat_id: started_typing.append(chat_id)
-    channel._add_reaction = AsyncMock(return_value=None)
 
     async def capture_handle(**kwargs) -> None:
         handled.append(kwargs)
 
     channel._handle_message = capture_handle
+    channel._start_typing = lambda _chat_id: None
+    channel._add_reaction = AsyncMock(return_value=None)
 
     await channel._on_message(_make_telegram_update(text="hello", chat_type="private"), None)
 
-    # Unauthorized DMs route through _deny_or_pair → _handle_message so the gate
-    # can issue a pairing code — but side effects (typing indicator, reaction) must not fire.
-    assert started_typing == []
-    channel._add_reaction.assert_not_awaited()
     assert len(handled) == 1
     assert handled[0]["sender_id"] == "12345|alice"
     assert handled[0]["is_dm"] is True
@@ -1828,12 +1843,14 @@ async def test_send_uses_native_keyboard_when_flag_on() -> None:
 
 
 @pytest.mark.asyncio
-async def test_callback_query_ignores_unauthorized_user_before_side_effects() -> None:
+async def test_callback_query_routes_through_gate_for_unauthorized_user() -> None:
+    """Inline keyboard taps are published unconditionally; the central gate handles auth."""
     channel = TelegramChannel(
         TelegramConfig(enabled=True, token="123:abc", allow_from=["999"], inline_keyboards=True),
         MessageBus(),
     )
     channel._handle_message = AsyncMock()
+    channel._start_typing = lambda _: None
 
     query = SimpleNamespace(
         id="cb_1",
@@ -1851,9 +1868,8 @@ async def test_callback_query_ignores_unauthorized_user_before_side_effects() ->
 
     await channel._on_callback_query(update, None)
 
-    query.answer.assert_not_awaited()
-    query.message.edit_reply_markup.assert_not_awaited()
-    channel._handle_message.assert_not_awaited()
+    query.answer.assert_awaited_once()
+    channel._handle_message.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

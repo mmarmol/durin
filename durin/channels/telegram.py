@@ -819,38 +819,29 @@ class TelegramChannel(BaseChannel):
         buf.message_id = sent.message_id
         buf.text = tail
 
-    async def _deny_or_pair(self, message: Any, sender_id: str) -> None:
-        """Unauthorized sender. Route through _handle_message so the central gate
-        (ChannelManager) can issue a pairing code for DMs or drop group messages.
-        Side effects (typing, reaction) must not fire before this call returns."""
-        await self._handle_message(
-            sender_id=sender_id,
-            chat_id=str(message.chat_id),
-            content="",
-            is_dm=message.chat.type == "private",
-        )
-
     async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /start command."""
+        """Handle /start command.
+
+        Published unconditionally so the central gate can issue a pairing code
+        for unauthorized DMs or drop unauthorized group messages.  Authorized
+        users land in _forward_command-style handling via the agent loop.
+        """
         if not update.message or not update.effective_user:
             return
 
         user = update.effective_user
         sender_id = self._sender_id(user)
-        if not self.is_allowed(sender_id):
-            await self._deny_or_pair(update.message, sender_id)
-            return
-        await update.message.reply_text(
-            f"👋 Hi {user.first_name}! I'm durin.\n\n"
-            "Send me a message and I'll respond!\n"
-            "Type /help to see available commands."
+        message = update.message
+        await self._handle_message(
+            sender_id=sender_id,
+            chat_id=str(message.chat_id),
+            content="/start",
+            is_dm=message.chat.type == "private",
         )
 
     async def _on_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /help command for allowed users only."""
+        """Handle /help command."""
         if not update.message or not update.effective_user:
-            return
-        if not self.is_allowed(self._sender_id(update.effective_user)):
             return
         await update.message.reply_text(build_help_text())
 
@@ -1042,9 +1033,6 @@ class TelegramChannel(BaseChannel):
         message = update.message
         user = update.effective_user
         sender_id = self._sender_id(user)
-        if not self.is_allowed(sender_id):
-            await self._deny_or_pair(message, sender_id)
-            return
         self._remember_thread_context(message)
 
         # Strip @bot_username suffix if present
@@ -1073,9 +1061,6 @@ class TelegramChannel(BaseChannel):
         user = update.effective_user
         chat_id = message.chat_id
         sender_id = self._sender_id(user)
-        if not self.is_allowed(sender_id):
-            await self._deny_or_pair(message, sender_id)
-            return
         self._remember_thread_context(message)
 
         # Store chat_id for replies
@@ -1160,6 +1145,7 @@ class TelegramChannel(BaseChannel):
             media=media_paths,
             metadata=metadata,
             session_key=session_key,
+            is_dm=message.chat.type == "private",
         )
 
     async def _flush_media_group(self, key: str) -> None:
@@ -1329,8 +1315,6 @@ class TelegramChannel(BaseChannel):
         sender_id = self._sender_id(user)
         if not chat_id:
             self.logger.warning("Callback query without chat_id")
-            return
-        if not self.is_allowed(sender_id):
             return
         button_label = query.data or ""
         await query.answer()
