@@ -72,7 +72,9 @@ scripts/hypothesis_test/v9_runs/
 
 # Playwright MCP debugging artifacts
 .playwright-mcp/
-effort-picker-test.png
+# Stray verification screenshots dropped at the repo root during live QA.
+# Real assets live under webui/ and docs/ and are unaffected by the root scope.
+/*.png
 
 # Test-mock leak guard: a test that mocks a path object and lets a real
 # cross_process_lock run writes a file named after the mock's repr (e.g.
