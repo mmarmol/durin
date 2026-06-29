@@ -425,3 +425,60 @@ async def test_olostep_package_missing_returns_install_hint(monkeypatch):
     result = await tool.execute(query="test query")
 
     assert result == "Error: olostep package not installed. Run: pip install olostep"
+
+
+# ---------------------------------------------------------------------------
+# Multi-query fan-out (queries[])
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_queries_fan_out_returns_one_record_per_query_in_order(monkeypatch):
+    tool = _tool(provider="brave", api_key="brave-key")
+
+    async def fake_search_one(query, count=None):
+        return f"hits for {query}"
+
+    monkeypatch.setattr(tool, "_search_one", fake_search_one)
+    out = await tool.execute(queries=["alpha", "beta", "gamma"])
+    assert out == {"results": [
+        {"query": "alpha", "results": "hits for alpha"},
+        {"query": "beta", "results": "hits for beta"},
+        {"query": "gamma", "results": "hits for gamma"},
+    ]}
+
+
+@pytest.mark.asyncio
+async def test_queries_run_concurrently_for_parallel_safe_provider(monkeypatch):
+    """Brave (concurrency-safe) must overlap the per-query searches, not
+    serialize them."""
+    import asyncio
+
+    tool = _tool(provider="brave", api_key="brave-key")
+    active = {"now": 0, "max": 0}
+
+    async def fake_search_one(query, count=None):
+        active["now"] += 1
+        active["max"] = max(active["max"], active["now"])
+        await asyncio.sleep(0.02)
+        active["now"] -= 1
+        return query
+
+    monkeypatch.setattr(tool, "_search_one", fake_search_one)
+    await tool.execute(queries=["a", "b", "c"])
+    assert active["max"] >= 2  # genuinely overlapped
+
+
+@pytest.mark.asyncio
+async def test_query_and_queries_mutually_exclusive():
+    tool = _tool(provider="brave", api_key="brave-key")
+    out = await tool.execute(query="a", queries=["b"])
+    assert out == "Error: pass either `query` (single) or `queries` (list), not both"
+
+
+@pytest.mark.asyncio
+async def test_queries_cap_enforced():
+    from durin.agent.tools.web import MAX_SEARCH_QUERIES
+    tool = _tool(provider="brave", api_key="brave-key")
+    out = await tool.execute(queries=["q"] * (MAX_SEARCH_QUERIES + 1))
+    assert "too many queries" in out

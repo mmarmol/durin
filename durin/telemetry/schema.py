@@ -121,6 +121,24 @@ class TurnBudgetEnforcedEvent(TypedDict):
     tool_count: int
 
 
+class ToolsParallelismEvent(TypedDict):
+    """Per-turn shape of tool-call parallelism. Counts all three forms:
+    harness batching (``max_batch_size`` > 1), intra-tool list fan-out
+    (``fanout_calls``/``fanout_items``), and background launches
+    (``background_launches``, e.g. spawn). ``parallelized`` is true if any
+    occurred."""
+    session_key: NotRequired[str | None]
+    tool_calls: int
+    batches: int
+    max_batch_size: int
+    concurrency_safe_calls: int
+    fanout_calls: int
+    fanout_items: int
+    background_launches: int
+    parallelized: bool
+    concurrent_tools_enabled: bool
+
+
 # ===========================================================================
 # Compaction events
 # ===========================================================================
@@ -1257,6 +1275,7 @@ EVENTS: dict[str, type] = {
     "unknown_tool.loop_guard": UnknownToolLoopGuardEvent,
     "post_compaction_loop.tripped": PostCompactionLoopTrippedEvent,
     "turn_budget.enforced": TurnBudgetEnforcedEvent,
+    "tools.parallelism": ToolsParallelismEvent,
     # Compaction
     "compaction.preemptive_trigger": CompactionPreemptiveTriggerEvent,
     "compaction.grace_extended": CompactionGraceExtendedEvent,

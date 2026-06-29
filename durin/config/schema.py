@@ -808,7 +808,11 @@ class AgentDefaults(Base):
     temperature: float = 0.4
     fallback_models: list[FallbackCandidate] = Field(default_factory=list)
     max_tool_iterations: int = 200
-    max_concurrent_subagents: int = Field(default=1, ge=1)
+    # Default 3 (not 1): the main agent can run a few independent subagents at
+    # once — the common "fan out 2-3 research/explore tasks" pattern — while
+    # still bounding cost, since each subagent is a full LLM loop. Raise it for
+    # heavier parallel work; set 1 to force strictly serial subagents.
+    max_concurrent_subagents: int = Field(default=3, ge=1)
     max_tool_result_chars: int = 16_000
     provider_retry_mode: Literal["standard", "persistent"] = "standard"
     tool_hint_max_length: int = Field(

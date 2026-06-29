@@ -491,3 +491,117 @@ async def test_runner_no_denial_in_build_mode():
     )
     assert tool.call_count == 1
     assert results[0] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Parallelism telemetry (tools.parallelism)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_emits_parallelism_telemetry_for_batched_read_only(tmp_path):
+    import json
+
+    from durin.agent.runner import AgentRunner, AgentRunSpec
+    from durin.telemetry.logger import TelemetryLogger, bind_telemetry, reset_telemetry
+
+    tools = ToolRegistry()
+    events: list[str] = []
+    tools.register(_DelayTool("read_a", delay=0.0, read_only=True, shared_events=events))
+    tools.register(_DelayTool("read_b", delay=0.0, read_only=True, shared_events=events))
+
+    log_path = tmp_path / "telemetry.jsonl"
+    runner = AgentRunner(MagicMock())
+    token = bind_telemetry(TelemetryLogger(log_path))
+    try:
+        await runner._execute_tools(
+            AgentRunSpec(
+                initial_messages=[],
+                tools=tools,
+                model="test-model",
+                max_iterations=1,
+                max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+                concurrent_tools=True,
+                session_key="s1",
+            ),
+            [
+                ToolCallRequest(id="r1", name="read_a", arguments={}),
+                ToolCallRequest(id="r2", name="read_b", arguments={}),
+            ],
+            {}, {}, set(),
+        )
+    finally:
+        reset_telemetry(token)
+
+    rows = [json.loads(line) for line in log_path.read_text().splitlines() if line]
+    par = [r for r in rows if r.get("type") == "tools.parallelism"]
+    assert len(par) == 1
+    data = par[0]["data"]
+    assert data["tool_calls"] == 2
+    assert data["concurrency_safe_calls"] == 2
+    assert data["max_batch_size"] == 2
+    assert data["parallelized"] is True
+
+
+@pytest.mark.asyncio
+async def test_parallelism_telemetry_counts_list_fanout(tmp_path):
+    """A single call that fans out over a list counts as parallelism even
+    though the harness batch size is 1."""
+    import json
+
+    from durin.agent.runner import AgentRunner, AgentRunSpec
+    from durin.telemetry.logger import TelemetryLogger, bind_telemetry, reset_telemetry
+
+    class _FanoutTool(Tool):
+        @property
+        def name(self) -> str:
+            return "fetch_many"
+
+        @property
+        def description(self) -> str:
+            return "fetch many"
+
+        @property
+        def parameters(self) -> dict:
+            return {"type": "object", "properties": {}, "required": []}
+
+        @property
+        def read_only(self) -> bool:
+            return True
+
+        def fanout_size(self, arguments: dict) -> int:
+            urls = arguments.get("urls")
+            return len(urls) if isinstance(urls, list) and urls else 1
+
+        async def execute(self, **kwargs):
+            return "ok"
+
+    tools = ToolRegistry()
+    tools.register(_FanoutTool())
+
+    log_path = tmp_path / "telemetry.jsonl"
+    runner = AgentRunner(MagicMock())
+    token = bind_telemetry(TelemetryLogger(log_path))
+    try:
+        await runner._execute_tools(
+            AgentRunSpec(
+                initial_messages=[],
+                tools=tools,
+                model="test-model",
+                max_iterations=1,
+                max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+                concurrent_tools=True,
+                session_key="s1",
+            ),
+            [ToolCallRequest(id="f1", name="fetch_many", arguments={"urls": ["a", "b", "c"]})],
+            {}, {}, set(),
+        )
+    finally:
+        reset_telemetry(token)
+
+    rows = [json.loads(line) for line in log_path.read_text().splitlines() if line]
+    data = next(r["data"] for r in rows if r.get("type") == "tools.parallelism")
+    assert data["max_batch_size"] == 1        # only one tool call
+    assert data["fanout_calls"] == 1
+    assert data["fanout_items"] == 3
+    assert data["parallelized"] is True       # fan-out counts

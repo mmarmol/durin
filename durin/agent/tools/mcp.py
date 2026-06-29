@@ -319,6 +319,12 @@ class MCPToolWrapper(Tool):
         self._parameters = _normalize_schema_for_openai(raw_schema)
         per_tool = getattr(getattr(connection, "_cfg", None), "tool_timeouts", {}) or {}
         self._tool_timeout = per_tool.get(tool_def.name, tool_timeout)
+        # Honor the MCP `readOnlyHint` tool annotation: a server that
+        # declares a tool read-only opts it into parallel execution alongside
+        # other concurrency-safe tools. Absent or false → run alone (the safe
+        # default for tools that may mutate remote state).
+        annotations = getattr(tool_def, "annotations", None)
+        self._read_only = bool(getattr(annotations, "readOnlyHint", False))
 
     @property
     def name(self) -> str:
@@ -331,6 +337,10 @@ class MCPToolWrapper(Tool):
     @property
     def parameters(self) -> dict[str, Any]:
         return self._parameters
+
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
 
     async def execute(self, **kwargs: Any) -> str | list[dict[str, Any]]:
         from mcp import types

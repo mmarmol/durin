@@ -45,6 +45,12 @@ class SpawnTool(Tool, ContextAware):
         self._origin_message_id.set(ctx.message_id)
 
     @property
+    def launches_background(self) -> bool:
+        # A spawn call returns immediately while the subagent runs concurrently
+        # in the background, so it counts as parallelism in turn telemetry.
+        return True
+
+    @property
     def name(self) -> str:
         return "spawn"
 
@@ -54,6 +60,11 @@ class SpawnTool(Tool, ContextAware):
             "Spawn a subagent to handle a task in the background. "
             "Use this for complex or time-consuming tasks that can run independently. "
             "The subagent will complete the task and report back when done. "
+            "When you have two or more independent tasks, spawn them together — "
+            "emit several spawn calls in the same turn — so the subagents run in "
+            "parallel rather than one after another. For example, kick off three "
+            "separate research threads at once instead of waiting for each to "
+            "finish before starting the next. "
             "For deliverables or existing projects, inspect the workspace first "
             "and use a dedicated subdirectory when helpful."
         )

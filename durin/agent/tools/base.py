@@ -166,6 +166,26 @@ class Tool(ABC):
         """Whether this tool should run alone even if concurrency is enabled."""
         return False
 
+    def fanout_size(self, arguments: dict[str, Any]) -> int:
+        """How many independent items THIS call fans out over internally.
+
+        Tools that accept a list parameter and resolve it in parallel
+        (web_fetch ``urls``, read_file ``paths``, …) override this to report
+        the list length so parallelism telemetry can count intra-tool fan-out,
+        which the harness-level batch view cannot see. Default 1 (a single
+        non-fanning call).
+        """
+        return 1
+
+    @property
+    def launches_background(self) -> bool:
+        """Whether this tool launches concurrent background work (e.g. spawn).
+
+        Such a call returns immediately while its work runs concurrently, so it
+        is a parallelism signal even though the call itself is not batched.
+        """
+        return False
+
     @property
     def llm_visible(self) -> bool:
         """Whether this tool's definition ships to the LLM.

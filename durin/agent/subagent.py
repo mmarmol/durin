@@ -317,6 +317,10 @@ class SubagentManager:
                 session_key=sess_key,
                 llm_timeout_s=llm_timeout,
                 mode_provider=_subagent_mode_provider,
+                # Subagents are read/search-heavy (Explore, research). Run
+                # independent concurrency-safe tool calls in parallel, same as
+                # the main loop; the runner keeps mutations serial.
+                concurrent_tools=True,
             ))
             status.phase = "done"
             status.stop_reason = result.stop_reason

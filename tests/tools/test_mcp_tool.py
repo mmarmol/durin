@@ -1341,3 +1341,39 @@ async def test_prompt_wrapper_execute_image_message_returns_image_block() -> Non
     result = await wrapper.execute(topic="x")
     assert isinstance(result, list)
     assert any(b["type"] == "image_url" for b in result)
+
+
+# ---------------------------------------------------------------------------
+# read_only honors the MCP `readOnlyHint` annotation
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_tool_read_only_defaults_false_without_annotation() -> None:
+    """No annotation → not concurrency-safe (runs alone). Back-compat: existing
+    MCP tools never auto-parallelize."""
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=None))
+    assert wrapper.read_only is False
+    assert wrapper.concurrency_safe is False
+
+
+def test_mcp_tool_read_only_true_when_hint_set() -> None:
+    tool_def = SimpleNamespace(
+        name="demo",
+        description="demo tool",
+        inputSchema={"type": "object", "properties": {}},
+        annotations=SimpleNamespace(readOnlyHint=True),
+    )
+    wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "test", tool_def)
+    assert wrapper.read_only is True
+    assert wrapper.concurrency_safe is True
+
+
+def test_mcp_tool_read_only_false_when_hint_false() -> None:
+    tool_def = SimpleNamespace(
+        name="demo",
+        description="demo tool",
+        inputSchema={"type": "object", "properties": {}},
+        annotations=SimpleNamespace(readOnlyHint=False),
+    )
+    wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "test", tool_def)
+    assert wrapper.read_only is False
