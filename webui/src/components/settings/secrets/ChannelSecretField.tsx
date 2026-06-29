@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { listSecrets } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
+import { ChevronDown } from "lucide-react";
 import { MaskedSecret } from "./MaskedSecret";
 
 export function ChannelSecretField({
@@ -63,20 +65,30 @@ export function ChannelSecretField({
   return (
     <div className="space-y-2">
       {mode === "choose" ? (
-        <select
-          value=""
-          disabled={busy}
-          onChange={(e) => {
-            const v = e.target.value;
-            if (v === "__create__") setMode("create");
-            else if (v) onSet(`\${secret:${v}}`);
-          }}
-          className="rounded-[8px] border border-border/60 bg-background px-2 py-1 text-[13px]"
-        >
-          <option value="">{t("settings.channels.secretNone")}</option>
-          {existing.map((s) => <option key={s} value={s}>{s}</option>)}
-          <option value="__create__">{t("settings.channels.secretCreate")}</option>
-        </select>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button type="button" variant="outline" disabled={busy}
+              className="h-8 min-w-[210px] justify-between rounded-full border-input bg-background px-3 text-[13px] font-normal shadow-none">
+              <span className="truncate">{t("settings.channels.secretNone")}</span>
+              <ChevronDown className="ml-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end"
+            className="max-h-[18rem] w-[240px] overflow-y-auto rounded-[18px] border-border/65 bg-popover p-1.5">
+            <DropdownMenuItem className="rounded-full text-[12px]" onSelect={() => onClear()}>
+              {t("settings.channels.secretNone")}
+            </DropdownMenuItem>
+            {existing.map((s) => (
+              <DropdownMenuItem key={s} className="rounded-full text-[12px]"
+                onSelect={() => onSet(`\${secret:${s}}`)}>
+                <span className="truncate">{s}</span>
+              </DropdownMenuItem>
+            ))}
+            <DropdownMenuItem className="rounded-full text-[12px]" onSelect={() => setMode("create")}>
+              {t("settings.channels.secretCreate")}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
           <Input type="password" value={value} autoFocus

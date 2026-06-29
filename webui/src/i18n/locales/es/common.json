@@ -232,7 +232,32 @@
       "groupSecurity": "Anti-spoofing",
       "groupAttachments": "Adjuntos",
       "groupConsent": "Consentimiento",
-      "fieldHelpAllowFrom": "Quién puede escribir a este canal (direcciones/IDs). Vacío = nadie."
+      "fieldHelpAllowFrom": "Quién puede escribir a este canal (direcciones/IDs). Vacío = nadie.",
+      "sectionActive": "Activos",
+      "sectionAvailable": "Disponibles",
+      "advanced": "Avanzado",
+      "groupAccess": "Acceso",
+      "desc": {
+        "websocket": "Transporte del panel web y de clientes WebSocket externos. Siempre activo mientras el panel esté habilitado. El token es opcional, solo para clientes externos.",
+        "email": "Recibe y responde correo por IMAP (entrada) y SMTP (salida)."
+      },
+      "field": {
+        "consent_granted": "Consentimiento",
+        "allow_from": "Permitir desde",
+        "imap_host": "Servidor IMAP", "imap_port": "Puerto", "imap_username": "Usuario",
+        "imap_password": "Contraseña", "imap_mailbox": "Buzón", "imap_use_ssl": "SSL",
+        "smtp_host": "Servidor SMTP", "smtp_port": "Puerto", "smtp_username": "Usuario",
+        "smtp_password": "Contraseña", "smtp_use_tls": "TLS", "smtp_use_ssl": "SSL",
+        "from_address": "Remitente",
+        "auto_reply_enabled": "Auto-respuesta", "poll_interval_seconds": "Intervalo de sondeo (s)",
+        "mark_seen": "Marcar como leído", "max_body_chars": "Máx. caracteres del cuerpo",
+        "subject_prefix": "Prefijo de asunto",
+        "verify_dkim": "Verificar DKIM", "verify_spf": "Verificar SPF",
+        "allowed_attachment_types": "Tipos de adjunto permitidos",
+        "max_attachment_size": "Tamaño máx. de adjunto",
+        "max_attachments_per_email": "Máx. adjuntos por correo",
+        "token": "Token"
+      }
     },
     "config": {
       "description": "Cada configuración de durin, agrupada por sección. Editar un valor lo escribe directamente al config — igual que durin config set. Las listas y secrets gestionados son de solo lectura aquí.",

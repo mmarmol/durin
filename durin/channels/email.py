@@ -32,7 +32,7 @@ class EmailConfig(Base):
     """Email channel configuration (IMAP inbound + SMTP outbound)."""
 
     enabled: bool = False
-    consent_granted: bool = Field(default=False, json_schema_extra={"group": "consent"})
+    consent_granted: bool = Field(default=False, json_schema_extra={"group": "access"})
 
     imap_host: str = Field(default="", json_schema_extra={"group": "imap", "required": True})
     imap_port: int = Field(default=993, json_schema_extra={"group": "imap"})
@@ -54,7 +54,7 @@ class EmailConfig(Base):
     mark_seen: bool = Field(default=True, json_schema_extra={"group": "behavior"})
     max_body_chars: int = Field(default=12000, json_schema_extra={"group": "behavior"})
     subject_prefix: str = Field(default="Re: ", json_schema_extra={"group": "behavior"})
-    allow_from: list[str] = Field(default_factory=list, json_schema_extra={"group": "behavior"})
+    allow_from: list[str] = Field(default_factory=list, json_schema_extra={"group": "access"})
 
     # Email authentication verification (anti-spoofing)
     verify_dkim: bool = Field(default=True, json_schema_extra={"group": "security"})

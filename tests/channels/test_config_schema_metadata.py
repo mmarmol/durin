@@ -32,6 +32,8 @@ def test_email_fields_grouped():
     assert _extra(EmailConfig, "auto_reply_enabled").get("group") == "behavior"
     assert _extra(EmailConfig, "verify_dkim").get("group") == "security"
     assert _extra(EmailConfig, "max_attachment_size").get("group") == "attachments"
+    assert _extra(EmailConfig, "consent_granted").get("group") == "access"
+    assert _extra(EmailConfig, "allow_from").get("group") == "access"
 
 
 def test_websocket_token_marked_secret():

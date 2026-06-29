@@ -286,7 +286,32 @@
       "groupSecurity": "Anti-spoofing",
       "groupAttachments": "Attachments",
       "groupConsent": "Consent",
-      "fieldHelpAllowFrom": "Who may message this channel (addresses/IDs). Empty = nobody."
+      "fieldHelpAllowFrom": "Who may message this channel (addresses/IDs). Empty = nobody.",
+      "sectionActive": "Active",
+      "sectionAvailable": "Available",
+      "advanced": "Advanced",
+      "groupAccess": "Access",
+      "desc": {
+        "websocket": "Transport for the web dashboard and external WebSocket clients. Always on while the dashboard is enabled. The token is optional, only for external clients.",
+        "email": "Receive and reply to email over IMAP (inbound) and SMTP (outbound)."
+      },
+      "field": {
+        "consent_granted": "Consent",
+        "allow_from": "Allowed senders",
+        "imap_host": "IMAP server", "imap_port": "Port", "imap_username": "Username",
+        "imap_password": "Password", "imap_mailbox": "Mailbox", "imap_use_ssl": "SSL",
+        "smtp_host": "SMTP server", "smtp_port": "Port", "smtp_username": "Username",
+        "smtp_password": "Password", "smtp_use_tls": "TLS", "smtp_use_ssl": "SSL",
+        "from_address": "From address",
+        "auto_reply_enabled": "Auto-reply", "poll_interval_seconds": "Poll interval (s)",
+        "mark_seen": "Mark as seen", "max_body_chars": "Max body characters",
+        "subject_prefix": "Subject prefix",
+        "verify_dkim": "Verify DKIM", "verify_spf": "Verify SPF",
+        "allowed_attachment_types": "Allowed attachment types",
+        "max_attachment_size": "Max attachment size",
+        "max_attachments_per_email": "Max attachments per email",
+        "token": "Token"
+      }
     },
     "memory": {
       "description": "Tune the memory subsystem — search reranking and dream auto-consolidation.",
