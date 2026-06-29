@@ -130,7 +130,8 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    (`is_deleted`) and never re-created.
 5. **Stage 2 (discover, when `discover=True`).** `discover_entities` makes one
    LLM call over the *same* turns for durable identity-class facts (identity,
-   roles, relationships, commitments, life events — ephemeral chatter excluded)
+   roles, relationships, commitments, life events — ephemeral chatter and
+   shown-not-asserted third-party content excluded by prompt rules)
    about entities the agent did **not** upsert, and writes them as
    `author="dream"` pages, skipping refs already handled in Stage 1 and
    tombstoned refs. Each proposal from the discovery prompt is a **rich
@@ -156,13 +157,18 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    proposal is the same entity under a variant name; a confirmed match reuses the
    existing entity instead of minting a new slug, preventing variant-name
    duplicates at birth. This semantic step is a no-op when the vector index is
-   unavailable. The discovered `name` is set via `write_entity(name=...)`, which
-   is **last-writer-wins** — a later explicit agent/user correction simply
-   overwrites a discovered guess. Per-field precedence applies to *attributes*,
-   not to the name. The extract pass builds a **single `AliasIndex`** once per
-   pass (refreshed across all sessions processed in that run) and passes it to
-   each `discover_entities` call; callers that omit it fall back to building
-   their own.
+   unavailable. The discover prompt is **seeded with an `EXISTING ENTITIES`
+   manifest** (up to 20 entries, retrieved by a query-mode search using the
+   conversation turns): the LLM is instructed to reuse the exact ref of a known
+   entity when the fact is about it, and to mint a new ref only for genuinely new
+   entities. This prompt-level seeding is a first-pass guard that reduces
+   duplicate slugs before any post-write resolution is attempted. The discovered
+   `name` is set via `write_entity(name=...)`, which is **last-writer-wins** — a
+   later explicit agent/user correction simply overwrites a discovered guess.
+   Per-field precedence applies to *attributes*, not to the name. The extract
+   pass builds a **single `AliasIndex`** once per pass (refreshed across all
+   sessions processed in that run) and passes it to each `discover_entities`
+   call; callers that omit it fall back to building their own.
 6. **Stage 3 (skill signals, when `skill_signals=True`).** Skill corrections and
    gaps in the same turns are logged as observations for later skill curation
    (out of scope here — see the skills internals docs).
@@ -171,11 +177,17 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    reusing the compaction learnings prompt — to extract durable learnings:
    preferences, corrections, standing constraints, and stable project facts. It
    writes each result as a `feedback`, `stance`, or `practice` entity with
-   `author="dream"` (never a `person` or other principal type). Writes freely;
-   duplicates with the agent's live captures and the compaction backstop are
-   resolved by the refine pass. Gated by `memory.dream.learnings_sweep_enabled`
-   (default true). Best-effort: an empty turn span, LLM failure, or parse failure
-   yields an empty list without aborting the session.
+   `author="dream"` (never a `person` or other principal type). The prompt is
+   **seeded with the full set of existing learning-type entities** (via
+   `build_entity_manifest(types=[...])`) so the LLM can reuse a known ref instead
+   of minting a new slug. Each proposed ref is additionally resolved against the
+   alias index (and optionally the vector index) using the same lexical+semantic
+   canonical resolution the discover path applies: a re-worded fact updates the
+   existing entity in place rather than creating a duplicate slug. The refine pass
+   remains the cross-run backstop for any duplicates that slip through. Gated by
+   `memory.dream.learnings_sweep_enabled` (default true). Best-effort: an empty
+   turn span, LLM failure, or parse failure yields an empty list without aborting
+   the session.
 8. Advance the cursor to the total turn count via `set_extract_cursor`.
 
 The `source_ref` in each patch's provenance points to the turn the fact came from.
@@ -233,7 +245,7 @@ threaded through; it is `None` when the vector index is unavailable.
    pairs that share at least one alias, strongest signal first.
 2. When `vector_index` is provided, `EntityAbsorption.find_semantic_candidates`
    supplements the set with **embedding-near same-type pairs** whose L2 distance
-   falls within `semantic_distance_threshold` (default 0.20), deduped against the
+   falls within `semantic_distance_threshold` (default 0.30), deduped against the
    alias pairs. This catches duplicates that share no alias — same entity,
    different name — and feeds them through the same judge. When the vector index is
    unavailable this step is a no-op.

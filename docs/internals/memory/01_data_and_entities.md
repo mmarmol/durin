@@ -263,6 +263,7 @@ Archive is excluded from all default search paths: the vector index, FTS5, the g
 | `SUGGESTED_TYPES` | `durin/memory/entities.py` | `frozenset` of 8 broad types as hints for the dream prompt. Not an enforced enum. |
 | `FieldPatch` | `durin/memory/field_patch.py` | Dataclass for one structured entity edit: `(kind, key, value, author, source_ref, at)`. Applied by `write_entity` in order, under per-field authorship precedence. |
 | `write_entity` | `durin/memory/memory_writer.py` | Single entity write path: read@HEAD → apply patches (precedence) → dulwich commit → CAS → fast-forward. Retries up to 30× on conflict. |
+| `build_entity_manifest` | `durin/memory/entity_manifest.py` | Compact existing-entity list that seeds the discover/learnings extraction prompts. Type-enumerate mode walks small canonical sets (feedback/stance/practice) exhaustively; search-retrieve mode calls the search pipeline for large sets (person/place/topic). |
 | `save_entry` | `durin/memory/storage.py` | Writes a `MemoryEntry` as markdown + YAML frontmatter (wikilink-wraps `source_refs`/`related` at the storage boundary). |
 | `load_entry` | `durin/memory/storage.py` | Reads and parses a `MemoryEntry`; strips wikilink wrappers back to plain URIs. |
 | `split_frontmatter` | `durin/memory/storage.py` | Low-level `---`-block splitter used by both `load_entry` and `EntityPage.from_text`. |

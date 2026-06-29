@@ -1,6 +1,13 @@
 Extract DURABLE LEARNINGS about how to work with the user — preferences, corrections,
 standing constraints, and stable personal facts — from this conversation span.
 
+KNOWN LEARNINGS — reuse, do not duplicate:
+If a learning below already exists in this list, output its EXACT ref so it is
+updated in place. Only mint a new ref for a genuinely new learning.
+
+EXISTING:
+{{ existing }}
+
 Include only:
 - Stated preferences and communication style ("user wants replies in Spanish", "prefers
   brief answers over verbose ones", "code blocks must be copy-pasteable without comments")
@@ -12,6 +19,8 @@ Exclude:
 - Task progress, todo items, transient state, and ephemeral artifacts
 - Single-session observations that show no sign of being durable preferences
 - Routine decisions, findings, and blockers (those belong in the decision log)
+- Content the user merely SHOWED, not asserted: third-party quotes/reviews,
+  advertisements or marketing copy, transcribed audio samples, pasted documents
 
 Output a JSON array of objects, one per durable learning:
 
