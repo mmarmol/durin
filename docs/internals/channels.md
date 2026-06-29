@@ -13,8 +13,9 @@ Three concerns are handled here that belong nowhere else:
 
 - **Plugin discovery** — new channel adapters can be added as Python packages
   and are loaded automatically at startup.
-- **Permission and pairing** — unapproved DM senders are handed a time-limited
-  pairing code; the owner approves or denies via `/pairing`.
+- **Permission and pairing** — inbound authorization is enforced once,
+  centrally, at the message-bus ingress gate; unapproved DM senders are handed
+  a time-limited pairing code; the owner approves or denies via `/pairing`.
 - **Streaming and deduplication** — the outbound dispatcher coalesces stream
   deltas, gates progress and reasoning messages per channel capability, and
   retries on transient delivery failures, all in one place.
@@ -38,17 +39,30 @@ win if a plugin registers the same name. `ChannelManager._init_channels`
 iterates the discovered classes, checks `config.channels.<name>.enabled`, and
 instantiates the ones that are on.
 
-**Permission and pairing.** `BaseChannel.is_allowed(sender_id)` checks three
-layers in order: a wildcard (`"*"`) in `allow_from`, an exact match in the
-`allow_from` list, and a lookup in the pairing store (`is_approved(channel,
-sender_id)`). For DM senders that fail all three checks, `_handle_message`
-calls `generate_code` to create a short-lived code (default TTL 600 seconds),
-sends it as a reply via `format_pairing_reply`, and stops. The owner runs
-`/pairing approve <code>` to move the sender from pending to approved; the
-store is a small JSON file at `<durin_home>/pairing.json` guarded by a
-`threading.Lock` plus `cross_process_lock` for cross-process safety (see
-`durin/pairing/store.py`). Group messages from unknown senders are silently
-dropped rather than receiving a pairing code.
+**Inbound authorization and pairing.** Authorization is enforced once,
+centrally, at the message-bus ingress via `MessageBus.publish_inbound`. When
+`ChannelManager` starts it installs `_authorize_inbound` on the bus via
+`bus.set_inbound_authorizer`. Every call to `publish_inbound` — from any
+channel or internal publisher — runs through this gate before the message is
+enqueued. Channels are pure transport and MUST NOT re-implement authorization
+in their handlers.
+
+The gate applies three rules in order: (1) messages whose channel name is not
+in `ChannelManager.channels` (cli, cron, subagent, TUI — internal origins) are
+always trusted; (2) for registered chat channels, `channel.is_allowed(sender_id)`
+is called — star wildcard, allowlist, or pairing-store approval; (3) if denied
+and the message is a DM (`is_dm=True`), a pairing code is generated via
+`generate_code` and sent back to the sender; if denied and the message is a
+group message, it is silently dropped.
+
+`BaseChannel.is_allowed(sender_id)` checks three layers: a wildcard (`"*"`) in
+`allow_from`, an exact match in the `allow_from` list, and a lookup in the
+pairing store (`is_approved(channel, sender_id)`). Channels set `is_dm` on the
+`InboundMessage` they publish so the gate can distinguish private from group
+context. The pairing store is a small JSON file at `<durin_home>/pairing.json`
+guarded by a `threading.Lock` plus `cross_process_lock` for cross-process
+safety (see `durin/pairing/store.py`). The owner runs `/pairing approve <code>`
+to move a sender from pending to approved.
 
 ## 3. Diagram
 
@@ -58,45 +72,49 @@ dropped rather than receiving a pairing code.
 sequenceDiagram
     participant P as Platform<br/>(Telegram / Discord / etc.)
     participant CH as Channel adapter<br/>(BaseChannel subclass)
-    participant BUS as MessageBus<br/>(bus.inbound / bus.outbound)
+    participant BUS as MessageBus<br/>publish_inbound → gate → inbound queue
+    participant GATE as ChannelManager<br/>_authorize_inbound
     participant LOOP as AgentLoop
     participant MGR as ChannelManager<br/>(_dispatch_outbound)
 
     Note over CH: start() — long-running listener
 
     P->>CH: platform event (message / update)
-    CH->>CH: _handle_message(sender_id, chat_id, content, ...)
-    alt sender not allowed
-        alt is DM
-            CH->>CH: generate_code(channel, sender_id)
-            CH->>P: send(OutboundMessage with pairing code)
-            Note over CH: pairing code stored in pairing.json (TTL 600s)
-        else group
-            Note over CH: silently ignored
-        end
-    else sender allowed
-        CH->>BUS: publish_inbound(InboundMessage)
-        BUS-->>LOOP: consume_inbound()
-        LOOP->>LOOP: process turn (state machine)
-        LOOP->>BUS: publish_outbound(OutboundMessage)
-        BUS-->>MGR: consume_outbound()
-        alt _reasoning_delta / _reasoning_end / _reasoning
-            MGR->>MGR: check channel.show_reasoning
-            MGR->>CH: send_reasoning_delta / send_reasoning_end
-        else _progress message
-            MGR->>MGR: _should_send_progress (send_progress / send_tool_hints)
-            MGR->>CH: send(msg) if allowed
-        else _retry_wait
-            MGR->>CH: send(msg) only for websocket channel
-        else _stream_delta
-            MGR->>MGR: _coalesce_stream_deltas (same channel+chat_id+_stream_id)
-            MGR->>CH: send_delta(chat_id, content, metadata)
-        else final response
-            MGR->>MGR: _should_suppress_outbound (SHA1 dedup by origin_message_id)
-            MGR->>CH: send(OutboundMessage)
-        end
-        CH->>P: platform-specific delivery (with retry backoff)
+    CH->>CH: _handle_message(sender_id, chat_id, content, is_dm=…)
+    CH->>BUS: publish_inbound(InboundMessage)
+    BUS->>GATE: _authorize_inbound(msg)
+    alt channel unknown (cli/cron/subagent/TUI)
+        GATE-->>BUS: True (trusted — internal origin)
+    else channel.is_allowed(sender_id)
+        GATE-->>BUS: True
+    else not allowed + is_dm
+        GATE->>CH: send(OutboundMessage with pairing code)
+        Note over GATE: pairing code stored in pairing.json (TTL 600s)
+        GATE-->>BUS: False (dropped)
+    else not allowed + group
+        Note over GATE: silently dropped
+        GATE-->>BUS: False (dropped)
     end
+    BUS-->>LOOP: consume_inbound() (allowed messages only)
+    LOOP->>LOOP: process turn (state machine)
+    LOOP->>BUS: publish_outbound(OutboundMessage)
+    BUS-->>MGR: consume_outbound()
+    alt _reasoning_delta / _reasoning_end / _reasoning
+        MGR->>MGR: check channel.show_reasoning
+        MGR->>CH: send_reasoning_delta / send_reasoning_end
+    else _progress message
+        MGR->>MGR: _should_send_progress (send_progress / send_tool_hints)
+        MGR->>CH: send(msg) if allowed
+    else _retry_wait
+        MGR->>CH: send(msg) only for websocket channel
+    else _stream_delta
+        MGR->>MGR: _coalesce_stream_deltas (same channel+chat_id+_stream_id)
+        MGR->>CH: send_delta(chat_id, content, metadata)
+    else final response
+        MGR->>MGR: _should_suppress_outbound (SHA1 dedup by origin_message_id)
+        MGR->>CH: send(OutboundMessage)
+    end
+    CH->>P: platform-specific delivery (with retry backoff)
 ```
 
 ### Pairing approval sub-flow
@@ -105,17 +123,20 @@ sequenceDiagram
 sequenceDiagram
     participant U as Unknown DM sender
     participant CH as Channel adapter
+    participant GATE as ChannelManager._authorize_inbound
     participant PS as pairing.json store
     participant O as Owner
 
     U->>CH: DM message
-    CH->>PS: generate_code(channel, sender_id) — TTL 600s
+    CH->>GATE: publish_inbound(InboundMessage, is_dm=True)
+    GATE->>PS: generate_code(channel, sender_id) — TTL 600s
+    GATE->>CH: send(OutboundMessage with pairing code)
     CH->>U: "Your pairing code is ABCD-EFGH …"
     U->>O: (shares code out of band)
     O->>CH: /pairing approve ABCD-EFGH
     CH->>PS: approve_code("ABCD-EFGH")
     PS-->>CH: (channel, sender_id) moved to approved set
-    Note over U,CH: Next DM from U passes is_allowed() check
+    Note over U,GATE: Next DM from U passes channel.is_allowed()
 ```
 
 ### Plugin discovery and startup
@@ -162,16 +183,20 @@ Once `start_all` is called, a dedicated asyncio task is created for
 
 Every channel's `start()` implementation runs a platform-specific event loop
 (polling, webhook, or persistent connection). When an event arrives, the
-channel calls `self._handle_message(sender_id, chat_id, content, ...)`.
+channel calls `self._handle_message(sender_id, chat_id, content, is_dm=…)`.
 
-`_handle_message` first calls `is_allowed(sender_id)`. That method checks, in
-order: `"*"` in `allow_from`, exact match in `allow_from` (both `allow_from`
-and `allowFrom` are accepted as config aliases), and `is_approved(channel,
-sender_id)` from the pairing store. If the sender is allowed and the channel
-is configured for streaming (`config.streaming=True` AND the subclass
-overrides `send_delta`), the `"_wants_stream": True` flag is added to the
-inbound metadata. Finally, an `InboundMessage` is constructed and pushed onto
-`bus.inbound` via `bus.publish_inbound`.
+`_handle_message` is purely a transport helper: it attaches the
+`"_wants_stream": True` flag when the channel supports streaming
+(`config.streaming=True` AND the subclass overrides `send_delta`), constructs
+an `InboundMessage`, and calls `bus.publish_inbound`. Authorization is not
+performed in the channel.
+
+`MessageBus.publish_inbound` runs the installed inbound-authorizer gate before
+enqueuing the message. `ChannelManager` installs `_authorize_inbound` as the
+gate at construction time. The gate is the single, un-bypassable enforcement
+point for all inbound messages regardless of source. Channels MUST NOT
+re-implement `is_allowed`/pairing logic in their handlers; they publish
+unconditionally and the gate decides.
 
 The agent loop (`AgentLoop.run()`) consumes from `bus.inbound`. The
 `InboundMessage.session_key` property returns `session_key_override` when set,
@@ -220,7 +245,10 @@ consumes these and applies a layered gating and transformation pipeline:
 
 Every channel is a subclass of `BaseChannel` with three abstract methods:
 
-- `start()` — long-running async listener; pushes inbound messages to the bus.
+- `start()` — long-running async listener; pushes inbound messages to the bus
+  via `_handle_message` (which calls `bus.publish_inbound`). Channels publish
+  unconditionally and set `is_dm=True` when the message arrived in a private
+  chat so the central gate can distinguish DM from group context.
 - `stop()` — graceful shutdown.
 - `send(msg: OutboundMessage)` — deliver a final response; raise on failure so
   the manager retries.
@@ -230,6 +258,11 @@ metadata)` and `send_reasoning_delta(chat_id, delta, metadata)`. The
 `supports_streaming` property returns `True` only when both `config.streaming`
 is true and the subclass actually overrides `send_delta` (checked by identity
 against `BaseChannel.send_delta`).
+
+`is_allowed(sender_id)` is a policy method called by the central gate — NOT by
+the channel itself. It checks: `"*"` in `allow_from`, exact match in
+`allow_from`, and `is_approved(channel, sender_id)` from the pairing store.
+Channels MUST NOT call `is_allowed` in their own handlers.
 
 A channel registers its default configuration via the class method
 `default_config()` which the onboarding flow uses to seed `config.json`.
@@ -249,9 +282,9 @@ background worker. `approve_code` moves an entry from pending to approved;
 
 | Symbol | File | Role |
 |---|---|---|
-| `BaseChannel` | `durin/channels/base.py` | Abstract adapter base. Owns `_handle_message`, `is_allowed`, `supports_streaming`, `send`, `send_delta`, `send_reasoning_delta`, `send_reasoning_end`, `transcribe_audio`. |
+| `BaseChannel` | `durin/channels/base.py` | Abstract adapter base. Owns `_handle_message` (publishes to bus; no auth), `is_allowed` (policy called by the gate, not the channel), `supports_streaming`, `send`, `send_delta`, `send_reasoning_delta`, `send_reasoning_end`, `transcribe_audio`. |
 | `ChannelManager` | `durin/channels/manager.py` | Lifecycle and dispatch coordinator. `_init_channels` discovers and instantiates. `_dispatch_outbound` applies gating, coalescing, dedup, and retry. `start_all` / `stop_all` manage the asyncio task tree. |
-| `MessageBus` | `durin/bus/queue.py` | Two `asyncio.Queue` objects (`inbound`, `outbound`). No routing logic — pure decoupler. |
+| `MessageBus` | `durin/bus/queue.py` | Two `asyncio.Queue` objects (`inbound`, `outbound`). `publish_inbound` runs the installed inbound-authorizer gate before enqueuing; `set_inbound_authorizer` wires the gate. |
 | `InboundMessage` | `durin/bus/events.py` | Channel-to-loop event: `channel`, `sender_id`, `chat_id`, `content`, `media`, `metadata`, `session_key_override`. `session_key` property returns override or `"channel:chat_id"`. |
 | `OutboundMessage` | `durin/bus/events.py` | Loop-to-channel event: `channel`, `chat_id`, `content`, `reply_to`, `media`, `metadata`, `buttons`. Metadata carries routing and flag keys such as `_progress`, `_stream_delta`, `_reasoning_delta`, `_retry_wait`. |
 | `discover_all` | `durin/channels/registry.py` | Returns merged dict of built-in (pkgutil scan) + external (entry_points) channel classes. Built-ins shadow plugins of the same name. |
@@ -355,8 +388,15 @@ response sent later in the same chat.
 is designed for private-assistant scale: a handful of channels and a small
 number of users. A JSON file under `cross_process_lock` is sufficient, requires
 no migration, and survives gateway restarts without a daemon. Operators who need
-LDAP or SSO-style access control implement a custom channel adapter and bypass
-`is_allowed` entirely.
+LDAP or SSO-style access control implement a custom channel adapter with a
+custom `is_allowed` policy; the central gate calls it uniformly.
+
+**Why is authorization enforced at the bus rather than in each channel?**
+Moving the gate to `MessageBus.publish_inbound` gives a single, un-bypassable
+enforcement point. A channel that forgets to call `is_allowed` or gets its DM
+detection wrong no longer opens a security hole — the gate runs regardless.
+It also decouples the channel from pairing logic: channels become pure
+transport, set `is_dm` on the message, and publish unconditionally.
 
 **Why does stream coalescing key on `_stream_id` and not just `(channel,
 chat_id)`?** Channels like Telegram forum topics or Discord threads can have
