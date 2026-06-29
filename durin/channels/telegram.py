@@ -943,7 +943,10 @@ class TelegramChannel(BaseChannel):
                 transcription = await self.transcribe_audio(file_path)
                 if transcription:
                     self.logger.info("Transcribed {}: {}...", media_type, transcription[:50])
-                    return [path_str], [f"[transcription: {transcription}]"]
+                    # Drop the audio path: the transcript is the payload. Passing
+                    # the path too would make the model invent a path for
+                    # interpret_audio (the loop skips audio paths in auto mode).
+                    return [], [f"[transcription: {transcription}]"]
                 return [path_str], [f"[{media_type}: {path_str}]"]
             return [path_str], [f"[{media_type}: {path_str}]"]
         except Exception as e:
