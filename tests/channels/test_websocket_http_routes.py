@@ -168,7 +168,7 @@ def test_sessions_routes_require_bearer_token(
     assert [m["role"] for m in body["messages"]] == ["user", "assistant"]
 
 
-def test_sessions_list_only_returns_websocket_sessions_by_default(
+def test_sessions_list_returns_all_channels_with_channel_field(
     bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
@@ -191,10 +191,20 @@ def test_sessions_list_only_returns_websocket_sessions_by_default(
 
     listing = client.get("/api/v1/sessions", headers=auth)
     assert listing.status_code == 200
-    keys = {s["key"] for s in listing.json()["sessions"]}
-    # Only websocket-channel sessions are part of the webui surface; CLI /
-    # Slack / Lark rows would be non-resumable from the browser.
-    assert keys == {"websocket:alpha", "websocket:beta"}
+    sessions = listing.json()["sessions"]
+    keys = {s["key"] for s in sessions}
+    # The API surface is now channel-complete: every channel's sessions are
+    # returned, each tagged with a ``channel`` derived from the key prefix.
+    # The webui defaults to the "Web" filter (websocket only) client-side and
+    # offers an "All" view that consumes these cross-channel rows.
+    assert keys == {
+        "cli:direct", "slack:C123", "lark:oc_abc",
+        "websocket:alpha", "websocket:beta",
+    }
+    by_key = {s["key"]: s for s in sessions}
+    assert by_key["cli:direct"]["channel"] == "cli"
+    assert by_key["slack:C123"]["channel"] == "slack"
+    assert by_key["websocket:alpha"]["channel"] == "websocket"
 
 
 def test_session_delete_removes_file(
@@ -245,7 +255,7 @@ def test_session_routes_accept_percent_encoded_websocket_keys(
     assert not path.exists()
 
 
-def test_session_routes_reject_non_websocket_keys(
+def test_session_routes_accept_non_websocket_keys(
     bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
@@ -262,18 +272,20 @@ def test_session_routes_reject_non_websocket_keys(
     tok = _token(client)
     auth = {"Authorization": f"Bearer {tok}"}
 
-    # The webui list already hides non-websocket sessions; handcrafted URLs
-    # should hit the same boundary rather than exposing or deleting them.
+    # Cross-channel sessions are now viewable + deletable from the same
+    # (auth-scoped) API so the webui "All" view can open them; the channel
+    # prefix is no longer a boundary, but the SESSIONS_READ/WRITE scope still is.
     msgs = client.get("/api/v1/sessions/cli:direct/messages", headers=auth)
-    assert msgs.status_code == 404
+    assert msgs.status_code == 200
 
     doomed = sm._get_session_path("slack:C123")
     assert doomed.exists()
-    deny_delete = client.delete(
+    allow_delete = client.delete(
         "/api/v1/sessions/slack:C123", headers=auth
     )
-    assert deny_delete.status_code == 404
-    assert doomed.exists()
+    assert allow_delete.status_code == 200
+    assert allow_delete.json()["deleted"] is True
+    assert not doomed.exists()
 
 
 def test_rename_during_active_turn_preserves_title_and_messages(

@@ -101,6 +101,84 @@
         "title": "BackgroundTask",
         "type": "object"
       },
+      "ChannelStartCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ChannelStartCommand",
+        "type": "object"
+      },
+      "ChannelStartResult": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "ChannelStartResult",
+        "type": "object"
+      },
+      "ChannelStopCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ChannelStopCommand",
+        "type": "object"
+      },
+      "ChannelStopResult": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "ChannelStopResult",
+        "type": "object"
+      },
       "ChannelsListQuery": {
         "additionalProperties": false,
         "description": "No inputs \u2014 lists all discovered channels with their enabled state.",
@@ -3176,6 +3254,142 @@
         "title": "OAuthStatusResult",
         "type": "object"
       },
+      "PairingApproveCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "PairingApproveCommand",
+        "type": "object"
+      },
+      "PairingApproveResult": {
+        "properties": {
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Channel"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "sender_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sender Id"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "PairingApproveResult",
+        "type": "object"
+      },
+      "PairingDenyCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "PairingDenyCommand",
+        "type": "object"
+      },
+      "PairingDenyResult": {
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "PairingDenyResult",
+        "type": "object"
+      },
+      "PairingListQuery": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "PairingListQuery",
+        "type": "object"
+      },
+      "PairingListResult": {
+        "properties": {
+          "approved": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Approved",
+            "type": "array"
+          },
+          "pending": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Pending",
+            "type": "array"
+          }
+        },
+        "required": [
+          "pending",
+          "approved"
+        ],
+        "title": "PairingListResult",
+        "type": "object"
+      },
+      "PairingRevokeCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "sender_id": {
+            "title": "Sender Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sender_id"
+        ],
+        "title": "PairingRevokeCommand",
+        "type": "object"
+      },
+      "PairingRevokeResult": {
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "PairingRevokeResult",
+        "type": "object"
+      },
       "PersonaDeleteCommand": {
         "additionalProperties": false,
         "properties": {
@@ -4024,7 +4238,7 @@
       },
       "SessionsListQuery": {
         "additionalProperties": false,
-        "description": "No inputs \u2014 lists all websocket-channel sessions.",
+        "description": "No inputs \u2014 lists all sessions across every channel.",
         "properties": {},
         "title": "SessionsListQuery",
         "type": "object"
@@ -4829,6 +5043,69 @@
         "title": "TasksListResult",
         "type": "object"
       },
+      "TelegramTestCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "TelegramTestCommand",
+        "type": "object"
+      },
+      "TelegramTestResult": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Username"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "TelegramTestResult",
+        "type": "object"
+      },
       "TokenMetadata": {
         "properties": {
           "created_at": {
@@ -5396,6 +5673,209 @@
         },
         "summary": "Discovered channels with their enabled state and primary credential field",
         "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/start": {
+      "post": {
+        "operationId": "channels_runtime_start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelStartCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelStartResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Hot-start a channel in the running gateway (no restart required)",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/stop": {
+      "post": {
+        "operationId": "channels_runtime_stop",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelStopCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelStopResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Hot-stop a channel in the running gateway (no restart required)",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/telegram/pairing": {
+      "get": {
+        "operationId": "telegram_pairing",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingListResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List pending and approved Telegram pairing entries",
+        "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/telegram/pairing/approve": {
+      "post": {
+        "operationId": "telegram_pairing_approve",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingApproveCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingApproveResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Approve a pending Telegram pairing code",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/telegram/pairing/deny": {
+      "post": {
+        "operationId": "telegram_pairing_deny",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingDenyCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingDenyResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Deny and discard a pending Telegram pairing code",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/telegram/pairing/revoke": {
+      "post": {
+        "operationId": "telegram_pairing_revoke",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingRevokeCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingRevokeResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Revoke an approved Telegram sender",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/telegram/test": {
+      "post": {
+        "operationId": "telegram_test",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramTestCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramTestResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Validate a Telegram bot token via getMe (persists nothing)",
+        "x-required-scope": "config:write"
       }
     },
     "/api/v1/commands": {
@@ -7309,7 +7789,7 @@
             "description": "Success"
           }
         },
-        "summary": "List websocket-channel sessions (path field stripped)",
+        "summary": "List all sessions across channels (path field stripped, channel field added)",
         "x-required-scope": "sessions:read"
       }
     },
@@ -7338,7 +7818,7 @@
             "description": "Success"
           }
         },
-        "summary": "Delete a websocket-channel session and its webui thread",
+        "summary": "Delete a session and its webui thread",
         "x-required-scope": "sessions:write"
       }
     },
@@ -7396,7 +7876,7 @@
             "description": "Success"
           }
         },
-        "summary": "Set a user-edited title for a websocket-channel session",
+        "summary": "Set a user-edited title for a session",
         "x-required-scope": "sessions:write"
       }
     },

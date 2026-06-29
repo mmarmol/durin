@@ -142,8 +142,8 @@ def test_scopes_are_valid():
 
 
 def test_all_service_classes_enumerated():
-    """SERVICE_CLASSES contains all 16 expected service types."""
-    assert len(SERVICE_CLASSES) == 16
+    """SERVICE_CLASSES contains all 18 expected service types."""
+    assert len(SERVICE_CLASSES) == 18
 
 
 def test_catalog_registry_has_no_duplicate_routes():

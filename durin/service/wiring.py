@@ -23,6 +23,7 @@ def build_service_registry(
     bus: Any = None,
     mcp_runtime: Any = None,
     subagent_manager: Any = None,
+    channel_manager: Any = None,
 ) -> ServiceRegistry:
     """Construct a registry with all domain services wired to real deps.
 
@@ -35,9 +36,16 @@ def build_service_registry(
     ``agent.subagents`` instance so the Tasks service can report running sub-agents;
     the websocket channel's shim registry passes ``None`` and only workflow runs are
     reported.
+
+    ``channel_manager`` is optional: the unified gateway passes the live
+    ``ChannelManager`` so the channels-runtime service can hot-start/stop channels;
+    the websocket channel's shim registry passes ``None`` and those routes report
+    "channel_manager not available".
     """
     from durin.security.api_tokens import ApiTokenStore
     from durin.service.auth import AuthService
+    from durin.service.channels_runtime import ChannelsRuntimeService
+    from durin.service.channels_telegram import TelegramService
     from durin.service.commands import CommandsService
     from durin.service.config import ConfigService
     from durin.service.cron import CronService
@@ -67,12 +75,15 @@ def build_service_registry(
         session_manager=session_manager,
         cron_service=cron_service,
         bus=bus,
+        channel_manager=channel_manager,
     )
     registry.register("secrets", SecretsService())
     registry.register("cron", CronService(cron_scheduler=cron_service))
     registry.register("sessions", SessionsService(session_manager=session_manager))
     registry.register("settings", SettingsService())
     registry.register("config", ConfigService())
+    registry.register("telegram", TelegramService())
+    registry.register("channels_runtime", ChannelsRuntimeService(channel_manager=channel_manager))
     registry.register("skills", SkillsService(workspace=_workspace()))
     registry.register("memory", MemoryService(workspace_resolver=_workspace))
     registry.register("personas", PersonasService(workspace_resolver=_workspace))

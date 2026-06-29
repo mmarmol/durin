@@ -1375,9 +1375,13 @@ async def test_on_message_ignores_unauthorized_user_before_side_effects() -> Non
 
     await channel._on_message(_make_telegram_update(text="hello", chat_type="private"), None)
 
+    # Unauthorized DMs route through _handle_message so the base can issue a
+    # pairing code — but side effects (typing indicator, reaction) must not fire.
     assert started_typing == []
     channel._add_reaction.assert_not_awaited()
-    assert handled == []
+    assert len(handled) == 1
+    assert handled[0]["sender_id"] == "12345|alice"
+    assert handled[0]["is_dm"] is True
 
 
 @pytest.mark.asyncio
@@ -1850,3 +1854,117 @@ async def test_callback_query_ignores_unauthorized_user_before_side_effects() ->
     query.answer.assert_not_awaited()
     query.message.edit_reply_markup.assert_not_awaited()
     channel._handle_message.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# P1: drop_pending_updates default + start_polling wiring
+# ---------------------------------------------------------------------------
+
+def test_config_drop_pending_updates_defaults_to_true() -> None:
+    assert TelegramConfig().drop_pending_updates is True
+
+
+@pytest.mark.asyncio
+async def test_start_passes_drop_pending_updates_from_config(monkeypatch) -> None:
+    _FakeHTTPXRequest.clear()
+    config = TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], drop_pending_updates=False)
+    bus = MessageBus()
+    channel = TelegramChannel(config, bus)
+    app = _FakeApp(lambda: setattr(channel, "_running", False))
+    builder = _FakeBuilder(app)
+
+    monkeypatch.setattr("durin.channels.telegram.HTTPXRequest", _FakeHTTPXRequest)
+    monkeypatch.setattr(
+        "durin.channels.telegram.Application",
+        SimpleNamespace(builder=lambda: builder),
+    )
+
+    await channel.start()
+
+    assert app.updater.start_polling_kwargs["drop_pending_updates"] is False
+
+
+@pytest.mark.asyncio
+async def test_start_passes_drop_pending_updates_true_by_default(monkeypatch) -> None:
+    _FakeHTTPXRequest.clear()
+    config = TelegramConfig(enabled=True, token="123:abc", allow_from=["*"])
+    bus = MessageBus()
+    channel = TelegramChannel(config, bus)
+    app = _FakeApp(lambda: setattr(channel, "_running", False))
+    builder = _FakeBuilder(app)
+
+    monkeypatch.setattr("durin.channels.telegram.HTTPXRequest", _FakeHTTPXRequest)
+    monkeypatch.setattr(
+        "durin.channels.telegram.Application",
+        SimpleNamespace(builder=lambda: builder),
+    )
+
+    await channel.start()
+
+    assert app.updater.start_polling_kwargs["drop_pending_updates"] is True
+
+
+# ---------------------------------------------------------------------------
+# P1: Conflict (409) special-case logging in _on_polling_error and _on_error
+# ---------------------------------------------------------------------------
+
+def test_on_polling_error_logs_conflict_with_actionable_message(monkeypatch) -> None:
+    from telegram.error import Conflict
+
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    recorded: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        channel.logger,
+        "error",
+        lambda message, *args: recorded.append(("error", message.format(*args) if args else message)),
+    )
+    monkeypatch.setattr(
+        channel.logger,
+        "warning",
+        lambda message, *args: recorded.append(("warning", message.format(*args) if args else message)),
+    )
+
+    channel._on_polling_error(Conflict("Conflict: terminated by other long poll or webhook"))
+
+    assert len(recorded) == 1
+    level, msg = recorded[0]
+    assert level == "error"
+    assert "409" in msg or "conflict" in msg.lower()
+    assert "only one gateway" in msg.lower() or "another process" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_on_error_logs_conflict_with_actionable_message(monkeypatch) -> None:
+    from telegram.error import Conflict
+
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    recorded: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        channel.logger,
+        "error",
+        lambda message, *args: recorded.append(("error", message.format(*args) if args else message)),
+    )
+    monkeypatch.setattr(
+        channel.logger,
+        "warning",
+        lambda message, *args: recorded.append(("warning", message.format(*args) if args else message)),
+    )
+
+    await channel._on_error(
+        object(),
+        SimpleNamespace(error=Conflict("Conflict: terminated by other long poll or webhook")),
+    )
+
+    assert len(recorded) == 1
+    level, msg = recorded[0]
+    assert level == "error"
+    assert "409" in msg or "conflict" in msg.lower()
+    assert "only one gateway" in msg.lower() or "another process" in msg.lower()
