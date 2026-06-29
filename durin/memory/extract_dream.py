@@ -162,6 +162,10 @@ Rules:
 - Include ONLY durable, identity-defining facts: who/what an entity is, stable roles or
   relationships, lasting preferences, commitments and deadlines, life events.
 - EXCLUDE ephemeral task details, transient state, speculation, and small talk.
+- EXCLUDE content the user merely SHOWED rather than asserted as their own
+  durable fact: third-party quotes or reviews, advertisements/marketing copy,
+  transcribed audio samples, and pasted documents. Capture a fact only when the
+  user states it about themselves or their world.
 - Only facts explicitly stated in the turns. Do not invent or infer.
 - Each entity is an object with:
   - "ref": "<type>:<slug>" — lowercase ascii slug; type one of

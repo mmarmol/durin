@@ -130,7 +130,8 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    (`is_deleted`) and never re-created.
 5. **Stage 2 (discover, when `discover=True`).** `discover_entities` makes one
    LLM call over the *same* turns for durable identity-class facts (identity,
-   roles, relationships, commitments, life events — ephemeral chatter excluded)
+   roles, relationships, commitments, life events — ephemeral chatter and
+   shown-not-asserted third-party content excluded by prompt rules)
    about entities the agent did **not** upsert, and writes them as
    `author="dream"` pages, skipping refs already handled in Stage 1 and
    tombstoned refs. Each proposal from the discovery prompt is a **rich

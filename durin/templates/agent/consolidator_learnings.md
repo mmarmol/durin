@@ -19,6 +19,8 @@ Exclude:
 - Task progress, todo items, transient state, and ephemeral artifacts
 - Single-session observations that show no sign of being durable preferences
 - Routine decisions, findings, and blockers (those belong in the decision log)
+- Content the user merely SHOWED, not asserted: third-party quotes/reviews,
+  advertisements or marketing copy, transcribed audio samples, pasted documents
 
 Output a JSON array of objects, one per durable learning:
 
