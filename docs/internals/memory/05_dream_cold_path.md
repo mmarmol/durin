@@ -156,13 +156,18 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    proposal is the same entity under a variant name; a confirmed match reuses the
    existing entity instead of minting a new slug, preventing variant-name
    duplicates at birth. This semantic step is a no-op when the vector index is
-   unavailable. The discovered `name` is set via `write_entity(name=...)`, which
-   is **last-writer-wins** — a later explicit agent/user correction simply
-   overwrites a discovered guess. Per-field precedence applies to *attributes*,
-   not to the name. The extract pass builds a **single `AliasIndex`** once per
-   pass (refreshed across all sessions processed in that run) and passes it to
-   each `discover_entities` call; callers that omit it fall back to building
-   their own.
+   unavailable. The discover prompt is **seeded with an `EXISTING ENTITIES`
+   manifest** (up to 20 entries, retrieved by a query-mode search using the
+   conversation turns): the LLM is instructed to reuse the exact ref of a known
+   entity when the fact is about it, and to mint a new ref only for genuinely new
+   entities. This prompt-level seeding is a first-pass guard that reduces
+   duplicate slugs before any post-write resolution is attempted. The discovered
+   `name` is set via `write_entity(name=...)`, which is **last-writer-wins** — a
+   later explicit agent/user correction simply overwrites a discovered guess.
+   Per-field precedence applies to *attributes*, not to the name. The extract
+   pass builds a **single `AliasIndex`** once per pass (refreshed across all
+   sessions processed in that run) and passes it to each `discover_entities`
+   call; callers that omit it fall back to building their own.
 6. **Stage 3 (skill signals, when `skill_signals=True`).** Skill corrections and
    gaps in the same turns are logged as observations for later skill curation
    (out of scope here — see the skills internals docs).

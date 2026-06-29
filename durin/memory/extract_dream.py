@@ -21,6 +21,7 @@ from typing import Any, Callable, Iterable
 from json_repair import repair_json
 
 from durin.memory.aliases_index import AliasIndex
+from durin.memory.entity_manifest import build_entity_manifest
 from durin.memory.entities import SUGGESTED_TYPES_ORDERED
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
@@ -180,16 +181,25 @@ Rules:
   - "attributes": a JSON object of scalar or short-list values — NO prose, NO nested objects
 - Output ONLY a JSON array of these objects. If nothing durable is stated, output [].
 
+KNOWN ENTITIES — reuse, do not duplicate:
+If a durable fact below is about an entity in this list, output its EXACT ref
+(do not mint a new slug or a different type). Only create a new ref for a
+genuinely new entity.
+
+EXISTING ENTITIES:
+{existing}
+
 CONVERSATION TURNS:
 {turns}
 
 JSON:"""
 
 
-def build_discover_prompt(turns: str) -> str:
+def build_discover_prompt(turns: str, existing: str = "") -> str:
     return _DISCOVER_PROMPT.format(
         turns=turns[:12000],
         types="/".join(SUGGESTED_TYPES_ORDERED),
+        existing=existing.strip() or "(none yet)",
     )
 
 
@@ -348,7 +358,9 @@ def discover_entities(
     if not turns.strip():
         return []
     skip = set(existing_refs)
-    prompt = build_discover_prompt(turns)
+    existing = build_entity_manifest(
+        workspace, query=turns, limit=20, vector_index=vector_index)
+    prompt = build_discover_prompt(turns, existing=existing)
     resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
     raw = resp.text if hasattr(resp, "text") else str(resp)
     proposals = parse_discoveries(raw)
