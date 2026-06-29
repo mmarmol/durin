@@ -110,6 +110,9 @@ async def test_spawn_tool_rejects_when_at_concurrency_limit(tmp_path):
         bus=bus,
         max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
     )
+    # Pin the limit to 1 so this test exercises the rejection path regardless
+    # of the configured default.
+    mgr.max_concurrent_subagents = 1
     mgr._announce_result = AsyncMock()
 
     # Block the first subagent so it stays "running"
@@ -135,7 +138,7 @@ async def test_spawn_tool_rejects_when_at_concurrency_limit(tmp_path):
     result = await tool.execute(task="first task")
     assert "started" in result
 
-    # Second spawn should be rejected (default limit is 1)
+    # Second spawn should be rejected (limit pinned to 1 above)
     result = await tool.execute(task="second task")
     assert "Cannot spawn subagent" in result
     assert "concurrency limit reached" in result

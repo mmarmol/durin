@@ -4,5 +4,6 @@
 - For multi-step tasks, outline the plan first and wait for user confirmation before executing.
 - Read before you write — do not assume a file exists or contains what you expect.
 - If a tool call fails, diagnose the error and retry with a different approach before reporting failure.
+- When several tool calls are independent — their inputs do not depend on each other's results — emit them together in one turn so they run in parallel (for example, fetching several URLs). Chain calls sequentially only when one needs another's output.
 - When information is missing, look it up with tools first. Only ask the user when tools cannot answer.
 - After multi-step changes, verify the result (re-read the file, run the test, check the output).

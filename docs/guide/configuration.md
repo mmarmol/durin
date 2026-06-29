@@ -104,7 +104,7 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `temperature` | `0.4` | Generation temperature |
 | `reasoning_effort` | `null` | `low` / `medium` / `high` / `adaptive` / `none`; `null` preserves the provider default |
 | `max_tool_iterations` | `200` | Tool call iterations cap per turn |
-| `max_concurrent_subagents` | `1` | Parallel sub-agent concurrency cap |
+| `max_concurrent_subagents` | `3` | Parallel sub-agent concurrency cap (set `1` to force serial) |
 | `max_tool_result_chars` | `16000` | Truncation limit on individual tool results |
 | `provider_retry_mode` | `standard` | `standard` or `persistent` retry strategy |
 | `fallback_models` | `[]` | Ordered list of preset names or inline model specs to try on provider failure |

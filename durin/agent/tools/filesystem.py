@@ -1,5 +1,6 @@
 """File system tools: read, write, edit, list."""
 
+import asyncio
 import difflib
 import mimetypes
 import os
@@ -14,6 +15,7 @@ from durin.agent.tools.file_state import FileStates, _hash_file, current_file_st
 from durin.agent.tools.path_utils import resolve_workspace_path
 from durin.agent.tools.post_edit_check import run_post_edit_check
 from durin.agent.tools.schema import (
+    ArraySchema,
     BooleanSchema,
     IntegerSchema,
     StringSchema,
@@ -188,9 +190,26 @@ def _parse_page_range(pages: str, total: int) -> tuple[int, int]:
     return max(0, start - 1), min(end - 1, total - 1)
 
 
+# Cap on paths per read_file call. Generous: reads are cheap local IO,
+# the cap just bounds how much file content lands in the model's context
+# from a single call.
+MAX_READ_PATHS: int = 15
+
+
 @tool_parameters(
     tool_parameters_schema(
-        path=StringSchema("The file path to read"),
+        path=StringSchema("The file path to read. Use this OR `paths` (not both)."),
+        paths=ArraySchema(
+            items=StringSchema("A file path to read"),
+            description=(
+                f"List of file paths to read in one call (max {MAX_READ_PATHS}). "
+                "Results come back in the same order, each as a `{path, content}` "
+                "record with an `error` field on entries that failed. Prefer this "
+                "form whenever 2+ independent files need reading. `offset`/`limit`/"
+                "`pages` are not supported with `paths` — use single `path` for "
+                "paginated reads."
+            ),
+        ),
         offset=IntegerSchema(
             1,
             description="Line number to start reading from (1-indexed, default 1)",
@@ -202,7 +221,6 @@ def _parse_page_range(pages: str, total: int) -> tuple[int, int]:
             minimum=1,
         ),
         pages=StringSchema("Page range for PDF files, e.g. '1-5' (default: all, max 20 pages)"),
-        required=["path"],
     )
 )
 class ReadFileTool(_FsTool):
@@ -221,10 +239,15 @@ class ReadFileTool(_FsTool):
     def description(self) -> str:
         return (
             "Read a file (text, image, or document). "
+            "Pass `path` for a single file. When you know you need two or more "
+            "files, ALWAYS pass them together as `paths` (a list) instead of "
+            "reading one at a time — it returns them all in a single call. "
+            "For example, to read a module with its test: "
+            '`paths: ["src/auth.py", "tests/test_auth.py"]`. '
             "Text output format: LINE_NUM|CONTENT. "
             "Images return visual content for analysis. "
             "Supports PDF, DOCX, XLSX, PPTX documents. "
-            "Use offset and limit for large text files. "
+            "Use offset and limit for large text files (single `path` only). "
             "Reads exceeding ~128K chars are truncated."
         )
 
@@ -232,7 +255,49 @@ class ReadFileTool(_FsTool):
     def read_only(self) -> bool:
         return True
 
-    async def execute(self, path: str | None = None, offset: int = 1, limit: int | None = None, pages: str | None = None, **kwargs: Any) -> Any:
+    def fanout_size(self, arguments: dict[str, Any]) -> int:
+        paths = arguments.get("paths")
+        return len(paths) if isinstance(paths, list) and paths else 1
+
+    async def execute(
+        self,
+        path: str | None = None,
+        paths: list[str] | None = None,
+        offset: int = 1,
+        limit: int | None = None,
+        pages: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        # Mutually exclusive surfaces, mirroring memory_drill / web_fetch.
+        if path and paths:
+            return "Error: pass either `path` (single) or `paths` (list), not both"
+        if paths is not None and path is None:
+            if not isinstance(paths, list) or len(paths) == 0:
+                return "Error: paths must be a non-empty list"
+            if len(paths) > MAX_READ_PATHS:
+                return f"Error: too many paths ({len(paths)}); cap is {MAX_READ_PATHS} per call"
+            # Each read is independent local IO touching a distinct file-state
+            # key, so awaiting them together is safe; this collapses N reads
+            # into one tool call (one round-trip, guaranteed grouping).
+            results = await asyncio.gather(*[
+                self._read_one_safe(str(p)) for p in paths
+            ])
+            return {"results": results}
+
+        return await self._read_one(path, offset, limit, pages)
+
+    async def _read_one_safe(self, path: str) -> dict[str, Any]:
+        """Batch helper — never raises, always returns a record carrying the
+        path so the caller can match it back to its request."""
+        if not path:
+            return {"path": path, "error": "empty path"}
+        try:
+            content = await self._read_one(path)
+        except Exception as exc:  # defensive: one read must not abort the batch
+            return {"path": path, "error": f"read failed: {exc}"}
+        return {"path": path, "content": content}
+
+    async def _read_one(self, path: str | None = None, offset: int = 1, limit: int | None = None, pages: str | None = None, **kwargs: Any) -> Any:
         try:
             if not path:
                 return "Error reading file: Unknown path"

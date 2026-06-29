@@ -83,6 +83,10 @@ class MemoryDrillTool(Tool):
     def read_only(self) -> bool:
         return True
 
+    def fanout_size(self, arguments: dict[str, Any]) -> int:
+        uris = arguments.get("uris")
+        return len(uris) if isinstance(uris, list) and uris else 1
+
     @property
     def name(self) -> str:
         return "memory_drill"
