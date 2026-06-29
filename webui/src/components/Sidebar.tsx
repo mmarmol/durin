@@ -41,11 +41,16 @@ interface SidebarProps {
 export function Sidebar(props: SidebarProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
+  const [channelFilter, setChannelFilter] = useState<"web" | "all">("web");
   const normalizedQuery = query.trim().toLowerCase();
   const filteredSessions = useMemo(() => {
-    if (!normalizedQuery) return props.sessions;
+    let sessions = props.sessions;
+    if (channelFilter === "web") {
+      sessions = sessions.filter((s) => s.channel === "websocket");
+    }
+    if (!normalizedQuery) return sessions;
     const terms = normalizedQuery.split(/\s+/).filter(Boolean);
-    return props.sessions.filter((session) => {
+    return sessions.filter((session) => {
       const haystack = [
         session.title,
         session.preview,
@@ -58,7 +63,7 @@ export function Sidebar(props: SidebarProps) {
         .toLowerCase();
       return terms.every((term) => haystack.includes(term));
     });
-  }, [normalizedQuery, props.sessions]);
+  }, [normalizedQuery, channelFilter, props.sessions]);
 
   return (
     <nav
@@ -113,6 +118,29 @@ export function Sidebar(props: SidebarProps) {
             )}
           />
         </label>
+        {props.sessions.some((s) => s.channel !== "websocket") && (
+          <div
+            className="flex h-7 rounded-full bg-sidebar-accent/35 p-0.5"
+            role="group"
+            aria-label="Channel filter"
+          >
+            {(["web", "all"] as const).map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => setChannelFilter(opt)}
+                className={cn(
+                  "flex-1 rounded-full text-[11.5px] font-medium transition-colors",
+                  channelFilter === opt
+                    ? "bg-sidebar-accent/80 text-sidebar-foreground shadow-sm"
+                    : "text-muted-foreground/75 hover:text-sidebar-foreground",
+                )}
+              >
+                {t(`chat.channelFilter.${opt}`)}
+              </button>
+            ))}
+          </div>
+        )}
         <Button
           onClick={props.onNewChat}
           className="h-8 w-full justify-start gap-2 rounded-full px-3 text-[12.5px] font-medium text-sidebar-foreground/92 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground"

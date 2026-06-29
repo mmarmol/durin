@@ -234,6 +234,31 @@
       "sectionAvailable": "Disponibles",
       "advanced": "Avanzado",
       "groupAccess": "Acceso",
+      "telegram": {
+        "modeGuided": "Guiado",
+        "modeManual": "Manual",
+        "step1Title": "1. Crea un bot",
+        "botFatherLink": "Abrir @BotFather",
+        "newBotHint": "Envía /newbot y copia el token que te da.",
+        "step2Title": "2. Valida tu token",
+        "tokenPlaceholder": "Token del bot de BotFather",
+        "validate": "Validar",
+        "validating": "Validando…",
+        "connectedAs": "Conectado como @{{username}}",
+        "saveAndEnable": "Guardar y habilitar",
+        "saving": "Guardando…",
+        "pairingInstruction": "Abre tu bot y envía /start:",
+        "sendStart": "y luego envía /start.",
+        "pairingInstructionGeneric": "Abre tu bot en Telegram y envía /start para vincular tu cuenta.",
+        "pendingRequests": "Solicitudes pendientes",
+        "approvedSenders": "Remitentes aprobados",
+        "approve": "Aprobar",
+        "deny": "Denegar",
+        "revoke": "Revocar",
+        "noPairings": "Aún no hay vinculaciones pendientes ni aprobadas.",
+        "allowFrom": "Permitir desde",
+        "allowFromHint": "IDs o @usernames separados por coma. * = todos (bot público). Vacío = solo por vinculación."
+      },
       "desc": {
         "websocket": "Transporte del panel web y de clientes WebSocket externos. Siempre activo mientras el panel esté habilitado. El token es opcional, solo para clientes externos.",
         "email": "Recibe y responde correo por IMAP (entrada) y SMTP (salida)."
@@ -964,7 +989,11 @@
       "yesterday": "Ayer"
     },
     "rename": "Cambiar nombre",
-    "renameAria": "Cambiar nombre del chat"
+    "renameAria": "Cambiar nombre del chat",
+    "channelFilter": {
+      "web": "Web",
+      "all": "Todos"
+    }
   },
   "deleteConfirm": {
     "title": "¿Eliminar este chat?",

@@ -156,6 +156,11 @@ export function ChatList({
                           className="min-w-0 flex-1 overflow-hidden py-1.5 text-left"
                         >
                           <span className="block w-full truncate font-medium leading-5">{title}</span>
+                          {s.channel && s.channel !== "websocket" && (
+                            <span className="mt-0.5 inline-block rounded-full bg-emerald-500/15 px-1.5 py-px text-[10px] font-medium capitalize leading-none text-emerald-700 dark:text-emerald-400">
+                              {s.channel}
+                            </span>
+                          )}
                         </button>
                       )}
                       {isEditing ? null : (

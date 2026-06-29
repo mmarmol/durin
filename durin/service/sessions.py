@@ -1,4 +1,4 @@
-"""SessionsService — list, read, delete, and rename websocket-channel sessions.
+"""SessionsService — list, read, delete, and rename sessions across all channels.
 
 Wraps durin's ``SessionManager``.  Returns unsigned data only: the
 ``_handle_session_messages`` and ``_handle_webui_thread_get`` shims apply
@@ -39,7 +39,7 @@ from durin.session.turn_lease import session_turn_lease
 
 
 class SessionsListQuery(Query):
-    """No inputs — lists all websocket-channel sessions."""
+    """No inputs — lists all sessions across every channel."""
 
 
 class SessionsListResult(Result):
@@ -105,7 +105,7 @@ class SessionRenameResult(Result):
 
 
 class SessionsService:
-    """Read and mutate websocket-channel sessions.
+    """Read and mutate sessions across all channels.
 
     ``session_manager`` is the live ``SessionManager`` instance (from the
     gateway's ``_session_manager``).  It may be ``None`` when tests construct
@@ -131,7 +131,7 @@ class SessionsService:
         scope=Scope.SESSIONS_READ.value,
         request_model=SessionsListQuery,
         response_model=SessionsListResult,
-        summary="List websocket-channel sessions (path field stripped)",
+        summary="List all sessions across channels (path field stripped, channel field added)",
     )
     async def list(
         self, query: SessionsListQuery, principal: Principal
@@ -139,11 +139,17 @@ class SessionsService:
         principal.require(Scope.SESSIONS_READ)
         sm = self._require_manager()
         sessions = sm.list_sessions()
-        cleaned = [
-            {k: v for k, v in s.items() if k != "path"}
-            for s in sessions
-            if isinstance(s.get("key"), str) and s["key"].startswith("websocket:")
-        ]
+        cleaned = []
+        for s in sessions:
+            key = s.get("key")
+            if not isinstance(key, str):
+                continue
+            # Derive the channel from the key prefix (e.g. "telegram:123" → "telegram").
+            colon = key.find(":")
+            channel = key[:colon] if colon != -1 else ""
+            row = {k: v for k, v in s.items() if k != "path"}
+            row["channel"] = channel
+            cleaned.append(row)
         return SessionsListResult(sessions=cleaned)
 
     @route(
@@ -164,8 +170,6 @@ class SessionsService:
         """
         principal.require(Scope.SESSIONS_READ)
         sm = self._require_manager()
-        if not query.key.startswith("websocket:"):
-            raise NotFoundError("session not found", details={"key": query.key})
         data = sm.read_session_file(query.key)
         if data is None:
             raise NotFoundError("session not found", details={"key": query.key})
@@ -204,8 +208,6 @@ class SessionsService:
         shim performs the adapter-specific side effect.
         """
         principal.require(Scope.SESSIONS_READ)
-        if not query.key.startswith("websocket:"):
-            raise NotFoundError("session not found", details={"key": query.key})
         # Sentinel — actual data is built by the shim (see docstring above).
         return WebuiThreadResult(data={})
 
@@ -215,15 +217,13 @@ class SessionsService:
         scope=Scope.SESSIONS_WRITE.value,
         request_model=SessionDeleteCommand,
         response_model=SessionDeleteResult,
-        summary="Delete a websocket-channel session and its webui thread",
+        summary="Delete a session and its webui thread",
     )
     async def delete(
         self, cmd: SessionDeleteCommand, principal: Principal
     ) -> SessionDeleteResult:
         principal.require(Scope.SESSIONS_WRITE)
         sm = self._require_manager()
-        if not cmd.key.startswith("websocket:"):
-            raise NotFoundError("session not found", details={"key": cmd.key})
         deleted = sm.delete_session(cmd.key)
         from durin.utils.webui_thread_disk import delete_webui_thread
 
@@ -236,15 +236,13 @@ class SessionsService:
         scope=Scope.SESSIONS_WRITE.value,
         request_model=SessionRenameCommand,
         response_model=SessionRenameResult,
-        summary="Set a user-edited title for a websocket-channel session",
+        summary="Set a user-edited title for a session",
     )
     async def rename(
         self, cmd: SessionRenameCommand, principal: Principal
     ) -> SessionRenameResult:
         principal.require(Scope.SESSIONS_WRITE)
         sm = self._require_manager()
-        if not cmd.key.startswith("websocket:"):
-            raise NotFoundError("session not found", details={"key": cmd.key})
         from durin.utils.webui_titles import (
             TITLE_MAX_CHARS,
             WEBUI_TITLE_METADATA_KEY,
