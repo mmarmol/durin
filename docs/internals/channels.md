@@ -392,6 +392,27 @@ will be discovered at startup and can be enabled with
   configured `host:port/path`. Authentication is handled via `token` or
   `token_issue_secret` (reverse-proxy path).
 
+### Viewing non-websocket sessions in the webui
+
+The webui sidebar lists sessions from all channels (Telegram, CLI, subagent,
+etc.). Historically, clicking one returned a 404 because the rich per-session
+JSONL transcript used by the thread endpoint is written only by the websocket
+channel (`append_transcript_object` in `durin/channels/websocket.py`).
+
+The thread endpoint (`GET /api/v1/sessions/{key}/webui-thread`) now falls back
+to the **universal session history** when no JSONL exists: it reads the
+OpenAI-format messages via `SessionManager.read_session_file` and converts them
+to the webui `UIMessage` shape with `session_messages_to_ui_messages`
+(`durin/utils/webui_transcript.py`). The payload carries `"readOnly": true` so
+the frontend knows the session cannot be continued from the webui (the webui
+would spawn a new websocket session, not resume the original channel). The
+`ThreadShell` component disables the composer and shows a banner when the active
+session's `channel` is not `"websocket"`.
+
+The converter is a pure function (no I/O): media signing reuses the channel's
+existing `_augment_transcript_user_media` callback, which HMAC-signs file paths
+using the same per-process `_media_secret` as websocket sessions.
+
 ## 7. Curated rationale
 
 **Why two queues instead of direct calls?** The agent loop processes one turn
