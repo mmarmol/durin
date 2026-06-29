@@ -11,10 +11,11 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from durin.bus.events import OutboundMessage
+from durin.bus.events import InboundMessage, OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 from durin.config.schema import Config
+from durin.pairing import PAIRING_CODE_META_KEY, format_pairing_reply, generate_code
 from durin.utils.restart import consume_restart_notice_from_env, format_restart_completed_message
 
 if TYPE_CHECKING:
@@ -89,6 +90,8 @@ class ChannelManager:
         # (and its in-process overlap guard), not a fresh action-log copy.
         self._cron_service = cron_service
         self.channels: dict[str, BaseChannel] = {}
+        if bus is not None:
+            self.bus.set_inbound_authorizer(self._authorize_inbound)
         self._dispatch_task: asyncio.Task | None = None
         self._origin_reply_fingerprints: dict[tuple[str, str, str], str] = {}
         # Fire-and-forget tasks (e.g. the restart-completion notice) are
@@ -236,6 +239,32 @@ class ChannelManager:
             return self.config.providers.groq.api_base or ""
         except AttributeError:
             return ""
+
+    async def _authorize_inbound(self, msg: InboundMessage) -> bool:
+        """Central inbound-authorization gate, installed on the bus at init time.
+
+        Unknown channels (cli, cron, subagent, TUI) are always trusted — they
+        are internal and never arrive over an external chat transport.  Known
+        channels delegate to ``channel.is_allowed``; unauthorized DM senders
+        receive a pairing code, unauthorized group messages are silently denied.
+        """
+        channel = self.channels.get(msg.channel)
+        if channel is None:
+            return True  # internal / non-chat origin — never block
+        if channel.is_allowed(msg.sender_id):
+            return True
+        if msg.is_dm:
+            code = generate_code(channel.name, str(msg.sender_id))
+            await channel.send(OutboundMessage(
+                channel=channel.name,
+                chat_id=str(msg.chat_id),
+                content=format_pairing_reply(code),
+                metadata={PAIRING_CODE_META_KEY: code},
+            ))
+            logger.info("Sent pairing code {} to {} on {}", code, msg.sender_id, channel.name)
+        else:
+            logger.warning("Access denied for {} on {}", msg.sender_id, channel.name)
+        return False
 
     def _validate_allow_from(self) -> None:
         for name, ch in self.channels.items():
