@@ -193,10 +193,18 @@ performed in the channel.
 
 `MessageBus.publish_inbound` runs the installed inbound-authorizer gate before
 enqueuing the message. `ChannelManager` installs `_authorize_inbound` as the
-gate at construction time. The gate is the single, un-bypassable enforcement
-point for all inbound messages regardless of source. Channels MUST NOT
-re-implement `is_allowed`/pairing logic in their handlers; they publish
-unconditionally and the gate decides.
+gate at construction time. `publish_inbound` is the only path that enqueues to
+`bus.inbound`, so any message that reaches the bus is gated and the gate cannot
+be bypassed once a message is published.
+
+The channel contract is to be **pure transport**: publish unconditionally with
+`is_dm` set and let the gate authorize — a channel should NOT re-implement
+`is_allowed`/pairing in its handlers. **Telegram is the reference implementation
+of this contract.** Several other channels still pre-filter with their own
+`is_allowed` check and early-`return` in their handlers (legacy behaviour,
+unchanged here — those messages never reach the gate); migrating them to pure
+transport so they route through the central gate is a follow-up. New channels
+should follow the Telegram model.
 
 The agent loop (`AgentLoop.run()`) consumes from `bus.inbound`. The
 `InboundMessage.session_key` property returns `session_key_override` when set,
@@ -392,11 +400,14 @@ LDAP or SSO-style access control implement a custom channel adapter with a
 custom `is_allowed` policy; the central gate calls it uniformly.
 
 **Why is authorization enforced at the bus rather than in each channel?**
-Moving the gate to `MessageBus.publish_inbound` gives a single, un-bypassable
-enforcement point. A channel that forgets to call `is_allowed` or gets its DM
-detection wrong no longer opens a security hole — the gate runs regardless.
-It also decouples the channel from pairing logic: channels become pure
-transport, set `is_dm` on the message, and publish unconditionally.
+Putting the gate at `MessageBus.publish_inbound` gives a single enforcement
+point that runs for every message a channel publishes — a pure-transport channel
+cannot publish an unauthorized message past it, even if it gets its own DM
+detection wrong, and the pairing logic lives in one place instead of being
+re-implemented per channel. (A channel that still pre-filters with its own
+`is_allowed` and early-returns short-circuits before publishing, so it never
+reaches the gate; that is the legacy pattern the pure-transport migration
+removes — Telegram first.)
 
 **Why does stream coalescing key on `_stream_id` and not just `(channel,
 chat_id)`?** Channels like Telegram forum topics or Discord threads can have
