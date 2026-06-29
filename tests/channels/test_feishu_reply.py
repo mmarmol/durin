@@ -931,7 +931,7 @@ async def test_on_message_unauthorized_dm_sends_pairing_code_without_side_effect
     channel._add_reaction.assert_not_awaited()
     channel._download_and_save_media.assert_not_awaited()
     channel.transcribe_audio.assert_not_awaited()
-    # _handle_message is called to issue the pairing code in DMs
+    # _handle_message is called so the gate can issue a pairing code in DMs
     channel._handle_message.assert_awaited_once()
 
 

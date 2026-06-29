@@ -1,9 +1,9 @@
-"""Tests for Telegram pairing-code behaviour for unauthorized senders."""
+"""Tests for TelegramChannel._deny_or_pair routing."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -12,10 +12,8 @@ try:
 except ImportError:
     pytest.skip("Telegram dependencies not installed (python-telegram-bot)", allow_module_level=True)
 
-from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.telegram import TelegramChannel, TelegramConfig
-from durin.pairing import PAIRING_CODE_META_KEY
 
 
 def _make_channel(allow_from: list[str] | None = None) -> TelegramChannel:
@@ -36,40 +34,37 @@ def _make_message(chat_type: str) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_deny_or_pair_dm_issues_pairing_code(monkeypatch) -> None:
-    """Unauthorized sender in a DM receives a pairing code via send()."""
+async def test_deny_or_pair_dm_calls_handle_message_with_is_dm_true() -> None:
+    """_deny_or_pair forwards private-chat messages with is_dm=True.
+
+    The gate (ChannelManager._authorize_inbound) receives the InboundMessage and
+    issues the pairing code — tested in test_inbound_gate.py::test_unauthorized_dm_pairs.
+    """
     channel = _make_channel(allow_from=[])
-    sent: list[OutboundMessage] = []
+    channel._handle_message = AsyncMock()
 
-    async def _fake_send(msg: OutboundMessage) -> None:
-        sent.append(msg)
+    message = _make_message("private")
+    await channel._deny_or_pair(message, "99|alice")
 
-    monkeypatch.setattr(channel, "send", _fake_send)
-
-    # Patch generate_code so we know what code to expect and avoid disk I/O
-    with patch("durin.channels.base.generate_code", return_value="TESTCODE") as mock_gen:
-        message = _make_message("private")
-        await channel._deny_or_pair(message, "99|alice")
-
-    mock_gen.assert_called_once_with("telegram", "99|alice")
-    assert len(sent) == 1
-    assert sent[0].metadata.get(PAIRING_CODE_META_KEY) == "TESTCODE"
+    channel._handle_message.assert_awaited_once()
+    kwargs = channel._handle_message.call_args.kwargs
+    assert kwargs["is_dm"] is True
+    assert kwargs["sender_id"] == "99|alice"
 
 
 @pytest.mark.asyncio
-async def test_deny_or_pair_group_does_not_issue_pairing_code(monkeypatch) -> None:
-    """Unauthorized sender in a group chat does NOT receive a pairing code."""
+async def test_deny_or_pair_group_calls_handle_message_with_is_dm_false() -> None:
+    """_deny_or_pair forwards group-chat messages with is_dm=False.
+
+    The gate drops the message silently without sending a pairing code —
+    tested in test_inbound_gate.py::test_unauthorized_group_denied.
+    """
     channel = _make_channel(allow_from=[])
-    sent: list[OutboundMessage] = []
+    channel._handle_message = AsyncMock()
 
-    async def _fake_send(msg: OutboundMessage) -> None:
-        sent.append(msg)
+    message = _make_message("group")
+    await channel._deny_or_pair(message, "99|alice")
 
-    monkeypatch.setattr(channel, "send", _fake_send)
-
-    with patch("durin.channels.base.generate_code", return_value="TESTCODE") as mock_gen:
-        message = _make_message("group")
-        await channel._deny_or_pair(message, "99|alice")
-
-    mock_gen.assert_not_called()
-    assert len(sent) == 0
+    channel._handle_message.assert_awaited_once()
+    kwargs = channel._handle_message.call_args.kwargs
+    assert kwargs["is_dm"] is False

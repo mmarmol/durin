@@ -820,9 +820,9 @@ class TelegramChannel(BaseChannel):
         buf.text = tail
 
     async def _deny_or_pair(self, message: Any, sender_id: str) -> None:
-        """Unauthorized sender. In a DM, route through the base so it issues a
-        pairing code; in a group, log the denial. Each handler previously returned
-        early here and silently dropped DMs, so pairing never fired."""
+        """Unauthorized sender. Route through _handle_message so the central gate
+        (ChannelManager) can issue a pairing code for DMs or drop group messages.
+        Side effects (typing, reaction) must not fire before this call returns."""
         await self._handle_message(
             sender_id=sender_id,
             chat_id=str(message.chat_id),

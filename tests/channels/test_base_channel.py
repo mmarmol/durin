@@ -1,8 +1,9 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from durin.bus.events import OutboundMessage
+from durin.bus.events import InboundMessage, OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 
@@ -67,29 +68,43 @@ def test_is_allowed_pairing_fallback(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_handle_message_dm_sends_pairing_code(monkeypatch) -> None:
-    channel = _DummyChannel({"allowFrom": []}, MessageBus())
-    monkeypatch.setattr(
-        "durin.channels.base.generate_code", lambda _ch, sid: "ABCD-EFGH"
-    )
+async def test_handle_message_publishes_inbound_dm() -> None:
+    """_handle_message always publishes to the bus regardless of sender auth.
+
+    Authorization + pairing are the gate's responsibility (ChannelManager).
+    The base only builds and publishes the InboundMessage, carrying is_dm so
+    the gate can decide whether to issue a pairing code.
+    """
+    bus = MessageBus()
+    bus.publish_inbound = AsyncMock()
+    channel = _DummyChannel({"allowFrom": []}, bus)
 
     await channel._handle_message(
         sender_id="stranger", chat_id="chat1", content="hello", is_dm=True
     )
 
-    assert len(channel._sent) == 1
-    msg = channel._sent[0]
-    assert "ABCD-EFGH" in msg.content
-    assert msg.metadata.get("_pairing_code") == "ABCD-EFGH"
+    bus.publish_inbound.assert_awaited_once()
+    published: InboundMessage = bus.publish_inbound.call_args[0][0]
+    assert published.sender_id == "stranger"
+    assert published.chat_id == "chat1"
+    assert published.is_dm is True
+    # Base must NOT send anything itself — pairing is the gate's job
+    assert channel._sent == []
 
 
 @pytest.mark.asyncio
-async def test_handle_message_group_ignores_unknown() -> None:
-    channel = _DummyChannel({"allowFrom": []}, MessageBus())
+async def test_handle_message_publishes_inbound_group() -> None:
+    """_handle_message publishes group messages too; the gate decides to drop them."""
+    bus = MessageBus()
+    bus.publish_inbound = AsyncMock()
+    channel = _DummyChannel({"allowFrom": []}, bus)
 
     await channel._handle_message(
         sender_id="stranger", chat_id="chat1", content="hello", is_dm=False
     )
 
+    bus.publish_inbound.assert_awaited_once()
+    published: InboundMessage = bus.publish_inbound.call_args[0][0]
+    assert published.is_dm is False
     assert channel._sent == []
 

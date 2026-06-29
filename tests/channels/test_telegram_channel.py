@@ -1375,8 +1375,8 @@ async def test_on_message_ignores_unauthorized_user_before_side_effects() -> Non
 
     await channel._on_message(_make_telegram_update(text="hello", chat_type="private"), None)
 
-    # Unauthorized DMs route through _handle_message so the base can issue a
-    # pairing code — but side effects (typing indicator, reaction) must not fire.
+    # Unauthorized DMs route through _deny_or_pair → _handle_message so the gate
+    # can issue a pairing code — but side effects (typing indicator, reaction) must not fire.
     assert started_typing == []
     channel._add_reaction.assert_not_awaited()
     assert len(handled) == 1
