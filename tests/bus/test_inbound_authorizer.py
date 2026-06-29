@@ -26,3 +26,23 @@ async def test_authorizer_true_enqueues_and_is_dm_roundtrips():
     await bus.publish_inbound(_msg(is_dm=True))
     got = await bus.consume_inbound()
     assert got.is_dm is True
+
+
+async def test_async_authorizer_is_awaited():
+    # The real gate (ChannelManager._authorize_inbound) is async — it awaits
+    # channel.send for pairing. Exercise the await branch in both directions.
+    bus = MessageBus()
+
+    async def deny(_msg):
+        return False
+
+    bus.set_inbound_authorizer(deny)
+    await bus.publish_inbound(_msg())
+    assert bus.inbound.qsize() == 0
+
+    async def allow(_msg):
+        return True
+
+    bus.set_inbound_authorizer(allow)
+    await bus.publish_inbound(_msg())
+    assert bus.inbound.qsize() == 1
