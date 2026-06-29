@@ -32,38 +32,38 @@ class EmailConfig(Base):
     """Email channel configuration (IMAP inbound + SMTP outbound)."""
 
     enabled: bool = False
-    consent_granted: bool = False
+    consent_granted: bool = Field(default=False, json_schema_extra={"group": "access"})
 
-    imap_host: str = ""
-    imap_port: int = 993
-    imap_username: str = ""
-    imap_password: str = ""
-    imap_mailbox: str = "INBOX"
-    imap_use_ssl: bool = True
+    imap_host: str = Field(default="", json_schema_extra={"group": "imap", "required": True})
+    imap_port: int = Field(default=993, json_schema_extra={"group": "imap"})
+    imap_username: str = Field(default="", json_schema_extra={"group": "imap", "required": True})
+    imap_password: str = Field(default="", json_schema_extra={"group": "imap", "secret": True})
+    imap_mailbox: str = Field(default="INBOX", json_schema_extra={"group": "imap"})
+    imap_use_ssl: bool = Field(default=True, json_schema_extra={"group": "imap"})
 
-    smtp_host: str = ""
-    smtp_port: int = 587
-    smtp_username: str = ""
-    smtp_password: str = ""
-    smtp_use_tls: bool = True
-    smtp_use_ssl: bool = False
-    from_address: str = ""
+    smtp_host: str = Field(default="", json_schema_extra={"group": "smtp", "required": True})
+    smtp_port: int = Field(default=587, json_schema_extra={"group": "smtp"})
+    smtp_username: str = Field(default="", json_schema_extra={"group": "smtp", "required": True})
+    smtp_password: str = Field(default="", json_schema_extra={"group": "smtp", "secret": True})
+    smtp_use_tls: bool = Field(default=True, json_schema_extra={"group": "smtp"})
+    smtp_use_ssl: bool = Field(default=False, json_schema_extra={"group": "smtp"})
+    from_address: str = Field(default="", json_schema_extra={"group": "smtp"})
 
-    auto_reply_enabled: bool = True
-    poll_interval_seconds: int = 30
-    mark_seen: bool = True
-    max_body_chars: int = 12000
-    subject_prefix: str = "Re: "
-    allow_from: list[str] = Field(default_factory=list)
+    auto_reply_enabled: bool = Field(default=True, json_schema_extra={"group": "behavior"})
+    poll_interval_seconds: int = Field(default=30, json_schema_extra={"group": "behavior"})
+    mark_seen: bool = Field(default=True, json_schema_extra={"group": "behavior"})
+    max_body_chars: int = Field(default=12000, json_schema_extra={"group": "behavior"})
+    subject_prefix: str = Field(default="Re: ", json_schema_extra={"group": "behavior"})
+    allow_from: list[str] = Field(default_factory=list, json_schema_extra={"group": "access"})
 
     # Email authentication verification (anti-spoofing)
-    verify_dkim: bool = True   # Require Authentication-Results with dkim=pass
-    verify_spf: bool = True    # Require Authentication-Results with spf=pass
+    verify_dkim: bool = Field(default=True, json_schema_extra={"group": "security"})
+    verify_spf: bool = Field(default=True, json_schema_extra={"group": "security"})
 
     # Attachment handling — set allowed types to enable (e.g. ["application/pdf", "image/*"], or ["*"] for all)
-    allowed_attachment_types: list[str] = Field(default_factory=list)
-    max_attachment_size: int = 2_000_000  # 2MB per attachment
-    max_attachments_per_email: int = 5
+    allowed_attachment_types: list[str] = Field(default_factory=list, json_schema_extra={"group": "attachments"})
+    max_attachment_size: int = Field(default=2_000_000, json_schema_extra={"group": "attachments"})
+    max_attachments_per_email: int = Field(default=5, json_schema_extra={"group": "attachments"})
 
 
 class EmailChannel(BaseChannel):
@@ -80,6 +80,7 @@ class EmailChannel(BaseChannel):
 
     name = "email"
     display_name = "Email"
+    channel_description = "Receive and reply to email via IMAP (inbound) and SMTP (outbound)."
     _IMAP_MONTHS = (
         "Jan",
         "Feb",
@@ -113,6 +114,10 @@ class EmailChannel(BaseChannel):
     @classmethod
     def default_config(cls) -> dict[str, Any]:
         return EmailConfig().model_dump(by_alias=False)
+
+    @classmethod
+    def config_model(cls) -> type | None:
+        return EmailConfig
 
     def __init__(self, config: Any, bus: MessageBus):
         if isinstance(config, dict):

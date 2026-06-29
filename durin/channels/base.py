@@ -266,6 +266,16 @@ class BaseChannel(ABC):
         """Return default config for onboard. Override in plugins to auto-populate config.json."""
         return {"enabled": False}
 
+    @classmethod
+    def config_model(cls) -> type | None:
+        """Return the Pydantic config model for this channel, or None.
+
+        Channels that return a model let the webui render a typed field form
+        (with per-field secret/group metadata via json_schema_extra). Channels
+        that return None fall back to the single-credential-field rendering.
+        """
+        return None
+
     @property
     def is_running(self) -> bool:
         """Check if the channel is running."""

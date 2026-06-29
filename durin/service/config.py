@@ -229,6 +229,55 @@ _CRED_FIELDS: tuple[str, ...] = (
     "api_key", "claw_token", "access_token",
 )
 
+
+def _py_type_name(annotation: Any) -> str:
+    """Map a Pydantic field annotation to a webui field type tag."""
+    import typing
+
+    origin = typing.get_origin(annotation)
+    if annotation is bool:
+        return "bool"
+    if annotation is int:
+        return "int"
+    if origin in (list, typing.List):
+        return "string_list"
+    return "string"
+
+
+def _channel_field_schema(model: type) -> list[dict[str, Any]]:
+    """Build the webui field schema from a Pydantic channel config model."""
+    fields: list[dict[str, Any]] = []
+    for fname, finfo in model.model_fields.items():
+        if fname == "enabled":
+            continue  # the toggle is handled separately
+        extra = finfo.json_schema_extra or {}
+        is_secret = bool(extra.get("secret"))
+        group = str(extra.get("group", ""))
+        # A field is rendered only if it opts in: it has a group OR is a
+        # secret. Email gives every field a group (full form); WebSocket marks
+        # only `token` secret, so the rest of its config (host, ssl paths,
+        # token_issue_secret, …) stays out of the UI and in config.toml.
+        if not group and not is_secret:
+            continue
+        if finfo.is_required():
+            default = None
+        else:
+            default = finfo.get_default(call_default_factory=True)
+            if isinstance(default, (set, frozenset)):
+                default = list(default)
+        fields.append(
+            {
+                "name": fname,
+                "type": "secret" if is_secret else _py_type_name(finfo.annotation),
+                "secret": is_secret,
+                "group": group,
+                "required": bool(extra.get("required", False)),
+                "default": default,
+            }
+        )
+    return fields
+
+
 class ConfigService:
     """Read/write the effective config, list models/channels, probe model health."""
 
@@ -563,20 +612,34 @@ class ConfigService:
             enabled = (
                 bool(section.get("enabled")) if isinstance(section, dict) else False
             )
+            model = cls.config_model() if hasattr(cls, "config_model") else None
+            fields: list[dict[str, Any]] = []
             credential_field = None
-            try:
-                defaults = cls.default_config() if hasattr(cls, "default_config") else {}
-                credential_field = next(
-                    (f for f in _CRED_FIELDS if f in defaults), None
-                )
-            except Exception:  # noqa: BLE001
-                credential_field = None
+            if model is not None:
+                try:
+                    fields = _channel_field_schema(model)
+                except Exception:  # noqa: BLE001
+                    fields = []
+            if not fields:
+                try:
+                    defaults = cls.default_config() if hasattr(cls, "default_config") else {}
+                    credential_field = next(
+                        (f for f in _CRED_FIELDS if f in defaults), None
+                    )
+                except Exception:  # noqa: BLE001
+                    credential_field = None
+            always_on = name == "websocket" and bool(
+                getattr(config.gateway, "webui_enabled", False)
+            )
             items.append(
                 {
                     "name": name,
                     "display_name": getattr(cls, "display_name", name),
                     "enabled": enabled,
+                    "always_on": always_on,
+                    "description": getattr(cls, "channel_description", ""),
                     "credential_field": credential_field,
+                    "fields": fields,
                 }
             )
         return ChannelsListResult(channels=items)
