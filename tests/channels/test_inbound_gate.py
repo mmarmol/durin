@@ -75,10 +75,12 @@ async def test_unauthorized_dm_pairs(mgr, monkeypatch):
 async def test_unauthorized_group_denied(mgr):
     from durin.bus.events import InboundMessage
 
-    mgr.channels["telegram"] = _Chan(False)
+    ch = _Chan(False)
+    mgr.channels["telegram"] = ch
     ok = await mgr._authorize_inbound(
         InboundMessage(
             channel="telegram", sender_id="s", chat_id="c", content="x", is_dm=False
         )
     )
     assert ok is False
+    assert len(ch.sent) == 0  # group denial must NOT send a pairing code
