@@ -893,8 +893,11 @@ class MatrixChannel(BaseChannel):
         if attachment and attachment.get("type") == "audio":
             transcription = await self.transcribe_audio(attachment["path"])
             if transcription:
-                parts.append(f"[transcription: {transcription}]")
-                transcribed_audio = True   # drop the path below; transcript is the payload
+                # Bare transcript as the user's message (no marker, path dropped
+                # below) so the model treats it as spoken input, not a transcript
+                # of a separate audio file. Matches the WhatsApp path.
+                parts.append(transcription)
+                transcribed_audio = True
             else:
                 parts.append(marker)
         elif marker:

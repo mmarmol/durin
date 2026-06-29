@@ -582,7 +582,7 @@ async def test_on_message_audio_publishes_downloaded_path_and_transcription() ->
     assert len(captured) == 1
     # Path dropped when transcription succeeds: transcript is the payload.
     assert captured[0].media == []
-    assert captured[0].content == "[transcription: hello from voice]"
+    assert captured[0].content == "hello from voice"
 
 
 @pytest.mark.asyncio

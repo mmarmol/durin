@@ -943,10 +943,12 @@ class TelegramChannel(BaseChannel):
                 transcription = await self.transcribe_audio(file_path)
                 if transcription:
                     self.logger.info("Transcribed {}: {}...", media_type, transcription[:50])
-                    # Drop the audio path: the transcript is the payload. Passing
-                    # the path too would make the model invent a path for
-                    # interpret_audio (the loop skips audio paths in auto mode).
-                    return [], [f"[transcription: {transcription}]"]
+                    # Hand the agent the bare transcript as the user's message —
+                    # no marker, no audio path. A "[transcription: …]" wrapper makes
+                    # the model treat it as a transcript of a separate audio file it
+                    # must open (inventing a path for interpret_audio); the bare text
+                    # reads as what the user said, matching the WhatsApp path.
+                    return [], [transcription]
                 return [path_str], [f"[{media_type}: {path_str}]"]
             return [path_str], [f"[{media_type}: {path_str}]"]
         except Exception as e:
