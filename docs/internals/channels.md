@@ -287,6 +287,11 @@ behaviour, which silently skips audio paths in `media`. Passing both the
 transcript text and the raw path causes the model to invent a file path and call
 `interpret_audio` on it — a hallucination the contract prevents.
 
+The transcript is handed over as the **bare user message**, not wrapped in a
+`[transcription: …]` marker. A marker reads to the model as a transcript of a
+separate audio file it should open, so it narrates that it cannot access the
+audio; the bare text reads as what the user said.
+
 WhatsApp is the reference implementation of this contract. Channels that
 transcribe locally (currently Telegram, Matrix, Feishu, and Weixin) apply the
 same idiom: on transcription success, return an empty `media` list and a
