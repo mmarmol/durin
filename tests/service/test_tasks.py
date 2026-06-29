@@ -71,6 +71,7 @@ def test_subagent_status_mapping(phase, expected):
     ("exhausted", "failed"),
     ("aborted", "failed"),
     ("crashed", "failed"),
+    ("cancelled", "cancelled"),
 ])
 def test_workflow_status_mapping(status, expected):
     assert _workflow_status(status) == expected

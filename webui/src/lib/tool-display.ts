@@ -26,7 +26,7 @@ const HOISTED = new Set([
 
 const CHIPPED = new Set([
   "spawn",
-  "subagent_stop",
+  "tasks",
   "cron",
   "message",
   "sleep",

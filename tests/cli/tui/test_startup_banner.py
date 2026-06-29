@@ -17,7 +17,7 @@ def test_categorize_tools_groups_by_purpose() -> None:
         "read_file", "write_file", "exec",
         "memory_search", "memory_store",
         "web_fetch", "web_search",
-        "spawn", "subagent_list",
+        "spawn", "tasks",
         "unknown_tool",
     ]
     cats = categorize_tools(names)
@@ -26,7 +26,7 @@ def test_categorize_tools_groups_by_purpose() -> None:
     assert cats["shell"] == ["exec"]
     assert set(cats["memory"]) == {"memory_search", "memory_store"}
     assert set(cats["web"]) == {"web_fetch", "web_search"}
-    assert set(cats["agent"]) == {"spawn", "subagent_list"}
+    assert set(cats["agent"]) == {"spawn", "tasks"}
     # Unknown tools fall through to misc.
     assert "unknown_tool" in cats["misc"]
 
@@ -55,7 +55,7 @@ def test_build_startup_banner_renders_tools_section_when_loop_exposes_them() -> 
         tool_names=[
             "read_file", "write_file", "exec",
             "memory_search", "web_fetch",
-            "spawn", "subagent_list",
+            "spawn", "tasks",
         ],
     )
     body = build_startup_banner(version="0.1.0a7.dev7", agent_loop=loop)

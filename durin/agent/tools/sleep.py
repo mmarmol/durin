@@ -2,8 +2,9 @@
 
 Lets the model pause the current turn for a fixed delay. The primary use
 case is **polling**: the agent kicks off background work (spawn a
-subagent, trigger a long-running shell, ask an external system) and then
-needs to wait a short while before checking back.
+subagent, run a workflow, trigger a long-running shell, ask an external
+system) and then needs to wait a short while before checking back (via
+``tasks``, ``process``, …).
 
 Bounds: 0 to 300 seconds (5 minutes). The cap is intentional —
 
@@ -78,8 +79,8 @@ class SleepTool(Tool):
         return (
             "Pause the current turn for the given number of seconds (max 300). "
             "Use this when you've started background work and need to wait "
-            "before polling for results — e.g. after spawning a subagent or "
-            "triggering an external job. Do NOT use it as a substitute for "
+            "before polling for results — e.g. after spawning a subagent, "
+            "running a workflow, or triggering an external job. Do NOT use it as a substitute for "
             "thinking, to 'wait for the user', or to delay obvious next steps. "
             "For long waits (> a few minutes), use `cron` to schedule a future "
             "check instead of blocking this turn."
