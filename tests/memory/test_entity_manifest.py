@@ -33,7 +33,6 @@ def test_empty_when_no_entities(tmp_path):
 
 
 def test_query_mode_returns_relevant_entity(tmp_path, monkeypatch):
-    pytest.importorskip("lancedb")
     ws = tmp_path / "ws"
     _seed(ws, "topic:durin", "durin", "A personal AI agent project.")
 
@@ -49,8 +48,23 @@ def test_query_mode_returns_relevant_entity(tmp_path, monkeypatch):
         vector_count=0,
         lexical_count=0,
     )
-    import durin.memory.search_pipeline as _sp
-    monkeypatch.setattr(_sp, "run_search_pipeline", lambda *a, **kw: fake_result)
 
-    out = build_entity_manifest(ws, query="tell me about the durin agent", limit=5)
+    captured_calls: list[tuple] = []
+
+    def _fake_pipeline(*args, **kwargs):
+        captured_calls.append((args, kwargs))
+        return fake_result
+
+    import durin.memory.search_pipeline as _sp
+    monkeypatch.setattr(_sp, "run_search_pipeline", _fake_pipeline)
+
+    query = "tell me about the durin agent"
+    out = build_entity_manifest(ws, query=query, limit=5)
+
     assert "topic:durin" in out
+    assert len(captured_calls) == 1, "run_search_pipeline should be called exactly once"
+    call_args, call_kwargs = captured_calls[0]
+    # First positional arg is the workspace path (may be wrapped in Path()).
+    assert Path(call_args[0]) == Path(ws), "first positional arg must be the workspace path"
+    # Query is passed as the second positional arg.
+    assert call_args[1] == query, "second positional arg must be the query string"
