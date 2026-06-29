@@ -993,7 +993,8 @@
     "channelFilter": {
       "web": "Web",
       "all": "Todos"
-    }
+    },
+    "readOnlyChannel": "Conversación de {{channel}} — solo lectura"
   },
   "deleteConfirm": {
     "title": "¿Eliminar este chat?",

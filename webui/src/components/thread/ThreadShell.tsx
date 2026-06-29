@@ -93,6 +93,9 @@ export function ThreadShell({
   const { t } = useTranslation();
   const chatId = session?.chatId ?? null;
   const historyKey = session?.key ?? null;
+  // Non-websocket sessions (Telegram, CLI, subagent…) are view-only: the webui
+  // can display their history but cannot continue them on a different channel.
+  const isReadOnlyChannel = session !== null && session.channel !== "websocket";
   const [panelOpen, setPanelOpen] = useState(false);
   const work = useWorkState(chatId, historyKey);
   const {
@@ -363,6 +366,18 @@ export function ThreadShell({
     [chatId, client],
   );
 
+  const readOnlyBanner = isReadOnlyChannel ? (
+    <div
+      role="status"
+      className={cn(
+        "mb-2 rounded-lg border border-border/50 bg-muted/60 px-3 py-2",
+        "text-[12px] leading-5 text-muted-foreground text-center",
+      )}
+    >
+      {t("chat.readOnlyChannel", { channel: session!.channel })}
+    </div>
+  ) : null;
+
   const composer = (
     <>
       {streamError ? (
@@ -371,12 +386,13 @@ export function ThreadShell({
           onDismiss={dismissStreamError}
         />
       ) : null}
+      {readOnlyBanner}
       {session ? (
         <ThreadComposer
           onSend={handleThreadSend}
           onTranscribeAudio={transcribeAudio}
           audioInputAllowed={transcriptionStatus.available}
-          disabled={!chatId}
+          disabled={!chatId || isReadOnlyChannel}
           isStreaming={isStreaming}
           placeholder={
             showHeroComposer
