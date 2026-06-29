@@ -546,7 +546,11 @@ def build_gateway_http_app(
 
     async def v1_webui_thread(request: Request) -> Response:
         from durin.service.sessions import WebuiThreadQuery
-        from durin.utils.webui_transcript import build_webui_thread_response
+        from durin.utils.webui_transcript import (
+            WEBUI_TRANSCRIPT_SCHEMA_VERSION,
+            build_webui_thread_response,
+            session_messages_to_ui_messages,
+        )
 
         principal = resolve_principal_from_headers(
             request.headers, auth=auth, static_token=static_token
@@ -568,9 +572,27 @@ def build_gateway_http_app(
             key, augment_user_media=channel._augment_transcript_user_media
         )
         if data is None:
-            return _problem_response(
-                NotFoundError("webui thread not found", details={"key": key})
-            )
+            # No webui JSONL transcript: fall back to the universal session history
+            # so non-websocket sessions (CLI, Telegram, subagent) render read-only
+            # instead of returning 404.
+            sm = channel._session_manager
+            raw = sm.read_session_file(key) if sm is not None else None
+            raw_messages = (raw or {}).get("messages") or []
+            if raw_messages:
+                ui_messages = session_messages_to_ui_messages(
+                    raw_messages,
+                    augment_user_media=channel._augment_transcript_user_media,
+                )
+                data = {
+                    "schemaVersion": WEBUI_TRANSCRIPT_SCHEMA_VERSION,
+                    "sessionKey": key,
+                    "messages": ui_messages,
+                    "readOnly": True,
+                }
+            else:
+                return _problem_response(
+                    NotFoundError("webui thread not found", details={"key": key})
+                )
         return JSONResponse({"data": data})
 
     # -- WebSocket chat endpoint --------------------------------------------
