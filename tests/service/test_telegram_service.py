@@ -43,6 +43,31 @@ async def test_token_test_bad(monkeypatch):
     assert res.ok is False and res.error == "RuntimeError"
 
 
+async def test_token_test_persists_nothing(monkeypatch):
+    """test() must never write to the secret store or the config file."""
+
+    def _forbidden_store_secret(*a, **kw):
+        raise AssertionError("store_secret must not be called by the test endpoint")
+
+    def _forbidden_save_config(*a, **kw):
+        raise AssertionError("save_config must not be called by the test endpoint")
+
+    monkeypatch.setattr("durin.security.secrets.store_secret", _forbidden_store_secret)
+    monkeypatch.setattr("durin.config.loader.save_config", _forbidden_save_config)
+
+    class FakeBot:
+        def __init__(self, token): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get_me(self):
+            class U: id = 7; username = "safe_bot"
+            return U()
+
+    monkeypatch.setattr("durin.service.channels_telegram.Bot", FakeBot)
+    res = await TelegramService().test(TelegramTestCommand(token="123:abc"), Principal.local())
+    assert res.ok is True
+
+
 async def test_token_test_error_does_not_expose_token(monkeypatch):
     """Error field must never contain the token string."""
     class FakeBot:

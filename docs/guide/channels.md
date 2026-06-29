@@ -127,6 +127,45 @@ after starting the gateway.
 
 Telegram uses **long polling** — no public IP or webhook is required.
 
+The bot token is **always stored as a durin secret**, never as plaintext in
+`config.toml`. Both the guided and manual setup paths write a `${secret:…}`
+reference into the config automatically.
+
+### Guided setup (recommended)
+
+Open the dashboard **Channels** tab, expand the Telegram section, and click
+**Set up Telegram**. The panel walks you through:
+
+1. **Create a bot** — follow the link to
+   [t.me/BotFather](https://t.me/BotFather), send `/newbot`, and copy the
+   token BotFather gives you.
+2. **Validate** — paste the token into the panel and click **Test**. durin
+   calls the Telegram `getMe` API to confirm the token is valid and shows
+   the bot's username. Nothing is written at this step.
+3. **Save** — click **Connect**. The token is saved to the secret store and
+   the config is updated to reference it as `${secret:TELEGRAM_BOT_TOKEN}`.
+   The gateway picks up the change on its next reload.
+
+Once connected, any Telegram user who DMs the bot triggers **pairing mode**
+unless their numeric user ID is already in `allow_from`. The dashboard
+displays pending pairing requests; approve or deny them there, or from any
+active channel:
+
+```
+/pairing list
+/pairing approve ABCD-EFGH
+/pairing deny ABCD-EFGH
+```
+
+### Manual setup
+
+Store the token in the secret store first, then write the config entry
+referencing it:
+
+```sh
+durin secret set TELEGRAM_BOT_TOKEN
+```
+
 ```toml
 [channels.telegram]
 enabled = true
@@ -136,17 +175,14 @@ group_policy = "mention" # "open" or "mention"
 streaming = true
 ```
 
-**How to get a token:**
-
-1. Open Telegram and start a chat with `@BotFather`.
-2. Send `/newbot` and follow the prompts.
-3. Copy the token and store it: `durin secret set TELEGRAM_BOT_TOKEN`.
+Set `allow_from` to a list of numeric Telegram user IDs to grant access
+without pairing, or leave it empty to require pairing for every new user.
 
 **Key fields (from `TelegramConfig`):**
 
 | Key | Default | Notes |
 |---|---|---|
-| `token` | _(required)_ | Bot API token from BotFather |
+| `token` | _(required)_ | Bot API token from BotFather; always stored as a durin secret |
 | `allow_from` | `[]` | Telegram user IDs or usernames; empty = pairing mode for DMs |
 | `group_policy` | `"mention"` | `"open"` (reply to all) or `"mention"` (reply only when @-mentioned) |
 | `proxy` | _(none)_ | HTTP proxy URL for outbound connections |
@@ -154,10 +190,6 @@ streaming = true
 | `react_emoji` | `"👀"` | Reaction added while processing |
 | `streaming` | `true` | Edit the message in-place as the model streams |
 | `inline_keyboards` | `false` | Render choice buttons as inline keyboards |
-
-**Pairing in Telegram:** when `allow_from` is empty, any new user who DMs the
-bot receives a pairing code. The owner approves it with `/pairing approve
-<code>` in any active channel.
 
 ---
 
