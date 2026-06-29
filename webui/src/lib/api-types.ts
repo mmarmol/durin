@@ -40,6 +40,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/telegram/pairing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List pending and approved Telegram pairing entries */
+        get: operations["telegram_pairing"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/telegram/pairing/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a pending Telegram pairing code */
+        post: operations["telegram_pairing_approve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/telegram/pairing/deny": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Deny and discard a pending Telegram pairing code */
+        post: operations["telegram_pairing_deny"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/telegram/pairing/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke an approved Telegram sender */
+        post: operations["telegram_pairing_revoke"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels/telegram/test": {
         parameters: {
             query?: never;
@@ -3111,6 +3179,57 @@ export interface components {
              */
             source: string | null;
         };
+        /** PairingApproveCommand */
+        PairingApproveCommand: {
+            /** Code */
+            code: string;
+        };
+        /** PairingApproveResult */
+        PairingApproveResult: {
+            /**
+             * Channel
+             * @default null
+             */
+            channel: string | null;
+            /** Ok */
+            ok: boolean;
+            /**
+             * Sender Id
+             * @default null
+             */
+            sender_id: string | null;
+        };
+        /** PairingDenyCommand */
+        PairingDenyCommand: {
+            /** Code */
+            code: string;
+        };
+        /** PairingDenyResult */
+        PairingDenyResult: {
+            /** Ok */
+            ok: boolean;
+        };
+        /** PairingListQuery */
+        PairingListQuery: Record<string, never>;
+        /** PairingListResult */
+        PairingListResult: {
+            /** Approved */
+            approved: string[];
+            /** Pending */
+            pending: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** PairingRevokeCommand */
+        PairingRevokeCommand: {
+            /** Sender Id */
+            sender_id: string;
+        };
+        /** PairingRevokeResult */
+        PairingRevokeResult: {
+            /** Ok */
+            ok: boolean;
+        };
         /** PersonaDeleteCommand */
         PersonaDeleteCommand: {
             /** Name */
@@ -4167,6 +4286,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChannelsListResult"];
+                };
+            };
+        };
+    };
+    telegram_pairing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PairingListQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingListResult"];
+                };
+            };
+        };
+    };
+    telegram_pairing_approve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PairingApproveCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingApproveResult"];
+                };
+            };
+        };
+    };
+    telegram_pairing_deny: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PairingDenyCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingDenyResult"];
+                };
+            };
+        };
+    };
+    telegram_pairing_revoke: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PairingRevokeCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingRevokeResult"];
                 };
             };
         };

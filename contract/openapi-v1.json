@@ -3176,6 +3176,142 @@
         "title": "OAuthStatusResult",
         "type": "object"
       },
+      "PairingApproveCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "PairingApproveCommand",
+        "type": "object"
+      },
+      "PairingApproveResult": {
+        "properties": {
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Channel"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "sender_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sender Id"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "PairingApproveResult",
+        "type": "object"
+      },
+      "PairingDenyCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "PairingDenyCommand",
+        "type": "object"
+      },
+      "PairingDenyResult": {
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "PairingDenyResult",
+        "type": "object"
+      },
+      "PairingListQuery": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "PairingListQuery",
+        "type": "object"
+      },
+      "PairingListResult": {
+        "properties": {
+          "approved": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Approved",
+            "type": "array"
+          },
+          "pending": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Pending",
+            "type": "array"
+          }
+        },
+        "required": [
+          "pending",
+          "approved"
+        ],
+        "title": "PairingListResult",
+        "type": "object"
+      },
+      "PairingRevokeCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "sender_id": {
+            "title": "Sender Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sender_id"
+        ],
+        "title": "PairingRevokeCommand",
+        "type": "object"
+      },
+      "PairingRevokeResult": {
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "PairingRevokeResult",
+        "type": "object"
+      },
       "PersonaDeleteCommand": {
         "additionalProperties": false,
         "properties": {
@@ -5459,6 +5595,122 @@
         },
         "summary": "Discovered channels with their enabled state and primary credential field",
         "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/telegram/pairing": {
+      "get": {
+        "operationId": "telegram_pairing",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingListResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List pending and approved Telegram pairing entries",
+        "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/telegram/pairing/approve": {
+      "post": {
+        "operationId": "telegram_pairing_approve",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingApproveCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingApproveResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Approve a pending Telegram pairing code",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/telegram/pairing/deny": {
+      "post": {
+        "operationId": "telegram_pairing_deny",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingDenyCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingDenyResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Deny and discard a pending Telegram pairing code",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/telegram/pairing/revoke": {
+      "post": {
+        "operationId": "telegram_pairing_revoke",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingRevokeCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingRevokeResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Revoke an approved Telegram sender",
+        "x-required-scope": "config:write"
       }
     },
     "/api/v1/channels/telegram/test": {
