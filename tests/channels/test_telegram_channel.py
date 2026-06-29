@@ -1987,3 +1987,71 @@ async def test_on_error_logs_conflict_with_actionable_message(monkeypatch) -> No
     assert level == "error"
     assert "409" in msg or "conflict" in msg.lower()
     assert "only one gateway" in msg.lower() or "another process" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_voice_transcription_drops_audio_path(monkeypatch, tmp_path) -> None:
+    # Channel-level STT succeeds → agent must get text only, no audio path.
+    media_dir = tmp_path / "media" / "telegram"
+    media_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        "durin.channels.telegram.get_media_dir",
+        lambda channel=None: media_dir if channel else tmp_path / "media",
+    )
+
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    channel._app = _FakeApp(lambda: None)
+
+    async def _fake_get_file(file_id):
+        async def _dl(path):
+            Path(path).write_bytes(b"OggS-fake")
+        return SimpleNamespace(download_to_drive=_dl)
+
+    channel._app.bot.get_file = AsyncMock(side_effect=_fake_get_file)
+    monkeypatch.setattr(channel, "transcribe_audio",
+                        AsyncMock(return_value="hello world"))
+
+    voice = SimpleNamespace(file_id="f1", file_unique_id="u1", mime_type="audio/ogg")
+    msg = SimpleNamespace(photo=None, voice=voice, audio=None, document=None,
+                          video=None, video_note=None, animation=None)
+
+    media_paths, content_parts = await channel._download_message_media(msg)
+
+    assert media_paths == []                              # path dropped
+    assert content_parts == ["[transcription: hello world]"]
+
+
+@pytest.mark.asyncio
+async def test_voice_transcription_failure_keeps_audio_path(monkeypatch, tmp_path) -> None:
+    media_dir = tmp_path / "media" / "telegram"
+    media_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        "durin.channels.telegram.get_media_dir",
+        lambda channel=None: media_dir if channel else tmp_path / "media",
+    )
+
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    channel._app = _FakeApp(lambda: None)
+
+    async def _fake_get_file(file_id):
+        async def _dl(path):
+            Path(path).write_bytes(b"OggS-fake")
+        return SimpleNamespace(download_to_drive=_dl)
+
+    channel._app.bot.get_file = AsyncMock(side_effect=_fake_get_file)
+    monkeypatch.setattr(channel, "transcribe_audio", AsyncMock(return_value=""))
+
+    voice = SimpleNamespace(file_id="f1", file_unique_id="u1", mime_type="audio/ogg")
+    msg = SimpleNamespace(photo=None, voice=voice, audio=None, document=None,
+                          video=None, video_note=None, animation=None)
+
+    media_paths, content_parts = await channel._download_message_media(msg)
+
+    assert len(media_paths) == 1 and media_paths[0].endswith(".ogg")  # kept for fallback
+    assert content_parts[0].startswith("[voice:")

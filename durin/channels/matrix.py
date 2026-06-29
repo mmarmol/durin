@@ -889,10 +889,12 @@ class MatrixChannel(BaseChannel):
         if isinstance(body := getattr(event, "body", None), str) and body.strip():
             parts.append(body.strip())
 
+        transcribed_audio = False
         if attachment and attachment.get("type") == "audio":
             transcription = await self.transcribe_audio(attachment["path"])
             if transcription:
                 parts.append(f"[transcription: {transcription}]")
+                transcribed_audio = True   # drop the path below; transcript is the payload
             else:
                 parts.append(marker)
         elif marker:
@@ -907,7 +909,7 @@ class MatrixChannel(BaseChannel):
             await self._handle_message(
                 sender_id=event.sender, chat_id=room.room_id,
                 content="\n".join(parts),
-                media=[attachment["path"]] if attachment else [],
+                media=[] if transcribed_audio else ([attachment["path"]] if attachment else []),
                 metadata=meta,
                 is_dm=self._is_direct_room(room),
             )

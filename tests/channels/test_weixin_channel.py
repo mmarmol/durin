@@ -13,6 +13,7 @@ from durin.bus.queue import MessageBus
 from durin.channels.weixin import (
     ITEM_IMAGE,
     ITEM_TEXT,
+    ITEM_VOICE,
     MESSAGE_TYPE_BOT,
     WEIXIN_CHANNEL_VERSION,
     WeixinChannel,
@@ -1254,3 +1255,50 @@ async def test_send_text_succeeds_on_zero_errcode() -> None:
     await channel._send_text("wx-user", "hello", "ctx-ok")
 
     channel._api_post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_voice_transcription_drops_media_path() -> None:
+    channel, bus = _make_channel()
+    channel._download_media_item = AsyncMock(return_value="/tmp/weixin_voice.ogg")
+    channel.transcribe_audio = AsyncMock(return_value="transcribed text")
+
+    await channel._process_message(
+        {
+            "message_type": 1,
+            "message_id": "m-voice-1",
+            "from_user_id": "wx-user",
+            "context_token": "ctx-voice-1",
+            "item_list": [
+                {"type": ITEM_VOICE, "voice_item": {"media": {"encrypt_query_param": "enc"}}},
+            ],
+        }
+    )
+
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1.0)
+
+    assert (inbound.media or []) == []
+    assert "[voice] transcribed text" in inbound.content
+
+
+@pytest.mark.asyncio
+async def test_voice_transcription_failure_keeps_media_path() -> None:
+    channel, bus = _make_channel()
+    channel._download_media_item = AsyncMock(return_value="/tmp/weixin_voice_fail.ogg")
+    channel.transcribe_audio = AsyncMock(return_value="")
+
+    await channel._process_message(
+        {
+            "message_type": 1,
+            "message_id": "m-voice-2",
+            "from_user_id": "wx-user",
+            "context_token": "ctx-voice-2",
+            "item_list": [
+                {"type": ITEM_VOICE, "voice_item": {"media": {"encrypt_query_param": "enc2"}}},
+            ],
+        }
+    )
+
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1.0)
+
+    assert "/tmp/weixin_voice_fail.ogg" in (inbound.media or [])
