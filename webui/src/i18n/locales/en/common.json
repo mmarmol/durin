@@ -284,7 +284,6 @@
       "groupBehavior": "Behavior",
       "groupSecurity": "Anti-spoofing",
       "groupAttachments": "Attachments",
-      "groupConsent": "Consent",
       "sectionActive": "Active",
       "sectionAvailable": "Available",
       "advanced": "Advanced",

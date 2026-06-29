@@ -10,12 +10,11 @@ import { ChevronDown } from "lucide-react";
 import { MaskedSecret } from "./MaskedSecret";
 
 export function ChannelSecretField({
-  secretRef, secretName, serviceLabel, help, busy, token, onSet, onClear,
+  secretRef, secretName, serviceLabel, busy, token, onSet, onClear,
 }: {
   secretRef: string | null;
   secretName: string;     // canonical name to create, e.g. EMAIL_IMAP_PASSWORD
   serviceLabel: string;   // e.g. channel:email
-  help?: string;
   busy: boolean;
   token: string;
   onSet: (ref: string) => void;
@@ -42,10 +41,7 @@ export function ChannelSecretField({
       : "";
   if (current) {
     return (
-      <div className="space-y-1">
-        <MaskedSecret secretName={current} serviceLabel={serviceLabel} busy={busy} onDisconnect={onClear} />
-        {help ? <p className="text-[12px] text-muted-foreground">{help}</p> : null}
-      </div>
+      <MaskedSecret secretName={current} serviceLabel={serviceLabel} busy={busy} onDisconnect={onClear} />
     );
   }
 
@@ -105,7 +101,6 @@ export function ChannelSecretField({
           </Button>
         </div>
       )}
-      {help ? <p className="text-[12px] text-muted-foreground">{help}</p> : null}
     </div>
   );
 }
