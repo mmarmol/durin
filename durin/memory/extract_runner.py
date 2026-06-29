@@ -188,6 +188,7 @@ def run_extract_for_session(
         learned = mine_learnings(
             workspace, text, llm_invoke=llm_invoke, model=model, source_ref=src,
             alias_index=alias_index, vector_index=vector_index,
+            confidence_threshold=confidence_threshold,
             semantic_distance_threshold=semantic_distance_threshold)
     set_extract_cursor(jsonl_path, total)          # advance per-batch
     return {

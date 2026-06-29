@@ -19,9 +19,10 @@ def test_learnings_resolves_to_existing_feedback_by_name(tmp_path):
                  create=True, name="Spanish replies")
     idx = AliasIndex(ws / "memory"); idx.build()
 
-    # The LLM proposes the SAME fact under a NEW slug:
+    # The LLM proposes the SAME fact under a NEW slug, with a DISTINCT body:
+    proposal_body = "User strongly prefers replies in Spanish."
     raw = ('[{"ref":"feedback:spanish-communication",'
-           '"name":"Spanish replies","body":"User writes in Spanish."}]')
+           '"name":"Spanish replies","body":"' + proposal_body + '"}]')
     out = mine_learnings(ws, "USER: respondé en español",
                          llm_invoke=lambda *a, **k: _FakeResp(raw),
                          alias_index=idx)
@@ -29,3 +30,6 @@ def test_learnings_resolves_to_existing_feedback_by_name(tmp_path):
     # It must have updated the existing entity, NOT minted a second slug.
     assert (ws / "memory" / "entities" / "feedback" / "spanish-language.md").exists()
     assert not (ws / "memory" / "entities" / "feedback" / "spanish-communication.md").exists()
+    # The DISTINCT proposal body must now appear in the existing entity's file,
+    # proving the update-in-place happened (not a no-op).
+    assert proposal_body in (ws / "memory" / "entities" / "feedback" / "spanish-language.md").read_text()
