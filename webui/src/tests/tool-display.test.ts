@@ -23,7 +23,7 @@ describe("toolDisplayClass", () => {
       "complete_goal",
       "long_task",
       "enter_plan_mode",
-      "subagent_stop",
+      "tasks",
     ]) {
       expect(toolDisplayClass(name)).toBe("chip");
     }

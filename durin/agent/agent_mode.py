@@ -104,11 +104,10 @@ PLAN_MODE_ALLOWED = frozenset({
     "ask_user_question",
     # Searching the current session's prior messages is read-only.
     "session_search",
-    # Subagent lifecycle observation (and stop) is read-only with respect
-    # to the workspace — only touches the manager's in-memory state.
-    "subagent_list",
-    "subagent_status",
-    "subagent_stop",
+    # Observing and cancelling background work (sub-agents + workflow runs) is
+    # read-only with respect to the workspace — stop only touches in-memory
+    # manager state / a cooperative cancel flag, never the workspace.
+    "tasks",
     "subagent_output",
     "subagent_monitor",
     # Capability bridges delegate to an auxiliary model — read-only

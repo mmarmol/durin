@@ -2,7 +2,15 @@
 
 import asyncio
 import pytest
-from durin.agent.tools.run_workflow import RunWorkflowTool
+from durin.agent.tools.run_workflow import RunWorkflowTool, _background_launch_message
+
+
+def test_background_launch_message_carries_run_id_and_points_at_tasks():
+    msg = _background_launch_message("research-to-answer", "abc123def456")
+    assert "abc123def456" in msg            # the agent gets the id it needs to poll/stop
+    assert "research-to-answer" in msg
+    assert "tasks(action='status'" in msg   # the structural fix: launch tells it the door
+    assert "tasks(action='stop'" in msg
 
 
 class _FakeBus:

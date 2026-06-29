@@ -76,6 +76,18 @@ _PARAMETERS = {
 }
 
 
+def _background_launch_message(name: str, run_id: str) -> str:
+    """The reply a background launch returns to the agent. It carries the run id and
+    points at the `tasks` tool — so the agent learns, at launch, that it can observe
+    or cancel the run rather than only wait for the follow-up."""
+    return (
+        f"Workflow '{name}' started in the background (run id: {run_id}). "
+        "You can keep working; I'll deliver its result as a follow-up when it "
+        f"finishes. To check progress meanwhile call tasks(action='status', "
+        f"id='{run_id}'), or tasks(action='stop', id='{run_id}') to cancel it."
+    )
+
+
 def _format_result(result: Any) -> str:
     lines = [f"Workflow run {result.run_id}: {result.status}"]
 
@@ -173,7 +185,9 @@ class RunWorkflowTool(Tool, ContextAware):
             "and call this tool again with the same task plus their answers. "
             "Pass background=false to block and get the result inline only when you need it "
             "to continue right now; otherwise it runs in the background and its result is "
-            "delivered as a follow-up message."
+            "delivered as a follow-up message. A background launch returns the run's id; "
+            "use tasks(action='status', id=...) to check progress or tasks(action='stop', "
+            "id=...) to cancel it."
         )
 
     async def _inject_result(self, summary: str, *, name: str, inject_target: dict) -> None:
@@ -270,18 +284,23 @@ class RunWorkflowTool(Tool, ContextAware):
                 except Exception:  # noqa: BLE001 - best-effort; never break the run
                     pass
             progress_emit = _emit_progress
-        # Generate the run id here (instead of letting the engine mint it) so the
-        # terminal "done" frame emitted after the run carries the same id and
-        # updates the existing work item rather than creating a new one.
+        # Pre-generate the run id (instead of letting the engine mint it) for two
+        # reasons: the terminal "done" progress frame emitted after the run must
+        # carry the same id to update the existing work item, and a background
+        # launch returns it so the agent can poll/cancel via the `tasks` tool —
+        # the engine's cooperative cancel is keyed by it.
+        from durin.workflow.cancellation import clear as _clear_cancel
+        from durin.workflow.cancellation import is_cancelled as _is_cancelled
         run_id = uuid.uuid4().hex[:12]
         engine = WorkflowEngine(
             node_runner=node_runner,
+            run_id_factory=lambda: run_id,
             subworkflow_runner=subworkflow_runner,
             workspace=self._workspace,
             pick_runner=judge_runner.pick,
             max_node_visits=self._app_config.workflow.max_node_visits,
             progress_emit=progress_emit,
-            run_id_factory=lambda: run_id,
+            cancel_check=lambda: _is_cancelled(run_id),
         )
         root_session_key = self._session_key.get()
         inject_target = {
@@ -306,16 +325,16 @@ class RunWorkflowTool(Tool, ContextAware):
                     if progress_emit is not None:
                         progress_emit({"run_id": run_id, "nodes": [], "done": True})
                     summary = f"Workflow run failed in background: {exc}"
+                finally:
+                    # Drop the cancel flag now the run is over (whether or not it was set).
+                    _clear_cancel(run_id)
                 await self._inject_result(summary, name=name, inject_target=inject_target)
 
             task_handle = asyncio.create_task(_run_and_inject())
             # Keep a reference so the task isn't garbage-collected mid-flight.
             self._bg_tasks.add(task_handle)
             task_handle.add_done_callback(self._bg_tasks.discard)
-            return (
-                f"Workflow '{name}' started in the background. You can keep working; "
-                "I'll deliver its result to you as a follow-up when it finishes."
-            )
+            return _background_launch_message(name, run_id)
 
         # The engine owns the run manifest (started→updated→finalized); no record write here.
         result = await asyncio.to_thread(

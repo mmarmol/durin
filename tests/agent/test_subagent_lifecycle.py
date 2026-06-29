@@ -119,7 +119,7 @@ class TestSpawn:
     @pytest.mark.asyncio
     async def test_creates_status_and_retains_after_completion(self, tmp_path):
         """The status survives task completion (LRU retention) so
-        subagent_output / subagent_status can serve completed tasks for
+        subagent_output / tasks(status) can serve completed tasks for
         a while after the announce."""
         sm = _manager(tmp_path)
         sm.runner.run = AsyncMock(return_value=AgentRunResult(

@@ -234,7 +234,9 @@ class SubagentManager:
         logger.info("Spawned subagent [{}]: {}", task_id, display_label)
         return (
             f"Subagent [{display_label}] started (id: {task_id}). "
-            "I'll notify you when it completes.\n\n"
+            "I'll notify you when it completes. To check on it meanwhile call "
+            f"tasks(action='status', id='{task_id}'), or tasks(action='stop', "
+            f"id='{task_id}') to cancel it.\n\n"
             "IMPORTANT: subagents always run in EXPLORE MODE (read-only). "
             "The subagent CAN: read_file, list_dir, grep, repo_overview, "
             "web_fetch, web_search. The subagent CANNOT: edit_file, "

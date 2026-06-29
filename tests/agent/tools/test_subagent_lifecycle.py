@@ -1,4 +1,10 @@
-"""Tests for the subagent lifecycle tools (list, status, stop, output)."""
+"""Tests for the subagent drill-in tools (monitor, output).
+
+List / single-snapshot status / stop now live on the unified ``tasks`` tool
+(see ``test_tasks_tool.py``); these cover the two sub-agent-specific tools.
+The ``_FakeManager`` keeps the full surface (list/status/stop/output/monitor)
+so it can double for both the kept tools and any cross-checks.
+"""
 
 from __future__ import annotations
 
@@ -9,11 +15,8 @@ import pytest
 from durin.agent.subagent import SubagentStatus
 from durin.agent.tools.context import RequestContext
 from durin.agent.tools.subagent_lifecycle import (
-    SubagentListTool,
     SubagentMonitorTool,
     SubagentOutputTool,
-    SubagentStatusTool,
-    SubagentStopTool,
 )
 
 
@@ -144,153 +147,6 @@ def _wire(tool, sess: str = "cli:d") -> None:
 
 
 # ---------------------------------------------------------------------------
-# subagent_list
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_list_reports_running_and_finished_counts():
-    m = _FakeManager()
-    m.add_status("aaa", "cli:d", running=True, label="research")
-    m.add_status("bbb", "cli:d", running=False, label="summarize")
-    tool = SubagentListTool(manager=m)
-    _wire(tool)
-
-    out = await tool.execute()
-    assert "2 subagent(s)" in out
-    assert "1 running" in out
-    assert "1 finished" in out
-    assert "[aaa]" in out and "[bbb]" in out
-
-
-@pytest.mark.asyncio
-async def test_list_empty_session_returns_clear_message():
-    m = _FakeManager()
-    tool = SubagentListTool(manager=m)
-    _wire(tool)
-
-    out = await tool.execute()
-    assert "No subagents" in out
-
-
-@pytest.mark.asyncio
-async def test_list_excludes_other_sessions():
-    """A session must only see its own subagents."""
-    m = _FakeManager()
-    m.add_status("mine", "cli:d", label="ours")
-    m.add_status("theirs", "cli:other", label="not ours")
-    tool = SubagentListTool(manager=m)
-    _wire(tool)
-
-    out = await tool.execute()
-    assert "mine" in out
-    assert "theirs" not in out
-
-
-# ---------------------------------------------------------------------------
-# subagent_status
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_status_returns_detailed_snapshot():
-    m = _FakeManager()
-    m.add_status(
-        "x1", "cli:d",
-        running=True,
-        label="long task",
-        phase="awaiting_tools",
-        iteration=3,
-        tool_events=[
-            {"name": "read_file", "status": "ok", "detail": "file content"},
-            {"name": "grep", "status": "ok", "detail": "matches"},
-        ],
-    )
-    tool = SubagentStatusTool(manager=m)
-    _wire(tool)
-
-    out = await tool.execute(task_id="x1")
-    assert "x1" in out and "long task" in out
-    assert "running" in out
-    assert "iteration: 3" in out
-    assert "read_file" in out and "grep" in out
-
-
-@pytest.mark.asyncio
-async def test_status_unknown_task_returns_error():
-    m = _FakeManager()
-    tool = SubagentStatusTool(manager=m)
-    _wire(tool)
-
-    out = await tool.execute(task_id="ghost")
-    assert "Error" in out
-    assert "unknown task_id" in out.lower() or "ghost" in out
-
-
-@pytest.mark.asyncio
-async def test_status_cross_session_returns_error():
-    m = _FakeManager()
-    m.add_status("x1", "cli:other", label="not ours")
-    tool = SubagentStatusTool(manager=m)
-    _wire(tool, sess="cli:d")
-
-    out = await tool.execute(task_id="x1")
-    assert "Error" in out
-
-
-# ---------------------------------------------------------------------------
-# subagent_stop
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_stop_cancels_running_subagent():
-    m = _FakeManager()
-    m.add_status("x1", "cli:d", running=True)
-    tool = SubagentStopTool(manager=m)
-    _wire(tool)
-
-    out = await tool.execute(task_id="x1")
-    assert "cancelled" in out.lower()
-    assert not m._is_running("x1")
-
-
-@pytest.mark.asyncio
-async def test_stop_not_running_returns_clear_message():
-    m = _FakeManager()
-    m.add_status("x1", "cli:d", running=False)
-    tool = SubagentStopTool(manager=m)
-    _wire(tool)
-
-    out = await tool.execute(task_id="x1")
-    assert "already finished" in out.lower()
-
-
-@pytest.mark.asyncio
-async def test_stop_unknown_task_returns_error():
-    m = _FakeManager()
-    tool = SubagentStopTool(manager=m)
-    _wire(tool)
-
-    out = await tool.execute(task_id="ghost")
-    assert "Error" in out
-
-
-@pytest.mark.asyncio
-async def test_stop_cross_session_returns_error():
-    m = _FakeManager()
-    m.add_status("x1", "cli:other", running=True)
-    tool = SubagentStopTool(manager=m)
-    _wire(tool, sess="cli:d")
-
-    out = await tool.execute(task_id="x1")
-    assert "Error" in out
-    # And the task is still running in the other session — we did NOT
-    # cancel it from across sessions.
-    assert m._is_running("x1")
-
-
-# ---------------------------------------------------------------------------
 # subagent_output
 # ---------------------------------------------------------------------------
 
@@ -346,14 +202,12 @@ async def test_output_truncates_very_long_results():
 
 
 def test_tools_are_in_plan_mode_allowed_set():
-    """Lifecycle tools are read-only with respect to the workspace and
-    must remain callable during plan mode."""
+    """Background-work observation/cancel is read-only with respect to the
+    workspace and must remain callable during plan mode."""
     from durin.agent.agent_mode import PLAN_MODE
 
     for name in (
-        "subagent_list",
-        "subagent_status",
-        "subagent_stop",
+        "tasks",
         "subagent_output",
         "subagent_monitor",
     ):
@@ -364,9 +218,7 @@ def test_tools_discovered_by_loader():
     from durin.agent.tools.loader import ToolLoader
 
     names = {c.__name__ for c in ToolLoader().discover()}
-    assert "SubagentListTool" in names
-    assert "SubagentStatusTool" in names
-    assert "SubagentStopTool" in names
+    assert "TasksTool" in names
     assert "SubagentOutputTool" in names
     assert "SubagentMonitorTool" in names
 

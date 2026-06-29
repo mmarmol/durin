@@ -102,11 +102,9 @@ _TOOL_CATEGORY: dict[str, str] = {
     "session_search": "memory",
     # agent loop / sub-agents
     "spawn": "agent",
-    "subagent_list": "agent",
+    "tasks": "agent",
     "subagent_monitor": "agent",
     "subagent_output": "agent",
-    "subagent_status": "agent",
-    "subagent_stop": "agent",
     "long_task": "agent",
     "complete_goal": "agent",
     "todo_write": "agent",
