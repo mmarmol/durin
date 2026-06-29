@@ -183,7 +183,7 @@ without pairing, or leave it empty to require pairing for every new user.
 | Key | Default | Notes |
 |---|---|---|
 | `token` | _(required)_ | Bot API token from BotFather; always stored as a durin secret |
-| `allow_from` | `[]` | Telegram user IDs or usernames; empty = pairing mode for DMs |
+| `allow_from` | `[]` | Telegram user IDs or usernames; empty = pairing mode for DMs. Entries are bare numeric IDs (`"123456"`) or `"<id>\|<username>"` (written by the pairing flow). The numeric ID is permanent; the username part can go stale if the user renames their account. |
 | `group_policy` | `"mention"` | `"open"` (reply to all) or `"mention"` (reply only when @-mentioned) |
 | `proxy` | _(none)_ | HTTP proxy URL for outbound connections |
 | `reply_to_message` | `false` | Quote the original message in replies |

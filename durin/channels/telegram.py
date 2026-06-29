@@ -20,7 +20,7 @@ from telegram import (
     ReplyParameters,
     Update,
 )
-from telegram.error import BadRequest, NetworkError, TimedOut
+from telegram.error import BadRequest, Conflict, NetworkError, TimedOut
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
@@ -234,7 +234,14 @@ class TelegramConfig(Base):
     # link survives a page reload.  Not a secret and intentionally excluded from the
     # UI field schema (no json_schema_extra → the group-or-secret filter skips it).
     bot_username: str = ""
+    # Entries are bare numeric IDs ("123456") OR the "<id>|<username>" composite
+    # written by the pairing flow.  Username-based entries can go stale if the
+    # Telegram user later changes or removes their username; the numeric-ID form
+    # is permanent and preferred for manually curated lists.
     allow_from: list[str] = Field(default_factory=list, json_schema_extra={"group": "access"})
+    # On a shared or restarted deploy, processing stale messages queued while
+    # the bot was offline is surprising.  Set to False to replay them instead.
+    drop_pending_updates: bool = True
     proxy: str | None = None
     reply_to_message: bool = False
     react_emoji: str = "👀"
@@ -266,7 +273,7 @@ class TelegramChannel(BaseChannel):
         BotCommand("status", "Show bot status"),
         BotCommand("history", "Show recent conversation messages"),
         BotCommand("goal", "Start a sustained objective (long-running task)"),
-        BotCommand("pairing", "Manage DM pairing (approve/deny/list)"),
+        BotCommand("pairing", "Manage DM pairing: approve/deny/list (complements the webui panel)"),
         BotCommand("model", "Switch runtime model preset"),
         BotCommand("dream", "Run Dream memory consolidation now"),
         BotCommand("dream_log", "Show the latest Dream memory change"),
@@ -304,7 +311,14 @@ class TelegramChannel(BaseChannel):
         self._stream_bufs: dict[str, _StreamBuf] = {}  # chat_id -> streaming state
 
     def is_allowed(self, sender_id: str) -> bool:
-        """Preserve Telegram's legacy id|username allowlist matching."""
+        """Check whether a sender is on the allowlist.
+
+        Handles two entry formats in allow_from:
+        - Bare numeric ID: "123456" — permanent, preferred for manually curated lists.
+        - Composite "<id>|<username>": written by the pairing flow.  Username part
+          can go stale if the Telegram user changes or removes their username; in
+          that case the numeric ID half still matches.
+        """
         if super().is_allowed(sender_id):
             return True
 
@@ -423,7 +437,7 @@ class TelegramChannel(BaseChannel):
         # Start polling (this runs until stopped)
         await self._app.updater.start_polling(
             allowed_updates=allowed_updates,
-            drop_pending_updates=False,  # Process pending messages on startup
+            drop_pending_updates=self.config.drop_pending_updates,
             error_callback=self._on_polling_error,
         )
 
@@ -591,6 +605,11 @@ class TelegramChannel(BaseChannel):
                 self.logger.warning(
                     "timeout (attempt {}/{}), retrying in {:.1f}s",
                     attempt, _SEND_MAX_RETRIES, delay,
+                )
+                self.logger.debug(
+                    "TimedOut may indicate a saturated connection pool (current pool size: {});"
+                    " consider raising connection_pool_size in config",
+                    self.config.connection_pool_size,
                 )
                 await asyncio.sleep(delay)
             except RetryAfter as e:
@@ -1224,7 +1243,13 @@ class TelegramChannel(BaseChannel):
     def _on_polling_error(self, exc: Exception) -> None:
         """Keep long-polling network failures to a single readable line."""
         summary = self._format_telegram_error(exc)
-        if isinstance(exc, (NetworkError, TimedOut)):
+        if isinstance(exc, Conflict):
+            self.logger.error(
+                "Telegram getUpdates conflict (409): another process is polling this same bot token"
+                " — only one gateway can poll a token at a time."
+                " Stop the other poller or use a different token."
+            )
+        elif isinstance(exc, (NetworkError, TimedOut)):
             self.logger.warning("polling network issue: {}", summary)
         else:
             self.logger.error("polling error: {}", summary)
@@ -1233,7 +1258,13 @@ class TelegramChannel(BaseChannel):
         """Log polling / handler errors instead of silently swallowing them."""
         summary = self._format_telegram_error(context.error)
 
-        if isinstance(context.error, (NetworkError, TimedOut)):
+        if isinstance(context.error, Conflict):
+            self.logger.error(
+                "Telegram getUpdates conflict (409): another process is polling this same bot token"
+                " — only one gateway can poll a token at a time."
+                " Stop the other poller or use a different token."
+            )
+        elif isinstance(context.error, (NetworkError, TimedOut)):
             self.logger.warning("network issue: {}", summary)
         else:
             self.logger.error("error: {}", summary)
