@@ -40,6 +40,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Hot-start a channel in the running gateway (no restart required) */
+        post: operations["channels_runtime_start"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Hot-stop a channel in the running gateway (no restart required) */
+        post: operations["channels_runtime_stop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels/telegram/pairing": {
         parameters: {
             query?: never;
@@ -1767,6 +1801,36 @@ export interface components {
              * @default null
              */
             task: string | null;
+        };
+        /** ChannelStartCommand */
+        ChannelStartCommand: {
+            /** Name */
+            name: string;
+        };
+        /** ChannelStartResult */
+        ChannelStartResult: {
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /** Ok */
+            ok: boolean;
+        };
+        /** ChannelStopCommand */
+        ChannelStopCommand: {
+            /** Name */
+            name: string;
+        };
+        /** ChannelStopResult */
+        ChannelStopResult: {
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /** Ok */
+            ok: boolean;
         };
         /**
          * ChannelsListQuery
@@ -4286,6 +4350,54 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChannelsListResult"];
+                };
+            };
+        };
+    };
+    channels_runtime_start: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChannelStartCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelStartResult"];
+                };
+            };
+        };
+    };
+    channels_runtime_stop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChannelStopCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelStopResult"];
                 };
             };
         };

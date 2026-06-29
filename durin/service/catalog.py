@@ -24,7 +24,8 @@ registry.  Each class's dep handling:
 - ``OAuthService``     — no deps.
 - ``AuthService``      — ``store=None`` → creates a default ``ApiTokenStore`` (safe to do).
 - ``TasksService``     — ``workspace=Path("/")`` (stored, never touched), ``subagent_manager=None``.
-- ``TelegramService``  — no deps.
+- ``TelegramService``      — no deps.
+- ``ChannelsRuntimeService`` — ``channel_manager=None`` (stored, never called here).
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from durin.service.auth import AuthService
+from durin.service.channels_runtime import ChannelsRuntimeService
 from durin.service.channels_telegram import TelegramService
 from durin.service.commands import CommandsService
 from durin.service.config import ConfigService
@@ -68,6 +70,7 @@ SERVICE_CLASSES: list[type] = [
     TasksService,
     WorkflowsService,
     TelegramService,
+    ChannelsRuntimeService,
 ]
 
 
@@ -96,4 +99,5 @@ def build_catalog_registry() -> ServiceRegistry:
     registry.register("tasks", TasksService(workspace=Path("/")))
     registry.register("workflows", WorkflowsService(workspace=Path("/")))
     registry.register("telegram", TelegramService())
+    registry.register("channels_runtime", ChannelsRuntimeService())
     return registry

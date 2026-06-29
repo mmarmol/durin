@@ -101,6 +101,84 @@
         "title": "BackgroundTask",
         "type": "object"
       },
+      "ChannelStartCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ChannelStartCommand",
+        "type": "object"
+      },
+      "ChannelStartResult": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "ChannelStartResult",
+        "type": "object"
+      },
+      "ChannelStopCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ChannelStopCommand",
+        "type": "object"
+      },
+      "ChannelStopResult": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "ChannelStopResult",
+        "type": "object"
+      },
       "ChannelsListQuery": {
         "additionalProperties": false,
         "description": "No inputs \u2014 lists all discovered channels with their enabled state.",
@@ -5595,6 +5673,64 @@
         },
         "summary": "Discovered channels with their enabled state and primary credential field",
         "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/start": {
+      "post": {
+        "operationId": "channels_runtime_start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelStartCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelStartResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Hot-start a channel in the running gateway (no restart required)",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/stop": {
+      "post": {
+        "operationId": "channels_runtime_stop",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelStopCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelStopResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Hot-stop a channel in the running gateway (no restart required)",
+        "x-required-scope": "config:write"
       }
     },
     "/api/v1/channels/telegram/pairing": {

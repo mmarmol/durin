@@ -132,15 +132,67 @@ class ChannelManager:
             if enabled and fe is not None and not _module_present(fe.module):
                 ensure_or_note(name, config=self.config)
 
-    def _init_channels(self) -> None:
-        """Initialize channels discovered via pkgutil scan + entry_points plugins."""
-        self._ensure_channel_extras()
+    def _make_channel(self, name: str) -> "BaseChannel | None":
+        """Instantiate one channel by name from the current config.
+
+        Reads the channel section fresh from ``self.config``, resolves secret
+        refs, applies per-channel overrides (transcription, bool flags), and
+        returns the new instance — or ``None`` if the channel class is not
+        found or the section is absent.  Does NOT start the channel.
+        """
         from durin.channels.registry import discover_all
+
+        cls = discover_all().get(name)
+        if cls is None:
+            return None
+        section = getattr(self.config.channels, name, None)
+        if section is None:
+            return None
 
         transcription_provider = self.config.channels.transcription_provider
         transcription_key = self._resolve_transcription_key(transcription_provider)
         transcription_base = self._resolve_transcription_base(transcription_provider)
         transcription_language = self.config.channels.transcription_language
+
+        kwargs: dict[str, Any] = {}
+        if cls.name == "websocket":
+            if self._session_manager is not None:
+                kwargs["session_manager"] = self._session_manager
+                static_path = _default_webui_dist()
+                if static_path is not None:
+                    kwargs["static_dist_path"] = static_path
+            if self._webui_runtime_model_name is not None:
+                kwargs["runtime_model_name"] = self._webui_runtime_model_name
+            if self._webui_runtime_model_preset is not None:
+                kwargs["runtime_model_preset"] = self._webui_runtime_model_preset
+            if self._cron_service is not None:
+                kwargs["cron_service"] = self._cron_service
+
+        channel = cls(_resolve_section_secrets(section), self.bus, **kwargs)
+        channel.transcription_provider = transcription_provider
+        channel.transcription_api_key = transcription_key
+        channel.transcription_api_base = transcription_base
+        channel.transcription_language = transcription_language
+        shared_transcription = getattr(self, "transcription", None)
+        if shared_transcription is not None:
+            channel.transcription = shared_transcription
+        channel.speech_synthesis = getattr(self, "speech_synthesis", None)
+        channel.voice_config = getattr(self.config, "voice", None)
+        channel.send_progress = self._resolve_bool_override(
+            section, "send_progress", self.config.channels.send_progress,
+        )
+        channel.send_tool_hints = self._resolve_bool_override(
+            section, "send_tool_hints", self.config.channels.send_tool_hints,
+        )
+        channel.show_reasoning = self._resolve_bool_override(
+            section, "show_reasoning", self.config.channels.show_reasoning,
+        )
+        return channel
+
+    def _init_channels(self) -> None:
+        """Initialize channels discovered via pkgutil scan + entry_points plugins."""
+        self._ensure_channel_extras()
+        from durin.channels.registry import discover_all
 
         for name, cls in discover_all().items():
             section = getattr(self.config.channels, name, None)
@@ -154,44 +206,9 @@ class ChannelManager:
             if not enabled:
                 continue
             try:
-                kwargs: dict[str, Any] = {}
-                # Only the WebSocket channel currently hosts the embedded webui
-                # surface; other channels stay oblivious to these knobs.
-                if cls.name == "websocket":
-                    if self._session_manager is not None:
-                        kwargs["session_manager"] = self._session_manager
-                        static_path = _default_webui_dist()
-                        if static_path is not None:
-                            kwargs["static_dist_path"] = static_path
-                    if self._webui_runtime_model_name is not None:
-                        kwargs["runtime_model_name"] = self._webui_runtime_model_name
-                    if self._webui_runtime_model_preset is not None:
-                        kwargs["runtime_model_preset"] = self._webui_runtime_model_preset
-                    if self._cron_service is not None:
-                        kwargs["cron_service"] = self._cron_service
-                channel = cls(_resolve_section_secrets(section), self.bus, **kwargs)
-                channel.transcription_provider = transcription_provider
-                channel.transcription_api_key = transcription_key
-                channel.transcription_api_base = transcription_base
-                channel.transcription_language = transcription_language
-                # Inject the shared backend transcription service.
-                # ``getattr`` so managers constructed via ``__new__`` in tests
-                # (which skip ``__init__``) don't crash here — they simply get
-                # no service and fall back to the legacy channel-level path.
-                shared_transcription = getattr(self, "transcription", None)
-                if shared_transcription is not None:
-                    channel.transcription = shared_transcription
-                channel.speech_synthesis = getattr(self, "speech_synthesis", None)
-                channel.voice_config = getattr(self.config, "voice", None)
-                channel.send_progress = self._resolve_bool_override(
-                    section, "send_progress", self.config.channels.send_progress,
-                )
-                channel.send_tool_hints = self._resolve_bool_override(
-                    section, "send_tool_hints", self.config.channels.send_tool_hints,
-                )
-                channel.show_reasoning = self._resolve_bool_override(
-                    section, "show_reasoning", self.config.channels.show_reasoning,
-                )
+                channel = self._make_channel(name)
+                if channel is None:
+                    continue
                 self.channels[name] = channel
                 logger.info("{} channel enabled", cls.display_name)
             except Exception as e:
@@ -385,6 +402,55 @@ class ChannelManager:
                 logger.info("Stopped {} channel", name)
             except Exception:
                 logger.exception("Error stopping {}", name)
+
+    async def start_channel(self, name: str) -> None:
+        """Hot-start a single channel without restarting the gateway.
+
+        If the channel is already running (present in ``self.channels``), this
+        is a no-op so callers can be idempotent.  Otherwise the config is
+        reloaded first so a just-enabled section is visible, the channel is
+        instantiated via ``_make_channel``, stored, and started.
+
+        Raises on failure so the HTTP caller can surface the error.
+        """
+        if name in self.channels:
+            logger.info("Channel {} already running, skipping start", name)
+            return
+        from durin.config.loader import load_config
+        self.config = load_config()
+        channel = self._make_channel(name)
+        if channel is None:
+            raise ValueError(f"Unknown or unconfigured channel: {name}")
+        self.channels[name] = channel
+        try:
+            await channel.start()
+            logger.info("Hot-started channel {}", name)
+        except Exception:
+            del self.channels[name]
+            logger.exception("Failed to hot-start channel {}", name)
+            raise
+
+    async def stop_channel(self, name: str) -> None:
+        """Hot-stop a single channel without restarting the gateway.
+
+        If the channel is not running this is a no-op.  On success the channel
+        is removed from ``self.channels`` so a subsequent ``start_channel``
+        re-instantiates it with fresh config.
+
+        Exceptions from ``channel.stop()`` are logged but the channel is still
+        removed from the registry (mirroring ``stop_all`` behaviour).
+        """
+        channel = self.channels.get(name)
+        if channel is None:
+            logger.info("Channel {} not running, skipping stop", name)
+            return
+        try:
+            await channel.stop()
+            logger.info("Hot-stopped channel {}", name)
+        except Exception:
+            logger.exception("Error stopping channel {}", name)
+        finally:
+            self.channels.pop(name, None)
 
     @staticmethod
     def _fingerprint_content(content: str) -> str:

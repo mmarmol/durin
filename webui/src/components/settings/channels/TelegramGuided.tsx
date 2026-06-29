@@ -8,6 +8,7 @@ import { ChannelSecretField } from "@/components/settings/secrets/ChannelSecretF
 import { useClient } from "@/providers/ClientProvider";
 import {
   setConfigValue,
+  startChannel,
   testTelegramToken,
   getTelegramPairing,
   approveTelegramPairing,
@@ -283,6 +284,7 @@ function GuidedSetup({
         await setConfigValue(token, "channels.telegram.bot_username", validated.username);
       }
       await setConfigValue(token, "channels.telegram.enabled", true);
+      await startChannel(token, "telegram");
       onChanged();
     } catch {
       setValidated({ ok: false, username: null, error: t("settings.channels.saveError") });

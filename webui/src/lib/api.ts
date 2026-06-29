@@ -2182,3 +2182,11 @@ export async function denyTelegramPairing(token: string, code: string, base = ""
 export async function revokeTelegramPairing(token: string, senderId: string, base = ""): Promise<{ ok: boolean }> {
   return post(`${base}/api/v1/channels/telegram/pairing/revoke`, token, { sender_id: senderId });
 }
+
+export async function startChannel(token: string, name: string, base = ""): Promise<{ ok: boolean; error?: string | null }> {
+  return post(`${base}/api/v1/channels/start`, token, { name });
+}
+
+export async function stopChannel(token: string, name: string, base = ""): Promise<{ ok: boolean; error?: string | null }> {
+  return post(`${base}/api/v1/channels/stop`, token, { name });
+}

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ChannelSecretField } from "@/components/settings/secrets/ChannelSecretField";
 import { useClient } from "@/providers/ClientProvider";
-import { getConfig, listChannels, setConfigValue, type ChannelField, type ChannelInfo } from "@/lib/api";
+import { getConfig, listChannels, setConfigValue, startChannel, stopChannel, type ChannelField, type ChannelInfo } from "@/lib/api";
 import { TelegramGuided } from "@/components/settings/channels/TelegramGuided";
 
 // Groups that are always visible in the form.
@@ -529,6 +529,7 @@ export function ChannelsSettings({ token }: { token: string }) {
           );
         }
         await setConfigValue(token, `channels.${channel.name}.enabled`, true);
+        await startChannel(token, channel.name);
         await load();
       } catch {
         setError(t("settings.channels.saveError"));
@@ -545,6 +546,7 @@ export function ChannelsSettings({ token }: { token: string }) {
       setError(null);
       try {
         await setConfigValue(token, `channels.${channel.name}.enabled`, false);
+        await stopChannel(token, channel.name);
         await load();
       } catch {
         setError(t("settings.channels.saveError"));
