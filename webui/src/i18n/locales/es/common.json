@@ -989,7 +989,11 @@
       "yesterday": "Ayer"
     },
     "rename": "Cambiar nombre",
-    "renameAria": "Cambiar nombre del chat"
+    "renameAria": "Cambiar nombre del chat",
+    "channelFilter": {
+      "web": "Web",
+      "all": "Todos"
+    }
   },
   "deleteConfirm": {
     "title": "¿Eliminar este chat?",

@@ -4238,7 +4238,7 @@
       },
       "SessionsListQuery": {
         "additionalProperties": false,
-        "description": "No inputs \u2014 lists all websocket-channel sessions.",
+        "description": "No inputs \u2014 lists all sessions across every channel.",
         "properties": {},
         "title": "SessionsListQuery",
         "type": "object"
@@ -7789,7 +7789,7 @@
             "description": "Success"
           }
         },
-        "summary": "List websocket-channel sessions (path field stripped)",
+        "summary": "List all sessions across channels (path field stripped, channel field added)",
         "x-required-scope": "sessions:read"
       }
     },
@@ -7818,7 +7818,7 @@
             "description": "Success"
           }
         },
-        "summary": "Delete a websocket-channel session and its webui thread",
+        "summary": "Delete a session and its webui thread",
         "x-required-scope": "sessions:write"
       }
     },
@@ -7876,7 +7876,7 @@
             "description": "Success"
           }
         },
-        "summary": "Set a user-edited title for a websocket-channel session",
+        "summary": "Set a user-edited title for a session",
         "x-required-scope": "sessions:write"
       }
     },

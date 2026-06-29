@@ -1109,7 +1109,11 @@
       "earlier": "Earlier"
     },
     "rename": "Rename",
-    "renameAria": "Rename chat"
+    "renameAria": "Rename chat",
+    "channelFilter": {
+      "web": "Web",
+      "all": "All"
+    }
   },
   "deleteConfirm": {
     "title": "Delete this chat?",

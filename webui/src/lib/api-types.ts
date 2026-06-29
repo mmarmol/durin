@@ -1064,7 +1064,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List websocket-channel sessions (path field stripped) */
+        /** List all sessions across channels (path field stripped, channel field added) */
         get: operations["sessions_list"];
         put?: never;
         post?: never;
@@ -1084,7 +1084,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete a websocket-channel session and its webui thread */
+        /** Delete a session and its webui thread */
         delete: operations["sessions_delete"];
         options?: never;
         head?: never;
@@ -1117,7 +1117,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Set a user-edited title for a websocket-channel session */
+        /** Set a user-edited title for a session */
         post: operations["sessions_rename"];
         delete?: never;
         options?: never;
@@ -3675,7 +3675,7 @@ export interface components {
         };
         /**
          * SessionsListQuery
-         * @description No inputs — lists all websocket-channel sessions.
+         * @description No inputs — lists all sessions across every channel.
          */
         SessionsListQuery: Record<string, never>;
         /** SessionsListResult */

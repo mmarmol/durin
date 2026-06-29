@@ -41,10 +41,18 @@ def sm(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-async def test_list_returns_only_websocket_sessions(sm) -> None:
+async def test_list_returns_all_channel_sessions(sm) -> None:
     result = await SessionsService(sm).list(SessionsListQuery(), Principal.local())
     keys = {s["key"] for s in result.sessions}
-    assert keys == {"websocket:alpha", "websocket:beta"}
+    assert keys == {"websocket:alpha", "websocket:beta", "cli:direct"}
+
+
+async def test_list_includes_channel_field(sm) -> None:
+    result = await SessionsService(sm).list(SessionsListQuery(), Principal.local())
+    channels = {s["key"]: s["channel"] for s in result.sessions}
+    assert channels["websocket:alpha"] == "websocket"
+    assert channels["websocket:beta"] == "websocket"
+    assert channels["cli:direct"] == "cli"
 
 
 async def test_list_strips_path_field(sm) -> None:
@@ -84,11 +92,11 @@ async def test_messages_raises_not_found_for_missing_session(sm) -> None:
         )
 
 
-async def test_messages_raises_not_found_for_non_websocket_key(sm) -> None:
-    with pytest.raises(NotFoundError):
-        await SessionsService(sm).messages(
-            SessionMessagesQuery(key="cli:direct"), Principal.local()
-        )
+async def test_messages_returns_data_for_non_websocket_key(sm) -> None:
+    result = await SessionsService(sm).messages(
+        SessionMessagesQuery(key="cli:direct"), Principal.local()
+    )
+    assert result.data["key"] == "cli:direct"
 
 
 async def test_messages_raises_unavailable_when_no_manager() -> None:
@@ -111,19 +119,13 @@ async def test_messages_requires_read_scope(sm) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_webui_thread_validates_websocket_key() -> None:
-    result = await SessionsService(None).webui_thread(
-        WebuiThreadQuery(key="websocket:abc"), Principal.local()
-    )
-    # Sentinel result — shim discards this and calls build_webui_thread_response.
-    assert result.data == {}
-
-
-async def test_webui_thread_raises_not_found_for_non_websocket_key() -> None:
-    with pytest.raises(NotFoundError):
-        await SessionsService(None).webui_thread(
-            WebuiThreadQuery(key="cli:direct"), Principal.local()
+async def test_webui_thread_validates_any_key() -> None:
+    for key in ("websocket:abc", "telegram:123", "cli:direct"):
+        result = await SessionsService(None).webui_thread(
+            WebuiThreadQuery(key=key), Principal.local()
         )
+        # Sentinel result — shim discards this and calls build_webui_thread_response.
+        assert result.data == {}
 
 
 async def test_webui_thread_requires_read_scope() -> None:
@@ -149,11 +151,11 @@ async def test_delete_removes_session(sm, tmp_path: Path) -> None:
     assert not path.exists()
 
 
-async def test_delete_raises_not_found_for_non_websocket_key(sm) -> None:
-    with pytest.raises(NotFoundError):
-        await SessionsService(sm).delete(
-            SessionDeleteCommand(key="cli:direct"), Principal.local()
-        )
+async def test_delete_removes_non_websocket_session(sm) -> None:
+    result = await SessionsService(sm).delete(
+        SessionDeleteCommand(key="cli:direct"), Principal.local()
+    )
+    assert result.deleted is True
 
 
 async def test_delete_returns_false_for_nonexistent_session(sm) -> None:
@@ -202,11 +204,11 @@ async def test_rename_raises_not_found_for_missing_session(sm) -> None:
         )
 
 
-async def test_rename_raises_not_found_for_non_websocket_key(sm) -> None:
-    with pytest.raises(NotFoundError):
-        await SessionsService(sm).rename(
-            SessionRenameCommand(key="cli:direct", title="X"), Principal.local()
-        )
+async def test_rename_sets_title_for_non_websocket_key(sm) -> None:
+    result = await SessionsService(sm).rename(
+        SessionRenameCommand(key="cli:direct", title="Terminal Session"), Principal.local()
+    )
+    assert result.title == "Terminal Session"
 
 
 async def test_rename_raises_validation_for_empty_title(sm) -> None:
