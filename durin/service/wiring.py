@@ -38,6 +38,7 @@ def build_service_registry(
     """
     from durin.security.api_tokens import ApiTokenStore
     from durin.service.auth import AuthService
+    from durin.service.channels_telegram import TelegramService
     from durin.service.commands import CommandsService
     from durin.service.config import ConfigService
     from durin.service.cron import CronService
@@ -73,6 +74,7 @@ def build_service_registry(
     registry.register("sessions", SessionsService(session_manager=session_manager))
     registry.register("settings", SettingsService())
     registry.register("config", ConfigService())
+    registry.register("telegram", TelegramService())
     registry.register("skills", SkillsService(workspace=_workspace()))
     registry.register("memory", MemoryService(workspace_resolver=_workspace))
     registry.register("personas", PersonasService(workspace_resolver=_workspace))

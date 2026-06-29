@@ -149,3 +149,24 @@ async def test_pairing_approve_unknown_code():
     assert res.ok is False
     assert res.channel is None
     assert res.sender_id is None
+
+
+def test_gateway_registry_registers_telegram_like_the_catalog():
+    """The gateway builds its registry via wiring.build_service_registry, NOT
+    catalog.build_catalog_registry. A service registered in one but not the
+    other is served only by tests/standalone-api and silently 405s on the live
+    gateway. Freeze that the two register the same service set."""
+    from durin.service.catalog import build_catalog_registry
+    from durin.service.wiring import build_service_registry
+
+    wiring = build_service_registry(
+        config=None, session_manager=None, cron_service=None, bus=None
+    )
+    wnames = {b.service_name for b in wiring.routes}
+    cnames = {b.service_name for b in build_catalog_registry().routes}
+    assert wnames == cnames, (
+        f"registry drift — catalog-only={cnames - wnames}, "
+        f"wiring-only={wnames - cnames}"
+    )
+    assert "telegram" in wnames
+    assert any(b.spec.path.endswith("/telegram/test") for b in wiring.routes)
