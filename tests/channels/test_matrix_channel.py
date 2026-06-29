@@ -1,6 +1,7 @@
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -1773,3 +1774,36 @@ async def test_send_delta_ignores_whitespace_only_delta(monkeypatch) -> None:
     assert "!room:matrix.org" in channel._stream_bufs
     assert channel._stream_bufs["!room:matrix.org"].text == "   "
     assert client.room_send_calls == []
+
+
+@pytest.mark.asyncio
+async def test_audio_transcription_drops_media(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("durin.channels.matrix.get_data_dir", lambda: tmp_path)
+
+    channel = MatrixChannel(_make_config(), MessageBus())
+    client = _FakeAsyncClient("", "", "", None)
+    channel.client = client
+    channel._handle_message = AsyncMock()
+
+    monkeypatch.setattr(
+        channel, "_fetch_media_attachment",
+        AsyncMock(return_value=({"type": "audio", "path": "/tmp/a.ogg"}, "[audio: /tmp/a.ogg]")),
+    )
+    monkeypatch.setattr(channel, "transcribe_audio", AsyncMock(return_value="hi there"))
+
+    room = SimpleNamespace(room_id="!room:matrix.org", display_name="Test room", member_count=2)
+    event = SimpleNamespace(
+        sender="@alice:matrix.org",
+        body="voice.ogg",
+        url="mxc://example.org/audio1",
+        event_id="$event1",
+        source={"content": {"msgtype": "m.audio", "info": {"mimetype": "audio/ogg", "size": 100}}},
+        server_timestamp=None,
+    )
+
+    await channel._on_media_message(room, event)
+
+    channel._handle_message.assert_awaited_once()
+    kwargs = channel._handle_message.await_args.kwargs
+    assert kwargs["media"] == []
+    assert "[transcription: hi there]" in kwargs["content"]
