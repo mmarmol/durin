@@ -176,11 +176,17 @@ skill_signals)` iterates every `sessions/*.jsonl` and calls
    reusing the compaction learnings prompt — to extract durable learnings:
    preferences, corrections, standing constraints, and stable project facts. It
    writes each result as a `feedback`, `stance`, or `practice` entity with
-   `author="dream"` (never a `person` or other principal type). Writes freely;
-   duplicates with the agent's live captures and the compaction backstop are
-   resolved by the refine pass. Gated by `memory.dream.learnings_sweep_enabled`
-   (default true). Best-effort: an empty turn span, LLM failure, or parse failure
-   yields an empty list without aborting the session.
+   `author="dream"` (never a `person` or other principal type). The prompt is
+   **seeded with the full set of existing learning-type entities** (via
+   `build_entity_manifest(types=[...])`) so the LLM can reuse a known ref instead
+   of minting a new slug. Each proposed ref is additionally resolved against the
+   alias index (and optionally the vector index) using the same lexical+semantic
+   canonical resolution the discover path applies: a re-worded fact updates the
+   existing entity in place rather than creating a duplicate slug. The refine pass
+   remains the cross-run backstop for any duplicates that slip through. Gated by
+   `memory.dream.learnings_sweep_enabled` (default true). Best-effort: an empty
+   turn span, LLM failure, or parse failure yields an empty list without aborting
+   the session.
 8. Advance the cursor to the total turn count via `set_extract_cursor`.
 
 The `source_ref` in each patch's provenance points to the turn the fact came from.

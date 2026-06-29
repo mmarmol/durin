@@ -490,16 +490,30 @@ def mine_learnings(
     llm_invoke: LLMInvoke | None = None,
     model: str | None = None,
     source_ref: str | None = None,
+    alias_index: "AliasIndex | None" = None,
+    vector_index: object | None = None,
+    confidence_threshold: int = 95,
+    semantic_distance_threshold: float = 0.30,
 ) -> list[dict[str, Any]]:
     """Mine durable learnings (preferences/corrections) from a session-turn span
-    and write them as feedback/stance/practice entities. Best-effort: empty text,
-    LLM failure, or parse failure all yield []. Writes freely (the refine pass
-    deduplicates); never writes a principal or other non-learning type."""
+    and write them as feedback/stance/practice entities.
+
+    The prompt is seeded with the full set of existing learning-type entities so
+    the LLM reuses a known ref instead of minting a new slug. Each proposed ref
+    is also resolved against the alias index (and optionally the vector index)
+    before writing — a re-worded fact updates the existing entity rather than
+    creating a duplicate slug. The refine pass remains the cross-run backstop.
+
+    Best-effort: empty text, LLM failure, or parse failure yield []. Never writes
+    a principal or other non-learning type.
+    """
     from durin.utils.prompt_templates import render_template
     llm_invoke = llm_invoke or default_llm_invoke
     if not text.strip():
         return []
-    prompt = (render_template("agent/consolidator_learnings.md")
+    existing = build_entity_manifest(workspace, types=list(_LEARNING_TYPES), limit=40)
+    prompt = (render_template("agent/consolidator_learnings.md",
+                              existing=existing or "(none yet)")
               + "\n\nCONVERSATION SPAN:\n" + text[:12000])
     try:
         resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
@@ -507,6 +521,12 @@ def mine_learnings(
         learnings = _parse_learnings(raw)
     except Exception:
         return []
+
+    index = alias_index
+    if index is None:
+        index = AliasIndex(Path(workspace) / "memory")
+        index.build()
+
     now = datetime.now(timezone.utc)
     src = source_ref or "learnings_sweep"
     out: list[dict[str, Any]] = []
@@ -514,12 +534,27 @@ def mine_learnings(
         ref = it["ref"]
         if ref.split(":", 1)[0] not in _LEARNING_TYPES:
             continue
+        target = _resolve_existing_ref(index, ref, it["name"])
+        if target is None and vector_index is not None:
+            target = _resolve_semantic_ref(
+                workspace, vector_index, ref, it["name"], {},
+                llm_invoke=llm_invoke, model=model,
+                confidence_threshold=confidence_threshold,
+                distance_threshold=semantic_distance_threshold)
+        write_ref = target or ref
         result = write_entity(
-            workspace, ref,
+            workspace, write_ref,
             [FieldPatch(kind="body_replace", value=it["body"], author="dream",
                         source_ref=src, at=now)],
-            create=True, name=it["name"])
-        out.append({"ref": ref, "committed": result.committed})
+            create=(target is None), name=it["name"])
+        # Keep the alias index current so a later proposal in this same sweep
+        # resolves against what we just wrote.
+        type_, _, slug = write_ref.partition(":")
+        page = EntityPage.from_file(
+            Path(workspace) / "memory" / "entities" / type_ / f"{slug}.md")
+        if page is not None:
+            index.refresh_for(page, slug)
+        out.append({"ref": write_ref, "committed": result.committed})
     try:
         _mine_emit_tool_event("memory.dream.learnings", {
             "proposed": len(learnings),
