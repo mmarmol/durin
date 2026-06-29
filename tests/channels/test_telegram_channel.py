@@ -1858,6 +1858,7 @@ async def test_callback_query_routes_through_gate_for_unauthorized_user() -> Non
         answer=AsyncMock(),
         message=SimpleNamespace(
             chat_id=123,
+            chat=SimpleNamespace(type="private"),
             edit_reply_markup=AsyncMock(),
         ),
     )
@@ -1870,6 +1871,8 @@ async def test_callback_query_routes_through_gate_for_unauthorized_user() -> Non
 
     query.answer.assert_awaited_once()
     channel._handle_message.assert_awaited_once()
+    # a private-chat tap must thread is_dm so the gate can pair an unauthorized user
+    assert channel._handle_message.call_args.kwargs["is_dm"] is True
 
 
 # ---------------------------------------------------------------------------

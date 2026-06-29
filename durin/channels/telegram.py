@@ -1335,4 +1335,5 @@ class TelegramChannel(BaseChannel):
                 "first_name": user.first_name,
                 "is_callback": True,
             },
+            is_dm=query.message.chat.type == "private" if query.message else False,
         )
