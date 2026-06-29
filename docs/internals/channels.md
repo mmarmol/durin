@@ -275,6 +275,24 @@ Channels MUST NOT call `is_allowed` in their own handlers.
 A channel registers its default configuration via the class method
 `default_config()` which the onboarding flow uses to seed `config.json`.
 
+### Audio transcription contract
+
+When a channel transcribes incoming audio at the channel level, it must pass the
+transcript text to the agent and **drop the audio path from `media`**. The raw
+path is forwarded only when transcription fails, as a fallback for the
+`interpret_audio` tool. This mirrors the TUI drag-drop path
+(`durin/cli/dragdrop.py::transcribe_dragged_audio`) and the WhatsApp adapter
+(`durin/channels/whatsapp.py`), and matches the agent loop's `audio_mode="auto"`
+behaviour, which silently skips audio paths in `media`. Passing both the
+transcript text and the raw path causes the model to invent a file path and call
+`interpret_audio` on it — a hallucination the contract prevents.
+
+WhatsApp is the reference implementation of this contract. Channels that
+transcribe locally (currently Telegram, Matrix, Feishu, and Weixin) apply the
+same idiom: on transcription success, return an empty `media` list and a
+`[transcription: …]` content part; on failure, return the audio path so the
+`interpret_audio` tool remains a usable fallback.
+
 ### Pairing store
 
 The pairing store (`durin/pairing/store.py`) is a small JSON file at

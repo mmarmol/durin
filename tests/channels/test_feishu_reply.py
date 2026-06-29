@@ -580,7 +580,8 @@ async def test_on_message_audio_publishes_downloaded_path_and_transcription() ->
     )
     channel.transcribe_audio.assert_awaited_once_with(r"C:\\Users\\dodre\\.durin\\media\\feishu\\voice.ogg")
     assert len(captured) == 1
-    assert captured[0].media == [r"C:\\Users\\dodre\\.durin\\media\\feishu\\voice.ogg"]
+    # Path dropped when transcription succeeds: transcript is the payload.
+    assert captured[0].media == []
     assert captured[0].content == "[transcription: hello from voice]"
 
 
@@ -1048,3 +1049,31 @@ async def test_session_key_with_topic_isolation_false_uses_group_scoped() -> Non
     assert bus_spy[1].session_key_override == "feishu:oc_abc"
     # Private chat has no session key override
     assert bus_spy[2].session_key_override is None
+
+@pytest.mark.asyncio
+async def test_on_message_audio_keeps_path_when_transcription_fails() -> None:
+    channel = _make_feishu_channel()
+    channel._processed_message_ids.clear()
+    captured = []
+
+    async def capture(msg):
+        captured.append(msg)
+
+    channel.bus.publish_inbound = capture
+    audio_path = "/tmp/feishu_voice.ogg"
+    channel._download_and_save_media = AsyncMock(
+        return_value=(audio_path, f"[audio: {audio_path}]")
+    )
+    channel.transcribe_audio = AsyncMock(return_value="")
+    channel._add_reaction = AsyncMock(return_value=None)
+
+    event = _make_feishu_event(
+        msg_type="audio",
+        content='{"file_key": "audio_key2", "duration": 500}',
+        message_id="om_audio2",
+    )
+    await channel._on_message(event)
+
+    assert len(captured) == 1
+    # Path kept as fallback when transcription fails.
+    assert audio_path in captured[0].media

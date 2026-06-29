@@ -678,7 +678,7 @@ class WeixinChannel(BaseChannel):
                             content_parts.append(f"[voice] {transcription}")
                         else:
                             content_parts.append(f"[voice]\n[Audio: source: {file_path}]")
-                        media_paths.append(file_path)
+                            media_paths.append(file_path)  # keep only as interpret_audio fallback
                     else:
                         content_parts.append("[voice]")
 
@@ -740,7 +740,7 @@ class WeixinChannel(BaseChannel):
                             content_parts.append(f"[voice] {transcription}")
                         else:
                             content_parts.append(f"[voice]\n[Audio: source: {file_path}]")
-                        media_paths.append(file_path)
+                            media_paths.append(file_path)  # keep only as interpret_audio fallback
                 elif ref_type == ITEM_FILE:
                     file_item = ref_media_item.get("file_item") or {}
                     file_name = file_item.get("file_name", "unknown")
