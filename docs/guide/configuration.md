@@ -320,7 +320,7 @@ background file watching, and health checks. See
 |---|---|---|
 | `enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone) |
 | `confidence_threshold` | `95` | LLM-judge confidence floor (0-100) for an auto-merge |
-| `semantic_distance_threshold` | `0.20` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.90; lower = stricter — the judge still decides the merge |
+| `semantic_distance_threshold` | `0.30` | L2² distance below which an embedding-near entity becomes a dedup candidate (refine + discovery); the judge decides the merge, so a looser value trades judge calls for better duplicate recall |
 | `escalate_floor` | `0` | **Opt-in.** When `> 0`, borderline pairs (Tier 1 verdict `unclear`, or `same` with confidence in `[escalate_floor, confidence_threshold)`) escalate to a bounded sub-agent that investigates with read-only entity/lineage/session tools. `0` disables Tier 2 entirely. |
 
 **`memory.search`** — search pipeline configuration:

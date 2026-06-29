@@ -3,7 +3,7 @@ from durin.memory import dream_passes
 
 
 def test_semantic_distance_threshold_default():
-    assert AutoAbsorbConfig().semantic_distance_threshold == 0.20
+    assert AutoAbsorbConfig().semantic_distance_threshold == 0.30
 
 
 def test_run_refine_pass_forwards_threshold(monkeypatch):

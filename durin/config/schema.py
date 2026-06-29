@@ -368,11 +368,11 @@ class AutoAbsorbConfig(Base):
 
     # Semantic candidate threshold: LanceDB L2² distance below which an
     # embedding-near same-type entity is handed to the judge (in refine AND
-    # at discovery time). ~0.0–1.0; 0.20 ≈ cosine 0.90. Lower = stricter
-    # (fewer candidates, fewer judge calls); the judge (confidence_threshold)
-    # still decides the actual merge/reuse.
+    # at discovery time). ~0.0–1.0; 0.30 ≈ cosine 0.85; the judge
+    # (confidence_threshold) decides the actual merge/reuse, so recall favours
+    # catching near-duplicate variant names over minimising judge calls.
     semantic_distance_threshold: float = Field(
-        default=0.20,
+        default=0.30,
         ge=0.0,
         le=1.0,  # L2² of 1.0 ≈ cosine 0.5 — already far looser than useful;
         # nothing above it is a meaningful dedup candidate. Matches the webui input.
