@@ -497,7 +497,7 @@ def mine_learnings(
     alias_index: "AliasIndex | None" = None,
     vector_index: object | None = None,
     confidence_threshold: int = 95,
-    semantic_distance_threshold: float = 0.30,
+    semantic_distance_threshold: float = 0.20,
 ) -> list[dict[str, Any]]:
     """Mine durable learnings (preferences/corrections) from a session-turn span
     and write them as feedback/stance/practice entities.
