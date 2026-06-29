@@ -70,6 +70,12 @@ async def test_unauthorized_dm_pairs(mgr, monkeypatch):
     )
     assert ok is False
     assert len(ch.sent) == 1
+    # the sent message is a real pairing reply carrying the code + meta key
+    from durin.pairing import PAIRING_CODE_META_KEY
+
+    sent = ch.sent[0]
+    assert sent.metadata.get(PAIRING_CODE_META_KEY) == "AAAA-BBBB"
+    assert "AAAA-BBBB" in sent.content
 
 
 async def test_unauthorized_group_denied(mgr):
