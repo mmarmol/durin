@@ -18,6 +18,29 @@ from typing import Any
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 
+
+def _terminal_progress_payload(workflow: Any, run_id: str, runs: Any) -> dict:
+    """Build the final ``workflow_progress`` payload (``done=True``) from the
+    completed node runs.
+
+    The engine only emits per-node ``done=False`` frames during the walk and
+    never a terminal frame, so without this the WORK panel (TUI + webui) leaves
+    a finished workflow stuck on "running". Emitted after the run completes,
+    keyed by the same ``run_id`` so it updates the existing work item.
+    """
+    from durin.workflow.spec import node_label
+
+    nodes = [
+        {
+            "id": r.node_id,
+            "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
+            "status": "failed" if r.status in ("node_failed", "persist_failed") else "done",
+            "route_label": getattr(r, "route_label", None),
+        }
+        for r in runs
+    ]
+    return {"run_id": run_id, "nodes": nodes, "done": True}
+
 _PARAMETERS = {
     "type": "object",
     "properties": {
@@ -261,10 +284,11 @@ class RunWorkflowTool(Tool, ContextAware):
                 except Exception:  # noqa: BLE001 - best-effort; never break the run
                     pass
             progress_emit = _emit_progress
-        # Pre-generate the run id so a background launch can return it (the agent
-        # needs it to poll/stop via the `tasks` tool) and so the engine's
-        # cooperative cancel can be keyed by it. The engine would otherwise mint
-        # its own id inside run().
+        # Pre-generate the run id (instead of letting the engine mint it) for two
+        # reasons: the terminal "done" progress frame emitted after the run must
+        # carry the same id to update the existing work item, and a background
+        # launch returns it so the agent can poll/cancel via the `tasks` tool —
+        # the engine's cooperative cancel is keyed by it.
         from durin.workflow.cancellation import clear as _clear_cancel
         from durin.workflow.cancellation import is_cancelled as _is_cancelled
         run_id = uuid.uuid4().hex[:12]
@@ -293,8 +317,13 @@ class RunWorkflowTool(Tool, ContextAware):
                         root_session_key=root_session_key,
                         output_format=output_format or None,
                     )
+                    if progress_emit is not None:
+                        progress_emit(_terminal_progress_payload(workflow, run_id, result.runs))
                     summary = _format_result(result)
                 except Exception as exc:  # noqa: BLE001
+                    # Clear the work item even on failure so it doesn't hang on "running".
+                    if progress_emit is not None:
+                        progress_emit({"run_id": run_id, "nodes": [], "done": True})
                     summary = f"Workflow run failed in background: {exc}"
                 finally:
                     # Drop the cancel flag now the run is over (whether or not it was set).
@@ -313,4 +342,6 @@ class RunWorkflowTool(Tool, ContextAware):
             root_session_key=root_session_key,
             output_format=output_format or None,
         )
+        if progress_emit is not None:
+            progress_emit(_terminal_progress_payload(workflow, run_id, result.runs))
         return _format_result(result)

@@ -116,16 +116,24 @@ class MessageBubble(Static):
     def __init__(self, role: Role, body: str = "") -> None:
         super().__init__("", classes=role)
         self._role: Role = role
+        self._raw_body: str = body
         self.body = body
         # `init=False` on the reactive means the line above didn't fire
         # `watch_body`. Push the initial body through the renderer so the
         # widget is consistent before mount.
         self._render_body()
 
-    def watch_body(self, _old: str, _new: str) -> None:
+    def watch_body(self, _old: str, new: str) -> None:
+        self._raw_body = new
         self._render_body()
 
     def _render_body(self) -> None:
+        try:
+            # No-op outside an active Textual app (e.g., unit tests that
+            # construct a bubble without running the app).
+            _ = self.app
+        except Exception:  # noqa: BLE001
+            return
         body = self.body or ""
         if not body:
             self.update("")
@@ -154,8 +162,34 @@ class MessageBubble(Static):
             self.update(text)
         else:
             # user (or any role without a prefix): plain text, no markup
-            # interpretation.
-            self.update(Text(body))
+            # interpretation. User messages carry a dim trailing edit hint;
+            # clicking anywhere on the bubble reloads the text into the input.
+            text = Text(body)
+            if self._role == "user":
+                text.append("  ✎", style="dim")
+            self.update(text)
+
+    def editable_text(self) -> str:
+        """The raw text to reload into the input when editing this message."""
+        return self._raw_body or ""
+
+    def on_click(self, event) -> None:  # noqa: ANN001 — Textual Click event
+        """Clicking a user bubble reloads its text into the input for re-editing.
+
+        The whole bubble is the affordance — a separate child widget would turn
+        this Static into a container and stop its own text from rendering.
+        """
+        if self._role != "user":
+            return
+        try:
+            from durin.cli.tui.widgets import InputArea
+
+            inp = self.app.query_one(InputArea)
+        except Exception:  # noqa: BLE001
+            return
+        inp.value = self.editable_text()
+        inp.cursor_position = len(inp.value)
+        inp.focus()
 
     def append(self, delta: str) -> None:
         """Streaming helper — append a delta to the body."""
@@ -168,6 +202,74 @@ class MessageBubble(Static):
         self.add_class("error")
 
 
+class _QuickActionChips(Static):
+    """Row of suggestion chips shown on an empty thread."""
+
+    DEFAULT_CSS = """
+    _QuickActionChips {
+        width: 100%;
+        padding: 1 2;
+        color: $text-muted;
+    }
+    _QuickActionChips .qa-chip {
+        background: $boost;
+        color: $text;
+        padding: 0 1;
+        margin: 0 1 0 0;
+    }
+    _QuickActionChips .qa-chip:hover {
+        background: $accent 40%;
+        color: $accent;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        for label in ChatView.quick_actions():
+            chip = Static(label, classes="qa-chip", markup=False, name=label)
+            yield chip
+
+    def on_click(self, event) -> None:  # noqa: ANN001
+        target = event.widget
+        if target is None or "qa-chip" not in target.classes:
+            return
+        try:
+            from durin.cli.tui.widgets import InputArea
+
+            inp = self.app.query_one(InputArea)
+        except Exception:  # noqa: BLE001
+            return
+        label = target.name or (target.renderable if isinstance(target.renderable, str) else str(target.renderable))
+        inp.value = label
+        inp.cursor_position = len(inp.value)
+        inp.focus()
+
+
+class _ScrollToBottom(Static):
+    """Button that jumps to the end of the chat history."""
+
+    DEFAULT_CSS = """
+    _ScrollToBottom {
+        dock: bottom;
+        width: auto;
+        padding: 0 2;
+        background: $boost;
+        color: $text-muted;
+        display: none;
+    }
+    _ScrollToBottom:hover {
+        background: $accent 40%;
+        color: $accent;
+    }
+    """
+
+    def on_click(self, _event) -> None:  # noqa: ANN001
+        try:
+            chat = self.app.query_one(ChatView)
+            chat.scroll_end(animate=False)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 class ChatView(VerticalScroll):
     """Scrollable history. Append :class:`MessageBubble` instances to it."""
 
@@ -178,15 +280,34 @@ class ChatView(VerticalScroll):
     }
     """
 
+    @staticmethod
+    def quick_actions() -> list[str]:
+        """Labels for the suggestion chips shown on an empty thread."""
+        return ["Plan", "Analyze", "Brainstorm", "Code", "Summarize"]
+
     def compose(self) -> ComposeResult:
-        # ChatView's content is appended dynamically via add_message().
-        yield from ()
+        yield _QuickActionChips(id="qa-chips")
+        yield _ScrollToBottom("↓ Jump to bottom", id="scroll-to-bottom")
 
     def add_message(self, role: Role, body: str = "") -> MessageBubble:
+        # Hide quick-action chips once the thread has real messages.
+        # Don't hide for decorative roles (logo, banner).
+        if role in ("user", "assistant", "system", "tool", "reasoning"):
+            chips = self.query_one("#qa-chips", _QuickActionChips)
+            chips.display = False
         bubble = MessageBubble(role=role, body=body)
         self.mount(bubble)
         self.scroll_end(animate=False)
         return bubble
+
+    def watch_scroll_y(self, old: float, new: float) -> None:
+        """Show/hide the jump button based on scroll position."""
+        super().watch_scroll_y(old, new)
+        try:
+            btn = self.query_one("#scroll-to-bottom", _ScrollToBottom)
+            btn.display = new < self.max_scroll_y - 1
+        except Exception:  # noqa: BLE001
+            pass
 
     def replace_last(self, role: Role, body: str) -> None:
         """Replace the last bubble's role + body (used by /stop or errors)."""

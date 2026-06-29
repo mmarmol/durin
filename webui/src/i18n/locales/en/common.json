@@ -929,7 +929,11 @@
         "curation": "Curation",
         "import": "Import",
         "system": "System"
-      }
+      },
+      "diffLoading": "Loading changes…",
+      "diffEmpty": "No file changes in this commit.",
+      "showChanges": "Show changes",
+      "diffError": "Could not load the changes. Collapse and expand again to retry."
     },
     "noFindings": "No security findings.",
     "scanClean": "Scan found no risks.",
@@ -1131,7 +1135,6 @@
       "placeholderOpening": "Opening a new chat…",
       "placeholderStreaming": "Model is responding…",
       "inputAria": "Message input",
-      "sendHint": "Enter to send · Shift+Enter for newline",
       "runRuntimeTitle": "Running · {{elapsed}}",
       "goalStateStrip": "Goal · {{label}}",
       "goalStateFallback": "Goal",
@@ -1164,6 +1167,17 @@
       },
       "mode": {
         "title": "Mode"
+      },
+      "add": {
+        "title": "Add",
+        "attach": "Upload file or photo",
+        "slash": "Slash commands",
+        "equation": "Insert equation"
+      },
+      "voice": {
+        "title": "Voice input",
+        "dictation": "Dictate to text",
+        "handsFree": "Hands-free voice"
       },
       "tools": {
         "search": "Search",
@@ -1312,6 +1326,11 @@
     "next": "Next image",
     "close": "Close image preview"
   },
+  "formula": {
+    "copyLatex": "Copy LaTeX",
+    "copyWord": "Copy for Word",
+    "actionsAria": "Formula actions"
+  },
   "code": {
     "fallbackLanguage": "code",
     "copyAria": "Copy code",
@@ -1450,7 +1469,10 @@
     "placeholder": "Type your message…",
     "inputAria": "Message input",
     "sendAria": "Send message",
-    "hint": "Enter to send · Shift+Enter for newline"
+    "hint": "Enter to send · Shift+Enter for newline",
+    "equationEditor": "Equation editor",
+    "insertEquation": "Insert",
+    "equationDialogTitle": "Write an equation"
   },
   "empty": {
     "noChatsTitle": "No chats yet",
@@ -1512,7 +1534,18 @@
       "reviewInSkills": "Review in Skills",
       "emptyFlagged": "No memory pairs flagged for review.",
       "emptyQuarantine": "No skills in quarantine.",
-      "resolveError": "Could not resolve pair — it may have already been processed. Refresh to see the current state."
+      "resolveError": "Could not resolve pair — it may have already been processed. Refresh to see the current state.",
+      "suggestionsTitle": "Skill suggestions",
+      "emptySuggestions": "No skill suggestions right now.",
+      "accept": "Accept",
+      "reject": "Reject",
+      "rejectHint": "rejecting silences it for ~30 days",
+      "suggestionError": "Could not apply the suggestion — it may have already been processed. Refresh to see the current state.",
+      "action": {
+        "evolve": "improve",
+        "retire": "retire",
+        "fuse": "merge"
+      }
     }
   },
   "audio": {
@@ -1538,5 +1571,11 @@
     "finished": "Finished ({{count}})",
     "empty": "No active work",
     "close": "Close work panel"
+  },
+  "rich": {
+    "code": "Code",
+    "preview": "Preview",
+    "expand": "Expand",
+    "copy": "Copy"
   }
 }

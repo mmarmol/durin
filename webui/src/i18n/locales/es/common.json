@@ -817,7 +817,11 @@
         "curation": "Curación",
         "import": "Importación",
         "system": "Sistema"
-      }
+      },
+      "diffLoading": "Cargando cambios…",
+      "diffEmpty": "Este commit no cambió archivos.",
+      "showChanges": "Ver cambios",
+      "diffError": "No se pudieron cargar los cambios. Colapsa y vuelve a expandir para reintentar."
     },
     "noFindings": "Sin hallazgos de seguridad.",
     "scanClean": "Scan sin riesgos detectados.",
@@ -1012,7 +1016,6 @@
       "placeholderOpening": "Abriendo un nuevo chat…",
       "placeholderStreaming": "El modelo está respondiendo…",
       "inputAria": "Entrada de mensaje",
-      "sendHint": "Enter para enviar · Shift+Enter para nueva línea",
       "runRuntimeTitle": "En ejecución · {{elapsed}}",
       "goalStateStrip": "Objetivo · {{label}}",
       "goalStateFallback": "Objetivo",
@@ -1044,6 +1047,17 @@
       },
       "mode": {
         "title": "Modo"
+      },
+      "add": {
+        "title": "Añadir",
+        "attach": "Subir archivo o foto",
+        "slash": "Comandos de barra",
+        "equation": "Insertar fórmula"
+      },
+      "voice": {
+        "title": "Entrada de voz",
+        "dictation": "Dictado a texto",
+        "handsFree": "Voz manos libres"
       },
       "encoding": "Procesando…",
       "remove": "Quitar adjunto",
@@ -1193,6 +1207,11 @@
     "next": "Imagen siguiente",
     "close": "Cerrar vista previa"
   },
+  "formula": {
+    "copyLatex": "Copiar LaTeX",
+    "copyWord": "Copiar para Word",
+    "actionsAria": "Acciones de fórmula"
+  },
   "code": {
     "fallbackLanguage": "código",
     "copyAria": "Copiar código",
@@ -1331,7 +1350,10 @@
     "placeholder": "Escribe tu mensaje…",
     "inputAria": "Entrada de mensaje",
     "sendAria": "Enviar mensaje",
-    "hint": "Enter para enviar · Shift+Enter para nueva línea"
+    "hint": "Enter para enviar · Shift+Enter para nueva línea",
+    "equationEditor": "Editor de ecuaciones",
+    "insertEquation": "Insertar",
+    "equationDialogTitle": "Escribir una ecuación"
   },
   "empty": {
     "noChatsTitle": "Aún no hay chats",
@@ -1400,7 +1422,18 @@
       "reviewInSkills": "Revisar en Skills",
       "emptyFlagged": "No hay pares de memoria marcados para revisión.",
       "emptyQuarantine": "No hay skills en cuarentena.",
-      "resolveError": "No se pudo resolver el par — es posible que ya haya sido procesado. Recargá para ver el estado actual."
+      "resolveError": "No se pudo resolver el par — es posible que ya haya sido procesado. Recargá para ver el estado actual.",
+      "suggestionsTitle": "Sugerencias de skills",
+      "emptySuggestions": "No hay sugerencias de skills por ahora.",
+      "accept": "Aceptar",
+      "reject": "Rechazar",
+      "rejectHint": "rechazar la silencia ~30 días",
+      "suggestionError": "No se pudo aplicar la sugerencia — es posible que ya haya sido procesada. Recargá para ver el estado actual.",
+      "action": {
+        "evolve": "mejorar",
+        "retire": "retirar",
+        "fuse": "fusionar"
+      }
     }
   },
   "workflows": {
@@ -1530,5 +1563,11 @@
     "finished": "Finalizadas ({{count}})",
     "empty": "Sin trabajo activo",
     "close": "Cerrar panel de trabajo"
+  },
+  "rich": {
+    "code": "Código",
+    "preview": "Vista",
+    "expand": "Ampliar",
+    "copy": "Copiar"
   }
 }

@@ -288,6 +288,10 @@ _MAX_VIDEOS_PER_MESSAGE = 1
 _MAX_VIDEO_BYTES = 20 * 1024 * 1024
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024
 _MAX_AUDIO_PER_MESSAGE = 1
+# Grace window before a disconnected voice session is torn down. Long enough to
+# ride out a wifi blip / backgrounded tab and let the browser reconnect onto the
+# same session; short enough that a truly closed tab frees it promptly.
+_VOICE_GRACE_S = 30.0
 
 # Image MIME whitelist — matches the Composer's ``accept`` list. SVG is
 # explicitly excluded to avoid the XSS surface inside embedded scripts.
@@ -501,6 +505,11 @@ class WebSocketChannel(BaseChannel):
         self._subs: dict[str, set[Any]] = {}
         # chat_id -> VoiceSession (conversational voice mode state).
         self._voice: dict[str, Any] = {}
+        # chat_id -> pending teardown task. A socket drop schedules a delayed
+        # drop here instead of killing the session at once; a reconnect that
+        # re-subscribes cancels it, so a transient blip never ends the call.
+        self._voice_cleanup: dict[str, asyncio.Task] = {}
+        self._voice_grace_s: float = _VOICE_GRACE_S
         # connection -> chat_ids it is subscribed to (O(1) cleanup on disconnect).
         self._conn_chats: dict[Any, set[str]] = {}
         # connection -> default chat_id for legacy frames that omit routing.
@@ -566,6 +575,11 @@ class WebSocketChannel(BaseChannel):
         """Idempotently subscribe *connection* to *chat_id*."""
         self._subs.setdefault(chat_id, set()).add(connection)
         self._conn_chats.setdefault(connection, set()).add(chat_id)
+        # A reconnect re-subscribing within the grace window keeps the voice
+        # session alive: cancel any pending teardown for this chat.
+        task = self._voice_cleanup.pop(chat_id, None)
+        if task is not None:
+            task.cancel()
 
     def _cleanup_connection(self, connection: Any) -> None:
         """Remove *connection* from every subscription set; safe to call multiple times."""
@@ -577,12 +591,40 @@ class WebSocketChannel(BaseChannel):
             subs.discard(connection)
             if not subs:
                 self._subs.pop(cid, None)
+        # Defer voice-session teardown by a grace period rather than killing it
+        # on the disconnect: a transient socket drop (wifi blip, backgrounded
+        # tab) would otherwise end the conversation and discard the in-flight
+        # reply. A reconnect cancels the pending drop via _attach.
         for cid in list(self._voice):
             if not self._subs.get(cid):
-                sess = self._voice.pop(cid, None)
+                self._schedule_voice_cleanup(cid)
+        self._conn_default.pop(connection, None)
+
+    def _schedule_voice_cleanup(self, chat_id: str) -> None:
+        """Drop the voice session for *chat_id* after the grace window, unless a
+        client re-subscribes first. Idempotent — a second call is a no-op while a
+        teardown is already pending."""
+        if chat_id in self._voice_cleanup:
+            return
+
+        async def _drop() -> None:
+            try:
+                await asyncio.sleep(self._voice_grace_s)
+            except asyncio.CancelledError:
+                return
+            self._voice_cleanup.pop(chat_id, None)
+            if not self._subs.get(chat_id):
+                sess = self._voice.pop(chat_id, None)
                 if sess is not None:
                     sess.cancel_speak()
-        self._conn_default.pop(connection, None)
+
+        try:
+            self._voice_cleanup[chat_id] = asyncio.ensure_future(_drop())
+        except RuntimeError:
+            # No running loop (sync teardown path): drop immediately.
+            sess = self._voice.pop(chat_id, None)
+            if sess is not None:
+                sess.cancel_speak()
 
     async def _maybe_push_active_goal_state(self, chat_id: str) -> None:
         """Replay an active sustained goal from session metadata after *chat_id* is subscribed.
@@ -1449,8 +1491,15 @@ class WebSocketChannel(BaseChannel):
                 return
             from durin.voice.session import VoiceSession
 
-            self._voice[cid] = VoiceSession(chat_id=cid)
-            await self.send_voice_state(cid, "listening")
+            # Idempotent: the reconnect self-heal re-sends voice_start, so reuse
+            # an existing session (keeping its reply buffer + in-flight TTS)
+            # instead of wiping it. Re-affirm the current state for the new
+            # connection; a fresh session starts in "listening".
+            sess = self._voice.get(cid)
+            if sess is None:
+                sess = VoiceSession(chat_id=cid)
+                self._voice[cid] = sess
+            await self.send_voice_state(cid, sess.state if sess.state != "idle" else "listening")
             return
         if t == "voice_stop":
             cid = envelope.get("chat_id")
@@ -1613,6 +1662,9 @@ class WebSocketChannel(BaseChannel):
         if not self._running:
             return
         self._running = False
+        for task in self._voice_cleanup.values():
+            task.cancel()
+        self._voice_cleanup.clear()
         for sess in self._voice.values():
             sess.cancel_speak()
         self._voice.clear()

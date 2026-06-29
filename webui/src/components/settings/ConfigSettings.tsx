@@ -310,7 +310,7 @@ function LeafRow({
           variant="outline"
           disabled={busy}
           onClick={() => onSave(leaf.path, !value)}
-          className="w-[68px] rounded-full"
+          className="min-w-[68px] rounded-full"
         >
           {value ? t("settings.config.on") : t("settings.config.off")}
         </Button>

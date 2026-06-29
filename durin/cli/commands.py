@@ -37,6 +37,14 @@ _log_handler_id = logger.add(
     filter=lambda record: record["extra"].setdefault("channel", "-") or True,
 )
 
+# Route durin's own stdlib loggers (durin.*) into loguru so their records
+# reach every loguru sink — the stderr sink above and, in daemon mode, the
+# gateway.log JSONL file sink. Without this, modules that log via
+# logging.getLogger(__name__) bypass gateway.log entirely.
+from durin.utils.logging_bridge import redirect_durin_logging
+
+redirect_durin_logging()
+
 from prompt_toolkit import PromptSession, print_formatted_text
 from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.formatted_text import ANSI, HTML
@@ -1489,6 +1497,29 @@ def _run_gateway(
                 )
             except Exception:
                 logger.exception("skill curation step (non-fatal) failed")
+
+            # Skill suggestions for MANUAL skills: propose curation actions into
+            # the dream bandeja for user review (never auto-applied). Gated +
+            # best-effort: a failure here must not abort the dream cron.
+            if config.memory.dream.skill_suggestions_enabled:
+                try:
+                    from durin.agent.skill_curation import suggest_manual_skills
+                    from durin.memory.llm_invoke import default_llm_invoke
+
+                    _sg_model = resolve_memory_model(config)
+
+                    def _sg_judge(prompt: str) -> str:
+                        return default_llm_invoke(prompt, model=_sg_model).text
+
+                    from durin.agent.skill_usage import collect_recent_skill_calls
+                    _sg_usage = collect_recent_skill_calls(workspace, within_hours=24)
+                    _sg = suggest_manual_skills(
+                        workspace, judge=_sg_judge, usage=_sg_usage)
+                    logger.info(
+                        "skill suggestions: reviewed={} suggested={} suppressed={}",
+                        _sg["reviewed"], _sg["suggested"], _sg["suppressed"])
+                except Exception:
+                    logger.exception("skill suggestions step (non-fatal) failed")
 
             # Reap stale per-run cron sessions (cron:{id}:run:{ms}). These are
             # created on every agent_turn cron execution and never otherwise

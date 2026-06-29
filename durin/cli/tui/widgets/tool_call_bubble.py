@@ -84,6 +84,10 @@ class ToolCallBubble(Vertical):
         height: auto;
         padding: 0 1;
     }
+    ToolCallBubble > #tc-plan-actions {
+        height: auto;
+        padding: 0 1;
+    }
     ToolCallBubble .tc-option {
         height: 1;
         color: $accent;
@@ -167,6 +171,14 @@ class ToolCallBubble(Vertical):
                     id="tc-secret-provide",
                     classes="tc-option",
                 )
+        # exit_plan_mode: inline Approve / Refine rows let the user act
+        # without typing /build. Refine just focuses the input.
+        if self._name == "exit_plan_mode" and str(
+            (self._args or {}).get("plan") or ""
+        ).strip():
+            with Horizontal(id="tc-plan-actions"):
+                yield Static("✓ Approve", id="tc-plan-approve", classes="tc-option")
+                yield Static("✎ Refine", id="tc-plan-refine", classes="tc-option")
         # Populate body from the start args; result/error replace it later.
         self._update_body(self._render_running_body())
 
@@ -192,6 +204,10 @@ class ToolCallBubble(Vertical):
                 pass
         elif wid == "tc-secret-provide":
             self._open_secret_prompt()
+        elif wid == "tc-plan-approve":
+            self._approve_plan()
+        elif wid == "tc-plan-refine":
+            self._focus_input()
 
     def _toggle_expanded(self) -> None:
         self._expanded = not self._expanded
@@ -264,6 +280,33 @@ class ToolCallBubble(Vertical):
         if bg is not None:
             bg.add(task)
             task.add_done_callback(bg.discard)
+
+    def _plan_action_ids(self) -> list[str]:
+        """Return the action row ids for exit_plan_mode, empty for other tools."""
+        if self._name == "exit_plan_mode":
+            return ["tc-plan-approve", "tc-plan-refine"]
+        return []
+
+    def _approve_plan(self) -> None:
+        """Approve the plan: publish /build to switch the agent into build mode."""
+        app = self.app
+
+        async def _go() -> None:
+            try:
+                await app._publish_inbound("/build", [])
+            except Exception:  # noqa: BLE001
+                pass
+
+        app.run_worker(_go())
+
+    def _focus_input(self) -> None:
+        """Focus the chat input so the user can type a refinement."""
+        try:
+            from durin.cli.tui.widgets import InputArea
+
+            self.app.query_one(InputArea).focus()
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---- lifecycle ----
 

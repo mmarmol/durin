@@ -96,6 +96,53 @@ def test_save_skill_file_accepts_valid_python(tmp_path: Path):
     assert res["ok"] is True
 
 
+def test_save_skill_file_blocks_json_syntax_error(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")
+    set_mode(tmp_path, "demo", "manual")
+    res = save_skill_file(tmp_path, "demo", "data/config.json", '{"a": 1,}\n', rationale="r")
+    assert res.get("error") == "syntax" and res.get("lang") == "json"
+    assert isinstance(res.get("line"), int)
+    # NOT written
+    assert not (tmp_path / "skills" / "demo" / "data" / "config.json").exists()
+
+
+def test_save_skill_file_accepts_valid_json(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")
+    set_mode(tmp_path, "demo", "manual")
+    res = save_skill_file(tmp_path, "demo", "data/config.json", '{"a": 1}\n', rationale="r")
+    assert res["ok"] is True
+
+
+def test_save_skill_file_blocks_toml_syntax_error(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")
+    set_mode(tmp_path, "demo", "manual")
+    res = save_skill_file(tmp_path, "demo", "config.toml", "key = \n", rationale="r")
+    assert res.get("error") == "syntax" and res.get("lang") == "toml"
+    assert not (tmp_path / "skills" / "demo" / "config.toml").exists()
+
+
+def test_save_skill_file_accepts_valid_toml(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")
+    set_mode(tmp_path, "demo", "manual")
+    res = save_skill_file(tmp_path, "demo", "config.toml", 'key = "value"\n', rationale="r")
+    assert res["ok"] is True
+
+
+def test_save_skill_file_blocks_yaml_syntax_error(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")
+    set_mode(tmp_path, "demo", "manual")
+    res = save_skill_file(tmp_path, "demo", "data.yaml", "foo: [1, 2\n", rationale="r")
+    assert res.get("error") == "syntax" and res.get("lang") == "yaml"
+    assert not (tmp_path / "skills" / "demo" / "data.yaml").exists()
+
+
+def test_save_skill_file_accepts_valid_yaml(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")
+    set_mode(tmp_path, "demo", "manual")
+    res = save_skill_file(tmp_path, "demo", "data.yaml", "foo:\n  - 1\n  - 2\n", rationale="r")
+    assert res["ok"] is True
+
+
 from durin.agent.skills_store import web_file_get, web_file_save, web_files, web_history
 
 

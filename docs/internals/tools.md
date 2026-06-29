@@ -255,7 +255,7 @@ grants access to the tool that produced the result.
 | `tools.web.enable` | `bool` | `true` | Enables/disables both `web_search` and `web_fetch` |
 | `tools.web.search.provider` | `str` | `"duckduckgo"` | Search provider (`brave`, `tavily`, `searxng`, `jina`, `kagi`, `olostep`, `duckduckgo`) |
 | `tools.post_edit_check.enable` | `bool` | `true` | Runs configurable linters/formatters after each `edit_file` call |
-| `tools.post_edit_check.checkers` | `dict[str, str]` | `{}` | Map of file extension → shell command; `{file}` is substituted with the edited path |
+| `tools.post_edit_check.checkers` | `dict[str, str]` | built-ins for `py` (ruff) and `json` (`json.tool`) | Map of file extension → shell command; `{file}` is substituted with the edited path. User entries merge over the built-ins. A checker whose binary is absent is skipped silently |
 | `tools.post_edit_check.max_lines` | `int` | `20` | Maximum checker output lines returned to the model |
 | `tools.code_execution.enable` | `bool` | `true` | Enables/disables the `execute_code` sandboxed Python tool (Unix only) |
 | `tools.code_execution.timeout_s` | `int` | `300` | Maximum run time for a code execution in seconds |

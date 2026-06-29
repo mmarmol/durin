@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Input
 
 from durin import __version__ as DURIN_VERSION  # noqa: N812 — descriptive version alias
-from durin.cli.tui.widgets import ChatView, FooterBar, HeaderBar, InputArea, MessageBubble
+from durin.cli.tui.widgets import ChatView, FooterBar, GoalBanner, HeaderBar, InputArea, MessageBubble
 from durin.cli.tui.widgets.footer_bar import payload_from_loop
 
 __all__ = ["DurinApp", "run_durin_tui"]
@@ -56,6 +57,7 @@ class DurinApp(App[None]):
         ("ctrl+y", "copy_last_assistant", "Copy"),
         ("ctrl+p", "open_command_palette", "Commands"),
         ("ctrl+shift+l", "open_variant_picker", "Effort"),
+        ("ctrl+shift+p", "open_persona_picker", "Persona"),
         ("ctrl+b", "toggle_sidebar", "Sidebar"),
         ("ctrl+r", "retry_last", "Retry"),
         ("ctrl+g", "steer", "Steer"),
@@ -96,6 +98,9 @@ class DurinApp(App[None]):
         # here so the event loop keeps a strong reference and can't GC them
         # mid-flight (RUF006).
         self._background_tasks: set[asyncio.Task] = set()
+        # Per-turn wall-clock timing: set on user submit, cleared at turn end.
+        self._turn_started_at: float | None = None
+        self._last_latency_ms: float | None = None
         self._palette = "ithildin"
         self._mode = "dark"
         self._apply_durin_theme()
@@ -159,9 +164,9 @@ class DurinApp(App[None]):
         session_label = f"{self._cli_channel}:{self._cli_chat_id}"
         session_meta = self._compute_session_meta()
         with Horizontal(id="app-layout"):
-            yield SidebarPanel()
             with Vertical(id="main-layout"):
                 yield HeaderBar(session_label=session_label, session_meta=session_meta)
+                yield GoalBanner()
                 yield ChatView(id="chat")
                 yield CompletionsHint()
                 yield InputArea(
@@ -169,10 +174,10 @@ class DurinApp(App[None]):
                     workspace=Path(self._agent_loop.workspace) if self._agent_loop else None,
                 )
                 yield FooterBar(
-                    payload_getter=lambda: payload_from_loop(
-                        self._agent_loop, self._cli_channel, self._cli_chat_id
-                    ),
+                    payload_getter=self._footer_payload,
                 )
+            # Sidebar docked on the right; open by default (see SidebarPanel.on_mount).
+            yield SidebarPanel()
 
     def _compute_session_meta(self) -> str:
         """Return a short '47 msgs · 12h ago' string for the header.
@@ -486,6 +491,7 @@ class DurinApp(App[None]):
             return
         # Spinner: shows "thinking…" between submit and first delta.
         self._show_working_indicator()
+        self._turn_started_at = time.monotonic()
         task = asyncio.create_task(self._publish_inbound(value, media))
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
@@ -595,6 +601,23 @@ class DurinApp(App[None]):
                 bubble.update_from_event(event)
             except Exception:  # noqa: BLE001
                 pass
+
+    def _route_work_event(self, event: dict[str, Any]) -> None:
+        """Send a workflow/subagent progress event to the sidebar WORK section.
+
+        The sidebar auto-opens and jumps to WORK the first time work starts in a
+        turn, so background progress is visible without the user toggling Ctrl+B.
+        """
+        try:
+            from durin.cli.tui.widgets import SidebarPanel
+
+            sidebar = self.query_one(SidebarPanel)
+        except Exception:  # noqa: BLE001
+            return
+        was_active = sidebar.has_active_work
+        sidebar.update_work(event)
+        if sidebar.has_active_work and not was_active:
+            sidebar.jump_to_work()
 
     async def _publish_inbound(self, value: str, media: list[str]) -> None:
         from durin.bus.events import InboundMessage
@@ -738,6 +761,10 @@ class DurinApp(App[None]):
     def action_open_variant_picker(self) -> None:
         """Ctrl+Shift+L: open the reasoning effort picker."""
         self._open_variant_picker()
+
+    def action_open_persona_picker(self) -> None:
+        """Ctrl+Shift+P: open the persona picker modal."""
+        self._open_persona_picker()
 
     def action_toggle_sidebar(self) -> None:
         """Ctrl+B: toggle the left sidebar (Todos / Files / MCP)."""
@@ -1001,6 +1028,30 @@ class DurinApp(App[None]):
         add_recent_model(variant_name)
         await self._publish_inbound(f"/model {variant_name}", [])
 
+    @work
+    async def _open_persona_picker(self) -> None:
+        """Ctrl+Shift+P — pick a persona from the configured list."""
+        from durin.cli.tui.screens import PersonaPickerScreen
+        from durin.cli.tui.screens.persona_picker import PersonaRow
+        from durin.config.loader import get_config_path, load_config
+
+        cfg = load_config(get_config_path())
+        rows = [
+            PersonaRow(name=name, soul=p.soul, model=p.model)
+            for name, p in sorted(cfg.personas.items())
+        ]
+        if not any(r.name == "default" for r in rows):
+            rows.insert(0, PersonaRow(name="default", soul="default", model=None))
+        active = cfg.agents.defaults.persona or "default"
+        if self._agent_loop is not None:
+            session_key = f"{self._cli_channel}:{self._cli_chat_id}"
+            session = self._agent_loop.sessions.get_or_create(session_key)
+            active = session.metadata.get("persona") or active
+        selected = await self.push_screen_wait(PersonaPickerScreen(rows, active=active))
+        if not selected or selected == active:
+            return
+        await self._publish_inbound(f"/persona {selected}", [])
+
     def _set_palette(self, name: str) -> None:
         """Switch the colour palette (the `/theme <name>` form)."""
         from durin.cli.theme import PALETTE_NAMES
@@ -1109,6 +1160,22 @@ class DurinApp(App[None]):
         """
         meta = msg.metadata or {}
 
+        # ---- goal-state sync ----------------------------------------------
+        # goal_state rides every turn-end frame (turn_metadata["goal_state"])
+        # and also arrives as a dedicated push from long_task.py.
+        goal_state = meta.get("goal_state")
+        if goal_state is not None or meta.get("_goal_state_sync"):
+            blob = goal_state or {}
+            if blob.get("active"):
+                objective = (
+                    str(blob.get("ui_summary") or "").strip()
+                    or str(blob.get("objective") or "").strip()
+                    or None
+                )
+            else:
+                objective = None
+            self.query_one(GoalBanner).set_goal(objective)
+
         # /resume routes here: the next inbound publish uses the new chat_id.
         switch_to = meta.get("_switch_chat_id")
         if switch_to and switch_to != self._cli_chat_id:
@@ -1128,7 +1195,10 @@ class DurinApp(App[None]):
             # from the event's arguments. Don't double-render it.
             self._dismiss_working_indicator()
             for event in tool_events:
-                self._render_tool_event(event)
+                if str(event.get("name") or "") in ("workflow_progress", "subagent_result"):
+                    self._route_work_event(event)
+                else:
+                    self._render_tool_event(event)
             return
 
         # ---- reasoning stream (model's internal monologue) --------------
@@ -1195,12 +1265,14 @@ class DurinApp(App[None]):
             # Belt-and-suspenders: if a turn ends without any content
             # (rare error path), make sure the spinner doesn't linger.
             self._dismiss_working_indicator()
+            self._record_turn_latency()
             return
 
         if meta.get("_streamed"):
             # End-of-turn signal; UI already streamed via deltas.
             self._finalize_cluster()
             self._dismiss_working_indicator()
+            self._record_turn_latency()
             return
 
         content = msg.content or ""
@@ -1230,6 +1302,28 @@ class DurinApp(App[None]):
             chat.add_message(role, content)
 
     # ---- helpers ----------------------------------------------------------
+
+    def _record_turn_latency(self) -> None:
+        """Compute wall-clock latency for the completed turn and refresh the footer."""
+        if self._turn_started_at is not None:
+            self._last_latency_ms = (time.monotonic() - self._turn_started_at) * 1000
+            self._turn_started_at = None
+        try:
+            self.query_one(FooterBar).refresh_now()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _footer_payload(self) -> dict | None:
+        """Build the footer payload, augmented with mode and last-turn latency."""
+        base = payload_from_loop(self._agent_loop, self._cli_channel, self._cli_chat_id)
+        if not base:
+            # No live payload (agent loop inactive) — keep the footer empty
+            # rather than rendering a sparse line from stamped fields alone.
+            return None
+        base["mode"] = self._get_agent_mode()
+        if self._last_latency_ms is not None:
+            base["latency_ms"] = self._last_latency_ms
+        return base
 
     def _refresh_chrome(self) -> None:
         """Update Header + Footer reactive surfaces after a session switch."""

@@ -107,8 +107,9 @@ _README_CONTENT = """\
 # durin workspace
 
 This folder is the on-disk state of your durin agent — a memory store,
-ingested artifacts, session transcripts, and indices. Everything human-
-readable is plain markdown with YAML frontmatter.
+ingested artifacts, session transcripts, agent configuration, and
+indices. Everything human-readable is plain markdown with YAML
+frontmatter.
 
 This README exists so a human (you, or anyone you give the folder to)
 can navigate the workspace without consulting source code.
@@ -118,6 +119,8 @@ can navigate the workspace without consulting source code.
 ```
 <workspace>/
 ├── VAULT_README.md          ← this file
+├── SOUL.md                  ← the agent's identity / active persona
+├── AGENTS.md                ← standing agent instructions (loaded every session)
 ├── memory/                  ← the agent's persistent memory (markdown)
 │   ├── stable/              ← durable facts (preferences, IDs, durable choices)
 │   ├── episodic/            ← observations, conversation fragments
@@ -130,6 +133,11 @@ can navigate the workspace without consulting source code.
 ├── sessions/                ← raw conversation transcripts per session
 ├── dream/                   ← Dream consolidator working files
 ├── skills/<name>/SKILL.md   ← user-authored skill definitions
+├── souls/                   ← reusable persona definitions (SOUL files)
+├── workflows/               ← workflow definitions (the workflow engine)
+├── workflows-runs/          ← per-run workflow artifacts
+├── cron/                    ← scheduled-job definitions + run state
+├── work/<session>/          ← scratch the agent writes during a task (disposable)
 └── .durin/                  ← internal indices (FTS5 + LanceDB) — opaque
     └── index/
         ├── fts.sqlite       ← SQLite FTS5 lexical index
@@ -193,6 +201,8 @@ installing Obsidian.
 - **`memory/archive/`** — entries that Dream has absorbed into canonical
   pages. Kept around as a recovery surface (you can read the original
   fragment that contributed to a page). Safe to ignore for browsing.
+- **`work/<session>/`** — per-session scratch the agent writes during tasks.
+  Safe to delete wholesale; nothing durable lives here.
 
 ## Where to find more
 

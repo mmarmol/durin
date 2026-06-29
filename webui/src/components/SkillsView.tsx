@@ -1638,7 +1638,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                 <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
                   {tab === "history" ? (
                     history ? (
-                      <SkillHistory data={history} />
+                      <SkillHistory data={history} skillName={pane.name} token={token} />
                     ) : (
                       <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
                         <Loader2 className="mr-2 size-4 animate-spin" /> {t("skills.history.loading")}

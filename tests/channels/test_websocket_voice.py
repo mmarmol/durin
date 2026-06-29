@@ -22,6 +22,10 @@ def _voice_channel():
     ch.logger = __import__("loguru").logger
     ch._voice = {}
     ch._subs = {}
+    ch._conn_chats = {}
+    ch._conn_default = {}
+    ch._voice_cleanup = {}
+    ch._voice_grace_s = 0.05
     return ch
 
 
@@ -326,3 +330,70 @@ async def test_voice_preview_without_tts_returns_unavailable():
     events = [json.loads(r) for r in conn.sent]
     audio = [e for e in events if e.get("event") == "voice_preview_audio"]
     assert audio and audio[0].get("error") == "tts_unavailable"
+
+
+# -- Connection-drop resilience (grace period + idempotent restart) -----------
+
+
+@pytest.mark.asyncio
+async def test_disconnect_keeps_voice_session_during_grace_period():
+    # A transient socket drop must NOT immediately destroy the voice session;
+    # otherwise a wifi blip or a backgrounded tab kills the live conversation.
+    ch = _voice_channel()
+    conn = _FakeConn()
+    ch._attach(conn, "c1")
+    ch._voice["c1"] = VoiceSession(chat_id="c1")
+
+    ch._cleanup_connection(conn)
+
+    assert "c1" in ch._voice  # survives the disconnect (grace not yet elapsed)
+
+
+@pytest.mark.asyncio
+async def test_voice_session_dropped_after_grace_without_reconnect():
+    ch = _voice_channel()
+    ch._voice_grace_s = 0.02
+    conn = _FakeConn()
+    ch._attach(conn, "c1")
+    ch._voice["c1"] = VoiceSession(chat_id="c1")
+
+    ch._cleanup_connection(conn)
+    assert "c1" in ch._voice
+
+    await asyncio.sleep(0.05)
+    assert "c1" not in ch._voice  # no reconnect -> dropped after the grace window
+
+
+@pytest.mark.asyncio
+async def test_reconnect_within_grace_preserves_voice_session():
+    ch = _voice_channel()
+    ch._voice_grace_s = 0.05
+    conn1 = _FakeConn()
+    ch._attach(conn1, "c1")
+    sess = VoiceSession(chat_id="c1")
+    ch._voice["c1"] = sess
+
+    ch._cleanup_connection(conn1)
+    # Browser reconnects and re-subscribes to the same chat within the window.
+    conn2 = _FakeConn()
+    ch._attach(conn2, "c1")
+
+    await asyncio.sleep(0.08)  # past the original grace window
+    assert ch._voice.get("c1") is sess  # same session object preserved
+
+
+@pytest.mark.asyncio
+async def test_voice_start_preserves_existing_session():
+    # The reconnect self-heal re-sends voice_start; it must NOT wipe an existing
+    # session (which would discard the in-flight reply buffer + speak task).
+    ch = _voice_channel()
+    conn = _FakeConn()
+    ch._attach(conn, "c1")
+    sess = VoiceSession(chat_id="c1")
+    sess.reply_buffer.append("partial reply")
+    ch._voice["c1"] = sess
+
+    await ch._dispatch_envelope(conn, "client1", {"type": "voice_start", "chat_id": "c1"})
+
+    assert ch._voice["c1"] is sess
+    assert ch._voice["c1"].reply_buffer == ["partial reply"]

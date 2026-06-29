@@ -18,6 +18,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
     fetchFlaggedPairs: vi.fn(),
     resolveFlaggedPair: vi.fn(),
     listQuarantine: vi.fn(),
+    fetchSkillSuggestions: vi.fn(),
+    acceptSkillSuggestion: vi.fn(),
+    rejectSkillSuggestion: vi.fn(),
   };
 });
 
@@ -57,10 +60,14 @@ beforeEach(() => {
   vi.mocked(api.fetchFlaggedPairs).mockReset();
   vi.mocked(api.resolveFlaggedPair).mockReset();
   vi.mocked(api.listQuarantine).mockReset();
+  vi.mocked(api.fetchSkillSuggestions).mockReset();
+  vi.mocked(api.acceptSkillSuggestion).mockReset();
+  vi.mocked(api.rejectSkillSuggestion).mockReset();
 
   // Default Bandeja mocks to empty so Resumen tests don't need them
   vi.mocked(api.fetchFlaggedPairs).mockResolvedValue([]);
   vi.mocked(api.listQuarantine).mockResolvedValue([]);
+  vi.mocked(api.fetchSkillSuggestions).mockResolvedValue([]);
 });
 afterEach(() => vi.restoreAllMocks());
 

@@ -9,13 +9,17 @@ from __future__ import annotations
 import datetime as _dt
 import difflib
 import hashlib
+import json
 import logging
 import os
 import shutil
 import subprocess
 import tempfile
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+import yaml
 
 from durin.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
 from durin.agent.skills_frontmatter import ensure_durin, join_frontmatter, split_frontmatter
@@ -166,9 +170,11 @@ def read_skill_file(workspace: Path, name: str, relpath: str) -> dict | None:
 
 
 def _lint_script(relpath: str, content: str) -> dict | None:
-    """Blocking syntax lint for scripts. Returns an error dict on failure, else None.
-    .py -> in-process compile(); .sh -> `bash -n`. Unknown extensions / missing
-    bash -> no lint (None)."""
+    """Blocking syntax lint for scripts and config files. Returns an error dict
+    on failure, else None. In-process parsers (no subprocess, no new deps):
+    .py -> compile(); .json -> json.loads(); .toml -> tomllib.loads();
+    .yaml/.yml -> yaml.safe_load_all(). .sh -> `bash -n`. Unknown extensions /
+    missing bash -> no lint (None)."""
     suffix = Path(relpath).suffix.lower()
     if suffix == ".py":
         try:
@@ -177,6 +183,29 @@ def _lint_script(relpath: str, content: str) -> dict | None:
         except SyntaxError as exc:
             return {"error": "syntax", "lang": "python",
                     "detail": exc.msg or "syntax error", "line": exc.lineno or 0}
+    if suffix == ".json":
+        try:
+            json.loads(content)
+            return None
+        except json.JSONDecodeError as exc:
+            return {"error": "syntax", "lang": "json",
+                    "detail": exc.msg or "invalid JSON", "line": exc.lineno or 0}
+    if suffix == ".toml":
+        try:
+            tomllib.loads(content)
+            return None
+        except tomllib.TOMLDecodeError as exc:
+            return {"error": "syntax", "lang": "toml",
+                    "detail": str(exc) or "invalid TOML", "line": 0}
+    if suffix in (".yaml", ".yml"):
+        try:
+            list(yaml.safe_load_all(content))
+            return None
+        except yaml.YAMLError as exc:
+            mark = getattr(exc, "problem_mark", None)
+            line = (mark.line + 1) if mark is not None else 0
+            detail = getattr(exc, "problem", None) or str(exc) or "invalid YAML"
+            return {"error": "syntax", "lang": "yaml", "detail": detail, "line": line}
     if suffix == ".sh":
         try:
             with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False, encoding="utf-8") as fh:
@@ -1239,3 +1268,15 @@ def web_history(workspace: Path, name: str) -> tuple[int, dict]:
     if _resolve_skill_dir(workspace, name) is None:
         return 404, {"error": f"skill not found: {name}"}
     return 200, skill_history(workspace, name)
+
+
+def web_commit_diff(workspace: Path, name: str, sha: str) -> tuple[int, dict]:
+    """Unified diff of one commit, scoped to skill ``name``'s subtree."""
+    if not _safe_name(name):
+        return 404, {"error": "invalid skill name"}
+    store = _store(workspace)
+    res = store.commit_diff(sha, path=name)
+    if res is None:
+        return 404, {"error": "commit not found"}
+    info, patch = res
+    return 200, {"sha": info.sha, "patch": patch}

@@ -25,7 +25,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Sequence
+
+from loguru import logger
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.paths import MEMORY_CLASSES, walk_class
@@ -63,6 +65,7 @@ class HotLayer(NamedTuple):
     fragment_blocks: list[str]
     headlines: list[str]
     entities: list[str]
+    types: Sequence[str] = ()
 
     def render(self) -> str:
         """Render the hot layer as markdown for the stable prompt tier.
@@ -99,6 +102,9 @@ class HotLayer(NamedTuple):
         if self.entities:
             csv = ", ".join(self.entities)
             parts.append(f"## Memory: Known Entities\n\n{csv}")
+        if self.types:
+            csv = ", ".join(self.types)
+            parts.append(f"## Memory: Known types\n\n{csv}")
         return "\n\n".join(parts)
 
 
@@ -139,12 +145,19 @@ def read_hot_layer(workspace: Path) -> HotLayer:
         _emit_failure("entities", exc)
         entities = []
 
+    try:
+        types = _read_type_list(workspace)
+    except Exception as exc:  # pragma: no cover - defensive
+        _emit_failure("types", exc)
+        types = []
+
     return HotLayer(
         identity=identity,
         canonical_blocks=canonicals,
         fragment_blocks=fragments,
         headlines=headlines,
         entities=entities,
+        types=types,
     )
 
 
@@ -490,6 +503,30 @@ def _read_top_headlines(workspace: Path) -> list[str]:
         [h for _, h in candidates[:_MAX_HEADLINES]],
         _HEADLINES_BUDGET_CHARS,
     )
+
+
+def _read_type_list(workspace: Path, cap: int = 100) -> list[str]:
+    """Distinct entity *types* on disk — the subdirectories of
+    ``memory/entities/`` that hold at least one page. Alphabetical.
+
+    Capped at ``cap`` (rendered into the prompt); a count past the cap is a
+    sprawl signal, logged as a warning so it surfaces in the gateway log /
+    webui Logs panel rather than silently bloating the prompt.
+    """
+    root = Path(workspace) / "memory" / "entities"
+    if not root.is_dir():
+        return []
+    types = sorted(
+        d.name for d in root.iterdir()
+        if d.is_dir() and any(d.glob("*.md"))
+    )
+    if len(types) > cap:
+        logger.warning(
+            "memory entity-type sprawl: {} distinct types (rendering {})",
+            len(types), cap,
+        )
+        return types[:cap]
+    return types
 
 
 def _read_entity_list(workspace: Path) -> list[str]:

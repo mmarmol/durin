@@ -313,18 +313,26 @@ class ChannelManager:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _warmup_speech(self) -> None:
-        """Warm the shared STT/TTS services at startup if their local extra is
-        installed and the subsystem is enabled. Skipped silently when the extra
-        is absent (the install prompts still surface at use-time); cloud
-        providers warm to a no-op. Failures are logged, never fatal."""
-        from durin.extras import _module_present
+        """Warm the shared STT/TTS services at startup for every *enabled*
+        subsystem. When an enabled local subsystem's extra is not installed, the
+        engine is downloaded first (gated by config.install.auto_install_extras)
+        rather than deferring the install to first use; if that install is
+        disabled or fails, warmup is skipped. Cloud providers warm to a no-op.
+        Failures are logged, never fatal."""
+        from durin.extras import _module_present, ensure_or_note
 
-        async def _warm(svc, cfg, module: str, label: str) -> None:
+        async def _warm(svc, cfg, feature: str, module: str, label: str) -> None:
             if svc is None or not getattr(cfg, "enabled", False):
                 return
-            # Only a local engine needs its extra present; cloud providers no-op.
+            # Only a local engine needs its extra; cloud providers no-op.
             if getattr(cfg, "provider", None) == "local" and not _module_present(module):
-                return
+                # Enabled but not installed: download it now (subprocess + model
+                # download, so off-thread). ensure_or_note honours
+                # config.install.auto_install_extras and is a fast no-op once
+                # present. Skip warmup if it could not be made importable.
+                res = await asyncio.to_thread(ensure_or_note, feature, config=self.config)
+                if res.status not in ("present", "installed") or not _module_present(module):
+                    return
             try:
                 await svc.warmup()
                 logger.info("{} engine warmed", label)
@@ -333,11 +341,11 @@ class ChannelManager:
 
         await _warm(
             getattr(self, "transcription", None),
-            getattr(self.config, "transcription", None), "sherpa_onnx", "Transcription",
+            getattr(self.config, "transcription", None), "stt", "sherpa_onnx", "Transcription",
         )
         await _warm(
             getattr(self, "speech_synthesis", None),
-            getattr(self.config, "tts", None), "supertonic", "Speech synthesis",
+            getattr(self.config, "tts", None), "tts", "supertonic", "Speech synthesis",
         )
 
     def _notify_restart_done_if_needed(self) -> None:

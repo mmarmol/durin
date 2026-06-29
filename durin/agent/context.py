@@ -5,7 +5,6 @@ import logging
 import mimetypes
 import platform
 from contextlib import suppress
-from importlib.resources import files as pkg_files
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -21,47 +20,6 @@ from durin.utils.helpers import (
 from durin.utils.prompt_templates import render_template
 
 logger = logging.getLogger(__name__)
-
-# Always-present directive injected into every system prompt regardless of the
-# active SOUL. The operating floor is conditional (skipped when a SOUL embeds
-# its own "## Execution Rules"), so this section must live outside that path.
-# Static text — no interpolation needed; matches the plan's "THE DIRECTIVE" block.
-_MEMORY_CAPTURE_SECTION = """\
-## Memory — capture as you go
-
-You are building memory for your future self. Saving the right things now is what
-stops the user from having to steer, correct, or re-explain later — that is the test
-for what is worth saving.
-
-**Capture proactively, in the moment — do not wait to be asked.** Concrete trigger:
-before you write an acknowledgement like "got it", "noted", or "I'll keep that in
-mind", save the thing first.
-
-Save when:
-- the user corrects you, or tells you to do (or stop doing) something;
-- the user states a preference, habit, or standing constraint on how they want you to work;
-- you learn a durable fact about who the user is or the context of their work;
-- something surprises you or contradicts what you believed.
-
-Author each as an **entity** with `memory_upsert_entity` — this is what re-feeds you
-next session:
-- **how you should work** (corrections, preferences, what to repeat or avoid) → a
-  `feedback`, `stance`, or `practice` entity. State WHY it matters and HOW to apply it,
-  so you can judge edge cases instead of following blindly.
-- **who the user is** (role, goals, durable personal facts) → update the user's entity.
-- **the work or its external context** → a `project` or `topic` entity.
-
-Do NOT save: anything derivable from the code, the repo, or git history; task progress
-or transient state; ephemeral artifacts (PR numbers, commit SHAs, today's status).
-
-**Correct in place.** When the user corrects something you already recorded, UPDATE that
-entity (overwrite the stale value) — do not stack a contradicting one on top.
-
-**Say what you did, briefly.** When you save something, tell the user in a few words
-("noted — you prefer X"). When a memory materially shaped a decision, say so ("doing it
-this way because I recall you prefer Y") so they can catch and correct a stale memory on
-the spot. Keep it short; never narrate trivial recalls.\
-"""
 
 
 def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -146,7 +104,10 @@ class ContextBuilder:
     # USER.md dropped — the user profile lives in the principal person
     # entity (pinned context), not a bootstrap file. SOUL.md is now
     # persona-driven (rendered as a dedicated soul block, not a bootstrap file).
-    BOOTSTRAP_FILES = ["AGENTS.md", "TOOLS.md"]
+    # TOOLS.md dropped — tool names, descriptions, and parameter schemas reach
+    # the model through the function-calling channel (the authoritative source,
+    # generated from the tool registry); a hand-written prose mirror only drifts.
+    BOOTSTRAP_FILES = ["AGENTS.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
     _MAX_RECENT_HISTORY = 50
     _MAX_HISTORY_CHARS = 32_000  # hard cap on recent history section size
@@ -256,13 +217,6 @@ class ContextBuilder:
             breakdown["operating_floor"] = floor
             parts.append(floor)
 
-        # Always-present capture directive — unconditional, placed immediately
-        # after the operating floor so it lands in the high-attention stable tier.
-        # Must NOT live inside _build_operating_floor because that returns ""
-        # when the active SOUL already embeds "## Execution Rules".
-        breakdown["memory_capture"] = _MEMORY_CAPTURE_SECTION
-        parts.append(_MEMORY_CAPTURE_SECTION)
-
         always_skills = self.skills.get_always_skills()
         if always_skills:
             always_content = self.skills.load_skills_for_context(always_skills)
@@ -287,6 +241,14 @@ class ContextBuilder:
         if pinned:
             breakdown["memory_pinned"] = pinned
             parts.append(pinned)
+
+        # Rich-output guidance is static (never changes turn-to-turn), so it
+        # belongs before memory_hot in the stable prefix to remain cache-hot
+        # even when the hot layer rotates daily under dream.
+        rich_output = render_template("agent/rich_output.md")
+        if rich_output:
+            breakdown["rich_output"] = rich_output
+            parts.append(rich_output)
 
         # Memory hot layer (Phase 1.9). Always-loaded snapshot of identity +
         # top headlines + known entities. Lives at the END of the stable
@@ -449,15 +411,6 @@ class ContextBuilder:
                 parts.append(f"## {filename}\n\n{content}")
 
         return "\n\n".join(parts) if parts else ""
-
-    @staticmethod
-    def _is_template_content(content: str, template_path: str) -> bool:
-        """Check if *content* is identical to the bundled template (user hasn't customized it)."""
-        with suppress(Exception):
-            tpl = pkg_files("durin") / "templates" / template_path
-            if tpl.is_file():
-                return content.strip() == tpl.read_text(encoding="utf-8").strip()
-        return False
 
     def build_messages(
         self,

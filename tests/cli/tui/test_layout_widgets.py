@@ -207,6 +207,31 @@ async def test_footer_renders_via_payload_getter(tmp_path) -> None:
         assert "glm-5.1" in footer.text
 
 
+def test_footer_renders_latency_and_mode() -> None:
+    from durin.cli.tui.widgets.footer_bar import _render
+
+    out = _render({"model": "opus-4.8", "mode": "build", "latency_ms": 4200})
+    assert "build" in out
+    assert "4.2s" in out
+
+
+def test_footer_mode_flanked_by_bullets() -> None:
+    from durin.cli.tui.widgets.footer_bar import _render
+
+    out = _render({"model": "opus-4.8", "mode": "build"})
+    # Mode is shown as "· build ·" — a bullet on each side, per spec.
+    assert "build[/bold] ·" in out
+
+
+def test_footer_omits_mode_and_latency_when_absent() -> None:
+    from durin.cli.tui.widgets.footer_bar import _render
+
+    out = _render({"model": "opus-4.8"})
+    assert "⏱" not in out
+    # No mode segment: the bold-wrapped mode marker must not appear.
+    assert "[bold]" not in out
+
+
 @pytest.mark.asyncio
 async def test_footer_silent_on_payload_failure() -> None:
     """A getter that raises must not blow up the footer."""
@@ -221,3 +246,14 @@ async def test_footer_silent_on_payload_failure() -> None:
         footer.refresh_now()
         await pilot.pause()
         assert footer.text == ""
+
+
+def test_goal_banner_shows_and_hides() -> None:
+    from durin.cli.tui.widgets.goal_banner import GoalBanner
+
+    banner = GoalBanner()
+    banner.set_goal("ship the work panel", "3/7")
+    assert banner.is_shown is True
+    assert "ship the work panel" in banner.render_text()
+    banner.set_goal(None)
+    assert banner.is_shown is False

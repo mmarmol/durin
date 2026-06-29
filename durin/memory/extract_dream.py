@@ -21,6 +21,7 @@ from typing import Any, Callable, Iterable
 from json_repair import repair_json
 
 from durin.memory.aliases_index import AliasIndex
+from durin.memory.entities import SUGGESTED_TYPES_ORDERED
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
 from durin.memory.llm_invoke import default_llm_invoke
@@ -163,7 +164,7 @@ Rules:
 - Only facts explicitly stated in the turns. Do not invent or infer.
 - Each entity is an object with:
   - "ref": "<type>:<slug>" — lowercase ascii slug; type one of
-    person/place/project/topic/organization/event/artifact/stance/practice
+    {types}
   - "name": the display name
   - "aliases": optional array of OTHER names/spellings for this entity that appear
     in the turns (e.g. the conversation used both "Torrent" and "Torrente"). Do
@@ -186,7 +187,10 @@ JSON:"""
 
 
 def build_discover_prompt(turns: str) -> str:
-    return _DISCOVER_PROMPT.format(turns=turns[:12000])
+    return _DISCOVER_PROMPT.format(
+        turns=turns[:12000],
+        types="/".join(SUGGESTED_TYPES_ORDERED),
+    )
 
 
 def parse_discoveries(raw: str) -> list[dict[str, Any]]:

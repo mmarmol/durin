@@ -1,13 +1,18 @@
 """ChannelManager warms the shared STT/TTS engines at startup so the first
-transcription / voice synth doesn't pay the model load inline — but only when
-the local extra is installed (cloud providers warm to a no-op), and never for a
-disabled subsystem. A missing local extra is skipped silently (the install
-prompts still surface at use-time)."""
+transcription / voice synth doesn't pay the model load inline. A subsystem is
+warmed only when enabled (cloud providers warm to a no-op). When an enabled
+local subsystem's extra is *not installed*, the manager downloads it first
+(gated by config.install.auto_install_extras) rather than deferring to use-time;
+if the install is disabled or fails, warmup is skipped without raising."""
 import types
 
 import pytest
 
 import durin.channels.manager as mgr
+
+
+def _ok_install(feature, *, config):
+    return types.SimpleNamespace(status="installed", needs_restart=False)
 
 
 class _FakeSvc:
@@ -41,12 +46,53 @@ async def test_warms_local_engines_when_extra_present(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_skips_local_engines_when_extra_absent(monkeypatch):
-    monkeypatch.setattr("durin.extras._module_present", lambda m: False)
+async def test_installs_absent_extra_then_warms(monkeypatch):
+    # Enabled but the local extra is missing: download it, then warm once the
+    # module becomes importable.
+    installed = {"sherpa_onnx": False, "supertonic": False}
+    monkeypatch.setattr("durin.extras._module_present", lambda mod: installed.get(mod, False))
+    seen: list[str] = []
+
+    def fake_ensure(feature, *, config):
+        installed[{"stt": "sherpa_onnx", "tts": "supertonic"}[feature]] = True
+        seen.append(feature)
+        return types.SimpleNamespace(status="installed", needs_restart=False)
+
+    monkeypatch.setattr("durin.extras.ensure_or_note", fake_ensure)
+    m = _manager()
+    await m._warmup_speech()
+    assert sorted(seen) == ["stt", "tts"]
+    assert m.transcription.warmed == 1
+    assert m.speech_synthesis.warmed == 1
+
+
+@pytest.mark.asyncio
+async def test_absent_extra_skips_warm_when_install_unavailable(monkeypatch):
+    # Auto-install disabled or failed: no warm, no crash (the module stays absent).
+    monkeypatch.setattr("durin.extras._module_present", lambda mod: False)
+
+    def fake_ensure(feature, *, config):
+        return types.SimpleNamespace(status="disabled", needs_restart=True)
+
+    monkeypatch.setattr("durin.extras.ensure_or_note", fake_ensure)
     m = _manager()
     await m._warmup_speech()
     assert m.transcription.warmed == 0
     assert m.speech_synthesis.warmed == 0
+
+
+@pytest.mark.asyncio
+async def test_present_extra_is_not_reinstalled(monkeypatch):
+    monkeypatch.setattr("durin.extras._module_present", lambda mod: True)
+
+    def boom(feature, *, config):  # would fail the test if install were attempted
+        raise AssertionError(f"unexpected install of {feature}")
+
+    monkeypatch.setattr("durin.extras.ensure_or_note", boom)
+    m = _manager()
+    await m._warmup_speech()
+    assert m.transcription.warmed == 1
+    assert m.speech_synthesis.warmed == 1
 
 
 @pytest.mark.asyncio
