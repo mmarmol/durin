@@ -62,9 +62,11 @@ function ModeSwitch({
 function PairingPanel({
   token,
   username,
+  persistedUsername,
 }: {
   token: string;
   username: string | null;
+  persistedUsername?: string | null;
 }) {
   const { t } = useTranslation();
   const [pairing, setPairing] = useState<TelegramPairing | null>(null);
@@ -98,19 +100,21 @@ function PairingPanel({
     [fetchPairing],
   );
 
+  const resolvedUsername = username ?? persistedUsername ?? null;
+
   return (
     <div className="mt-3 space-y-3">
       <p className="text-[13px] text-muted-foreground">
-        {username ? (
+        {resolvedUsername ? (
           <>
             {t("settings.channels.telegram.pairingInstruction")}{" "}
             <a
-              href={`https://t.me/${username}`}
+              href={`https://t.me/${resolvedUsername}`}
               target="_blank"
               rel="noreferrer"
               className="underline hover:text-foreground"
             >
-              t.me/{username}
+              t.me/{resolvedUsername}
             </a>{" "}
             {t("settings.channels.telegram.sendStart")}
           </>
@@ -216,10 +220,12 @@ function PairingPanel({
 
 function GuidedSetup({
   channel,
+  channelValues,
   token,
   onChanged,
 }: {
   channel: ChannelInfo;
+  channelValues: Record<string, unknown>;
   token: string;
   onChanged: () => void;
 }) {
@@ -259,7 +265,7 @@ function GuidedSetup({
     }
   };
 
-  // Save: storeSecret → write ${secret:...} ref → enable → notify parent
+  // Save: storeSecret → write ${secret:...} ref → bot_username → enable → notify parent
   // The raw token NEVER goes to setConfigValue.
   const save = async () => {
     const v = rawToken.trim();
@@ -273,10 +279,13 @@ function GuidedSetup({
         scope: ["channel:telegram"],
       });
       await setConfigValue(token, "channels.telegram.token", "${secret:TELEGRAM_TOKEN}");
+      if (validated.username) {
+        await setConfigValue(token, "channels.telegram.bot_username", validated.username);
+      }
       await setConfigValue(token, "channels.telegram.enabled", true);
       onChanged();
     } catch {
-      // leave saving=false so user can retry
+      setValidated({ ok: false, username: null, error: t("settings.channels.saveError") });
     } finally {
       setSaving(false);
     }
@@ -284,8 +293,12 @@ function GuidedSetup({
 
   // Bot is already configured → show pairing panel only
   if (channel.enabled) {
+    const persistedUsername =
+      typeof channelValues["bot_username"] === "string" && channelValues["bot_username"]
+        ? channelValues["bot_username"]
+        : null;
     return (
-      <PairingPanel token={token} username={validatedUsername} />
+      <PairingPanel token={token} username={validatedUsername} persistedUsername={persistedUsername} />
     );
   }
 
@@ -473,7 +486,7 @@ export function TelegramGuided({
       </div>
 
       {mode === "guided" ? (
-        <GuidedSetup channel={channel} token={token} onChanged={onChanged} />
+        <GuidedSetup channel={channel} channelValues={channelValues} token={token} onChanged={onChanged} />
       ) : (
         <ManualView
           channelValues={channelValues}

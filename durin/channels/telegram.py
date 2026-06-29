@@ -230,6 +230,10 @@ class TelegramConfig(Base):
 
     enabled: bool = False
     token: str = Field(default="", json_schema_extra={"secret": True})
+    # Cached bot @username written by the guided setup flow so the t.me/<bot> deep
+    # link survives a page reload.  Not a secret and intentionally excluded from the
+    # UI field schema (no json_schema_extra → the group-or-secret filter skips it).
+    bot_username: str = ""
     allow_from: list[str] = Field(default_factory=list, json_schema_extra={"group": "access"})
     proxy: str | None = None
     reply_to_message: bool = False

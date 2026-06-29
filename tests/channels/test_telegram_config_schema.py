@@ -18,3 +18,11 @@ def test_telegram_schema_only_token_and_allow_from():
     from durin.service.config import _channel_field_schema
     names = {f["name"] for f in _channel_field_schema(TelegramConfig)}
     assert names == {"token", "allow_from"}
+
+
+def test_bot_username_not_in_ui_schema():
+    """bot_username is a plain config field with no json_schema_extra, so the
+    group-or-secret filter excludes it from the UI field schema."""
+    from durin.service.config import _channel_field_schema
+    names = {f["name"] for f in _channel_field_schema(TelegramConfig)}
+    assert "bot_username" not in names
