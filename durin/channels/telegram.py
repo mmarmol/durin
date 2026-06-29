@@ -229,8 +229,8 @@ class TelegramConfig(Base):
     """Telegram channel configuration."""
 
     enabled: bool = False
-    token: str = ""
-    allow_from: list[str] = Field(default_factory=list)
+    token: str = Field(default="", json_schema_extra={"secret": True})
+    allow_from: list[str] = Field(default_factory=list, json_schema_extra={"group": "access"})
     proxy: str | None = None
     reply_to_message: bool = False
     react_emoji: str = "👀"
@@ -275,6 +275,10 @@ class TelegramChannel(BaseChannel):
     TELEGRAM_BUS_SLASH_COMMAND_RE = re.compile(
         r"^/(?:new|stop|restart|status|dream|history|goal|pairing|model)(?:@\w+)?(?:\s+.*)?$"
     )
+
+    @classmethod
+    def config_model(cls) -> type | None:
+        return TelegramConfig
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:
