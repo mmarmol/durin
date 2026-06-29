@@ -4829,6 +4829,69 @@
         "title": "TasksListResult",
         "type": "object"
       },
+      "TelegramTestCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "TelegramTestCommand",
+        "type": "object"
+      },
+      "TelegramTestResult": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Username"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "TelegramTestResult",
+        "type": "object"
+      },
       "TokenMetadata": {
         "properties": {
           "created_at": {
@@ -5396,6 +5459,35 @@
         },
         "summary": "Discovered channels with their enabled state and primary credential field",
         "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/telegram/test": {
+      "post": {
+        "operationId": "telegram_test",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramTestCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramTestResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Validate a Telegram bot token via getMe (persists nothing)",
+        "x-required-scope": "config:write"
       }
     },
     "/api/v1/commands": {

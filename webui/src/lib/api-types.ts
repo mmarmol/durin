@@ -40,6 +40,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/telegram/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate a Telegram bot token via getMe (persists nothing) */
+        post: operations["telegram_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/commands": {
         parameters: {
             query?: never;
@@ -3840,6 +3857,31 @@ export interface components {
             /** Tasks */
             tasks: components["schemas"]["BackgroundTask"][];
         };
+        /** TelegramTestCommand */
+        TelegramTestCommand: {
+            /** Token */
+            token: string;
+        };
+        /** TelegramTestResult */
+        TelegramTestResult: {
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /**
+             * Id
+             * @default null
+             */
+            id: number | null;
+            /** Ok */
+            ok: boolean;
+            /**
+             * Username
+             * @default null
+             */
+            username: string | null;
+        };
         /** TokenMetadata */
         TokenMetadata: {
             /** Created At */
@@ -4125,6 +4167,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChannelsListResult"];
+                };
+            };
+        };
+    };
+    telegram_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelegramTestCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelegramTestResult"];
                 };
             };
         };
