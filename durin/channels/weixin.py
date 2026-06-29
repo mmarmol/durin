@@ -675,7 +675,10 @@ class WeixinChannel(BaseChannel):
                     if file_path:
                         transcription = await self.transcribe_audio(file_path)
                         if transcription:
-                            content_parts.append(f"[voice] {transcription}")
+                            # Bare transcript as the user's message so the model
+                            # treats it as spoken input, not a transcript of a
+                            # separate audio file. Matches the WhatsApp path.
+                            content_parts.append(transcription)
                         else:
                             content_parts.append(f"[voice]\n[Audio: source: {file_path}]")
                             media_paths.append(file_path)  # keep only as interpret_audio fallback
@@ -737,7 +740,10 @@ class WeixinChannel(BaseChannel):
                     if file_path:
                         transcription = await self.transcribe_audio(file_path)
                         if transcription:
-                            content_parts.append(f"[voice] {transcription}")
+                            # Bare transcript as the user's message so the model
+                            # treats it as spoken input, not a transcript of a
+                            # separate audio file. Matches the WhatsApp path.
+                            content_parts.append(transcription)
                         else:
                             content_parts.append(f"[voice]\n[Audio: source: {file_path}]")
                             media_paths.append(file_path)  # keep only as interpret_audio fallback

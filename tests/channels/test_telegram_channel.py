@@ -2021,7 +2021,7 @@ async def test_voice_transcription_drops_audio_path(monkeypatch, tmp_path) -> No
     media_paths, content_parts = await channel._download_message_media(msg)
 
     assert media_paths == []                              # path dropped
-    assert content_parts == ["[transcription: hello world]"]
+    assert content_parts == ["hello world"]              # bare transcript, no marker
 
 
 @pytest.mark.asyncio
