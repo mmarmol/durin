@@ -11,4 +11,6 @@ def test_discover_prompt_includes_existing_manifest_and_reuse_instruction():
 
 def test_discover_prompt_without_existing_still_builds():
     p = build_discover_prompt("[turn-1] USER: hi")
+    assert "EXISTING ENTITIES" in p
+    assert "(none yet)" in p
     assert "JSON" in p
