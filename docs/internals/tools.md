@@ -146,7 +146,33 @@ actually sees. When `mode_provider` is `None` or the mode has no restrictions
 
 After the LLM responds with tool calls, `_execute_tools()` partitions them into
 batches. Tools whose `concurrency_safe` property is `True` may run in parallel
-(`asyncio.gather`); tools marked `exclusive` (like `exec`) run alone.
+(`asyncio.gather`); tools marked `exclusive` (like `exec`) run alone. Both the
+main loop's operating floor (see [loop.md](loop.md)) and the subagent system
+prompt instruct the model to emit independent tool calls together in a single
+turn — that is what produces the multi-call batches this partitioning
+parallelizes. Both run specs set `concurrent_tools=True`.
+
+MCP tools opt into the parallel batch via the spec's `readOnlyHint` tool
+annotation: a server that declares a tool read-only marks the wrapper
+`read_only=True`; absent or false, the wrapper runs alone (the safe default for
+tools that may mutate remote state).
+
+Each turn that issues ≥1 tool call emits a `tools.parallelism` telemetry event
+(`_emit_parallelism_telemetry`) recording the batch shape so the actual
+parallelisation rate is measured, not assumed. It counts all three forms of
+parallelism: harness batching (`max_batch_size` > 1), intra-tool list fan-out
+(`fanout_calls`/`fanout_items`, via each tool's `fanout_size()`), and background
+launches (`background_launches`, tools whose `launches_background` is true, like
+`spawn`). `parallelized` is true if any of them occurred.
+
+**Structural fan-out (list parameters).** Beyond harness-level parallelism, some
+read-only tools accept a list and fan out internally with `asyncio.gather`,
+turning N independent calls into one guaranteed-parallel call regardless of
+whether the model batched: `memory_drill` (`uris`), `web_fetch` (`urls`),
+`web_search` (`queries`), `read_file` (`paths`), and `memory_search` (vector +
+FTS + grep in one call). Each takes the single form OR the list form (not both),
+caps the list, and returns one record per item in order with a per-item `error`
+field so one failure does not abort the batch.
 
 For each tool call, `_run_tool()` applies checks in this order:
 

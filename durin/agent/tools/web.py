@@ -16,7 +16,12 @@ from pydantic import Field
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
+from durin.agent.tools.schema import (
+    ArraySchema,
+    IntegerSchema,
+    StringSchema,
+    tool_parameters_schema,
+)
 from durin.config.schema import Base
 from durin.extras import ensure_extra
 from durin.security.network import ssrf_safe_async_client
@@ -98,11 +103,24 @@ def _format_results(query: str, items: list[dict[str, Any]], n: int) -> str:
     return "\n".join(lines)
 
 
+# Cap on queries per web_search call. Small: each query is a provider
+# round-trip, and most multi-faceted questions split into 2-3 searches.
+MAX_SEARCH_QUERIES: int = 5
+
+
 @tool_parameters(
     tool_parameters_schema(
-        query=StringSchema("Search query"),
+        query=StringSchema("Single search query. Use this OR `queries` (not both)."),
+        queries=ArraySchema(
+            items=StringSchema("Search query"),
+            description=(
+                f"List of queries to run in one call (max {MAX_SEARCH_QUERIES}). "
+                "They run in parallel and results come back in the same order, "
+                "each as a `{query, results}` record. Prefer this form when a "
+                "multi-faceted question needs 2+ independent searches."
+            ),
+        ),
         count=IntegerSchema(1, description="Results (1-10)", minimum=1, maximum=10),
-        required=["query"],
     )
 )
 class WebSearchTool(Tool):
@@ -112,6 +130,12 @@ class WebSearchTool(Tool):
     name = "web_search"
     description = (
         "Search the web. Returns titles, URLs, and snippets. "
+        "Pass `query` for a single search. When a question has two or more "
+        "independent facets, ALWAYS pass them together as `queries` (a list) "
+        "instead of searching one at a time — they run in parallel in a single "
+        "call, which is faster. For example, to research a tool's pricing and "
+        "its rate limits at once: "
+        '`queries: ["acme API pricing 2026", "acme API rate limits"]`. '
         "count defaults to 5 (max 10). "
         "Use web_fetch to read a specific page in full."
     )
@@ -204,7 +228,42 @@ class WebSearchTool(Tool):
         """DuckDuckGo searches are serialized because ddgs is not concurrency-safe."""
         return self._effective_provider() == "duckduckgo"
 
-    async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
+    def fanout_size(self, arguments: dict[str, Any]) -> int:
+        queries = arguments.get("queries")
+        return len(queries) if isinstance(queries, list) and queries else 1
+
+    async def execute(
+        self,
+        query: str | None = None,
+        queries: list[str] | None = None,
+        count: int | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        # Mutually exclusive surfaces, mirroring memory_drill / web_fetch.
+        if query and queries:
+            return "Error: pass either `query` (single) or `queries` (list), not both"
+        if not query and not queries:
+            return "Error: query or queries is required"
+
+        if queries is not None and query is None:
+            if not isinstance(queries, list) or len(queries) == 0:
+                return "Error: queries must be a non-empty list"
+            if len(queries) > MAX_SEARCH_QUERIES:
+                return f"Error: too many queries ({len(queries)}); cap is {MAX_SEARCH_QUERIES} per call"
+            qs = [str(q) for q in queries]
+            # DuckDuckGo's ``ddgs`` client is not concurrency-safe, so a
+            # duckduckgo batch must run serially; any other provider fans
+            # out in parallel.
+            if self._effective_provider() == "duckduckgo":
+                results = [{"query": q, "results": await self._search_one(q, count)} for q in qs]
+            else:
+                gathered = await asyncio.gather(*[self._search_one(q, count) for q in qs])
+                results = [{"query": q, "results": r} for q, r in zip(qs, gathered)]
+            return {"results": results}
+
+        return await self._search_one(str(query), count)
+
+    async def _search_one(self, query: str, count: int | None = None) -> str:
         self._refresh_config()
         provider = self.config.provider.strip().lower() or "brave"
         n = min(max(count or self.config.max_results, 1), 10)
@@ -461,16 +520,32 @@ def _ddgs_text(query: str, n: int):
     return DDGS(timeout=10).text(query, max_results=n)
 
 
+# Cap on URLs per web_fetch call. Kept small: each URL is a full HTTP
+# fetch + extraction, and fanning out too many at once both hammers
+# targets and floods the model's context with page bodies.
+MAX_FETCH_URLS: int = 5
+
+
 @tool_parameters(
     tool_parameters_schema(
-        url=StringSchema("URL to fetch"),
+        url=StringSchema("Single URL to fetch. Use this OR `urls` (not both)."),
+        urls=ArraySchema(
+            items=StringSchema("URL to fetch"),
+            description=(
+                f"List of URLs to fetch in one call (max {MAX_FETCH_URLS}). "
+                "They are fetched in parallel and results come back in the "
+                "same order, each as a `{url, content}` record with an "
+                "`error` field on entries that failed — one failure does not "
+                "abort the rest. Prefer this form whenever 2+ independent "
+                "URLs need fetching."
+            ),
+        ),
         extractMode={
             "type": "string",
             "enum": ["markdown", "text"],
             "default": "markdown",
         },
         maxChars=IntegerSchema(0, minimum=100),
-        required=["url"],
     )
 )
 class WebFetchTool(Tool):
@@ -480,6 +555,11 @@ class WebFetchTool(Tool):
     name = "web_fetch"
     description = (
         "Fetch a URL and extract readable content (HTML → markdown/text). "
+        "Pass `url` for a single page. When you have two or more independent "
+        "pages to read, ALWAYS pass them together as `urls` (a list) instead of "
+        "calling this tool once per URL — they are fetched in parallel in a "
+        "single call, which is faster. For example, to read three docs at once: "
+        '`urls: ["https://a.com/x", "https://b.com/y", "https://c.com/z"]`. '
         "Output is capped at maxChars (default 50 000). "
         "Works for most web pages and docs; may fail on login-walled or JS-heavy sites."
     )
@@ -512,16 +592,62 @@ class WebFetchTool(Tool):
     def read_only(self) -> bool:
         return True
 
+    def fanout_size(self, arguments: dict[str, Any]) -> int:
+        urls = arguments.get("urls")
+        return len(urls) if isinstance(urls, list) and urls else 1
+
     async def execute(
         self,
-        url: str,
+        url: str | None = None,
+        urls: list[str] | None = None,
         extract_mode: str = "markdown",
         max_chars: int | None = None,
         **kwargs: Any,
     ) -> Any:
-        url = url.strip(" \t\r\n`\"'")
         extract_mode = kwargs.pop("extractMode", extract_mode)
         max_chars = kwargs.pop("maxChars", max_chars) or self.max_chars
+
+        # Mutually exclusive surfaces, mirroring memory_drill.
+        if url and urls:
+            return json.dumps({"error": "pass either `url` (single) or `urls` (list), not both"}, ensure_ascii=False)
+        if not url and not urls:
+            return json.dumps({"error": "url or urls is required"}, ensure_ascii=False)
+
+        if urls is not None and url is None:
+            if not isinstance(urls, list) or len(urls) == 0:
+                return json.dumps({"error": "urls must be a non-empty list"}, ensure_ascii=False)
+            if len(urls) > MAX_FETCH_URLS:
+                return json.dumps({"error": f"too many urls ({len(urls)}); cap is {MAX_FETCH_URLS} per call"}, ensure_ascii=False)
+            # Each fetch is bound by network IO, so awaiting them together
+            # parallelises naturally — independent of whether the model
+            # batched the calls itself.
+            results = await asyncio.gather(*[
+                self._fetch_one_safe(str(u), extract_mode, max_chars) for u in urls
+            ])
+            return {"results": results}
+
+        return await self._fetch_one(str(url), extract_mode, max_chars)
+
+    async def _fetch_one_safe(self, url: str, extract_mode: str, max_chars: int) -> dict[str, Any]:
+        """Batch helper — never raises, always returns a record carrying the
+        url so the caller can match it back to its request."""
+        url = url.strip(" \t\r\n`\"'")
+        if not url:
+            return {"url": url, "error": "empty url"}
+        try:
+            result = await self._fetch_one(url, extract_mode, max_chars)
+        except Exception as exc:  # defensive: a single URL must not abort the batch
+            return {"url": url, "error": f"fetch failed: {exc}"}
+        return {"url": url, "content": result}
+
+    async def _fetch_one(
+        self,
+        url: str,
+        extract_mode: str = "markdown",
+        max_chars: int | None = None,
+    ) -> Any:
+        url = url.strip(" \t\r\n`\"'")
+        max_chars = max_chars or self.max_chars
         is_valid, error_msg = _validate_url_safe(url)
         if not is_valid:
             err = json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)

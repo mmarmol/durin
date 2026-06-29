@@ -1690,6 +1690,7 @@ class AgentRunner:
         seen_failed_calls: set[str],
     ) -> tuple[list[Any], list[dict[str, str]], BaseException | None]:
         batches = self._partition_tool_batches(spec, tool_calls)
+        self._emit_parallelism_telemetry(spec, tool_calls, batches)
         tool_results: list[tuple[Any, dict[str, Any], BaseException | None]] = []
         for batch in batches:
             if spec.concurrent_tools and len(batch) > 1:
@@ -1720,6 +1721,64 @@ class AgentRunner:
             if error is not None and fatal_error is None:
                 fatal_error = error
         return results, events, fatal_error
+
+    def _emit_parallelism_telemetry(
+        self,
+        spec: AgentRunSpec,
+        tool_calls: list[ToolCallRequest],
+        batches: list[list[ToolCallRequest]],
+    ) -> None:
+        """Record the parallelisation shape of one assistant turn.
+
+        Emitted once per turn that issued ≥1 tool call. Captures whether the
+        model's independent calls actually ran in parallel so we can measure —
+        not assume — how well the parallel-tool instruction lands across
+        models. ``concurrency_safe_count`` ≥ 2 with ``max_batch_size`` == 1
+        would be a missed-batching signal (parallel-safe tools that did not
+        share a turn). Best-effort: telemetry never breaks the turn.
+        """
+        if not tool_calls:
+            return
+        _logger = current_telemetry()
+        if _logger is None:
+            return
+        # Best-effort: a malformed tools registry or tool must never break the
+        # turn, so the whole computation is guarded.
+        with suppress(Exception):
+            get_tool = spec.tools.get
+            safe_count = 0
+            fanout_calls = 0      # calls that fan out over a list (≥2 items)
+            fanout_items = 0      # total parallel items across those calls
+            background_launches = 0  # calls that launch background work (spawn)
+            for tc in tool_calls:
+                tool = get_tool(tc.name)
+                if tool is None:
+                    continue
+                if tool.concurrency_safe:
+                    safe_count += 1
+                if tool.launches_background:
+                    background_launches += 1
+                size = tool.fanout_size(tc.arguments or {})
+                if isinstance(size, int) and size > 1:
+                    fanout_calls += 1
+                    fanout_items += size
+            max_batch = max((len(b) for b in batches), default=0)
+            # Parallelism happens three ways: a harness batch of ≥2
+            # concurrency-safe calls, a single call that fans out over a list,
+            # or ≥2 background launches (spawn). True if ANY of them did.
+            parallelized = max_batch > 1 or fanout_calls > 0 or background_launches >= 2
+            _logger.log("tools.parallelism", {
+                "session_key": spec.session_key,
+                "tool_calls": len(tool_calls),
+                "batches": len(batches),
+                "max_batch_size": max_batch,
+                "concurrency_safe_calls": safe_count,
+                "fanout_calls": fanout_calls,
+                "fanout_items": fanout_items,
+                "background_launches": background_launches,
+                "parallelized": parallelized,
+                "concurrent_tools_enabled": bool(spec.concurrent_tools),
+            })
 
     async def _run_tool_timed(
         self,

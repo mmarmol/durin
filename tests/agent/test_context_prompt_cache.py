@@ -186,6 +186,8 @@ def test_operating_floor_template_contains_execution_rules() -> None:
     assert "## Operating Floor" in floor
     assert "single-step tasks" in floor
     assert "multi-step tasks" in floor
+    # Independent tool calls are instructed to run in parallel (one turn).
+    assert "run in parallel" in floor
     soul = (pkg_files("durin") / "templates" / "SOUL.md").read_text(encoding="utf-8")
     assert "## Execution Rules" not in soul
 
