@@ -249,6 +249,11 @@ class SettingsService:
                 from durin.utils.oauth import any_token_present
 
                 configured = any_token_present(spec.name)
+            elif getattr(spec, "is_local", False):
+                # Local providers (ollama/lm_studio/vllm) authenticate by reachable
+                # endpoint, not a key — mirror configured_provider_names' per-spec
+                # branch so a configured local provider can be the default.
+                configured = bool(provider_config and getattr(provider_config, "api_base", None))
             else:
                 configured = bool(provider_config and provider_config.api_key)
             if not configured:
