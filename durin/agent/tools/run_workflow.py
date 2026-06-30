@@ -61,6 +61,16 @@ _PARAMETERS = {
                 "Omit to use the workflow's own output description."
             ),
         },
+        "input_files": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Optional. Absolute paths of files to hand the workflow as input. Each is copied "
+                "into the run's shared working folder before the start node runs, so every node "
+                "(including tool-less ones, and a dynamic fan-out of one worker per file) can read "
+                "them there. Use this instead of pasting file contents into 'task'."
+            ),
+        },
         "background": {
             "type": "boolean",
             "description": (
@@ -88,7 +98,7 @@ def _background_launch_message(name: str, run_id: str) -> str:
     )
 
 
-def _format_result(result: Any) -> str:
+def _format_result(result: Any, output_files: bool = False) -> str:
     lines = [f"Workflow run {result.run_id}: {result.status}"]
 
     if result.status == "needs_input":
@@ -133,6 +143,12 @@ def _format_result(result: Any) -> str:
 
     if result.status == "completed" and result.final_output:
         lines.append(f"\nFinal output:\n{result.final_output}")
+
+    # Surface the run's working folder only when the workflow declares it outputs files,
+    # so a file-producing run tells the agent where to read its outputs. The folder also
+    # holds any seeded input files. Pure-text workflows stay silent (no noise).
+    if output_files and result.output_dir:
+        lines.append(f"\nThe workflow's output files are in: {result.output_dir}")
 
     return "\n".join(lines)
 
@@ -180,7 +196,9 @@ class RunWorkflowTool(Tool, ContextAware):
             "Run a user-defined workflow on a task. The workflow is a flow graph of "
             "nodes (defined in <workspace>/workflows/<name>.json); a node does the work "
             "and, when it has routing set (on_pass/on_fail), routes the flow on its verdict. "
-            "Returns a run summary. If the summary says the workflow needs more information, "
+            "Returns a run summary. Pass input_files (absolute paths) to hand the workflow files "
+            "to work on — they are placed in the run's shared working folder for every node to read. "
+            "If the summary says the workflow needs more information, "
             "it ENDED asking for clarification (it did not fail) — ask the user those questions "
             "and call this tool again with the same task plus their answers. "
             "Pass background=false to block and get the result inline only when you need it "
@@ -223,7 +241,7 @@ class RunWorkflowTool(Tool, ContextAware):
         except Exception:  # noqa: BLE001 - best-effort; the run already persisted its manifest
             pass
 
-    async def execute(self, name: str, task: str, output_format: str = "", background: bool = True) -> str:  # type: ignore[override]
+    async def execute(self, name: str, task: str, output_format: str = "", input_files: list[str] | None = None, background: bool = True) -> str:  # type: ignore[override]
         from durin.agent.runner import AgentRunner
         from durin.providers.factory import make_provider
         from durin.workflow.engine import WorkflowEngine
@@ -241,6 +259,10 @@ class RunWorkflowTool(Tool, ContextAware):
         # Snapshot the current definitions into the workflow version history (captures
         # any edit since the last run). Best-effort: never blocks the run.
         WorkflowVersionStore(workflows_dir(self._workspace)).snapshot(f"run {name}")
+
+        # Whether this workflow declares it produces files — gates surfacing the run's
+        # working folder in the summary so a file-producing run points the agent at its outputs.
+        output_files = bool((workflow.output or {}).get("file"))
 
         preset = self._app_config.resolve_default_preset()
         provider = make_provider(self._app_config, preset=preset)
@@ -315,11 +337,12 @@ class RunWorkflowTool(Tool, ContextAware):
                     result = await asyncio.to_thread(
                         engine.run, workflow, task,
                         root_session_key=root_session_key,
+                        input_files=input_files or None,
                         output_format=output_format or None,
                     )
                     if progress_emit is not None:
                         progress_emit(_terminal_progress_payload(workflow, run_id, result.runs))
-                    summary = _format_result(result)
+                    summary = _format_result(result, output_files=output_files)
                 except Exception as exc:  # noqa: BLE001
                     # Clear the work item even on failure so it doesn't hang on "running".
                     if progress_emit is not None:
@@ -340,8 +363,9 @@ class RunWorkflowTool(Tool, ContextAware):
         result = await asyncio.to_thread(
             engine.run, workflow, task,
             root_session_key=root_session_key,
+            input_files=input_files or None,
             output_format=output_format or None,
         )
         if progress_emit is not None:
             progress_emit(_terminal_progress_payload(workflow, run_id, result.runs))
-        return _format_result(result)
+        return _format_result(result, output_files=output_files)
