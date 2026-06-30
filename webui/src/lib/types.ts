@@ -415,6 +415,8 @@ export interface WebuiThreadPersistedPayload {
    *  (non-websocket channel) rather than the webui JSONL transcript.
    *  The composer is disabled for these sessions — they are view-only. */
   readOnly?: boolean;
+  /** Active persona slug for this session, if one was set via ``/persona``. */
+  persona?: string | null;
 }
 
 export type Outbound =

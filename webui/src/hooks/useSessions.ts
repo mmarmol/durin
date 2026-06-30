@@ -108,6 +108,8 @@ export function useSessionHistory(key: string | null): {
   version: number;
   /** ``true`` when the replayed transcript ends with a trace row (turn still in flight). */
   hasPendingToolCalls: boolean;
+  /** Active persona slug for this session, or null if none is set. */
+  persona: string | null;
 } {
   const { token } = useClient();
   const [refreshSeq, setRefreshSeq] = useState(0);
@@ -121,6 +123,7 @@ export function useSessionHistory(key: string | null): {
     error: string | null;
     hasPendingToolCalls: boolean;
     version: number;
+    persona: string | null;
   }>({
     key: null,
     messages: [],
@@ -128,6 +131,7 @@ export function useSessionHistory(key: string | null): {
     error: null,
     hasPendingToolCalls: false,
     version: 0,
+    persona: null,
   });
 
   useEffect(() => {
@@ -139,6 +143,7 @@ export function useSessionHistory(key: string | null): {
         error: null,
         hasPendingToolCalls: false,
         version: 0,
+        persona: null,
       });
       return;
     }
@@ -154,6 +159,7 @@ export function useSessionHistory(key: string | null): {
           error: null,
           hasPendingToolCalls: false,
           version: 0,
+          persona: null,
         });
     (async () => {
       try {
@@ -167,6 +173,7 @@ export function useSessionHistory(key: string | null): {
             error: null,
             hasPendingToolCalls: false,
             version: prev.key === key ? prev.version + 1 : 1,
+            persona: body?.persona ?? null,
           }));
           return;
         }
@@ -184,6 +191,7 @@ export function useSessionHistory(key: string | null): {
           error: null,
           hasPendingToolCalls: hasPending,
           version: prev.key === key ? prev.version + 1 : 1,
+          persona: body.persona ?? null,
         }));
       } catch (e) {
         if (cancelled) return;
@@ -195,6 +203,7 @@ export function useSessionHistory(key: string | null): {
             error: null,
             hasPendingToolCalls: false,
             version: prev.key === key ? prev.version + 1 : 1,
+            persona: null,
           }));
         } else {
           setState((prev) => ({
@@ -204,6 +213,7 @@ export function useSessionHistory(key: string | null): {
             error: (e as Error).message,
             hasPendingToolCalls: false,
             version: prev.key === key ? prev.version : 0,
+            persona: null,
           }));
         }
       }
@@ -221,6 +231,7 @@ export function useSessionHistory(key: string | null): {
       refresh,
       version: 0,
       hasPendingToolCalls: false,
+      persona: null,
     };
   }
 
@@ -234,6 +245,7 @@ export function useSessionHistory(key: string | null): {
       refresh,
       version: 0,
       hasPendingToolCalls: false,
+      persona: null,
     };
   }
 
@@ -244,6 +256,7 @@ export function useSessionHistory(key: string | null): {
     refresh,
     version: state.version,
     hasPendingToolCalls: state.hasPendingToolCalls,
+    persona: state.persona,
   };
 }
 

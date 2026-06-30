@@ -104,6 +104,7 @@ export function ThreadShell({
     hasPendingToolCalls,
     refresh: refreshHistory,
     version: historyVersion,
+    persona: historicalPersona,
   } = useSessionHistory(historyKey);
   const { client, modelName, modelPreset, token } = useClient();
   const activeEffort = effortFromPreset(modelPreset);
@@ -341,6 +342,10 @@ export function ThreadShell({
   );
 
   const [activePersona, setActivePersona] = useState<string | null>(null);
+  // Seed the pill from the fetched thread payload whenever the active chat changes.
+  useEffect(() => {
+    setActivePersona(historicalPersona ?? null);
+  }, [historyKey, historicalPersona]);
   const handlePersonaPick = useCallback(
     (name: string) => {
       setActivePersona(name);
