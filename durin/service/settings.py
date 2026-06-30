@@ -149,14 +149,19 @@ class SettingsService:
                 )
                 continue
             provider_config = getattr(config.providers, spec.name, None)
-            if provider_config is None or spec.is_oauth or spec.is_local:
+            if provider_config is None or spec.is_oauth:
                 continue
+            if spec.is_local:
+                configured = bool(getattr(provider_config, "api_base", None))
+            else:
+                configured = bool(provider_config.api_key)
             providers.append(
                 {
                     "name": spec.name,
                     "label": spec.label,
-                    "configured": bool(provider_config.api_key),
-                    "api_key_hint": mask_secret_hint(provider_config.api_key),
+                    "configured": configured,
+                    "is_local": bool(spec.is_local),
+                    "api_key_hint": None if spec.is_local else mask_secret_hint(provider_config.api_key),
                     "api_base": provider_config.api_base,
                     "default_api_base": spec.default_api_base or None,
                 }
