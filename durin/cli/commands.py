@@ -1951,6 +1951,7 @@ def _run_gateway(
                     subagent_manager=agent.subagents,
                     channel_manager=channels,
                     on_config_changed=agent.reload_app_config,
+                    on_default_changed=agent.apply_default_model_live,
                 )
                 # Static token lives on the websocket channel config.
                 _ws_cfg_u = getattr(config.channels, "websocket", None)

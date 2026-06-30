@@ -490,6 +490,28 @@ class AgentLoop:
         self.app_config = cfg
         self.model_presets = preset_helpers.configured_model_presets(cfg)
 
+    def apply_default_model_live(self) -> None:
+        """Re-read config and apply the new ``agents.defaults`` model/provider to
+        the running loop WITHOUT a restart — the same path ``/model`` uses.
+
+        Refreshes ``app_config``/``model_presets`` (via ``reload_app_config``) then
+        re-resolves the default model ref through ``resolve_preset_ref`` +
+        ``set_model_preset`` so a default change from the settings UI takes effect
+        on the next turn. For an explicit ``provider model`` pair we resolve on the
+        named provider (picker form); ``auto`` falls back to the bare model ref so
+        provider inference matches the gateway's cold-start behaviour.
+        """
+        self.reload_app_config()
+        defaults = self.app_config.agents.defaults
+        model = (defaults.model or "").strip()
+        if not model:
+            return
+        provider = (defaults.provider or "auto").strip()
+        ref = f"{provider} {model}" if provider and provider != "auto" else model
+        from durin.command.builtin import resolve_preset_ref
+        name = resolve_preset_ref(self, ref)
+        self.set_model_preset(name, publish_update=True)
+
     # ------------------------------------------------------------------
     # Memory background services lifecycle
     # ------------------------------------------------------------------

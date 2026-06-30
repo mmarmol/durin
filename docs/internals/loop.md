@@ -432,6 +432,18 @@ which never shadows a built-in). The same `ModesService` route handles
 after each mutation so a change takes effect without a restart; the three
 built-ins are immutable.
 
+### Default model (live-applied from settings)
+
+Changing `agents.defaults.model`/`provider` through the settings UI
+(`POST /api/v1/settings`, `SettingsService`) applies to the running loop without a
+restart. After saving config the service calls its `on_default_changed` hook,
+which the gateway binds to `AgentLoop.apply_default_model_live`
+(`durin/agent/loop.py`). That method reloads the config snapshot
+(`reload_app_config`) and re-resolves the new default through the same path the
+`/model` command uses — `resolve_preset_ref` then `set_model_preset` — so the
+change is live on the next turn. A local provider (ollama and friends) is
+accepted as the default when its `api_base` is set, not by `api_key`.
+
 ### Sessions
 
 A `Session` ([`durin/session/manager.py`](../../durin/session/manager.py)) is an

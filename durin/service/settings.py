@@ -22,7 +22,7 @@ left behind were removed in SP8, so this service is now the sole owner.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from durin.service.principal import Principal, Scope
 from durin.service.registry import route
@@ -115,6 +115,13 @@ class SettingsWebSearchUpdateCommand(Command):
 
 class SettingsService:
     """Read and mutate agent model/provider and web-search settings."""
+
+    def __init__(self, on_default_changed: Callable[[], None] | None = None) -> None:
+        # Called after the default model/provider changes so the running loop
+        # re-resolves it live (no gateway restart). The gateway binds the live
+        # ``AgentLoop.apply_default_model_live``; surfaces without a loop leave
+        # it ``None`` and the change applies on the next process start.
+        self._on_default_changed = on_default_changed
 
     def _payload(self, *, requires_restart: bool = False) -> SettingsResult:
         """Build the full settings dict.
@@ -264,6 +271,9 @@ class SettingsService:
 
         if changed:
             save_config(config)
+            if self._on_default_changed is not None:
+                # Apply the new default to the running loop live (no restart).
+                self._on_default_changed()
         return self._payload(requires_restart=False)
 
     @route(
