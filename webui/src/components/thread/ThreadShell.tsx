@@ -340,6 +340,16 @@ export function ThreadShell({
     [chatId, client],
   );
 
+  const [activePersona, setActivePersona] = useState<string | null>(null);
+  const handlePersonaPick = useCallback(
+    (name: string) => {
+      setActivePersona(name);
+      const cid = chatId ?? client.defaultChatId;
+      if (cid) client.sendMessage(cid, `/persona ${name}`);
+    },
+    [chatId, client],
+  );
+
   // Lets an interaction block deep in the transcript answer a question
   // or store a requested secret without drilling callbacks through
   // viewport → list → bubble.
@@ -432,6 +442,8 @@ export function ThreadShell({
           voiceState={voiceState}
           apiStatus={apiStatus}
           onDismissApiStatus={dismissApiStatus}
+          onPersonaPick={handlePersonaPick}
+          activePersona={activePersona}
         />
       ) : (
         <ThreadComposer
@@ -464,6 +476,8 @@ export function ThreadShell({
           voiceState={voiceState}
           apiStatus={apiStatus}
           onDismissApiStatus={dismissApiStatus}
+          onPersonaPick={handlePersonaPick}
+          activePersona={activePersona}
         />
       )}
     </>

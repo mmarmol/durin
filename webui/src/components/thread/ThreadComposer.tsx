@@ -53,6 +53,7 @@ import {
   effortLabelKey,
 } from "@/components/thread/ModelPickerPopover";
 import { ModePicker } from "@/components/thread/ModePicker";
+import { PersonaPickerPopover } from "@/components/thread/PersonaPickerPopover";
 import { VoiceInputControl } from "@/components/thread/VoiceInputControl";
 import type { ModeInfo } from "@/lib/api";
 import type { SendImage } from "@/hooks/useDurinStream";
@@ -119,6 +120,10 @@ interface ThreadComposerProps {
    * active; hidden automatically once the run ends. */
   apiStatus?: ApiRetryStatus | null;
   onDismissApiStatus?: () => void;
+  /** Called when the user picks a persona from the pill. */
+  onPersonaPick?: (name: string) => void;
+  /** Currently active persona name, if any. */
+  activePersona?: string | null;
 }
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
@@ -489,6 +494,8 @@ export function ThreadComposer({
   voiceState = "idle",
   apiStatus = null,
   onDismissApiStatus,
+  onPersonaPick,
+  activePersona = null,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
@@ -1133,6 +1140,13 @@ export function ThreadComposer({
                 activeMode={agentMode}
                 modes={modes}
                 onSelect={onModeChange}
+                disabled={disabled}
+              />
+            ) : null}
+            {onPersonaPick ? (
+              <PersonaPickerPopover
+                activePersona={activePersona ?? null}
+                onSelect={onPersonaPick}
                 disabled={disabled}
               />
             ) : null}
