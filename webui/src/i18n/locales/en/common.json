@@ -1234,6 +1234,10 @@
       "mode": {
         "title": "Mode"
       },
+      "persona": {
+        "title": "Persona",
+        "empty": "No personas available"
+      },
       "add": {
         "title": "Add",
         "attach": "Upload file or photo",

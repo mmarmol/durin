@@ -1114,6 +1114,10 @@
       "mode": {
         "title": "Modo"
       },
+      "persona": {
+        "title": "Persona",
+        "empty": "No hay personas disponibles"
+      },
       "add": {
         "title": "Añadir",
         "attach": "Subir archivo o foto",
