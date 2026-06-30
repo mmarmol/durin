@@ -1870,7 +1870,7 @@ async def cmd_persona(ctx: CommandContext) -> OutboundMessage:
     config = getattr(loop, "app_config", None)
     session = ctx.session
     args = ctx.args.strip()
-    metadata = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+    metadata = {**dict(ctx.msg.metadata or {})}
 
     def _reply(content: str) -> OutboundMessage:
         return OutboundMessage(channel=ctx.msg.channel, chat_id=ctx.msg.chat_id, content=content, metadata=metadata)
