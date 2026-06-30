@@ -492,14 +492,23 @@ class AgentLoop:
 
     def apply_default_model_live(self) -> None:
         """Re-read config and apply the new ``agents.defaults`` model/provider to
-        the running loop WITHOUT a restart — the same path ``/model`` uses.
+        the running loop WITHOUT a restart.
 
-        Refreshes ``app_config``/``model_presets`` (via ``reload_app_config``) then
-        re-resolves the default model ref through ``resolve_preset_ref`` +
-        ``set_model_preset`` so a default change from the settings UI takes effect
-        on the next turn. For an explicit ``provider model`` pair we resolve on the
-        named provider (picker form); ``auto`` falls back to the bare model ref so
-        provider inference matches the gateway's cold-start behaviour.
+        Refreshes ``app_config``/``model_presets`` (via ``reload_app_config``),
+        which rebuilds the always-present ``"default"`` preset from the new
+        ``agents.defaults``. We then apply the new default on the next turn:
+
+        * For ``provider == "auto"`` (the schema default; provider inference) we
+          apply the rebuilt ``"default"`` preset directly — the same path
+          cold-start uses. A bare ``model`` string is NOT a registered preset, so
+          building a synthetic ``provider model`` ref would raise ``KeyError`` out
+          of ``set_model_preset``.
+        * For an explicit provider we resolve the ``provider model`` picker pair
+          through ``resolve_preset_ref`` (registers an ad-hoc preset) +
+          ``set_model_preset`` — the same raw-pair-safe path ``/model`` uses.
+
+        Any unresolvable ref logs a warning and no-ops rather than escaping the
+        settings ``on_default_changed`` handler (config has already been saved).
         """
         self.reload_app_config()
         defaults = self.app_config.agents.defaults
@@ -507,10 +516,20 @@ class AgentLoop:
         if not model:
             return
         provider = (defaults.provider or "auto").strip()
-        ref = f"{provider} {model}" if provider and provider != "auto" else model
-        from durin.command.builtin import resolve_preset_ref
-        name = resolve_preset_ref(self, ref)
-        self.set_model_preset(name, publish_update=True)
+        try:
+            if not provider or provider == "auto":
+                # The rebuilt "default" preset already reflects the new default
+                # (model + auto provider); apply it directly.
+                self.set_model_preset("default", publish_update=True)
+            else:
+                from durin.command.builtin import resolve_preset_ref
+                name = resolve_preset_ref(self, f"{provider} {model}")
+                self.set_model_preset(name, publish_update=True)
+        except (KeyError, ValueError) as exc:
+            logger.warning(
+                "Could not apply default model {!r} (provider {!r}) live: {}",
+                model, provider, exc,
+            )
 
     # ------------------------------------------------------------------
     # Memory background services lifecycle

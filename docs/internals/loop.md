@@ -439,10 +439,22 @@ Changing `agents.defaults.model`/`provider` through the settings UI
 restart. After saving config the service calls its `on_default_changed` hook,
 which the gateway binds to `AgentLoop.apply_default_model_live`
 (`durin/agent/loop.py`). That method reloads the config snapshot
-(`reload_app_config`) and re-resolves the new default through the same path the
-`/model` command uses — `resolve_preset_ref` then `set_model_preset` — so the
-change is live on the next turn. A local provider (ollama and friends) is
-accepted as the default when its `api_base` is set, not by `api_key`.
+(`reload_app_config`), which rebuilds the always-present `default` preset from
+the new `agents.defaults`, then applies the new default so the change is live on
+the next turn. The apply path depends on the provider:
+
+- For an **explicit provider** the `"provider model"` picker pair is resolved
+  through the same raw-pair-safe path the `/model` command uses —
+  `resolve_preset_ref` (registers an ad-hoc preset) then `set_model_preset`.
+- For `provider == "auto"` (the schema default, and what the settings provider
+  picker emits when left empty) it applies the rebuilt `default` preset directly,
+  the same path cold-start uses. A bare model string is not a registered preset,
+  so a synthetic `provider model` ref would raise `KeyError` out of
+  `set_model_preset`.
+
+An unresolvable ref logs a warning and no-ops rather than escaping the
+`on_default_changed` handler. A local provider (ollama and friends) is accepted
+as the default when its `api_base` is set, not by `api_key`.
 
 ### Sessions
 
