@@ -488,8 +488,7 @@ class AgentLoop:
         from durin.config.loader import get_config_path, load_config
         cfg = load_config(get_config_path())
         self.app_config = cfg
-        from durin.agent import model_presets as _preset_helpers
-        self.model_presets = _preset_helpers.configured_model_presets(cfg)
+        self.model_presets = preset_helpers.configured_model_presets(cfg)
 
     # ------------------------------------------------------------------
     # Memory background services lifecycle

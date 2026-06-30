@@ -63,9 +63,7 @@ def test_replay_without_render_as():
 def test_replay_reuses_persisted_message_id():
     """A persisted server id is reused as the replay UIMessage id so live and
     refetch rows share a React key and merge instead of swapping."""
-    records = [
-        {"event": "message", "role": "assistant", "text": "hi", "id": "msg-abc"}
-    ]
+    records = [{"event": "message", "role": "assistant", "text": "hi", "id": "msg-abc"}]
     msgs = replay_transcript_to_ui_messages(records)
     assert any(m.get("id") == "msg-abc" for m in msgs)
 

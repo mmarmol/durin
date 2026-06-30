@@ -80,8 +80,8 @@ class SafeFileHistory(FileHistory):
 
     def store_string(self, string: str) -> None:
         super().store_string(_sanitize_surrogates(string))
-from durin.cli.stream import StreamRenderer, ThinkingSpinner
 from durin.agent.agent_mode import register_config_modes
+from durin.cli.stream import StreamRenderer, ThinkingSpinner
 from durin.config.paths import get_workspace_path, is_default_workspace
 from durin.config.schema import Config
 from durin.personas import seed_example_personas
@@ -1780,8 +1780,7 @@ def _run_gateway(
                     # extract its new turns into entity attributes immediately
                     # (the frequent dream, event-driven; the per-session cursor
                     # makes it idempotent). Refine stays on the daily cron.
-                    from durin.memory.dream_passes import (
-                        dream_vector_index, run_extract_pass)
+                    from durin.memory.dream_passes import dream_vector_index, run_extract_pass
                     from durin.memory.model_resolve import resolve_memory_model
                     # Pass the vector index so source-side semantic dedup runs on
                     # the reactive path too (where most turns are processed first

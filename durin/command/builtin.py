@@ -10,6 +10,7 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from durin import __version__
 from durin.bus.events import OutboundMessage
@@ -408,6 +409,26 @@ def adhoc_preset_config(config: Any, provider: str, model: str):
     )
 
 
+def resolve_preset_ref(loop: Any, ref: str) -> str:
+    """Resolve a model picker ref to a registered preset name, registering an
+    ad-hoc preset for a ``"provider model"`` pair (the picker form) when needed.
+
+    Shared by the ``/model`` and ``/persona`` commands so both apply a picker
+    ref through the same raw-pair-safe path: for a 2-part ref not already in
+    ``loop.model_presets`` an ad-hoc preset is registered keyed by the model
+    name; a bare name (preset or ``"default"``) is returned unchanged. The
+    returned name is safe to hand to ``loop.set_model_preset``.
+    """
+    parts = ref.split()
+    if len(parts) == 2:
+        provider, model = parts
+        if model not in loop.model_presets:
+            config = getattr(loop, "app_config", None)
+            loop.model_presets[model] = adhoc_preset_config(config, provider, model)
+        return model
+    return ref
+
+
 async def cmd_model(ctx: CommandContext) -> OutboundMessage:
     """Show or switch model presets."""
     loop = ctx.loop
@@ -431,7 +452,6 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
             metadata=metadata,
         )
 
-    from durin.config.schema import ModelPresetConfig
     from durin.providers.provider_catalog import catalog_model_caps
 
     config = getattr(loop, "app_config", None)
@@ -439,9 +459,7 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
     if len(parts) == 2:
         # Explicit `provider model` pair (the picker commits this form) — no
         # provider inference needed; the model resolves on the named provider.
-        provider, model = parts
-        loop.model_presets[model] = adhoc_preset_config(config, provider, model)
-        name = model
+        name = resolve_preset_ref(loop, args)
     else:
         name = parts[0]
 
@@ -1904,7 +1922,19 @@ async def cmd_persona(ctx: CommandContext) -> OutboundMessage:
         session.metadata["persona"] = name
     persona = config.resolve_persona(name) if config is not None else None
     if persona and persona.model and loop is not None:
-        loop.set_model_preset(persona.model, publish_update=True)
+        # The persona model may be a raw `provider model` pair (what the webui
+        # persona editor stores for a catalog pick), which is not a registered
+        # preset — register the ad-hoc preset first, the same path `/model`
+        # uses, so applying it never raises a KeyError. A genuinely bad ref
+        # degrades gracefully: the persona still switches, the model is left.
+        try:
+            preset_name = resolve_preset_ref(loop, persona.model)
+            loop.set_model_preset(preset_name, publish_update=True)
+        except (KeyError, ValueError):
+            return _reply(
+                f"Switched persona to `{name}`, but could not apply its model "
+                f"`{persona.model}` — add it under a provider in Settings."
+            )
     return _reply(f"Switched persona to `{name}` for this conversation.")
 
 
