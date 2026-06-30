@@ -14,9 +14,13 @@ SEED_PERSONAS: dict[str, PersonaConfig] = {
         soul="engineer",
         description="Terse senior engineer with strong taste (Hermes-style).",
     ),
-    "tutor": PersonaConfig(
-        soul="tutor",
-        description="Socratic tutor (adapted from OpenAI's Socratic prompt / Mr. Ranedeer).",
+    "tutor-feynman": PersonaConfig(
+        soul="tutor-feynman",
+        description="Explains the topic in plain words, then asks you to explain it back and fixes whatever you missed (Feynman technique).",
+    ),
+    "tutor-socratic": PersonaConfig(
+        soul="tutor-socratic",
+        description="Won't hand you the answer — asks questions until you reason it out yourself (Socratic method).",
     ),
 }
 
