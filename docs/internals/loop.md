@@ -297,9 +297,10 @@ backward compatibility and git-tracking); every other soul lives under
 `workspace/souls/<slug>.md`. Souls are plain markdown — readable and editable
 without any tooling.
 
-On a fresh workspace, three example souls are pre-seeded under `workspace/souls/`
-(`researcher`, `engineer`, `tutor`). They back the seeded example personas and
-serve as templates for user-defined souls.
+On a fresh workspace, a set of example souls is pre-seeded under
+`workspace/souls/` (`researcher`, `engineer`, `tutor-feynman`,
+`tutor-socratic`). They back the seeded example personas and serve as templates
+for user-defined souls.
 
 #### Persona records
 
@@ -310,8 +311,9 @@ use `"default"`), `model` (a model picker ref — a preset name or
 `description` (free text shown in `/persona` listings).
 
 Personas live in the `personas` map in `config.json`, structurally identical to
-`model_presets`. On first run, three example personas (`researcher`, `engineer`,
-`tutor`) are seeded into that map (`durin/personas/builtin.py`'s
+`model_presets`. On first run, the example personas (`researcher`, `engineer`,
+`tutor-feynman`, `tutor-socratic`) are seeded into that map
+(`durin/personas/builtin.py`'s
 `seed_example_personas`, guarded by the `agents.defaults.personas_seeded`
 marker) as ordinary entries — fully editable and deletable; a user who removes
 one keeps it removed across restarts (the marker prevents re-injection).
@@ -490,7 +492,7 @@ messages back to the bus and clears the per-session latency entry.
 | `PersonaConfig` | [`durin/config/schema.py`](../../durin/config/schema.py) | A soul + optional model + description; lives in the `personas` config map. |
 | `resolve_persona` / `persona_names` | [`durin/config/schema.py`](../../durin/config/schema.py) | Resolver (by name from the `personas` map) and listing method on `Config`. |
 | `resolve_active_persona_name` | [`durin/personas/resolve.py`](../../durin/personas/resolve.py) | Precedence resolver: per-conversation metadata → global default → None. |
-| `SEED_PERSONAS` / `seed_example_personas` | [`durin/personas/builtin.py`](../../durin/personas/builtin.py) | Example personas (`researcher`, `engineer`, `tutor`) seeded once into config on first run as ordinary editable/deletable entries. |
+| `SEED_PERSONAS` / `seed_example_personas` | [`durin/personas/builtin.py`](../../durin/personas/builtin.py) | Example personas (`researcher`, `engineer`, `tutor-feynman`, `tutor-socratic`) seeded once into config on first run as ordinary editable/deletable entries. |
 | `AgentMode` | [`durin/agent/agent_mode.py`](../../durin/agent/agent_mode.py) | Permission-as-data tool filter (build / plan / explore / read). |
 | `AgentHook` / `CompositeHook` | [`durin/agent/hook.py`](../../durin/agent/hook.py) | Per-iteration lifecycle callbacks with fan-out and error isolation. |
 | `AgentProgressHook` | [`durin/agent/progress_hook.py`](../../durin/agent/progress_hook.py) | The hook wired on every turn (streaming, tool hints, iteration count). |
