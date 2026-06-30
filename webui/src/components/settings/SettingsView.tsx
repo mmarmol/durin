@@ -688,6 +688,7 @@ function GeneralSettings({
               onSave={(v) => onSaveDefaultModel(v.model, v.provider)}
               configuredProviders={configuredProviders}
               token={token}
+              requiresRestart={settings.requires_restart}
             />
           </SettingsRow>
 
@@ -948,12 +949,14 @@ function DefaultModelControl({
   onSave,
   configuredProviders,
   token,
+  requiresRestart,
 }: {
   current: AuxModel;
   busy: boolean;
   onSave: (value: AuxModel) => void;
   configuredProviders: Array<{ name: string; label: string }>;
   token: string;
+  requiresRestart?: boolean;
 }) {
   const { t } = useTranslation();
   const initialProv = current.provider && current.provider !== "auto"
@@ -1029,6 +1032,10 @@ function DefaultModelControl({
             <span className="truncate max-w-[220px] inline-block align-bottom">
               {test.message}
             </span>
+          </span>
+        ) : requiresRestart && !dirty ? (
+          <span className="text-[12px] text-muted-foreground">
+            {t("settings.status.savedRestart")}
           </span>
         ) : null}
         <Button
