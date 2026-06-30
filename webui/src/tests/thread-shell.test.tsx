@@ -679,6 +679,84 @@ describe("ThreadShell", () => {
     await waitFor(() => expect(screen.getByText("live persona output")).toBeInTheDocument());
   });
 
+  it("does not duplicate a streamed reply when canonical hydrate runs", async () => {
+    // A STREAMED assistant reply keys its live row with a fallback random UUID
+    // (no server `msg-` id) and is persisted under a different replay id
+    // (`buf-…`/`m-…`). When title generation fires session_updated → canonical
+    // hydrate, the merge must NOT re-append the streamed live row: canonical
+    // already represents it under its own id, so keeping the live copy renders
+    // the reply TWICE. Only server-stamped `msg-…` command outputs survive.
+    const client = makeClient();
+    let historyCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("websocket%3Achat-stream/webui-thread")) {
+          historyCalls += 1;
+          if (historyCalls === 1) {
+            return httpJson(
+              transcriptFromSimpleMessages([{ role: "user", content: "ask something" }]),
+            );
+          }
+          // Canonical replay contains the same streamed reply under a
+          // replay-assigned id (`m-1`), NOT the live fallback UUID.
+          return httpJson(
+            transcriptFromSimpleMessages([
+              { role: "user", content: "ask something" },
+              { role: "assistant", content: "streamed reply body" },
+            ]),
+          );
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-stream")}
+          title="Chat chat-stream"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+
+    await waitFor(() => expect(screen.getByText("ask something")).toBeInTheDocument());
+
+    // Drive a streamed reply: delta opens a live row keyed by a fallback UUID
+    // (no message.id), then stream_end + turn_end finalize it.
+    await act(async () => {
+      client._emitChat("chat-stream", {
+        event: "delta",
+        chat_id: "chat-stream",
+        text: "streamed reply body",
+      });
+      client._emitChat("chat-stream", {
+        event: "stream_end",
+        chat_id: "chat-stream",
+      });
+      client._emitChat("chat-stream", {
+        event: "turn_end",
+        chat_id: "chat-stream",
+      });
+    });
+    await waitFor(() => expect(screen.getByText("streamed reply body")).toBeInTheDocument());
+    expect(screen.getAllByText("streamed reply body")).toHaveLength(1);
+
+    // Title generation → session_updated → canonical hydrate.
+    await act(async () => {
+      client._emitSessionUpdate("chat-stream");
+    });
+
+    await waitFor(() => expect(historyCalls).toBeGreaterThanOrEqual(2));
+    // The reply must render EXACTLY ONCE — the live UUID row must not be
+    // re-appended alongside the canonical copy.
+    await waitFor(() => expect(screen.getAllByText("streamed reply body")).toHaveLength(1));
+  });
+
   it("does not refetch thread history on turn_end", async () => {
     const client = makeClient();
     let historyCalls = 0;
