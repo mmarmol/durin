@@ -259,7 +259,9 @@
       "reasoningEffort": "Reasoning effort",
       "reasoningEffortHint": "For reasoning models: low | medium | high. Leave blank for default.",
       "enabled": "Enabled",
-      "disabled": "Disabled"
+      "disabled": "Disabled",
+      "defaultModel": "Default model",
+      "defaultModelHint": "Provider and model used for all new requests."
     },
     "channels": {
       "description": "Bridge durin to chat platforms. Enable a channel and set its credential — the token goes to the secret store, not config.json.",

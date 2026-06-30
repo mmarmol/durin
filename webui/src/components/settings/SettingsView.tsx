@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import {
   Bot,
   Brain,
@@ -151,17 +151,9 @@ export function SettingsView({
   });
   const [webSearchKeyVisible, setWebSearchKeyVisible] = useState(false);
   const [webSearchKeyEditing, setWebSearchKeyEditing] = useState(false);
-  const [form, setForm] = useState({
-    model: "",
-    provider: "",
-  });
 
   const applyPayload = useCallback((payload: SettingsPayload) => {
     setSettings(payload);
-    setForm({
-      model: payload.agent.model,
-      provider: payload.agent.provider,
-    });
     setWebSearchForm((prev) => ({
       provider: payload.web_search.provider,
       apiKey: prev.provider === payload.web_search.provider ? prev.apiKey ?? "" : "",
@@ -204,21 +196,12 @@ export function SettingsView({
     });
   }, [settings]);
 
-  const dirty = useMemo(() => {
-    if (!settings) return false;
-    return (
-      form.model !== settings.agent.model ||
-      form.provider !== settings.agent.provider
-    );
-  }, [form, settings]);
-
-  const save = async () => {
-    if (!dirty || saving) return;
+  const saveDefaultModel = async (model: string, provider: string) => {
     setSaving(true);
     try {
       const payload = await updateSettings(token, {
-        model: form.model,
-        ...(form.provider ? { provider: form.provider } : {}),
+        model,
+        ...(provider ? { provider } : {}),
       });
       applyPayload(payload);
       onModelNameChange(payload.agent.model || null);
@@ -414,12 +397,9 @@ export function SettingsView({
                   onToggleTheme={onToggleTheme}
                   palette={palette}
                   onSelectPalette={onSelectPalette}
-                  form={form}
-                  setForm={setForm}
                   settings={settings}
-                  dirty={dirty}
                   saving={saving}
-                  onSave={save}
+                  onSaveDefaultModel={saveDefaultModel}
                   onRestart={onRestart}
                   isRestarting={isRestarting}
                   onOpenByok={() => setActiveSection("providers")}
@@ -599,12 +579,9 @@ function GeneralSettings({
   onToggleTheme,
   palette,
   onSelectPalette,
-  form,
-  setForm,
   settings,
-  dirty,
   saving,
-  onSave,
+  onSaveDefaultModel,
   onRestart,
   isRestarting,
   onOpenByok,
@@ -614,18 +591,9 @@ function GeneralSettings({
   onToggleTheme: () => void;
   palette: Palette;
   onSelectPalette: (palette: Palette) => void;
-  form: {
-    model: string;
-    provider: string;
-  };
-  setForm: Dispatch<SetStateAction<{
-    model: string;
-    provider: string;
-  }>>;
   settings: SettingsPayload;
-  dirty: boolean;
   saving: boolean;
-  onSave: () => void;
+  onSaveDefaultModel: (model: string, provider: string) => void;
   onRestart?: () => void;
   isRestarting?: boolean;
   onOpenByok: () => void;
@@ -633,9 +601,6 @@ function GeneralSettings({
 }) {
   const { t } = useTranslation();
   const configuredProviders = settings.providers.filter((provider) => provider.configured);
-  const providerValue = configuredProviders.some((provider) => provider.name === form.provider)
-    ? form.provider
-    : "";
   return (
     <div className="space-y-8">
       <section>
@@ -714,51 +679,24 @@ function GeneralSettings({
         <SettingsSectionTitle>{t("settings.sections.ai")}</SettingsSectionTitle>
         <SettingsGroup>
           <SettingsRow
-            title={t("settings.rows.provider")}
-            description={t("settings.help.provider")}
+            title={t("settings.models.defaultModel")}
+            description={t("settings.models.defaultModelHint")}
           >
-            <ProviderPicker
-              providers={configuredProviders}
-              value={providerValue}
-              emptyLabel={t("settings.byok.noConfiguredProviders")}
-              onChange={(provider) => setForm((prev) => ({ ...prev, provider }))}
+            <DefaultModelControl
+              current={{ model: settings.agent.model, provider: settings.agent.provider }}
+              busy={saving}
+              onSave={(v) => onSaveDefaultModel(v.model, v.provider)}
+              configuredProviders={configuredProviders}
+              token={token}
             />
-          </SettingsRow>
-
-          <SettingsRow
-            title={t("settings.rows.model")}
-            description={t("settings.help.model")}
-          >
-            <div className="flex flex-col items-end gap-2">
-              <ModelPicker
-                token={token}
-                provider={form.provider}
-                value={form.model}
-                onChange={(model) => setForm((prev) => ({ ...prev, model }))}
-              />
-              <ModelTestInline
-                token={token}
-                model={form.model}
-                provider={form.provider}
-              />
-            </div>
           </SettingsRow>
 
           <ModelBlockRows
             token={token}
-            model={form.model}
-            provider={form.provider}
+            provider={settings.agent.provider}
             configuredProviders={configuredProviders}
           />
 
-          {(dirty || saving || settings.requires_restart) ? (
-            <SettingsFooter
-              dirty={dirty}
-              saving={saving}
-              saved={settings.requires_restart && !dirty}
-              onSave={onSave}
-            />
-          ) : null}
           {configuredProviders.length === 0 ? (
             <SettingsRow title={t("settings.byok.configureFirst")}>
               <Button size="sm" variant="outline" onClick={onOpenByok} className="rounded-full">
@@ -1000,6 +938,128 @@ function JudgeModelControl({
   );
 }
 
+/** Default-model row editor — same two-row layout as AuxControl
+ *  (provider dropdown + model picker / action buttons + caps summary)
+ *  but with no "clear" button since there must always be a default model.
+ */
+function DefaultModelControl({
+  current,
+  busy,
+  onSave,
+  configuredProviders,
+  token,
+}: {
+  current: AuxModel;
+  busy: boolean;
+  onSave: (value: AuxModel) => void;
+  configuredProviders: Array<{ name: string; label: string }>;
+  token: string;
+}) {
+  const { t } = useTranslation();
+  const initialProv = current.provider && current.provider !== "auto"
+    ? current.provider : "";
+  const [model, setModel] = useState(current.model);
+  const [prov, setProv] = useState(initialProv);
+  const [testing, setTesting] = useState(false);
+  const [test, setTest] = useState<ModelTestResult | null>(null);
+  const [caps, setCaps] = useState<ModelCapabilities | null>(null);
+
+  useEffect(() => {
+    setModel(current.model);
+    setProv(current.provider && current.provider !== "auto" ? current.provider : "");
+    setTest(null);
+  }, [current]);
+
+  useEffect(() => {
+    if (!model.trim() || !prov.trim()) {
+      setCaps(null);
+      return;
+    }
+    let cancelled = false;
+    getModelCapabilities(token, model.trim(), prov.trim())
+      .then((c) => { if (!cancelled) setCaps(c); })
+      .catch(() => { if (!cancelled) setCaps(null); });
+    return () => { cancelled = true; };
+  }, [token, model, prov]);
+
+  const dirty =
+    model.trim() !== current.model ||
+    prov.trim() !== (current.provider && current.provider !== "auto" ? current.provider : "");
+
+  const runTest = async () => {
+    if (!model.trim() || !prov.trim()) return;
+    setTesting(true);
+    setTest(null);
+    try {
+      setTest(await testModel(token, { model: model.trim(), provider: prov.trim() }));
+    } catch {
+      setTest({ status: "fail", message: t("settings.models.testError"), fix: "" });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <ProviderPicker
+          providers={configuredProviders}
+          value={prov}
+          emptyLabel={t("settings.models.pickProvider")}
+          onChange={setProv}
+        />
+        <ModelPicker
+          token={token}
+          provider={prov}
+          value={model}
+          onChange={setModel}
+          capability="text"
+        />
+      </div>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {test ? (
+          <span
+            className={cn(
+              "text-[12px]",
+              test.status === "ok" ? "text-emerald-600" : "text-destructive",
+            )}
+            title={test.message}
+          >
+            {test.status === "ok" ? "✓ " : "✗ "}
+            <span className="truncate max-w-[220px] inline-block align-bottom">
+              {test.message}
+            </span>
+          </span>
+        ) : null}
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!dirty || busy || !model.trim() || !prov.trim()}
+          onClick={() => onSave({ model: model.trim(), provider: prov.trim() })}
+          className="rounded-full"
+        >
+          {t("settings.models.save")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={testing || busy || !model.trim() || !prov.trim()}
+          onClick={() => void runTest()}
+          className="rounded-full"
+          title={t("settings.models.testRowHint")}
+        >
+          {testing ? t("settings.models.testing") : t("settings.models.testRow")}
+        </Button>
+      </div>
+      {caps && model.trim() && prov.trim() ? (
+        <span className="text-[11px] text-muted-foreground">
+          {modelCapsSummary(caps, t)}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 /** Compact vision/audio aux-model editor — provider dropdown +
  *  model autocomplete + save.
  *
@@ -1176,107 +1236,21 @@ function AuxControl({
   );
 }
 
-/** Inline test button + result for the main model — rendered next to
- *  the ModelPicker in the "Modelo" row so the action sits with what it
- *  acts on (same shape as each AuxControl row). Replaces the standalone
- *  "Prueba" SettingsRow that used to live at the end of the AI block.
- */
-function ModelTestInline({
-  token,
-  model,
-  provider,
-}: {
-  token: string;
-  model: string;
-  provider: string;
-}) {
-  const { t } = useTranslation();
-  const [testing, setTesting] = useState(false);
-  const [test, setTest] = useState<ModelTestResult | null>(null);
-  // Clear any prior result when the user changes the model/provider so
-  // a stale ✓ doesn't claim the new combo was tested.
-  useEffect(() => {
-    setTest(null);
-  }, [model, provider]);
-  const runTest = async () => {
-    if (!model.trim()) return;
-    setTesting(true);
-    setTest(null);
-    try {
-      setTest(await testModel(token, { model: model.trim(), provider: provider.trim() }));
-    } catch {
-      setTest({ status: "fail", message: t("settings.models.testError"), fix: "" });
-    } finally {
-      setTesting(false);
-    }
-  };
-  return (
-    <div className="flex flex-wrap items-center justify-end gap-2">
-      {test ? (
-        <span
-          className={cn(
-            "text-[12px]",
-            test.status === "ok" ? "text-emerald-600" : "text-destructive",
-          )}
-          title={test.message}
-        >
-          {test.status === "ok" ? "✓ " : "✗ "}
-          <span className="truncate max-w-[220px] inline-block align-bottom">
-            {test.message}
-          </span>
-        </span>
-      ) : null}
-      <Button
-        size="sm"
-        variant="ghost"
-        disabled={testing || !model.trim()}
-        onClick={() => void runTest()}
-        className="rounded-full"
-        title={t("settings.models.testRowHint")}
-      >
-        {testing ? t("settings.models.testing") : t("settings.models.testRow")}
-      </Button>
-    </div>
-  );
-}
-
-/** The model rows of the AI block: capabilities, vision/audio aux
- *  models. The main-model test sits in the parent SettingsRow next to
- *  the ModelPicker (see ModelTestInline) — keeping it close to what it
- *  acts on. */
+/** The model rows of the AI block: vision/audio/memory/judge aux
+ *  models. Capabilities for the default model are shown inline in
+ *  DefaultModelControl above this block. */
 function ModelBlockRows({
   token,
-  model,
   provider,
   configuredProviders,
 }: {
   token: string;
-  model: string;
   provider: string;
   configuredProviders: Array<{ name: string; label: string }>;
 }) {
   const { t } = useTranslation();
-  const [caps, setCaps] = useState<ModelCapabilities | null>(null);
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!model) {
-      setCaps(null);
-      return;
-    }
-    let cancelled = false;
-    getModelCapabilities(token, model, provider)
-      .then((c) => {
-        if (!cancelled) setCaps(c);
-      })
-      .catch(() => {
-        if (!cancelled) setCaps(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [token, model, provider]);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -1319,11 +1293,6 @@ function ModelBlockRows({
 
   return (
     <>
-      <SettingsRow title={t("settings.models.capabilities")}>
-        <span className="text-[12px] text-muted-foreground">
-          {modelCapsSummary(caps, t)}
-        </span>
-      </SettingsRow>
       <SettingsRow
         title={t("settings.models.vision")}
         description={t("settings.models.visionHint")}
@@ -2370,26 +2339,3 @@ function SecretsSettings({ token }: { token: string }) {
   );
 }
 
-function SettingsFooter({
-  dirty,
-  saving,
-  saved,
-  onSave,
-}: {
-  dirty: boolean;
-  saving: boolean;
-  saved: boolean;
-  onSave: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="flex min-h-[58px] items-center justify-between gap-4 px-4 py-3 sm:px-5">
-      <div className="text-[13px] text-muted-foreground">
-        {saved ? t("settings.status.savedRestart") : t("settings.status.unsaved")}
-      </div>
-      <Button size="sm" variant="outline" onClick={onSave} disabled={!dirty || saving} className="rounded-full">
-        {saving ? t("settings.actions.saving") : t("settings.actions.save")}
-      </Button>
-    </div>
-  );
-}

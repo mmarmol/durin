@@ -205,7 +205,9 @@
       "reasoningEffort": "Esfuerzo de razonamiento",
       "reasoningEffortHint": "Para modelos de razonamiento: low | medium | high. Vacío = por defecto.",
       "enabled": "Activado",
-      "disabled": "Desactivado"
+      "disabled": "Desactivado",
+      "defaultModel": "Modelo predeterminado",
+      "defaultModelHint": "Proveedor y modelo usados para todas las nuevas solicitudes."
     },
     "channels": {
       "credentialPlaceholder": "{{field}}",
