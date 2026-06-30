@@ -1902,6 +1902,9 @@ async def cmd_persona(ctx: CommandContext) -> OutboundMessage:
 
     if session is not None:
         session.metadata["persona"] = name
+    persona = config.resolve_persona(name) if config is not None else None
+    if persona and persona.model and loop is not None:
+        loop.set_model_preset(persona.model, publish_update=True)
     return _reply(f"Switched persona to `{name}` for this conversation.")
 
 
