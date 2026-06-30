@@ -24,7 +24,7 @@ def test_seeded_examples_appear_as_editable(tmp_path, monkeypatch):
     seed_example_personas()
     res = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
     names = {p.name for p in res.personas}
-    assert {"researcher", "engineer", "tutor"} <= names
+    assert {"researcher", "engineer", "tutor-feynman", "tutor-socratic"} <= names
     # seeded examples are ordinary editable personas, not an immutable category
     assert all(p.builtin is False for p in res.personas)
 

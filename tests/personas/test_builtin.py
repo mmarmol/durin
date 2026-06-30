@@ -4,7 +4,7 @@ from durin.config.loader import get_config_path, load_config, mutate_config
 
 
 def test_seed_personas_reference_soul_slugs():
-    assert set(SEED_PERSONAS) == {"researcher", "engineer", "tutor"}
+    assert set(SEED_PERSONAS) == {"researcher", "engineer", "tutor-feynman", "tutor-socratic"}
     for p in SEED_PERSONAS.values():
         assert isinstance(p, PersonaConfig)
         assert p.soul  # references a soul slug

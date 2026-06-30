@@ -3,7 +3,7 @@ from durin.utils.helpers import sync_workspace_templates
 
 def test_sync_creates_soul_files(tmp_path):
     sync_workspace_templates(tmp_path, silent=True)
-    for slug in ("researcher", "engineer", "tutor"):
+    for slug in ("researcher", "engineer", "tutor-feynman", "tutor-socratic"):
         assert (tmp_path / "souls" / f"{slug}.md").exists()
 
 
