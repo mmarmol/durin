@@ -151,12 +151,15 @@ Any `work` node can be tuned independently. `model` and `persona` are mutually e
   so file-producing stages build on each other (a plan's code accumulates; a debug loop's
   reproduction, fix, and test live together). Parallel writing branches fork a private copy
   that is reconciled back (see the static-parallel pattern). You do not declare the folder —
-  it exists per run; just have nodes read and write files normally.
+  it exists per run; just have nodes read and write files normally. To hand produced files
+  back to the caller, declare `output: {"file": true}` on the envelope: the run result then
+  reports the working-folder path so the caller reads the files there.
 
 ## Input / Output descriptors (envelope)
 
 Declare what the workflow consumes and delivers. Input text becomes the start node's task;
-input files land in the shared working folder.
+input files (declared with `"file": true`) are supplied at call time — `run_workflow`'s
+`input_files` argument or the web editor's run bar — and land in the shared working folder.
 
 ```json
 {

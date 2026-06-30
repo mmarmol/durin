@@ -35,6 +35,7 @@ def test_tool_metadata():
     assert tool.name == "run_workflow"
     assert "name" in tool.parameters["properties"]
     assert "task" in tool.parameters["properties"]
+    assert "input_files" in tool.parameters["properties"]
     assert "core" in RunWorkflowTool._scopes
 
 
@@ -136,6 +137,41 @@ async def test_run_anchors_node_sessions_to_invoking_session(tmp_path):
         await tool.execute(name="w", task="t", background=False)
     kids = sessions.children_of("websocket:abc")
     assert kids and kids[0]["origin_type"] == "workflow_node"
+
+
+@pytest.mark.asyncio
+async def test_input_files_forwarded_to_engine(tmp_path):
+    # The tool must hand input_files through to engine.run so the engine seeds them
+    # into the run's shared working folder.
+    _write_workflow(tmp_path, "doer", {
+        "name": "doer", "start": "a",
+        "nodes": [{"id": "a", "kind": "work", "prompt": "p", "next": None}],
+    })
+    tool = _tool(tmp_path)
+    captured = {}
+
+    def fake_run(self, workflow, task, *, root_session_key=None, input_files=None, output_format=None):
+        captured["input_files"] = input_files
+        return WorkflowResult(status="completed", run_id="r", final_output="ok", runs=[])
+
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "m"
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.workflow.engine.WorkflowEngine.run", fake_run):
+        await tool.execute(name="doer", task="t", input_files=["/abs/a.txt", "/abs/b.txt"], background=False)
+    assert captured["input_files"] == ["/abs/a.txt", "/abs/b.txt"]
+
+
+def test_completed_run_surfaces_output_dir_when_files_declared():
+    result = WorkflowResult(
+        status="completed", run_id="r", exhausted_node=None,
+        final_output="ans", output_dir="/ws/.workflow/r/work",
+        runs=[NodeRun(node_id="a", iteration=1, output="x", session_key="ws:s1")],
+    )
+    # Declared file output -> surface the working folder.
+    assert "The workflow's output files are in: /ws/.workflow/r/work" in _format_result(result, output_files=True)
+    # Pure-text workflow (default) -> no working-folder noise even though output_dir is set.
+    assert "output files are in" not in _format_result(result)
 
 
 def test_exhausted_run_renders_gracefully():
