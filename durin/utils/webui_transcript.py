@@ -456,6 +456,9 @@ def replay_transcript_to_ui_messages(
             lat = rec.get("latency_ms")
             if isinstance(lat, (int, float)) and lat >= 0:
                 extra["latencyMs"] = int(lat)
+            ra = rec.get("render_as")
+            if ra in ("text", "markdown"):
+                extra["renderAs"] = ra
             absorb_complete(extra, idx)
             if media:
                 suppress_until_turn_end = True
