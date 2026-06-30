@@ -266,15 +266,26 @@
       "field": {
         "consent_granted": "Consentimiento",
         "allow_from": "Permitir desde",
-        "imap_host": "Servidor IMAP", "imap_port": "Puerto", "imap_username": "Usuario",
-        "imap_password": "Contraseña", "imap_mailbox": "Buzón", "imap_use_ssl": "SSL",
-        "smtp_host": "Servidor SMTP", "smtp_port": "Puerto", "smtp_username": "Usuario",
-        "smtp_password": "Contraseña", "smtp_use_tls": "TLS", "smtp_use_ssl": "SSL",
+        "imap_host": "Servidor IMAP",
+        "imap_port": "Puerto",
+        "imap_username": "Usuario",
+        "imap_password": "Contraseña",
+        "imap_mailbox": "Buzón",
+        "imap_use_ssl": "SSL",
+        "smtp_host": "Servidor SMTP",
+        "smtp_port": "Puerto",
+        "smtp_username": "Usuario",
+        "smtp_password": "Contraseña",
+        "smtp_use_tls": "TLS",
+        "smtp_use_ssl": "SSL",
         "from_address": "Remitente",
-        "auto_reply_enabled": "Auto-respuesta", "poll_interval_seconds": "Intervalo de sondeo (s)",
-        "mark_seen": "Marcar como leído", "max_body_chars": "Máx. caracteres del cuerpo",
+        "auto_reply_enabled": "Auto-respuesta",
+        "poll_interval_seconds": "Intervalo de sondeo (s)",
+        "mark_seen": "Marcar como leído",
+        "max_body_chars": "Máx. caracteres del cuerpo",
         "subject_prefix": "Prefijo de asunto",
-        "verify_dkim": "Verificar DKIM", "verify_spf": "Verificar SPF",
+        "verify_dkim": "Verificar DKIM",
+        "verify_spf": "Verificar SPF",
         "allowed_attachment_types": "Tipos de adjunto permitidos",
         "max_attachment_size": "Tamaño máx. de adjunto",
         "max_attachments_per_email": "Máx. adjuntos por correo",
@@ -592,7 +603,8 @@
       "defaultModel": "por defecto: {{model}}",
       "modelsCount": "{{count}} modelos",
       "showMore": "Mostrar {{n}} más",
-      "showLess": "Mostrar menos"
+      "showLess": "Mostrar menos",
+      "localHint": "Servidor local — no se requiere clave API"
     },
     "mcp": {
       "description": "Conecta servidores Model Context Protocol (MCP) para darle herramientas extra al agente. El estado se lee en vivo del gateway en ejecución.",
@@ -1623,7 +1635,9 @@
     }
   },
   "tasks": {
-    "status": { "needs_input": "Necesita input" }
+    "status": {
+      "needs_input": "Necesita input"
+    }
   },
   "work": {
     "steps": "{{count}} pasos",

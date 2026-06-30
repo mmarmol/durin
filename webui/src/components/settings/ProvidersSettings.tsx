@@ -332,15 +332,19 @@ function ConnectionEditor({
     }
   };
 
+  const isLocal = !!provider.is_local;
+
   if (provider.configured && !editing) {
     return (
       <div>
         <SectionLabel>{t("settings.providers.connection")}</SectionLabel>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="flex items-center gap-2 rounded-lg border border-border/60 bg-background px-2.5 py-1.5">
-            <span className="text-[11.5px] text-muted-foreground">{t("settings.byok.apiKey")}</span>
-            <span className="font-mono text-[12px]">{provider.api_key_hint ?? "••••"}</span>
-          </span>
+          {!isLocal ? (
+            <span className="flex items-center gap-2 rounded-lg border border-border/60 bg-background px-2.5 py-1.5">
+              <span className="text-[11.5px] text-muted-foreground">{t("settings.byok.apiKey")}</span>
+              <span className="font-mono text-[12px]">{provider.api_key_hint ?? "••••"}</span>
+            </span>
+          ) : null}
           {provider.api_base ? (
             <span className="flex items-center gap-2 rounded-lg border border-border/60 bg-background px-2.5 py-1.5">
               <span className="text-[11.5px] text-muted-foreground">{t("settings.byok.apiBase")}</span>
@@ -363,20 +367,24 @@ function ConnectionEditor({
     <div>
       <SectionLabel>{t("settings.providers.connection")}</SectionLabel>
       <div className="space-y-2">
-        <label className="block">
-          <span className="mb-1 block text-[11.5px] text-muted-foreground">{t("settings.byok.apiKey")}</span>
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder={
-              provider.configured
-                ? t("settings.byok.apiKeyConfiguredPlaceholder")
-                : t("settings.byok.apiKeyPlaceholder")
-            }
-            className="h-9 w-full rounded-lg border border-border/60 bg-background px-3 text-[13px]"
-          />
-        </label>
+        {isLocal ? (
+          <p className="text-[11.5px] text-muted-foreground">{t("settings.providers.localHint")}</p>
+        ) : (
+          <label className="block">
+            <span className="mb-1 block text-[11.5px] text-muted-foreground">{t("settings.byok.apiKey")}</span>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={
+                provider.configured
+                  ? t("settings.byok.apiKeyConfiguredPlaceholder")
+                  : t("settings.byok.apiKeyPlaceholder")
+              }
+              className="h-9 w-full rounded-lg border border-border/60 bg-background px-3 text-[13px]"
+            />
+          </label>
+        )}
         <label className="block">
           <span className="mb-1 block text-[11.5px] text-muted-foreground">{t("settings.byok.apiBase")}</span>
           <input
@@ -389,7 +397,7 @@ function ConnectionEditor({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            disabled={saving || (!provider.configured && !apiKey.trim())}
+            disabled={saving || (!provider.configured && (isLocal ? !apiBase.trim() : !apiKey.trim()))}
             onClick={() => void save()}
             className="rounded-lg border border-border/60 bg-background px-3 py-1.5 text-[12px] font-medium disabled:opacity-50"
           >

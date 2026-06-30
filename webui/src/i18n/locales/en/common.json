@@ -320,15 +320,26 @@
       "field": {
         "consent_granted": "Consent",
         "allow_from": "Allowed senders",
-        "imap_host": "IMAP server", "imap_port": "Port", "imap_username": "Username",
-        "imap_password": "Password", "imap_mailbox": "Mailbox", "imap_use_ssl": "SSL",
-        "smtp_host": "SMTP server", "smtp_port": "Port", "smtp_username": "Username",
-        "smtp_password": "Password", "smtp_use_tls": "TLS", "smtp_use_ssl": "SSL",
+        "imap_host": "IMAP server",
+        "imap_port": "Port",
+        "imap_username": "Username",
+        "imap_password": "Password",
+        "imap_mailbox": "Mailbox",
+        "imap_use_ssl": "SSL",
+        "smtp_host": "SMTP server",
+        "smtp_port": "Port",
+        "smtp_username": "Username",
+        "smtp_password": "Password",
+        "smtp_use_tls": "TLS",
+        "smtp_use_ssl": "SSL",
         "from_address": "From address",
-        "auto_reply_enabled": "Auto-reply", "poll_interval_seconds": "Poll interval (s)",
-        "mark_seen": "Mark as seen", "max_body_chars": "Max body characters",
+        "auto_reply_enabled": "Auto-reply",
+        "poll_interval_seconds": "Poll interval (s)",
+        "mark_seen": "Mark as seen",
+        "max_body_chars": "Max body characters",
         "subject_prefix": "Subject prefix",
-        "verify_dkim": "Verify DKIM", "verify_spf": "Verify SPF",
+        "verify_dkim": "Verify DKIM",
+        "verify_spf": "Verify SPF",
         "allowed_attachment_types": "Allowed attachment types",
         "max_attachment_size": "Max attachment size",
         "max_attachments_per_email": "Max attachments per email",
@@ -593,7 +604,8 @@
       "defaultModel": "default: {{model}}",
       "modelsCount": "{{count}} models",
       "showMore": "Show {{n}} more",
-      "showLess": "Show less"
+      "showLess": "Show less",
+      "localHint": "Local server — no API key needed"
     },
     "mcp": {
       "description": "Connect Model Context Protocol (MCP) servers to give the agent extra tools. Status is read live from the running gateway.",
@@ -1631,7 +1643,9 @@
     }
   },
   "tasks": {
-    "status": { "needs_input": "Needs input" }
+    "status": {
+      "needs_input": "Needs input"
+    }
   },
   "work": {
     "steps": "{{count}} steps",
