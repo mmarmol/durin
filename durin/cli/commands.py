@@ -1951,6 +1951,7 @@ def _run_gateway(
                     mcp_runtime=_McpRuntime(agent),
                     subagent_manager=agent.subagents,
                     channel_manager=channels,
+                    on_config_changed=agent.reload_app_config,
                 )
                 # Static token lives on the websocket channel config.
                 _ws_cfg_u = getattr(config.channels, "websocket", None)

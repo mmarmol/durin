@@ -478,6 +478,20 @@ class AgentLoop:
         self._start_mcp_catalog_refresh()
 
     # ------------------------------------------------------------------
+    # Config hot-reload
+    # ------------------------------------------------------------------
+
+    def reload_app_config(self) -> None:
+        """Re-read config from disk into the live snapshot so persona/preset
+        edits made through the service (webui) take effect without a restart.
+        All readers dereference ``self.app_config``/``self.model_presets``."""
+        from durin.config.loader import get_config_path, load_config
+        cfg = load_config(get_config_path())
+        self.app_config = cfg
+        from durin.agent import model_presets as _preset_helpers
+        self.model_presets = _preset_helpers.configured_model_presets(cfg)
+
+    # ------------------------------------------------------------------
     # Memory background services lifecycle
     # ------------------------------------------------------------------
 

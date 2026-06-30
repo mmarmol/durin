@@ -138,8 +138,13 @@ class PersonaTestResult(Result):
 class PersonasService:
     """Read and mutate SOUL personality files in the workspace."""
 
-    def __init__(self, workspace_resolver: Callable[[], Path]) -> None:
+    def __init__(
+        self,
+        workspace_resolver: Callable[[], Path],
+        on_config_changed: Callable[[], None] | None = None,
+    ) -> None:
         self._workspace = workspace_resolver
+        self._on_config_changed = on_config_changed
 
     def _store(self) -> SoulStore:
         return SoulStore(self._workspace())
@@ -254,6 +259,8 @@ class PersonasService:
             cfg.personas[cmd.name] = PersonaConfig(soul=cmd.soul, model=cmd.model, description=cmd.description)
 
         mutate_config(_m)
+        if self._on_config_changed is not None:
+            self._on_config_changed()
         return PersonaUpsertResult(
             persona=PersonaItem(name=cmd.name, soul=cmd.soul, model=cmd.model, description=cmd.description, builtin=False)
         )
@@ -278,6 +285,8 @@ class PersonasService:
                 c.agents.defaults.persona = None
 
         mutate_config(_m)
+        if self._on_config_changed is not None:
+            self._on_config_changed()
         return PersonaDeleteResult(ok=True)
 
     @route(
@@ -301,6 +310,8 @@ class PersonasService:
             c.agents.defaults.persona = name
 
         mutate_config(_m)
+        if self._on_config_changed is not None:
+            self._on_config_changed()
         return SetDefaultPersonaResult(default=name)
 
     @route(

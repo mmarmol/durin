@@ -10,7 +10,7 @@ functional, dependency-wired registry.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from durin.service.registry import ServiceRegistry
 
@@ -24,6 +24,7 @@ def build_service_registry(
     mcp_runtime: Any = None,
     subagent_manager: Any = None,
     channel_manager: Any = None,
+    on_config_changed: Callable[[], None] | None = None,
 ) -> ServiceRegistry:
     """Construct a registry with all domain services wired to real deps.
 
@@ -86,7 +87,7 @@ def build_service_registry(
     registry.register("channels_runtime", ChannelsRuntimeService(channel_manager=channel_manager))
     registry.register("skills", SkillsService(workspace=_workspace()))
     registry.register("memory", MemoryService(workspace_resolver=_workspace))
-    registry.register("personas", PersonasService(workspace_resolver=_workspace))
+    registry.register("personas", PersonasService(workspace_resolver=_workspace, on_config_changed=on_config_changed))
     registry.register("mcp", McpService(mcp_runtime=mcp_runtime))
     registry.register("health", HealthService())
     registry.register("commands", CommandsService())
