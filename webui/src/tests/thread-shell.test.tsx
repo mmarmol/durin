@@ -561,6 +561,124 @@ describe("ThreadShell", () => {
     await waitFor(() => expect(screen.getByText("live assistant reply")).toBeInTheDocument());
   });
 
+  it("keeps a single row when a live message and canonical history share an id", async () => {
+    // A command output carries a stable server id (also persisted). When a
+    // session_updated triggers a canonical refetch that ALSO contains that id,
+    // the hydrate merge must dedupe by id — the row must not double.
+    const client = makeClient();
+    let historyCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("websocket%3Achat-id/webui-thread")) {
+          historyCalls += 1;
+          if (historyCalls === 1) {
+            return httpJson({ schemaVersion: 4, messages: [] });
+          }
+          return httpJson({
+            schemaVersion: 4,
+            messages: [
+              {
+                id: "msg-1",
+                role: "assistant",
+                content: "persona output row",
+                renderAs: "text",
+                createdAt: 1000,
+              },
+            ],
+          });
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-id")}
+          title="Chat chat-id"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+
+    await act(async () => {
+      client._emitChat("chat-id", {
+        event: "message",
+        chat_id: "chat-id",
+        id: "msg-1",
+        text: "persona output row",
+        render_as: "text",
+      });
+    });
+    await waitFor(() => expect(screen.getByText("persona output row")).toBeInTheDocument());
+    expect(screen.getAllByText("persona output row")).toHaveLength(1);
+
+    await act(async () => {
+      client._emitSessionUpdate("chat-id");
+    });
+
+    await waitFor(() => expect(historyCalls).toBeGreaterThanOrEqual(2));
+    // Exactly one row survives the canonical hydrate — no duplicate, no drop.
+    await waitFor(() => expect(screen.getAllByText("persona output row")).toHaveLength(1));
+  });
+
+  it("keeps a live row the canonical refetch does not yet contain", async () => {
+    // The refetch raced ahead of persistence and lacks the command output. The
+    // live row must survive instead of being wholesale-replaced away.
+    const client = makeClient();
+    let historyCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("websocket%3Achat-race/webui-thread")) {
+          historyCalls += 1;
+          if (historyCalls === 1) {
+            return httpJson({ schemaVersion: 4, messages: [] });
+          }
+          return httpJson(
+            transcriptFromSimpleMessages([{ role: "user", content: "/persona" }]),
+          );
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={session("chat-race")}
+          title="Chat chat-race"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />,
+      ),
+    );
+
+    await act(async () => {
+      client._emitChat("chat-race", {
+        event: "message",
+        chat_id: "chat-race",
+        id: "msg-race",
+        text: "live persona output",
+        render_as: "text",
+      });
+    });
+    await waitFor(() => expect(screen.getByText("live persona output")).toBeInTheDocument());
+
+    await act(async () => {
+      client._emitSessionUpdate("chat-race");
+    });
+
+    await waitFor(() => expect(historyCalls).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(screen.getByText("live persona output")).toBeInTheDocument());
+  });
+
   it("does not refetch thread history on turn_end", async () => {
     const client = makeClient();
     let historyCalls = 0;

@@ -261,6 +261,10 @@ export type InboundEvent =
       event: "message";
       chat_id: string;
       text: string;
+      /** Stable server-assigned id, also persisted into the webui transcript
+       * so the replay builder reuses it. Keying the live row by this id lets a
+       * later canonical refetch merge instead of duplicating the row. */
+      id?: string;
       reply_to?: string;
       media?: string[];
       media_urls?: Array<{ url: string; name?: string }>;

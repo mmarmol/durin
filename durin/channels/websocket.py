@@ -1764,6 +1764,15 @@ class WebSocketChannel(BaseChannel):
             "chat_id": msg.chat_id,
             "text": text,
         }
+        # Stamp a stable server-assigned id on every non-streamed message frame.
+        # Command outputs emit no turn_end, so without a persisted id the live
+        # row (keyed by a client-random UUID) and the replay row (keyed from the
+        # record index) differ — a later refetch wholesale-replaces the array and
+        # the row "disappears" then "reappears". Because this same `payload` dict
+        # is both serialized to the wire and deep-copied into the transcript, the
+        # id is identical in the live frame and the persisted JSONL record, so
+        # the replay builder can reuse it and the two rows merge.
+        payload["id"] = f"msg-{uuid.uuid4().hex}"
         # `render_as: "text"` is set by command handlers (e.g. /status,
         # /memory show, /sessions) that produce pre-formatted plain
         # text with explicit newlines. Without this hint, the WebUI

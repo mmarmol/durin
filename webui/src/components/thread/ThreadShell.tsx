@@ -172,8 +172,18 @@ export function ThreadShell({
         pendingCanonicalHydrateRef.current.delete(chatId);
         appliedHistoryVersionRef.current.set(chatId, historyVersion);
         const normalized = projectWebuiThreadMessages(historical);
-        messageCacheRef.current.set(chatId, normalized);
-        return normalized;
+        // Command outputs now carry a stable server id shared by the live row
+        // and the canonical replay row, so the two share a React key. Append
+        // any live row whose id the canonical replay doesn't yet contain (a
+        // refetch that raced ahead of persistence) instead of discarding it —
+        // and never duplicate a row that canonical already has.
+        const canonicalIds = new Set(normalized.map((m) => m.id));
+        const liveOnly = projectWebuiThreadMessages(prev).filter(
+          (m) => !canonicalIds.has(m.id),
+        );
+        const merged = [...normalized, ...liveOnly];
+        messageCacheRef.current.set(chatId, merged);
+        return merged;
       }
       if (cached && cached.length > 0) return projectWebuiThreadMessages(cached);
       if (historical.length === 0 && prev.length > 0) return projectWebuiThreadMessages(prev);
