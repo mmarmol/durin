@@ -57,12 +57,17 @@ class ResizableSemaphore:
         # (un)limited transitions: rebuild. Rare; only on turning a cap fully off/on.
         if self._limit == 0 or new_limit == 0:
             self._limit = new_limit
-            self._to_reduce = 0
             if new_limit == 0:
+                # -> unlimited: no gating, so any pending shrink is moot.
                 self._sem = None
+                self._to_reduce = 0
             else:
-                # New permits = new cap minus whatever is already in flight.
+                # unlimited -> N: start with the permits still free, and if more
+                # holders are already in flight than the new cap, withhold that
+                # overshoot as they exit so the live cap converges to exactly N
+                # (each such holder must NOT release, or the cap is over-granted).
                 self._sem = asyncio.Semaphore(max(0, new_limit - self._active))
+                self._to_reduce = max(0, self._active - new_limit)
             return
         delta = new_limit - self._limit
         self._limit = new_limit

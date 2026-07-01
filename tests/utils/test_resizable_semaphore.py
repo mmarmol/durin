@@ -92,3 +92,39 @@ def test_lower_limit_applies_as_holders_finish():
         assert run2["max"] == 1
 
     asyncio.run(run())
+
+
+def test_unlimited_to_limited_with_overshoot():
+    # Regression: transitioning from unlimited (0) to a cap LOWER than the
+    # in-flight count must converge to the new cap, not permanently over-admit.
+    async def run():
+        sem = ResizableSemaphore(0)  # unlimited
+        gate = asyncio.Event()
+        started = []
+
+        async def worker(i):
+            async with sem:
+                started.append(i)
+                await gate.wait()
+
+        tasks = [asyncio.create_task(worker(i)) for i in range(5)]
+        await asyncio.sleep(0.01)
+        assert len(started) == 5  # all admitted while unlimited
+        sem.set_limit(2)          # tighten below the 5 in flight
+        assert sem.limit == 2
+        gate.set()
+        await asyncio.gather(*tasks)
+
+        run2 = {"n": 0, "max": 0}
+
+        async def w2():
+            async with sem:
+                run2["n"] += 1
+                run2["max"] = max(run2["max"], run2["n"])
+                await asyncio.sleep(0.02)
+                run2["n"] -= 1
+
+        await asyncio.gather(*(w2() for _ in range(6)))
+        assert run2["max"] == 2  # converged to the new cap
+
+    asyncio.run(run())
