@@ -3772,6 +3772,18 @@
             "default": null,
             "title": "Reasoning Effort"
           },
+          "repeat_penalty": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Repeat Penalty"
+          },
           "supports_audio_input": {
             "default": false,
             "title": "Supports Audio Input",
@@ -3834,6 +3846,30 @@
             ],
             "default": null,
             "title": "Temperature"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Top K"
+          },
+          "top_p": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Top P"
           }
         },
         "required": [
@@ -3889,6 +3925,18 @@
             "default": null,
             "title": "Reasoning Effort"
           },
+          "repeat_penalty": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Repeat Penalty"
+          },
           "supports_audio_input": {
             "anyOf": [
               {
@@ -3936,6 +3984,30 @@
             ],
             "default": null,
             "title": "Temperature"
+          },
+          "top_k": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Top K"
+          },
+          "top_p": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Top P"
           }
         },
         "required": [

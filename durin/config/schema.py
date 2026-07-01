@@ -713,6 +713,9 @@ class ModelPresetConfig(Base):
     temperature: float = 0.1
     reasoning_effort: str | None = None
     request_timeout_s: float | None = None  # Per-model HTTP timeout; overrides DURIN_OPENAI_COMPAT_TIMEOUT_S
+    top_p: float | None = None  # Nucleus sampling (standard OpenAI param); None = don't send
+    top_k: int | None = None  # Top-k sampling; non-standard → sent via extra_body (ollama / LM Studio)
+    repeat_penalty: float | None = None  # Repetition penalty; non-standard → sent via extra_body
     # Pre-emptive compaction trigger ratio: fraction of
     # ``context_window_tokens`` above which the consolidator fires BEFORE
     # the next LLM call instead of waiting for a context overflow 400.
@@ -733,6 +736,9 @@ class ModelPresetConfig(Base):
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             reasoning_effort=self.reasoning_effort,
+            top_p=self.top_p,
+            top_k=self.top_k,
+            repeat_penalty=self.repeat_penalty,
         )
 
 
@@ -895,6 +901,9 @@ class ModelEntry(Base):
     temperature: float | None = None
     reasoning_effort: str | None = None
     request_timeout_s: float | None = None  # Per-model HTTP timeout; overrides DURIN_OPENAI_COMPAT_TIMEOUT_S
+    top_p: float | None = None  # Nucleus sampling (standard OpenAI param); None = don't send
+    top_k: int | None = None  # Top-k sampling; non-standard → sent via extra_body (ollama / LM Studio)
+    repeat_penalty: float | None = None  # Repetition penalty; non-standard → sent via extra_body
 
 
 class ProviderConfig(Base):
@@ -1333,10 +1342,14 @@ class Config(BaseSettings):
         temp = entry.temperature if entry and entry.temperature is not None else d.temperature
         eff = entry.reasoning_effort if entry and entry.reasoning_effort is not None else d.reasoning_effort
         timeout = entry.request_timeout_s if entry and entry.request_timeout_s is not None else None
+        top_p = entry.top_p if entry and entry.top_p is not None else None
+        top_k = entry.top_k if entry and entry.top_k is not None else None
+        repeat_penalty = entry.repeat_penalty if entry and entry.repeat_penalty is not None else None
         return ModelPresetConfig(
             model=d.model, provider=d.provider, max_tokens=mt,
             context_window_tokens=ctx, temperature=temp, reasoning_effort=eff,
             request_timeout_s=timeout,
+            top_p=top_p, top_k=top_k, repeat_penalty=repeat_penalty,
         )
 
     def resolve_preset(self, name: str | None = None) -> ModelPresetConfig:

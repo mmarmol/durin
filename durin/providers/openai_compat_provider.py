@@ -571,6 +571,11 @@ class OpenAICompatProvider(LLMProvider):
         temperature: float,
         reasoning_effort: str | None,
         tool_choice: str | dict[str, Any] | None,
+        *,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        repeat_penalty: float | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         model_name = model or self.default_model
         spec = self._spec
@@ -592,6 +597,10 @@ class OpenAICompatProvider(LLMProvider):
         # reasoning_effort is active.  Only include it when safe.
         if self._supports_temperature(model_name, reasoning_effort):
             kwargs["temperature"] = temperature
+            # top_p is a standard nucleus-sampling param gated the same way as
+            # temperature (the same reasoning models reject it when thinking).
+            if top_p is not None:
+                kwargs["top_p"] = top_p
 
         if spec and getattr(spec, "supports_max_completion_tokens", False):
             kwargs["max_completion_tokens"] = max(1, max_tokens)
@@ -683,6 +692,20 @@ class OpenAICompatProvider(LLMProvider):
             for msg in kwargs["messages"]:
                 if msg.get("role") == "assistant" and "reasoning_content" not in msg:
                     msg["reasoning_content"] = ""
+
+        # Non-standard sampling params ride in extra_body: ollama / LM Studio
+        # read top_k and repeat_penalty there (the OpenAI schema has no
+        # top-level slot for them). Only sent when explicitly configured.
+        if top_k is not None:
+            kwargs.setdefault("extra_body", {})["top_k"] = top_k
+        if repeat_penalty is not None:
+            kwargs.setdefault("extra_body", {})["repeat_penalty"] = repeat_penalty
+
+        # A caller-supplied extra_body (e.g. from the runner's request kwargs)
+        # merges over anything above but under the provider-configured
+        # extra_body below, so user config still wins.
+        if extra_body:
+            kwargs["extra_body"] = _deep_merge(kwargs.get("extra_body", {}), extra_body)
 
         # Merge user-configured extra_body last so it can override or
         # extend provider-specific defaults (e.g. chat_template_kwargs,
@@ -1287,6 +1310,10 @@ class OpenAICompatProvider(LLMProvider):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        repeat_penalty: float | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> LLMResponse:
         try:
             if self._should_use_responses_api(model, reasoning_effort):
@@ -1311,6 +1338,8 @@ class OpenAICompatProvider(LLMProvider):
             kwargs = self._build_kwargs(
                 messages, tools, model, max_tokens, temperature,
                 reasoning_effort, tool_choice,
+                top_p=top_p, top_k=top_k, repeat_penalty=repeat_penalty,
+                extra_body=extra_body,
             )
             return self._parse(await self._client.chat.completions.create(**kwargs))
         except Exception as e:
@@ -1327,6 +1356,10 @@ class OpenAICompatProvider(LLMProvider):
         tool_choice: str | dict[str, Any] | None = None,
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
         on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        repeat_penalty: float | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> LLMResponse:
         idle_timeout_s = int(os.environ.get("DURIN_STREAM_IDLE_TIMEOUT_S", "90"))
         try:
@@ -1375,6 +1408,8 @@ class OpenAICompatProvider(LLMProvider):
             kwargs = self._build_kwargs(
                 messages, tools, model, max_tokens, temperature,
                 reasoning_effort, tool_choice,
+                top_p=top_p, top_k=top_k, repeat_penalty=repeat_penalty,
+                extra_body=extra_body,
             )
             kwargs["stream"] = True
             kwargs["stream_options"] = {"include_usage": True}

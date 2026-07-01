@@ -1354,6 +1354,9 @@ export interface ProviderModelEntry {
   context_window_tokens?: number | null;
   temperature?: number | null;
   reasoning_effort?: string | null;
+  top_p?: number | null;
+  top_k?: number | null;
+  repeat_penalty?: number | null;
 }
 
 export interface ProviderModelParams {
@@ -1361,6 +1364,9 @@ export interface ProviderModelParams {
   context_window_tokens?: number | null;
   temperature?: number | null;
   reasoning_effort?: string | null;
+  top_p?: number | null;
+  top_k?: number | null;
+  repeat_penalty?: number | null;
   supports_vision?: boolean | null;
   supports_audio_input?: boolean | null;
   supports_reasoning?: boolean | null;

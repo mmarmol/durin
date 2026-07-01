@@ -255,6 +255,37 @@ async def test_provider_model_upsert_and_remove(config_path):
     assert "glm-5.2" not in (cfg2.providers.zai_coding_plan.models or {})
 
 
+async def test_provider_model_upsert_persists_sampling_params(config_path, monkeypatch):
+    import durin.providers.provider_catalog as pc
+    from durin.config.loader import load_config
+    from durin.providers.provider_catalog import ModelInfo
+    from durin.service.config import ProviderModelsQuery, ProviderModelUpsertCommand
+
+    monkeypatch.setattr(
+        pc, "_load_index",
+        lambda: {"zai_coding_plan": [ModelInfo(id="glm-5.2")]},
+    )
+    await ConfigService().provider_model_upsert(
+        ProviderModelUpsertCommand(
+            provider="zai_coding_plan", model="glm-5.2",
+            top_p=0.9, top_k=20, repeat_penalty=1.05,
+        ),
+        LOCAL,
+    )
+    entry = load_config(config_path).providers.zai_coding_plan.models["glm-5.2"]
+    assert entry.top_p == 0.9
+    assert entry.top_k == 20
+    assert entry.repeat_penalty == 1.05
+
+    res = await ConfigService().provider_models_route(
+        ProviderModelsQuery(provider="zai_coding_plan"), LOCAL
+    )
+    glm = next(m for m in res.models if m.id == "glm-5.2")
+    assert glm.top_p == 0.9
+    assert glm.top_k == 20
+    assert glm.repeat_penalty == 1.05
+
+
 async def test_provider_model_upsert_requires_write_scope():
     from durin.service.config import ProviderModelUpsertCommand
 

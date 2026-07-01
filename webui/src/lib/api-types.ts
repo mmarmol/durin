@@ -3468,6 +3468,11 @@ export interface components {
              */
             reasoning_effort: string | null;
             /**
+             * Repeat Penalty
+             * @default null
+             */
+            repeat_penalty: number | null;
+            /**
              * Supports Audio Input
              * @default false
              */
@@ -3502,6 +3507,16 @@ export interface components {
              * @default null
              */
             temperature: number | null;
+            /**
+             * Top K
+             * @default null
+             */
+            top_k: number | null;
+            /**
+             * Top P
+             * @default null
+             */
+            top_p: number | null;
         };
         /** ProviderModelUpsertCommand */
         ProviderModelUpsertCommand: {
@@ -3525,6 +3540,11 @@ export interface components {
              */
             reasoning_effort: string | null;
             /**
+             * Repeat Penalty
+             * @default null
+             */
+            repeat_penalty: number | null;
+            /**
              * Supports Audio Input
              * @default null
              */
@@ -3544,6 +3564,16 @@ export interface components {
              * @default null
              */
             temperature: number | null;
+            /**
+             * Top K
+             * @default null
+             */
+            top_k: number | null;
+            /**
+             * Top P
+             * @default null
+             */
+            top_p: number | null;
         };
         /** ProviderModelsQuery */
         ProviderModelsQuery: {

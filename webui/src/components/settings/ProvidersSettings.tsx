@@ -106,6 +106,9 @@ interface DraftParams {
   max_tokens: string;
   temperature: string;
   reasoning_effort: string;
+  top_p: string;
+  top_k: string;
+  repeat_penalty: string;
   supports_vision: CapOverride;
   supports_audio_input: CapOverride;
   supports_reasoning: CapOverride;
@@ -128,6 +131,9 @@ function toDraft(m: ProviderModelEntry): DraftParams {
     max_tokens: m.max_tokens != null ? String(m.max_tokens) : "",
     temperature: m.temperature != null ? String(m.temperature) : "",
     reasoning_effort: m.reasoning_effort ?? "",
+    top_p: m.top_p != null ? String(m.top_p) : "",
+    top_k: m.top_k != null ? String(m.top_k) : "",
+    repeat_penalty: m.repeat_penalty != null ? String(m.repeat_penalty) : "",
     // Seed the tri-state selectors from the RAW override (null = inherit), not
     // the effective capability — otherwise a catalog "false" pre-selects "no"
     // as if the user had set it, and any save would pin a phantom override.
@@ -475,6 +481,9 @@ function ModelsSection({
         max_tokens: parseNum(draft.max_tokens),
         temperature: parseNum(draft.temperature),
         reasoning_effort: draft.reasoning_effort.trim() || null,
+        top_p: parseNum(draft.top_p),
+        top_k: parseNum(draft.top_k),
+        repeat_penalty: parseNum(draft.repeat_penalty),
         supports_vision: fromCapOverride(draft.supports_vision),
         supports_audio_input: fromCapOverride(draft.supports_audio_input),
         supports_reasoning: fromCapOverride(draft.supports_reasoning),
@@ -654,6 +663,21 @@ function ModelRow(props: ModelRowProps) {
               label={t("settings.providerModels.reasoningEffort")}
               value={draft.reasoning_effort}
               onChange={(v) => props.onChange({ ...draft, reasoning_effort: v })}
+            />
+            <ParamField
+              label={t("settings.providerModels.topP")}
+              value={draft.top_p}
+              onChange={(v) => props.onChange({ ...draft, top_p: v })}
+            />
+            <ParamField
+              label={t("settings.providerModels.topK")}
+              value={draft.top_k}
+              onChange={(v) => props.onChange({ ...draft, top_k: v })}
+            />
+            <ParamField
+              label={t("settings.providerModels.repeatPenalty")}
+              value={draft.repeat_penalty}
+              onChange={(v) => props.onChange({ ...draft, repeat_penalty: v })}
             />
             <CapField
               label={t("settings.providerModels.capOverrideVision")}

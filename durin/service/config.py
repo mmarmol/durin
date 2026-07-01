@@ -142,6 +142,11 @@ class ProviderModelEntry(Result):
     context_window_tokens: int | None = None
     temperature: float | None = None
     reasoning_effort: str | None = None
+    # Sampling params (None = inherit / don't send). top_p is standard;
+    # top_k / repeat_penalty are non-standard (sent via extra_body).
+    top_p: float | None = None
+    top_k: int | None = None
+    repeat_penalty: float | None = None
 
 
 class ProviderModelsResult(Result):
@@ -156,6 +161,9 @@ class ProviderModelUpsertCommand(Command):
     context_window_tokens: int | None = None
     temperature: float | None = None
     reasoning_effort: str | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    repeat_penalty: float | None = None
     supports_vision: bool | None = None
     supports_audio_input: bool | None = None
     supports_reasoning: bool | None = None
@@ -406,6 +414,9 @@ class ConfigService:
                     context_window_tokens=getattr(ov, "context_window_tokens", None),
                     temperature=getattr(ov, "temperature", None),
                     reasoning_effort=getattr(ov, "reasoning_effort", None),
+                    top_p=getattr(ov, "top_p", None),
+                    top_k=getattr(ov, "top_k", None),
+                    repeat_penalty=getattr(ov, "repeat_penalty", None),
                 )
             )
         for mid, ov in configured.items():  # user customs not in the catalog
@@ -425,6 +436,9 @@ class ConfigService:
                     context_window_tokens=ov.context_window_tokens,
                     temperature=ov.temperature,
                     reasoning_effort=ov.reasoning_effort,
+                    top_p=ov.top_p,
+                    top_k=ov.top_k,
+                    repeat_penalty=ov.repeat_penalty,
                 )
             )
         out.sort(key=lambda e: e.id)
@@ -456,6 +470,9 @@ class ConfigService:
             context_window_tokens=cmd.context_window_tokens,
             temperature=cmd.temperature,
             reasoning_effort=cmd.reasoning_effort,
+            top_p=cmd.top_p,
+            top_k=cmd.top_k,
+            repeat_penalty=cmd.repeat_penalty,
         )
         # The three tri-state fields carry the COMPLETE desired override for this
         # model's vision/audio/reasoning (the editor always sends all three): a
