@@ -67,6 +67,7 @@ import {
   type ModelTestResult,
 } from "@/lib/api";
 import { ChannelsSettings } from "@/components/settings/ChannelsSettings";
+import { ConcurrencySettings } from "@/components/settings/ConcurrencySettings";
 import { ConfigSettings } from "@/components/settings/ConfigSettings";
 import { CronSettings } from "@/components/settings/CronSettings";
 import { LogsSettings } from "@/components/settings/LogsSettings";
@@ -103,6 +104,7 @@ type SettingsSectionKey =
   | "cron"
   | "secrets"
   | "advanced"
+  | "concurrency"
   | "logs";
 type ByokPaneKey = "llm" | "web-search";
 
@@ -425,6 +427,8 @@ export function SettingsView({
                 <SecretsSettings token={token} />
               ) : activeSection === "advanced" ? (
                 <ConfigSettings token={token} />
+              ) : activeSection === "concurrency" ? (
+                <ConcurrencySettings token={token} />
               ) : activeSection === "logs" ? (
                 <LogsSettings token={token} />
               ) : activeSection === "providers" ? (
@@ -500,6 +504,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "cron", icon: Clock },
   { key: "secrets", icon: Lock },
   { key: "advanced", icon: Sliders },
+  { key: "concurrency", icon: Cpu },
   { key: "logs", icon: ScrollText },
 ] as const;
 
