@@ -2,15 +2,27 @@
 
 import asyncio
 import inspect
+import logging
 import os
 
 from durin.bus.events import InboundMessage, OutboundMessage
+
+logger = logging.getLogger(__name__)
 
 # Bound the bus queues so a flooding or stuck channel cannot grow memory without
 # limit. A bounded asyncio.Queue makes ``put()`` await when full — lossless
 # backpressure on the producing channel rather than a silent unbounded backlog.
 # Generous default; ``DURIN_BUS_MAXSIZE=0`` opts out (unbounded, historical).
-_DEFAULT_BUS_MAXSIZE = int(os.environ.get("DURIN_BUS_MAXSIZE", "10000"))
+def _default_bus_maxsize() -> int:
+    raw = os.environ.get("DURIN_BUS_MAXSIZE", "10000")
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("invalid DURIN_BUS_MAXSIZE=%r; using default 10000", raw)
+        return 10000
+
+
+_DEFAULT_BUS_MAXSIZE = _default_bus_maxsize()
 
 
 class MessageBus:
