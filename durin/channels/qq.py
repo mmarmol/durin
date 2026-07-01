@@ -442,7 +442,7 @@ class QQChannel(BaseChannel):
                 return None, None
 
         # Remote URL
-        ok, err = validate_url_target(media_ref)
+        ok, err = await asyncio.to_thread(validate_url_target, media_ref)
         if not ok:
             self.logger.warning("outbound media URL validation failed url={} err={}", media_ref, err)
             return None, None
