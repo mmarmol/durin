@@ -135,10 +135,18 @@ A turn is the whole `RESTORE..SAVE` span of handling one inbound message. The
 5. **Save under the save lock.** At turn end, `SessionManager.save()` acquires
    `cross_process_lock(<key>.jsonl)` — note the *different* lock file,
    `<key>.jsonl.lock`, distinct from the turn lease's `<key>.turn.lock`. Under
-   it, the write is one atomic unit: write a temp file, `os.replace()` it over
-   the `.jsonl`, mirror derived metadata into the `.meta.json` sidecar,
-   regenerate the navigable `<key>.md` view, and incrementally FTS-index the new
-   turns. If anything fails the temp file is removed and the original is intact.
+   it, the durable write is one atomic unit: write a temp file, `os.replace()`
+   it over the `.jsonl`, and mirror derived metadata into the `.meta.json`
+   sidecar. If anything fails the temp file is removed and the original is
+   intact. The derived, non-durable tail — regenerating the navigable
+   `<key>.md` view and incrementally FTS-indexing the new turns — is a full
+   O(session) re-render, so on the per-turn hot path the loop **defers** it:
+   `save(reindex=False)` skips the tail and the loop schedules a *coalesced
+   background reindex* (`SessionManager.reindex_session()` run on a worker thread
+   via `asyncio.to_thread`, under the same `<key>.jsonl.lock`), collapsing rapid
+   successive saves into a single render so the event loop is never blocked on
+   the markdown render. Out-of-turn savers (cron, session rename, webui
+   title-generation) keep the inline tail — `save()` defaults to `reindex=True`.
 
 6. **Release.** The lease releases in the loop's `finally`; the save lock
    releases when `save()` returns. If the process dies mid-turn, the OS releases
