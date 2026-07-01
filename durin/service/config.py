@@ -465,6 +465,12 @@ class ConfigService:
         pc = getattr(cfg.providers, cmd.provider, None)
         if pc is None:
             raise ValidationFailedError(f"unknown provider {cmd.provider!r}")
+        # Full-state upsert (PUT semantics): the command carries the complete
+        # desired per-model state. Any field left None clears that param — the
+        # ModelEntry is rebuilt from the command, and the three editor-managed
+        # capability fields below follow the same rule. The webui always sends
+        # the full draft; a programmatic caller must likewise send every field
+        # it wants to keep, not a partial patch.
         pc.models[cmd.model] = ModelEntry(
             max_tokens=cmd.max_tokens,
             context_window_tokens=cmd.context_window_tokens,

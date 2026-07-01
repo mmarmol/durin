@@ -315,11 +315,15 @@ providers:
 ```
 
 Per-model entries (`ModelEntry`) hold `max_tokens`, `context_window_tokens`,
-`temperature`, `reasoning_effort`, and `request_timeout_s` — each `null` inherits
-the catalog value, then `agents.defaults`. `request_timeout_s` overrides the
-per-request LLM timeout for that model (default `DURIN_OPENAI_COMPAT_TIMEOUT_S`,
-300s); raise it for slow local models (a large-context ollama/LM Studio model can
-take minutes to first token). The Settings webui edits these under each provider.
+`temperature`, `reasoning_effort`, `request_timeout_s`, and the sampling params
+`top_p` / `top_k` / `repeat_penalty` — each `null` inherits the catalog value,
+then `agents.defaults`. `request_timeout_s` overrides the per-request LLM timeout
+for that model (default `DURIN_OPENAI_COMPAT_TIMEOUT_S`, 300s); raise it for slow
+local models (a large-context ollama/LM Studio model can take minutes to first
+token). `top_p` is a standard param; `top_k` and `repeat_penalty` are non-standard
+and ride in the request `extra_body` (ollama / LM Studio read them there), under
+any provider-level `extra_body`. The Settings webui edits these under each provider
+(except `request_timeout_s`, which is config-file only).
 
 **Capability overrides**
 
