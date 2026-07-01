@@ -17,6 +17,7 @@ def test_reload_app_config_picks_up_new_persona(tmp_path, monkeypatch):
     loop.model_presets = {}
     loop._interactive_lane = ResizableSemaphore(4, name="interactive")
     loop._ceiling = ResizableSemaphore(12, name="ceiling")
+    loop.subagents = SimpleNamespace(max_concurrent_subagents=cfg.agents.defaults.max_concurrent_subagents)
     assert "qa_persona" not in loop.app_config.persona_names()
     # mutate config on disk
     cfg.personas["qa_persona"] = PersonaConfig(soul="default", model=None, description="qa")
@@ -39,6 +40,7 @@ def test_apply_default_model_live_reapplies_new_default(tmp_path, monkeypatch):
     loop.model_presets = {}
     loop._interactive_lane = ResizableSemaphore(4, name="interactive")
     loop._ceiling = ResizableSemaphore(12, name="ceiling")
+    loop.subagents = SimpleNamespace(max_concurrent_subagents=cfg.agents.defaults.max_concurrent_subagents)
 
     applied: list[str] = []
     loop.set_model_preset = lambda name, *, publish_update=True: applied.append(name)

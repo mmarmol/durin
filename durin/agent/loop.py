@@ -506,6 +506,7 @@ class AgentLoop:
         _env = os.environ.get("DURIN_MAX_CONCURRENT_REQUESTS")
         self._interactive_lane.set_limit(int(_env) if _env is not None else _d.max_concurrent_interactive)
         self._ceiling.set_limit(_d.concurrency_ceiling)
+        self.subagents.max_concurrent_subagents = _d.max_concurrent_subagents
         self.mark_concurrency_dirty()
 
     # ------------------------------------------------------------------
