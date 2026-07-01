@@ -6,7 +6,7 @@ import asyncio
 import dataclasses
 import os
 import time
-from contextlib import nullcontext, suppress
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -392,6 +392,15 @@ class AgentLoop:
         # shared by this loop, so tools resolve the active state via contextvars.
         self._file_state_store = FileStateStore()
         self.runner = AgentRunner(provider)
+
+        from durin.utils.resizable_semaphore import ResizableSemaphore
+
+        _defaults = getattr(getattr(app_config, "agents", None), "defaults", None) or AgentDefaults()
+        _env = os.environ.get("DURIN_MAX_CONCURRENT_REQUESTS")
+        _interactive = int(_env) if _env is not None else _defaults.max_concurrent_interactive
+        self._interactive_lane = ResizableSemaphore(_interactive, name="interactive")
+        self._ceiling = ResizableSemaphore(_defaults.concurrency_ceiling, name="ceiling")
+
         self.subagents = SubagentManager(
             provider=provider,
             workspace=workspace,
@@ -404,6 +413,7 @@ class AgentLoop:
             max_iterations=self.max_iterations,
             llm_wall_timeout_for_session=lambda sk: runner_wall_llm_timeout_s(self.sessions, sk),
             sessions=self.sessions,
+            ceiling=self._ceiling,
         )
         self._unified_session = unified_session
         self._max_messages = max_messages if max_messages > 0 else 120
@@ -432,11 +442,6 @@ class AgentLoop:
         # saves (user message + assistant turn) into a single O(N) render.
         self._reindex_dirty: set[str] = set()
         self._reindex_inflight: set[str] = set()
-        # DURIN_MAX_CONCURRENT_REQUESTS: <=0 means unlimited; default 3.
-        _max = int(os.environ.get("DURIN_MAX_CONCURRENT_REQUESTS", "3"))
-        self._concurrency_gate: asyncio.Semaphore | None = (
-            asyncio.Semaphore(_max) if _max > 0 else None
-        )
         self.consolidator = Consolidator(
             store=self.context.memory,
             provider=provider,
@@ -495,6 +500,10 @@ class AgentLoop:
         cfg = load_config(get_config_path())
         self.app_config = cfg
         self.model_presets = preset_helpers.configured_model_presets(cfg)
+        _d = cfg.agents.defaults
+        _env = os.environ.get("DURIN_MAX_CONCURRENT_REQUESTS")
+        self._interactive_lane.set_limit(int(_env) if _env is not None else _d.max_concurrent_interactive)
+        self._ceiling.set_limit(_d.concurrency_ceiling)
 
     def apply_default_model_live(self) -> None:
         """Re-read config and apply the new ``agents.defaults`` model/provider to
@@ -1761,7 +1770,6 @@ class AgentLoop:
         if session_key != msg.session_key:
             msg = dataclasses.replace(msg, session_key_override=session_key)
         lock = self._session_locks.setdefault(session_key, asyncio.Lock())
-        gate = self._concurrency_gate or nullcontext()
 
         if pending is None:
             pending = asyncio.Queue(maxsize=20)
@@ -1769,7 +1777,7 @@ class AgentLoop:
 
         session_path = self.sessions._get_session_path(session_key)
         try:
-            async with lock, gate:
+            async with lock, self._interactive_lane, self._ceiling:
                 try:
                     turn_lease_cm = session_turn_lease(session_path)
                     await turn_lease_cm.__aenter__()

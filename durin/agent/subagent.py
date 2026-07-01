@@ -4,7 +4,7 @@ import asyncio
 import json
 import time
 import uuid
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -130,11 +130,18 @@ class SubagentManager:
         max_iterations: int | None = None,
         llm_wall_timeout_for_session: Callable[[str | None], float | None] | None = None,
         sessions: Any | None = None,
+        ceiling: Any | None = None,
     ):
         defaults = AgentDefaults()
         self.provider = provider
         self.workspace = workspace
         self.bus = bus
+        # Shared global concurrency ceiling (ResizableSemaphore), owned by the
+        # parent AgentLoop. Acquired around each subagent's LLM run so
+        # subagents count against the same cap as interactive turns instead
+        # of bypassing it. ``None`` in tests/callers that don't wire one —
+        # falls back to no gating.
+        self._ceiling = ceiling
         # Optional SessionManager — when provided, subagent inherits the
         # parent session's agent_mode. Without it, falls back to a static
         # EXPLORE_MODE (the safe-but-stricter default).
@@ -302,26 +309,32 @@ class SubagentManager:
             # the provider here makes this in-flight subagent turn immune to
             # that mutation, symmetric with the AgentLoop fix.
             subagent_provider = self.runner.provider
-            result = await self.runner.run(AgentRunSpec(
-                initial_messages=messages,
-                tools=tools,
-                model=self.model,
-                provider=subagent_provider,
-                max_iterations=self.max_iterations,
-                max_tool_result_chars=self.max_tool_result_chars,
-                hook=_SubagentHook(task_id, status, bus=self.bus, origin=origin),
-                max_iterations_message="Task completed but no final response was generated.",
-                error_message=None,
-                fail_on_tool_error=True,
-                checkpoint_callback=_on_checkpoint,
-                session_key=sess_key,
-                llm_timeout_s=llm_timeout,
-                mode_provider=_subagent_mode_provider,
-                # Subagents are read/search-heavy (Explore, research). Run
-                # independent concurrency-safe tool calls in parallel, same as
-                # the main loop; the runner keeps mutations serial.
-                concurrent_tools=True,
-            ))
+            # Subagents are fire-and-forget background tasks (spawned via
+            # asyncio.create_task, never awaited by the parent turn), so
+            # acquiring the shared ceiling here cannot deadlock a parent that's
+            # holding it — the parent has already returned by this point.
+            _gate = self._ceiling if self._ceiling is not None else nullcontext()
+            async with _gate:
+                result = await self.runner.run(AgentRunSpec(
+                    initial_messages=messages,
+                    tools=tools,
+                    model=self.model,
+                    provider=subagent_provider,
+                    max_iterations=self.max_iterations,
+                    max_tool_result_chars=self.max_tool_result_chars,
+                    hook=_SubagentHook(task_id, status, bus=self.bus, origin=origin),
+                    max_iterations_message="Task completed but no final response was generated.",
+                    error_message=None,
+                    fail_on_tool_error=True,
+                    checkpoint_callback=_on_checkpoint,
+                    session_key=sess_key,
+                    llm_timeout_s=llm_timeout,
+                    mode_provider=_subagent_mode_provider,
+                    # Subagents are read/search-heavy (Explore, research). Run
+                    # independent concurrency-safe tool calls in parallel, same as
+                    # the main loop; the runner keeps mutations serial.
+                    concurrent_tools=True,
+                ))
             status.phase = "done"
             status.stop_reason = result.stop_reason
             status.ended_at = time.monotonic()
