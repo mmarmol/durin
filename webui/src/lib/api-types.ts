@@ -3510,6 +3510,21 @@ export interface components {
              */
             reasoning_effort: string | null;
             /**
+             * Supports Audio Input
+             * @default null
+             */
+            supports_audio_input: boolean | null;
+            /**
+             * Supports Reasoning
+             * @default null
+             */
+            supports_reasoning: boolean | null;
+            /**
+             * Supports Vision
+             * @default null
+             */
+            supports_vision: boolean | null;
+            /**
              * Temperature
              * @default null
              */
