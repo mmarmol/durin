@@ -168,6 +168,44 @@ async def test_save_offloads_blocking_lint_and_commit(tmp_path: Path, monkeypatc
     assert seen["thread"] is True
 
 
+async def test_resolve_offloads_blocking_network(tmp_path: Path, monkeypatch) -> None:
+    import durin.agent.skills_store as ss
+    import durin.service.skills as sksvc
+
+    ws = _make_workspace(tmp_path)
+    svc = _svc(ws)
+    monkeypatch.setattr(ss, "web_import_resolve", lambda w, s: (200, {"candidates": []}))
+    seen = {"thread": False}
+    real_to_thread = asyncio.to_thread
+
+    async def spy(fn, *args, **kwargs):
+        seen["thread"] = True
+        return await real_to_thread(fn, *args, **kwargs)
+
+    monkeypatch.setattr(sksvc.asyncio, "to_thread", spy)
+    await svc.resolve(SkillsResolveQuery(source="clawhub:demo"), Principal.local())
+    assert seen["thread"] is True
+
+
+async def test_github_token_test_offloads_blocking_network(tmp_path: Path, monkeypatch) -> None:
+    import durin.agent.skills_store as ss
+    import durin.service.skills as sksvc
+
+    ws = _make_workspace(tmp_path)
+    svc = _svc(ws)
+    monkeypatch.setattr(ss, "web_github_token_test", lambda name: (200, {"ok": True}))
+    seen = {"thread": False}
+    real_to_thread = asyncio.to_thread
+
+    async def spy(fn, *args, **kwargs):
+        seen["thread"] = True
+        return await real_to_thread(fn, *args, **kwargs)
+
+    monkeypatch.setattr(sksvc.asyncio, "to_thread", spy)
+    await svc.github_token_test(GithubTokenTestQuery(secret="tok"), Principal.local())
+    assert seen["thread"] is True
+
+
 async def test_save_requires_write_scope(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     svc = _svc(ws)
