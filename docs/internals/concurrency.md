@@ -108,10 +108,13 @@ No path acquires these in the reverse direction, so the graph has no cycle.
 A turn is the whole `RESTORE..SAVE` span of handling one inbound message. The
 [agent loop](loop.md) serializes it like this:
 
-1. **In-process gate first.** `_dispatch` acquires a per-session
-   `asyncio.Lock` from `self._session_locks`. This is fast and does no I/O; it
-   guarantees that within one process, two turns on the same session run one at a
-   time.
+1. **In-process gates first.** `_dispatch` acquires, in the same `async with`, a
+   per-session `asyncio.Lock` from `self._session_locks`, the interactive-lane
+   `ResizableSemaphore`, and the global-ceiling `ResizableSemaphore` (shared with
+   `SubagentManager`, so subagents count against the same ceiling — see
+   [loop](loop.md)). None of these do I/O; the session lock guarantees that
+   within one process, two turns on the same session run one at a time, while the
+   two semaphores bound how many turns and subagents run at once process-wide.
 
 2. **Cross-process turn lease.** Still inside that lock, the loop enters
    `session_turn_lease(session_path)`

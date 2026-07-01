@@ -107,7 +107,7 @@ flowchart LR
     RunLoop -->|"session has a<br/>pending queue?"| Inject["route to<br/>_pending_queues[key]"]
     RunLoop -->|"new session turn"| NewTask["register _pending_queues[key]<br/>then create_task(_dispatch)"]
     NewTask --> Disp["_dispatch(msg, pending)"]
-    Disp --> Lock["asyncio.Lock[session_key]<br/>+ concurrency gate (semaphore)"]
+    Disp --> Lock["asyncio.Lock[session_key]<br/>+ interactive lane + ceiling<br/>(ResizableSemaphore x2)"]
     Lock --> Lease["turn lease<br/>(.turn.lock flock)"]
     Lease --> SM[per-turn state machine]
     Inject -.->|"drained by runner<br/>injection callback"| SM
@@ -131,7 +131,7 @@ sequenceDiagram
     participant ST as state machine
     participant C as Consolidator
 
-    D->>D: acquire asyncio.Lock + concurrency gate
+    D->>D: acquire asyncio.Lock + interactive lane + ceiling
     D->>L: acquire turn lease (inside the lock)
     L-->>D: held (or TimeoutError -> "session busy" notice)
     D->>SM: reload(session_key)  (load-per-turn from disk)
@@ -173,14 +173,28 @@ override.
 ### The turn: `_dispatch`
 
 `_dispatch` is where serialization happens. It acquires, in order, the
-per-`session_key` `asyncio.Lock`, the concurrency gate (a semaphore sized by
-`DURIN_MAX_CONCURRENT_REQUESTS`), and then — *inside* the lock — the cross-process
-turn lease via `session_turn_lease`. The lease is acquired inside the lock so an
-in-process turn never even attempts the flock while a sibling task holds the
-same lock; if the lease times out (another *process* holds the session), the
-turn returns early with a "session is busy" notice. With the lease held, it
-calls `sessions.reload(session_key)` — load-per-turn — so the turn always sees
-the freshest on-disk state rather than a stale cached `Session`.
+per-`session_key` `asyncio.Lock`, the **interactive lane** (`self._interactive_lane`,
+a `ResizableSemaphore` sized by `agents.defaults.max_concurrent_interactive` —
+`DURIN_MAX_CONCURRENT_REQUESTS` overrides it live), the **global ceiling**
+(`self._ceiling`, sized by `agents.defaults.concurrency_ceiling`), and then —
+*inside* the lock — the cross-process turn lease via `session_turn_lease`. The
+lease is acquired inside the lock so an in-process turn never even attempts the
+flock while a sibling task holds the same lock; if the lease times out (another
+*process* holds the session), the turn returns early with a "session is busy"
+notice. With the lease held, it calls `sessions.reload(session_key)` —
+load-per-turn — so the turn always sees the freshest on-disk state rather than
+a stale cached `Session`.
+
+The ceiling is shared with `SubagentManager`, which acquires it around each
+subagent's LLM run (`_run_subagent`) — so subagents count against the same
+global cap as interactive turns rather than running unbounded alongside them.
+Subagents remain fire-and-forget: `spawn()` schedules `_run_subagent` via
+`asyncio.create_task` and returns immediately, so a parent turn holding the
+lane/ceiling while spawning a subagent never waits on that subagent — only the
+subagent's own later ceiling acquire can block, which resolves once any
+in-flight turn releases its slot. Both limiters support `set_limit()` for a live
+resize on `reload_app_config` (config hot-reload), independent of a process
+restart. See [Concurrency](concurrency.md) for the full lock-ordering picture.
 
 It then runs `_process_message`, publishes the result, and in a `finally` block
 releases the lease and re-publishes any messages still sitting in the pending
@@ -542,6 +556,9 @@ Loop-relevant `agents.defaults.*` keys (see
 | `plan_stall_turns` | `8` | Turns of no todo progress on an executing plan before a "reassess" reminder (`0` disables). |
 | `agents.defaults.persona` | `null` | Default persona name for interactive conversations. Overridden per-conversation via `/persona`. |
 | `context_window_tokens`, `context_block_limit`, `max_tool_result_chars` | — | Token/size budgets used when building and persisting. |
+| `max_concurrent_interactive` | `4` | Interactive-lane cap: human-facing turns in flight at once, across all sessions. `DURIN_MAX_CONCURRENT_REQUESTS` overrides this at runtime. |
+| `concurrency_ceiling` | `12` | Global ceiling: total in-flight turns *and* subagents across all lanes (see [Concurrency](concurrency.md)). |
+| `max_concurrent_subagents` | `3` | Process-wide subagent-lane cap, checked at spawn time (`spawn.py`); independent of the global ceiling above. |
 
 ### Environment knobs
 
@@ -549,7 +566,7 @@ Read at runtime (mostly in the runner / loop):
 
 | Variable | Default | Effect |
 |---|---|---|
-| `DURIN_MAX_CONCURRENT_REQUESTS` | `3` | Semaphore size for cross-session concurrency (`0` = unlimited). |
+| `DURIN_MAX_CONCURRENT_REQUESTS` | unset | Overrides `max_concurrent_interactive` (the interactive lane's cap) when set; `0` or negative = unlimited. |
 | `DURIN_LLM_TIMEOUT_S` | `300` | Wall-clock outer timeout per LLM request. |
 | `DURIN_STREAM_IDLE_TIMEOUT_S` | — | Provider idle timeout for streaming (overrides wall-clock when set). |
 | `DURIN_COMPACTION_GRACE_S` | `30` | One-shot deadline extension when consolidation is in flight. |

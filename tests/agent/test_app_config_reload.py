@@ -10,9 +10,13 @@ def test_reload_app_config_picks_up_new_persona(tmp_path, monkeypatch):
     cfg = load_config(get_config_path())
     from durin.agent.loop import AgentLoop
 
+    from durin.utils.resizable_semaphore import ResizableSemaphore
+
     loop = AgentLoop.__new__(AgentLoop)  # construct bare; only app_config matters here
     loop.app_config = cfg
     loop.model_presets = {}
+    loop._interactive_lane = ResizableSemaphore(4, name="interactive")
+    loop._ceiling = ResizableSemaphore(12, name="ceiling")
     assert "qa_persona" not in loop.app_config.persona_names()
     # mutate config on disk
     cfg.personas["qa_persona"] = PersonaConfig(soul="default", model=None, description="qa")
@@ -28,9 +32,13 @@ def test_apply_default_model_live_reapplies_new_default(tmp_path, monkeypatch):
     cfg = load_config(get_config_path())
     from durin.agent.loop import AgentLoop
 
+    from durin.utils.resizable_semaphore import ResizableSemaphore
+
     loop = AgentLoop.__new__(AgentLoop)  # bare; only the fields below are touched
     loop.app_config = cfg
     loop.model_presets = {}
+    loop._interactive_lane = ResizableSemaphore(4, name="interactive")
+    loop._ceiling = ResizableSemaphore(12, name="ceiling")
 
     applied: list[str] = []
     loop.set_model_preset = lambda name, *, publish_update=True: applied.append(name)
