@@ -763,8 +763,7 @@ class WebFetchTool(Tool):
                 r = await client.get(url, headers={"User-Agent": self.user_agent})
                 r.raise_for_status()
 
-            from durin.security.network import validate_resolved_url
-            redir_ok, redir_err = validate_resolved_url(str(r.url))
+            redir_ok, redir_err = await validate_resolved_url_async(str(r.url))
             if not redir_ok:
                 return json.dumps({"error": f"Redirect blocked: {redir_err}", "url": url}, ensure_ascii=False)
 
