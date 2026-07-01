@@ -475,3 +475,35 @@ class TestReadSuggestionOnMiss:
         assert "File not found" in result
         # No suggestion possible — parent doesn't exist
         assert "Did you mean" not in result
+
+
+class TestReadVerbatim:
+    """`verbatim=True` returns the file's real content (for programmatic
+    consumers like execute_code scripts) instead of the numbered display view."""
+
+    @pytest.fixture()
+    def tool(self, tmp_path):
+        return ReadFileTool(workspace=tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_verbatim_returns_unnumbered_content(self, tool, tmp_path):
+        f = tmp_path / "x.json"
+        f.write_text('{"a": 1}\n', encoding="utf-8")
+        numbered = await tool.execute(path=str(f))
+        verbatim = await tool.execute(path=str(f), verbatim=True)
+        # Default view decorates with line numbers + footer.
+        assert numbered.startswith("1| ")
+        assert "End of file" in numbered
+        # Verbatim is the file's exact text — parseable as JSON.
+        assert verbatim == '{"a": 1}\n'
+
+    @pytest.mark.asyncio
+    async def test_verbatim_bypasses_dedup(self, tool, tmp_path):
+        f = tmp_path / "data.txt"
+        f.write_text("real-content\n", encoding="utf-8")
+        first = await tool.execute(path=str(f), verbatim=True)
+        second = await tool.execute(path=str(f), verbatim=True)
+        # A programmatic reader must get real content every time, never the
+        # "unchanged" stub the display path returns on repeat reads.
+        assert first == "real-content\n"
+        assert second == "real-content\n"

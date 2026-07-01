@@ -75,6 +75,19 @@ function resultText(result: unknown): string {
   return String(result);
 }
 
+/** Parse a tool result that may arrive as a JSON string or an object. */
+function parseJsonObject(result: unknown): Record<string, unknown> | null {
+  let obj: unknown = result;
+  if (typeof result === "string") {
+    try {
+      obj = JSON.parse(result);
+    } catch {
+      return null;
+    }
+  }
+  return obj && typeof obj === "object" ? (obj as Record<string, unknown>) : null;
+}
+
 interface ToolCallBlockProps {
   event: ToolProgressEvent;
 }
@@ -366,7 +379,7 @@ interface BodyLine {
 const URL_RE = /(https?:\/\/[^\s)>\]]+)/;
 
 /** Build the per-tool body as a list of (text, className) lines. */
-function renderBodyLines(ev: ToolProgressEvent): BodyLine[] {
+export function renderBodyLines(ev: ToolProgressEvent): BodyLine[] {
   const name = ev.name || "";
 
   if (name === "edit_file") {
@@ -402,6 +415,32 @@ function renderBodyLines(ev: ToolProgressEvent): BodyLine[] {
 
   if (ev.error) {
     return [{ text: String(ev.error), className: "text-red-500/90" }];
+  }
+
+  if (name === "execute_code") {
+    // Parse the tool's JSON envelope so the raw
+    // {"status":...,"output":...,"error":...} blob never shows verbatim:
+    // stdout in muted text, any error in red.
+    const data = parseJsonObject(ev.result);
+    if (data) {
+      const lines: BodyLine[] = [];
+      const output = typeof data.output === "string" ? data.output : "";
+      const error = data.error != null ? String(data.error) : "";
+      if (output) {
+        for (const l of output.split("\n")) {
+          lines.push({ text: l, className: "text-muted-foreground/90" });
+        }
+      }
+      if (error) {
+        for (const l of error.split("\n")) {
+          lines.push({ text: l, className: "text-red-500/90" });
+        }
+      }
+      if (!output && !error) {
+        lines.push({ text: "(no output)", className: "text-muted-foreground/60" });
+      }
+      return lines;
+    }
   }
 
   // web_search / web_fetch: linkify source URLs so results are clickable.

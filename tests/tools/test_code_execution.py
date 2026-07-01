@@ -44,7 +44,7 @@ async def test_script_calls_read_file_via_rpc(tmp_path):
     tool = _tool(tmp_path)
     code = (
         "from durin_tools import read_file\n"
-        "content = read_file('data.txt', limit=10)\n"
+        "content = read_file('data.txt')\n"
         "print('FOUND' if 'needle-in-file' in content else 'MISSING')\n"
     )
     result = json.loads(await tool.execute(code=code))
@@ -53,6 +53,50 @@ async def test_script_calls_read_file_via_rpc(tmp_path):
     assert result["tool_calls_made"] == 1
     # The raw file content is NOT in the result — only what the script printed.
     assert "needle-in-file" not in result["output"]
+
+
+@pytest.mark.asyncio
+async def test_script_read_file_returns_raw_parseable_content(tmp_path):
+    """A script reading a JSON file gets the file's real bytes it can parse —
+    not the line-numbered display view (`1| ...`), which would break
+    json.loads on char 1. Reproduces the user-reported JSONDecodeError."""
+    (tmp_path / "data.json").write_text('{"answer": 42}', encoding="utf-8")
+    tool = _tool(tmp_path)
+    code = (
+        "import json\n"
+        "from durin_tools import read_file\n"
+        "data = json.loads(read_file('data.json'))\n"
+        "print('ANSWER', data['answer'])\n"
+    )
+    result = json.loads(await tool.execute(code=code))
+    assert result["status"] == "success", result
+    assert "ANSWER 42" in result["output"]
+
+
+@pytest.mark.asyncio
+async def test_error_result_has_no_duplicated_traceback(tmp_path):
+    """On crash the failure appears once (in `error`); `output` is the script's
+    stdout, never a merged stdout+stderr copy. Prevents the duplicated-traceback
+    blob the UI dumps verbatim."""
+    tool = _tool(tmp_path)
+    result = json.loads(await tool.execute(code="raise ValueError('boom-42')"))
+    assert result["status"] == "error"
+    assert "boom-42" in result["error"]
+    assert "boom-42" not in result["output"]
+    assert "--- stderr ---" not in result["output"]
+
+
+@pytest.mark.asyncio
+async def test_error_result_keeps_stdout_separate(tmp_path):
+    """When a script prints before crashing, stdout stays in `output` and the
+    traceback stays in `error` — the two never merge."""
+    tool = _tool(tmp_path)
+    code = "print('PARTIAL-OUTPUT')\nraise ValueError('boom')\n"
+    result = json.loads(await tool.execute(code=code))
+    assert result["status"] == "error"
+    assert "PARTIAL-OUTPUT" in result["output"]
+    assert "boom" in result["error"]
+    assert "boom" not in result["output"]
 
 
 @pytest.mark.asyncio
