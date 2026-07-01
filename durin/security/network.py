@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import re
 import socket
@@ -116,6 +117,18 @@ def validate_resolved_url(url: str) -> tuple[bool, str]:
     return True, ""
 
 
+async def validate_url_target_async(url: str) -> tuple[bool, str]:
+    """Async wrapper: run the blocking DNS resolution of validate_url_target on a
+    worker thread so it never stalls the event loop."""
+    return await asyncio.to_thread(validate_url_target, url)
+
+
+async def validate_resolved_url_async(url: str) -> tuple[bool, str]:
+    """Async wrapper: run the blocking DNS resolution of validate_resolved_url on a
+    worker thread so it never stalls the event loop."""
+    return await asyncio.to_thread(validate_resolved_url, url)
+
+
 class SSRFError(Exception):
     """A fetch target resolved to a private/internal address, or was
     unresolvable — raised by the connect-time SSRF guard."""
@@ -174,7 +187,7 @@ class SSRFGuardTransport(httpx.AsyncHTTPTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         host = request.url.host
         if host:
-            ip = resolve_and_validate(host)  # raises SSRFError on private/unresolvable
+            ip = await asyncio.to_thread(resolve_and_validate, host)  # raises SSRFError; DNS off-loop
             if ip != host:
                 # Pin to the validated IP; keep Host (already set on the
                 # request) and pin TLS SNI to the original hostname.

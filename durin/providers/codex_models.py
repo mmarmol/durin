@@ -27,15 +27,7 @@ def _client() -> httpx.Client:
     return httpx.Client(timeout=httpx.Timeout(10.0))
 
 
-def _discover(access_token: str) -> list[str]:
-    with _client() as client:
-        resp = client.get(
-            MODELS_URL,
-            headers={"Authorization": f"Bearer {access_token}", "originator": ORIGINATOR},
-        )
-    if resp.status_code != 200:
-        return []
-    data = resp.json()
+def _parse_models(data: object) -> list[str]:
     entries = data.get("models", []) if isinstance(data, dict) else []
     ranked: list[tuple[int, str]] = []
     for item in entries:
@@ -54,11 +46,46 @@ def _discover(access_token: str) -> list[str]:
     return [slug for _, slug in ranked]
 
 
+def _discover(access_token: str) -> list[str]:
+    with _client() as client:
+        resp = client.get(
+            MODELS_URL,
+            headers={"Authorization": f"Bearer {access_token}", "originator": ORIGINATOR},
+        )
+    if resp.status_code != 200:
+        return []
+    return _parse_models(resp.json())
+
+
+async def _discover_async(access_token: str) -> list[str]:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+        resp = await client.get(
+            MODELS_URL,
+            headers={"Authorization": f"Bearer {access_token}", "originator": ORIGINATOR},
+        )
+    if resp.status_code != 200:
+        return []
+    return _parse_models(resp.json())
+
+
 def list_codex_models(access_token: str | None) -> list[str]:
     """Discovered models when a token is available; static fallback otherwise."""
     if access_token:
         try:
             models = _discover(access_token)
+            if models:
+                return models
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("codex model discovery failed: {}", exc)
+    return list(STATIC_FALLBACK)
+
+
+async def list_codex_models_async(access_token: str | None) -> list[str]:
+    """Async twin of list_codex_models: discovery runs on an async client so the
+    /api/v1/models route never blocks the event loop."""
+    if access_token:
+        try:
+            models = await _discover_async(access_token)
             if models:
                 return models
         except Exception as exc:  # noqa: BLE001
