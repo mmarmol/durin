@@ -98,11 +98,31 @@ function capsText(m: ProviderModelEntry, t: (k: string) => string): string {
   return parts.join(" · ");
 }
 
+// Tri-state capability override: "" = inherit from catalog, "true" = yes, "false" = no
+type CapOverride = "" | "true" | "false";
+
 interface DraftParams {
   context_window_tokens: string;
   max_tokens: string;
   temperature: string;
   reasoning_effort: string;
+  top_p: string;
+  top_k: string;
+  repeat_penalty: string;
+  supports_vision: CapOverride;
+  supports_audio_input: CapOverride;
+  supports_reasoning: CapOverride;
+}
+
+function toCapOverride(v: boolean | null | undefined): CapOverride {
+  if (v == null) return "";
+  return v ? "true" : "false";
+}
+
+function fromCapOverride(v: CapOverride): boolean | null {
+  if (v === "true") return true;
+  if (v === "false") return false;
+  return null;
 }
 
 function toDraft(m: ProviderModelEntry): DraftParams {
@@ -111,6 +131,15 @@ function toDraft(m: ProviderModelEntry): DraftParams {
     max_tokens: m.max_tokens != null ? String(m.max_tokens) : "",
     temperature: m.temperature != null ? String(m.temperature) : "",
     reasoning_effort: m.reasoning_effort ?? "",
+    top_p: m.top_p != null ? String(m.top_p) : "",
+    top_k: m.top_k != null ? String(m.top_k) : "",
+    repeat_penalty: m.repeat_penalty != null ? String(m.repeat_penalty) : "",
+    // Seed the tri-state selectors from the RAW override (null = inherit), not
+    // the effective capability — otherwise a catalog "false" pre-selects "no"
+    // as if the user had set it, and any save would pin a phantom override.
+    supports_vision: toCapOverride(m.supports_vision_override),
+    supports_audio_input: toCapOverride(m.supports_audio_input_override),
+    supports_reasoning: toCapOverride(m.supports_reasoning_override),
   };
 }
 
@@ -332,15 +361,19 @@ function ConnectionEditor({
     }
   };
 
+  const isLocal = !!provider.is_local;
+
   if (provider.configured && !editing) {
     return (
       <div>
         <SectionLabel>{t("settings.providers.connection")}</SectionLabel>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="flex items-center gap-2 rounded-lg border border-border/60 bg-background px-2.5 py-1.5">
-            <span className="text-[11.5px] text-muted-foreground">{t("settings.byok.apiKey")}</span>
-            <span className="font-mono text-[12px]">{provider.api_key_hint ?? "••••"}</span>
-          </span>
+          {!isLocal ? (
+            <span className="flex items-center gap-2 rounded-lg border border-border/60 bg-background px-2.5 py-1.5">
+              <span className="text-[11.5px] text-muted-foreground">{t("settings.byok.apiKey")}</span>
+              <span className="font-mono text-[12px]">{provider.api_key_hint ?? "••••"}</span>
+            </span>
+          ) : null}
           {provider.api_base ? (
             <span className="flex items-center gap-2 rounded-lg border border-border/60 bg-background px-2.5 py-1.5">
               <span className="text-[11.5px] text-muted-foreground">{t("settings.byok.apiBase")}</span>
@@ -363,20 +396,24 @@ function ConnectionEditor({
     <div>
       <SectionLabel>{t("settings.providers.connection")}</SectionLabel>
       <div className="space-y-2">
-        <label className="block">
-          <span className="mb-1 block text-[11.5px] text-muted-foreground">{t("settings.byok.apiKey")}</span>
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder={
-              provider.configured
-                ? t("settings.byok.apiKeyConfiguredPlaceholder")
-                : t("settings.byok.apiKeyPlaceholder")
-            }
-            className="h-9 w-full rounded-lg border border-border/60 bg-background px-3 text-[13px]"
-          />
-        </label>
+        {isLocal ? (
+          <p className="text-[11.5px] text-muted-foreground">{t("settings.providers.localHint")}</p>
+        ) : (
+          <label className="block">
+            <span className="mb-1 block text-[11.5px] text-muted-foreground">{t("settings.byok.apiKey")}</span>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={
+                provider.configured
+                  ? t("settings.byok.apiKeyConfiguredPlaceholder")
+                  : t("settings.byok.apiKeyPlaceholder")
+              }
+              className="h-9 w-full rounded-lg border border-border/60 bg-background px-3 text-[13px]"
+            />
+          </label>
+        )}
         <label className="block">
           <span className="mb-1 block text-[11.5px] text-muted-foreground">{t("settings.byok.apiBase")}</span>
           <input
@@ -389,7 +426,7 @@ function ConnectionEditor({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            disabled={saving || (!provider.configured && !apiKey.trim())}
+            disabled={saving || (!provider.configured && (isLocal ? !apiBase.trim() : !apiKey.trim()))}
             onClick={() => void save()}
             className="rounded-lg border border-border/60 bg-background px-3 py-1.5 text-[12px] font-medium disabled:opacity-50"
           >
@@ -444,6 +481,12 @@ function ModelsSection({
         max_tokens: parseNum(draft.max_tokens),
         temperature: parseNum(draft.temperature),
         reasoning_effort: draft.reasoning_effort.trim() || null,
+        top_p: parseNum(draft.top_p),
+        top_k: parseNum(draft.top_k),
+        repeat_penalty: parseNum(draft.repeat_penalty),
+        supports_vision: fromCapOverride(draft.supports_vision),
+        supports_audio_input: fromCapOverride(draft.supports_audio_input),
+        supports_reasoning: fromCapOverride(draft.supports_reasoning),
       });
       setEditing(null);
       setDraft(null);
@@ -621,6 +664,36 @@ function ModelRow(props: ModelRowProps) {
               value={draft.reasoning_effort}
               onChange={(v) => props.onChange({ ...draft, reasoning_effort: v })}
             />
+            <ParamField
+              label={t("settings.providerModels.topP")}
+              value={draft.top_p}
+              onChange={(v) => props.onChange({ ...draft, top_p: v })}
+            />
+            <ParamField
+              label={t("settings.providerModels.topK")}
+              value={draft.top_k}
+              onChange={(v) => props.onChange({ ...draft, top_k: v })}
+            />
+            <ParamField
+              label={t("settings.providerModels.repeatPenalty")}
+              value={draft.repeat_penalty}
+              onChange={(v) => props.onChange({ ...draft, repeat_penalty: v })}
+            />
+            <CapField
+              label={t("settings.providerModels.capOverrideVision")}
+              value={draft.supports_vision}
+              onChange={(v) => props.onChange({ ...draft, supports_vision: v })}
+            />
+            <CapField
+              label={t("settings.providerModels.capOverrideAudio")}
+              value={draft.supports_audio_input}
+              onChange={(v) => props.onChange({ ...draft, supports_audio_input: v })}
+            />
+            <CapField
+              label={t("settings.providerModels.capOverrideReasoning")}
+              value={draft.supports_reasoning}
+              onChange={(v) => props.onChange({ ...draft, supports_reasoning: v })}
+            />
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -672,6 +745,24 @@ function ParamField(props: { label: string; value: string; onChange: (v: string)
         onChange={(e) => props.onChange(e.target.value)}
         className="rounded-md border border-border/60 bg-background px-2 py-1 text-[12px] text-foreground"
       />
+    </label>
+  );
+}
+
+function CapField(props: { label: string; value: CapOverride; onChange: (v: CapOverride) => void }) {
+  const { t } = useTranslation();
+  return (
+    <label className="flex flex-col gap-1 text-[10.5px] text-muted-foreground">
+      {props.label}
+      <select
+        value={props.value}
+        onChange={(e) => props.onChange(e.target.value as CapOverride)}
+        className="rounded-md border border-border/60 bg-background px-2 py-1 text-[12px] text-foreground"
+      >
+        <option value="">{t("settings.providerModels.capOverrideInherit")}</option>
+        <option value="true">{t("settings.providerModels.capOverrideYes")}</option>
+        <option value="false">{t("settings.providerModels.capOverrideNo")}</option>
+      </select>
     </label>
   );
 }

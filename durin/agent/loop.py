@@ -478,6 +478,60 @@ class AgentLoop:
         self._start_mcp_catalog_refresh()
 
     # ------------------------------------------------------------------
+    # Config hot-reload
+    # ------------------------------------------------------------------
+
+    def reload_app_config(self) -> None:
+        """Re-read config from disk into the live snapshot so persona/preset
+        edits made through the service (webui) take effect without a restart.
+        All readers dereference ``self.app_config``/``self.model_presets``."""
+        from durin.config.loader import get_config_path, load_config
+        cfg = load_config(get_config_path())
+        self.app_config = cfg
+        self.model_presets = preset_helpers.configured_model_presets(cfg)
+
+    def apply_default_model_live(self) -> None:
+        """Re-read config and apply the new ``agents.defaults`` model/provider to
+        the running loop WITHOUT a restart.
+
+        Refreshes ``app_config``/``model_presets`` (via ``reload_app_config``),
+        which rebuilds the always-present ``"default"`` preset from the new
+        ``agents.defaults``. We then apply the new default on the next turn:
+
+        * For ``provider == "auto"`` (the schema default; provider inference) we
+          apply the rebuilt ``"default"`` preset directly — the same path
+          cold-start uses. A bare ``model`` string is NOT a registered preset, so
+          building a synthetic ``provider model`` ref would raise ``KeyError`` out
+          of ``set_model_preset``.
+        * For an explicit provider we resolve the ``provider model`` picker pair
+          through ``resolve_preset_ref`` (registers an ad-hoc preset) +
+          ``set_model_preset`` — the same raw-pair-safe path ``/model`` uses.
+
+        Any unresolvable ref logs a warning and no-ops rather than escaping the
+        settings ``on_default_changed`` handler (config has already been saved).
+        """
+        self.reload_app_config()
+        defaults = self.app_config.agents.defaults
+        model = (defaults.model or "").strip()
+        if not model:
+            return
+        provider = (defaults.provider or "auto").strip()
+        try:
+            if not provider or provider == "auto":
+                # The rebuilt "default" preset already reflects the new default
+                # (model + auto provider); apply it directly.
+                self.set_model_preset("default", publish_update=True)
+            else:
+                from durin.command.builtin import resolve_preset_ref
+                name = resolve_preset_ref(self, f"{provider} {model}")
+                self.set_model_preset(name, publish_update=True)
+        except (KeyError, ValueError) as exc:
+            logger.warning(
+                "Could not apply default model {!r} (provider {!r}) live: {}",
+                model, provider, exc,
+            )
+
+    # ------------------------------------------------------------------
     # Memory background services lifecycle
     # ------------------------------------------------------------------
 
@@ -1239,7 +1293,11 @@ class AgentLoop:
             return mode, False
         try:
             from durin.providers.capabilities import get_model_capabilities
-            caps = get_model_capabilities(self.model, self.provider)
+            overrides = {}
+            if self.app_config is not None:
+                caps_map = getattr(self.app_config, "model_capabilities", {}) or {}
+                overrides = {k: v.model_dump(exclude_none=True) for k, v in caps_map.items()}
+            caps = get_model_capabilities(self.model, self.provider, overrides=overrides)
             return mode, bool(getattr(caps, "supports_audio_input", False))
         except Exception:  # noqa: BLE001
             return mode, False

@@ -74,6 +74,48 @@ describe("ProvidersSettings", () => {
     expect(screen.getByText("https://api.z.ai/api/coding/paas/v4")).toBeInTheDocument();
   });
 
+  it("enables Save for a local provider with only api_base (no api_key)", async () => {
+    const localSettings: SettingsPayload = {
+      ...SETTINGS,
+      providers: [
+        {
+          name: "ollama",
+          label: "Ollama",
+          configured: false,
+          is_local: true,
+          default_api_base: "http://localhost:11434",
+        },
+      ],
+    };
+    updateProviderSettings.mockResolvedValue(localSettings);
+    render(<ProvidersSettings token="t" settings={localSettings} onRefresh={() => {}} />);
+
+    fireEvent.click(screen.getByText("Ollama"));
+
+    // api_base field is present; api_key field is NOT rendered
+    const apiBaseInput = screen.getByPlaceholderText("http://localhost:11434");
+    expect(apiBaseInput).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/api key/i)).not.toBeInTheDocument();
+
+    // Save (Connect) button inside the form — pick the one that is a <button> with exactly "Connect" text (the row header button wraps a badge span)
+    const connectBtns = screen.getAllByRole("button", { name: /connect/i });
+    // The form submit button is the disabled one (no apiBase yet)
+    const connectBtn = connectBtns.find((b) => b.tagName === "BUTTON" && b.hasAttribute("disabled"))!;
+    expect(connectBtn).toBeDisabled();
+
+    fireEvent.change(apiBaseInput, { target: { value: "http://localhost:11434" } });
+    expect(connectBtn).not.toBeDisabled();
+
+    fireEvent.click(connectBtn);
+    await waitFor(() =>
+      expect(updateProviderSettings).toHaveBeenCalledWith("t", {
+        provider: "ollama",
+        apiKey: undefined,
+        apiBase: "http://localhost:11434",
+      }),
+    );
+  });
+
   it("adds a custom model under the expanded provider", async () => {
     render(<ProvidersSettings token="t" settings={SETTINGS} onRefresh={() => {}} />);
     await waitFor(() => expect(fetchProviderModels).toHaveBeenCalled());

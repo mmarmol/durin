@@ -259,7 +259,9 @@
       "reasoningEffort": "Reasoning effort",
       "reasoningEffortHint": "For reasoning models: low | medium | high. Leave blank for default.",
       "enabled": "Enabled",
-      "disabled": "Disabled"
+      "disabled": "Disabled",
+      "defaultModel": "Default model",
+      "defaultModelHint": "Provider and model used for all new requests."
     },
     "channels": {
       "description": "Bridge durin to chat platforms. Enable a channel and set its credential — the token goes to the secret store, not config.json.",
@@ -320,15 +322,26 @@
       "field": {
         "consent_granted": "Consent",
         "allow_from": "Allowed senders",
-        "imap_host": "IMAP server", "imap_port": "Port", "imap_username": "Username",
-        "imap_password": "Password", "imap_mailbox": "Mailbox", "imap_use_ssl": "SSL",
-        "smtp_host": "SMTP server", "smtp_port": "Port", "smtp_username": "Username",
-        "smtp_password": "Password", "smtp_use_tls": "TLS", "smtp_use_ssl": "SSL",
+        "imap_host": "IMAP server",
+        "imap_port": "Port",
+        "imap_username": "Username",
+        "imap_password": "Password",
+        "imap_mailbox": "Mailbox",
+        "imap_use_ssl": "SSL",
+        "smtp_host": "SMTP server",
+        "smtp_port": "Port",
+        "smtp_username": "Username",
+        "smtp_password": "Password",
+        "smtp_use_tls": "TLS",
+        "smtp_use_ssl": "SSL",
         "from_address": "From address",
-        "auto_reply_enabled": "Auto-reply", "poll_interval_seconds": "Poll interval (s)",
-        "mark_seen": "Mark as seen", "max_body_chars": "Max body characters",
+        "auto_reply_enabled": "Auto-reply",
+        "poll_interval_seconds": "Poll interval (s)",
+        "mark_seen": "Mark as seen",
+        "max_body_chars": "Max body characters",
         "subject_prefix": "Subject prefix",
-        "verify_dkim": "Verify DKIM", "verify_spf": "Verify SPF",
+        "verify_dkim": "Verify DKIM",
+        "verify_spf": "Verify SPF",
         "allowed_attachment_types": "Allowed attachment types",
         "max_attachment_size": "Max attachment size",
         "max_attachments_per_email": "Max attachments per email",
@@ -576,10 +589,19 @@
       "maxTokens": "Max output",
       "temperature": "Temperature",
       "reasoningEffort": "Reasoning effort",
+      "topP": "Top-p",
+      "topK": "Top-k",
+      "repeatPenalty": "Repeat penalty",
       "catalogDefault": "catalog default",
       "capVision": "vision",
       "capAudio": "audio",
       "capReasoning": "reasoning",
+      "capOverrideVision": "Vision override",
+      "capOverrideAudio": "Audio override",
+      "capOverrideReasoning": "Reasoning override",
+      "capOverrideInherit": "inherit",
+      "capOverrideYes": "yes",
+      "capOverrideNo": "no",
       "emptyTeach": "No catalog models for this provider yet. Add a custom one below.",
       "loadError": "Could not load models."
     },
@@ -593,7 +615,8 @@
       "defaultModel": "default: {{model}}",
       "modelsCount": "{{count}} models",
       "showMore": "Show {{n}} more",
-      "showLess": "Show less"
+      "showLess": "Show less",
+      "localHint": "Local server — no API key needed"
     },
     "mcp": {
       "description": "Connect Model Context Protocol (MCP) servers to give the agent extra tools. Status is read live from the running gateway.",
@@ -1234,6 +1257,10 @@
       "mode": {
         "title": "Mode"
       },
+      "persona": {
+        "title": "Persona",
+        "empty": "No personas available"
+      },
       "add": {
         "title": "Add",
         "attach": "Upload file or photo",
@@ -1627,7 +1654,9 @@
     }
   },
   "tasks": {
-    "status": { "needs_input": "Needs input" }
+    "status": {
+      "needs_input": "Needs input"
+    }
   },
   "work": {
     "steps": "{{count}} steps",

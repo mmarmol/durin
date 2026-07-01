@@ -157,17 +157,21 @@ function stampLastAssistantLatency(prev: UIMessage[], latencyMs: number): UIMess
 
 function absorbCompleteAssistantMessage(
   prev: UIMessage[],
-  message: Omit<UIMessage, "id" | "role" | "createdAt">,
+  message: Omit<UIMessage, "id" | "role" | "createdAt"> & { id?: string },
 ): UIMessage[] {
+  // A server-assigned id (also persisted to the transcript) lets the canonical
+  // refetch row reconcile with this live row by React key instead of replacing
+  // it. Fall back to a random id only when the server didn't stamp one.
+  const id = message.id ?? crypto.randomUUID();
   const last = prev[prev.length - 1];
   if (!last || !isReasoningOnlyPlaceholder(last)) {
     return [
       ...prev,
       {
-        id: crypto.randomUUID(),
         role: "assistant",
         createdAt: Date.now(),
         ...message,
+        id,
       },
     ];
   }
@@ -176,6 +180,7 @@ function absorbCompleteAssistantMessage(
     {
       ...last,
       ...message,
+      id,
       isStreaming: false,
       reasoningStreaming: false,
     },
@@ -534,6 +539,7 @@ export function useDurinStream(
             : undefined;
           return absorbCompleteAssistantMessage(filtered, {
             content,
+            ...(ev.id ? { id: ev.id } : {}),
             ...(hasMedia ? { media } : {}),
             ...(lat !== undefined ? { latencyMs: lat } : {}),
             ...(renderAs ? { renderAs } : {}),

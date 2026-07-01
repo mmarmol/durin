@@ -571,11 +571,11 @@ def build_gateway_http_app(
         data = build_webui_thread_response(
             key, augment_user_media=channel._augment_transcript_user_media
         )
+        sm = channel._session_manager
         if data is None:
             # No webui JSONL transcript: fall back to the universal session history
             # so non-websocket sessions (CLI, Telegram, subagent) render read-only
             # instead of returning 404.
-            sm = channel._session_manager
             raw = sm.read_session_file(key) if sm is not None else None
             raw_messages = (raw or {}).get("messages") or []
             if raw_messages:
@@ -593,6 +593,17 @@ def build_gateway_http_app(
                 return _problem_response(
                     NotFoundError("webui thread not found", details={"key": key})
                 )
+        # Resolve the active persona for this session and include it in the payload.
+        from durin.config.loader import load_config
+        from durin.personas.resolve import resolve_active_persona_name
+
+        raw_session = sm.read_session_file(key) if sm is not None else None
+        session_metadata = (raw_session or {}).get("metadata") or {}
+        try:
+            cfg = load_config()
+        except Exception:
+            cfg = None
+        data["persona"] = resolve_active_persona_name(cfg, session_metadata, None)
         return JSONResponse({"data": data})
 
     # -- WebSocket chat endpoint --------------------------------------------

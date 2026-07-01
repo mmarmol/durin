@@ -126,14 +126,27 @@ class ProviderModelEntry(Result):
     id: str
     configured: bool = False
     max_input_tokens: int | None = None
+    # Effective (override-or-catalog) capabilities, for the caps badge display.
     supports_vision: bool = False
     supports_audio_input: bool = False
     supports_reasoning: bool = False
+    # Raw capability override (None = no override, inheriting catalog/heuristic).
+    # Separate from the effective fields above so the editor's tri-state selector
+    # can show "inherit" rather than pre-selecting the catalog value as if it were
+    # a user override.
+    supports_vision_override: bool | None = None
+    supports_audio_input_override: bool | None = None
+    supports_reasoning_override: bool | None = None
     # User param overrides (None = inherit catalog / default).
     max_tokens: int | None = None
     context_window_tokens: int | None = None
     temperature: float | None = None
     reasoning_effort: str | None = None
+    # Sampling params (None = inherit / don't send). top_p is standard;
+    # top_k / repeat_penalty are non-standard (sent via extra_body).
+    top_p: float | None = None
+    top_k: int | None = None
+    repeat_penalty: float | None = None
 
 
 class ProviderModelsResult(Result):
@@ -148,6 +161,12 @@ class ProviderModelUpsertCommand(Command):
     context_window_tokens: int | None = None
     temperature: float | None = None
     reasoning_effort: str | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    repeat_penalty: float | None = None
+    supports_vision: bool | None = None
+    supports_audio_input: bool | None = None
+    supports_reasoning: bool | None = None
 
 
 class ProviderModelDeleteCommand(Command):
@@ -364,35 +383,62 @@ class ConfigService:
         cfg = load_config()
         pc = getattr(cfg.providers, provider, None)
         configured = dict(getattr(pc, "models", {}) or {})
+        cap_overrides = cfg.model_capabilities
         out: list[ProviderModelEntry] = []
         seen: set[str] = set()
         for mi in provider_models(provider):
             seen.add(mi.id)
             ov = configured.get(mi.id)
+            cap_ov = cap_overrides.get(f"{provider}/{mi.id}")
             out.append(
                 ProviderModelEntry(
                     id=mi.id,
                     configured=mi.id in configured,
                     max_input_tokens=mi.max_input_tokens,
-                    supports_vision=mi.supports_vision,
-                    supports_audio_input=mi.supports_audio_input,
-                    supports_reasoning=mi.supports_reasoning,
+                    supports_vision=(
+                        cap_ov.supports_vision if cap_ov and cap_ov.supports_vision is not None
+                        else mi.supports_vision
+                    ),
+                    supports_audio_input=(
+                        cap_ov.supports_audio_input if cap_ov and cap_ov.supports_audio_input is not None
+                        else mi.supports_audio_input
+                    ),
+                    supports_reasoning=(
+                        cap_ov.supports_reasoning if cap_ov and cap_ov.supports_reasoning is not None
+                        else mi.supports_reasoning
+                    ),
+                    supports_vision_override=getattr(cap_ov, "supports_vision", None),
+                    supports_audio_input_override=getattr(cap_ov, "supports_audio_input", None),
+                    supports_reasoning_override=getattr(cap_ov, "supports_reasoning", None),
                     max_tokens=getattr(ov, "max_tokens", None),
                     context_window_tokens=getattr(ov, "context_window_tokens", None),
                     temperature=getattr(ov, "temperature", None),
                     reasoning_effort=getattr(ov, "reasoning_effort", None),
+                    top_p=getattr(ov, "top_p", None),
+                    top_k=getattr(ov, "top_k", None),
+                    repeat_penalty=getattr(ov, "repeat_penalty", None),
                 )
             )
         for mid, ov in configured.items():  # user customs not in the catalog
             if mid in seen:
                 continue
+            cap_ov = cap_overrides.get(f"{provider}/{mid}")
             out.append(
                 ProviderModelEntry(
                     id=mid, configured=True,
+                    supports_vision=(cap_ov.supports_vision if cap_ov and cap_ov.supports_vision is not None else False),
+                    supports_audio_input=(cap_ov.supports_audio_input if cap_ov and cap_ov.supports_audio_input is not None else False),
+                    supports_reasoning=(cap_ov.supports_reasoning if cap_ov and cap_ov.supports_reasoning is not None else False),
+                    supports_vision_override=getattr(cap_ov, "supports_vision", None),
+                    supports_audio_input_override=getattr(cap_ov, "supports_audio_input", None),
+                    supports_reasoning_override=getattr(cap_ov, "supports_reasoning", None),
                     max_tokens=ov.max_tokens,
                     context_window_tokens=ov.context_window_tokens,
                     temperature=ov.temperature,
                     reasoning_effort=ov.reasoning_effort,
+                    top_p=ov.top_p,
+                    top_k=ov.top_k,
+                    repeat_penalty=ov.repeat_penalty,
                 )
             )
         out.sort(key=lambda e: e.id)
@@ -419,12 +465,44 @@ class ConfigService:
         pc = getattr(cfg.providers, cmd.provider, None)
         if pc is None:
             raise ValidationFailedError(f"unknown provider {cmd.provider!r}")
+        # Full-state upsert (PUT semantics): the command carries the complete
+        # desired per-model state. Any field left None clears that param — the
+        # ModelEntry is rebuilt from the command, and the three editor-managed
+        # capability fields below follow the same rule. The webui always sends
+        # the full draft; a programmatic caller must likewise send every field
+        # it wants to keep, not a partial patch.
         pc.models[cmd.model] = ModelEntry(
             max_tokens=cmd.max_tokens,
             context_window_tokens=cmd.context_window_tokens,
             temperature=cmd.temperature,
             reasoning_effort=cmd.reasoning_effort,
+            top_p=cmd.top_p,
+            top_k=cmd.top_k,
+            repeat_penalty=cmd.repeat_penalty,
         )
+        # The three tri-state fields carry the COMPLETE desired override for this
+        # model's vision/audio/reasoning (the editor always sends all three): a
+        # value sets the override, None clears it back to inherit. Override fields
+        # not surfaced by the editor (function calling, token bounds, …) are
+        # preserved; the key is dropped when no override remains.
+        from durin.config.schema import ModelCapabilityOverride
+
+        cap_key = f"{cmd.provider}/{cmd.model}"
+        existing = cfg.model_capabilities.get(cap_key)
+        caps = existing.model_dump(exclude_none=True) if existing is not None else {}
+        for field, value in (
+            ("supports_vision", cmd.supports_vision),
+            ("supports_audio_input", cmd.supports_audio_input),
+            ("supports_reasoning", cmd.supports_reasoning),
+        ):
+            if value is None:
+                caps.pop(field, None)
+            else:
+                caps[field] = value
+        if caps:
+            cfg.model_capabilities[cap_key] = ModelCapabilityOverride(**caps)
+        else:
+            cfg.model_capabilities.pop(cap_key, None)
         save_config(cfg, path)
         return ConfigSetResult(
             ok=True, config=mask_secrets(cfg.model_dump(mode="json", by_alias=False))
@@ -448,8 +526,13 @@ class ConfigService:
         path = get_config_path()
         cfg = load_config(path)
         pc = getattr(cfg.providers, cmd.provider, None)
+        changed = False
         if pc is not None and getattr(pc, "models", None):
-            pc.models.pop(cmd.model, None)
+            changed = pc.models.pop(cmd.model, None) is not None
+        # Drop any orphaned capability override so a later re-add starts clean.
+        if cfg.model_capabilities.pop(f"{cmd.provider}/{cmd.model}", None) is not None:
+            changed = True
+        if changed:
             save_config(cfg, path)
         return ConfigSetResult(
             ok=True, config=mask_secrets(cfg.model_dump(mode="json", by_alias=False))
@@ -575,9 +658,12 @@ class ConfigService:
     ) -> ModelCapabilitiesResult:
         principal.require(Scope.CONFIG_READ)
         try:
+            from durin.config.loader import load_config
             from durin.providers.capabilities import get_model_capabilities
 
-            caps = get_model_capabilities(query.model, query.provider)
+            cfg = load_config()
+            overrides = {k: v.model_dump(exclude_none=True) for k, v in cfg.model_capabilities.items()}
+            caps = get_model_capabilities(query.model, query.provider, overrides=overrides)
         except Exception as e:  # noqa: BLE001
             raise ValidationFailedError(f"could not resolve capabilities: {e}") from e
         return ModelCapabilitiesResult(

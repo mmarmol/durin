@@ -36,10 +36,10 @@ class ModelEntry:
     group: str = ""
 
 
-def _get_caps(model: str, provider: str | None = None) -> ModelCapabilities:
+def _get_caps(model: str, provider: str | None = None, overrides: dict | None = None) -> ModelCapabilities:
     """Safe wrapper around get_model_capabilities."""
     try:
-        return get_model_capabilities(model, provider)
+        return get_model_capabilities(model, provider, overrides=overrides or {})
     except Exception:  # noqa: BLE001
         return ModelCapabilities(model=model, provider=provider)
 
@@ -93,13 +93,17 @@ def build_entries(
     from durin.agent.model_picker import picker_entries
 
     rows = picker_entries(config, presets=presets, recent=recent, active=active)
+    cap_overrides = {
+        k: v.model_dump(exclude_none=True)
+        for k, v in (getattr(config, "model_capabilities", {}) or {}).items()
+    }
     return [
         ModelEntry(
             name=r.name,
             provider=r.provider,
             is_preset=(r.role == "preset"),
             is_recent=(r.role == "recent"),
-            capabilities=_get_caps(r.name, r.provider),
+            capabilities=_get_caps(r.name, r.provider, overrides=cap_overrides),
             ref=r.ref,
             group=r.group,
         )

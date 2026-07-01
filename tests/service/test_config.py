@@ -255,6 +255,37 @@ async def test_provider_model_upsert_and_remove(config_path):
     assert "glm-5.2" not in (cfg2.providers.zai_coding_plan.models or {})
 
 
+async def test_provider_model_upsert_persists_sampling_params(config_path, monkeypatch):
+    import durin.providers.provider_catalog as pc
+    from durin.config.loader import load_config
+    from durin.providers.provider_catalog import ModelInfo
+    from durin.service.config import ProviderModelsQuery, ProviderModelUpsertCommand
+
+    monkeypatch.setattr(
+        pc, "_load_index",
+        lambda: {"zai_coding_plan": [ModelInfo(id="glm-5.2")]},
+    )
+    await ConfigService().provider_model_upsert(
+        ProviderModelUpsertCommand(
+            provider="zai_coding_plan", model="glm-5.2",
+            top_p=0.9, top_k=20, repeat_penalty=1.05,
+        ),
+        LOCAL,
+    )
+    entry = load_config(config_path).providers.zai_coding_plan.models["glm-5.2"]
+    assert entry.top_p == 0.9
+    assert entry.top_k == 20
+    assert entry.repeat_penalty == 1.05
+
+    res = await ConfigService().provider_models_route(
+        ProviderModelsQuery(provider="zai_coding_plan"), LOCAL
+    )
+    glm = next(m for m in res.models if m.id == "glm-5.2")
+    assert glm.top_p == 0.9
+    assert glm.top_k == 20
+    assert glm.repeat_penalty == 1.05
+
+
 async def test_provider_model_upsert_requires_write_scope():
     from durin.service.config import ProviderModelUpsertCommand
 
@@ -422,3 +453,149 @@ async def test_cross_encoder_test_requires_read_scope():
         await ConfigService().cross_encoder_test(
             CrossEncoderTestQuery(model="any"), principal
         )
+
+
+# ---------------------------------------------------------------------------
+# per-model capability overrides: resolver wiring + editable via the upsert API
+# ---------------------------------------------------------------------------
+
+
+async def test_model_capabilities_respects_config_override(tmp_path, monkeypatch):
+    """The capabilities endpoint returns the OVERRIDDEN caps when
+    config.model_capabilities sets supports_vision=True for a model that
+    the snapshot would say False."""
+    from durin.config.loader import save_config
+    from durin.config.schema import Config, ModelCapabilityOverride
+
+    cfg = Config()
+    cfg.model_capabilities["ollama/qwythos-9b-200k"] = ModelCapabilityOverride(
+        supports_vision=True
+    )
+    path = tmp_path / "config.json"
+    save_config(cfg, path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", path)
+
+    result = await ConfigService().model_capabilities(
+        ModelCapabilitiesQuery(model="qwythos-9b-200k", provider="ollama"), LOCAL
+    )
+    assert result.supports_vision is True
+
+
+async def test_provider_model_upsert_persists_capability_override(tmp_path, monkeypatch):
+    """Upserting with supports_vision=True writes a ModelCapabilityOverride
+    into config.model_capabilities and the provider-models list reflects it."""
+    import durin.providers.provider_catalog as pc
+    from durin.config.loader import load_config, save_config
+    from durin.config.schema import Config
+    from durin.providers.provider_catalog import ModelInfo
+    from durin.service.config import ProviderModelsQuery, ProviderModelUpsertCommand
+
+    monkeypatch.setattr(
+        pc, "_load_index",
+        lambda: {"ollama": [ModelInfo(id="qwythos-9b-200k", supports_vision=False)]},
+    )
+
+    cfg = Config()
+    path = tmp_path / "config.json"
+    save_config(cfg, path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", path)
+
+    await ConfigService().provider_model_upsert(
+        ProviderModelUpsertCommand(
+            provider="ollama", model="qwythos-9b-200k", supports_vision=True
+        ),
+        LOCAL,
+    )
+
+    # Persisted to model_capabilities
+    saved = load_config(path)
+    assert saved.model_capabilities.get("ollama/qwythos-9b-200k") is not None
+    assert saved.model_capabilities["ollama/qwythos-9b-200k"].supports_vision is True
+
+    # provider-models list reflects the override in BOTH the effective field
+    # (badge) and the raw override field (editor seed).
+    res = await ConfigService().provider_models_route(
+        ProviderModelsQuery(provider="ollama"), LOCAL
+    )
+    entry = next(m for m in res.models if m.id == "qwythos-9b-200k")
+    assert entry.supports_vision is True
+    assert entry.supports_vision_override is True
+
+
+async def test_provider_models_no_override_reports_none_not_catalog(tmp_path, monkeypatch):
+    """A model with NO override reports supports_*_override=None (so the editor
+    shows "inherit"), even though the effective supports_* mirrors the catalog."""
+    import durin.providers.local_models as lm
+    from durin.config.loader import save_config
+    from durin.config.schema import Config
+    from durin.service.config import ProviderModelsQuery
+
+    # Force the ollama live-model path to yield exactly this id (independent of
+    # whether a real ollama is running); the model has no config override.
+    monkeypatch.setattr(lm, "list_local_models", lambda *a, **k: ["qwythos-9b-200k"])
+    path = tmp_path / "config.json"
+    save_config(Config(), path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", path)
+
+    res = await ConfigService().provider_models_route(
+        ProviderModelsQuery(provider="ollama"), LOCAL
+    )
+    entry = next(m for m in res.models if m.id == "qwythos-9b-200k")
+    assert entry.supports_vision is False  # effective, from catalog/default
+    assert entry.supports_vision_override is None  # no override → editor inherits
+
+
+async def test_provider_model_upsert_inherit_clears_override(tmp_path, monkeypatch):
+    """Upserting a cap field back to None clears that override; unrelated
+    override fields (not surfaced by the editor) are preserved; the key is
+    dropped when nothing remains."""
+    from durin.config.loader import load_config, save_config
+    from durin.config.schema import Config, ModelCapabilityOverride
+    from durin.service.config import ProviderModelUpsertCommand
+
+    cfg = Config()
+    cfg.model_capabilities["ollama/qwythos-9b-200k"] = ModelCapabilityOverride(
+        supports_vision=True, supports_function_calling=True
+    )
+    path = tmp_path / "config.json"
+    save_config(cfg, path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", path)
+
+    # Editor sends all three tri-state fields; vision back to inherit (None).
+    await ConfigService().provider_model_upsert(
+        ProviderModelUpsertCommand(
+            provider="ollama", model="qwythos-9b-200k",
+            supports_vision=None, supports_audio_input=None, supports_reasoning=None,
+        ),
+        LOCAL,
+    )
+    saved = load_config(path)
+    ov = saved.model_capabilities.get("ollama/qwythos-9b-200k")
+    assert ov is not None  # survives: function_calling is not editor-managed
+    assert ov.supports_vision is None  # cleared
+    assert ov.supports_function_calling is True  # preserved
+
+
+async def test_provider_model_remove_drops_capability_override(tmp_path, monkeypatch):
+    """Removing a model also drops its orphaned capability override so a later
+    re-add does not inherit stale values."""
+    from durin.config.loader import load_config, save_config
+    from durin.config.schema import Config, ModelCapabilityOverride, ModelEntry
+    from durin.service.config import ProviderModelDeleteCommand
+
+    cfg = Config()
+    cfg.providers.ollama.models["qwythos-9b-200k"] = ModelEntry(max_tokens=16384)
+    cfg.model_capabilities["ollama/qwythos-9b-200k"] = ModelCapabilityOverride(
+        supports_vision=True
+    )
+    path = tmp_path / "config.json"
+    save_config(cfg, path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", path)
+
+    await ConfigService().provider_model_remove(
+        ProviderModelDeleteCommand(provider="ollama", model="qwythos-9b-200k"),
+        LOCAL,
+    )
+    saved = load_config(path)
+    assert "qwythos-9b-200k" not in saved.providers.ollama.models
+    assert saved.model_capabilities.get("ollama/qwythos-9b-200k") is None

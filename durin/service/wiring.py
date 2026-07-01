@@ -10,7 +10,7 @@ functional, dependency-wired registry.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from durin.service.registry import ServiceRegistry
 
@@ -24,6 +24,8 @@ def build_service_registry(
     mcp_runtime: Any = None,
     subagent_manager: Any = None,
     channel_manager: Any = None,
+    on_config_changed: Callable[[], None] | None = None,
+    on_default_changed: Callable[[], None] | None = None,
 ) -> ServiceRegistry:
     """Construct a registry with all domain services wired to real deps.
 
@@ -41,6 +43,11 @@ def build_service_registry(
     ``ChannelManager`` so the channels-runtime service can hot-start/stop channels;
     the websocket channel's shim registry passes ``None`` and those routes report
     "channel_manager not available".
+
+    ``on_default_changed`` is optional: the unified gateway passes the live
+    ``AgentLoop.apply_default_model_live`` so a default model/provider change made
+    through the settings service applies to the running loop without a restart;
+    surfaces without a loop leave it ``None`` and the change applies on next start.
     """
     from durin.security.api_tokens import ApiTokenStore
     from durin.service.auth import AuthService
@@ -80,13 +87,13 @@ def build_service_registry(
     registry.register("secrets", SecretsService())
     registry.register("cron", CronService(cron_scheduler=cron_service))
     registry.register("sessions", SessionsService(session_manager=session_manager))
-    registry.register("settings", SettingsService())
+    registry.register("settings", SettingsService(on_default_changed=on_default_changed))
     registry.register("config", ConfigService())
     registry.register("telegram", TelegramService())
     registry.register("channels_runtime", ChannelsRuntimeService(channel_manager=channel_manager))
     registry.register("skills", SkillsService(workspace=_workspace()))
     registry.register("memory", MemoryService(workspace_resolver=_workspace))
-    registry.register("personas", PersonasService(workspace_resolver=_workspace))
+    registry.register("personas", PersonasService(workspace_resolver=_workspace, on_config_changed=on_config_changed))
     registry.register("mcp", McpService(mcp_runtime=mcp_runtime))
     registry.register("health", HealthService())
     registry.register("commands", CommandsService())

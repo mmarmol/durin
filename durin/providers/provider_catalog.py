@@ -53,6 +53,14 @@ def _user_cache_path() -> Path | None:
         return None
 
 
+def _load_config_for_local():
+    """Config accessor for the local-provider live-model path. Split out so
+    tests can stub it without touching the on-disk config."""
+    from durin.config.loader import load_config
+
+    return load_config()
+
+
 def _read_index_file(path: Path) -> dict[str, list[ModelInfo]]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -89,6 +97,31 @@ def provider_models(provider: str, *, access_token: str | None = None) -> list[M
             openai_caps.get(slug) or ModelInfo(id=slug)
             for slug in list_codex_models(access_token)
         ]
+
+    # Local providers (ollama/lm_studio/vllm/…) serve only what the user has
+    # actually pulled/loaded, so the static catalog would show phantom models.
+    # Prefer the live /v1/models list; fall back to the static floor on any
+    # failure (unreachable server, empty list).
+    from durin.providers.registry import find_by_name
+
+    spec = find_by_name(provider)
+    if spec is not None and getattr(spec, "is_local", False):
+        api_base = None
+        api_key = None
+        try:
+            pconf = getattr(_load_config_for_local().providers, provider, None)
+            api_base = getattr(pconf, "api_base", None) or getattr(spec, "default_api_base", None)
+            api_key = getattr(pconf, "api_key", None)
+        except Exception:  # noqa: BLE001
+            api_base = getattr(spec, "default_api_base", None)
+        if api_base:
+            from durin.providers import local_models
+
+            ids = local_models.list_local_models(api_base, api_key)
+            if ids:
+                return [ModelInfo(id=i) for i in ids]
+        return list(_load_index().get(provider, ()))
+
     return list(_load_index().get(provider, ()))
 
 

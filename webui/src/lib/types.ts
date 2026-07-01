@@ -170,6 +170,7 @@ export interface SettingsPayload {
     label: string;
     configured: boolean;
     oauth?: boolean;
+    is_local?: boolean;
     api_key_hint?: string | null;
     api_base?: string | null;
     default_api_base?: string | null;
@@ -261,6 +262,10 @@ export type InboundEvent =
       event: "message";
       chat_id: string;
       text: string;
+      /** Stable server-assigned id, also persisted into the webui transcript
+       * so the replay builder reuses it. Keying the live row by this id lets a
+       * later canonical refetch merge instead of duplicating the row. */
+      id?: string;
       reply_to?: string;
       media?: string[];
       media_urls?: Array<{ url: string; name?: string }>;
@@ -410,6 +415,8 @@ export interface WebuiThreadPersistedPayload {
    *  (non-websocket channel) rather than the webui JSONL transcript.
    *  The composer is disabled for these sessions — they are view-only. */
   readOnly?: boolean;
+  /** Active persona slug for this session, if one was set via ``/persona``. */
+  persona?: string | null;
 }
 
 export type Outbound =
