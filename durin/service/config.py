@@ -148,6 +148,9 @@ class ProviderModelUpsertCommand(Command):
     context_window_tokens: int | None = None
     temperature: float | None = None
     reasoning_effort: str | None = None
+    supports_vision: bool | None = None
+    supports_audio_input: bool | None = None
+    supports_reasoning: bool | None = None
 
 
 class ProviderModelDeleteCommand(Command):
@@ -364,19 +367,30 @@ class ConfigService:
         cfg = load_config()
         pc = getattr(cfg.providers, provider, None)
         configured = dict(getattr(pc, "models", {}) or {})
+        cap_overrides = cfg.model_capabilities
         out: list[ProviderModelEntry] = []
         seen: set[str] = set()
         for mi in provider_models(provider):
             seen.add(mi.id)
             ov = configured.get(mi.id)
+            cap_ov = cap_overrides.get(f"{provider}/{mi.id}")
             out.append(
                 ProviderModelEntry(
                     id=mi.id,
                     configured=mi.id in configured,
                     max_input_tokens=mi.max_input_tokens,
-                    supports_vision=mi.supports_vision,
-                    supports_audio_input=mi.supports_audio_input,
-                    supports_reasoning=mi.supports_reasoning,
+                    supports_vision=(
+                        cap_ov.supports_vision if cap_ov and cap_ov.supports_vision is not None
+                        else mi.supports_vision
+                    ),
+                    supports_audio_input=(
+                        cap_ov.supports_audio_input if cap_ov and cap_ov.supports_audio_input is not None
+                        else mi.supports_audio_input
+                    ),
+                    supports_reasoning=(
+                        cap_ov.supports_reasoning if cap_ov and cap_ov.supports_reasoning is not None
+                        else mi.supports_reasoning
+                    ),
                     max_tokens=getattr(ov, "max_tokens", None),
                     context_window_tokens=getattr(ov, "context_window_tokens", None),
                     temperature=getattr(ov, "temperature", None),
@@ -386,9 +400,13 @@ class ConfigService:
         for mid, ov in configured.items():  # user customs not in the catalog
             if mid in seen:
                 continue
+            cap_ov = cap_overrides.get(f"{provider}/{mid}")
             out.append(
                 ProviderModelEntry(
                     id=mid, configured=True,
+                    supports_vision=(cap_ov.supports_vision if cap_ov and cap_ov.supports_vision is not None else False),
+                    supports_audio_input=(cap_ov.supports_audio_input if cap_ov and cap_ov.supports_audio_input is not None else False),
+                    supports_reasoning=(cap_ov.supports_reasoning if cap_ov and cap_ov.supports_reasoning is not None else False),
                     max_tokens=ov.max_tokens,
                     context_window_tokens=ov.context_window_tokens,
                     temperature=ov.temperature,
@@ -425,6 +443,24 @@ class ConfigService:
             temperature=cmd.temperature,
             reasoning_effort=cmd.reasoning_effort,
         )
+        # Write capability overrides when any tri-state field is set.
+        cap_key = f"{cmd.provider}/{cmd.model}"
+        cap_fields: dict = {}
+        if cmd.supports_vision is not None:
+            cap_fields["supports_vision"] = cmd.supports_vision
+        if cmd.supports_audio_input is not None:
+            cap_fields["supports_audio_input"] = cmd.supports_audio_input
+        if cmd.supports_reasoning is not None:
+            cap_fields["supports_reasoning"] = cmd.supports_reasoning
+        if cap_fields:
+            from durin.config.schema import ModelCapabilityOverride
+            existing = cfg.model_capabilities.get(cap_key)
+            if existing is not None:
+                merged = existing.model_dump(exclude_none=True)
+                merged.update(cap_fields)
+                cfg.model_capabilities[cap_key] = ModelCapabilityOverride(**merged)
+            else:
+                cfg.model_capabilities[cap_key] = ModelCapabilityOverride(**cap_fields)
         save_config(cfg, path)
         return ConfigSetResult(
             ok=True, config=mask_secrets(cfg.model_dump(mode="json", by_alias=False))
@@ -575,9 +611,12 @@ class ConfigService:
     ) -> ModelCapabilitiesResult:
         principal.require(Scope.CONFIG_READ)
         try:
+            from durin.config.loader import load_config
             from durin.providers.capabilities import get_model_capabilities
 
-            caps = get_model_capabilities(query.model, query.provider)
+            cfg = load_config()
+            overrides = {k: v.model_dump(exclude_none=True) for k, v in cfg.model_capabilities.items()}
+            caps = get_model_capabilities(query.model, query.provider, overrides=overrides)
         except Exception as e:  # noqa: BLE001
             raise ValidationFailedError(f"could not resolve capabilities: {e}") from e
         return ModelCapabilitiesResult(

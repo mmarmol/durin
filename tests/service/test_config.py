@@ -422,3 +422,69 @@ async def test_cross_encoder_test_requires_read_scope():
         await ConfigService().cross_encoder_test(
             CrossEncoderTestQuery(model="any"), principal
         )
+
+
+# ---------------------------------------------------------------------------
+# per-model capability overrides (Part A + B)
+# ---------------------------------------------------------------------------
+
+
+async def test_model_capabilities_respects_config_override(tmp_path, monkeypatch):
+    """The capabilities endpoint returns the OVERRIDDEN caps when
+    config.model_capabilities sets supports_vision=True for a model that
+    the snapshot would say False."""
+    from durin.config.loader import save_config
+    from durin.config.schema import Config, ModelCapabilityOverride
+
+    cfg = Config()
+    cfg.model_capabilities["ollama/qwythos-9b-200k"] = ModelCapabilityOverride(
+        supports_vision=True
+    )
+    path = tmp_path / "config.json"
+    save_config(cfg, path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", path)
+
+    result = await ConfigService().model_capabilities(
+        ModelCapabilitiesQuery(model="qwythos-9b-200k", provider="ollama"), LOCAL
+    )
+    assert result.supports_vision is True
+
+
+async def test_provider_model_upsert_persists_capability_override(tmp_path, monkeypatch):
+    """Upserting with supports_vision=True writes a ModelCapabilityOverride
+    into config.model_capabilities and the provider-models list reflects it."""
+    from durin.config.loader import load_config, save_config
+    from durin.config.schema import Config
+    from durin.service.config import ProviderModelUpsertCommand, ProviderModelsQuery
+
+    import durin.providers.provider_catalog as pc
+    from durin.providers.provider_catalog import ModelInfo
+
+    monkeypatch.setattr(
+        pc, "_load_index",
+        lambda: {"ollama": [ModelInfo(id="qwythos-9b-200k", supports_vision=False)]},
+    )
+
+    cfg = Config()
+    path = tmp_path / "config.json"
+    save_config(cfg, path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", path)
+
+    await ConfigService().provider_model_upsert(
+        ProviderModelUpsertCommand(
+            provider="ollama", model="qwythos-9b-200k", supports_vision=True
+        ),
+        LOCAL,
+    )
+
+    # Persisted to model_capabilities
+    saved = load_config(path)
+    assert saved.model_capabilities.get("ollama/qwythos-9b-200k") is not None
+    assert saved.model_capabilities["ollama/qwythos-9b-200k"].supports_vision is True
+
+    # provider-models list reflects the override
+    res = await ConfigService().provider_models_route(
+        ProviderModelsQuery(provider="ollama"), LOCAL
+    )
+    entry = next(m for m in res.models if m.id == "qwythos-9b-200k")
+    assert entry.supports_vision is True

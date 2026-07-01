@@ -64,7 +64,11 @@ def apply_model_capabilities(config: Config, model: str, provider: str) -> list[
     from durin.providers.capabilities import get_model_capabilities
 
     changed: list[str] = []
-    caps = get_model_capabilities(model, provider or None)
+    cap_overrides = {
+        k: v.model_dump(exclude_none=True)
+        for k, v in (getattr(config, "model_capabilities", {}) or {}).items()
+    }
+    caps = get_model_capabilities(model, provider or None, overrides=cap_overrides)
     win = caps.max_input_tokens
     if isinstance(win, int) and win > 0 and config.agents.defaults.context_window_tokens != win:
         old = config.agents.defaults.context_window_tokens
@@ -396,12 +400,16 @@ def _mark(ok: bool) -> str:
     return "✓" if ok else "✗"
 
 
-def _model_caps(model: str, provider: str) -> tuple[bool, bool]:
+def _model_caps(model: str, provider: str, config=None) -> tuple[bool, bool]:
     """Return ``(supports_vision, supports_audio_input)`` for a model."""
     try:
         from durin.providers.capabilities import get_model_capabilities
 
-        caps = get_model_capabilities(model, provider or None)
+        cap_overrides = {
+            k: v.model_dump(exclude_none=True)
+            for k, v in (getattr(config, "model_capabilities", {}) or {}).items()
+        } if config is not None else {}
+        caps = get_model_capabilities(model, provider or None, overrides=cap_overrides)
         return (
             bool(getattr(caps, "supports_vision", False)),
             bool(getattr(caps, "supports_audio_input", False)),
@@ -410,9 +418,9 @@ def _model_caps(model: str, provider: str) -> tuple[bool, bool]:
         return (False, False)
 
 
-def _caps_marks(model: str, provider: str) -> str:
+def _caps_marks(model: str, provider: str, config=None) -> str:
     """A compact ``text✓ vision✗ audio✗`` capability string."""
-    vision, audio = _model_caps(model, provider)
+    vision, audio = _model_caps(model, provider, config=config)
     return f"text✓ vision{_mark(vision)} audio{_mark(audio)}"
 
 
@@ -651,7 +659,7 @@ _HUB_ROWS: tuple[tuple[str, str], ...] = (
 def _native_modalities(config: Config) -> tuple[bool, bool]:
     """``(vision, audio)`` support of the main default model."""
     d = config.agents.defaults
-    return _model_caps(d.model, d.provider)
+    return _model_caps(d.model, d.provider, config=config)
 
 
 def _modality_covered(config: Config, kind: str, native: bool) -> bool:
@@ -822,7 +830,7 @@ def _capable_aux_models(config: Config, kind: str) -> list[tuple[str, str]]:
         for model in DEFAULT_MODELS.get(name, ()):
             if model in seen:
                 continue
-            vision, audio = _model_caps(model, name)
+            vision, audio = _model_caps(model, name, config=config)
             if (kind == "vision" and vision) or (kind == "audio" and audio):
                 pairs.append((model, name))
                 seen.add(model)

@@ -1293,7 +1293,11 @@ class AgentLoop:
             return mode, False
         try:
             from durin.providers.capabilities import get_model_capabilities
-            caps = get_model_capabilities(self.model, self.provider)
+            overrides = {}
+            if self.app_config is not None:
+                caps_map = getattr(self.app_config, "model_capabilities", {}) or {}
+                overrides = {k: v.model_dump(exclude_none=True) for k, v in caps_map.items()}
+            caps = get_model_capabilities(self.model, self.provider, overrides=overrides)
             return mode, bool(getattr(caps, "supports_audio_input", False))
         except Exception:  # noqa: BLE001
             return mode, False
