@@ -362,7 +362,11 @@ class SkillsService:
         principal.require(Scope.SKILLS_READ)
         from durin.agent import skills_store as ss
 
-        status, payload = ss.web_import_resolve(self._workspace, query.source)
+        # Off the event loop: resolving a source may do network (GitHub/HTTP
+        # skill resolution) via a joined worker thread that would block the loop.
+        status, payload = await asyncio.to_thread(
+            ss.web_import_resolve, self._workspace, query.source,
+        )
         return _skills_result(status, payload)
 
     @route(
@@ -411,7 +415,8 @@ class SkillsService:
         principal.require(Scope.SKILLS_READ)
         from durin.agent import skills_store as ss
 
-        status, payload = ss.web_github_token_test(query.secret)
+        # Off the event loop: this calls the GitHub API (network round-trip).
+        status, payload = await asyncio.to_thread(ss.web_github_token_test, query.secret)
         return _skills_result(status, payload)
 
     @route(
