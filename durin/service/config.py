@@ -566,9 +566,9 @@ class ConfigService:
                 access = tok.access if tok else None
             except Exception:  # noqa: BLE001
                 access = None
-            from durin.providers.codex_models import list_codex_models
+            from durin.providers.codex_models import list_codex_models_async
 
-            models = list_codex_models(access)
+            models = await list_codex_models_async(access)
             return ModelsListResult(suggested=models, models=models)
 
         from durin.config.loader import load_config

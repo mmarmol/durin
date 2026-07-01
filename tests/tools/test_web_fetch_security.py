@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import socket
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -183,7 +183,7 @@ async def test_web_fetch_connect_time_guard_blocks_dns_rebind():
     tool = WebFetchTool(WebFetchConfig(use_jina_reader=False))
     # Simulate the rebind: validation already passed, but the address the
     # fetch actually resolves to is internal.
-    with patch("durin.agent.tools.web._validate_url_safe", return_value=(True, "")), \
+    with patch("durin.agent.tools.web.validate_url_target_async", AsyncMock(return_value=(True, ""))), \
          patch("durin.security.network.socket.getaddrinfo", _fake_resolve_private):
         result = await tool.execute(url="http://rebind.example/latest/meta-data/")
     data = json.loads(result)

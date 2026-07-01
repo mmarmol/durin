@@ -1,7 +1,7 @@
 """Characterization test for GET /api/v1/models codex discovery.
 
 The logic lives in ``durin.service.config`` (ConfigService.models_list); this
-drives it through the unified v1 front door and patches ``list_codex_models`` at
+drives it through the unified v1 front door and patches ``list_codex_models_async`` at
 its source module since the service imports it lazily from there.
 """
 
@@ -30,9 +30,11 @@ def _channel():
 
 def test_models_list_uses_codex_discovery(monkeypatch, tmp_path):
     monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
-    monkeypatch.setattr(
-        codex_models, "list_codex_models", lambda access_token: ["gpt-5.5", "gpt-5.4"]
-    )
+
+    async def _fake_discovery(access_token):
+        return ["codex-discovery-sentinel", "gpt-5.4"]
+
+    monkeypatch.setattr(codex_models, "list_codex_models_async", _fake_discovery)
     inst = _channel()
     app = build_gateway_http_app(inst, inst._services, auth=inst._services.get("auth"))
     client = TestClient(app)
@@ -42,4 +44,4 @@ def test_models_list_uses_codex_discovery(monkeypatch, tmp_path):
         headers={"Authorization": f"Bearer {tok}"},
     )
     assert resp.status_code == 200
-    assert "gpt-5.5" in resp.json()["models"]
+    assert "codex-discovery-sentinel" in resp.json()["models"]
