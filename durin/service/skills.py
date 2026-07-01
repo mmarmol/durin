@@ -445,7 +445,11 @@ class SkillsService:
         principal.require(Scope.SKILLS_WRITE)
         from durin.agent import skills_store as ss
 
-        status, payload = ss.web_save(self._workspace, cmd.name, cmd.content)
+        # Off the event loop: web_save runs a blocking `bash -n` lint subprocess
+        # (up to 10s) and a git commit; keeping it inline would stall the loop.
+        status, payload = await asyncio.to_thread(
+            ss.web_save, self._workspace, cmd.name, cmd.content,
+        )
         return _skills_result(status, payload)
 
     @route(
@@ -460,7 +464,10 @@ class SkillsService:
         principal.require(Scope.SKILLS_WRITE)
         from durin.agent import skills_store as ss
 
-        status, payload = ss.web_file_save(
+        # Off the event loop: web_file_save runs a blocking `bash -n` lint
+        # subprocess (up to 10s for .sh files) and a git commit.
+        status, payload = await asyncio.to_thread(
+            ss.web_file_save,
             self._workspace,
             cmd.name,
             cmd.path,
