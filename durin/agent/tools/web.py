@@ -75,7 +75,7 @@ def _normalize(text: str) -> str:
 
 
 def _validate_url(url: str) -> tuple[bool, str]:
-    """Validate URL scheme/domain. Does NOT check resolved IPs (use _validate_url_safe for that)."""
+    """Validate URL scheme/domain. Does NOT check resolved IPs (use validate_url_target_async for that)."""
     try:
         p = urlparse(url)
         if p.scheme not in ('http', 'https'):
@@ -85,12 +85,6 @@ def _validate_url(url: str) -> tuple[bool, str]:
         return True, ""
     except Exception as e:
         return False, str(e)
-
-
-def _validate_url_safe(url: str) -> tuple[bool, str]:
-    """Validate URL with SSRF protection: scheme, domain, and resolved IP check."""
-    from durin.security.network import validate_url_target
-    return validate_url_target(url)
 
 
 def _format_results(query: str, items: list[dict[str, Any]], n: int) -> str:
