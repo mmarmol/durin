@@ -3,8 +3,8 @@ import { cn } from "@/lib/utils";
 import { useConcurrencySnapshot } from "@/hooks/useConcurrencySnapshot";
 
 /** Always-visible aggregate: "5 / 12" ceiling occupancy, amber when work is
- * queued. Click opens the Concurrency settings card. Hidden until the first
- * snapshot arrives so it never shows a misleading 0/0. */
+ * queued. Click behavior is caller-defined via onOpen. Hidden until the
+ * first snapshot arrives so it never shows a misleading 0/0. */
 export function SaturationChip({ onOpen }: { onOpen: () => void }) {
   const { t } = useTranslation();
   const snap = useConcurrencySnapshot();

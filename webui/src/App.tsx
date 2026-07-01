@@ -9,6 +9,7 @@ import { WorkflowsView } from "@/components/WorkflowsView";
 import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView, type SettingsSectionKey } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
+import { GlobalWorkPanel } from "@/components/work/GlobalWorkPanel";
 import { useVoiceSession } from "@/components/voice/useVoiceSession";
 import { useVoiceConfig } from "@/hooks/useVoiceConfig";
 import { useTokenRefresh } from "@/hooks/useTokenRefresh";
@@ -326,6 +327,7 @@ function Shell({
   const restartSawDisconnectRef = useRef(false);
   const [restartToast, setRestartToast] = useState<string | null>(null);
   const [isRestarting, setIsRestarting] = useState(false);
+  const [globalWorkOpen, setGlobalWorkOpen] = useState(false);
 
   useEffect(() => {
     try {
@@ -476,10 +478,16 @@ function Shell({
     setMobileSidebarOpen(false);
   }, []);
 
-  const onOpenConcurrency = useCallback(() => {
+  // Settings deep-link: jumps straight to the Concurrency section. Reached
+  // via the global Work panel's gear button.
+  const onOpenConcurrencySettings = useCallback(() => {
     setSettingsSection("concurrency");
     setView("settings");
     setMobileSidebarOpen(false);
+  }, []);
+
+  const onToggleGlobalWork = useCallback(() => {
+    setGlobalWorkOpen((v) => !v);
   }, []);
 
   const onBackToChat = useCallback(() => {
@@ -595,7 +603,7 @@ function Shell({
     workflowsActive: view === "workflows",
     onOpenDream,
     dreamActive: view === "dream",
-    onOpenConcurrency,
+    onOpenConcurrency: onToggleGlobalWork,
   };
   const showMainSidebar = view !== "settings";
 
@@ -713,6 +721,12 @@ function Shell({
           </div>
         )}
       </main>
+
+      <GlobalWorkPanel
+        open={globalWorkOpen}
+        onClose={() => setGlobalWorkOpen(false)}
+        onOpenSettings={onOpenConcurrencySettings}
+      />
 
       <DeleteConfirm
         open={!!pendingDelete}

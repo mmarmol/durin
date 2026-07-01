@@ -6,7 +6,13 @@ import type { ChatSummary, InboundEvent } from "@/lib/types";
 type ConcurrencySnapshotEvent = Extract<InboundEvent, { event: "concurrency_snapshot" }>;
 
 const connectSpy = vi.fn();
-let concurrencySnapshotHandler: ((ev: ConcurrencySnapshotEvent) => void) | null = null;
+// Multiple components (the sidebar's chip, the global Work panel) each
+// subscribe independently, so the mock must broadcast to every subscriber
+// rather than remembering only the most recent one.
+const concurrencySnapshotHandlers = new Set<(ev: ConcurrencySnapshotEvent) => void>();
+function emitConcurrencySnapshot(ev: ConcurrencySnapshotEvent) {
+  concurrencySnapshotHandlers.forEach((handler) => handler(ev));
+}
 const refreshSpy = vi.fn();
 const createChatSpy = vi.fn().mockResolvedValue("chat-1");
 const deleteChatSpy = vi.fn();
@@ -71,9 +77,9 @@ vi.mock("@/lib/durin-client", () => {
     onVoiceState = () => () => {};
     onVoiceAudio = () => () => {};
     onConcurrencySnapshot = (handler: (ev: ConcurrencySnapshotEvent) => void) => {
-      concurrencySnapshotHandler = handler;
+      concurrencySnapshotHandlers.add(handler);
       return () => {
-        concurrencySnapshotHandler = null;
+        concurrencySnapshotHandlers.delete(handler);
       };
     };
     sendMessage = vi.fn();
@@ -96,7 +102,7 @@ describe("App layout", () => {
     createChatSpy.mockClear();
     deleteChatSpy.mockReset();
     toggleThemeSpy.mockReset();
-    concurrencySnapshotHandler = null;
+    concurrencySnapshotHandlers.clear();
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -280,7 +286,7 @@ describe("App layout", () => {
     expect(screen.queryByDisplayValue("unsaved-brave-key")).not.toBeInTheDocument();
   });
 
-  it("opens Concurrency via the saturation chip once, without sticking on repeat opens", async () => {
+  it("toggles the global Work panel from the saturation chip, and reaches Concurrency settings once via its gear without sticking on repeat opens", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -318,8 +324,8 @@ describe("App layout", () => {
 
     // Feed a concurrency snapshot so the chip renders (it's hidden until the
     // first frame arrives).
-    await waitFor(() => expect(concurrencySnapshotHandler).not.toBeNull());
-    concurrencySnapshotHandler!({
+    await waitFor(() => expect(concurrencySnapshotHandlers.size).toBeGreaterThan(0));
+    emitConcurrencySnapshot({
       event: "concurrency_snapshot",
       lanes: {
         interactive: { active: 1, limit: 4 },
@@ -335,8 +341,17 @@ describe("App layout", () => {
       name: "Concurrency: 5 of 12 slots in use",
     });
 
-    // First click: opens Settings directly on the Concurrency section.
+    // First click: opens the global Work panel (not Settings).
     fireEvent.click(chip);
+    expect(await screen.findByRole("complementary", { name: "Activity — all sessions" })).toBeInTheDocument();
+
+    // Second click: closes the panel again.
+    fireEvent.click(chip);
+    expect(screen.queryByRole("complementary", { name: "Activity — all sessions" })).not.toBeInTheDocument();
+
+    // Reopen, then use the panel's gear to deep-link into Settings.
+    fireEvent.click(chip);
+    fireEvent.click(screen.getByRole("button", { name: "Concurrency" }));
     expect(await screen.findByRole("heading", { name: "Concurrency" })).toBeInTheDocument();
 
     // Manually navigate to another settings tab, then back to chat.
@@ -346,19 +361,20 @@ describe("App layout", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
 
     // Reopening Settings via the normal sidebar button must NOT stick on
-    // Concurrency from the earlier chip click.
+    // Concurrency from the earlier gear click.
     const sidebarAgain = screen.getByRole("navigation", { name: "Sidebar navigation" });
     fireEvent.click(within(sidebarAgain).getByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Concurrency" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
 
-    // A repeat chip click still works after the manual navigation above —
-    // proof the deep-link value is a one-shot, not permanently consumed. The
-    // sidebar (and its snapshot subscription) remounted on return to chat,
-    // so feed it a fresh snapshot before looking for the chip again.
-    await waitFor(() => expect(concurrencySnapshotHandler).not.toBeNull());
-    concurrencySnapshotHandler!({
+    // A repeat chip → gear click still works after the manual navigation
+    // above — proof the deep-link value is a one-shot, not permanently
+    // consumed. The sidebar (and its snapshot subscription) remounted on
+    // return to chat, so feed it a fresh snapshot before looking for the
+    // chip again.
+    await waitFor(() => expect(concurrencySnapshotHandlers.size).toBeGreaterThan(0));
+    emitConcurrencySnapshot({
       event: "concurrency_snapshot",
       lanes: {
         interactive: { active: 1, limit: 4 },
@@ -372,7 +388,11 @@ describe("App layout", () => {
     const chipAgain = await within(sidebarThird).findByRole("button", {
       name: "Concurrency: 5 of 12 slots in use",
     });
+    // The panel was left open from the earlier interaction, so the first
+    // click here closes it; a second click reopens it.
     fireEvent.click(chipAgain);
+    fireEvent.click(chipAgain);
+    fireEvent.click(screen.getByRole("button", { name: "Concurrency" }));
     expect(await screen.findByRole("heading", { name: "Concurrency" })).toBeInTheDocument();
   });
 
