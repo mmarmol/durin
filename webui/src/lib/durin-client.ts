@@ -56,6 +56,8 @@ type RuntimeModelHandler = (modelName: string | null, modelPreset?: string | nul
 type SessionUpdateHandler = (chatId: string) => void;
 type DreamProgressEvent = Extract<InboundEvent, { event: "dream_progress" }>;
 type DreamProgressHandler = (ev: DreamProgressEvent) => void;
+type ConcurrencySnapshotEvent = Extract<InboundEvent, { event: "concurrency_snapshot" }>;
+type ConcurrencySnapshotHandler = (ev: ConcurrencySnapshotEvent) => void;
 
 /** Structured connection-level errors surfaced to the UI.
  *
@@ -130,6 +132,7 @@ export class DurinClient {
   private runtimeModelHandlers = new Set<RuntimeModelHandler>();
   private sessionUpdateHandlers = new Set<SessionUpdateHandler>();
   private dreamProgressHandlers = new Set<DreamProgressHandler>();
+  private concurrencySnapshotHandlers = new Set<ConcurrencySnapshotHandler>();
   private errorHandlers = new Set<ErrorHandler>();
   // chat_id -> handlers listening on it
   private chatHandlers = new Map<string, Set<EventHandler>>();
@@ -228,6 +231,15 @@ export class DurinClient {
     this.dreamProgressHandlers.add(handler);
     return () => {
       this.dreamProgressHandlers.delete(handler);
+    };
+  }
+
+  /** Subscribe to gateway-wide concurrency snapshots (lane occupancy + running
+   * work), broadcast globally and coalesced on turn/subagent boundaries. */
+  onConcurrencySnapshot(handler: ConcurrencySnapshotHandler): Unsubscribe {
+    this.concurrencySnapshotHandlers.add(handler);
+    return () => {
+      this.concurrencySnapshotHandlers.delete(handler);
     };
   }
 
@@ -512,6 +524,11 @@ export class DurinClient {
       return;
     }
 
+    if (parsed.event === "concurrency_snapshot") {
+      this.emitConcurrencySnapshot(parsed);
+      return;
+    }
+
     if (parsed.event === "secret_stored") {
       const pending = this.pendingSecretStores.get(parsed.request_id);
       if (pending) {
@@ -584,6 +601,12 @@ export class DurinClient {
 
   private emitDreamProgress(ev: DreamProgressEvent): void {
     for (const handler of this.dreamProgressHandlers) {
+      handler(ev);
+    }
+  }
+
+  private emitConcurrencySnapshot(ev: ConcurrencySnapshotEvent): void {
+    for (const handler of this.concurrencySnapshotHandlers) {
       handler(ev);
     }
   }
