@@ -621,6 +621,75 @@ describe("useDurinStream", () => {
     expect(result.current.messages[0].content).toBe("fine");
   });
 
+  it("keys a complete assistant message by the server-assigned id", () => {
+    // Command outputs carry a stable ``id`` (also persisted to the transcript).
+    // The live append must adopt it so a later canonical refetch reconciles by
+    // React key instead of duplicating/dropping the row.
+    const fake = fakeClient();
+    const { result } = renderHook(() => useDurinStream("chat-id", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-id", {
+        event: "message",
+        chat_id: "chat-id",
+        id: "msg-server-1",
+        text: "## Persona",
+        render_as: "text",
+      });
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0].id).toBe("msg-server-1");
+    expect(result.current.messages[0].renderAs).toBe("text");
+  });
+
+  it("adopts the server id even when absorbing a reasoning placeholder", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useDurinStream("chat-id2", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-id2", {
+        event: "reasoning_delta",
+        chat_id: "chat-id2",
+        text: "thinking",
+      });
+      fake.emit("chat-id2", { event: "reasoning_end", chat_id: "chat-id2" });
+      fake.emit("chat-id2", {
+        event: "message",
+        chat_id: "chat-id2",
+        id: "msg-server-2",
+        text: "final answer",
+      });
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0].id).toBe("msg-server-2");
+    expect(result.current.messages[0].content).toBe("final answer");
+  });
+
+  it("falls back to a generated id when the server omits one", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(() => useDurinStream("chat-id3", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-id3", {
+        event: "message",
+        chat_id: "chat-id3",
+        text: "no id here",
+      });
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(typeof result.current.messages[0].id).toBe("string");
+    expect(result.current.messages[0].id.length).toBeGreaterThan(0);
+  });
+
   it("attaches assistant media_urls to complete messages", () => {
     const fake = fakeClient();
     const { result } = renderHook(() => useDurinStream("chat-m", EMPTY_MESSAGES), {

@@ -131,6 +131,7 @@ def _make_provider_core(
             spec=spec,
             extra_body=extra_body,
             parallel_tool_calls_overrides=dict(config.agents.defaults.parallel_tool_calls),
+            request_timeout_s=resolved.request_timeout_s,
         )
 
     provider.generation = resolved.to_generation_settings()

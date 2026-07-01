@@ -118,6 +118,12 @@ class GenerationSettings:
     temperature: float = 0.7
     max_tokens: int = 4096
     reasoning_effort: str | None = None
+    # Optional sampling params (None = don't send). ``top_p`` is a standard
+    # OpenAI param; ``top_k`` / ``repeat_penalty`` are non-standard and ride in
+    # ``extra_body`` (ollama / LM Studio read them there).
+    top_p: float | None = None
+    top_k: int | None = None
+    repeat_penalty: float | None = None
 
 
 _SYNTHETIC_USER_CONTENT = "(conversation continued)"
@@ -327,6 +333,10 @@ class LLMProvider(ABC):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        repeat_penalty: float | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request.
@@ -554,6 +564,10 @@ class LLMProvider(ABC):
         tool_choice: str | dict[str, Any] | None = None,
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
         on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        repeat_penalty: float | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Stream a chat completion, calling *on_content_delta* for each text chunk.
 
@@ -572,6 +586,8 @@ class LLMProvider(ABC):
             messages=messages, tools=tools, model=model,
             max_tokens=max_tokens, temperature=temperature,
             reasoning_effort=reasoning_effort, tool_choice=tool_choice,
+            top_p=top_p, top_k=top_k, repeat_penalty=repeat_penalty,
+            extra_body=extra_body,
         )
         if on_content_delta and response.content:
             await on_content_delta(response.content)
@@ -597,6 +613,10 @@ class LLMProvider(ABC):
         tool_choice: str | dict[str, Any] | None = None,
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
         on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
+        top_p: object = _SENTINEL,
+        top_k: object = _SENTINEL,
+        repeat_penalty: object = _SENTINEL,
+        extra_body: dict[str, Any] | None = None,
         retry_mode: str = "standard",
         on_retry_wait: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     ) -> LLMResponse:
@@ -607,6 +627,12 @@ class LLMProvider(ABC):
             temperature = self.generation.temperature
         if reasoning_effort is self._SENTINEL:
             reasoning_effort = self.generation.reasoning_effort
+        if top_p is self._SENTINEL:
+            top_p = self.generation.top_p
+        if top_k is self._SENTINEL:
+            top_k = self.generation.top_k
+        if repeat_penalty is self._SENTINEL:
+            repeat_penalty = self.generation.repeat_penalty
 
         kw: dict[str, Any] = dict(
             messages=messages, tools=tools, model=model,
@@ -614,6 +640,8 @@ class LLMProvider(ABC):
             reasoning_effort=reasoning_effort, tool_choice=tool_choice,
             on_content_delta=on_content_delta,
             on_thinking_delta=on_thinking_delta,
+            top_p=top_p, top_k=top_k, repeat_penalty=repeat_penalty,
+            extra_body=extra_body,
         )
         return await self._run_with_retry(
             self._safe_chat_stream,
@@ -632,6 +660,10 @@ class LLMProvider(ABC):
         temperature: object = _SENTINEL,
         reasoning_effort: object = _SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
+        top_p: object = _SENTINEL,
+        top_k: object = _SENTINEL,
+        repeat_penalty: object = _SENTINEL,
+        extra_body: dict[str, Any] | None = None,
         retry_mode: str = "standard",
         on_retry_wait: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     ) -> LLMResponse:
@@ -642,7 +674,10 @@ class LLMProvider(ABC):
         reasoning_effort through every layer. Explicit ``None`` is also
         normalized to the provider's generation defaults so that downstream
         ``_build_kwargs`` never sees ``None`` for ``max_tokens`` / ``temperature``
-        (which would crash ``max(1, max_tokens)``).
+        (which would crash ``max(1, max_tokens)``). Sampling params
+        (``top_p`` / ``top_k`` / ``repeat_penalty``) fall back to
+        ``self.generation`` on the sentinel; an explicit ``None`` is preserved
+        as "don't send". ``extra_body`` is a passthrough merged by the provider.
         """
         if max_tokens is self._SENTINEL or max_tokens is None:
             max_tokens = self.generation.max_tokens
@@ -650,11 +685,19 @@ class LLMProvider(ABC):
             temperature = self.generation.temperature
         if reasoning_effort is self._SENTINEL:
             reasoning_effort = self.generation.reasoning_effort
+        if top_p is self._SENTINEL:
+            top_p = self.generation.top_p
+        if top_k is self._SENTINEL:
+            top_k = self.generation.top_k
+        if repeat_penalty is self._SENTINEL:
+            repeat_penalty = self.generation.repeat_penalty
 
         kw: dict[str, Any] = dict(
             messages=messages, tools=tools, model=model,
             max_tokens=max_tokens, temperature=temperature,
             reasoning_effort=reasoning_effort, tool_choice=tool_choice,
+            top_p=top_p, top_k=top_k, repeat_penalty=repeat_penalty,
+            extra_body=extra_body,
         )
         return await self._run_with_retry(
             self._safe_chat,

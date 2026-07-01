@@ -253,19 +253,24 @@ def replay_transcript_to_ui_messages(
                 }
                 return
 
-    def absorb_complete(extra: dict[str, Any], idx: int) -> None:
+    def absorb_complete(extra: dict[str, Any], idx: int, msg_id: str | None = None) -> None:
         last = messages[-1] if messages else None
         if last and is_reasoning_only_placeholder(last):
-            messages[-1] = {
+            absorbed = {
                 **last,
                 **extra,
                 "isStreaming": False,
                 "reasoningStreaming": False,
             }
+            # A server-assigned id pins the row to the same React key the live
+            # path used, so a later refetch merges instead of replacing it.
+            if msg_id:
+                absorbed["id"] = msg_id
+            messages[-1] = absorbed
         else:
             messages.append(
                 {
-                    "id": _new_id("as", idx),
+                    "id": msg_id or _new_id("as", idx),
                     "role": "assistant",
                     "createdAt": _ts_base + idx,
                     **extra,
@@ -456,7 +461,12 @@ def replay_transcript_to_ui_messages(
             lat = rec.get("latency_ms")
             if isinstance(lat, (int, float)) and lat >= 0:
                 extra["latencyMs"] = int(lat)
-            absorb_complete(extra, idx)
+            ra = rec.get("render_as")
+            if ra in ("text", "markdown"):
+                extra["renderAs"] = ra
+            rec_id = rec.get("id")
+            msg_id = rec_id if isinstance(rec_id, str) and rec_id else None
+            absorb_complete(extra, idx, msg_id)
             if media:
                 suppress_until_turn_end = True
             continue

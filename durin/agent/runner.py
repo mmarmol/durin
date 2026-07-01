@@ -245,6 +245,11 @@ class AgentRunSpec:
     temperature: float | None = None
     max_tokens: int | None = None
     reasoning_effort: str | None = None
+    # Optional sampling params (None = don't send). top_p is standard; top_k /
+    # repeat_penalty are non-standard and routed into the request's extra_body.
+    top_p: float | None = None
+    top_k: int | None = None
+    repeat_penalty: float | None = None
     hook: AgentHook | None = None
     error_message: str | None = _DEFAULT_ERROR_MESSAGE
     max_iterations_message: str | None = None
@@ -1457,6 +1462,16 @@ class AgentRunner:
             kwargs["max_tokens"] = spec.max_tokens
         if spec.reasoning_effort is not None:
             kwargs["reasoning_effort"] = spec.reasoning_effort
+        # Sampling params. top_p is a standard OpenAI param; top_k and
+        # repeat_penalty are non-standard and ride in extra_body (ollama /
+        # LM Studio read them there). extra_body is only created when at least
+        # one non-standard param is set, so an all-unset spec emits nothing.
+        if spec.top_p is not None:
+            kwargs["top_p"] = spec.top_p
+        if spec.top_k is not None:
+            kwargs.setdefault("extra_body", {})["top_k"] = spec.top_k
+        if spec.repeat_penalty is not None:
+            kwargs.setdefault("extra_body", {})["repeat_penalty"] = spec.repeat_penalty
         return kwargs
 
     async def _await_with_compaction_grace(

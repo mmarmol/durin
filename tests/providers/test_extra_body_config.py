@@ -185,6 +185,73 @@ class TestBuildKwargsExtraBody:
         assert kwargs["extra_body"]["repetition_penalty"] == 1.15
 
 
+class TestBuildKwargsSamplingParams:
+    """Per-model sampling params: top_p standard, top_k/repeat_penalty via extra_body."""
+
+    def test_top_p_is_standard_kwarg(self) -> None:
+        provider = _make_provider()
+        kwargs = provider._build_kwargs(
+            messages=_simple_messages(),
+            tools=None, model=None, max_tokens=100,
+            temperature=0.1, reasoning_effort=None, tool_choice=None,
+            top_p=0.9,
+        )
+        assert kwargs["top_p"] == 0.9
+        assert "extra_body" not in kwargs
+
+    def test_top_k_and_repeat_penalty_go_into_extra_body(self) -> None:
+        provider = _make_provider()
+        kwargs = provider._build_kwargs(
+            messages=_simple_messages(),
+            tools=None, model=None, max_tokens=100,
+            temperature=0.1, reasoning_effort=None, tool_choice=None,
+            top_k=20, repeat_penalty=1.05,
+        )
+        assert kwargs["extra_body"]["top_k"] == 20
+        assert kwargs["extra_body"]["repeat_penalty"] == 1.05
+        assert "top_k" not in kwargs
+        assert "repeat_penalty" not in kwargs
+
+    def test_sampling_params_merge_with_configured_extra_body(self) -> None:
+        """Non-standard sampling params must not clobber a pre-existing
+        ProviderConfig.extra_body entry (deep-merge path)."""
+        provider = _make_provider({"chat_template_kwargs": {"enable_thinking": False}})
+        kwargs = provider._build_kwargs(
+            messages=_simple_messages(),
+            tools=None, model=None, max_tokens=100,
+            temperature=0.1, reasoning_effort=None, tool_choice=None,
+            top_k=20, repeat_penalty=1.05,
+        )
+        body = kwargs["extra_body"]
+        assert body["top_k"] == 20
+        assert body["repeat_penalty"] == 1.05
+        assert body["chat_template_kwargs"] == {"enable_thinking": False}
+
+    def test_passthrough_extra_body_merges_with_sampling(self) -> None:
+        """An ``extra_body`` passed by the runner merges alongside the
+        provider's own config extra_body and named sampling params."""
+        provider = _make_provider({"guided_json": {"type": "object"}})
+        kwargs = provider._build_kwargs(
+            messages=_simple_messages(),
+            tools=None, model=None, max_tokens=100,
+            temperature=0.1, reasoning_effort=None, tool_choice=None,
+            extra_body={"top_k": 30},
+        )
+        body = kwargs["extra_body"]
+        assert body["top_k"] == 30
+        assert body["guided_json"] == {"type": "object"}
+
+    def test_no_sampling_params_no_extra_keys(self) -> None:
+        provider = _make_provider()
+        kwargs = provider._build_kwargs(
+            messages=_simple_messages(),
+            tools=None, model=None, max_tokens=100,
+            temperature=0.1, reasoning_effort=None, tool_choice=None,
+        )
+        assert "top_p" not in kwargs
+        assert "extra_body" not in kwargs
+
+
 # ---------------------------------------------------------------------------
 # Schema validation
 # ---------------------------------------------------------------------------

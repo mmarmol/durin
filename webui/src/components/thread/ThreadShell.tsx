@@ -104,6 +104,7 @@ export function ThreadShell({
     hasPendingToolCalls,
     refresh: refreshHistory,
     version: historyVersion,
+    persona: historicalPersona,
   } = useSessionHistory(historyKey);
   const { client, modelName, modelPreset, token } = useClient();
   const activeEffort = effortFromPreset(modelPreset);
@@ -172,8 +173,21 @@ export function ThreadShell({
         pendingCanonicalHydrateRef.current.delete(chatId);
         appliedHistoryVersionRef.current.set(chatId, historyVersion);
         const normalized = projectWebuiThreadMessages(historical);
-        messageCacheRef.current.set(chatId, normalized);
-        return normalized;
+        // Canonical replay is authoritative. The only live row it can legitimately
+        // be missing is a server-stamped command output (id ``msg-…``) whose
+        // persistence the refetch raced ahead of — command turns emit no
+        // ``turn_end``, so the live row was never re-anchored. Keep ONLY those.
+        // Every other live row (notably a streamed reply, keyed by a fallback
+        // ``crypto.randomUUID()`` and persisted under a different replay id) is
+        // already represented in canonical; re-appending it would render it
+        // twice, so it must be dropped here.
+        const canonicalIds = new Set(normalized.map((m) => m.id));
+        const liveOnly = projectWebuiThreadMessages(prev).filter(
+          (m) => m.id.startsWith("msg-") && !canonicalIds.has(m.id),
+        );
+        const merged = [...normalized, ...liveOnly];
+        messageCacheRef.current.set(chatId, merged);
+        return merged;
       }
       if (cached && cached.length > 0) return projectWebuiThreadMessages(cached);
       if (historical.length === 0 && prev.length > 0) return projectWebuiThreadMessages(prev);
@@ -327,6 +341,20 @@ export function ThreadShell({
     [chatId, client],
   );
 
+  const [activePersona, setActivePersona] = useState<string | null>(null);
+  // Seed the pill from the fetched thread payload whenever the active chat changes.
+  useEffect(() => {
+    setActivePersona(historicalPersona ?? null);
+  }, [historyKey, historicalPersona]);
+  const handlePersonaPick = useCallback(
+    (name: string) => {
+      setActivePersona(name);
+      const cid = chatId ?? client.defaultChatId;
+      if (cid) client.sendMessage(cid, `/persona ${name}`);
+    },
+    [chatId, client],
+  );
+
   // Lets an interaction block deep in the transcript answer a question
   // or store a requested secret without drilling callbacks through
   // viewport → list → bubble.
@@ -419,6 +447,8 @@ export function ThreadShell({
           voiceState={voiceState}
           apiStatus={apiStatus}
           onDismissApiStatus={dismissApiStatus}
+          onPersonaPick={handlePersonaPick}
+          activePersona={activePersona}
         />
       ) : (
         <ThreadComposer
@@ -451,6 +481,8 @@ export function ThreadShell({
           voiceState={voiceState}
           apiStatus={apiStatus}
           onDismissApiStatus={dismissApiStatus}
+          onPersonaPick={handlePersonaPick}
+          activePersona={activePersona}
         />
       )}
     </>

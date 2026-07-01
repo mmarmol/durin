@@ -22,7 +22,7 @@ left behind were removed in SP8, so this service is now the sole owner.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from durin.service.principal import Principal, Scope
 from durin.service.registry import route
@@ -116,6 +116,13 @@ class SettingsWebSearchUpdateCommand(Command):
 class SettingsService:
     """Read and mutate agent model/provider and web-search settings."""
 
+    def __init__(self, on_default_changed: Callable[[], None] | None = None) -> None:
+        # Called after the default model/provider changes so the running loop
+        # re-resolves it live (no gateway restart). The gateway binds the live
+        # ``AgentLoop.apply_default_model_live``; surfaces without a loop leave
+        # it ``None`` and the change applies on the next process start.
+        self._on_default_changed = on_default_changed
+
     def _payload(self, *, requires_restart: bool = False) -> SettingsResult:
         """Build the full settings dict.
 
@@ -149,14 +156,19 @@ class SettingsService:
                 )
                 continue
             provider_config = getattr(config.providers, spec.name, None)
-            if provider_config is None or spec.is_oauth or spec.is_local:
+            if provider_config is None or spec.is_oauth:
                 continue
+            if spec.is_local:
+                configured = bool(getattr(provider_config, "api_base", None))
+            else:
+                configured = bool(provider_config.api_key)
             providers.append(
                 {
                     "name": spec.name,
                     "label": spec.label,
-                    "configured": bool(provider_config.api_key),
-                    "api_key_hint": mask_secret_hint(provider_config.api_key),
+                    "configured": configured,
+                    "is_local": bool(spec.is_local),
+                    "api_key_hint": None if spec.is_local else mask_secret_hint(provider_config.api_key),
                     "api_base": provider_config.api_base,
                     "default_api_base": spec.default_api_base or None,
                 }
@@ -244,6 +256,11 @@ class SettingsService:
                 from durin.utils.oauth import any_token_present
 
                 configured = any_token_present(spec.name)
+            elif getattr(spec, "is_local", False):
+                # Local providers (ollama/lm_studio/vllm) authenticate by reachable
+                # endpoint, not a key — mirror configured_provider_names' per-spec
+                # branch so a configured local provider can be the default.
+                configured = bool(provider_config and getattr(provider_config, "api_base", None))
             else:
                 configured = bool(provider_config and provider_config.api_key)
             if not configured:
@@ -254,6 +271,9 @@ class SettingsService:
 
         if changed:
             save_config(config)
+            if self._on_default_changed is not None:
+                # Apply the new default to the running loop live (no restart).
+                self._on_default_changed()
         return self._payload(requires_restart=False)
 
     @route(

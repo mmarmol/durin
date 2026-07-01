@@ -3468,25 +3468,55 @@ export interface components {
              */
             reasoning_effort: string | null;
             /**
+             * Repeat Penalty
+             * @default null
+             */
+            repeat_penalty: number | null;
+            /**
              * Supports Audio Input
              * @default false
              */
             supports_audio_input: boolean;
+            /**
+             * Supports Audio Input Override
+             * @default null
+             */
+            supports_audio_input_override: boolean | null;
             /**
              * Supports Reasoning
              * @default false
              */
             supports_reasoning: boolean;
             /**
+             * Supports Reasoning Override
+             * @default null
+             */
+            supports_reasoning_override: boolean | null;
+            /**
              * Supports Vision
              * @default false
              */
             supports_vision: boolean;
             /**
+             * Supports Vision Override
+             * @default null
+             */
+            supports_vision_override: boolean | null;
+            /**
              * Temperature
              * @default null
              */
             temperature: number | null;
+            /**
+             * Top K
+             * @default null
+             */
+            top_k: number | null;
+            /**
+             * Top P
+             * @default null
+             */
+            top_p: number | null;
         };
         /** ProviderModelUpsertCommand */
         ProviderModelUpsertCommand: {
@@ -3510,10 +3540,40 @@ export interface components {
              */
             reasoning_effort: string | null;
             /**
+             * Repeat Penalty
+             * @default null
+             */
+            repeat_penalty: number | null;
+            /**
+             * Supports Audio Input
+             * @default null
+             */
+            supports_audio_input: boolean | null;
+            /**
+             * Supports Reasoning
+             * @default null
+             */
+            supports_reasoning: boolean | null;
+            /**
+             * Supports Vision
+             * @default null
+             */
+            supports_vision: boolean | null;
+            /**
              * Temperature
              * @default null
              */
             temperature: number | null;
+            /**
+             * Top K
+             * @default null
+             */
+            top_k: number | null;
+            /**
+             * Top P
+             * @default null
+             */
+            top_p: number | null;
         };
         /** ProviderModelsQuery */
         ProviderModelsQuery: {
