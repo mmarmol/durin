@@ -160,6 +160,25 @@ def publish_dream_progress(bus: MessageBus, payload: dict[str, Any]) -> None:
     ))
 
 
+def publish_concurrency_snapshot(bus: MessageBus, snapshot: dict[str, Any]) -> None:
+    """Enqueue a concurrency snapshot for ALL websocket connections (global fan-out).
+
+    Mirrors :func:`publish_dream_progress`: a ``chat_id="*"`` frame flagged so
+    the channel's ``send`` dispatcher broadcasts it to every open connection.
+    Droppable — a full outbound bus skips this frame; the next boundary
+    re-publishes the latest state, so a lost snapshot never desyncs the UI for
+    long."""
+    try:
+        bus.outbound.put_nowait(OutboundMessage(
+            channel="websocket",
+            chat_id="*",
+            content="",
+            metadata={"_concurrency_snapshot": True, "snapshot": snapshot},
+        ))
+    except asyncio.QueueFull:
+        pass
+
+
 def _default_model_name_from_config() -> str | None:
     """Resolved model string from on-disk config (bootstrap fallback)."""
     try:
@@ -500,6 +519,7 @@ class WebSocketChannel(BaseChannel):
         static_dist_path: Path | None = None,
         runtime_model_name: Callable[[], str | None] | None = None,
         runtime_model_preset: Callable[[], str | None] | None = None,
+        runtime_concurrency_snapshot: Callable[[], dict[str, Any]] | None = None,
         cron_service: "CronService | None" = None,
     ):
         if isinstance(config, dict):
@@ -527,6 +547,7 @@ class WebSocketChannel(BaseChannel):
         )
         self._runtime_model_name = runtime_model_name
         self._runtime_model_preset = runtime_model_preset
+        self._runtime_concurrency_snapshot = runtime_concurrency_snapshot
         # Running CronService (same process). Used only by the run-now
         # endpoint so a manual trigger reaches the live scheduler + its
         # in-process overlap guard. None outside the gateway (tests).
@@ -656,10 +677,31 @@ class WebSocketChannel(BaseChannel):
             return
         await self.send_goal_status(chat_id, "running", started_at=t0)
 
+    async def _maybe_push_concurrency_snapshot(self, chat_id: str) -> None:
+        """Push the current concurrency snapshot to the just-subscribed chat so a
+        fresh or reconnected client shows live lane state without waiting for the
+        next turn boundary."""
+        if self._runtime_concurrency_snapshot is None:
+            return
+        try:
+            snap = self._runtime_concurrency_snapshot()
+        except Exception:  # noqa: BLE001 - hydrate is best-effort
+            return
+        if not isinstance(snap, dict):
+            return
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        body: dict[str, Any] = {"event": "concurrency_snapshot", **snap}
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" concurrency_snapshot ")
+
     async def _hydrate_after_subscribe(self, chat_id: str) -> None:
-        """Replay goal/run strip state after subscribe (same-process refresh)."""
+        """Replay goal/run strip + concurrency state after subscribe (same-process refresh)."""
         await self._maybe_push_active_goal_state(chat_id)
         await self._maybe_push_turn_run_wall_clock(chat_id)
+        await self._maybe_push_concurrency_snapshot(chat_id)
 
     async def _send_event(self, connection: Any, event: str, **fields: Any) -> None:
         """Send a control event (attached, error, ...) to a single connection."""
@@ -1709,6 +1751,13 @@ class WebSocketChannel(BaseChannel):
             await self.send_dream_progress(payload if isinstance(payload, dict) else {})
             return
 
+        # Concurrency snapshot — a global (chat_id="*") frame broadcast to
+        # every connection. Checked before the per-chat subscriber lookup.
+        if msg.metadata.get("_concurrency_snapshot"):
+            payload = msg.metadata.get("snapshot")
+            await self.send_concurrency_snapshot(payload if isinstance(payload, dict) else {})
+            return
+
         # Provider retry heartbeat — surface as a dedicated WS event so the
         # UI can render a transient banner ("retrying in 4s, attempt 2 of 7")
         # instead of letting the error become the assistant's reply.
@@ -2063,3 +2112,18 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" dream_progress ")
+
+    async def send_concurrency_snapshot(self, payload: dict[str, Any]) -> None:
+        """Broadcast a concurrency snapshot to every open websocket connection.
+
+        Drives the sidebar saturation chip, the Concurrency settings card's live
+        readouts, and the global Work panel. Like :meth:`send_dream_progress`,
+        fans out to all connections. Returns early when none are open — the
+        subscriber gate that keeps the monitor free when nobody is watching."""
+        conns = list(self._conn_chats)
+        if not conns:
+            return
+        body: dict[str, Any] = {"event": "concurrency_snapshot", **payload}
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" concurrency_snapshot ")

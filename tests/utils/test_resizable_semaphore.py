@@ -94,6 +94,37 @@ def test_lower_limit_applies_as_holders_finish():
     asyncio.run(run())
 
 
+def test_waiting_counts_blocked_acquirers():
+    async def run():
+        sem = ResizableSemaphore(1, name="t")
+        assert sem.waiting == 0
+        async with sem:  # take the only permit
+            assert sem.active == 1
+            assert sem.waiting == 0
+            blocked = asyncio.create_task(_hold(sem))
+            await asyncio.sleep(0.01)  # let it block in __aenter__
+            assert sem.waiting == 1
+        await asyncio.sleep(0.01)  # permit released -> blocked admitted
+        assert sem.waiting == 0
+        await blocked
+
+    asyncio.run(run())
+
+
+async def _hold(sem: ResizableSemaphore) -> None:
+    async with sem:
+        await asyncio.sleep(0)
+
+
+def test_waiting_zero_when_unlimited():
+    async def run():
+        sem = ResizableSemaphore(0, name="u")  # unlimited: no gating
+        async with sem:
+            assert sem.waiting == 0
+
+    asyncio.run(run())
+
+
 def test_unlimited_to_limited_with_overshoot():
     # Regression: transitioning from unlimited (0) to a cap LOWER than the
     # in-flight count must converge to the new cap, not permanently over-admit.

@@ -255,6 +255,29 @@ export interface ApiRetryStatus {
   final: boolean;
 }
 
+export interface ConcurrencyLane {
+  active: number;
+  /** 0 means unlimited. */
+  limit: number;
+  waiting?: number;
+}
+export interface ConcurrencyWorkItem {
+  kind: "turn" | "subagent";
+  id: string;
+  session_key: string | null;
+  label: string;
+  status: "running";
+}
+export interface ConcurrencySnapshot {
+  lanes: {
+    interactive: ConcurrencyLane;
+    ceiling: ConcurrencyLane;
+    subagents: ConcurrencyLane;
+  };
+  queued: number;
+  work: ConcurrencyWorkItem[];
+}
+
 export type InboundEvent =
   | { event: "ready"; chat_id: string; client_id: string }
   | { event: "attached"; chat_id: string }
@@ -359,6 +382,12 @@ export type InboundEvent =
       /** On ``run_finished``: false when the consolidation passes errored. */
       ok?: boolean;
     }
+  | ({
+      /** Gateway-wide concurrency snapshot: lane occupancy + running-work list,
+       * broadcast to every connection. Drives the saturation chip, the
+       * Concurrency settings card, and the global Work panel. */
+      event: "concurrency_snapshot";
+    } & ConcurrencySnapshot)
   | {
       /** Ack for a `secret_store` frame — the credential was written to
        * the local secret store (or rejected). Carries no secret value. */

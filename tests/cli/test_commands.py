@@ -1353,6 +1353,9 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
             self.provider = kwargs.get("provider", object())
             self.tools = {}
 
+        def build_concurrency_snapshot(self):
+            return {"lanes": {}, "queued": 0, "work": []}
+
         async def process_direct(self, *_args, **_kwargs):
             return OutboundMessage(
                 channel="telegram",
@@ -1487,6 +1490,9 @@ def test_gateway_cron_job_passes_none_on_progress_for_bus_callback(
             self.model = "test-model"
             self.provider = object()
             self.tools = {}
+
+        def build_concurrency_snapshot(self):
+            return {"lanes": {}, "queued": 0, "work": []}
 
         async def process_direct(self, *_args, on_progress=None, **_kwargs):
             seen["on_progress"] = on_progress
@@ -1721,6 +1727,9 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
             self.provider = object()
             self.dream = _FakeDream()
             self.sessions = _FakeSessionManager()
+
+        def build_concurrency_snapshot(self):
+            return {"lanes": {}, "queued": 0, "work": []}
 
         async def run(self) -> None:
             await asyncio.Event().wait()

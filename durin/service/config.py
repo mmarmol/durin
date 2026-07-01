@@ -31,7 +31,7 @@ Extracted from ``durin/channels/websocket.py``
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import Field
 
@@ -248,6 +248,14 @@ _CRED_FIELDS: tuple[str, ...] = (
     "api_key", "claw_token", "access_token",
 )
 
+#: Dotted config keys whose write should hot-reload the running loop's
+#: concurrency lanes rather than waiting for a restart.
+CONCURRENCY_CAP_KEYS = {
+    "agents.defaults.max_concurrent_interactive",
+    "agents.defaults.concurrency_ceiling",
+    "agents.defaults.max_concurrent_subagents",
+}
+
 
 def _py_type_name(annotation: Any) -> str:
     """Map a Pydantic field annotation to a webui field type tag."""
@@ -299,6 +307,12 @@ def _channel_field_schema(model: type) -> list[dict[str, Any]]:
 
 class ConfigService:
     """Read/write the effective config, list models/channels, probe model health."""
+
+    def __init__(self, on_config_changed: Callable[[], None] | None = None) -> None:
+        # Fired after a write to a concurrency-cap key so the running loop
+        # re-reads the caps and resizes its lanes without a restart. None on
+        # surfaces without a live loop (the write still persists to disk).
+        self._on_config_changed = on_config_changed
 
     @route(
         "GET",
@@ -359,6 +373,11 @@ class ConfigService:
             raise ValidationFailedError(f"validation failed: {e}") from e
 
         save_config(config, path)
+        if (
+            self._on_config_changed is not None
+            and _normalize_dotted_path(cmd.key) in CONCURRENCY_CAP_KEYS
+        ):
+            self._on_config_changed()
         return ConfigSetResult(
             ok=True,
             config=mask_secrets(config.model_dump(mode="json", by_alias=False)),

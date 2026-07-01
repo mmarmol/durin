@@ -78,7 +78,8 @@
       "modes": "Modes",
       "cron": "Cron",
       "logs": "Logs",
-      "mcp": "MCP"
+      "mcp": "MCP",
+      "concurrency": "Concurrency"
     },
     "sections": {
       "interface": "Interface",
@@ -857,6 +858,41 @@
         "stop": "Stop voice",
         "bargeHint": "Speak to interrupt"
       }
+    },
+    "concurrency": {
+      "description": "How many turns and sub-agents run at once. Changes apply immediately, no restart.",
+      "sections": { "caps": "Limits", "live": "Live" },
+      "rows": {
+        "interactive": "Interactive turns",
+        "ceiling": "Global ceiling",
+        "subagents": "Sub-agents"
+      },
+      "help": {
+        "interactive": "Max interactive turns running at once across all sessions.",
+        "ceiling": "Max concurrent work overall — interactive turns plus sub-agents.",
+        "subagents": "Max sub-agents running at once."
+      },
+      "live": {
+        "interactive": "Interactive",
+        "ceiling": "Ceiling",
+        "subagents": "Sub-agents",
+        "queued": "Queued",
+        "unlimited": "∞"
+      }
+    }
+  },
+  "concurrency": {
+    "chip": {
+      "label": "Concurrency: {{active}} of {{limit}} slots in use",
+      "unlimited": "{{active}} active",
+      "queued": "{{count}} queued"
+    },
+    "panel": {
+      "title": "Activity — all sessions",
+      "empty": "Nothing running",
+      "turn": "Turn",
+      "subagent": "Sub-agent",
+      "close": "Close"
     }
   },
   "workflows": {
