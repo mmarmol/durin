@@ -12,17 +12,66 @@ there never affect the JSONL write.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
+import threading
 import time
+from collections import OrderedDict
 from contextvars import ContextVar, Token
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TextIO
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_DIR = Path.home() / ".cache" / "durin" / "telemetry"
 _MAX_EVENTS_PER_FILE = 10_000
+
+# Persistent append-handle pool. Reopening the file per event (open+write+close)
+# was the dominant per-event cost; keeping one append handle per path and writing
+# through (write + flush, no fsync) drops the open/close syscalls while every
+# event stays immediately readable by a fresh reader. Bounded LRU so a long-lived
+# multi-session process never accumulates unbounded file descriptors.
+_MAX_OPEN_HANDLES = 64
+_open_handles: "OrderedDict[Path, TextIO]" = OrderedDict()
+_io_lock = threading.Lock()
+
+
+def _append_line(path: Path, line: str) -> None:
+    """Append one line to *path* via a pooled persistent handle, flushing so the
+    write is immediately visible to a fresh reader. Thread-safe; all pool access
+    and writes serialize on ``_io_lock``."""
+    with _io_lock:
+        handle = _open_handles.get(path)
+        if handle is None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handle = path.open("a", encoding="utf-8")
+            _open_handles[path] = handle
+            while len(_open_handles) > _MAX_OPEN_HANDLES:
+                _, evicted = _open_handles.popitem(last=False)
+                try:
+                    evicted.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        else:
+            _open_handles.move_to_end(path)
+        handle.write(line)
+        handle.flush()
+
+
+def close_all_handles() -> None:
+    """Close every pooled telemetry handle. Registered with atexit; safe to call
+    explicitly (e.g. on gateway shutdown) and idempotent."""
+    with _io_lock:
+        for handle in _open_handles.values():
+            try:
+                handle.close()
+            except Exception:  # noqa: BLE001
+                pass
+        _open_handles.clear()
+
+
+atexit.register(close_all_handles)
 
 
 class _Sink(Protocol):
@@ -95,9 +144,10 @@ class TelemetryLogger:
         }
         if data:
             entry["data"] = data
-        with self._path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")))
-            f.write("\n")
+        _append_line(
+            self._path,
+            json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n",
+        )
         self._count += 1
         # Fan out to extra sinks (e.g. PushSink). Isolation: each sink
         # runs in its own try/except so a failure in one (network down,
