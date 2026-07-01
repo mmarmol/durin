@@ -1,9 +1,12 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ChatSummary } from "@/lib/types";
+import type { ChatSummary, InboundEvent } from "@/lib/types";
+
+type ConcurrencySnapshotEvent = Extract<InboundEvent, { event: "concurrency_snapshot" }>;
 
 const connectSpy = vi.fn();
+let concurrencySnapshotHandler: ((ev: ConcurrencySnapshotEvent) => void) | null = null;
 const refreshSpy = vi.fn();
 const createChatSpy = vi.fn().mockResolvedValue("chat-1");
 const deleteChatSpy = vi.fn();
@@ -67,7 +70,12 @@ vi.mock("@/lib/durin-client", () => {
     onChat = () => () => {};
     onVoiceState = () => () => {};
     onVoiceAudio = () => () => {};
-    onConcurrencySnapshot = () => () => {};
+    onConcurrencySnapshot = (handler: (ev: ConcurrencySnapshotEvent) => void) => {
+      concurrencySnapshotHandler = handler;
+      return () => {
+        concurrencySnapshotHandler = null;
+      };
+    };
     sendMessage = vi.fn();
     newChat = vi.fn();
     attach = vi.fn();
@@ -88,6 +96,7 @@ describe("App layout", () => {
     createChatSpy.mockClear();
     deleteChatSpy.mockReset();
     toggleThemeSpy.mockReset();
+    concurrencySnapshotHandler = null;
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -269,6 +278,102 @@ describe("App layout", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Brave Search" }));
     expect(screen.getByText("BSAo••••ew20")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("unsaved-brave-key")).not.toBeInTheDocument();
+  });
+
+  it("opens Concurrency via the saturation chip once, without sticking on repeat opens", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/api/v1/settings")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              agent: {
+                model: "openai/gpt-4o",
+                provider: "auto",
+                resolved_provider: "openai",
+                has_api_key: true,
+              },
+              providers: [{ name: "openai", label: "OpenAI", configured: true }],
+              web_search: {
+                provider: "duckduckgo",
+                api_key_hint: null,
+                base_url: null,
+                providers: [
+                  { name: "duckduckgo", label: "DuckDuckGo", credential: "none" },
+                ],
+              },
+              runtime: { config_path: "/tmp/config.json" },
+              requires_restart: false,
+            }),
+          };
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    render(<App />);
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+
+    // Feed a concurrency snapshot so the chip renders (it's hidden until the
+    // first frame arrives).
+    await waitFor(() => expect(concurrencySnapshotHandler).not.toBeNull());
+    concurrencySnapshotHandler!({
+      event: "concurrency_snapshot",
+      lanes: {
+        interactive: { active: 1, limit: 4 },
+        ceiling: { active: 5, limit: 12 },
+        subagents: { active: 1, limit: 3 },
+      },
+      queued: 0,
+      work: [],
+    });
+
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    const chip = await within(sidebar).findByRole("button", {
+      name: "Concurrency: 5 of 12 slots in use",
+    });
+
+    // First click: opens Settings directly on the Concurrency section.
+    fireEvent.click(chip);
+    expect(await screen.findByRole("heading", { name: "Concurrency" })).toBeInTheDocument();
+
+    // Manually navigate to another settings tab, then back to chat.
+    const settingsNav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(settingsNav).getByRole("button", { name: "General" }));
+    expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
+
+    // Reopening Settings via the normal sidebar button must NOT stick on
+    // Concurrency from the earlier chip click.
+    const sidebarAgain = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    fireEvent.click(within(sidebarAgain).getByRole("button", { name: "Settings" }));
+    expect(await screen.findByRole("heading", { name: "General" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Concurrency" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
+
+    // A repeat chip click still works after the manual navigation above —
+    // proof the deep-link value is a one-shot, not permanently consumed. The
+    // sidebar (and its snapshot subscription) remounted on return to chat,
+    // so feed it a fresh snapshot before looking for the chip again.
+    await waitFor(() => expect(concurrencySnapshotHandler).not.toBeNull());
+    concurrencySnapshotHandler!({
+      event: "concurrency_snapshot",
+      lanes: {
+        interactive: { active: 1, limit: 4 },
+        ceiling: { active: 5, limit: 12 },
+        subagents: { active: 1, limit: 3 },
+      },
+      queued: 0,
+      work: [],
+    });
+    const sidebarThird = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    const chipAgain = await within(sidebarThird).findByRole("button", {
+      name: "Concurrency: 5 of 12 slots in use",
+    });
+    fireEvent.click(chipAgain);
+    expect(await screen.findByRole("heading", { name: "Concurrency" })).toBeInTheDocument();
   });
 
   it("hides the Sign out button when the deploy does not require a secret", async () => {

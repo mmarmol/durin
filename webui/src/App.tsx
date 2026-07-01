@@ -7,7 +7,7 @@ import { DreamView } from "@/components/DreamView";
 import { SkillsView } from "@/components/SkillsView";
 import { WorkflowsView } from "@/components/WorkflowsView";
 import { ToastProvider } from "@/components/ui/toast";
-import { SettingsView } from "@/components/settings/SettingsView";
+import { SettingsView, type SettingsSectionKey } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { useVoiceSession } from "@/components/voice/useVoiceSession";
 import { useVoiceConfig } from "@/hooks/useVoiceConfig";
@@ -314,7 +314,7 @@ function Shell({
   const { sessions, loading, refresh, createChat, deleteChat, renameChat } = useSessions();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [view, setView] = useState<ShellView>("chat");
-  const [settingsSection, setSettingsSection] = useState<string | null>(null);
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionKey | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
@@ -681,6 +681,7 @@ function Shell({
                 setView("chat");
               }}
               initialSection={settingsSection}
+              onInitialSectionConsumed={() => setSettingsSection(null)}
             />
           </div>
         )}
