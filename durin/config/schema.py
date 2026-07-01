@@ -712,6 +712,7 @@ class ModelPresetConfig(Base):
     context_window_tokens: int = 65_536
     temperature: float = 0.1
     reasoning_effort: str | None = None
+    request_timeout_s: float | None = None  # Per-model HTTP timeout; overrides DURIN_OPENAI_COMPAT_TIMEOUT_S
     # Pre-emptive compaction trigger ratio: fraction of
     # ``context_window_tokens`` above which the consolidator fires BEFORE
     # the next LLM call instead of waiting for a context overflow 400.
@@ -893,6 +894,7 @@ class ModelEntry(Base):
     context_window_tokens: int | None = None
     temperature: float | None = None
     reasoning_effort: str | None = None
+    request_timeout_s: float | None = None  # Per-model HTTP timeout; overrides DURIN_OPENAI_COMPAT_TIMEOUT_S
 
 
 class ProviderConfig(Base):
@@ -1330,9 +1332,11 @@ class Config(BaseSettings):
         )
         temp = entry.temperature if entry and entry.temperature is not None else d.temperature
         eff = entry.reasoning_effort if entry and entry.reasoning_effort is not None else d.reasoning_effort
+        timeout = entry.request_timeout_s if entry and entry.request_timeout_s is not None else None
         return ModelPresetConfig(
             model=d.model, provider=d.provider, max_tokens=mt,
             context_window_tokens=ctx, temperature=temp, reasoning_effort=eff,
+            request_timeout_s=timeout,
         )
 
     def resolve_preset(self, name: str | None = None) -> ModelPresetConfig:

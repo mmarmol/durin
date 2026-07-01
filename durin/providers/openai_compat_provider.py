@@ -304,6 +304,7 @@ class OpenAICompatProvider(LLMProvider):
         spec: ProviderSpec | None = None,
         extra_body: dict[str, Any] | None = None,
         parallel_tool_calls_overrides: dict[str, bool] | None = None,
+        request_timeout_s: float | None = None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
@@ -347,7 +348,7 @@ class OpenAICompatProvider(LLMProvider):
         # opening a fresh connection for each request, which is cheap on a
         # LAN.  Cloud providers benefit from keepalive, so we leave the
         # default pool settings for them.
-        timeout_s = _openai_compat_timeout_s()
+        timeout_s = request_timeout_s if request_timeout_s is not None else _openai_compat_timeout_s()
         self._timeout_s = timeout_s
         self._is_local = _is_local_endpoint(spec, effective_base)
 
