@@ -77,7 +77,8 @@
       "modes": "Modos",
       "cron": "Cron",
       "logs": "Registros",
-      "mcp": "MCP"
+      "mcp": "MCP",
+      "concurrency": "Concurrencia"
     },
     "sections": {
       "interface": "Interfaz",
@@ -856,6 +857,41 @@
         "stop": "Detener voz",
         "bargeHint": "Habla para interrumpir"
       }
+    },
+    "concurrency": {
+      "description": "Cuántos turnos y sub-agentes se ejecutan a la vez. Los cambios se aplican de inmediato, sin reiniciar.",
+      "sections": { "caps": "Límites", "live": "En vivo" },
+      "rows": {
+        "interactive": "Turnos interactivos",
+        "ceiling": "Techo global",
+        "subagents": "Sub-agentes"
+      },
+      "help": {
+        "interactive": "Máximo de turnos interactivos ejecutándose a la vez en todas las sesiones.",
+        "ceiling": "Máximo de trabajo concurrente en total — turnos interactivos más sub-agentes.",
+        "subagents": "Máximo de sub-agentes ejecutándose a la vez."
+      },
+      "live": {
+        "interactive": "Interactivos",
+        "ceiling": "Techo",
+        "subagents": "Sub-agentes",
+        "queued": "En cola",
+        "unlimited": "∞"
+      }
+    }
+  },
+  "concurrency": {
+    "chip": {
+      "label": "Concurrencia: {{active}} de {{limit}} espacios en uso",
+      "unlimited": "{{active}} activos",
+      "queued": "{{count}} en cola"
+    },
+    "panel": {
+      "title": "Actividad — todas las sesiones",
+      "empty": "Nada en ejecución",
+      "turn": "Turno",
+      "subagent": "Sub-agente",
+      "close": "Cerrar"
     }
   },
   "skills": {

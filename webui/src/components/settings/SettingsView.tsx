@@ -67,6 +67,7 @@ import {
   type ModelTestResult,
 } from "@/lib/api";
 import { ChannelsSettings } from "@/components/settings/ChannelsSettings";
+import { ConcurrencySettings } from "@/components/settings/ConcurrencySettings";
 import { ConfigSettings } from "@/components/settings/ConfigSettings";
 import { CronSettings } from "@/components/settings/CronSettings";
 import { LogsSettings } from "@/components/settings/LogsSettings";
@@ -89,7 +90,7 @@ import { PersonasSettings } from "./PersonasSettings";
 import { ModesSettings } from "./ModesSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 
-type SettingsSectionKey =
+export type SettingsSectionKey =
   | "general"
   | "providers"
   | "web-search"
@@ -103,6 +104,7 @@ type SettingsSectionKey =
   | "cron"
   | "secrets"
   | "advanced"
+  | "concurrency"
   | "logs";
 type ByokPaneKey = "llm" | "web-search";
 
@@ -117,6 +119,15 @@ interface SettingsViewProps {
   onRestart?: () => void;
   isRestarting?: boolean;
   onOpenSession?: (sessionKey: string) => void;
+  /** Deep-links to a settings section on mount (e.g. from the saturation
+   * chip). Optional and backward-compatible: absent means "general". */
+  initialSection?: SettingsSectionKey | null;
+  /** Called right after `initialSection` is applied to `activeSection`, so
+   * the parent can clear it back to null. Without this, the deep-link value
+   * stays set in the parent forever: since SettingsView unmounts on every
+   * leave, its lazy `activeSection` initializer would keep re-reading the
+   * stale value on every reopen, permanently overriding manual navigation. */
+  onInitialSectionConsumed?: () => void;
 }
 
 export function SettingsView({
@@ -130,6 +141,8 @@ export function SettingsView({
   onRestart,
   isRestarting = false,
   onOpenSession,
+  initialSection,
+  onInitialSectionConsumed,
 }: SettingsViewProps) {
   const { t } = useTranslation();
   const { token } = useClient();
@@ -139,7 +152,9 @@ export function SettingsView({
   const [providerSaving, setProviderSaving] = useState<string | null>(null);
   const [webSearchSaving, setWebSearchSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<SettingsSectionKey>("general");
+  const [activeSection, setActiveSection] = useState<SettingsSectionKey>(
+    () => initialSection ?? "general",
+  );
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [providerForms, setProviderForms] = useState<Record<string, { apiKey: string; apiBase: string }>>({});
   const [visibleProviderKeys, setVisibleProviderKeys] = useState<Record<string, boolean>>({});
@@ -151,6 +166,12 @@ export function SettingsView({
   });
   const [webSearchKeyVisible, setWebSearchKeyVisible] = useState(false);
   const [webSearchKeyEditing, setWebSearchKeyEditing] = useState(false);
+
+  useEffect(() => {
+    if (!initialSection) return;
+    setActiveSection(initialSection);
+    onInitialSectionConsumed?.();
+  }, [initialSection, onInitialSectionConsumed]);
 
   const applyPayload = useCallback((payload: SettingsPayload) => {
     setSettings(payload);
@@ -425,6 +446,8 @@ export function SettingsView({
                 <SecretsSettings token={token} />
               ) : activeSection === "advanced" ? (
                 <ConfigSettings token={token} />
+              ) : activeSection === "concurrency" ? (
+                <ConcurrencySettings token={token} />
               ) : activeSection === "logs" ? (
                 <LogsSettings token={token} />
               ) : activeSection === "providers" ? (
@@ -500,6 +523,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "cron", icon: Clock },
   { key: "secrets", icon: Lock },
   { key: "advanced", icon: Sliders },
+  { key: "concurrency", icon: Cpu },
   { key: "logs", icon: ScrollText },
 ] as const;
 

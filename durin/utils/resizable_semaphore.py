@@ -20,6 +20,7 @@ class ResizableSemaphore:
             asyncio.Semaphore(self._limit) if self._limit > 0 else None
         )
         self._active = 0
+        self._waiting = 0  # coroutines currently blocked in __aenter__
         # Permits to withhold on the next N releases, to shrink the live cap
         # without yanking a permit out from under an in-flight holder.
         self._to_reduce = 0
@@ -32,9 +33,17 @@ class ResizableSemaphore:
     def active(self) -> int:
         return self._active
 
+    @property
+    def waiting(self) -> int:
+        return self._waiting
+
     async def __aenter__(self) -> "ResizableSemaphore":
         if self._sem is not None:
-            await self._sem.acquire()
+            self._waiting += 1
+            try:
+                await self._sem.acquire()
+            finally:
+                self._waiting -= 1
         self._active += 1
         return self
 

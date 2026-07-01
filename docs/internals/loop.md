@@ -192,9 +192,11 @@ Subagents remain fire-and-forget: `spawn()` schedules `_run_subagent` via
 `asyncio.create_task` and returns immediately, so a parent turn holding the
 lane/ceiling while spawning a subagent never waits on that subagent — only the
 subagent's own later ceiling acquire can block, which resolves once any
-in-flight turn releases its slot. Both limiters support `set_limit()` for a live
-resize on `reload_app_config` (config hot-reload), independent of a process
-restart. See [Concurrency](concurrency.md) for the full lock-ordering picture.
+in-flight turn releases its slot. `reload_app_config` re-applies the caps live —
+the interactive lane and the ceiling via `set_limit()`, and the sub-agent cap by
+re-reading `max_concurrent_subagents` — so a `ConfigService` write to a cap key
+takes effect without a process restart. See [Concurrency](concurrency.md) for the
+full lock-ordering picture.
 
 It then runs `_process_message`, publishes the result, and in a `finally` block
 releases the lease and re-publishes any messages still sitting in the pending

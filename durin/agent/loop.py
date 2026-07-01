@@ -414,6 +414,7 @@ class AgentLoop:
             llm_wall_timeout_for_session=lambda sk: runner_wall_llm_timeout_s(self.sessions, sk),
             sessions=self.sessions,
             ceiling=self._ceiling,
+            on_concurrency_change=self.mark_concurrency_dirty,
         )
         self._unified_session = unified_session
         self._max_messages = max_messages if max_messages > 0 else 120
@@ -442,6 +443,7 @@ class AgentLoop:
         # saves (user message + assistant turn) into a single O(N) render.
         self._reindex_dirty: set[str] = set()
         self._reindex_inflight: set[str] = set()
+        self._concurrency_flush_scheduled = False
         self.consolidator = Consolidator(
             store=self.context.memory,
             provider=provider,
@@ -504,6 +506,53 @@ class AgentLoop:
         _env = os.environ.get("DURIN_MAX_CONCURRENT_REQUESTS")
         self._interactive_lane.set_limit(int(_env) if _env is not None else _d.max_concurrent_interactive)
         self._ceiling.set_limit(_d.concurrency_ceiling)
+        self.subagents.max_concurrent_subagents = _d.max_concurrent_subagents
+        self.mark_concurrency_dirty()
+
+    # ------------------------------------------------------------------
+    # Concurrency snapshot (in-memory; coalesced, subscriber-gated broadcast)
+    # ------------------------------------------------------------------
+
+    def build_concurrency_snapshot(self) -> dict[str, Any]:
+        """A handful of integers + the running-work list, read straight from
+        memory (no disk). Safe to call on the loop thread and on hydrate."""
+        from durin.agent.concurrency_snapshot import build_snapshot
+        turn_sessions = [
+            k for k, tasks in self._active_tasks.items()
+            if any(not t.done() for t in tasks)
+        ]
+        running = [
+            (s.task_id, s.session_key, s.label)
+            for s in self.subagents.list_running()
+        ]
+        return build_snapshot(
+            interactive=self._interactive_lane,
+            ceiling=self._ceiling,
+            subagent_running=self.subagents.get_running_count(),
+            subagent_limit=self.subagents.max_concurrent_subagents,
+            turn_sessions=turn_sessions,
+            running_subagents=running,
+        )
+
+    def mark_concurrency_dirty(self) -> None:
+        """Schedule ONE coalesced snapshot broadcast on the next loop tick.
+        Multiple boundary events in the same tick collapse to a single build +
+        publish. No-op when there is no running loop (sync/test contexts) — the
+        running-loop check comes BEFORE marking scheduled so a no-loop call never
+        leaves the flag stuck."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._concurrency_flush_scheduled:
+            return
+        self._concurrency_flush_scheduled = True
+        loop.call_soon(self._flush_concurrency_snapshot)
+
+    def _flush_concurrency_snapshot(self) -> None:
+        self._concurrency_flush_scheduled = False
+        from durin.channels.websocket import publish_concurrency_snapshot
+        publish_concurrency_snapshot(self.bus, self.build_concurrency_snapshot())
 
     def apply_default_model_live(self) -> None:
         """Re-read config and apply the new ``agents.defaults`` model/provider to
@@ -1924,6 +1973,7 @@ class AgentLoop:
                         leftover, session_key,
                     )
             await publish_turn_run_status(self.bus, msg, "idle")
+            self.mark_concurrency_dirty()
             self._pending_turn_latency_ms.pop(session_key, None)
 
     async def close_mcp(self) -> None:
@@ -2360,6 +2410,7 @@ class AgentLoop:
     async def _state_run(self, ctx: TurnContext) -> str:
         for attempt in range(1 + _MAX_OVERFLOW_RETRIES):
             await publish_turn_run_status(self.bus, ctx.msg, "running")
+            self.mark_concurrency_dirty()
             result = await self._run_agent_loop(
                 ctx.initial_messages,
                 on_progress=ctx.on_progress,
