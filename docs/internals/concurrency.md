@@ -279,6 +279,44 @@ field of `AgentRunSpec`. The runner pins `spec.provider or self.provider` at the
 top of the run, so a concurrent swap on another session cannot alter a turn
 already in flight. See [providers](providers.md) for how snapshots are resolved.
 
+### Observability (concurrency snapshot)
+
+The webui exposes live concurrency state through one global websocket event,
+`concurrency_snapshot`, built by `AgentLoop.build_concurrency_snapshot()` from
+`durin/agent/concurrency_snapshot.py`. Its payload is a handful of integers plus
+a running-work list: per-lane `active`/`limit`/`waiting` for the interactive
+lane, the ceiling, and sub-agents; a `queued` total (`interactive.waiting +
+ceiling.waiting`); and a `work` array of the currently-running execution units.
+
+The snapshot is bound by a cost contract:
+
+- **In-memory only.** It reads the two `ResizableSemaphore` gates, the
+  `SubagentManager`'s live task set, and `AgentLoop._active_tasks` — never disk.
+  Because a global view must not touch session files, the `work` list enumerates
+  only the in-memory execution units (interactive turns + running sub-agents);
+  workflow *runs* live in on-disk manifests (read per-session by
+  `durin/agent/background_tasks.py`) and are intentionally not enumerated
+  globally. Workflow-driven work still appears as its turns/sub-agents, and the
+  ceiling counts stay exact because that work acquires the ceiling through those
+  same units.
+- **Coalesced, never per-event.** `AgentLoop.mark_concurrency_dirty()` schedules
+  a single build+publish on the next loop tick (a `loop.call_soon` guarded by a
+  flag), so a burst of boundary events collapses to one frame. It is marked dirty
+  at the sparse boundaries where occupancy changes: interactive turn start/end,
+  sub-agent spawn/finish, and config hot-reload. No polling timer.
+- **Subscriber-gated.** The frame fans out through the existing outbound-bus →
+  websocket path (mirroring `dream_progress`) and is dropped when no connection
+  is open; a fresh client is hydrated on subscribe. Publishing tolerates a full
+  bus (the frame is droppable — the next boundary re-publishes the latest state).
+
+Three webui surfaces consume it: a **Concurrency settings card** (live per-lane
+readouts + editable caps), an always-visible **saturation chip** in the sidebar,
+and a Shell-level **global Work panel** that reuses `WorkItemCard`. Editing a cap
+in the card writes the config key (`agents.defaults.max_concurrent_interactive`,
+`concurrency_ceiling`, or `max_concurrent_subagents`); `ConfigService` fires
+`reload_app_config` for those keys, so the change applies to the running gateway
+without a restart (see [loop](loop.md)).
+
 ## 5. Key types & entry points
 
 | Symbol | File | Role |
