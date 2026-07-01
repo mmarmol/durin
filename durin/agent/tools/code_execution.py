@@ -54,8 +54,8 @@ _ALLOWED_TOOLS = (
 
 # (name, python signature, args-dict expression) for the generated stub.
 _STUB_SPECS: tuple[tuple[str, str, str], ...] = (
-    ("read_file", "path, start=0, limit=2000",
-     "{'path': path, 'start': start, 'limit': limit}"),
+    ("read_file", "path",
+     "{'path': path, 'verbatim': True}"),
     ("write_file", "path, content",
      "{'path': path, 'content': content}"),
     ("edit_file", "path, old_text, new_text, replace_all=False",
@@ -301,9 +301,10 @@ class ExecuteCodeTool(Tool):
             )
         elif proc.returncode != 0:
             result["status"] = "error"
+            # Keep stdout in `output` and the failure in `error` — never merge
+            # them. Merging duplicated the traceback across both fields, which
+            # surfaces (and costs tokens) verbatim wherever the result is shown.
             result["error"] = err_text or f"Script exited with code {proc.returncode}"
-            if err_text:
-                result["output"] = f"{out_text}\n--- stderr ---\n{err_text}".strip()
         emit_tool_event("tool.execute_code", {
             "status": result["status"],
             "tool_calls_made": total_calls,

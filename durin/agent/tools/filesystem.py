@@ -266,6 +266,7 @@ class ReadFileTool(_FsTool):
         offset: int = 1,
         limit: int | None = None,
         pages: str | None = None,
+        verbatim: bool = False,
         **kwargs: Any,
     ) -> Any:
         # Mutually exclusive surfaces, mirroring memory_drill / web_fetch.
@@ -284,7 +285,7 @@ class ReadFileTool(_FsTool):
             ])
             return {"results": results}
 
-        return await self._read_one(path, offset, limit, pages)
+        return await self._read_one(path, offset, limit, pages, verbatim=verbatim)
 
     async def _read_one_safe(self, path: str) -> dict[str, Any]:
         """Batch helper — never raises, always returns a record carrying the
@@ -297,7 +298,7 @@ class ReadFileTool(_FsTool):
             return {"path": path, "error": f"read failed: {exc}"}
         return {"path": path, "content": content}
 
-    async def _read_one(self, path: str | None = None, offset: int = 1, limit: int | None = None, pages: str | None = None, **kwargs: Any) -> Any:
+    async def _read_one(self, path: str | None = None, offset: int = 1, limit: int | None = None, pages: str | None = None, verbatim: bool = False, **kwargs: Any) -> Any:
         try:
             if not path:
                 return "Error reading file: Unknown path"
@@ -323,6 +324,27 @@ class ReadFileTool(_FsTool):
                 return self._read_office_doc(fp)
 
             raw = fp.read_bytes()
+
+            if verbatim:
+                # Programmatic consumers (execute_code scripts) need the file's
+                # real content to parse, not the numbered display view (`1| …`),
+                # the truncation/pagination footer, or the dedup "unchanged"
+                # stub — any of which breaks json.loads / csv / line counting.
+                try:
+                    text = raw.decode("utf-8").replace("\r\n", "\n")
+                except UnicodeDecodeError:
+                    return (
+                        f"Error: Cannot read binary file {path} as text "
+                        "(use open(path, 'rb') in the script for raw bytes)."
+                    )
+                self._emit("tool.read_file", {
+                    "path": self._display_path(fp),
+                    "kind": "text",
+                    "verbatim": True,
+                    "result_chars": len(text),
+                })
+                return text
+
             if not raw:
                 return f"(Empty file: {path})"
 

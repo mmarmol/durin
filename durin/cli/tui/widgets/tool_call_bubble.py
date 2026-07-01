@@ -428,6 +428,8 @@ class ToolCallBubble(Vertical):
                 str(a.get("command") or ""),
                 output=result_text,
             )
+        if self._name == "execute_code":
+            return _execute_code_renderable(result)
         if self._name == "ask_user_question":
             a = self._args if isinstance(self._args, dict) else {}
             return _ask_user_renderable(str(a.get("question") or ""))
@@ -676,6 +678,37 @@ def _todos_renderable(todos: list) -> Text:
             out.append(str(t.get("content") or ""))
         out.append("\n")
     return out
+
+
+def _execute_code_renderable(result: Any) -> Text:
+    """Render ``execute_code``: the script's stdout, then any error in red.
+
+    Parsed from the tool's JSON envelope so the raw
+    ``{"status": ..., "output": ..., "error": ...}`` blob never reaches the
+    user. Falls back to the plain stringified result if it isn't the expected
+    shape.
+    """
+    data: Any = result
+    if isinstance(result, str):
+        try:
+            data = json.loads(result)
+        except (ValueError, TypeError):
+            return _linkify(_strip_decorations(str(result)))
+    if not isinstance(data, dict):
+        return _linkify(_strip_decorations(str(result)))
+
+    output = str(data.get("output") or "")
+    error = str(data.get("error") or "")
+    text = Text()
+    if output:
+        text.append(_linkify(output))
+    if error:
+        if output:
+            text.append("\n")
+        text.append(error, style="red")
+    if not output and not error:
+        text.append("(no output)", style="dim")
+    return text
 
 
 def _ask_user_renderable(question: str) -> Text:

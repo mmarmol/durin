@@ -682,3 +682,36 @@ async def test_exit_plan_mode_bubble_has_approve_and_refine_widgets() -> None:
         refine = bubble.query_one("#tc-plan-refine", Static)
         assert "Approve" in _static_plain(approve)
         assert "Refine" in _static_plain(refine)
+
+
+def test_execute_code_renderable_shows_error_not_envelope() -> None:
+    """execute_code's JSON envelope is parsed to a clean error, not dumped raw."""
+    import json as _json
+
+    from durin.cli.tui.widgets.tool_call_bubble import _execute_code_renderable
+
+    result = _json.dumps({
+        "status": "error",
+        "output": "",
+        "tool_calls_made": 1,
+        "duration_seconds": 0.06,
+        "error": "Traceback (most recent call last):\n  ValueError: boom",
+    })
+    plain = _execute_code_renderable(result).plain
+    assert "ValueError: boom" in plain
+    assert "tool_calls_made" not in plain
+    assert '"status"' not in plain
+
+
+def test_execute_code_renderable_shows_stdout_on_success() -> None:
+    import json as _json
+
+    from durin.cli.tui.widgets.tool_call_bubble import _execute_code_renderable
+
+    result = _json.dumps({
+        "status": "success",
+        "output": "hello\nworld",
+        "tool_calls_made": 0,
+        "duration_seconds": 0.01,
+    })
+    assert _execute_code_renderable(result).plain == "hello\nworld"
