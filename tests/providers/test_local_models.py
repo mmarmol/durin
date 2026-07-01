@@ -110,16 +110,45 @@ def test_provider_models_ollama_live_wins_over_static(tmp_path, monkeypatch):
     pc._load_index.cache_clear()
 
 
-def test_provider_models_ollama_falls_back_to_static(tmp_path, monkeypatch):
-    """When live discovery returns [], provider_models falls back to static catalog."""
+def test_provider_models_ollama_empty_live_falls_back_to_static(tmp_path, monkeypatch):
+    """Server reachable (api_base set) but /v1/models empty → static fallback.
+
+    Exercises the ``if ids:`` branch: a truthy api_base means list_local_models
+    IS called; when it returns [], provider_models uses the static catalog.
+    """
     idx = _write_index(tmp_path, [{"id": "static-model"}])
     monkeypatch.setattr(pc, "_INDEX_PATH", idx)
     pc._load_index.cache_clear()
 
-    monkeypatch.setattr(lm, "list_local_models", lambda *a, **kw: [])
-    monkeypatch.setattr(pc, "_load_config_for_local", lambda: _mock_cfg(api_base=None))
+    called: list = []
+    monkeypatch.setattr(lm, "list_local_models", lambda *a, **kw: called.append(1) or [])
+    monkeypatch.setattr(pc, "_load_config_for_local", lambda: _mock_cfg())  # api_base set
 
     models = pc.provider_models("ollama")
+    assert called == [1], "list_local_models must be called when api_base is set"
+    assert [m.id for m in models] == ["static-model"]
+    pc._load_index.cache_clear()
+
+
+def test_provider_models_no_api_base_uses_static(tmp_path, monkeypatch):
+    """No api_base and no default → skip the live query, use the static catalog.
+
+    (ollama has a default_api_base, so force the local branch onto a spec with
+    none by clearing it via a provider whose config + spec both lack a base.)
+    """
+    idx = _write_index(tmp_path, [{"id": "static-model"}], provider="vllm")
+    monkeypatch.setattr(pc, "_INDEX_PATH", idx)
+    pc._load_index.cache_clear()
+
+    called: list = []
+    monkeypatch.setattr(lm, "list_local_models", lambda *a, **kw: called.append(1) or [])
+    cfg = _mock_cfg(api_base=None)
+    cfg.providers.vllm.api_base = None
+    cfg.providers.vllm.api_key = None
+    monkeypatch.setattr(pc, "_load_config_for_local", lambda: cfg)
+
+    models = pc.provider_models("vllm")  # vllm spec has no default_api_base
+    assert called == [], "no api_base → live query skipped"
     assert [m.id for m in models] == ["static-model"]
     pc._load_index.cache_clear()
 
