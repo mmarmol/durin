@@ -1946,19 +1946,20 @@ class AgentLoop:
     def _schedule_session_reindex(self, key: str) -> None:
         """Mark *key* dirty and ensure exactly one background drainer runs it.
 
-        Safe to call from sync or async contexts; only schedules if there's
-        a running event loop.
+        No-op scheduler when there is no running event loop (e.g. a sync unit
+        test): the dirty flag is still set, and a later call from async context
+        schedules the drainer. The running-loop check is BEFORE marking the key
+        in-flight so the no-loop path never leaves a key stuck 'in-flight' with
+        no drainer to clear it.
         """
         self._reindex_dirty.add(key)
         if key in self._reindex_inflight:
             return
-        self._reindex_inflight.add(key)
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
-            # No running event loop (called from sync context). The dirty flag
-            # is set; the drainer will run when the loop eventually starts.
             return
+        self._reindex_inflight.add(key)
         self._schedule_background(self._drain_session_reindex(key))
 
     async def _drain_session_reindex(self, key: str) -> None:
