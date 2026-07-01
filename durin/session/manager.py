@@ -696,22 +696,27 @@ class SessionManager:
         path = self._get_session_path(key)
         if not path.exists():
             return
-        with cross_process_lock(path):
-            try:
-                from durin.memory.session_md import regenerate_session_md
+        try:
+            with cross_process_lock(path):
+                try:
+                    from durin.memory.session_md import regenerate_session_md
 
-                regenerate_session_md(path)
-            except Exception:
-                logger.warning(
-                    "Failed to regenerate session markdown view for {}", key,
-                )
-                return
-            try:
-                from durin.memory.indexer import reindex_session_file
+                    regenerate_session_md(path)
+                except Exception:
+                    logger.warning(
+                        "Failed to regenerate session markdown view for {}", key,
+                    )
+                    return
+                try:
+                    from durin.memory.indexer import reindex_session_file
 
-                reindex_session_file(self.workspace, path.with_suffix(".md"))
-            except Exception:
-                logger.warning("Failed to index session turns for {}", key)
+                    reindex_session_file(self.workspace, path.with_suffix(".md"))
+                except Exception:
+                    logger.warning("Failed to index session turns for {}", key)
+        except Exception:
+            # Lock acquisition (e.g. TimeoutError) must never raise into the
+            # background reindex drainer — reindex is best-effort.
+            logger.warning("reindex_session could not lock/complete for {}", key)
 
     def flush_all(self) -> int:
         """Re-save every cached session with fsync for durable shutdown.
