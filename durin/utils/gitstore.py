@@ -17,8 +17,9 @@ from durin.utils.file_lock import cross_process_lock
 # Per-repo write locks. Serialize the stage+commit so concurrent writers to one
 # git-backed store (e.g. the skill dream and a webui edit) cannot corrupt the git
 # index or lose a commit. Mirrors the memory writer's discipline. Keyed by the
-# resolved repo path so different stores never contend. RLock so the reentrant
-# self-call inside auto_commit does not self-deadlock.
+# resolved repo path so different stores never contend. RLock (+ same-thread
+# reentrant cross_process_lock) so a reentrant path — e.g. revert() calling
+# auto_commit while the caller already holds this lock — cannot self-deadlock.
 _repo_write_locks: dict[str, threading.RLock] = {}
 _repo_write_locks_guard = threading.Lock()
 
