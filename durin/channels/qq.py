@@ -79,7 +79,7 @@ class _SSRFGuardResolver(aiohttp.abc.AbstractResolver):
         self, host: str, port: int = 0, family: int = socket.AF_INET,
     ) -> list[dict[str, Any]]:
         try:
-            ip = resolve_and_validate(host)
+            ip = await asyncio.to_thread(resolve_and_validate, host)
         except SSRFError as exc:
             raise OSError(str(exc)) from exc
         fam = socket.AF_INET6 if ":" in ip else socket.AF_INET
