@@ -7,6 +7,7 @@ store outcome is raised as a DomainError (payload echoed in ``.details``).
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -145,6 +146,26 @@ async def test_save_overwrites_skill_content(tmp_path: Path) -> None:
         Principal.local(),
     )
     assert result.data.get("ok") or result.data.get("name") == "hello"
+
+
+async def test_save_offloads_blocking_lint_and_commit(tmp_path: Path, monkeypatch) -> None:
+    import durin.service.skills as sksvc
+
+    ws = _make_workspace(tmp_path)
+    svc = _svc(ws)
+    seen = {"thread": False}
+    real_to_thread = asyncio.to_thread
+
+    async def spy(fn, *args, **kwargs):
+        seen["thread"] = True
+        return await real_to_thread(fn, *args, **kwargs)
+
+    monkeypatch.setattr(sksvc.asyncio, "to_thread", spy)
+    await svc.save(
+        SkillSaveCommand(name="hello", content="---\nname: hello\ndescription: d\n---\nBody.\n"),
+        Principal.local(),
+    )
+    assert seen["thread"] is True
 
 
 async def test_save_requires_write_scope(tmp_path: Path) -> None:
