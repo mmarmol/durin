@@ -592,6 +592,12 @@
       "capVision": "visión",
       "capAudio": "audio",
       "capReasoning": "razonamiento",
+      "capOverrideVision": "Override visión",
+      "capOverrideAudio": "Override audio",
+      "capOverrideReasoning": "Override razonamiento",
+      "capOverrideInherit": "heredar",
+      "capOverrideYes": "sí",
+      "capOverrideNo": "no",
       "emptyTeach": "Este proveedor aún no tiene modelos del catálogo. Agregá uno abajo.",
       "loadError": "No se pudieron cargar los modelos."
     },

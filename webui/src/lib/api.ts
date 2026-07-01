@@ -1356,6 +1356,9 @@ export interface ProviderModelParams {
   context_window_tokens?: number | null;
   temperature?: number | null;
   reasoning_effort?: string | null;
+  supports_vision?: boolean | null;
+  supports_audio_input?: boolean | null;
+  supports_reasoning?: boolean | null;
 }
 
 export async function fetchProviderModels(

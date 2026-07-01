@@ -593,6 +593,12 @@
       "capVision": "vision",
       "capAudio": "audio",
       "capReasoning": "reasoning",
+      "capOverrideVision": "Vision override",
+      "capOverrideAudio": "Audio override",
+      "capOverrideReasoning": "Reasoning override",
+      "capOverrideInherit": "inherit",
+      "capOverrideYes": "yes",
+      "capOverrideNo": "no",
       "emptyTeach": "No catalog models for this provider yet. Add a custom one below.",
       "loadError": "Could not load models."
     },

@@ -98,11 +98,28 @@ function capsText(m: ProviderModelEntry, t: (k: string) => string): string {
   return parts.join(" · ");
 }
 
+// Tri-state capability override: "" = inherit from catalog, "true" = yes, "false" = no
+type CapOverride = "" | "true" | "false";
+
 interface DraftParams {
   context_window_tokens: string;
   max_tokens: string;
   temperature: string;
   reasoning_effort: string;
+  supports_vision: CapOverride;
+  supports_audio_input: CapOverride;
+  supports_reasoning: CapOverride;
+}
+
+function toCapOverride(v: boolean | null | undefined): CapOverride {
+  if (v == null) return "";
+  return v ? "true" : "false";
+}
+
+function fromCapOverride(v: CapOverride): boolean | null {
+  if (v === "true") return true;
+  if (v === "false") return false;
+  return null;
 }
 
 function toDraft(m: ProviderModelEntry): DraftParams {
@@ -111,6 +128,9 @@ function toDraft(m: ProviderModelEntry): DraftParams {
     max_tokens: m.max_tokens != null ? String(m.max_tokens) : "",
     temperature: m.temperature != null ? String(m.temperature) : "",
     reasoning_effort: m.reasoning_effort ?? "",
+    supports_vision: toCapOverride(m.supports_vision),
+    supports_audio_input: toCapOverride(m.supports_audio_input),
+    supports_reasoning: toCapOverride(m.supports_reasoning),
   };
 }
 
@@ -452,6 +472,9 @@ function ModelsSection({
         max_tokens: parseNum(draft.max_tokens),
         temperature: parseNum(draft.temperature),
         reasoning_effort: draft.reasoning_effort.trim() || null,
+        supports_vision: fromCapOverride(draft.supports_vision),
+        supports_audio_input: fromCapOverride(draft.supports_audio_input),
+        supports_reasoning: fromCapOverride(draft.supports_reasoning),
       });
       setEditing(null);
       setDraft(null);
@@ -629,6 +652,21 @@ function ModelRow(props: ModelRowProps) {
               value={draft.reasoning_effort}
               onChange={(v) => props.onChange({ ...draft, reasoning_effort: v })}
             />
+            <CapField
+              label={t("settings.providerModels.capOverrideVision")}
+              value={draft.supports_vision}
+              onChange={(v) => props.onChange({ ...draft, supports_vision: v })}
+            />
+            <CapField
+              label={t("settings.providerModels.capOverrideAudio")}
+              value={draft.supports_audio_input}
+              onChange={(v) => props.onChange({ ...draft, supports_audio_input: v })}
+            />
+            <CapField
+              label={t("settings.providerModels.capOverrideReasoning")}
+              value={draft.supports_reasoning}
+              onChange={(v) => props.onChange({ ...draft, supports_reasoning: v })}
+            />
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -680,6 +718,24 @@ function ParamField(props: { label: string; value: string; onChange: (v: string)
         onChange={(e) => props.onChange(e.target.value)}
         className="rounded-md border border-border/60 bg-background px-2 py-1 text-[12px] text-foreground"
       />
+    </label>
+  );
+}
+
+function CapField(props: { label: string; value: CapOverride; onChange: (v: CapOverride) => void }) {
+  const { t } = useTranslation();
+  return (
+    <label className="flex flex-col gap-1 text-[10.5px] text-muted-foreground">
+      {props.label}
+      <select
+        value={props.value}
+        onChange={(e) => props.onChange(e.target.value as CapOverride)}
+        className="rounded-md border border-border/60 bg-background px-2 py-1 text-[12px] text-foreground"
+      >
+        <option value="">{t("settings.providerModels.capOverrideInherit")}</option>
+        <option value="true">{t("settings.providerModels.capOverrideYes")}</option>
+        <option value="false">{t("settings.providerModels.capOverrideNo")}</option>
+      </select>
     </label>
   );
 }
