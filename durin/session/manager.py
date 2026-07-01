@@ -559,7 +559,7 @@ class SessionManager:
             "messages": session.messages,
         }
 
-    def save(self, session: Session, *, fsync: bool = False) -> None:
+    def save(self, session: Session, *, fsync: bool = False, reindex: bool = True) -> None:
         """Save a session to disk atomically.
 
         Splits ``session.metadata`` into two persistence layers:
@@ -577,6 +577,10 @@ class SessionManager:
         should be enabled during graceful shutdown so that filesystems with
         write-back caching (e.g. rclone VFS, NFS, FUSE mounts) do not lose
         the most recent writes.
+
+        When *reindex* is ``False``, the regeneration of the ``.md`` view and
+        FTS indexing are skipped. Use this to defer regeneration to a separate
+        ``reindex_session()`` call (e.g., off the event-loop thread).
         """
         if getattr(session, "_deleted", False):
             logger.debug("Skipping save of deleted session {}", session.key)
@@ -656,7 +660,7 @@ class SessionManager:
             # and (since the entity dream reads the .md) no place in the memory graph.
             # Best-effort: a regeneration/index failure must not bring down the session
             # save — the jsonl is the durable surface.
-            if not is_workflow_session(session.key):
+            if reindex and not is_workflow_session(session.key):
                 try:
                     from durin.memory.session_md import regenerate_session_md
 
@@ -679,6 +683,35 @@ class SessionManager:
                         )
 
         self._cache[session.key] = session
+
+    def reindex_session(self, key: str) -> None:
+        """Regenerate the ``<key>.md`` view and incrementally FTS-index its new
+        turns. Split out of ``save`` so the agent loop can run it off the
+        event-loop thread via ``asyncio.to_thread``. Skips workflow sessions
+        (they earn no .md/index) and missing files. Best-effort — a failure is
+        logged and never raised. Takes the session's ``.jsonl`` lock so it
+        renders from a consistent transcript."""
+        if is_workflow_session(key):
+            return
+        path = self._get_session_path(key)
+        if not path.exists():
+            return
+        with cross_process_lock(path):
+            try:
+                from durin.memory.session_md import regenerate_session_md
+
+                regenerate_session_md(path)
+            except Exception:
+                logger.warning(
+                    "Failed to regenerate session markdown view for {}", key,
+                )
+                return
+            try:
+                from durin.memory.indexer import reindex_session_file
+
+                reindex_session_file(self.workspace, path.with_suffix(".md"))
+            except Exception:
+                logger.warning("Failed to index session turns for {}", key)
 
     def flush_all(self) -> int:
         """Re-save every cached session with fsync for durable shutdown.
