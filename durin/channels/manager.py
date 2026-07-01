@@ -78,6 +78,7 @@ class ChannelManager:
         session_manager: "SessionManager | None" = None,
         webui_runtime_model_name: Callable[[], str | None] | None = None,
         webui_runtime_model_preset: Callable[[], str | None] | None = None,
+        webui_runtime_concurrency_snapshot: Callable[[], dict] | None = None,
         cron_service: "CronService | None" = None,
     ):
         self.config = config
@@ -85,6 +86,7 @@ class ChannelManager:
         self._session_manager = session_manager
         self._webui_runtime_model_name = webui_runtime_model_name
         self._webui_runtime_model_preset = webui_runtime_model_preset
+        self._webui_runtime_concurrency_snapshot = webui_runtime_concurrency_snapshot
         # Running CronService instance (same gateway process) — handed to the
         # websocket channel so its run-now endpoint reaches the live scheduler
         # (and its in-process overlap guard), not a fresh action-log copy.
@@ -168,6 +170,8 @@ class ChannelManager:
                 kwargs["runtime_model_name"] = self._webui_runtime_model_name
             if self._webui_runtime_model_preset is not None:
                 kwargs["runtime_model_preset"] = self._webui_runtime_model_preset
+            if self._webui_runtime_concurrency_snapshot is not None:
+                kwargs["runtime_concurrency_snapshot"] = self._webui_runtime_concurrency_snapshot
             if self._cron_service is not None:
                 kwargs["cron_service"] = self._cron_service
 

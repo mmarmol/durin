@@ -156,6 +156,7 @@ class TestToolEventProgress:
         outbound = []
         while bus.outbound_size > 0:
             outbound.append(await bus.consume_outbound())
+        outbound = [m for m in outbound if not m.metadata.get("_concurrency_snapshot")]
 
         assert [m.content for m in outbound] == ["Hello"]
         assert not any(m.metadata.get("_progress") for m in outbound)
@@ -205,6 +206,7 @@ class TestToolEventProgress:
             and not m.metadata.get("_stream_end")
             and not m.metadata.get("_turn_end")
             and not m.metadata.get("_goal_status")
+            and not m.metadata.get("_concurrency_snapshot")
         ]
 
         assert [m.content for m in deltas] == ["Hel", "lo"]
@@ -375,6 +377,7 @@ class TestToolEventProgress:
         outbound = []
         while bus.outbound_size > 0:
             outbound.append(await bus.consume_outbound())
+        outbound = [m for m in outbound if not m.metadata.get("_concurrency_snapshot")]
 
         assert len(outbound) == 1
         assert outbound[0].content == "Done"

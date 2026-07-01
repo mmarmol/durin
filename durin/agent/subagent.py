@@ -131,6 +131,7 @@ class SubagentManager:
         llm_wall_timeout_for_session: Callable[[str | None], float | None] | None = None,
         sessions: Any | None = None,
         ceiling: Any | None = None,
+        on_concurrency_change: Callable[[], None] | None = None,
     ):
         defaults = AgentDefaults()
         self.provider = provider
@@ -142,6 +143,7 @@ class SubagentManager:
         # of bypassing it. ``None`` in tests/callers that don't wire one —
         # falls back to no gating.
         self._ceiling = ceiling
+        self._on_concurrency_change = on_concurrency_change
         # Optional SessionManager — when provided, subagent inherits the
         # parent session's agent_mode. Without it, falls back to a static
         # EXPLORE_MODE (the safe-but-stricter default).
@@ -227,6 +229,7 @@ class SubagentManager:
         self._running_tasks[task_id] = bg_task
         if session_key:
             self._session_tasks.setdefault(session_key, set()).add(task_id)
+        self._notify_concurrency()
 
         def _cleanup(_: asyncio.Task) -> None:
             # Drop only the asyncio.Task handle. The SubagentStatus stays
@@ -235,6 +238,7 @@ class SubagentManager:
             # ``_remember_finished`` once we exceed the history window.
             self._running_tasks.pop(task_id, None)
             self._remember_finished(task_id)
+            self._notify_concurrency()
 
         bg_task.add_done_callback(_cleanup)
 
@@ -525,6 +529,13 @@ class SubagentManager:
             for tid in self._running_tasks
             if tid in self._task_statuses
         ]
+
+    def _notify_concurrency(self) -> None:
+        if self._on_concurrency_change is not None:
+            try:
+                self._on_concurrency_change()
+            except Exception:  # noqa: BLE001 - snapshot notify is best-effort
+                pass
 
     def get_running_count_by_session(self, session_key: str) -> int:
         """Return the number of currently running subagents for a session."""

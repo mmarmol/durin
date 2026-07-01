@@ -1641,6 +1641,7 @@ def _run_gateway(
         session_manager=session_manager,
         webui_runtime_model_name=_webui_runtime_model_name,
         webui_runtime_model_preset=_webui_runtime_model_preset,
+        webui_runtime_concurrency_snapshot=agent.build_concurrency_snapshot,
         cron_service=cron,
     )
 
