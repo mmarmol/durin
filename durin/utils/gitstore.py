@@ -3,12 +3,34 @@
 from __future__ import annotations
 
 import io
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
+
+from durin.utils.file_lock import cross_process_lock
+
+
+# Per-repo write locks. Serialize the stage+commit so concurrent writers to one
+# git-backed store (e.g. the skill dream and a webui edit) cannot corrupt the git
+# index or lose a commit. Mirrors the memory writer's discipline. Keyed by the
+# resolved repo path so different stores never contend. RLock so the reentrant
+# self-call inside auto_commit does not self-deadlock.
+_repo_write_locks: dict[str, threading.RLock] = {}
+_repo_write_locks_guard = threading.Lock()
+
+
+def _repo_write_lock(root: Path | str) -> threading.RLock:
+    key = str(Path(root).resolve())
+    with _repo_write_locks_guard:
+        lock = _repo_write_locks.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _repo_write_locks[key] = lock
+        return lock
 
 
 def _compose_with_trailers(message: str, trailers: dict[str, str] | None) -> str:
@@ -184,40 +206,44 @@ class GitStore:
 
         Optional `trailers` are appended as a git-style `Key: value` block.
         Returns the short commit SHA, or None if nothing to commit.
+
+        Serialized per repo (in-process RLock + cross-process working-tree lock)
+        so concurrent writers cannot corrupt the git index or lose a commit.
         """
         if not self.is_initialized():
             return None
 
-        try:
-            from dulwich import porcelain
+        with _repo_write_lock(self._workspace), cross_process_lock(self._workspace / ".git-worktree"):
+            try:
+                from dulwich import porcelain
 
-            if self._subtree:
-                if not self._stage_all():
-                    return None
-            else:
-                # .gitignore excludes everything except tracked files,
-                # so any staged/unstaged change must be in our files.
-                st = porcelain.status(str(self._workspace))
-                if not st.unstaged and not any(st.staged.values()):
-                    return None
-                porcelain.add(str(self._workspace), paths=self._tracked_files)
+                if self._subtree:
+                    if not self._stage_all():
+                        return None
+                else:
+                    # .gitignore excludes everything except tracked files,
+                    # so any staged/unstaged change must be in our files.
+                    st = porcelain.status(str(self._workspace))
+                    if not st.unstaged and not any(st.staged.values()):
+                        return None
+                    porcelain.add(str(self._workspace), paths=self._tracked_files)
 
-            composed = _compose_with_trailers(message, trailers) if isinstance(message, str) else message
-            msg_bytes = composed.encode("utf-8") if isinstance(composed, str) else composed
-            sha_bytes = porcelain.commit(
-                str(self._workspace),
-                message=msg_bytes,
-                author=self._author,
-                committer=self._author,
-            )
-            if sha_bytes is None:
+                composed = _compose_with_trailers(message, trailers) if isinstance(message, str) else message
+                msg_bytes = composed.encode("utf-8") if isinstance(composed, str) else composed
+                sha_bytes = porcelain.commit(
+                    str(self._workspace),
+                    message=msg_bytes,
+                    author=self._author,
+                    committer=self._author,
+                )
+                if sha_bytes is None:
+                    return None
+                sha = sha_bytes.hex()[:8]
+                logger.debug("Git auto-commit: {} ({})", sha, message)
+                return sha
+            except Exception:
+                logger.exception("Git auto-commit failed: {}", message)
                 return None
-            sha = sha_bytes.hex()[:8]
-            logger.debug("Git auto-commit: {} ({})", sha, message)
-            return sha
-        except Exception:
-            logger.exception("Git auto-commit failed: {}", message)
-            return None
 
     # -- internal helpers ------------------------------------------------------
 
