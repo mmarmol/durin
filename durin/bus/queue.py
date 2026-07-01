@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 # Bound the bus queues so a flooding or stuck channel cannot grow memory without
 # limit. A bounded asyncio.Queue makes ``put()`` await when full — lossless
 # backpressure on the producing channel rather than a silent unbounded backlog.
-# Generous default; ``DURIN_BUS_MAXSIZE=0`` opts out (unbounded, historical).
+# Generous default; ``DURIN_BUS_MAXSIZE=0`` (in fact any value <= 0, per asyncio)
+# opts out (unbounded, historical).
 def _default_bus_maxsize() -> int:
     raw = os.environ.get("DURIN_BUS_MAXSIZE", "10000")
     try:

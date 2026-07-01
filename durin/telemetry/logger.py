@@ -31,7 +31,9 @@ _MAX_EVENTS_PER_FILE = 10_000
 # was the dominant per-event cost; keeping one append handle per path and writing
 # through (write + flush, no fsync) drops the open/close syscalls while every
 # event stays immediately readable by a fresh reader. Bounded LRU so a long-lived
-# multi-session process never accumulates unbounded file descriptors.
+# multi-session process never accumulates unbounded file descriptors. Keyed by the
+# exact Path, so callers must use a stable spelling per file (get_session_logger
+# builds a consistent path per session, so this holds today).
 _MAX_OPEN_HANDLES = 64
 _open_handles: "OrderedDict[Path, TextIO]" = OrderedDict()
 _io_lock = threading.Lock()
@@ -60,8 +62,9 @@ def _append_line(path: Path, line: str) -> None:
 
 
 def close_all_handles() -> None:
-    """Close every pooled telemetry handle. Registered with atexit; safe to call
-    explicitly (e.g. on gateway shutdown) and idempotent."""
+    """Close every pooled telemetry handle. Registered with atexit (fires on normal
+    interpreter exit); idempotent and safe to call explicitly. Every write already
+    flushes, so an atexit miss (e.g. SIGKILL) loses nothing."""
     with _io_lock:
         for handle in _open_handles.values():
             try:
