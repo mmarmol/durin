@@ -820,6 +820,12 @@ class AgentDefaults(Base):
     # still bounding cost, since each subagent is a full LLM loop. Raise it for
     # heavier parallel work; set 1 to force strictly serial subagents.
     max_concurrent_subagents: int = Field(default=3, ge=1)
+    # Interactive-lane cap: how many human-facing turns run at once across all
+    # sessions. Env DURIN_MAX_CONCURRENT_REQUESTS still overrides this at runtime.
+    max_concurrent_interactive: int = Field(default=4, ge=1)
+    # Global ceiling: total in-flight turns + subagents across all lanes. Keep it
+    # >= the interactive cap; sized above the sum of typical lane usage.
+    concurrency_ceiling: int = Field(default=12, ge=1)
     max_tool_result_chars: int = 16_000
     provider_retry_mode: Literal["standard", "persistent"] = "standard"
     tool_hint_max_length: int = Field(
