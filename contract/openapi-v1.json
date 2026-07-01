@@ -3777,15 +3777,51 @@
             "title": "Supports Audio Input",
             "type": "boolean"
           },
+          "supports_audio_input_override": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Supports Audio Input Override"
+          },
           "supports_reasoning": {
             "default": false,
             "title": "Supports Reasoning",
             "type": "boolean"
           },
+          "supports_reasoning_override": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Supports Reasoning Override"
+          },
           "supports_vision": {
             "default": false,
             "title": "Supports Vision",
             "type": "boolean"
+          },
+          "supports_vision_override": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Supports Vision Override"
           },
           "temperature": {
             "anyOf": [

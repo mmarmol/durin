@@ -128,9 +128,12 @@ function toDraft(m: ProviderModelEntry): DraftParams {
     max_tokens: m.max_tokens != null ? String(m.max_tokens) : "",
     temperature: m.temperature != null ? String(m.temperature) : "",
     reasoning_effort: m.reasoning_effort ?? "",
-    supports_vision: toCapOverride(m.supports_vision),
-    supports_audio_input: toCapOverride(m.supports_audio_input),
-    supports_reasoning: toCapOverride(m.supports_reasoning),
+    // Seed the tri-state selectors from the RAW override (null = inherit), not
+    // the effective capability — otherwise a catalog "false" pre-selects "no"
+    // as if the user had set it, and any save would pin a phantom override.
+    supports_vision: toCapOverride(m.supports_vision_override),
+    supports_audio_input: toCapOverride(m.supports_audio_input_override),
+    supports_reasoning: toCapOverride(m.supports_reasoning_override),
   };
 }
 

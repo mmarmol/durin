@@ -400,7 +400,7 @@ def _mark(ok: bool) -> str:
     return "✓" if ok else "✗"
 
 
-def _model_caps(model: str, provider: str, config=None) -> tuple[bool, bool]:
+def _model_caps(model: str, provider: str, config: Config | None = None) -> tuple[bool, bool]:
     """Return ``(supports_vision, supports_audio_input)`` for a model."""
     try:
         from durin.providers.capabilities import get_model_capabilities
@@ -418,7 +418,7 @@ def _model_caps(model: str, provider: str, config=None) -> tuple[bool, bool]:
         return (False, False)
 
 
-def _caps_marks(model: str, provider: str, config=None) -> str:
+def _caps_marks(model: str, provider: str, config: Config | None = None) -> str:
     """A compact ``text✓ vision✗ audio✗`` capability string."""
     vision, audio = _model_caps(model, provider, config=config)
     return f"text✓ vision{_mark(vision)} audio{_mark(audio)}"

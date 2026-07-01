@@ -126,9 +126,17 @@ class ProviderModelEntry(Result):
     id: str
     configured: bool = False
     max_input_tokens: int | None = None
+    # Effective (override-or-catalog) capabilities, for the caps badge display.
     supports_vision: bool = False
     supports_audio_input: bool = False
     supports_reasoning: bool = False
+    # Raw capability override (None = no override, inheriting catalog/heuristic).
+    # Separate from the effective fields above so the editor's tri-state selector
+    # can show "inherit" rather than pre-selecting the catalog value as if it were
+    # a user override.
+    supports_vision_override: bool | None = None
+    supports_audio_input_override: bool | None = None
+    supports_reasoning_override: bool | None = None
     # User param overrides (None = inherit catalog / default).
     max_tokens: int | None = None
     context_window_tokens: int | None = None
@@ -391,6 +399,9 @@ class ConfigService:
                         cap_ov.supports_reasoning if cap_ov and cap_ov.supports_reasoning is not None
                         else mi.supports_reasoning
                     ),
+                    supports_vision_override=getattr(cap_ov, "supports_vision", None),
+                    supports_audio_input_override=getattr(cap_ov, "supports_audio_input", None),
+                    supports_reasoning_override=getattr(cap_ov, "supports_reasoning", None),
                     max_tokens=getattr(ov, "max_tokens", None),
                     context_window_tokens=getattr(ov, "context_window_tokens", None),
                     temperature=getattr(ov, "temperature", None),
@@ -407,6 +418,9 @@ class ConfigService:
                     supports_vision=(cap_ov.supports_vision if cap_ov and cap_ov.supports_vision is not None else False),
                     supports_audio_input=(cap_ov.supports_audio_input if cap_ov and cap_ov.supports_audio_input is not None else False),
                     supports_reasoning=(cap_ov.supports_reasoning if cap_ov and cap_ov.supports_reasoning is not None else False),
+                    supports_vision_override=getattr(cap_ov, "supports_vision", None),
+                    supports_audio_input_override=getattr(cap_ov, "supports_audio_input", None),
+                    supports_reasoning_override=getattr(cap_ov, "supports_reasoning", None),
                     max_tokens=ov.max_tokens,
                     context_window_tokens=ov.context_window_tokens,
                     temperature=ov.temperature,
@@ -443,24 +457,29 @@ class ConfigService:
             temperature=cmd.temperature,
             reasoning_effort=cmd.reasoning_effort,
         )
-        # Write capability overrides when any tri-state field is set.
+        # The three tri-state fields carry the COMPLETE desired override for this
+        # model's vision/audio/reasoning (the editor always sends all three): a
+        # value sets the override, None clears it back to inherit. Override fields
+        # not surfaced by the editor (function calling, token bounds, …) are
+        # preserved; the key is dropped when no override remains.
+        from durin.config.schema import ModelCapabilityOverride
+
         cap_key = f"{cmd.provider}/{cmd.model}"
-        cap_fields: dict = {}
-        if cmd.supports_vision is not None:
-            cap_fields["supports_vision"] = cmd.supports_vision
-        if cmd.supports_audio_input is not None:
-            cap_fields["supports_audio_input"] = cmd.supports_audio_input
-        if cmd.supports_reasoning is not None:
-            cap_fields["supports_reasoning"] = cmd.supports_reasoning
-        if cap_fields:
-            from durin.config.schema import ModelCapabilityOverride
-            existing = cfg.model_capabilities.get(cap_key)
-            if existing is not None:
-                merged = existing.model_dump(exclude_none=True)
-                merged.update(cap_fields)
-                cfg.model_capabilities[cap_key] = ModelCapabilityOverride(**merged)
+        existing = cfg.model_capabilities.get(cap_key)
+        caps = existing.model_dump(exclude_none=True) if existing is not None else {}
+        for field, value in (
+            ("supports_vision", cmd.supports_vision),
+            ("supports_audio_input", cmd.supports_audio_input),
+            ("supports_reasoning", cmd.supports_reasoning),
+        ):
+            if value is None:
+                caps.pop(field, None)
             else:
-                cfg.model_capabilities[cap_key] = ModelCapabilityOverride(**cap_fields)
+                caps[field] = value
+        if caps:
+            cfg.model_capabilities[cap_key] = ModelCapabilityOverride(**caps)
+        else:
+            cfg.model_capabilities.pop(cap_key, None)
         save_config(cfg, path)
         return ConfigSetResult(
             ok=True, config=mask_secrets(cfg.model_dump(mode="json", by_alias=False))
@@ -484,8 +503,13 @@ class ConfigService:
         path = get_config_path()
         cfg = load_config(path)
         pc = getattr(cfg.providers, cmd.provider, None)
+        changed = False
         if pc is not None and getattr(pc, "models", None):
-            pc.models.pop(cmd.model, None)
+            changed = pc.models.pop(cmd.model, None) is not None
+        # Drop any orphaned capability override so a later re-add starts clean.
+        if cfg.model_capabilities.pop(f"{cmd.provider}/{cmd.model}", None) is not None:
+            changed = True
+        if changed:
             save_config(cfg, path)
         return ConfigSetResult(
             ok=True, config=mask_secrets(cfg.model_dump(mode="json", by_alias=False))

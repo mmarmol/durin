@@ -1342,9 +1342,14 @@ export interface ProviderModelEntry {
   id: string;
   configured: boolean;
   max_input_tokens?: number | null;
+  // Effective (override-or-catalog) caps, for the caps badge.
   supports_vision?: boolean;
   supports_audio_input?: boolean;
   supports_reasoning?: boolean;
+  // Raw override (null = inherit), for seeding the tri-state editor selectors.
+  supports_vision_override?: boolean | null;
+  supports_audio_input_override?: boolean | null;
+  supports_reasoning_override?: boolean | null;
   max_tokens?: number | null;
   context_window_tokens?: number | null;
   temperature?: number | null;

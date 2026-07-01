@@ -314,6 +314,13 @@ providers:
     api_base: "https://openrouter.ai/api/v1"
 ```
 
+Per-model entries (`ModelEntry`) hold `max_tokens`, `context_window_tokens`,
+`temperature`, `reasoning_effort`, and `request_timeout_s` — each `null` inherits
+the catalog value, then `agents.defaults`. `request_timeout_s` overrides the
+per-request LLM timeout for that model (default `DURIN_OPENAI_COMPAT_TIMEOUT_S`,
+300s); raise it for slow local models (a large-context ollama/LM Studio model can
+take minutes to first token). The Settings webui edits these under each provider.
+
 **Capability overrides**
 
 ```yaml
@@ -327,6 +334,12 @@ model_capabilities:
 
 Overrides are keyed by bare model name or `provider/model` form. Provider-qualified
 keys win over bare names.
+
+The Settings webui exposes the vision/audio/reasoning flags per model as a tri-state
+selector (inherit / yes / no) that writes `provider/model`-keyed entries here via the
+provider-model upsert API; "inherit" clears the override so the model falls back to
+the snapshot/heuristic. Flags not surfaced in the editor (token bounds, function
+calling, …) stay editable in YAML and are preserved across webui edits.
 
 **Auxiliary models**
 

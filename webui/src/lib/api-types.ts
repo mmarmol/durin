@@ -3473,15 +3473,30 @@ export interface components {
              */
             supports_audio_input: boolean;
             /**
+             * Supports Audio Input Override
+             * @default null
+             */
+            supports_audio_input_override: boolean | null;
+            /**
              * Supports Reasoning
              * @default false
              */
             supports_reasoning: boolean;
             /**
+             * Supports Reasoning Override
+             * @default null
+             */
+            supports_reasoning_override: boolean | null;
+            /**
              * Supports Vision
              * @default false
              */
             supports_vision: boolean;
+            /**
+             * Supports Vision Override
+             * @default null
+             */
+            supports_vision_override: boolean | null;
             /**
              * Temperature
              * @default null
