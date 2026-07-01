@@ -67,6 +67,7 @@ vi.mock("@/lib/durin-client", () => {
     onChat = () => () => {};
     onVoiceState = () => () => {};
     onVoiceAudio = () => () => {};
+    onConcurrencySnapshot = () => () => {};
     sendMessage = vi.fn();
     newChat = vi.fn();
     attach = vi.fn();

@@ -314,6 +314,7 @@ function Shell({
   const { sessions, loading, refresh, createChat, deleteChat, renameChat } = useSessions();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [view, setView] = useState<ShellView>("chat");
+  const [settingsSection, setSettingsSection] = useState<string | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
@@ -475,6 +476,12 @@ function Shell({
     setMobileSidebarOpen(false);
   }, []);
 
+  const onOpenConcurrency = useCallback(() => {
+    setSettingsSection("concurrency");
+    setView("settings");
+    setMobileSidebarOpen(false);
+  }, []);
+
   const onBackToChat = useCallback(() => {
     setView("chat");
     setMobileSidebarOpen(false);
@@ -588,6 +595,7 @@ function Shell({
     workflowsActive: view === "workflows",
     onOpenDream,
     dreamActive: view === "dream",
+    onOpenConcurrency,
   };
   const showMainSidebar = view !== "settings";
 
@@ -672,6 +680,7 @@ function Shell({
                 setActiveKey(key);
                 setView("chat");
               }}
+              initialSection={settingsSection}
             />
           </div>
         )}

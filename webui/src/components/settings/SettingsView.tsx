@@ -119,6 +119,9 @@ interface SettingsViewProps {
   onRestart?: () => void;
   isRestarting?: boolean;
   onOpenSession?: (sessionKey: string) => void;
+  /** Deep-links to a settings section on mount (e.g. from the saturation
+   * chip). Optional and backward-compatible: absent means "general". */
+  initialSection?: SettingsSectionKey | string | null;
 }
 
 export function SettingsView({
@@ -132,6 +135,7 @@ export function SettingsView({
   onRestart,
   isRestarting = false,
   onOpenSession,
+  initialSection,
 }: SettingsViewProps) {
   const { t } = useTranslation();
   const { token } = useClient();
@@ -141,7 +145,9 @@ export function SettingsView({
   const [providerSaving, setProviderSaving] = useState<string | null>(null);
   const [webSearchSaving, setWebSearchSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<SettingsSectionKey>("general");
+  const [activeSection, setActiveSection] = useState<SettingsSectionKey>(
+    () => (initialSection as SettingsSectionKey) ?? "general",
+  );
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [providerForms, setProviderForms] = useState<Record<string, { apiKey: string; apiBase: string }>>({});
   const [visibleProviderKeys, setVisibleProviderKeys] = useState<Record<string, boolean>>({});
@@ -153,6 +159,10 @@ export function SettingsView({
   });
   const [webSearchKeyVisible, setWebSearchKeyVisible] = useState(false);
   const [webSearchKeyEditing, setWebSearchKeyEditing] = useState(false);
+
+  useEffect(() => {
+    if (initialSection) setActiveSection(initialSection as SettingsSectionKey);
+  }, [initialSection]);
 
   const applyPayload = useCallback((payload: SettingsPayload) => {
     setSettings(payload);
