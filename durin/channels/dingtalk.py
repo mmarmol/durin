@@ -20,7 +20,7 @@ from durin.channels.base import BaseChannel
 from durin.config.schema import Base
 from durin.security.network import (
     ssrf_safe_async_client,
-    validate_resolved_url,
+    validate_resolved_url_async,
     validate_url_target,
 )
 
@@ -374,7 +374,7 @@ class DingTalkChannel(BaseChannel):
         if not self._http:
             return None, None
 
-        if not self._validate_remote_media_url(media_ref):
+        if not await asyncio.to_thread(self._validate_remote_media_url, media_ref):
             return None, None
 
         try:
@@ -386,7 +386,7 @@ class DingTalkChannel(BaseChannel):
                 current_url = media_ref
                 for _ in range(DINGTALK_MAX_REMOTE_MEDIA_REDIRECTS + 1):
                     async with stream("GET", current_url, follow_redirects=False) as resp:
-                        final_ok, final_err = validate_resolved_url(str(resp.url))
+                        final_ok, final_err = await validate_resolved_url_async(str(resp.url))
                         if not final_ok:
                             self.logger.warning(
                                 "remote media redirect blocked ref={} final={} reason={}",
@@ -429,7 +429,7 @@ class DingTalkChannel(BaseChannel):
             current_url = media_ref
             for _ in range(DINGTALK_MAX_REMOTE_MEDIA_REDIRECTS + 1):
                 resp = await self._http.get(current_url, follow_redirects=False)
-                final_ok, final_err = validate_resolved_url(str(getattr(resp, "url", current_url)))
+                final_ok, final_err = await validate_resolved_url_async(str(getattr(resp, "url", current_url)))
                 if not final_ok:
                     self.logger.warning(
                         "remote media redirect blocked ref={} final={} reason={}",
