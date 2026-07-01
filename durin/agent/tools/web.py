@@ -24,7 +24,11 @@ from durin.agent.tools.schema import (
 )
 from durin.config.schema import Base
 from durin.extras import ensure_extra
-from durin.security.network import ssrf_safe_async_client
+from durin.security.network import (
+    ssrf_safe_async_client,
+    validate_resolved_url_async,
+    validate_url_target_async,
+)
 from durin.utils.helpers import build_image_content_blocks
 
 # Shared constants
@@ -648,7 +652,7 @@ class WebFetchTool(Tool):
     ) -> Any:
         url = url.strip(" \t\r\n`\"'")
         max_chars = max_chars or self.max_chars
-        is_valid, error_msg = _validate_url_safe(url)
+        is_valid, error_msg = await validate_url_target_async(url)
         if not is_valid:
             err = json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
             emit_tool_event("tool.web_fetch", {
@@ -664,9 +668,7 @@ class WebFetchTool(Tool):
         try:
             async with ssrf_safe_async_client(proxy=self.proxy, follow_redirects=True, max_redirects=MAX_REDIRECTS, timeout=15.0) as client:
                 async with client.stream("GET", url, headers={"User-Agent": self.user_agent}) as r:
-                    from durin.security.network import validate_resolved_url
-
-                    redir_ok, redir_err = validate_resolved_url(str(r.url))
+                    redir_ok, redir_err = await validate_resolved_url_async(str(r.url))
                     if not redir_ok:
                         err = json.dumps({"error": f"Redirect blocked: {redir_err}", "url": url}, ensure_ascii=False)
                         emit_tool_event("tool.web_fetch", {
