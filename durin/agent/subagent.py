@@ -518,6 +518,14 @@ class SubagentManager:
         """Return the number of currently running subagents."""
         return len(self._running_tasks)
 
+    def list_running(self) -> list["SubagentStatus"]:
+        """Live sub-agents only (running task handles), for the global snapshot."""
+        return [
+            self._task_statuses[tid]
+            for tid in self._running_tasks
+            if tid in self._task_statuses
+        ]
+
     def get_running_count_by_session(self, session_key: str) -> int:
         """Return the number of currently running subagents for a session."""
         tids = self._session_tasks.get(session_key, set())
