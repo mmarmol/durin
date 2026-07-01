@@ -396,8 +396,8 @@ class DingTalkChannel(BaseChannel):
                             )
                             return None, None
                         if 300 <= resp.status_code < 400:
-                            next_url = self._next_remote_media_url(
-                                str(resp.url), resp.headers.get("location")
+                            next_url = await asyncio.to_thread(
+                                self._next_remote_media_url, str(resp.url), resp.headers.get("location")
                             )
                             if not next_url:
                                 return None, None
@@ -439,8 +439,8 @@ class DingTalkChannel(BaseChannel):
                     )
                     return None, None
                 if 300 <= resp.status_code < 400:
-                    next_url = self._next_remote_media_url(
-                        str(getattr(resp, "url", current_url)), resp.headers.get("location")
+                    next_url = await asyncio.to_thread(
+                        self._next_remote_media_url, str(getattr(resp, "url", current_url)), resp.headers.get("location")
                     )
                     if not next_url:
                         return None, None
