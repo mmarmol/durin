@@ -25,7 +25,7 @@ venv/
 /build/
 
 # Node / WebUI
-node_modules/
+node_modules
 webui/dist/
 # Webui bundle — built into the package tree by hatch_build.py at
 # wheel-build time; never committed.
