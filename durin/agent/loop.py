@@ -426,6 +426,12 @@ class AgentLoop:
         # When a session has an active task, new messages for that session
         # are routed here instead of creating a new task.
         self._pending_queues: dict[str, asyncio.Queue] = {}
+        # Coalesced background session reindex (regen .md + FTS off the loop).
+        # A save marks the key dirty; one drainer per key runs reindex_session
+        # via a worker thread until no longer dirty, collapsing rapid successive
+        # saves (user message + assistant turn) into a single O(N) render.
+        self._reindex_dirty: set[str] = set()
+        self._reindex_inflight: set[str] = set()
         # DURIN_MAX_CONCURRENT_REQUESTS: <=0 means unlimited; default 3.
         _max = int(os.environ.get("DURIN_MAX_CONCURRENT_REQUESTS", "3"))
         self._concurrency_gate: asyncio.Semaphore | None = (
@@ -1271,7 +1277,8 @@ class AgentLoop:
                 session.metadata.pop(PENDING_SECRET_KEY, None)
             session.add_message("user", text, **extra)
             self._mark_pending_user_turn(session)
-            self.sessions.save(session)
+            self.sessions.save(session, reindex=False)
+            self._schedule_session_reindex(session.key)
             return True
         return False
 
@@ -1936,6 +1943,38 @@ class AgentLoop:
         self._background_tasks.append(task)
         task.add_done_callback(self._background_tasks.remove)
 
+    def _schedule_session_reindex(self, key: str) -> None:
+        """Mark *key* dirty and ensure exactly one background drainer runs it.
+
+        No-op scheduler when there is no running event loop (e.g. a sync unit
+        test): the dirty flag is still set, and a later call from async context
+        schedules the drainer. The running-loop check is BEFORE marking the key
+        in-flight so the no-loop path never leaves a key stuck 'in-flight' with
+        no drainer to clear it.
+        """
+        self._reindex_dirty.add(key)
+        if key in self._reindex_inflight:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._reindex_inflight.add(key)
+        self._schedule_background(self._drain_session_reindex(key))
+
+    async def _drain_session_reindex(self, key: str) -> None:
+        """Drain the dirty flag for *key*, running reindex off the loop thread.
+        Re-checks after each pass so a save that arrived mid-render is not lost;
+        re-arms if a save slipped in during teardown."""
+        try:
+            while key in self._reindex_dirty:
+                self._reindex_dirty.discard(key)
+                await asyncio.to_thread(self.sessions.reindex_session, key)
+        finally:
+            self._reindex_inflight.discard(key)
+            if key in self._reindex_dirty:
+                self._schedule_session_reindex(key)
+
     def stop(self) -> None:
         """Stop the agent loop."""
         from durin.agent import pending_answers
@@ -2428,7 +2467,8 @@ class AgentLoop:
         ctx.session.enforce_file_cap(on_archive=self.context.memory.raw_archive)
         self._clear_pending_user_turn(ctx.session)
         self._clear_runtime_checkpoint(ctx.session)
-        self.sessions.save(ctx.session)
+        self.sessions.save(ctx.session, reindex=False)
+        self._schedule_session_reindex(ctx.session_key)
         self._schedule_background(
             self.consolidator.maybe_consolidate_by_tokens(
                 ctx.session,
