@@ -199,12 +199,12 @@ be bypassed once a message is published.
 
 The channel contract is to be **pure transport**: publish unconditionally with
 `is_dm` set and let the gate authorize — a channel should NOT re-implement
-`is_allowed`/pairing in its handlers. **Telegram is the reference implementation
-of this contract.** Several other channels still pre-filter with their own
-`is_allowed` check and early-`return` in their handlers (legacy behaviour,
-unchanged here — those messages never reach the gate); migrating them to pure
-transport so they route through the central gate is a follow-up. New channels
-should follow the Telegram model.
+`is_allowed`/pairing in its handlers. **Telegram and Slack are the reference
+implementations of this contract.** Several other channels still pre-filter
+with their own `is_allowed` check and early-`return` in their handlers (legacy
+behaviour, unchanged here — those messages never reach the gate); migrating
+them to pure transport so they route through the central gate is a follow-up.
+New channels should follow the Telegram/Slack model.
 
 The agent loop (`AgentLoop.run()`) consumes from `bus.inbound`. The
 `InboundMessage.session_key` property returns `session_key_override` when set,

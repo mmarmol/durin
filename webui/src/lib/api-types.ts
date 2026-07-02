@@ -40,6 +40,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/slack/manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Return the Slack app manifest for create-from-manifest setup */
+        get: operations["slack_manifest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/slack/pairing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List pending and approved Slack pairing entries */
+        get: operations["slack_pairing"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/slack/pairing/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a pending Slack pairing code */
+        post: operations["slack_pairing_approve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/slack/pairing/deny": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Deny and discard a pending Slack pairing code */
+        post: operations["slack_pairing_deny"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/slack/pairing/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke an approved Slack sender */
+        post: operations["slack_pairing_revoke"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/slack/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate Slack bot/app tokens (persists nothing) */
+        post: operations["slack_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels/start": {
         parameters: {
             query?: never;
@@ -4093,6 +4195,110 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** SlackManifestQuery */
+        SlackManifestQuery: {
+            /**
+             * Name
+             * @default durin
+             */
+            name: string;
+        };
+        /** SlackManifestResult */
+        SlackManifestResult: {
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+        };
+        /** SlackPairingApproveCommand */
+        SlackPairingApproveCommand: {
+            /** Code */
+            code: string;
+        };
+        /** SlackPairingApproveResult */
+        SlackPairingApproveResult: {
+            /**
+             * Channel
+             * @default null
+             */
+            channel: string | null;
+            /** Ok */
+            ok: boolean;
+            /**
+             * Sender Id
+             * @default null
+             */
+            sender_id: string | null;
+        };
+        /** SlackPairingDenyCommand */
+        SlackPairingDenyCommand: {
+            /** Code */
+            code: string;
+        };
+        /** SlackPairingDenyResult */
+        SlackPairingDenyResult: {
+            /** Ok */
+            ok: boolean;
+        };
+        /** SlackPairingListQuery */
+        SlackPairingListQuery: Record<string, never>;
+        /** SlackPairingListResult */
+        SlackPairingListResult: {
+            /** Approved */
+            approved: string[];
+            /** Pending */
+            pending: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** SlackPairingRevokeCommand */
+        SlackPairingRevokeCommand: {
+            /** Sender Id */
+            sender_id: string;
+        };
+        /** SlackPairingRevokeResult */
+        SlackPairingRevokeResult: {
+            /** Ok */
+            ok: boolean;
+        };
+        /** SlackTestCommand */
+        SlackTestCommand: {
+            /**
+             * App Token
+             * @default
+             */
+            app_token: string;
+            /**
+             * Bot Token
+             * @default
+             */
+            bot_token: string;
+        };
+        /** SlackTestResult */
+        SlackTestResult: {
+            /**
+             * App Error
+             * @default null
+             */
+            app_error: string | null;
+            /**
+             * Bot Error
+             * @default null
+             */
+            bot_error: string | null;
+            /**
+             * Bot User
+             * @default null
+             */
+            bot_user: string | null;
+            /** Ok */
+            ok: boolean;
+            /**
+             * Team
+             * @default null
+             */
+            team: string | null;
+        };
         /** SoulDeleteCommand */
         SoulDeleteCommand: {
             /** Slug */
@@ -4508,6 +4714,150 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChannelsListResult"];
+                };
+            };
+        };
+    };
+    slack_manifest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlackManifestQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlackManifestResult"];
+                };
+            };
+        };
+    };
+    slack_pairing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlackPairingListQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlackPairingListResult"];
+                };
+            };
+        };
+    };
+    slack_pairing_approve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlackPairingApproveCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlackPairingApproveResult"];
+                };
+            };
+        };
+    };
+    slack_pairing_deny: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlackPairingDenyCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlackPairingDenyResult"];
+                };
+            };
+        };
+    };
+    slack_pairing_revoke: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlackPairingRevokeCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlackPairingRevokeResult"];
+                };
+            };
+        };
+    };
+    slack_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlackTestCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlackTestResult"];
                 };
             };
         };
