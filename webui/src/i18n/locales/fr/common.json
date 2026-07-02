@@ -192,32 +192,9 @@
     "empty": {
       "description": "Posez des questions, poursuivez votre travail local ou démarrez un nouveau fil.",
       "greeting": "Que puis-je faire pour vous ?",
-      "quickActions": {
-        "plan": {
-          "title": "Créer un plan de projet",
-          "prompt": "Créez un plan de projet concis pour ce que je devrais construire ensuite."
-        },
-        "analyze": {
-          "title": "Analyser ces données",
-          "prompt": "Aidez-moi à analyser ces données et à faire ressortir les tendances les plus importantes."
-        },
-        "brainstorm": {
-          "title": "Trouver des idées",
-          "prompt": "Proposez quelques idées pratiques et leurs compromis pour ce problème."
-        },
-        "code": {
-          "title": "Écrire du code",
-          "prompt": "Aidez-moi à écrire le code pour cette tâche, en commençant par le plus petit changement utile."
-        },
-        "summarize": {
-          "title": "Résumer ce document",
-          "prompt": "Résumez ce document et listez les points clés à retenir."
-        },
-        "more": {
-          "title": "Plus",
-          "prompt": "Montrez-moi quelques façons utiles dont vous pouvez m’aider dans cet espace de travail."
-        }
-      },
+      "resumeLast": "Reprendre : {{name}}",
+      "continueSession": "Continuer : {{name}}",
+      "whatDoYouKnow": "Que sais-tu de moi ?",
       "imageQuickActions": {
         "icon": {
           "title": "Créer une icône d’app",

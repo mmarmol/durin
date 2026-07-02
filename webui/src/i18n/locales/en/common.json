@@ -1222,32 +1222,9 @@
     "loadingConversation": "Loading conversation…",
     "empty": {
       "greeting": "What can I do for you?",
-      "quickActions": {
-        "plan": {
-          "title": "Create a project plan",
-          "prompt": "Create a concise project plan for what I should build next."
-        },
-        "analyze": {
-          "title": "Analyze this data",
-          "prompt": "Help me analyze this data and call out the most important patterns."
-        },
-        "brainstorm": {
-          "title": "Brainstorm ideas",
-          "prompt": "Brainstorm a few practical ideas and tradeoffs for this problem."
-        },
-        "code": {
-          "title": "Write code",
-          "prompt": "Help me write the code for this task, starting with the smallest useful change."
-        },
-        "summarize": {
-          "title": "Summarize this document",
-          "prompt": "Summarize this document and list the key takeaways."
-        },
-        "more": {
-          "title": "More",
-          "prompt": "Show me a few useful ways you can help in this workspace."
-        }
-      },
+      "resumeLast": "Resume: {{name}}",
+      "continueSession": "Continue: {{name}}",
+      "whatDoYouKnow": "What do you know about me?",
       "imageQuickActions": {
         "icon": {
           "title": "Design an app icon",
@@ -1325,6 +1302,9 @@
       "persona": {
         "title": "Persona",
         "empty": "No personas available"
+      },
+      "agent": {
+        "title": "Agent"
       },
       "add": {
         "title": "Add",

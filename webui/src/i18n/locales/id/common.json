@@ -479,32 +479,9 @@
     "empty": {
       "description": "Ajukan pertanyaan, lanjutkan pekerjaan lokal, atau mulai thread baru.",
       "greeting": "Apa yang bisa saya bantu?",
-      "quickActions": {
-        "plan": {
-          "title": "Buat rencana proyek",
-          "prompt": "Buat rencana proyek ringkas untuk apa yang sebaiknya saya bangun berikutnya."
-        },
-        "analyze": {
-          "title": "Analisis data ini",
-          "prompt": "Bantu saya menganalisis data ini dan soroti pola yang paling penting."
-        },
-        "brainstorm": {
-          "title": "Brainstorm ide",
-          "prompt": "Brainstorm beberapa ide praktis dan tradeoff untuk masalah ini."
-        },
-        "code": {
-          "title": "Tulis kode",
-          "prompt": "Bantu saya menulis kode untuk tugas ini, mulai dari perubahan berguna yang paling kecil."
-        },
-        "summarize": {
-          "title": "Ringkas dokumen ini",
-          "prompt": "Ringkas dokumen ini dan daftar poin-poin utamanya."
-        },
-        "more": {
-          "title": "Lainnya",
-          "prompt": "Tunjukkan beberapa cara berguna Anda dapat membantu di workspace ini."
-        }
-      },
+      "resumeLast": "Lanjutkan: {{name}}",
+      "continueSession": "Teruskan: {{name}}",
+      "whatDoYouKnow": "Apa yang kamu tahu tentang saya?",
       "imageQuickActions": {
         "icon": {
           "title": "Desain ikon aplikasi",

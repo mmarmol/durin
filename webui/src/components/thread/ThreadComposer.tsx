@@ -52,8 +52,7 @@ import {
   ModelPickerPopover,
   effortLabelKey,
 } from "@/components/thread/ModelPickerPopover";
-import { ModePicker } from "@/components/thread/ModePicker";
-import { PersonaPickerPopover } from "@/components/thread/PersonaPickerPopover";
+import { AgentPickerPopover } from "@/components/thread/AgentPickerPopover";
 import { VoiceInputControl } from "@/components/thread/VoiceInputControl";
 import type { ModeInfo } from "@/lib/api";
 import type { SendImage } from "@/hooks/useDurinStream";
@@ -1135,18 +1134,13 @@ export function ThreadComposer({
               hidden
               onChange={onFilePick}
             />
-            {onModeChange ? (
-              <ModePicker
+            {onModeChange || onPersonaPick ? (
+              <AgentPickerPopover
                 activeMode={agentMode}
                 modes={modes}
-                onSelect={onModeChange}
-                disabled={disabled}
-              />
-            ) : null}
-            {onPersonaPick ? (
-              <PersonaPickerPopover
+                onModeSelect={onModeChange}
                 activePersona={activePersona ?? null}
-                onSelect={onPersonaPick}
+                onPersonaSelect={onPersonaPick}
                 disabled={disabled}
               />
             ) : null}
