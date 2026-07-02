@@ -146,12 +146,25 @@ def _render(p: dict[str, Any]) -> str:
     mode = p.get("mode")
     mode_part = f" · [bold]{mode}[/bold] ·" if mode else ""
 
-    latency_ms = p.get("latency_ms")
-    latency_part = (
-        f" · ⏱ {latency_ms / 1000:.1f}s"
-        if isinstance(latency_ms, (int, float)) and latency_ms > 0
-        else ""
-    )
+    # Live turn diagnostics. While a turn is in flight the footer shows a
+    # ticking elapsed clock and hides the previous turn's latency (both at
+    # once would read as two contradicting timers); a provider retry in
+    # progress rides alongside so a silent backoff doesn't look like a hang.
+    elapsed_s = p.get("elapsed_s")
+    if isinstance(elapsed_s, (int, float)):
+        m, s = divmod(int(elapsed_s), 60)
+        clock = f"{m}:{s:02d}" if m else f"{s}s"
+        elapsed_part = f" · [bold]● {clock}[/bold]"
+        latency_part = ""
+    else:
+        elapsed_part = ""
+        latency_ms = p.get("latency_ms")
+        latency_part = (
+            f" · ⏱ {latency_ms / 1000:.1f}s"
+            if isinstance(latency_ms, (int, float)) and latency_ms > 0
+            else ""
+        )
+    retry_part = _render_retry(p.get("retry_status"))
 
     # Footer is for *current-conversation* state. Memory totals & vector
     # availability are install-level info — they belong in the startup
@@ -165,7 +178,28 @@ def _render(p: dict[str, Any]) -> str:
         f"{extras_part}"
         f"{mode_part}"
         f"{latency_part}"
+        f"{elapsed_part}"
+        f"{retry_part}"
     )
+
+
+def _render_retry(status: Any) -> str:
+    """Footer segment for a provider retry in progress.
+
+    ``⟳ llm retry 2/10 · 14s`` while backing off (attempt / limit / seconds
+    until the next try; persistent mode has no limit → ``∞``), or
+    ``✗ llm giving up`` on the final attempt — the error text itself follows
+    in chat, this only explains why the turn stalled.
+    """
+    if not isinstance(status, dict):
+        return ""
+    attempt = status.get("attempt")
+    if status.get("final"):
+        return f" · [red]✗ llm giving up (attempt {attempt})[/red]"
+    max_attempts = status.get("max_attempts")
+    limit = "∞" if status.get("persistent") or not max_attempts else str(max_attempts)
+    delay = int(status.get("delay_s") or 0)
+    return f" · [yellow]⟳ llm retry {attempt}/{limit} · {delay}s[/yellow]"
 
 
 def payload_from_loop(agent_loop: Any, cli_channel: str, cli_chat_id: str) -> dict[str, Any] | None:

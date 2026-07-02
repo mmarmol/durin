@@ -442,6 +442,14 @@ in a frame also carries its `iteration` (current pass number) and `budget`
 (effective visit limit, `null` where not applicable) so the panels can render
 loop progress live, not just after the run completes.
 
+The **terminal frame** (built by the tool after the run, not by the engine)
+additionally carries the run-level `status` (`completed` / `needs_input` /
+`exhausted` / …). For a `needs_input` run the node that asked is marked
+`needs_input` (only its last run row — earlier rows are completed loop
+iterations) and the questions ride in a capped `detail` field, so push-fed
+panels (the TUI sidebar) can show a paused run and what it is waiting for
+without polling the tasks API or reading the manifest.
+
 **The web UI's Runs sidebar tab** reads the global feed (§4f) to show every run
 across all origins (sessions, HTTP, cron, editor) in one place, with a tray of
 stranded `needs_input` runs on top — each with its questions and a direct resume

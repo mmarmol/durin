@@ -19,29 +19,49 @@ from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 
 
-def _terminal_progress_payload(workflow: Any, run_id: str, runs: Any) -> dict:
+def _terminal_progress_payload(workflow: Any, run_id: str, result: Any) -> dict:
     """Build the final ``workflow_progress`` payload (``done=True``) from the
-    completed node runs.
+    completed run.
 
     The engine only emits per-node ``done=False`` frames during the walk and
     never a terminal frame, so without this the WORK panel (TUI + webui) leaves
     a finished workflow stuck on "running". Emitted after the run completes,
     keyed by the same ``run_id`` so it updates the existing work item.
+
+    Carries the run-level ``status`` so the panels can tell a paused
+    ``needs_input`` run from a completed one; for ``needs_input`` the node
+    that asked is marked accordingly and the questions ride in ``detail``
+    (capped, same limit the tasks API applies) so the user sees what the run
+    is waiting for without opening the manifest.
     """
     from durin.workflow.spec import node_label
 
+    # Only the *last* run row of the asking node represents the pause —
+    # earlier rows of the same node are completed loop iterations.
+    ni_idx = -1
+    if result.status == "needs_input" and result.needs_input_node:
+        for i, r in enumerate(result.runs):
+            if r.node_id == result.needs_input_node:
+                ni_idx = i
     nodes = [
         {
             "id": r.node_id,
             "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
-            "status": "failed" if r.status in ("node_failed", "persist_failed") else "done",
+            "status": (
+                "needs_input" if i == ni_idx
+                else "failed" if r.status in ("node_failed", "persist_failed")
+                else "done"
+            ),
             "route_label": getattr(r, "route_label", None),
             "iteration": r.iteration,
             "budget": getattr(r, "budget", None),
         }
-        for r in runs
+        for i, r in enumerate(result.runs)
     ]
-    return {"run_id": run_id, "nodes": nodes, "done": True}
+    payload: dict = {"run_id": run_id, "nodes": nodes, "done": True, "status": result.status}
+    if result.status == "needs_input" and result.final_output:
+        payload["detail"] = str(result.final_output)[:500]
+    return payload
 
 _PARAMETERS = {
     "type": "object",
@@ -332,6 +352,12 @@ class RunWorkflowTool(Tool, ContextAware):
                     "arguments": {"workflow": name, "task": task},
                     "nodes": payload["nodes"],
                 }
+                # Terminal frames carry the run status (completed / needs_input /
+                # exhausted / …) and, for needs_input, the questions as `detail`.
+                if payload.get("status"):
+                    ev["status"] = payload["status"]
+                if payload.get("detail"):
+                    ev["detail"] = payload["detail"]
                 try:
                     asyncio.run_coroutine_threadsafe(
                         bus.publish_outbound(OutboundMessage(
@@ -382,12 +408,12 @@ class RunWorkflowTool(Tool, ContextAware):
                         resume=resume,
                     )
                     if progress_emit is not None:
-                        progress_emit(_terminal_progress_payload(workflow, run_id, result.runs))
+                        progress_emit(_terminal_progress_payload(workflow, run_id, result))
                     summary = _format_result(result, output_files=output_files)
                 except Exception as exc:  # noqa: BLE001
                     # Clear the work item even on failure so it doesn't hang on "running".
                     if progress_emit is not None:
-                        progress_emit({"run_id": run_id, "nodes": [], "done": True})
+                        progress_emit({"run_id": run_id, "nodes": [], "done": True, "status": "failed"})
                     summary = f"Workflow run failed in background: {exc}"
                 finally:
                     # Drop the cancel flag now the run is over (whether or not it was set).
@@ -409,5 +435,5 @@ class RunWorkflowTool(Tool, ContextAware):
             resume=resume,
         )
         if progress_emit is not None:
-            progress_emit(_terminal_progress_payload(workflow, run_id, result.runs))
+            progress_emit(_terminal_progress_payload(workflow, run_id, result))
         return _format_result(result, output_files=output_files)

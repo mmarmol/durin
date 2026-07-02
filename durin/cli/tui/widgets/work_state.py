@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from rich.markup import escape
+
 __all__ = ["WorkStore"]
 
-_GLYPH = {"running": "○", "done": "✓", "failed": "✗", "pending": "○"}
+_GLYPH = {"running": "○", "done": "✓", "failed": "✗", "pending": "○", "needs_input": "?"}
 # Braille spinner frames — a running node cycles through these so the panel
 # shows motion while work is in flight.
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -26,6 +28,7 @@ _NODE_CLASS = {
     "done": "work-done",
     "failed": "work-failed",
     "pending": "work-pending",
+    "needs_input": "work-needs-input",
 }
 
 
@@ -34,7 +37,7 @@ class _Item:
     call_id: str
     kind: str  # "workflow" | "subagent"
     label: str
-    status: str  # "running" | "done" | "failed"
+    status: str  # "running" | "done" | "failed" | "needs_input"
     detail: str = ""
     nodes: list[dict] = field(default_factory=list)
 
@@ -56,12 +59,25 @@ class WorkStore:
         phase = str(event.get("phase") or "")
         if name == "workflow_progress":
             args = event.get("arguments") or {}
-            status = "done" if phase == "end" else "running"
+            if phase == "end":
+                # Terminal frames carry the run status; a paused run is
+                # "waiting for the user", not finished. Events without a
+                # status (older emitters) keep the plain end→done mapping.
+                run_status = str(event.get("status") or "")
+                if run_status == "needs_input":
+                    status = "needs_input"
+                elif run_status in ("", "completed"):
+                    status = "done"
+                else:  # exhausted / aborted / cancelled / failed
+                    status = "failed"
+            else:
+                status = "running"
             item = _Item(
                 call_id=call_id,
                 kind="workflow",
                 label=str(args.get("workflow") or "workflow"),
                 status=status,
+                detail=str(event.get("detail") or ""),
                 nodes=list(event.get("nodes") or []),
             )
         else:
@@ -97,10 +113,25 @@ class WorkStore:
         """Render the WORK section. ``spin`` advances the running-node spinner."""
         if self.is_empty():
             return ""
-        active = [self._items[c] for c in self._order if self._items[c].status == "running"]
-        finished = [self._items[c] for c in self._order if self._items[c].status != "running"]
+        # A needs_input run belongs with the active items: it is waiting for
+        # the user, not finished — parking it under "Finished" would hide it.
+        active = [
+            self._items[c] for c in self._order
+            if self._items[c].status in ("running", "needs_input")
+        ]
+        finished = [
+            self._items[c] for c in self._order
+            if self._items[c].status not in ("running", "needs_input")
+        ]
+        running_n = sum(1 for it in active if it.status == "running")
+        waiting_n = len(active) - running_n
+        counts: list[str] = []
+        if running_n or not waiting_n:
+            counts.append(f"{running_n} running")
+        if waiting_n:
+            counts.append(f"{waiting_n} waiting")
         lines: list[str] = [
-            f"[work-header]WORK[/] [work-count]({len(active)} running)[/]"
+            f"[work-header]WORK[/] [work-count]({' · '.join(counts)})[/]"
         ]
         for item in active:
             lines.extend(self._render_item(item, spin=spin))
@@ -120,6 +151,13 @@ class WorkStore:
         if item.kind == "subagent" and item.detail:
             head += f" [work-count]{item.detail}[/]"
         out = [head]
+        if item.kind == "workflow" and item.status == "needs_input":
+            out.append("  [work-needs-input]waiting for your reply in chat[/]")
+            if item.detail:
+                # First line of the questions, markup-escaped (LLM text may
+                # contain literal brackets that Rich would parse as tags).
+                first = escape(item.detail.strip().splitlines()[0][:80])
+                out.append(f"  [work-count]{first}[/]")
         if not compact and item.kind == "workflow":
             for node in item.nodes:
                 out.extend(self._render_node(node, indent=1, spin=spin))

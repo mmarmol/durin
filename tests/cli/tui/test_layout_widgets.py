@@ -257,3 +257,49 @@ def test_goal_banner_shows_and_hides() -> None:
     assert "ship the work panel" in banner.render_text()
     banner.set_goal(None)
     assert banner.is_shown is False
+
+
+def test_footer_elapsed_clock_replaces_latency_while_running() -> None:
+    """During a turn the footer shows a ticking elapsed clock and hides the
+    previous turn's latency — two timers at once would contradict each other."""
+    from durin.cli.tui.widgets.footer_bar import _render
+
+    out = _render({"model": "opus-4.8", "latency_ms": 4200, "elapsed_s": 83})
+    assert "● 1:23" in out
+    assert "⏱" not in out
+    # Sub-minute turns render as plain seconds.
+    out = _render({"model": "opus-4.8", "elapsed_s": 7})
+    assert "● 7s" in out
+
+
+def test_footer_retry_badge_backoff_and_final() -> None:
+    from durin.cli.tui.widgets.footer_bar import _render
+
+    out = _render({
+        "model": "opus-4.8",
+        "retry_status": {"kind": "retry_wait", "attempt": 2, "max_attempts": 10,
+                         "delay_s": 14, "persistent": False, "final": False},
+    })
+    assert "⟳ llm retry 2/10 · 14s" in out
+
+    out = _render({
+        "model": "opus-4.8",
+        "retry_status": {"kind": "retry_wait", "attempt": 5, "max_attempts": None,
+                         "delay_s": 30, "persistent": True, "final": False},
+    })
+    assert "5/∞" in out
+
+    out = _render({
+        "model": "opus-4.8",
+        "retry_status": {"kind": "giving_up", "attempt": 10, "max_attempts": 10,
+                         "delay_s": 0, "persistent": False, "final": True},
+    })
+    assert "✗ llm giving up" in out
+
+
+def test_footer_no_diagnostics_when_idle() -> None:
+    from durin.cli.tui.widgets.footer_bar import _render
+
+    out = _render({"model": "opus-4.8"})
+    assert "●" not in out
+    assert "⟳" not in out
