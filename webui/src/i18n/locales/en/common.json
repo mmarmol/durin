@@ -1660,7 +1660,8 @@
       "created": "created",
       "improved": "improved",
       "flagged": "flagged",
-      "run": "run"
+      "run": "run",
+      "warning": "warning"
     },
     "close": "Close",
     "openFull": "Open full",
