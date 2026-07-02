@@ -28,6 +28,11 @@ from durin.utils.gitstore import GitStore
 
 logger = logging.getLogger(__name__)
 
+# Bump this constant whenever a curation rule is added to skill_curation.md.
+# `needs_curation` will re-check skills with stale rules versions, pulling them
+# back through the curation gate once per rules update cycle.
+CURATION_RULES_VERSION = 2
+
 
 @dataclass
 class Attribution:
@@ -415,17 +420,23 @@ def _unsync_index(workspace: Path, name: str) -> None:
 
 
 def needs_curation(workspace: Path, name: str) -> bool:
-    """True when the skill is new or its BODY changed since last curated."""
+    """True when the skill is new or its BODY changed since last curated, or when
+    the stored curation rules version is absent or older than the current version."""
     text = read_skill_content(workspace, name)
     if text is None:
         return False
-    prov = _durin_blob(text).get("provenance")
+    durin = _durin_blob(text)
+    prov = durin.get("provenance")
     stored = prov.get("dream_processed_through") if isinstance(prov, dict) else None
-    return stored != _body_hash(text)
+    body_hash_mismatch = stored != _body_hash(text)
+    # Re-check if rules version is absent or stale
+    stored_rules = durin.get("curation_rules")
+    rules_version_stale = stored_rules is None or stored_rules < CURATION_RULES_VERSION
+    return body_hash_mismatch or rules_version_stale
 
 
 def mark_curated(workspace: Path, name: str) -> str | None:
-    """Stamp provenance.dream_processed_through = current body hash + commit."""
+    """Stamp provenance.dream_processed_through = current body hash + curation_rules version + commit."""
     if not _safe_name(name):
         return None
     store = _store_init(workspace)
@@ -439,6 +450,7 @@ def mark_curated(workspace: Path, name: str) -> str | None:
             prov = {"source": "unknown", "created_at": _today()}
         prov["dream_processed_through"] = h
         durin["provenance"] = prov
+        durin["curation_rules"] = CURATION_RULES_VERSION
 
     _update_md(dest / "SKILL.md", _set)
     sha = store.auto_commit(f"skill({name}): curated @ {h}")
