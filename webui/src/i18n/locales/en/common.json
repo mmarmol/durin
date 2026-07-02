@@ -1717,7 +1717,8 @@
     "status": {
       "needs_input": "Needs input"
     },
-    "needsInputHint": "Handed to the calling agent — it may answer from its own context or ask you, then resume this run."
+    "needsInputHint": "Handed to the calling agent — it may answer from its own context or ask you, then resume this run.",
+    "questions": "Questions"
   },
   "work": {
     "steps": "{{count}} steps",

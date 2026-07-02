@@ -123,6 +123,7 @@ export interface BackgroundTask {
   session_key: string | null;
   nodes?: Array<{ id: string; label?: string; status: string; branches?: Array<{ id: string; label?: string; status: string }> | null }> | null;
   task?: string | null;
+  needs_input_detail?: string | null;
 }
 
 export async function listBackgroundTasks(

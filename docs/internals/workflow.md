@@ -383,7 +383,9 @@ engine as its `run_id_factory`) so the agent can observe or cancel the run
 through the unified `tasks` tool — `tasks(action='status', id=…)` reads the run
 manifest, `tasks(action='stop', id=…)` requests cancellation. The same merge of
 sub-agents and workflow runs that backs `GET /api/v1/tasks`
-(`durin/agent/background_tasks.py`) is what `tasks` renders.
+(`durin/agent/background_tasks.py`) is what `tasks` renders. For a run that
+ends `needs_input`, this same surface carries the gate's questions so panels
+(like the web UI's Work panel) can show what is being asked.
 
 **Resuming a needs_input run.** A run that ended needs_input can be resumed
 instead of restarted: the engine re-enters the graph AT the asking node, with

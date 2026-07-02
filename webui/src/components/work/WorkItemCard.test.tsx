@@ -242,4 +242,40 @@ describe("WorkItemCard", () => {
       ),
     ).toBeInTheDocument();
   });
+
+  it("renders the questions box when needsInputDetail is present", () => {
+    render(
+      <WorkItemCard
+        item={{
+          kind: "workflow",
+          id: "r8",
+          label: "waiting",
+          status: "needs_input",
+          needsInputDetail: "Which env — staging or prod?",
+          nodes: [],
+          startedAt: 0,
+          endedAt: null,
+        }}
+      />,
+    );
+    expect(screen.getByText("Questions")).toBeInTheDocument();
+    expect(screen.getByText("Which env — staging or prod?")).toBeInTheDocument();
+  });
+
+  it("does not render the questions box when needsInputDetail is absent", () => {
+    render(
+      <WorkItemCard
+        item={{
+          kind: "workflow",
+          id: "r9",
+          label: "waiting",
+          status: "needs_input",
+          nodes: [],
+          startedAt: 0,
+          endedAt: null,
+        }}
+      />,
+    );
+    expect(screen.queryByText("Questions")).not.toBeInTheDocument();
+  });
 });

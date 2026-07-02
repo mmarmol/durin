@@ -41,6 +41,18 @@
             "title": "Label",
             "type": "string"
           },
+          "needs_input_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Needs Input Detail"
+          },
           "nodes": {
             "anyOf": [
               {

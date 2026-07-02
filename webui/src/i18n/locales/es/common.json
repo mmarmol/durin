@@ -1709,7 +1709,8 @@
     "status": {
       "needs_input": "Necesita input"
     },
-    "needsInputHint": "En manos del agente que lo llamó — puede responder con su propio contexto o preguntarte, y luego reanuda este run."
+    "needsInputHint": "En manos del agente que lo llamó — puede responder con su propio contexto o preguntarte, y luego reanuda este run.",
+    "questions": "Preguntas"
   },
   "work": {
     "steps": "{{count}} pasos",

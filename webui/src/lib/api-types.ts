@@ -1801,6 +1801,11 @@ export interface components {
             /** Label */
             label: string;
             /**
+             * Needs Input Detail
+             * @default null
+             */
+            needs_input_detail: string | null;
+            /**
              * Nodes
              * @default null
              */

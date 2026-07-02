@@ -221,6 +221,7 @@ export function useWorkState(
             label: r.label,
             status: r.status,
             ...(r.task != null ? { task: r.task } : {}),
+            ...(r.needs_input_detail != null ? { needsInputDetail: r.needs_input_detail } : {}),
             startedAt: r.started_at,
             endedAt: r.ended_at,
             nodes: toWorkNodes(r.nodes),
