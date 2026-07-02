@@ -139,6 +139,22 @@ with different content; an auto-merge step (diff-and-combine, or an LLM
 merge judge) would resolve the common case without a human in the loop, falling
 back to today's abort when the merge itself is ambiguous.
 
+**Structured completion contract for subagents and work nodes.** Workflow runs
+already end in a closed status set, and routing gates already record their verdict
+through a forced tool call — but a workflow's *work nodes* and durin's *subagents*
+close with free text only: the caller must infer from prose whether the unit
+finished clean, finished with doubts, or got stuck. Generalize the proven
+forced-tool-call mechanism into a self-declared completion status at the close of
+every subagent and work node: a small closed enum (done / done-with-concerns /
+blocked / needs-context) plus a free-text concerns field — closed status for
+mechanical routing, open text for the detail. Three consumers make it worth
+building: the calling agent routes on it (concerns → scrutinize, blocked → change
+something before retrying, needs-context → supply and re-dispatch); the dream
+diagnostics mine it (a node that chronically finishes "with concerns" is a prompt
+smell invisible today); the Work panel surfaces it (a doubting subagent currently
+looks identical to a confident one). Boundary: the self-report *informs, never
+decides* — independent gates keep the verdict (the anti-Goodhart separation).
+
 **Unified GitHub credential section + connect UX.** GitHub recurs across skills
 (`skills.security.github_token_secret`), MCP discovery (`mcp_discovery.github_token_secret`), the
 GitHub MCP server, and the Copilot OAuth provider — each configures its token in its own place.
