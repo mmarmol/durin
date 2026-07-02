@@ -303,6 +303,40 @@ def test_refine_non_escalated_kept_not_flagged(tmp_path):
     assert records == []
 
 
+def test_refine_judge_error_emits_skipped_event(tmp_path, monkeypatch):
+    import durin.agent.tools._telemetry as tel
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    _two_dupes(tmp_path)
+    # An invoke that never yields a parseable verdict -> JudgeError after retries.
+    out = run_refine(tmp_path, llm_invoke=lambda prompt, **kw: "no verdict markers")
+    assert any(s["reason"].startswith("judge_error") for s in out["skipped"])
+    skips = [d for n, d in events if n == "memory.absorb.skipped"]
+    assert any(d.get("reason") == "judge_error" for d in skips)
+
+
+def test_refine_load_failed_emits_skipped_event(tmp_path, monkeypatch):
+    import durin.agent.tools._telemetry as tel
+    import durin.memory.refine_dream as refine_dream
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    _two_dupes(tmp_path)
+    real_load_page = refine_dream._load_page
+
+    def _load_page_one_missing(ws, ref):
+        if ref == "company:mxhero_inc":
+            return None
+        return real_load_page(ws, ref)
+
+    monkeypatch.setattr(refine_dream, "_load_page", _load_page_one_missing)
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 96))
+    assert any(s["reason"] == "load_failed" for s in out["skipped"])
+    skips = [d for n, d in events if n == "memory.absorb.skipped"]
+    assert any(d.get("reason") == "load_failed" for d in skips)
+
+
 def test_flagged_empty_workspace(tmp_path):
     """read_flagged on a workspace with no flagged file returns empty list."""
     assert read_flagged(tmp_path) == []
@@ -347,3 +381,38 @@ def test_remove_flagged_noop_on_missing(tmp_path):
                 verdict="unclear", confidence=70, reasoning="r")
     remove_flagged(tmp_path, "company:a", "company:b")  # different pair — no error
     assert len(read_flagged(tmp_path)) == 1
+
+
+def test_refine_capped_escalation_flags_pair(tmp_path, monkeypatch):
+    """Past the per-run escalation cap, a borderline pair is flagged for the
+    Bandeja instead of silently keeping the cheap verdict."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+    monkeypatch.setattr(rd, "_MAX_ESCALATIONS_PER_RUN", 0)
+    monkeypatch.setattr(
+        rd, "_escalate_judge",
+        lambda ws, a, b, **kw: (_ for _ in ()).throw(
+            AssertionError("must not escalate past the cap")))
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("unclear", 80),
+                     confidence_threshold=95, escalate_floor=70)
+    assert not out["merged"]
+    flagged = read_flagged(tmp_path)
+    assert len(flagged) == 1
+    assert flagged[0]["reasoning"].startswith("escalation cap")
+
+
+def test_refine_absorb_events_carry_entity_type(tmp_path, monkeypatch):
+    """judged/auto_merged events must carry the entity type so per-class
+    duplicate churn (e.g. feedback/stance/practice) is measurable."""
+    import durin.agent.tools._telemetry as tel
+
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    _two_dupes(tmp_path)
+    run_refine(tmp_path, llm_invoke=_judge_stub("same", 96))
+    judged = [d for n, d in events if n == "memory.absorb.judged"]
+    merged = [d for n, d in events if n == "memory.absorb.auto_merged"]
+    assert judged and judged[0]["entity_type"] == "company"
+    assert merged and merged[0]["entity_type"] == "company"

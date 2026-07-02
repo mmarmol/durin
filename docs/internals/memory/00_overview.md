@@ -223,8 +223,10 @@ Agent and user writes both go through `memory_writer.write_entity`:
    contention.
 4. Fast-forward the working tree so file-based readers (Obsidian, the webui) see
    the latest content.
-5. After a successful commit, `VectorIndex.upsert` and `FTSIndex.reindex_one_file`
-   update both indices incrementally.
+5. The working-tree fast-forward is picked up by the file watcher, which
+   incrementally reindexes the changed page (FTS via `reindex_one_file`,
+   vector re-embed). With `memory.file_watcher.enabled = false`, a written
+   page becomes searchable at the next health-check repair tick instead.
 
 The `pending` class bypasses this path; it is a raw buffer that the indexer skips.
 
@@ -312,7 +314,7 @@ For deeper coverage of individual subsystems, see the sibling docs:
 | `memory.search.sectioning.max_per_source` | `3` | Maximum corpus hits per `ingest_id` in the sectioned output. |
 | `memory.file_watcher.enabled` | `true` | Reactive re-indexing when `.md` files under `memory/` are modified outside the agent (vim, git merge). |
 | `memory.health_check.enabled` | `true` | Periodic consistency probe between the markdown source and the derived indices. |
-| `memory.health_check.interval_seconds` | `3600` | How often the health check probe runs. |
+| `memory.health_check.interval_seconds` | `900` | How often the health check probe runs. |
 | `memory.dream.enabled` | `true` | Master switch for cron and reactive dream triggers. Manual `durin memory dream` always works. |
 | `memory.dream.cron` | `0 3 * * *` | Schedule for the daily five-pass dream run. |
 | `memory.dream.post_compaction` | `true` | Run extract pass after a session is compacted. |
@@ -348,14 +350,20 @@ durin memory stats                  show index sizes and entry counts
 
 ### Agent tools
 
-The agent accesses memory through six tools (see [04_agent_tools.md](04_agent_tools.md) for signatures and parameters):
+The agent accesses memory through five core tools plus three read-only
+inspection tools (see [04_agent_tools.md](04_agent_tools.md) for signatures):
 
 - `memory_search` — query the search pipeline
 - `memory_upsert_entity` — create or update an entity page
-- `memory_ingest` — ingest a document into corpus chunks
+- `memory_ingest` — ingest a document (kept whole as a reference)
 - `memory_drill` — fetch the full body of a specific memory entry
-- `memory_forget` — soft-delete a memory entry (sets a tombstone; `archive` not delete)
-- `memory_store` — write a raw fragment (episodic, stable, or corpus class)
+- `memory_forget` — archive an entry and drop its index rows
+- `memory_read_entity` / `memory_entity_lineage` / `memory_source_session` —
+  inspect an entity's full page, git history, and source conversation turns
+
+`memory_store` exists in the codebase but is disabled at load time; raw
+fragments are produced by `/remember` and session-close summaries, not by the
+agent.
 
 ---
 

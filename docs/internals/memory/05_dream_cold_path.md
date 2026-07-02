@@ -279,9 +279,11 @@ threaded through; it is `None` when the vector index is unavailable.
    **and** `confidence >= confidence_threshold`. Every other outcome keeps the
    pair separate.
 7. **Flag surface:** when the Tier 2 sub-agent investigated a pair and did not
-   confirm it as `"same"`, the pair is recorded in `memory/.flagged_pairs.json`.
-   `durin memory absorb-suggest` surfaces these under "Flagged by the agent —
-   needs review" so the operator can inspect and merge or dismiss them manually.
+   confirm it as `"same"`, or a borderline pair hit the per-run escalation cap
+   before it could be investigated, the pair is recorded in
+   `memory/.flagged_pairs.json`. `durin memory absorb-suggest` and the webui
+   Bandeja surface these so the operator can inspect and merge or dismiss them
+   manually.
 
 `EntityAbsorption.absorb` does a deterministic structural merge (union of
 aliases / attributes / relations / provenance; canonical wins attribute
@@ -328,6 +330,12 @@ page's provenance map.
 A per-entity relation count is checked on every write (soft 50 / hard 200) and
 emits a warning telemetry event on a crossing, but this is **alert-only** — no
 write is blocked and no relation is dropped.
+
+An LLM response that cannot be parsed at all (unloadable JSON, wrong top-level
+type) emits `memory.dream.parse_failure` with the stage and source, and that
+call yields an empty result — distinguishing "model returned garbage" from
+"nothing to extract". The cursor still advances, so a persistent parse failure
+surfaces in telemetry rather than blocking the pass.
 
 ### Concurrency and the cursor
 
@@ -397,7 +405,7 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.always_on_token_budget` | `1500` | Token ceiling for the always-on pin. 0 disables the pin. |
 | `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM-judge confidence floor (0–100) for an auto-merge. |
-| `memory.dream.auto_absorb.semantic_distance_threshold` | `0.20` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.90; lower = stricter — the judge still decides the merge. |
+| `memory.dream.auto_absorb.semantic_distance_threshold` | `0.30` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.85; lower = stricter — the judge still decides the merge. |
 | `memory.dream.auto_absorb.escalate_floor` | `0` | **Opt-in.** Confidence floor (0–100) below which the Tier 1 judge's borderline verdicts escalate to a bounded sub-agent for deeper investigation. `0` (the default) disables Tier 2 entirely. Set to e.g. `60` to escalate pairs the cheap judge rated same at 60–94 confidence or returned `unclear`. |
 
 The model every pass uses is resolved by
@@ -515,5 +523,5 @@ without ever clobbering something a human set by hand. The discovered entity
 display name should yield immediately to any later explicit correction.
 
 For the broader memory design decisions — markdown as the single source of truth,
-why fragments are never consolidated, why auto-absorb defaults off, and the
+why fragments are never consolidated, why auto-absorb defaults on, and the
 mechanisms durin chose not to adopt — see `design_rationale.md`.

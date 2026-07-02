@@ -30,8 +30,9 @@ LLMInvoke = Callable[..., Any]
 _TOMBSTONE_FILE = ".refine_tombstones.json"
 _FLAGGED_FILE = ".flagged_pairs.json"
 # Cost bound: a single refine run never fans out more than this many Tier-2
-# sub-agent investigations. Past it, borderline pairs keep the cheap verdict
-# and a `memory.absorb.escalation_capped` event is emitted (never silent).
+# sub-agent investigations. Past it, borderline pairs keep the cheap verdict,
+# emit a `memory.absorb.escalation_capped` event, and are flagged for manual
+# review in the Bandeja (never silent).
 _MAX_ESCALATIONS_PER_RUN = 25
 
 
@@ -100,7 +101,9 @@ def add_flagged(
     confidence: int,
     reasoning: str,
 ) -> None:
-    """Record a pair the Tier-2 agent investigated but did not confirm as same.
+    """Record a pair the Tier-2 agent investigated but did not confirm as same,
+    or a borderline pair capped before Tier-2 ran (escalation budget exhausted
+    for the run) and kept on its cheap Tier-1 verdict instead.
 
     The record is keyed by sorted pair so order does not matter. A duplicate
     pair key keeps the newest record. Write failures are swallowed so a store
@@ -203,7 +206,7 @@ def run_refine(
     escalate_floor: int = 0,
     run_started_at: "datetime | None" = None,
     vector_index: object | None = None,
-    semantic_distance_threshold: float = 0.20,
+    semantic_distance_threshold: float = 0.30,
 ) -> dict:
     """Dedup pass: judge alias-overlap candidate pairs and merge the same ones.
 
@@ -256,6 +259,7 @@ def run_refine(
         page_b = _load_page(workspace, ref_b)
         if page_a is None or page_b is None:
             skipped.append({"pair": [ref_a, ref_b], "reason": "load_failed"})
+            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason="load_failed")
             continue
         if page_a.author == "user_authored" or page_b.author == "user_authored":
             skipped.append({"pair": [ref_a, ref_b], "reason": "user_managed"})
@@ -277,9 +281,12 @@ def run_refine(
             )
         except JudgeError as exc:
             skipped.append({"pair": [ref_a, ref_b], "reason": f"judge_error:{exc}"})
+            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b,
+                  reason="judge_error")
             continue
         _emit("memory.absorb.judged", canonical=ref_a, absorbed=ref_b,
               verdict=judged.verdict, confidence=judged.confidence,
+              entity_type=page_a.type,
               distance=cand.distance)
         decision = judged
         escalated = False
@@ -292,6 +299,11 @@ def run_refine(
             if escalations >= _MAX_ESCALATIONS_PER_RUN:
                 _emit("memory.absorb.escalation_capped",
                       canonical=ref_a, absorbed=ref_b)
+                add_flagged(workspace, ref_a, ref_b,
+                            verdict=judged.verdict,
+                            confidence=judged.confidence,
+                            reasoning=("escalation cap reached this run; "
+                                       "Tier-1 verdict kept — review manually"))
             else:
                 escalations += 1
                 try:
@@ -311,7 +323,7 @@ def run_refine(
             merged.append({"canonical": ref_a, "absorbed": ref_b,
                            "confidence": decision.confidence})
             _emit("memory.absorb.auto_merged", canonical=ref_a, absorbed=ref_b,
-                  confidence=decision.confidence)
+                  confidence=decision.confidence, entity_type=page_a.type)
         else:
             if escalated:
                 add_flagged(workspace, ref_a, ref_b,
