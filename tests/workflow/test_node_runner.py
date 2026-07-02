@@ -726,3 +726,14 @@ def test_persistent_max_turns_budget_note_does_not_stack(tmp_path):
     assert system.count("rounds of tool use") == 1     # not re-appended to the reloaded system turn
     last_user = [m for m in spec.initial_messages if m["role"] == "user"][-1]["content"]
     assert "rounds of tool use" in last_user            # delivered in the revisit turn instead
+
+
+def test_node_turns_run_concurrency_safe_tools_in_parallel(tmp_path):
+    # Workflow nodes are read/search-heavy like subagents: the runner must get
+    # concurrent_tools so independent safe tool calls in one turn run in parallel
+    # (mutations stay serial in the runner's batching). Without it every node's
+    # fetches/reads serialize.
+    nr = _faithful_runner(SessionManager(workspace=tmp_path))
+    nr(_req(WorkNode(id="a", tools="default", next=None)))
+    spec = nr.runner.run.call_args.args[0]
+    assert spec.concurrent_tools is True

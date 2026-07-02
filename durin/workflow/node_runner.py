@@ -281,6 +281,10 @@ class AgentNodeRunner:
                 model=model,
                 max_iterations=run_max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
+                # Nodes are read/search-heavy (gather, review, verify): run independent
+                # concurrency-safe tool calls in parallel, same as the main loop and
+                # subagents; the runner keeps mutations serial.
+                concurrent_tools=True,
             )))
         except Exception as exc:  # noqa: BLE001 - persist + re-raise as a typed node failure
             raise self._on_failure(req, messages, exc) from exc
