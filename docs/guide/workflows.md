@@ -37,12 +37,14 @@ Every node has:
 - **Skills and MCP servers.** A node can name `skills` (skill docs injected
   into its own prompt) and `mcps` (a subset of your already-configured MCP
   servers) — scoped per node, so a node only sees what its job needs.
-- **A mode.** `mode: "build"` (the default) gives full access with a
-  neutral posture; `mode: "read"` restricts the node to read-only tools —
-  useful for a node that inspects or judges rather than edits. Don't use
-  the interactive `plan`/`explore` modes on a workflow node; they carry
-  conversational framing (e.g. "the parent should /build") that derails a
-  step running unattended.
+- **A mode.** Non-routing work nodes default to `mode: "build"` (full
+  access, neutral posture); routing nodes (those with `on_pass`/`on_fail` or
+  `cases`) default to `mode: "read"` (read-only, neutral posture) — a
+  deliberate gate that can inspect but not modify. You can override either
+  default by setting `mode` explicitly, but avoid the interactive
+  `plan`/`explore` modes on workflow nodes; they carry conversational
+  framing (e.g. "the parent should /build") that derails a step running
+  unattended. Prefer the neutral `read` mode for any read-only work step.
 
 ## Routing: deciding what happens next
 
@@ -59,10 +61,12 @@ goes:
   ends its reply with exactly one of those labels. `null` ends the run;
   any other value is the id of the node to go to next.
 
-Either way, the verdict is elicited from the model as a forced tool call
-(not just hoped for in free text), so a routing node's output is a
-reliable pass/fail or label rather than something a stray sentence can
-derail.
+The verdict is elicited from the model as a **forced tool call**
+(not just hoped for in free text), so a routing node's output is
+reliable — a pass/fail or label that cannot be derailed by a stray sentence.
+If the forced call is unavailable, a text-parse fallback applies: a binary
+gate reads its verdict from the **first non-empty line** (PASS/FAIL), and a
+multi-way node from the **last non-empty line** (a matched case label).
 
 One special multi-way target is reserved: `__needs_input__`. Routing there
 ends the run with status `needs_input` and the node's own output (its
@@ -170,7 +174,9 @@ decides how their work comes back together:
 - `read` — read-only branches; nothing is written back (the default, for
   analysis/review branches).
 - `choose` — each branch writes into its own private copy of the run's
-  files; a judge picks the best one to keep, discarding the rest.
+  files; a judge picks the best one to keep, discarding the rest. A
+  `choose` node requires a `criteria` string (how the judge should pick
+  the winner).
 - `union` — every branch's writes are applied; a genuine conflict (two
   branches wrote *different* content to the same file) aborts the run
   rather than silently picking one.
