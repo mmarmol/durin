@@ -40,8 +40,16 @@ LLMInvoke = Callable[..., Any]
 def dream_vector_index(workspace: Path, cfg: Any) -> "VectorIndex | None":
     """Build the entity vector index for one dream run, or None when the
     optional vector backend (lancedb) isn't installed. Built once per run by
-    the cron / CLI callers and passed to the refine pass for semantic recall."""
+    the cron / CLI callers and passed to the refine pass for semantic recall.
+
+    When vector memory is enabled but the backend is unavailable, the run
+    silently degrades semantic dedup to alias matching — that degradation
+    emits ``memory.dream.vector_unavailable`` (once per run) so the operator
+    can distinguish "no duplicates found" from "no vectors to find them with".
+    A deliberate ``memory.enabled = false`` stays silent (expected state)."""
     if not vector_index_available():
+        if getattr(getattr(cfg, "memory", None), "enabled", False):
+            _emit("memory.dream.vector_unavailable")
         return None
     return VectorIndex(workspace, FastembedProvider(model=cfg.memory.embedding.model))
 
