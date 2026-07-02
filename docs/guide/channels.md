@@ -204,7 +204,10 @@ without pairing, or leave it empty to require pairing for every new user.
 
 ## Slack
 
-Slack uses **Socket Mode** — no public URL is needed.
+Slack uses **Socket Mode** — no public URL is needed. Tokens and access
+policies can also be configured from the webui **Channels** tab. The channel
+reconnects automatically when the WebSocket drops, deduplicates events that
+Slack redelivers after a reconnect, and retries Web API calls on rate limits.
 
 ```toml
 [channels.slack]
@@ -242,7 +245,8 @@ group_policy = "mention"  # "open", "mention", or "allowlist"
 |---|---|---|
 | `bot_token` | _(required)_ | `xoxb-…` Bot User OAuth Token |
 | `app_token` | _(required)_ | `xapp-…` App-Level Token (Socket Mode) |
-| `allow_from` | `[]` | Slack user IDs; empty = pairing mode for DMs |
+| `allow_from` | `[]` | Slack user IDs (`U…`) allowed to talk to durin; `["*"]` allows anyone. Empty = pairing mode: unapproved DM senders receive a pairing code, unapproved channel senders are ignored. |
+| `dm_enabled` | `true` | Listen to direct messages at all |
 | `group_policy` | `"mention"` | `"open"`, `"mention"`, or `"allowlist"` |
 | `group_allow_from` | `[]` | Channel IDs allowed when `group_policy = "allowlist"` |
 | `reply_in_thread` | `true` | Reply in the originating thread |
@@ -250,8 +254,10 @@ group_policy = "mention"  # "open", "mention", or "allowlist"
 | `done_emoji` | `"white_check_mark"` | Reaction added when done |
 | `include_thread_context` | `true` | Prepend thread history on first mention in a thread |
 | `thread_context_limit` | `20` | Max messages of thread context to include |
-| `dm.enabled` | `true` | Accept direct messages |
-| `dm.policy` | `"open"` | `"open"` or `"allowlist"` for DM access |
+
+Sender authorization is enforced at durin's central inbound gate, the same as
+every other channel: approve a sender by adding their Slack user ID to
+`allow_from` or by completing the pairing exchange durin starts in the DM.
 
 ---
 
