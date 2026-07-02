@@ -766,19 +766,21 @@ class MemoryAbsorbSkippedEvent(TypedDict):
 
     - ``"cross_type"``: candidate refs span different entity types
       (e.g. person:marcelo vs project:marcelo) — filtered before judge.
+    - ``"tombstoned"``: the user previously rejected this pair
+      (recorded in ``.refine_tombstones.json``).
+    - ``"user_managed"``: either page is ``author == "user_authored"``.
     - ``"quarantine"``: at least one page was created at/after the run start
       (the run never merges its own fresh output).
-    - ``"below_threshold"``: judge said "same" but confidence < floor.
-    - ``"verdict_different"`` / ``"verdict_unclear"``: judge declined.
-    - ``"judge_failed"``: LLM call or parse failure after all retries.
-    - ``"page_load_failed"``: one of the two pages couldn't be loaded.
     - ``"judge_error"``: the judge raised ``JudgeError`` (unparseable verdict
       after all retries) and the pair was skipped for this run.
+
+    Declined verdicts ("different" / "unclear" / below-threshold "same") are
+    not skips — they show up in ``memory.absorb.judged`` instead.
     """
 
     canonical: str
     absorbed: str
-    confidence: int  # 0 if reason is cross_type / quarantine / judge_failed / page_load_failed
+    confidence: NotRequired[int]  # never emitted today — skips fire before a usable verdict
     reason: str
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
