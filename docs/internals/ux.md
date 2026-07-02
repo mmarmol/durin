@@ -320,6 +320,37 @@ operations are safe from both async channel handlers and sync CLI contexts.
 | Textual TUI | `durin agent --tui` |
 | WebUI (gateway) | `durin gateway` — serves WebSocket channel + SPA on `gateway.host:gateway.port` |
 
+### WebUI features
+
+The WebUI (served by `durin gateway` on port `gateway.port`, default 18790)
+provides browser-based interaction over WebSocket.
+
+**Composer toolbar.** Above the text input, two pill buttons control the model
+and agent:
+- **Agent pill** (left, icon + "mode · persona"): Opens a popover with two
+  sections. The mode section lists available agent modes (e.g. Build, Analyze);
+  selecting one publishes `/mode <name>`. The persona section lists all configured
+  personas (each with name and optional description); selecting one publishes
+  `/persona <name>`. Personas lazy-load on first popover open.
+- **Model pill** (right, icon + model name + "effort" badge): Opens a popover
+  with two sections. The model section lists configured model presets and provides
+  a custom provider/model entry; selecting one publishes `/model <ref>`. The effort
+  section lists reasoning levels (none / low / medium / high / max); selecting one
+  publishes `/effort <level>`. The current effort level (if any) is extracted from
+  the active model preset's suffix (e.g. `default:high` → `high`).
+
+**Empty-state landing.** When a chat is first opened, a centered greeting displays
+two types of chips:
+- **Resume chips**: For each of the last three recent sessions (if any), a chip
+  labeled "Resume <title>" or "Continue <title>". Clicking a chip opens the
+  corresponding session in place.
+- **Audit chip**: A single "What do you know about me?" chip that sends the
+  `/audit` command, triggering a memory and capability check.
+
+**Edit affordance.** Each user message carries a dim edit hint; clicking the
+message reloads its text into the composer input for revision. This is a refill
+only — it does not truncate history or automatically resend.
+
 ### TUI features
 
 The Textual TUI (`durin agent --tui`) provides richer interaction affordances
