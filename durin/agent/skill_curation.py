@@ -44,6 +44,37 @@ def _emit(event: str, **data) -> None:
         pass
 
 
+def _parse_judge_output(raw: object) -> dict | None:
+    """Parse the judge's JSON object. Returns ``None`` when the output cannot
+    be parsed at all (unloadable JSON or wrong top-level type) — distinct from
+    a valid object with empty actions, which is a completed review. Same
+    None-vs-empty contract (and fence-strip + repair tolerance) as the
+    dream-pass parsers."""
+    import re as _re
+
+    from json_repair import repair_json
+
+    s = str(raw or "").strip()
+    m = _re.search(r"```(?:json)?\s*(.*?)```", s, _re.DOTALL)
+    if m:
+        s = m.group(1).strip()
+    try:
+        obj = json.loads(repair_json(s))
+    except (ValueError, TypeError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _emit_curation_parse_failure(stage: str, raw: object) -> None:
+    """Surface an unparseable judge response the same way dream-pass parse
+    failures surface (telemetry + Dream-feed warning). Best-effort."""
+    try:
+        from durin.memory.llm_invoke import emit_parse_failure
+        emit_parse_failure(stage, raw=str(raw or ""))
+    except Exception:  # noqa: BLE001 — telemetry must never break curation
+        pass
+
+
 def curate_catalog(workspace, *, judge: Callable[[str], str],
                    usage: dict | None = None, budget: int = DEFAULT_BUDGET,
                    drift_check: Callable | None = None,
@@ -141,10 +172,25 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
 
     prompt = _build_prompt(catalog, usage or {}, upstream, obs_shown,
                            declined_shown, principles, user_edits)
-    try:
-        parsed = json.loads(judge(prompt)) or {}
-    except (ValueError, TypeError):
-        parsed = {}
+    raw = judge(prompt)
+    parsed = _parse_judge_output(raw)
+    if parsed is None:
+        # Unparseable judge output (degraded provider, prose instead of JSON).
+        # Do NOT stamp the reviewed set — leaving it unstamped means the same
+        # skills re-enter the next run's delta instead of the review being
+        # silently consumed as a no-op. Observations stay OPEN for the same
+        # reason. Backfills already applied above are deterministic and kept.
+        _emit_curation_parse_failure("curation", raw)
+        logger.warning(
+            "curation: judge output unparseable; skipping stamps so the "
+            "%d selected skill(s) re-enter the next run", len(selected))
+        _emit("skill.curation_run", reviewed=len(selected), applied=0,
+             deferred=deferred, backfilled=backfilled)
+        return {"reviewed": len(selected), "applied": 0, "deferred": deferred,
+                "backfilled": backfilled, "judge_parse_failed": True,
+                "observations": {**dict(_NO_OBS),
+                                 "open": len(so.open_observations(workspace))},
+                "principles": len(so.active_principles(workspace))}
     actions = parsed.get("actions", [])
 
     applied = 0
@@ -242,10 +288,16 @@ def suggest_manual_skills(workspace, *, judge: Callable[[str], str],
     selected = delta[:budget]
     catalog = {n: ss.read_skill_content(workspace, n) or "" for n in selected}
     prompt = _build_suggestion_prompt(catalog)
-    try:
-        parsed = json.loads(judge(prompt)) or {}
-    except (ValueError, TypeError):
-        parsed = {}
+    raw = judge(prompt)
+    parsed = _parse_judge_output(raw)
+    if parsed is None:
+        # Same guard as curate_catalog: an unparseable judge must not advance
+        # the evaluation cursor, or the skill is never re-evaluated.
+        _emit_curation_parse_failure("suggestions", raw)
+        logger.warning("skill suggestions: judge output unparseable; cursor "
+                       "not advanced for %d skill(s)", len(selected))
+        return {"reviewed": len(selected), "suggested": 0, "suppressed": 0,
+                "judge_parse_failed": True}
     actions = parsed.get("actions", [])
 
     suggested = 0

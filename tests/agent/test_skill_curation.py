@@ -257,3 +257,79 @@ def test_backfill_of_already_curated_skill_reenters_delta(tmp_path):
     assert out.get("backfilled") == 1
     assert out["reviewed"] == 1
     assert calls and "qr-reader" in calls[0]
+
+
+def _mk_auto(ws, name="parse-guard-skill"):
+    body = (f"---\nname: {name}\ndescription: A test skill with triggers.\n---\n"
+            f"# {name}\n\nDo the thing step by step.\n")
+    assert ss.dream_create_skill(ws, name, body, "seed").get("ok")
+    return name
+
+
+def test_curation_unparseable_judge_skips_stamp_and_emits(tmp_path, monkeypatch):
+    """Unparseable judge output must NOT consume the review: no curation stamp
+    (the skill re-enters the next delta) and a parse-failure event fires."""
+    import durin.agent.tools._telemetry as tel
+
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    name = _mk_auto(tmp_path)
+    res = curate_catalog(tmp_path, judge=lambda p: "sorry, the model returned prose")
+    assert res.get("judge_parse_failed") is True
+    assert res["applied"] == 0
+    assert ss.needs_curation(tmp_path, name)  # NOT stamped — re-enters next run
+    failures = [d for n, d in events if n == "memory.dream.parse_failure"]
+    assert failures and failures[0]["stage"] == "curation"
+    runs = [d for n, d in events if n == "skill.curation_run"]
+    assert runs and runs[0]["reviewed"] == 1
+
+
+def test_curation_valid_empty_judge_still_stamps(tmp_path, monkeypatch):
+    """A legitimately empty verdict IS a completed review: stamp proceeds."""
+    import durin.agent.tools._telemetry as tel
+
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    name = _mk_auto(tmp_path, "parse-guard-empty")
+    res = curate_catalog(tmp_path, judge=lambda p: '{"actions": [], "observations": []}')
+    assert "judge_parse_failed" not in res
+    assert not ss.needs_curation(tmp_path, name)  # stamped
+    assert not [d for n, d in events if n == "memory.dream.parse_failure"]
+
+
+def test_curation_non_dict_json_treated_as_unparseable(tmp_path):
+    name = _mk_auto(tmp_path, "parse-guard-list")
+    res = curate_catalog(tmp_path, judge=lambda p: '["not", "a", "dict"]')
+    assert res.get("judge_parse_failed") is True
+    assert ss.needs_curation(tmp_path, name)
+
+
+def test_suggest_manual_unparseable_keeps_cursor(tmp_path, monkeypatch):
+    """Manual-suggestions path: unparseable judge output must not advance the
+    evaluation cursor, so the skill is re-evaluated next run."""
+    import durin.agent.tools._telemetry as tel
+    from durin.agent import skill_suggestions as sg
+    from durin.agent.skill_curation import suggest_manual_skills
+
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    name = _mk_auto(tmp_path, "parse-guard-manual")
+    assert ss.set_mode(tmp_path, name, "manual")  # returns commit sha
+    res = suggest_manual_skills(tmp_path, judge=lambda p: "garbage output")
+    assert res.get("judge_parse_failed") is True
+    assert sg.needs_suggestion(tmp_path, name)  # cursor NOT advanced
+    failures = [d for n, d in events if n == "memory.dream.parse_failure"]
+    assert failures and failures[0]["stage"] == "suggestions"
+
+
+def test_curation_fenced_judge_output_is_recovered(tmp_path):
+    """A valid action object wrapped in a markdown fence is a completed review
+    (recovered like the dream-pass parsers do), not a parse failure."""
+    name = _mk_auto(tmp_path, "parse-guard-fenced")
+    fenced = '```json\n{"actions": [], "observations": []}\n```'
+    res = curate_catalog(tmp_path, judge=lambda p: fenced)
+    assert "judge_parse_failed" not in res
+    assert not ss.needs_curation(tmp_path, name)  # stamped
