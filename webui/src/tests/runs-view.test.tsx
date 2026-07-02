@@ -156,6 +156,17 @@ describe("RunsView", () => {
 
     expect(await screen.findByText("the weekly digest")).toBeInTheDocument();
     expect(api.getWorkflowRunManifest).toHaveBeenCalledWith("tok", "digest", "run-done");
+
+    // The detail expands INLINE under the clicked row (same wrapper element),
+    // not at the bottom of the whole feed — a long list must not hide it below
+    // the fold where a click appears to do nothing.
+    const row = screen.getByText("summarize the week").closest("div[class*='flex-col']");
+    expect(row).not.toBeNull();
+    expect(row!.textContent).toContain("the weekly digest");
+
+    // Clicking the active row again collapses the detail (accordion toggle).
+    await user.click(screen.getByText("summarize the week"));
+    expect(screen.queryByText("the weekly digest")).not.toBeInTheDocument();
   });
 
   it("marks a sub-run whose parent is not in the list with a 'sub of' marker", async () => {
