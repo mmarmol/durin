@@ -239,7 +239,10 @@ export function TranscriptionSettings({ token }: { token: string }) {
     [client, t],
   );
 
-  if (loading) {
+  // Unmount into the spinner only before the FIRST load: later reloads
+  // (the periodic auth-token re-mint changes the `token` prop) refresh in
+  // place, so open editors and scroll position survive.
+  if (loading && config === null) {
     return (
       <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />

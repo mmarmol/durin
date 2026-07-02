@@ -507,7 +507,7 @@ export function McpSettings({ token }: { token: string }) {
           </div>
         </div>
         <SettingsGroup>
-          {loading ? (
+          {loading && servers.length === 0 ? (
             <SettingsRow title={t("settings.status.loading")} />
           ) : servers.length === 0 ? (
             <div className="flex flex-col items-start gap-2 px-4 py-5 sm:px-5">
