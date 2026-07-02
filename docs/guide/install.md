@@ -345,21 +345,27 @@ After install or upgrade, run the diagnostic battery:
 ```bash
 durin doctor                  # full report; exit 0 unless something fails
 durin doctor --ping           # also test reachability of the active provider
-durin doctor --fix            # apply safe fixes (create workspace, replay migrations)
+durin doctor --fix            # safe fixes + relaunch a dead daemon + offer restart of a stale gateway
 durin doctor --json | jq      # machine-readable for CI / scripts
 ```
 
-`durin doctor` is the canonical "is everything wired?" check. It groups
-results by category (system, config, providers, tools, extras, state) and
-prints a list of suggested fixes at the bottom. Exit code 0 means no
-`fail` — `warn` results don't break the exit code, so you can wire it
-into CI.
+`durin doctor` is the canonical "is anything broken?" check. It groups
+results by category (system, config, providers, tools, extras, state,
+services) and prints a list of suggested fixes at the bottom. Exit code 0
+means no `fail` — `warn` results don't break the exit code, so you can wire
+it into CI. The services category compares the running gateway's version
+against the installed CLI, so a reinstall that forgot to restart the gateway
+shows up as a warning instead of stale webui confusion.
 
-Lower-level individual checks:
+The complementary snapshot is `durin status` — "what do I have and is it
+running?" with no judgement. It probes the live gateway for version, uptime,
+per-channel connection state, and scheduled cron jobs, falling back to
+config-only output when the gateway is down:
 
 ```bash
 durin --version
 durin status
+durin status --json | jq
 durin config show | head -20
 pytest tests/cli/ -q          # if you installed `[dev]`
 ```
@@ -367,7 +373,3 @@ pytest tests/cli/ -q          # if you installed `[dev]`
 If `status` reports a missing config path, rerun `durin onboard`.
 If a provider line says `not set`, drop your key in via `durin config set
 providers.<name>.api_key …` (or `durin config edit`).
-
----
-
-Last updated: 2026-06-07.

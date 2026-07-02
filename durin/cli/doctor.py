@@ -7,8 +7,9 @@ the process exit so CI / shell pipelines can gate on it.
 
 Optional behaviour:
 - ``--ping``: tests reachability of the active provider's ``api_base``.
-- ``--fix``: applies the small subset of fixes that are always safe
-  (creating the workspace directory, replaying config migration).
+- ``--fix``: applies safe fixes (creating the workspace directory, replaying
+  config migration), relaunches a dead gateway daemon, and offers to restart
+  a gateway that is serving a stale version (asks first unless ``--yes``).
 - ``--json``: machine-readable output for scripts.
 """
 
@@ -261,7 +262,9 @@ def check_default_model_resolvable() -> CheckResult:
             fix="`durin config set agents.defaults.model glm-5.1` (or your preferred model)",
             category="providers",
         )
-    return CheckResult("default model", "ok", f"{model} (preset: {cfg.agents.defaults.model_preset!r})", category="providers")
+    preset_name = cfg.agents.defaults.model_preset
+    detail = f"{model} (preset: {preset_name})" if preset_name else f"{model} (no preset)"
+    return CheckResult("default model", "ok", detail, category="providers")
 
 
 def check_durin_on_path() -> CheckResult:
@@ -1084,26 +1087,29 @@ def check_model_ping(*, timeout: float = 15.0, cfg: "Config | None" = None) -> C
     return asyncio.run(check_model_ping_async(timeout=timeout, cfg=cfg))
 
 
-def check_gateway_daemon() -> CheckResult:
-    """When ``config.gateway.daemon=true``, the PID file should point at a live process.
+def _gateway_ws_base(cfg: "Config") -> str:
+    """Base URL of the gateway HTTP surface (the websocket channel's port)."""
+    ws_section = getattr(cfg.channels, "websocket", None)
+    host = "127.0.0.1"
+    port = 8765  # websocket channel default
+    if ws_section is not None:
+        if isinstance(ws_section, dict):
+            host = ws_section.get("host", host) or host
+            port = ws_section.get("port", port) or port
+        else:
+            host = getattr(ws_section, "host", host) or host
+            port = getattr(ws_section, "port", port) or port
+    return f"http://{host}:{port}"
 
-    Skipped (ok-message) when daemon mode isn't requested — running the
-    gateway in foreground is a totally valid choice, not a problem.
+
+def check_gateway_daemon() -> CheckResult:
+    """The gateway PID file is the ground truth for daemon state.
+
+    The user's intent is read from the PID file itself (it only exists after
+    `durin gateway start`), NOT from ``config.gateway.daemon`` — the daemon
+    is routinely started with the flag off, and keying on config used to
+    make this check skip while a dead daemon went unnoticed.
     """
-    try:
-        cfg = load_config()
-    except Exception:  # noqa: BLE001
-        return CheckResult(
-            "gateway daemon", "warn",
-            "Could not load config to check daemon state.",
-            category="services",
-        )
-    if not getattr(cfg.gateway, "daemon", False):
-        return CheckResult(
-            "gateway daemon", "ok",
-            "daemon mode disabled (gateway.daemon=false)",
-            category="services",
-        )
     from durin.cli.gateway_daemon import daemon_status
 
     s = daemon_status()
@@ -1116,14 +1122,86 @@ def check_gateway_daemon() -> CheckResult:
     if s.state == "stale_pid":
         return CheckResult(
             "gateway daemon", "fail",
-            "config requests daemon mode but the PID file points at a dead process.",
-            fix="`durin gateway start` to relaunch.",
+            "PID file points at a dead process — the gateway crashed or was killed.",
+            fix="`durin gateway start` to relaunch (or `durin doctor --fix`).",
+            category="services",
+        )
+    # No PID file. Only a problem when config explicitly requests daemon mode.
+    try:
+        cfg = load_config()
+        daemon_requested = bool(getattr(cfg.gateway, "daemon", False))
+    except Exception:  # noqa: BLE001
+        daemon_requested = False
+    if daemon_requested:
+        return CheckResult(
+            "gateway daemon", "fail",
+            "config requests daemon mode but the gateway is not running.",
+            fix="`durin gateway start` to launch it (or `durin doctor --fix`).",
             category="services",
         )
     return CheckResult(
-        "gateway daemon", "fail",
-        "config requests daemon mode but the gateway is not running.",
-        fix="`durin gateway start` to launch it.",
+        "gateway daemon", "ok",
+        "not running (daemon mode not requested)",
+        category="services",
+    )
+
+
+def check_gateway_version(*, timeout: float = 1.5) -> CheckResult:
+    """Detect a gateway serving STALE code after a reinstall.
+
+    Compares the running gateway's reported version (`/api/v1/health`)
+    against this CLI's version. A mismatch means the gateway process
+    predates the current install — the webui and channels serve old code
+    until it restarts.
+    """
+    try:
+        cfg = load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult(
+            "gateway version", "warn",
+            "Could not load config to locate the gateway.",
+            category="services",
+        )
+    base = _gateway_ws_base(cfg)
+    try:
+        import httpx
+
+        with httpx.Client(timeout=timeout) as client:
+            r = client.get(f"{base}/api/v1/health")
+    except Exception:  # noqa: BLE001 — not reachable; the daemon check owns that
+        return CheckResult(
+            "gateway version", "ok",
+            "gateway not reachable — skipped (see gateway daemon check)",
+            category="services",
+        )
+    if r.status_code != 200:
+        return CheckResult(
+            "gateway version", "ok",
+            f"health endpoint returned HTTP {r.status_code} — skipped",
+            category="services",
+        )
+    try:
+        running = r.json().get("version")
+    except Exception:  # noqa: BLE001
+        running = None
+    if not running:
+        return CheckResult(
+            "gateway version", "warn",
+            "gateway predates version reporting — it is running old code.",
+            fix="`durin gateway restart` to pick up the current install.",
+            category="services",
+        )
+    if running != __version__:
+        return CheckResult(
+            "gateway version", "warn",
+            f"gateway is running v{running} but the CLI is v{__version__} — "
+            "webui/channels are serving stale code.",
+            fix="`durin gateway restart` (or `durin doctor --fix`).",
+            category="services",
+        )
+    return CheckResult(
+        "gateway version", "ok",
+        f"gateway and CLI both v{__version__}",
         category="services",
     )
 
@@ -1147,20 +1225,7 @@ def check_webui_reachable(*, timeout: float = 1.5) -> CheckResult:
             "webui disabled (gateway.webui_enabled=false)",
             category="services",
         )
-    # Figure out where the webui is served. Defaults match the
-    # websocket channel's defaults (host 127.0.0.1, port 8765); live
-    # overrides come from config.channels.websocket.
-    ws_section = getattr(cfg.channels, "websocket", None)
-    host = "127.0.0.1"
-    ws_port = 8765
-    if ws_section is not None:
-        if isinstance(ws_section, dict):
-            host = ws_section.get("host", host)
-            ws_port = ws_section.get("port", ws_port)
-        else:
-            host = getattr(ws_section, "host", host) or host
-            ws_port = getattr(ws_section, "port", ws_port) or ws_port
-    target = f"http://{host}:{ws_port}/"
+    target = f"{_gateway_ws_base(cfg)}/"
     try:
         import httpx
 
@@ -1295,9 +1360,11 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     report.add(check_tts_installed())
     report.add(check_tts_model_cached())
     report.add(check_stt_cloud_keys())
-    # Service-level checks: when the user opted into daemon mode or the
-    # webui dashboard, verify they're actually up.
+    # Service-level checks: daemon liveness (PID-file ground truth), a
+    # version match between the running gateway and this install, and the
+    # webui dashboard when enabled.
     report.add(check_gateway_daemon())
+    report.add(check_gateway_version())
     report.add(check_webui_reachable())
     # Detect new extras and append them to the tracked set, then surface
     # any tracked-but-missing as a warning so the user notices when a
@@ -1340,6 +1407,86 @@ def apply_safe_fixes() -> list[str]:
     if migrate_config_file():
         applied.append("Re-saved config with current schema defaults.")
     return applied
+
+
+def apply_service_repairs(
+    report: DoctorReport, *, assume_yes: bool = False
+) -> list[str]:
+    """Repair service-level findings from *report*. Returns human messages.
+
+    Two repairs, graded by blast radius:
+    - Dead daemon (stale PID file, or config requests daemon mode and
+      nothing runs): relaunch unconditionally — nothing is lost by
+      starting something that should be running.
+    - Stale gateway (running, but older version than this CLI): restart
+      interrupts live sessions, so it asks first unless ``assume_yes``.
+    """
+    from durin.cli.gateway_daemon import start_daemon, stop_daemon
+
+    applied: list[str] = []
+    daemon_dead = any(
+        r.name == "gateway daemon" and r.status == "fail" for r in report.results
+    )
+    version_stale = any(
+        r.name == "gateway version" and r.status == "warn" for r in report.results
+    )
+    if daemon_dead:
+        try:
+            pid = start_daemon([])
+            _wait_for_gateway_health()
+            applied.append(f"Relaunched the gateway daemon (pid {pid}).")
+        except Exception as e:  # noqa: BLE001
+            applied.append(f"Could not relaunch the gateway daemon: {e}")
+        return applied
+    if version_stale:
+        if not assume_yes:
+            try:
+                confirmed = typer.confirm(
+                    "Restart the gateway to pick up the current install? "
+                    "(interrupts any in-flight turns)",
+                    default=False,
+                )
+            except typer.Abort:
+                # No TTY (piped / CI) — treat as a decline, not a crash.
+                confirmed = False
+            if not confirmed:
+                return applied
+        try:
+            stop_daemon()
+            pid = start_daemon([])
+            _wait_for_gateway_health()
+            applied.append(f"Restarted the gateway on the current install (pid {pid}).")
+        except Exception as e:  # noqa: BLE001
+            applied.append(f"Could not restart the gateway: {e}")
+    return applied
+
+
+def _wait_for_gateway_health(*, timeout: float = 15.0) -> bool:
+    """Poll ``/api/v1/health`` until the (re)launched gateway answers.
+
+    The daemon spawn returns before the port binds; without this wait the
+    re-check that follows a repair would report a false webui failure.
+    Returns True when healthy, False on timeout (the re-check then reports
+    the real state).
+    """
+    import time
+
+    import httpx
+
+    try:
+        base = _gateway_ws_base(load_config())
+    except Exception:  # noqa: BLE001
+        return False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with httpx.Client(timeout=1.0) as client:
+                if client.get(f"{base}/api/v1/health").status_code == 200:
+                    return True
+        except Exception:  # noqa: BLE001 — still booting
+            pass
+        time.sleep(0.5)
+    return False
 
 
 def collect_missing_extras(report: DoctorReport) -> list[str]:
@@ -1483,6 +1630,18 @@ def run_doctor(
                 console.print(f"  [green]✓[/green] {m}")
             console.print("")
     report = run_checks(ping=ping, ping_model=ping_model)
+    if fix:
+        # Service repairs need the check results (dead daemon / stale
+        # gateway version), so they run AFTER the first pass and trigger a
+        # re-check — same shape as --install-missing below.
+        repairs = apply_service_repairs(report, assume_yes=assume_yes)
+        if repairs:
+            if not as_json:
+                console.print("[bold]Service repairs:[/bold]")
+                for m in repairs:
+                    console.print(f"  [green]✓[/green] {m}")
+                console.print("\n[bold]Re-checking…[/bold]\n")
+            report = run_checks(ping=ping, ping_model=ping_model)
     if install_missing:
         extras = collect_missing_extras(report)
         if extras:
@@ -1516,7 +1675,11 @@ def register(app: typer.Typer) -> None:
             "--ping-model",
             help="Make a real ~3-token call to the configured default model to verify it actually responds (auth, model name, network).",
         ),
-        fix: bool = typer.Option(False, "--fix", help="Apply safe fixes (create workspace, re-save config)."),
+        fix: bool = typer.Option(
+            False,
+            "--fix",
+            help="Apply safe fixes (create workspace, re-save config), relaunch a dead gateway daemon, and offer to restart a stale-version gateway.",
+        ),
         install_missing: bool = typer.Option(
             False,
             "--install-missing",
