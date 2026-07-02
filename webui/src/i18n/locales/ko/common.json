@@ -192,9 +192,6 @@
     "empty": {
       "description": "질문을 하거나, 로컬 작업을 이어가거나, 새 스레드를 시작할 수 있습니다.",
       "greeting": "무엇을 도와드릴까요?",
-      "resumeLast": "이어서: {{name}}",
-      "continueSession": "계속하기: {{name}}",
-      "whatDoYouKnow": "저에 대해 무엇을 알고 있나요?",
       "imageQuickActions": {
         "icon": {
           "title": "앱 아이콘 디자인",

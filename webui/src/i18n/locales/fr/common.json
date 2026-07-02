@@ -192,9 +192,6 @@
     "empty": {
       "description": "Posez des questions, poursuivez votre travail local ou démarrez un nouveau fil.",
       "greeting": "Que puis-je faire pour vous ?",
-      "resumeLast": "Reprendre : {{name}}",
-      "continueSession": "Continuer : {{name}}",
-      "whatDoYouKnow": "Que sais-tu de moi ?",
       "imageQuickActions": {
         "icon": {
           "title": "Créer une icône d’app",

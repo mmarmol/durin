@@ -356,13 +356,8 @@ and agent:
   publishes `/effort <level>`. The current effort level (if any) is extracted from
   the active model preset's suffix (e.g. `default:high` → `high`).
 
-**Empty-state landing.** When a chat is first opened, a centered greeting displays
-two types of chips:
-- **Resume chips**: For each of the last three recent sessions (if any), a chip
-  labeled "Resume <title>" or "Continue <title>". Clicking a chip opens the
-  corresponding session in place.
-- **Audit chip**: A single "What do you know about me?" chip that sends the
-  `/audit` command, triggering a memory and capability check.
+**Empty-state landing.** When a chat is first opened, a centered greeting is
+shown above the composer. There are no suggestion chips or canned prompts.
 
 **Edit affordance.** The last user message carries a dim edit hint; clicking the
 message reloads its text into the composer input for revision. This is a refill
@@ -392,13 +387,8 @@ turn and the active agent mode.
 message reloads its text into the composer input for revision. This is a refill
 only — it does not truncate history or automatically resend.
 
-**Empty-thread landing chips.** When the thread is empty, the chat area shows
-the same chip set as the WebUI landing: up to three recent-session chips
-("Resume: <label>" for the most recent, "Continue: <label>" for the rest,
-where `<label>` is the session's title falling back to its message preview)
-plus a trailing "What do you know about me?" chip. Clicking a session chip
-resumes that session (`/resume <key>`); clicking the audit chip sends
-`/audit` — both act immediately rather than seeding the composer. A
+**Empty-thread landing.** When the thread is empty, the chat area shows only
+the durin logo/banner — no suggestion chips or canned prompts. A
 scroll-to-bottom control appears when the user has scrolled up from the latest
 message.
 

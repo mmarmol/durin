@@ -202,65 +202,6 @@ class MessageBubble(Static):
         self.add_class("error")
 
 
-class _QuickActionChips(Static):
-    """Row of suggestion chips shown on an empty thread.
-
-    Mirrors the webui landing chips: up to 3 recent-session chips
-    ("Resume: {label}" for the most recent, "Continue: {label}" for the
-    rest) plus a trailing "What do you know about me?" chip that runs
-    ``/audit``. Session chips act immediately — clicking one resumes
-    that session the same way the session picker does.
-    """
-
-    DEFAULT_CSS = """
-    _QuickActionChips {
-        width: 100%;
-        padding: 1 2;
-        color: $text-muted;
-    }
-    _QuickActionChips .qa-chip {
-        background: $boost;
-        color: $text;
-        padding: 0 1;
-        margin: 0 1 0 0;
-    }
-    _QuickActionChips .qa-chip:hover {
-        background: $accent 40%;
-        color: $accent;
-    }
-    """
-
-    def compose(self) -> ComposeResult:
-        for label, key in ChatView.session_chips(self.app):
-            yield Static(label, classes="qa-chip qa-chip-resume", markup=False, name=key)
-        yield Static(ChatView.AUDIT_LABEL, classes="qa-chip qa-chip-audit", markup=False)
-
-    def on_click(self, event) -> None:  # noqa: ANN001
-        target = event.widget
-        if target is None or "qa-chip" not in target.classes:
-            return
-        if "qa-chip-audit" in target.classes:
-            self._submit("/audit")
-            return
-        session_key = target.name
-        if session_key:
-            self._submit(f"/resume {session_key}")
-
-    def _submit(self, command: str) -> None:
-        """Publish `command` through the same submit path a typed message uses."""
-        import asyncio
-
-        app = self.app
-        publish = getattr(app, "_publish_inbound", None)
-        if publish is None:
-            return
-        task = asyncio.create_task(publish(command, []))
-        background_tasks = getattr(app, "_background_tasks", None)
-        if background_tasks is not None:
-            background_tasks.add(task)
-            task.add_done_callback(background_tasks.discard)
-
-
 class _ScrollToBottom(Static):
     """Button that jumps to the end of the chat history."""
 
@@ -297,53 +238,10 @@ class ChatView(VerticalScroll):
     }
     """
 
-    AUDIT_LABEL = "What do you know about me?"
-
-    @staticmethod
-    def session_chips(app: object) -> list[tuple[str, str]]:
-        """Return up to 3 ``(label, session_key)`` pairs for recent-session chips.
-
-        The first chip reads "Resume: {label}", the rest "Continue: {label}" —
-        ``label`` is the session's title, falling back to its message preview.
-        Sessions with neither (or the current session) are skipped. Newest
-        session first, matching the webui landing chips.
-        """
-        agent_loop = getattr(app, "_agent_loop", None)
-        if agent_loop is None:
-            return []
-        sessions_mgr = getattr(agent_loop, "sessions", None)
-        list_sessions = getattr(sessions_mgr, "list_sessions", None)
-        if list_sessions is None:
-            return []
-        try:
-            sessions = list_sessions()
-        except Exception:  # noqa: BLE001
-            return []
-        current_key = f"{getattr(app, '_cli_channel', '')}:{getattr(app, '_cli_chat_id', '')}"
-        chips: list[tuple[str, str]] = []
-        for info in sessions:
-            key = info.get("key")
-            if not key or key == current_key:
-                continue
-            label = (info.get("title") or info.get("preview") or "").strip()
-            if not label:
-                continue
-            prefix = "Resume" if not chips else "Continue"
-            chips.append((f"{prefix}: {label}", key))
-            if len(chips) == 3:
-                break
-        return chips
-
     def compose(self) -> ComposeResult:
-        yield _QuickActionChips(id="qa-chips")
         yield _ScrollToBottom("↓ Jump to bottom", id="scroll-to-bottom")
 
     def add_message(self, role: Role, body: str = "") -> MessageBubble:
-        # Hide quick-action chips once the thread has real messages.
-        # Don't hide for decorative roles (logo, banner).
-        if role in ("user", "assistant", "system", "tool", "reasoning"):
-            chips = self.query_one("#qa-chips", _QuickActionChips)
-            chips.display = False
         bubble = MessageBubble(role=role, body=body)
         self.mount(bubble)
         self.scroll_end(animate=False)

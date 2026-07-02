@@ -7,7 +7,6 @@ import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { resources } from "@/i18n";
 
 const AUDIO_KEYS = ["downloadingModel", "loadingModel", "transcribing", "transcriptPrefix", "processing"];
-const EMPTY_STATE_KEYS = ["resumeLast", "continueSession", "whatDoYouKnow"];
 const IMAGE_QUICK_ACTION_KEYS = ["icon", "sticker", "poster", "product", "portrait", "edit"];
 const SETTINGS_NAV_KEYS = ["general", "providers", "web-search", "secrets", "advanced"];
 
@@ -61,9 +60,6 @@ describe("webui i18n", () => {
     for (const resource of Object.values(resources)) {
       const empty = resource.common.thread.empty;
       expect(empty.greeting).toBeTruthy();
-      for (const key of EMPTY_STATE_KEYS) {
-        expect(empty[key as keyof typeof empty]).toBeTruthy();
-      }
       for (const key of IMAGE_QUICK_ACTION_KEYS) {
         const action = empty.imageQuickActions[key as keyof typeof empty.imageQuickActions];
         expect(action.title).toBeTruthy();

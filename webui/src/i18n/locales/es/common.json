@@ -1115,9 +1115,6 @@
     "empty": {
       "description": "Haz preguntas, continúa tu trabajo local o inicia un nuevo hilo.",
       "greeting": "¿Qué puedo hacer por ti?",
-      "resumeLast": "Retomar: {{name}}",
-      "continueSession": "Seguir con: {{name}}",
-      "whatDoYouKnow": "¿Qué sabés de mí?",
       "imageQuickActions": {
         "icon": {
           "title": "Diseñar un icono de app",
