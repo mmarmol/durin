@@ -2307,6 +2307,45 @@ export async function revokeTelegramPairing(token: string, senderId: string, bas
   return post(`${base}/api/v1/channels/telegram/pairing/revoke`, token, { sender_id: senderId });
 }
 
+// -- Slack channel ----------------------------------------------------------
+
+export interface SlackTestResult {
+  ok: boolean;
+  bot_user: string | null;
+  team: string | null;
+  bot_error: string | null;
+  app_error: string | null;
+}
+export interface SlackManifestResult { manifest: Record<string, unknown>; }
+export interface SlackPairing { pending: PendingPairing[]; approved: string[]; }
+
+export async function getSlackManifest(token: string, base = ""): Promise<SlackManifestResult> {
+  return request<SlackManifestResult>(`${base}/api/v1/channels/slack/manifest`, token);
+}
+export async function testSlackTokens(
+  token: string,
+  botToken: string,
+  appToken: string,
+  base = "",
+): Promise<SlackTestResult> {
+  return post<SlackTestResult>(`${base}/api/v1/channels/slack/test`, token, {
+    bot_token: botToken,
+    app_token: appToken,
+  });
+}
+export async function getSlackPairing(token: string, base = ""): Promise<SlackPairing> {
+  return request<SlackPairing>(`${base}/api/v1/channels/slack/pairing`, token);
+}
+export async function approveSlackPairing(token: string, code: string, base = ""): Promise<{ ok: boolean }> {
+  return post(`${base}/api/v1/channels/slack/pairing/approve`, token, { code });
+}
+export async function denySlackPairing(token: string, code: string, base = ""): Promise<{ ok: boolean }> {
+  return post(`${base}/api/v1/channels/slack/pairing/deny`, token, { code });
+}
+export async function revokeSlackPairing(token: string, senderId: string, base = ""): Promise<{ ok: boolean }> {
+  return post(`${base}/api/v1/channels/slack/pairing/revoke`, token, { sender_id: senderId });
+}
+
 export async function startChannel(token: string, name: string, base = ""): Promise<{ ok: boolean; error?: string | null }> {
   return post(`${base}/api/v1/channels/start`, token, { name });
 }

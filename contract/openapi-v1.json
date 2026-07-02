@@ -5070,6 +5070,246 @@
         "title": "SkillsResult",
         "type": "object"
       },
+      "SlackManifestQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "default": "durin",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "title": "SlackManifestQuery",
+        "type": "object"
+      },
+      "SlackManifestResult": {
+        "properties": {
+          "manifest": {
+            "additionalProperties": true,
+            "title": "Manifest",
+            "type": "object"
+          }
+        },
+        "required": [
+          "manifest"
+        ],
+        "title": "SlackManifestResult",
+        "type": "object"
+      },
+      "SlackPairingApproveCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "SlackPairingApproveCommand",
+        "type": "object"
+      },
+      "SlackPairingApproveResult": {
+        "properties": {
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Channel"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "sender_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sender Id"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "SlackPairingApproveResult",
+        "type": "object"
+      },
+      "SlackPairingDenyCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "SlackPairingDenyCommand",
+        "type": "object"
+      },
+      "SlackPairingDenyResult": {
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "SlackPairingDenyResult",
+        "type": "object"
+      },
+      "SlackPairingListQuery": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "SlackPairingListQuery",
+        "type": "object"
+      },
+      "SlackPairingListResult": {
+        "properties": {
+          "approved": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Approved",
+            "type": "array"
+          },
+          "pending": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Pending",
+            "type": "array"
+          }
+        },
+        "required": [
+          "pending",
+          "approved"
+        ],
+        "title": "SlackPairingListResult",
+        "type": "object"
+      },
+      "SlackPairingRevokeCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "sender_id": {
+            "title": "Sender Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sender_id"
+        ],
+        "title": "SlackPairingRevokeCommand",
+        "type": "object"
+      },
+      "SlackPairingRevokeResult": {
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "SlackPairingRevokeResult",
+        "type": "object"
+      },
+      "SlackTestCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "app_token": {
+            "default": "",
+            "title": "App Token",
+            "type": "string"
+          },
+          "bot_token": {
+            "default": "",
+            "title": "Bot Token",
+            "type": "string"
+          }
+        },
+        "title": "SlackTestCommand",
+        "type": "object"
+      },
+      "SlackTestResult": {
+        "properties": {
+          "app_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "App Error"
+          },
+          "bot_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bot Error"
+          },
+          "bot_user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bot User"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Team"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "SlackTestResult",
+        "type": "object"
+      },
       "SoulDeleteCommand": {
         "additionalProperties": false,
         "properties": {
@@ -5915,6 +6155,180 @@
         },
         "summary": "Discovered channels with their enabled state and primary credential field",
         "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/slack/manifest": {
+      "get": {
+        "operationId": "slack_manifest",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackManifestQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackManifestResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Return the Slack app manifest for create-from-manifest setup",
+        "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/slack/pairing": {
+      "get": {
+        "operationId": "slack_pairing",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackPairingListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackPairingListResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List pending and approved Slack pairing entries",
+        "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/slack/pairing/approve": {
+      "post": {
+        "operationId": "slack_pairing_approve",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackPairingApproveCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackPairingApproveResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Approve a pending Slack pairing code",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/slack/pairing/deny": {
+      "post": {
+        "operationId": "slack_pairing_deny",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackPairingDenyCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackPairingDenyResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Deny and discard a pending Slack pairing code",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/slack/pairing/revoke": {
+      "post": {
+        "operationId": "slack_pairing_revoke",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackPairingRevokeCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackPairingRevokeResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Revoke an approved Slack sender",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/slack/test": {
+      "post": {
+        "operationId": "slack_test",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackTestCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackTestResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Validate Slack bot/app tokens (persists nothing)",
+        "x-required-scope": "config:write"
       }
     },
     "/api/v1/channels/start": {
