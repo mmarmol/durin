@@ -231,7 +231,9 @@ class SlackService:
 
         if app_token and app_error is None:
             try:
-                await AsyncWebClient(token=app_token).apps_connections_open()
+                # apps.connections.open takes the app-level token as an explicit
+                # parameter — the client-constructor token is NOT used for it.
+                await AsyncWebClient().apps_connections_open(app_token=app_token)
             except Exception as e:  # noqa: BLE001
                 app_error = _slack_error_code(e)
 
