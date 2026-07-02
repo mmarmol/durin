@@ -119,3 +119,43 @@ def test_manifest_task_persists_through_lifecycle(tmp_path):
     assert rec is not None
     assert rec['task'] == 'process the annual budget'
 
+
+def test_manifest_parent_run_id_persists_through_lifecycle(tmp_path):
+    """A top-level run passes no parent_run_id; a nested run's engine.run(parent_run_id=...)
+    must land in both the running and the finalized manifest."""
+    def runner(req):
+        return NodeRunResponse(output="x", session_key="sk")
+
+    engine = WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: "r1")
+    res = engine.run(_two_node_wf(), "go", parent_run_id="parent1")
+    assert res.status == "completed"
+
+    rec = run_log.read_manifest(tmp_path, "w", "r1")
+    assert rec["parent_run_id"] == "parent1"
+
+
+def test_manifest_parent_run_id_defaults_to_none(tmp_path):
+    def runner(req):
+        return NodeRunResponse(output="x", session_key="sk")
+
+    engine = WorkflowEngine(runner, workspace=str(tmp_path), run_id_factory=lambda: "r1")
+    engine.run(_two_node_wf(), "go")
+    rec = run_log.read_manifest(tmp_path, "w", "r1")
+    assert rec["parent_run_id"] is None
+
+
+def test_finalize_manifest_prunes_older_terminal_runs(tmp_path):
+    """_finalize_manifest calls prune_manifests(keep=self._prune_keep) best-effort right
+    after a successful finalize_run, bounding manifest growth for this workflow name."""
+    def runner(req):
+        return NodeRunResponse(output="x", session_key="sk")
+
+    run_ids = iter(["r0", "r1", "r2"])
+    engine = WorkflowEngine(runner, workspace=str(tmp_path),
+                            run_id_factory=lambda: next(run_ids), prune_keep=2)
+    for _ in range(3):
+        engine.run(_two_node_wf(), "go")
+
+    remaining = {p.stem for p in (tmp_path / "workflows-runs" / "w").glob("*.json")}
+    assert remaining == {"r1", "r2"}   # r0 pruned; the 2 most recent survive
+

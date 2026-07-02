@@ -154,7 +154,7 @@ class WorkflowEngine:
         node_runner: NodeRunner,
         *,
         run_id_factory: Callable[[], str] | None = None,
-        subworkflow_runner: Callable[..., str] | None = None,  # (name, task, root_session_key, work_dir=None) -> str
+        subworkflow_runner: Callable[..., str] | None = None,  # (name, task, root_session_key, work_dir=None, parent_run_id=None) -> str
         workspace: str | None = None,
         pick_runner: Callable[[str, list[str], "str | None"], int] | None = None,
         max_node_visits: int = 1000,
@@ -191,6 +191,7 @@ class WorkflowEngine:
         output_format: str | None = None,
         resume: ResumeState | None = None,
         work_dir_override: str | None = None,
+        parent_run_id: str | None = None,
     ) -> WorkflowResult:
         """Run the workflow. A node-execution failure (provider/MCP/tool error) does not
         propagate — it ends the run as a typed ``aborted`` result carrying the partial
@@ -207,7 +208,10 @@ class WorkflowEngine:
         node's upstream input, instead of starting a fresh run at the workflow's start.
 
         When ``work_dir_override`` is given, the run uses this folder as its working
-        directory instead of creating its own folder under the workspace."""
+        directory instead of creating its own folder under the workspace.
+
+        ``parent_run_id`` marks this run as a nested subworkflow invocation, recording
+        the caller's run_id in the manifest — ``None`` for a top-level run."""
         run_id = resume.run_id if resume is not None else self._run_id_factory()
 
         # Pre-flight input validation: check for missing/colliding files and declared-file contracts
@@ -225,7 +229,7 @@ class WorkflowEngine:
         # manifest records that same key or runs_for_session can't find the run.
         effective_root = root_session_key or f"workflow:{run_id}:root"
         started_at = time.time()
-        self._start_manifest(workflow, run_id, effective_root, started_at, task)
+        self._start_manifest(workflow, run_id, effective_root, started_at, task, parent_run_id)
 
         def _update() -> None:
             self._update_manifest(workflow, run_id, runs)
@@ -249,7 +253,7 @@ class WorkflowEngine:
                 workflow,
                 WorkflowResult(status="aborted", final_output=f"workflow config error: {exc}",
                                runs=runs, run_id=run_id),
-                effective_root, started_at)
+                effective_root, started_at, parent_run_id)
             raise
         except NodeExecutionError as exc:
             # A named node failure: the walk already appended its node_failed NodeRun.
@@ -265,7 +269,7 @@ class WorkflowEngine:
                 status="aborted", final_output=f"workflow error: {exc}",
                 runs=runs, run_id=run_id,
             )
-        self._finalize_manifest(workflow, result, effective_root, started_at)
+        self._finalize_manifest(workflow, result, effective_root, started_at, parent_run_id)
         return result
 
     @staticmethod
@@ -297,13 +301,14 @@ class WorkflowEngine:
                               f"{hint}. Please provide them (input_files) and run it again."))
         return None
 
-    def _start_manifest(self, workflow, run_id, root_session_key, started_at, task=None) -> None:
+    def _start_manifest(self, workflow, run_id, root_session_key, started_at, task=None,
+                        parent_run_id=None) -> None:
         if self._workspace is None:
             return
         try:
             run_log.start_run(self._workspace, workflow.name, run_id,
                               root_session_key=root_session_key, started_at=started_at,
-                              task=task)
+                              task=task, parent_run_id=parent_run_id)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest start failed for {}", workflow.name)
 
@@ -316,15 +321,25 @@ class WorkflowEngine:
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest update failed for {}", workflow.name)
 
-    def _finalize_manifest(self, workflow, result, root_session_key, started_at) -> None:
+    def _finalize_manifest(self, workflow, result, root_session_key, started_at,
+                           parent_run_id=None) -> None:
         if self._workspace is None:
             return
         try:
             run_log.finalize_run(self._workspace, workflow.name, result,
                                  root_session_key=root_session_key, started_at=started_at,
-                                 finished_at=time.time())
+                                 finished_at=time.time(), parent_run_id=parent_run_id)
         except Exception:  # noqa: BLE001 - a manifest write must not break the run
             logger.exception("workflow run manifest finalize failed for {}", workflow.name)
+        else:
+            # Bound manifest growth for this workflow name right after a successful
+            # terminal write. Nested runs prune their own (child-name) manifest store —
+            # manifests are per workflow name, unlike the shared .workflow folder tree
+            # that nested runs must not touch. Best-effort: never break the run.
+            try:
+                run_log.prune_manifests(self._workspace, workflow.name, keep=self._prune_keep)
+            except Exception:  # noqa: BLE001 - pruning must not break the run
+                logger.exception("workflow run manifest prune failed for {}", workflow.name)
 
     @staticmethod
     def _frame_task(workflow: Workflow, task: str, output_format: str | None = None) -> str:
@@ -570,7 +585,8 @@ class WorkflowEngine:
                     raise WorkflowConfigError(
                         f"node {node.id!r} is a subworkflow but the engine has no subworkflow_runner"
                     )
-                output = self._subworkflow_runner(node.workflow, upstream_output or task, root_session_key, work_dir=work_dir)
+                output = self._subworkflow_runner(node.workflow, upstream_output or task, root_session_key,
+                                                  work_dir=work_dir, parent_run_id=run_id)
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=output))
                 upstream_output = output
                 final_output = output
