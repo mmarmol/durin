@@ -103,7 +103,8 @@ def build_service_registry(
     registry.register("memory", MemoryService(workspace_resolver=_workspace))
     registry.register("personas", PersonasService(workspace_resolver=_workspace, on_config_changed=on_config_changed))
     registry.register("mcp", McpService(mcp_runtime=mcp_runtime))
-    registry.register("health", HealthService())
+    registry.register("health", HealthService(
+        channel_manager=channel_manager, cron_service=cron_service))
     registry.register("commands", CommandsService())
     registry.register("modes", ModesService(tool_registry_resolver=tool_registry_resolver))
     registry.register("oauth", OAuthService())

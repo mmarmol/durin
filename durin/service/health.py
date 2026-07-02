@@ -35,6 +35,26 @@ from durin.service.types import (
 )
 
 # ---------------------------------------------------------------------------
+# DTOs — status
+# ---------------------------------------------------------------------------
+
+
+class RuntimeStatusQuery(Query):
+    """No inputs — one aggregate snapshot."""
+
+
+class RuntimeStatusResult(Result):
+    version: str
+    uptime_s: float | None = None
+    # Per-channel {name, enabled, running}; only channels that are enabled
+    # in config or live in the running manager are listed.
+    channels: list[dict[str, Any]] = []
+    # CronService.status() passthrough: {enabled, jobs, next_wake_at_ms};
+    # None when no scheduler is wired (shim registry, tests).
+    cron: dict[str, Any] | None = None
+
+
+# ---------------------------------------------------------------------------
 # DTOs — extras_status
 # ---------------------------------------------------------------------------
 
@@ -112,11 +132,85 @@ class LogsListResult(Result):
 
 
 class HealthService:
-    """System-health service: extras lifecycle + log viewer.
+    """System-health service: runtime status, extras lifecycle + log viewer.
 
-    No constructor dependencies — all reads go to the REGISTRY and the log
-    files on disk directly.
+    ``channel_manager`` and ``cron_service`` are optional live-gateway deps
+    used by the ``status`` route; surfaces without them (the websocket
+    channel's shim registry, tests) report config-only data.
     """
+
+    def __init__(
+        self,
+        *,
+        channel_manager: Any | None = None,
+        cron_service: Any | None = None,
+    ) -> None:
+        self._channel_manager = channel_manager
+        self._cron_service = cron_service
+
+    @route(
+        "GET",
+        "/api/v1/status",
+        scope=Scope.SYSTEM_READ.value,
+        request_model=RuntimeStatusQuery,
+        response_model=RuntimeStatusResult,
+        summary="One-call runtime snapshot: version, uptime, channels, cron",
+    )
+    async def status(
+        self, query: RuntimeStatusQuery, principal: Principal
+    ) -> RuntimeStatusResult:
+        """Aggregate runtime state for ``durin status`` and other clients.
+
+        One HTTP call answers "what is this gateway running right now":
+        package version, process uptime, per-channel enabled/running state,
+        and the cron scheduler summary.
+        """
+        principal.require(Scope.SYSTEM_READ)
+        from durin import __version__
+        from durin.config.loader import load_config
+        from durin.utils.process_runtime import uptime_s as process_uptime
+
+        uptime_s = process_uptime()
+
+        # Channels: enabled comes from config; running from the live manager.
+        channels: list[dict[str, Any]] = []
+        try:
+            config = load_config()
+            extra = getattr(config.channels, "__pydantic_extra__", None) or {}
+        except Exception:  # noqa: BLE001 — config errors leave channels empty
+            extra = {}
+        running_map: dict[str, Any] = (
+            getattr(self._channel_manager, "channels", None) or {}
+            if self._channel_manager is not None
+            else {}
+        )
+        names = sorted(set(extra) | set(running_map))
+        for name in names:
+            section = extra.get(name)
+            enabled = (
+                bool(section.get("enabled"))
+                if isinstance(section, dict)
+                else bool(getattr(section, "enabled", False))
+            )
+            inst = running_map.get(name)
+            running = bool(getattr(inst, "is_running", False)) if inst is not None else False
+            if not enabled and not running:
+                continue
+            channels.append({"name": name, "enabled": enabled, "running": running})
+
+        cron: dict[str, Any] | None = None
+        if self._cron_service is not None:
+            try:
+                cron = self._cron_service.status()
+            except Exception:  # noqa: BLE001 — cron summary is best-effort
+                cron = None
+
+        return RuntimeStatusResult(
+            version=__version__,
+            uptime_s=uptime_s,
+            channels=channels,
+            cron=cron,
+        )
 
     @route(
         "GET",

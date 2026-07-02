@@ -4150,6 +4150,60 @@
         "title": "RevokeTokenResult",
         "type": "object"
       },
+      "RuntimeStatusQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 one aggregate snapshot.",
+        "properties": {},
+        "title": "RuntimeStatusQuery",
+        "type": "object"
+      },
+      "RuntimeStatusResult": {
+        "properties": {
+          "channels": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Channels",
+            "type": "array"
+          },
+          "cron": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cron"
+          },
+          "uptime_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Uptime S"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "RuntimeStatusResult",
+        "type": "object"
+      },
       "SecretDeleteCommand": {
         "additionalProperties": false,
         "properties": {
@@ -9481,6 +9535,35 @@
         },
         "summary": "Create or overwrite a SOUL personality file",
         "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/status": {
+      "get": {
+        "operationId": "health_status",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeStatusQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuntimeStatusResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "One-call runtime snapshot: version, uptime, channels, cron",
+        "x-required-scope": "system:read"
       }
     },
     "/api/v1/tasks": {

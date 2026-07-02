@@ -165,3 +165,70 @@ async def test_logs_list_read_error_raises_unavailable(svc, local, monkeypatch, 
     with pytest.raises(UnavailableError) as excinfo:
         await svc.logs_list(LogsListQuery(), local)
     assert "log read failed" in excinfo.value.message
+
+
+# ---------------------------------------------------------------------------
+# status (runtime snapshot)
+# ---------------------------------------------------------------------------
+
+
+class _FakeChannel:
+    def __init__(self, running: bool) -> None:
+        self.is_running = running
+
+
+class _FakeChannelManager:
+    def __init__(self, channels: dict) -> None:
+        self.channels = channels
+
+
+class _FakeCron:
+    def status(self) -> dict:
+        return {"enabled": True, "jobs": 3, "next_wake_at_ms": 1_700_000_000_000}
+
+
+async def test_status_reports_version_channels_and_cron(local, monkeypatch, tmp_path):
+    from durin import __version__
+    from durin.config.schema import Config
+    from durin.service.health import RuntimeStatusQuery
+
+    cfg = Config()
+    cfg.channels.__pydantic_extra__["telegram"] = {"enabled": True}
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
+
+    svc = HealthService(
+        channel_manager=_FakeChannelManager({"telegram": _FakeChannel(True)}),
+        cron_service=_FakeCron(),
+    )
+    result = await svc.status(RuntimeStatusQuery(), local)
+    assert result.version == __version__
+    assert result.cron == {"enabled": True, "jobs": 3, "next_wake_at_ms": 1_700_000_000_000}
+    assert result.channels == [{"name": "telegram", "enabled": True, "running": True}]
+
+
+async def test_status_without_deps_degrades_to_config_only(local, monkeypatch):
+    from durin.config.schema import Config
+    from durin.service.health import RuntimeStatusQuery
+
+    cfg = Config()
+    cfg.channels.__pydantic_extra__["telegram"] = {"enabled": True}
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
+
+    svc = HealthService()
+    result = await svc.status(RuntimeStatusQuery(), local)
+    assert result.cron is None
+    # Enabled in config but no live manager → running=False (nothing runs here).
+    assert result.channels == [{"name": "telegram", "enabled": True, "running": False}]
+
+
+async def test_status_skips_disabled_and_not_running_channels(local, monkeypatch):
+    from durin.config.schema import Config
+    from durin.service.health import RuntimeStatusQuery
+
+    cfg = Config()
+    cfg.channels.__pydantic_extra__["telegram"] = {"enabled": False}
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
+
+    svc = HealthService(channel_manager=_FakeChannelManager({}))
+    result = await svc.status(RuntimeStatusQuery(), local)
+    assert result.channels == []

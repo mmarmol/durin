@@ -194,7 +194,10 @@ def test_stop_daemon_handles_stale_pid_file(isolated_home: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_doctor_skips_daemon_check_when_config_disabled(isolated_home: Path) -> None:
+def test_doctor_ok_when_not_running_and_daemon_not_requested(isolated_home: Path) -> None:
+    """No PID file + config.daemon=false → nothing to complain about. The
+    check keys on the PID file, not the config flag, so a *crashed* daemon
+    is still reported even with the flag off (see test below)."""
     from durin.cli.doctor import check_gateway_daemon
     from durin.config.schema import Config
 
@@ -203,7 +206,21 @@ def test_doctor_skips_daemon_check_when_config_disabled(isolated_home: Path) -> 
     with patch("durin.cli.doctor.load_config", return_value=cfg):
         r = check_gateway_daemon()
     assert r.status == "ok"
-    assert "disabled" in r.message.lower()
+    assert "not requested" in r.message.lower()
+
+
+def test_doctor_flags_dead_daemon_even_with_config_disabled(isolated_home: Path) -> None:
+    """A stale PID file means the daemon crashed — must FAIL regardless of
+    config.gateway.daemon (the daemon is routinely started with the flag off)."""
+    from durin.cli.doctor import check_gateway_daemon
+    from durin.config.schema import Config
+
+    daemon_pid_path().write_text("999999", encoding="utf-8")
+    cfg = Config()
+    cfg.gateway.daemon = False
+    with patch("durin.cli.doctor.load_config", return_value=cfg):
+        r = check_gateway_daemon()
+    assert r.status == "fail"
 
 
 def test_doctor_flags_missing_daemon_when_config_enabled(isolated_home: Path) -> None:
