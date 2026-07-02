@@ -101,6 +101,11 @@ class DurinApp(App[None]):
         # Per-turn wall-clock timing: set on user submit, cleared at turn end.
         self._turn_started_at: float | None = None
         self._last_latency_ms: float | None = None
+        # Live turn diagnostics: latest provider retry/backoff status (shown
+        # in the footer, cleared when content flows again) and the 1s ticker
+        # that keeps the footer's elapsed clock moving during a turn.
+        self._retry_status: dict[str, Any] | None = None
+        self._elapsed_timer: Any = None
         self._palette = "ithildin"
         self._mode = "dark"
         self._apply_durin_theme()
@@ -492,6 +497,7 @@ class DurinApp(App[None]):
         # Spinner: shows "thinking…" between submit and first delta.
         self._show_working_indicator()
         self._turn_started_at = time.monotonic()
+        self._start_turn_diagnostics()
         task = asyncio.create_task(self._publish_inbound(value, media))
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
@@ -607,6 +613,9 @@ class DurinApp(App[None]):
 
         The sidebar auto-opens and jumps to WORK the first time work starts in a
         turn, so background progress is visible without the user toggling Ctrl+B.
+        A workflow that pauses for user input additionally raises a toast and a
+        system note in chat: the user answers in chat and the agent resumes the
+        run, so a sidebar glyph alone is too easy to miss.
         """
         try:
             from durin.cli.tui.widgets import SidebarPanel
@@ -618,6 +627,36 @@ class DurinApp(App[None]):
         sidebar.update_work(event)
         if sidebar.has_active_work and not was_active:
             sidebar.jump_to_work()
+        if (
+            str(event.get("name") or "") == "workflow_progress"
+            and str(event.get("phase") or "") == "end"
+            and str(event.get("status") or "") == "needs_input"
+        ):
+            self._notify_workflow_needs_input(event)
+
+    def _notify_workflow_needs_input(self, event: dict[str, Any]) -> None:
+        args = event.get("arguments") or {}
+        label = str(args.get("workflow") or "workflow")
+        detail = str(event.get("detail") or "").strip()
+        body = (
+            f"Workflow **{label}** is paused and needs your input — "
+            "reply here to continue it."
+        )
+        if detail:
+            body += f"\n\n{detail}"
+        try:
+            chat = self.query_one("#chat", ChatView)
+            chat.add_message("system", body)
+            chat.scroll_end(animate=False)
+        except Exception:  # noqa: BLE001
+            pass
+        self.toast(f"Workflow '{label}' needs input", level="warning", duration=4.0)
+        try:
+            from durin.cli.tui.widgets import SidebarPanel
+
+            self.query_one(SidebarPanel).jump_to_work()
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _publish_inbound(self, value: str, media: list[str]) -> None:
         from durin.bus.events import InboundMessage
@@ -743,6 +782,9 @@ class DurinApp(App[None]):
             pass
         # Close any open assistant bubble so the next reply starts fresh.
         self._current_assistant_bubble = None
+        self._dismiss_working_indicator()
+        self._turn_started_at = None
+        self._end_turn_diagnostics()
 
     def action_toggle_dark(self) -> None:
         """Ctrl+T: flip light/dark within the current durin palette."""
@@ -1194,6 +1236,7 @@ class DurinApp(App[None]):
             # structured events — the bubble derives its summary line
             # from the event's arguments. Don't double-render it.
             self._dismiss_working_indicator()
+            self._clear_retry_status()
             for event in tool_events:
                 if str(event.get("name") or "") in ("workflow_progress", "subagent_result"):
                     self._route_work_event(event)
@@ -1211,6 +1254,7 @@ class DurinApp(App[None]):
             # First reasoning chunk means the model is now responding —
             # drop the spinner.
             self._dismiss_working_indicator()
+            self._clear_retry_status()
             if self._current_reasoning_bubble is None:
                 from durin.cli.tui.widgets.chat_view import MessageBubble
 
@@ -1234,19 +1278,24 @@ class DurinApp(App[None]):
             return
 
         # ---- retry-wait notifications ----------------------------------
-        # Transient retries (which are common because the first request
-        # after Textual boot often loses a TLS race) just add visual
-        # noise. The user perceives the ~1s delay; they don't need a
-        # bubble for it. We DO show retry messages from the FINAL
-        # attempt (the "failed after N retries, giving up" line) — those
-        # come through without `_retry_wait` so they fall through to the
-        # normal text path below.
+        # Provider retries/backoff don't deserve a chat bubble (transient
+        # noise), but they shouldn't be invisible either: a hung-looking
+        # turn is usually a provider backoff. Park the structured status
+        # (attempt / delay / final) for the footer badge; it clears when
+        # content flows again or the turn ends.
         if meta.get("_retry_wait"):
+            status = meta.get("retry_status")
+            self._retry_status = dict(status) if isinstance(status, dict) else None
+            try:
+                self.query_one(FooterBar).refresh_now()
+            except Exception:  # noqa: BLE001
+                pass
             return
 
         if meta.get("_stream_delta"):
             # Content is now flowing — drop the spinner.
             self._dismiss_working_indicator()
+            self._clear_retry_status()
             # Finalize the activity cluster (collapse reasoning + tools).
             self._finalize_cluster()
             if self._current_assistant_bubble is not None:
@@ -1300,6 +1349,10 @@ class DurinApp(App[None]):
             # Out-of-turn payload (slash command response, system note).
             role = "system" if meta.get("render_as") == "text" else "assistant"
             chat.add_message(role, content)
+        # Plain content with no streaming flags is a completed exchange
+        # (slash command reply, non-streamed final) — stop the elapsed
+        # ticker so the footer doesn't keep counting a finished turn.
+        self._record_turn_latency()
 
     # ---- helpers ----------------------------------------------------------
 
@@ -1308,6 +1361,55 @@ class DurinApp(App[None]):
         if self._turn_started_at is not None:
             self._last_latency_ms = (time.monotonic() - self._turn_started_at) * 1000
             self._turn_started_at = None
+        self._end_turn_diagnostics()
+        try:
+            self.query_one(FooterBar).refresh_now()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _start_turn_diagnostics(self) -> None:
+        """Begin live footer diagnostics for a turn: busy dot + elapsed ticker.
+
+        The footer's own refresh runs every 2s; a ticking elapsed clock needs
+        1s granularity, so a dedicated interval runs only while a turn is in
+        flight and is stopped again in ``_end_turn_diagnostics``.
+        """
+        self._retry_status = None
+        try:
+            self.query_one(HeaderBar).is_busy = True
+        except Exception:  # noqa: BLE001
+            pass
+        if self._elapsed_timer is None:
+            try:
+                self._elapsed_timer = self.set_interval(1.0, self._tick_turn_footer)
+            except Exception:  # noqa: BLE001
+                self._elapsed_timer = None
+
+    def _end_turn_diagnostics(self) -> None:
+        """Stop the elapsed ticker and clear the retry badge + busy dot."""
+        if self._elapsed_timer is not None:
+            try:
+                self._elapsed_timer.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self._elapsed_timer = None
+        self._retry_status = None
+        try:
+            self.query_one(HeaderBar).is_busy = False
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _tick_turn_footer(self) -> None:
+        try:
+            self.query_one(FooterBar).refresh_now()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _clear_retry_status(self) -> None:
+        """Drop the footer retry badge once the provider call is flowing again."""
+        if self._retry_status is None:
+            return
+        self._retry_status = None
         try:
             self.query_one(FooterBar).refresh_now()
         except Exception:  # noqa: BLE001
@@ -1323,6 +1425,12 @@ class DurinApp(App[None]):
         base["mode"] = self._get_agent_mode()
         if self._last_latency_ms is not None:
             base["latency_ms"] = self._last_latency_ms
+        # Live turn diagnostics: elapsed clock while a turn is in flight,
+        # provider retry status while the provider is backing off.
+        if self._turn_started_at is not None:
+            base["elapsed_s"] = int(time.monotonic() - self._turn_started_at)
+        if self._retry_status is not None:
+            base["retry_status"] = self._retry_status
         return base
 
     def _refresh_chrome(self) -> None:

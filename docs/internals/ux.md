@@ -231,10 +231,27 @@ existing Todos, Files, and MCP tabs.
 **Sidebar WORK section.** When work becomes active in a turn — a running
 workflow or a spawned sub-agent — the sidebar auto-opens and switches to the
 WORK tab. The section renders each active workflow as a node tree, including
-nested parallel branches, with per-node status (running / done / failed). Active
-sub-agents appear as peer entries alongside workflow nodes. The section is fed
-from `workflow_progress` and `subagent_result` events on the outbound bus; no
-polling is involved.
+nested parallel branches, with per-node status (running / done / failed /
+needs_input). Active sub-agents appear as peer entries alongside workflow
+nodes. The section is fed from `workflow_progress` and `subagent_result`
+events on the outbound bus; no polling is involved.
+
+**Paused workflows (needs_input).** The terminal `workflow_progress` frame
+carries the run-level status and, for a `needs_input` run, the questions as a
+capped `detail` field. The TUI keeps a paused run in the active list — glyph
+`?`, "waiting" count in the WORK header, first question line under the item —
+and additionally raises a warning toast plus a system note in chat carrying the
+questions. The user answers in chat and the agent resumes the run
+(`run_workflow` with `resume_run_id`); the sidebar entry is a signal, not an
+input surface, matching the webui's "the agent owns resume" design.
+
+**Live turn diagnostics (footer).** While a turn is in flight the footer shows
+a ticking elapsed clock (1s interval, only active during the turn) instead of
+the previous turn's latency, and the header status dot fills in. Provider
+retry/backoff status (`_retry_wait` outbound frames) renders as a footer badge
+— attempt count, retry limit (`∞` for persistent mode) and seconds until the
+next try, or a "giving up" marker on the final attempt. The badge clears as
+soon as reasoning/content/tool events flow again or the turn ends.
 
 **Goal banner.** A sticky strip above the chat renders the session's
 active goal, drawn from the `goal_state` blob carried on turn-end frames and
