@@ -1675,7 +1675,7 @@
     "finalOutput": "salida final",
     "finalOutputFrom": "resultado final de {{node}}",
     "runHistory": "ejecuciones",
-    "historyRetention": "el historial conserva las ejecuciones más recientes (workflow.keep_runs)",
+    "historyRetention": "muestra los runs más recientes — los antiguos conservan su registro, pero sus carpetas de trabajo se podan (workflow.keep_runs)",
     "copySession": "copiar clave de sesión",
     "sessionCopied": "clave de sesión copiada",
     "workerLabel": "worker {{index}}",

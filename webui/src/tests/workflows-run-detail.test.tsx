@@ -346,7 +346,7 @@ describe("WorkflowsView run detail", () => {
     ]);
     await openRunner();
     await screen.findByText(/^runs$/i);
-    expect(screen.getByText(/keeps the most recent runs/i)).toBeInTheDocument();
+    expect(screen.getByText(/working folders are pruned/i)).toBeInTheDocument();
   });
 
   it("shows a breadcrumb naming the node that produced the final output", async () => {
