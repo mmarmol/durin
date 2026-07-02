@@ -73,7 +73,12 @@ def start_run(
 ) -> Path:
     """Write the ``running`` manifest before the walk begins. Returns the record path.
     ``parent_run_id`` marks a nested subworkflow run with the run_id of its caller —
-    ``None`` for a top-level run."""
+    ``None`` for a top-level run. When ``None`` and a prior manifest for this run_id
+    exists (a resume rewrites the record), the prior value is preserved so the
+    nested-run marker survives every rewrite."""
+    if parent_run_id is None:
+        prior = read_manifest(workspace, name, run_id) or {}
+        parent_run_id = prior.get("parent_run_id")
     record = {
         "schema": SCHEMA,
         "run_id": run_id,

@@ -255,7 +255,9 @@ many manifests accumulate per workflow name: after each successful `finalize_run
 engine deletes the oldest *terminal* records (completed/exhausted/aborted/cancelled/crashed)
 beyond `keep`, run best-effort and never fatal to the run. A `running` or `needs_input`
 manifest is never deleted and never counts against `keep` — a running record is live,
-and a needs_input manifest is the resume point a caller may still act on. Malformed or
+and a needs_input manifest is the resume point a caller may still act on (the deliberate
+consequence: needs_input records that are never resumed accumulate outside the retention
+bound until they are resumed or abandoned runs are cleaned by hand). Malformed or
 unreadable files are skipped, never deleted. A nested subworkflow run prunes its own
 (child workflow name's) manifest store independently of its parent's, since manifests
 are keyed per workflow name. Because pruning is intentionally decoupled from the dream
