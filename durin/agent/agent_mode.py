@@ -117,6 +117,18 @@ PLAN_MODE_ALLOWED = frozenset({
     # Subagent spawning is allowed; subagents inherit `explore` mode (see
     # spawn integration) which is also read-only.
     "spawn",
+    # Memory recall — planning must not be blind to the project's memory
+    # (past decisions, project state). `memory_search` finds candidates;
+    # `memory_drill` fetches the full body of a hit whose search preview was
+    # truncated. Both read-only.
+    "memory_search",
+    "memory_drill",
+    # Capability awareness — to plan HOW to execute, the agent needs to see
+    # which skills and workflows already exist. All read-only discovery.
+    "skills_list",
+    "skill_view",
+    "skill_search",
+    "list_workflows",
 })
 
 PLAN_MODE = AgentMode(
@@ -170,8 +182,13 @@ PLAN_MODE = AgentMode(
     ),
 )
 
-# Mode for exploration sub-agents — read-only, no exit affordance (a
-# sub-agent's job is to gather info and report back, not to drive a plan).
+# Shared read-only investigation surface for `explore` (subagent fallback) and
+# `read` (workflow inspect/judge nodes) — read-only, no exit affordance (the job
+# is to gather info and report, not to drive a plan). `memory_search` +
+# `memory_drill` let a delegated investigator recall the project's memory
+# ("what do we know about X"). Both carry the "subagent" tool scope so they
+# actually load into subagent / workflow-node registries; a mode allowlist can
+# only filter tools that the scope already loaded, never add ones it excluded.
 EXPLORE_MODE_ALLOWED = frozenset({
     "read_file",
     "list_dir",
@@ -179,6 +196,8 @@ EXPLORE_MODE_ALLOWED = frozenset({
     "repo_overview",
     "web_fetch",
     "web_search",
+    "memory_search",
+    "memory_drill",
 })
 
 EXPLORE_MODE = AgentMode(
@@ -189,8 +208,10 @@ EXPLORE_MODE = AgentMode(
     prompt_suffix=(
         "\n\n## EXPLORE MODE — READ-ONLY (strict)\n"
         "You are an exploration sub-agent in READ-ONLY mode. You CANNOT "
-        "edit, write, or execute. Your tool surface is restricted to: "
-        "read_file, list_dir, grep, repo_overview, web_fetch, web_search.\n\n"
+        "edit, write, or execute. Your tool surface is read-only only: file "
+        "reads, code search, web lookup, and project-memory recall "
+        "(read_file, list_dir, grep, repo_overview, web_fetch, web_search, "
+        "memory_search, memory_drill).\n\n"
         "If your task requires modifications (writing files, running "
         "commands, applying edits), you CANNOT complete it. Stop "
         "immediately, do NOT loop trying alternative approaches, and "

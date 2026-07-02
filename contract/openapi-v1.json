@@ -5317,6 +5317,30 @@
         "title": "TokenMetadata",
         "type": "object"
       },
+      "ToolsListQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 lists every agent tool a mode allowlist can reference.",
+        "properties": {},
+        "title": "ToolsListQuery",
+        "type": "object"
+      },
+      "ToolsResult": {
+        "properties": {
+          "tools": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tools"
+        ],
+        "title": "ToolsResult",
+        "type": "object"
+      },
       "WebuiThreadQuery": {
         "additionalProperties": false,
         "properties": {
@@ -8998,6 +9022,35 @@
         },
         "summary": "List background tasks (sub-agents + workflow runs) for a chat session",
         "x-required-scope": "sessions:read"
+      }
+    },
+    "/api/v1/tools": {
+      "get": {
+        "operationId": "modes_tools",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolsListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List agent tools available to reference in a mode allowlist",
+        "x-required-scope": "system:read"
       }
     },
     "/api/v1/workflows": {

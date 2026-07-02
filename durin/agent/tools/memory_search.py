@@ -144,6 +144,12 @@ class MemorySearchTool(Tool):
     """memory_search tool — locate memories and source turns by substring."""
 
     config_key = "memory"
+    # Loaded for the core loop AND for subagent-scoped registries (spawned
+    # investigation subagents + workflow inspect/judge nodes) so a delegated
+    # investigator can recall the project's memory. The read-only agent modes
+    # (explore/read) allow it; without this scope the mode allowlist could
+    # never surface it, since scope gates which tools load at all.
+    _scopes = {"core", "subagent"}
 
     @property
     def read_only(self) -> bool:
