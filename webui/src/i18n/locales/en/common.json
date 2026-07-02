@@ -948,6 +948,8 @@
     "mode": "mode",
     "context": "context",
     "session": "Session",
+    "context_own": "own (isolated — sees only the previous step)",
+    "context_shared": "shared (reads and extends the shared context)",
     "session_fresh": "fresh (new each pass)",
     "session_persistent": "persistent (remembers across loop passes)",
     "prompt": "prompt",

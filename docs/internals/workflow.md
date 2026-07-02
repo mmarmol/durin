@@ -221,7 +221,7 @@ The per-node entries in the manifest's `runs` array carry:
 |---|---|
 | `node_id` | the node's id in the graph |
 | `iteration` | how many times this node has executed (loop-back counting) |
-| `session_key` | the persisted session containing the node's conversation (`workflow:<run_id>:<node_id>:<iteration>`, or with a `:<worker_index>` suffix for fan-out workers) |
+| `session_key` | the persisted session containing the node's conversation (`workflow:<run_id>:<node_id>:<iteration>`, with a `:<worker_index>` suffix for fan-out workers; a persistent-session node's key omits the iteration suffix — one session across its passes) |
 | `worker_index` | fan-out worker index (0-based; `null` for non-fan-out nodes) |
 | `branch_id` | static-parallel branch node id (`null` for non-branch nodes) |
 | `status` | `"ok"` / `"persist_failed"` (save raised) / `"node_failed"` (agent turn raised) |

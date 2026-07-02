@@ -490,7 +490,7 @@ function NodeConfigPanel({
                   value={(node.context as string) ?? "own"}
                   onChange={(e) => onChange({ context: e.target.value })}
                 >
-                  {CONTEXTS.map((c) => <option key={c} value={c}>{c}</option>)}
+                  {CONTEXTS.map((c) => <option key={c} value={c}>{t(`workflows.context_${c}`)}</option>)}
                 </select>
               </Field>
 

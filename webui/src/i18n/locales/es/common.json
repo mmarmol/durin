@@ -1616,6 +1616,8 @@
     "mode": "modo",
     "context": "contexto",
     "session": "Sesión",
+    "context_own": "propio (aislado — solo ve el paso anterior)",
+    "context_shared": "compartido (lee y extiende el contexto compartido)",
     "session_fresh": "nueva (una por pasada)",
     "session_persistent": "persistente (recuerda entre pasadas del loop)",
     "prompt": "prompt",

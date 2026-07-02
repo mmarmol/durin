@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,7 +34,7 @@ beforeEach(() => {
   }
   vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
   vi.mocked(api.listWorkflows).mockResolvedValue(["demo"]);
-  vi.mocked(api.listPersonas).mockResolvedValue({ personas: [] });
+  vi.mocked(api.listPersonas).mockResolvedValue({ personas: [], default: null });
   vi.mocked(api.getWorkflow).mockResolvedValue({
     name: "demo",
     start: "start",
