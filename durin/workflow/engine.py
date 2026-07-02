@@ -178,6 +178,14 @@ class WorkflowEngine:
         keys) with the visit counts already consumed and ``resume.upstream`` as that
         node's upstream input, instead of starting a fresh run at the workflow's start."""
         run_id = resume.run_id if resume is not None else self._run_id_factory()
+
+        # Pre-flight input validation: check for missing/colliding files and declared-file contracts
+        # Must run before prune_runs and _start_manifest so a pre-flight rejection leaves no trace.
+        preflight = self._preflight_inputs(workflow, input_files, run_id,
+                                           resuming=resume is not None)
+        if preflight is not None:
+            return preflight
+
         if self._workspace is not None:
             prune_runs(self._workspace)
         runs: list[NodeRun] = []
@@ -187,13 +195,6 @@ class WorkflowEngine:
         effective_root = root_session_key or f"workflow:{run_id}:root"
         started_at = time.time()
         self._start_manifest(workflow, run_id, effective_root, started_at, task)
-
-        # Pre-flight input validation: check for missing/colliding files and declared-file contracts
-        preflight = self._preflight_inputs(workflow, input_files, run_id,
-                                           resuming=resume is not None)
-        if preflight is not None:
-            self._finalize_manifest(workflow, preflight, effective_root, started_at)
-            return preflight
 
         def _update() -> None:
             self._update_manifest(workflow, run_id, runs)

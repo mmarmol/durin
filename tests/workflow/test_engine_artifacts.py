@@ -170,3 +170,19 @@ def test_declared_file_input_with_no_files_ends_needs_input(tmp_path):
     assert calls == []                            # zero LLM cost
     assert "file" in result.final_output.lower()
     assert "the report to summarize" in result.final_output
+
+
+def test_preflight_rejection_writes_no_manifest_and_prunes_nothing(tmp_path):
+    """Pre-flight rejection must not create the manifest record or artifact folders.
+    When a preflight check (declared file input without files) rejects the run,
+    no manifest should be written and the artifact tree should not be created."""
+    wf = parse_workflow({
+        "name": "w", "start": "a",
+        "input": {"file": True},
+        "nodes": [{"id": "a", "kind": "work", "tools": "default", "next": None}],
+    })
+    result = WorkflowEngine(lambda req: NodeRunResponse(output="x"),
+                            workspace=str(tmp_path)).run(wf, "t")
+    assert result.status == "needs_input"
+    # Pre-flight rejection must not create the manifest folder
+    assert not (Path(tmp_path) / "workflows-runs").exists()

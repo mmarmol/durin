@@ -92,6 +92,23 @@ def test_task_unchanged_without_io_descriptions():
     assert calls[0].task == "do it"
 
 
+def test_file_input_workflow_with_files_keeps_task_unchanged(tmp_path):
+    """A file-input workflow that receives input files should not frame the task.
+    The node receives the task unchanged when no I/O descriptions are present."""
+    src = tmp_path / "in.txt"
+    src.write_text("data")
+    wf = parse_workflow({
+        "name": "w", "start": "a",
+        "input": {"file": True},
+        "nodes": [{"id": "a", "kind": "work", "tools": "default", "next": None}],
+    })
+    calls = []
+    def runner(req):
+        calls.append(req)
+        return NodeRunResponse(output="x")
+    WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "the task", input_files=[str(src)])
+    assert calls and calls[0].task == "the task"
+
 
 def test_per_node_max_visits_overrides_workflow_default():
     # workflow default max_visits=5, but node 'a' caps itself at 2.
