@@ -1951,6 +1951,7 @@ def _run_gateway(
                     mcp_runtime=_McpRuntime(agent),
                     subagent_manager=agent.subagents,
                     channel_manager=channels,
+                    tool_registry_resolver=lambda: agent.tools,
                     on_config_changed=agent.reload_app_config,
                     on_default_changed=agent.apply_default_model_live,
                 )

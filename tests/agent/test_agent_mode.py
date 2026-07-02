@@ -87,6 +87,38 @@ class TestAgentMode:
         assert get_mode("read") is READ_MODE
         assert READ_MODE in list_modes()
 
+    def test_curation_plan_gains_memory_and_capability_discovery(self):
+        # Planning must recall project memory and see available capabilities.
+        for tool in ("memory_search", "memory_drill", "skills_list",
+                     "skill_view", "skill_search", "list_workflows"):
+            assert PLAN_MODE.is_tool_allowed(tool), tool
+        # But not setup/sensitive/mutation tools.
+        for tool in ("mcp_search", "list_secrets", "request_secret", "run_workflow"):
+            assert not PLAN_MODE.is_tool_allowed(tool), tool
+
+    def test_curation_explore_read_gain_memory_recall_and_stay_coupled(self):
+        # A delegated read-only investigator can recall project memory...
+        for mode in (EXPLORE_MODE, READ_MODE):
+            assert mode.is_tool_allowed("memory_search")
+            assert mode.is_tool_allowed("memory_drill")
+        # ...but stays lean: no skill/workflow discovery, no secrets, and
+        # session_search is useless in a freshly-spawned subagent session.
+        for tool in ("skills_list", "skill_search", "list_workflows",
+                     "session_search", "list_secrets"):
+            assert not EXPLORE_MODE.is_tool_allowed(tool), tool
+        # explore and read intentionally share ONE read-only tool surface;
+        # only their prompt posture differs.
+        assert EXPLORE_MODE.allowed == READ_MODE.allowed
+
+    def test_memory_recall_tools_are_subagent_scoped(self):
+        # A mode allowlist can only filter tools the scope already loaded, so
+        # the read-only modes' memory recall must carry the "subagent" scope —
+        # otherwise it would never surface in a subagent / workflow-node run.
+        from durin.agent.tools.memory_drill import MemoryDrillTool
+        from durin.agent.tools.memory_search import MemorySearchTool
+        assert "subagent" in MemorySearchTool._scopes
+        assert "subagent" in MemoryDrillTool._scopes
+
     def test_denied_wins_over_allowed(self):
         custom = AgentMode(
             name="custom",
