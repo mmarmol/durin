@@ -69,9 +69,9 @@ flowchart TD
 
     subgraph AbsorbPath["Refine / absorb (within dream)"]
         AB[Alias-overlap candidate]
+        AB --> AS[memory.absorb.skipped\ncross_type / tombstoned / load_failed /\nuser_managed / quarantine / judge_error]
         AB --> AJ[memory.absorb.judged]
         AJ --> AM[memory.absorb.auto_merged]
-        AJ --> AS[memory.absorb.skipped]
         AM --> AR[memory.absorb.reverted\non durin memory revert]
     end
 
@@ -148,8 +148,8 @@ Additional dream events:
 These fire during the refine pass and via the manual `durin memory` commands:
 
 - **`memory.absorb.judged`** — a candidate pair reached the LLM judge. `verdict` is `same | different | unclear`; `confidence` is 0–100. `entity_type` supports per-class duplicate-churn analysis (e.g. feedback/stance/practice). Emitted for every pair that survived the cross-type filter and quarantine check.
-- **`memory.absorb.auto_merged`** — pair was auto-merged (`verdict == same` and `confidence >= threshold`). `sha` is the merge commit. `entity_type` supports per-class duplicate-churn analysis (e.g. feedback/stance/practice).
-- **`memory.absorb.skipped`** — pair was not merged. `reason` is one of: `cross_type`, `quarantine`, `below_threshold`, `verdict_different`, `verdict_unclear`, `judge_failed`, `page_load_failed`, `judge_error`.
+- **`memory.absorb.auto_merged`** — pair was auto-merged (`verdict == same` and `confidence >= threshold`). `sha` is the merge commit. `entity_type` (same field as `memory.absorb.judged`) is carried here too.
+- **`memory.absorb.skipped`** — pair was never judged (fires instead of `memory.absorb.judged`, not after it). `reason` is one of: `cross_type`, `tombstoned`, `load_failed`, `user_managed`, `quarantine`, `judge_error`.
 - **`memory.absorb.reverted`** — a prior auto-merge was undone via `durin memory revert`. This is the regret-rate signal: a high revert count indicates the confidence threshold is too low.
 
 ### Relation-cap events (alert-only)
@@ -207,7 +207,7 @@ The following events exist in the catalog without dedicated sections above — c
 | `memory.dream.max_seconds_per_run` | `600` | Hard wall-clock cap per extract pass; triggers `memory.dream.max_seconds_reached` and sets `yielded=true` on `memory.dream.end`. |
 | `memory.dream.min_seconds_between_runs` | `300` | Reactive throttle window for `ReactiveDreamGate`; 0 disables throttling. |
 | `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates. When false, the pass runs but does not judge or merge — no `memory.absorb.*` events appear in the auto path. Manual `durin memory absorb` still works. |
-| `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM-judge confidence floor (0–100) below which a `same` verdict is skipped (`memory.absorb.skipped` with `reason=below_threshold`). |
+| `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM-judge confidence floor (0–100) below which a `same` verdict is not auto-merged — the pair still appears in `memory.absorb.judged`, just kept separate rather than merged. |
 | `memory.dream.auto_absorb.semantic_distance_threshold` | `0.30` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.85; lower = stricter — the judge still decides the merge. |
 | `telemetry.push.enabled` | `false` | Opt-in HTTPS push sink. When false, only local JSONL is written. |
 | `telemetry.push.url` | `""` | HTTPS endpoint for push. Must be `https://`. |

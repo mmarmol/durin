@@ -316,6 +316,27 @@ def test_refine_judge_error_emits_skipped_event(tmp_path, monkeypatch):
     assert any(d.get("reason") == "judge_error" for d in skips)
 
 
+def test_refine_load_failed_emits_skipped_event(tmp_path, monkeypatch):
+    import durin.agent.tools._telemetry as tel
+    import durin.memory.refine_dream as refine_dream
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    _two_dupes(tmp_path)
+    real_load_page = refine_dream._load_page
+
+    def _load_page_one_missing(ws, ref):
+        if ref == "company:mxhero_inc":
+            return None
+        return real_load_page(ws, ref)
+
+    monkeypatch.setattr(refine_dream, "_load_page", _load_page_one_missing)
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 96))
+    assert any(s["reason"] == "load_failed" for s in out["skipped"])
+    skips = [d for n, d in events if n == "memory.absorb.skipped"]
+    assert any(d.get("reason") == "load_failed" for d in skips)
+
+
 def test_flagged_empty_workspace(tmp_path):
     """read_flagged on a workspace with no flagged file returns empty list."""
     assert read_flagged(tmp_path) == []

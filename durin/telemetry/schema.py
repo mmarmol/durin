@@ -770,6 +770,7 @@ class MemoryAbsorbSkippedEvent(TypedDict):
       (e.g. person:marcelo vs project:marcelo) — filtered before judge.
     - ``"tombstoned"``: the user previously rejected this pair
       (recorded in ``.refine_tombstones.json``).
+    - ``"load_failed"``: one or both entity pages could not be loaded from disk.
     - ``"user_managed"``: either page is ``author == "user_authored"``.
     - ``"quarantine"``: at least one page was created at/after the run start
       (the run never merges its own fresh output).
@@ -1249,7 +1250,9 @@ class MemoryDreamAlwaysOnEvent(TypedDict):
 
 class MemoryDreamFlaggedEvent(TypedDict):
     """The refine dream flagged a pair the Tier-2 agent investigated but did not
-    confirm as the same entity.  ``canonical`` and ``absorbed`` are the two refs
+    confirm as the same entity, or a borderline pair capped before Tier-2 ever
+    ran (see ``memory.absorb.escalation_capped``) and kept on the cheap
+    Tier-1 verdict instead.  ``canonical`` and ``absorbed`` are the two refs
     the judge examined; the pair is stored in ``.flagged_pairs.json`` for future
     review.  Fires inside ``add_flagged`` so it is always consistent with the
     on-disk record."""

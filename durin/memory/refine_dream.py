@@ -101,7 +101,9 @@ def add_flagged(
     confidence: int,
     reasoning: str,
 ) -> None:
-    """Record a pair the Tier-2 agent investigated but did not confirm as same.
+    """Record a pair the Tier-2 agent investigated but did not confirm as same,
+    or a borderline pair capped before Tier-2 ran (escalation budget exhausted
+    for the run) and kept on its cheap Tier-1 verdict instead.
 
     The record is keyed by sorted pair so order does not matter. A duplicate
     pair key keeps the newest record. Write failures are swallowed so a store
@@ -257,6 +259,7 @@ def run_refine(
         page_b = _load_page(workspace, ref_b)
         if page_a is None or page_b is None:
             skipped.append({"pair": [ref_a, ref_b], "reason": "load_failed"})
+            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason="load_failed")
             continue
         if page_a.author == "user_authored" or page_b.author == "user_authored":
             skipped.append({"pair": [ref_a, ref_b], "reason": "user_managed"})
