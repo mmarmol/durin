@@ -55,11 +55,19 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   **`__needs_input__`** terminal, which ends the run asking the caller for more information.
 - **Per node**: a `model` **or** a `persona` (a SOUL + its model); a work `mode` (`build` =
   may write files, `read` = read-only); built-in `tools` (`none` / `default`); injected
-  `skills`; and a scoped subset of configured `mcps`. Each defaults to the minimum, so a node
-  sees only what its job needs.
+  `skills`; a scoped subset of configured `mcps`; and a `session` policy — `"persistent"`
+  makes a *looping* node resume its own conversation when the flow returns to it (it keeps
+  its prior reasoning and only receives what is new), instead of restarting cold each pass.
+  Each defaults to the minimum, so a node sees only what its job needs.
+- **Loops converge deliberately** — on a revisit the engine tells the node which pass this
+  is ("Pass X of Y") and marks the last allowed pass as FINAL; a gate whose FAIL would
+  exhaust the loop is told its verdict is definitive. You get this for free — just set
+  `max_visits` honestly.
 - **Shared working folder** — every sequential node with file tools reads and writes ONE
   folder per run, so file-producing steps build on each other (a plan's code accumulates; a
-  debug loop's reproduction, fix, and test live together) instead of copying a fileset down a chain.
+  debug loop's reproduction, fix, and test live together) instead of copying a fileset down
+  a chain. A `subworkflow` runs in its **parent's** folder, so files flow through composition;
+  parallel writing branches fork the folder and their writes reconcile back.
 - **Input / Output** — optional descriptors (text and/or files, plus a free-text contract).
   A per-call `output_format` overrides the delivery shape for one run.
 
@@ -71,12 +79,19 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   result, and `input_files` (a list of absolute paths) to hand the workflow files to work on:
   each is seeded into the run's shared working folder before the start node runs, so every node
   (including a dynamic fan-out of one worker per file) reads them there — use this instead of
-  pasting file contents into `task`. It loads the named JSON, runs the graph, and returns a
-  per-node trace plus the final text output. **Getting files back:** when the workflow
-  declares it outputs files (`output: {"file": true}`), the summary also reports the run's
-  working-folder path — read the produced files there with `read_file`. **If the
-  result says it needs input**, the workflow did not fail — it paused with questions; ask the
-  user those questions, then call `run_workflow` again with the SAME task plus their answers appended.
+  pasting file contents into `task`. Provided paths are validated before anything runs: a
+  missing file or two files with the same name abort with a clear message, and a workflow
+  that declares `input: {"file": true}` given no files pauses immediately asking for them.
+  It loads the named JSON, runs the graph, and returns a per-node trace plus the final text
+  output. **Getting files back:** when the workflow declares it outputs files
+  (`output: {"file": true}`), the summary reports the run's working-folder path AND lists the
+  produced files — read them there, and copy out anything that must outlive the run (working
+  folders are pruned after `workflow.keep_runs` newer runs). **If the result says it needs
+  input**, the workflow did not fail — it paused with questions and the summary carries the
+  run id; answer them (from your own context when you can, otherwise ask the user), then call
+  `run_workflow` again with `resume_run_id=<that id>` and the answers as `task`. That resumes
+  the SAME run — same working folder, node sessions, and loop counters — at the node that
+  asked, instead of restarting from scratch.
 - **Author:** write the JSON under `<workspace>/workflows/<name>.json` (you can write a graph
   on demand for a user's repeatable process), or use the web editor. Compose larger processes
   from `subworkflow` nodes — but only where each stage genuinely needs the structure above.
