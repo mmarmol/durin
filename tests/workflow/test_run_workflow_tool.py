@@ -305,3 +305,54 @@ def test_aborted_run_renders_gracefully():
     text = _format_result(result)
     assert "did not complete" in text.lower()
     assert "partial work" in text
+
+
+def test_completed_run_lists_output_files_with_overflow():
+    result = WorkflowResult(
+        status="completed", final_output="done", runs=[], run_id="r1",
+        output_dir="/tmp/wf/work",
+        output_files=[f"f{i:02}.txt" for i in range(25)],
+    )
+    out = _format_result(result, output_files=True)
+    assert "f00.txt" in out and "f19.txt" in out     # first 20 listed
+    assert "f20.txt" not in out                       # 21st not listed
+    assert "and 5 more" in out                        # overflow line
+    assert "Copy out any deliverable" in out          # retention warning
+
+
+@pytest.mark.asyncio
+async def test_tool_passes_keep_runs_to_engine(tmp_path):
+    _write_workflow(tmp_path, "simple", {
+        "name": "simple", "start": "a",
+        "nodes": [{"id": "a", "kind": "work", "prompt": "p", "next": None}],
+    })
+    sessions = SessionManager(workspace=tmp_path)
+    app_config = SimpleNamespace(
+        resolve_default_preset=lambda: object(),
+        tools=ToolsConfig(),
+        workflow=WorkflowConfig(keep_runs=7)
+    )
+    ctx = SimpleNamespace(workspace=str(tmp_path), sessions=sessions, app_config=app_config)
+    tool = RunWorkflowTool.create(ctx)
+
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "test-model"
+    fake_result = AgentRunResult(
+        final_content="done",
+        messages=[{"role": "assistant", "content": "done"}],
+    )
+
+    captured_kwargs = {}
+
+    def fake_engine_init(self, **kwargs):
+        captured_kwargs.update(kwargs)
+        self.run = MagicMock(return_value=WorkflowResult(
+            status="completed", run_id="r1", final_output="ok", runs=[]
+        ))
+
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.agent.runner.AgentRunner.run", AsyncMock(return_value=fake_result)), \
+         patch("durin.workflow.engine.WorkflowEngine.__init__", fake_engine_init):
+        await tool.execute(name="simple", task="do it", background=False)
+
+    assert captured_kwargs.get("prune_keep") == 7
