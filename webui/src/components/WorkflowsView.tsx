@@ -140,6 +140,7 @@ const nodeTypes = {
 
 const MODES = ["build", "plan", "explore"];
 const CONTEXTS = ["own", "shared"];
+const SESSIONS = ["fresh", "persistent"];
 const selectCls = "h-8 w-full rounded-md border border-border bg-background px-2 text-sm";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -461,6 +462,18 @@ function NodeConfigPanel({
                   {CONTEXTS.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </Field>
+
+              {((node.context as string) ?? "own") === "own" && (
+                <Field label={t("workflows.session")}>
+                  <select
+                    className={selectCls}
+                    value={(node.session as string) ?? "fresh"}
+                    onChange={(e) => onChange({ session: e.target.value === "fresh" ? undefined : e.target.value })}
+                  >
+                    {SESSIONS.map((s) => <option key={s} value={s}>{t(`workflows.session_${s}`)}</option>)}
+                  </select>
+                </Field>
+              )}
 
               <div className="flex-1 min-h-0 flex flex-col gap-1">
                 <div className="flex items-center justify-between">
