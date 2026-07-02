@@ -122,13 +122,19 @@ class FallbackProvider(LLMProvider):
         has_streamed: list[bool] = [False]
         original_delta = kwargs.get("on_content_delta")
 
-        async def _tracking_delta(text: str) -> None:
-            if text:
-                has_streamed[0] = True
-            if original_delta:
+        # The has_streamed guard prevents delivering DUPLICATE content to a
+        # delta consumer after a mid-stream failure. Callers without a
+        # consumer (every completion rides the streaming transport now, most
+        # with no callbacks) can't receive duplicates — for them a mid-stream
+        # primary failure must still fail over, so the tracker only arms when
+        # the caller actually supplied on_content_delta.
+        if original_delta is not None:
+            async def _tracking_delta(text: str) -> None:
+                if text:
+                    has_streamed[0] = True
                 await original_delta(text)
 
-        kwargs["on_content_delta"] = _tracking_delta
+            kwargs["on_content_delta"] = _tracking_delta
         return await self._try_with_fallback(
             lambda p, kw: p.chat_stream(**kw), kwargs, has_streamed=has_streamed
         )
