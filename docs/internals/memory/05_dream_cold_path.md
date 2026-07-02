@@ -403,7 +403,7 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.always_on_token_budget` | `1500` | Token ceiling for the always-on pin. 0 disables the pin. |
 | `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM-judge confidence floor (0–100) for an auto-merge. |
-| `memory.dream.auto_absorb.semantic_distance_threshold` | `0.20` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.90; lower = stricter — the judge still decides the merge. |
+| `memory.dream.auto_absorb.semantic_distance_threshold` | `0.30` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.85; lower = stricter — the judge still decides the merge. |
 | `memory.dream.auto_absorb.escalate_floor` | `0` | **Opt-in.** Confidence floor (0–100) below which the Tier 1 judge's borderline verdicts escalate to a bounded sub-agent for deeper investigation. `0` (the default) disables Tier 2 entirely. Set to e.g. `60` to escalate pairs the cheap judge rated same at 60–94 confidence or returned `unclear`. |
 
 The model every pass uses is resolved by
@@ -521,5 +521,5 @@ without ever clobbering something a human set by hand. The discovered entity
 display name should yield immediately to any later explicit correction.
 
 For the broader memory design decisions — markdown as the single source of truth,
-why fragments are never consolidated, why auto-absorb defaults off, and the
+why fragments are never consolidated, why auto-absorb defaults on, and the
 mechanisms durin chose not to adopt — see `design_rationale.md`.

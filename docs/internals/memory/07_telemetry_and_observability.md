@@ -208,7 +208,7 @@ The following events exist in the catalog without dedicated sections above — c
 | `memory.dream.min_seconds_between_runs` | `300` | Reactive throttle window for `ReactiveDreamGate`; 0 disables throttling. |
 | `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates. When false, the pass runs but does not judge or merge — no `memory.absorb.*` events appear in the auto path. Manual `durin memory absorb` still works. |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM-judge confidence floor (0–100) below which a `same` verdict is skipped (`memory.absorb.skipped` with `reason=below_threshold`). |
-| `memory.dream.auto_absorb.semantic_distance_threshold` | `0.20` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.90; lower = stricter — the judge still decides the merge. |
+| `memory.dream.auto_absorb.semantic_distance_threshold` | `0.30` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.85; lower = stricter — the judge still decides the merge. |
 | `telemetry.push.enabled` | `false` | Opt-in HTTPS push sink. When false, only local JSONL is written. |
 | `telemetry.push.url` | `""` | HTTPS endpoint for push. Must be `https://`. |
 | `telemetry.push.token_secret_name` | `""` | Name of the bearer token in `~/.durin/secrets.json`. Token never lives in config. |
