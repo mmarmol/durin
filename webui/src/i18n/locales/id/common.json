@@ -587,10 +587,6 @@
             "title": "Tampilkan status",
             "description": "Tampilkan status runtime, provider, dan channel."
           },
-          "history": {
-            "title": "Tampilkan riwayat",
-            "description": "Cetak N pesan percakapan tersimpan terbaru."
-          },
           "dream": {
             "title": "Jalankan Dream",
             "description": "Jalankan secara manual dream konsolidasi entitas (extract / skill / refine / always_on)."

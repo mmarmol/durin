@@ -1362,9 +1362,17 @@
             "title": "Show status",
             "description": "Display runtime, provider, and channel status."
           },
-          "history": {
-            "title": "Show conversation history",
-            "description": "Print the last N persisted conversation messages."
+          "effort": {
+            "title": "Reasoning effort",
+            "description": "Show or set the reasoning effort for the active model."
+          },
+          "usage": {
+            "title": "Token usage",
+            "description": "Show cumulative token usage for this session."
+          },
+          "retry": {
+            "title": "Retry last message",
+            "description": "Send the previous user message again."
           },
           "dream": {
             "title": "Run Dream",

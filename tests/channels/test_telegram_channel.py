@@ -197,9 +197,6 @@ async def test_start_creates_separate_pools_with_proxy(monkeypatch) -> None:
     assert callable(app.updater.start_polling_kwargs["error_callback"])
     assert any(cmd.command == "status" for cmd in app.bot.commands)
     assert any(cmd.command == "history" for cmd in app.bot.commands)
-    assert any(cmd.command == "dream" for cmd in app.bot.commands)
-    assert any(cmd.command == "dream_log" for cmd in app.bot.commands)
-    assert any(cmd.command == "dream_restore" for cmd in app.bot.commands)
 
 
 @pytest.mark.asyncio
@@ -1253,7 +1250,7 @@ async def test_forward_command_does_not_inject_reply_context() -> None:
 
 
 @pytest.mark.asyncio
-async def test_forward_command_preserves_dream_log_args_and_strips_bot_suffix() -> None:
+async def test_forward_command_preserves_args_and_strips_bot_suffix() -> None:
     channel = TelegramChannel(
         TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
         MessageBus(),
@@ -1265,33 +1262,12 @@ async def test_forward_command_preserves_dream_log_args_and_strips_bot_suffix() 
         handled.append(kwargs)
 
     channel._handle_message = capture_handle
-    update = _make_telegram_update(text="/dream-log@durin_test deadbeef", reply_to_message=None)
+    update = _make_telegram_update(text="/sessions@durin_test deadbeef", reply_to_message=None)
 
     await channel._forward_command(update, None)
 
     assert len(handled) == 1
-    assert handled[0]["content"] == "/dream-log deadbeef"
-
-
-@pytest.mark.asyncio
-async def test_forward_command_normalizes_telegram_safe_dream_aliases() -> None:
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
-        MessageBus(),
-    )
-    channel._app = _FakeApp(lambda: None)
-    handled = []
-
-    async def capture_handle(**kwargs) -> None:
-        handled.append(kwargs)
-
-    channel._handle_message = capture_handle
-    update = _make_telegram_update(text="/dream_restore@durin_test deadbeef", reply_to_message=None)
-
-    await channel._forward_command(update, None)
-
-    assert len(handled) == 1
-    assert handled[0]["content"] == "/dream-restore deadbeef"
+    assert handled[0]["content"] == "/sessions deadbeef"
 
 
 def test_telegram_bus_slash_command_regex_matches_agent_loop_commands() -> None:
@@ -1304,12 +1280,15 @@ def test_telegram_bus_slash_command_regex_matches_agent_loop_commands() -> None:
     assert pat.fullmatch("/model fast")
     assert pat.fullmatch("/new@durin_bot")
     assert pat.fullmatch("/goal@durin_bot refine objective")
-    assert pat.fullmatch("/dream-log deadbeef") is None
-    assert pat.fullmatch("/dream-restore deadbeef") is None
+    # Unknown commands also forward — the agent loop dispatches or falls
+    # through to the model, same contract as webui/TUI.
+    assert pat.fullmatch("/compact deadbeef")
+    assert pat.fullmatch("/start") is None  # start keeps its dedicated handler
 
 
 @pytest.mark.asyncio
-async def test_on_help_includes_restart_command() -> None:
+async def test_on_help_lists_channel_commands_and_hides_admin() -> None:
+    """Telegram /help renders user-facing channel commands and excludes admin commands."""
     channel = TelegramChannel(
         TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
         MessageBus(),
@@ -1321,11 +1300,12 @@ async def test_on_help_includes_restart_command() -> None:
 
     update.message.reply_text.assert_awaited_once()
     help_text = update.message.reply_text.await_args.args[0]
-    assert "/restart" in help_text
+    # User-facing channel commands should be visible
     assert "/status" in help_text
-    assert "/goal" in help_text
-    assert "/model" in help_text
-    assert "/version" in help_text
+    assert "/history" in help_text
+    # Admin commands should be hidden from channel help
+    assert "/restart" not in help_text
+    assert "/version" not in help_text
 
 
 @pytest.mark.asyncio

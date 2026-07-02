@@ -143,16 +143,16 @@ describe("webui API helpers", () => {
       json: async () => ({
         commands: [
           {
-            command: "/stop",
-            title: "Stop current task",
-            description: "Cancel the active task.",
-            icon: "square",
+            command: "/usage",
+            title: "Token usage",
+            description: "Show cumulative token usage for this session.",
+            icon: "bar-chart-3",
           },
           {
-            command: "/restart",
-            title: "Restart durin",
-            description: "Restart the bot process.",
-            icon: "rotate-cw",
+            command: "/retry",
+            title: "Retry last message",
+            description: "Send the previous user message again.",
+            icon: "rotate-ccw",
           },
           {
             command: "/history",
@@ -166,6 +166,20 @@ describe("webui API helpers", () => {
     } as Response);
 
     await expect(listSlashCommands("tok")).resolves.toEqual([
+      {
+        command: "/usage",
+        title: "Token usage",
+        description: "Show cumulative token usage for this session.",
+        icon: "bar-chart-3",
+        argHint: "",
+      },
+      {
+        command: "/retry",
+        title: "Retry last message",
+        description: "Send the previous user message again.",
+        icon: "rotate-ccw",
+        argHint: "",
+      },
       {
         command: "/history",
         title: "Show conversation history",

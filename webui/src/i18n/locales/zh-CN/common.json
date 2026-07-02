@@ -306,10 +306,6 @@
             "title": "查看状态",
             "description": "显示运行时、provider 和 channel 状态。"
           },
-          "history": {
-            "title": "查看对话历史",
-            "description": "打印最近 N 条已持久化的对话消息。"
-          },
           "dream": {
             "title": "运行 Dream",
             "description": "手动触发记忆整理。"

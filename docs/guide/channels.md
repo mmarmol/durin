@@ -157,6 +157,14 @@ active channel:
 /pairing deny ABCD-EFGH
 ```
 
+### Slash commands
+
+Telegram's bot command menu (the `/` picker in the Telegram client) is
+generated from the same built-in command registry that drives the WebUI
+palette and TUI autocomplete, scoped to the commands listed for channels.
+Any slash text the menu doesn't cover is still forwarded to durin like a
+normal message, so it reaches the agent instead of being dropped.
+
 ### Manual setup
 
 Store the token in the secret store first, then write the config entry

@@ -264,27 +264,22 @@ class TelegramChannel(BaseChannel):
     name = "telegram"
     display_name = "Telegram"
 
-    # Commands registered with Telegram's command menu
-    BOT_COMMANDS = [
-        BotCommand("start", "Start the bot"),
-        BotCommand("new", "Start a new conversation"),
-        BotCommand("stop", "Stop the current task"),
-        BotCommand("restart", "Restart the bot"),
-        BotCommand("status", "Show bot status"),
-        BotCommand("history", "Show recent conversation messages"),
-        BotCommand("goal", "Start a sustained objective (long-running task)"),
-        BotCommand("pairing", "Manage DM pairing: approve/deny/list (complements the webui panel)"),
-        BotCommand("model", "Switch runtime model preset"),
-        BotCommand("dream", "Run Dream memory consolidation now"),
-        BotCommand("dream_log", "Show the latest Dream memory change"),
-        BotCommand("dream_restore", "Restore Dream memory to an earlier version"),
-        BotCommand("help", "Show available commands"),
-    ]
+    @staticmethod
+    def bot_commands() -> list[BotCommand]:
+        """Menu commands registered with Telegram: /start + the shared registry."""
+        from durin.command.builtin import channel_menu_commands
 
-    # Regex for slash commands routed to AgentLoop via ``_forward_command``.
-    # Hyphenated ``dream-*`` commands stay on a separate handler (below).
+        commands = [BotCommand("start", "Start the bot")]
+        commands.extend(
+            BotCommand(name, title) for name, title in channel_menu_commands()
+        )
+        return commands
+
+    # Any slash command (except /start, which has a dedicated handler) is
+    # forwarded to the agent loop: known commands dispatch there, unknown
+    # ones fall through to the model — same contract as the webui and TUI.
     TELEGRAM_BUS_SLASH_COMMAND_RE = re.compile(
-        r"^/(?:new|stop|restart|status|dream|history|goal|pairing|model)(?:@\w+)?(?:\s+.*)?$"
+        r"^/(?!start(?:@\w+)?(?:\s|$))[A-Za-z][\w-]*(?:@\w+)?(?:\s+.*)?$"
     )
 
     @classmethod
@@ -341,10 +336,14 @@ class TelegramChannel(BaseChannel):
         """Map Telegram-safe command aliases back to canonical durin commands."""
         if not content.startswith("/"):
             return content
-        if content == "/dream_log" or content.startswith("/dream_log "):
-            return content.replace("/dream_log", "/dream-log", 1)
-        if content == "/dream_restore" or content.startswith("/dream_restore "):
-            return content.replace("/dream_restore", "/dream-restore", 1)
+        from durin.command.builtin import BUILTIN_COMMAND_SPECS
+
+        for spec in BUILTIN_COMMAND_SPECS:
+            if "-" not in spec.command:
+                continue
+            alias = spec.command.replace("-", "_")
+            if content == alias or content.startswith(alias + " "):
+                return content.replace(alias, spec.command, 1)
         return content
 
     async def start(self) -> None:
@@ -382,20 +381,16 @@ class TelegramChannel(BaseChannel):
         self._app.add_error_handler(self._on_error)
 
         # Add command handlers (using Regex to support @username suffixes before bot initialization)
+        # /start and /help keep dedicated handlers and must be registered before
+        # the generic forwarder below, which would otherwise match them first.
         self._app.add_handler(MessageHandler(filters.Regex(r"^/start(?:@\w+)?$"), self._on_start))
+        self._app.add_handler(MessageHandler(filters.Regex(r"^/help(?:@\w+)?$"), self._on_help))
         self._app.add_handler(
             MessageHandler(
                 filters.Regex(TelegramChannel.TELEGRAM_BUS_SLASH_COMMAND_RE),
                 self._forward_command,
             )
         )
-        self._app.add_handler(
-            MessageHandler(
-                filters.Regex(r"^/(dream-log|dream_log|dream-restore|dream_restore)(?:@\w+)?(?:\s+.*)?$"),
-                self._forward_command,
-            )
-        )
-        self._app.add_handler(MessageHandler(filters.Regex(r"^/help(?:@\w+)?$"), self._on_help))
 
         # Add message handler for text, photos, video, voice, documents, and locations
         self._app.add_handler(
@@ -429,7 +424,7 @@ class TelegramChannel(BaseChannel):
         self.logger.info("bot @{} connected", bot_info.username)
 
         try:
-            await self._app.bot.set_my_commands(self.BOT_COMMANDS)
+            await self._app.bot.set_my_commands(self.bot_commands())
             self.logger.debug("bot commands registered")
         except Exception as e:
             self.logger.warning("Failed to register bot commands: {}", e)
@@ -843,7 +838,7 @@ class TelegramChannel(BaseChannel):
         """Handle /help command."""
         if not update.message or not update.effective_user:
             return
-        await update.message.reply_text(build_help_text())
+        await update.message.reply_text(build_help_text("channels"))
 
     @staticmethod
     def _sender_id(user) -> str:

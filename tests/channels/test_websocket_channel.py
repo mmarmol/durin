@@ -1383,8 +1383,8 @@ def test_commands_api_returns_slash_command_metadata(
     assert response.status_code == 200
     body = response.json()
     commands = {row["command"]: row for row in body["commands"]}
-    assert commands["/stop"]["title"] == "Stop current task"
-    assert commands["/history"]["arg_hint"] == "[n]"
+    assert commands["/new"]["title"] == "New chat"
+    assert commands["/model"]["arg_hint"] == "[preset]"
     assert all("description" in row for row in body["commands"])
 
 

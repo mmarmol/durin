@@ -297,10 +297,6 @@
             "title": "Afficher l’état",
             "description": "Afficher l’état du runtime, du provider et des channels."
           },
-          "history": {
-            "title": "Afficher l’historique",
-            "description": "Afficher les N derniers messages persistés de la conversation."
-          },
           "dream": {
             "title": "Lancer Dream",
             "description": "Déclencher manuellement la consolidation de la mémoire."

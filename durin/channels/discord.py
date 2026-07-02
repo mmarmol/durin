@@ -15,7 +15,7 @@ from pydantic import Field
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
-from durin.command.builtin import build_help_text
+from durin.command.builtin import build_help_text, specs_for_surface
 from durin.config.paths import get_media_dir
 from durin.config.schema import Base
 from durin.utils.helpers import safe_filename, split_message
@@ -190,20 +190,16 @@ if DISCORD_AVAILABLE:
             )
 
         def _register_app_commands(self) -> None:
-            commands = (
-                ("new", "Stop current task and start a new conversation", "/new"),
-                ("stop", "Stop the current task", "/stop"),
-                ("restart", "Restart the bot", "/restart"),
-                ("status", "Show bot status", "/status"),
-                ("history", "Show recent conversation messages", "/history"),
-            )
-
-            for name, description, command_text in commands:
+            for spec in specs_for_surface("channels"):
+                name = spec.command.lstrip("/").replace("-", "_")
+                if name == "help":
+                    continue  # registered below with a local, ephemeral reply
+                description = spec.title[:100]
 
                 @self.tree.command(name=name, description=description)
                 async def command_handler(
                     interaction: discord.Interaction,
-                    _command_text: str = command_text,
+                    _command_text: str = spec.command,
                 ) -> None:
                     await self._forward_slash_command(interaction, _command_text)
 
@@ -217,7 +213,7 @@ if DISCORD_AVAILABLE:
                 if not await self._interaction_channel_allowed(interaction, channel):
                     await self._reply_ephemeral(interaction, "This channel is not allowed for this bot.")
                     return
-                await self._reply_ephemeral(interaction, build_help_text())
+                await self._reply_ephemeral(interaction, build_help_text("channels"))
 
             @self.tree.error
             async def on_app_command_error(
