@@ -31,6 +31,7 @@ from durin.service.types import Command, Query, Result
 SLACK_BOT_SCOPES = [
     "app_mentions:read",
     "channels:history",
+    "channels:join",
     "channels:read",
     "chat:write",
     "files:read",
@@ -111,6 +112,25 @@ class SlackPairingRevokeResult(Result):
     ok: bool
 
 
+class SlackChannelsListQuery(Query):
+    pass
+
+
+class SlackChannelsListResult(Result):
+    ok: bool
+    channels: list[dict[str, Any]]
+    error: str | None = None
+
+
+class SlackJoinChannelCommand(Command):
+    channel_id: str
+
+
+class SlackJoinChannelResult(Result):
+    ok: bool
+    error: str | None = None
+
+
 def build_slack_manifest(name: str = "durin") -> dict[str, Any]:
     """Return a Slack app manifest for the durin channel (Socket Mode)."""
     return {
@@ -119,6 +139,13 @@ def build_slack_manifest(name: str = "durin") -> dict[str, Any]:
             "description": "Personal AI agent",
         },
         "features": {
+            # Without an enabled messages tab Slack blocks DMs to the bot
+            # entirely ("Sending messages to this app has been turned off").
+            "app_home": {
+                "home_tab_enabled": False,
+                "messages_tab_enabled": True,
+                "messages_tab_read_only_enabled": False,
+            },
             "bot_user": {
                 "display_name": name,
                 "always_online": True,
@@ -170,7 +197,21 @@ class SlackService:
         bot_token = cmd.bot_token.strip()
         app_token = cmd.app_token.strip()
         if not bot_token and not app_token:
-            return SlackTestResult(ok=False, bot_error="no token provided")
+            # No tokens in the request → health-check the CONFIGURED ones, so
+            # the connected panel can prove the stored secrets actually work.
+            bot_token = _configured_bot_token() or ""
+            app_token = _configured_app_token() or ""
+            if not bot_token and not app_token:
+                return SlackTestResult(ok=False, bot_error="not_configured")
+
+        # Catch pasted-in-the-wrong-field mistakes before calling Slack: the
+        # raw API error (not_allowed_token_type) reads as a mystery in the UI.
+        if bot_token.startswith("xapp-") and app_token.startswith("xoxb-"):
+            return SlackTestResult(
+                ok=False, bot_error="swapped_tokens", app_error="swapped_tokens"
+            )
+        bot_error = "expected_bot_token" if bot_token and not bot_token.startswith("xoxb-") else None
+        app_error = "expected_app_token" if app_token and not app_token.startswith("xapp-") else None
 
         try:
             from slack_sdk.web.async_client import AsyncWebClient
@@ -179,10 +220,8 @@ class SlackService:
 
         bot_user: str | None = None
         team: str | None = None
-        bot_error: str | None = None
-        app_error: str | None = None
 
-        if bot_token:
+        if bot_token and bot_error is None:
             try:
                 auth = await AsyncWebClient(token=bot_token).auth_test()
                 bot_user = str(auth.get("user") or "") or None
@@ -190,7 +229,7 @@ class SlackService:
             except Exception as e:  # noqa: BLE001 — never include the token in the message
                 bot_error = _slack_error_code(e)
 
-        if app_token:
+        if app_token and app_error is None:
             try:
                 await AsyncWebClient(token=app_token).apps_connections_open()
             except Exception as e:  # noqa: BLE001
@@ -203,6 +242,80 @@ class SlackService:
             bot_error=bot_error,
             app_error=app_error,
         )
+
+    @route(
+        "GET",
+        "/api/v1/channels/slack/channels",
+        scope=Scope.CONFIG_READ.value,
+        request_model=SlackChannelsListQuery,
+        response_model=SlackChannelsListResult,
+        summary="List workspace channels with the bot's membership status",
+    )
+    async def channels(
+        self, query: SlackChannelsListQuery, principal: Principal
+    ) -> SlackChannelsListResult:
+        """List (up to ~800) channels using the configured bot token."""
+        principal.require(Scope.CONFIG_READ)
+        bot_token = _configured_bot_token()
+        if not bot_token:
+            return SlackChannelsListResult(ok=False, channels=[], error="not_configured")
+        try:
+            from slack_sdk.web.async_client import AsyncWebClient
+        except ImportError:
+            return SlackChannelsListResult(ok=False, channels=[], error="slack extra not installed")
+
+        client = AsyncWebClient(token=bot_token)
+        found: list[dict[str, Any]] = []
+        cursor: str | None = None
+        try:
+            for _ in range(4):  # 4 pages x 200 — plenty for a personal workspace
+                response = await client.conversations_list(
+                    types="public_channel,private_channel",
+                    exclude_archived=True,
+                    limit=200,
+                    cursor=cursor,
+                )
+                for ch in response.get("channels", []):
+                    found.append({
+                        "id": str(ch.get("id") or ""),
+                        "name": str(ch.get("name") or ""),
+                        "is_member": bool(ch.get("is_member")),
+                        "is_private": bool(ch.get("is_private")),
+                    })
+                cursor = ((response.get("response_metadata") or {}).get("next_cursor") or "").strip()
+                if not cursor:
+                    break
+        except Exception as e:  # noqa: BLE001
+            return SlackChannelsListResult(ok=False, channels=[], error=_slack_error_code(e))
+
+        found.sort(key=lambda ch: (not ch["is_member"], ch["name"]))
+        return SlackChannelsListResult(ok=True, channels=found)
+
+    @route(
+        "POST",
+        "/api/v1/channels/slack/channels/join",
+        scope=Scope.CONFIG_WRITE.value,
+        request_model=SlackJoinChannelCommand,
+        response_model=SlackJoinChannelResult,
+        summary="Join the bot to a public channel (private ones need /invite)",
+    )
+    async def join_channel(
+        self, cmd: SlackJoinChannelCommand, principal: Principal
+    ) -> SlackJoinChannelResult:
+        """conversations.join with the configured bot token (public channels only)."""
+        principal.require(Scope.CONFIG_WRITE)
+        bot_token = _configured_bot_token()
+        if not bot_token:
+            return SlackJoinChannelResult(ok=False, error="not_configured")
+        try:
+            from slack_sdk.web.async_client import AsyncWebClient
+        except ImportError:
+            return SlackJoinChannelResult(ok=False, error="slack extra not installed")
+        try:
+            await AsyncWebClient(token=bot_token).conversations_join(channel=cmd.channel_id)
+        except Exception as e:  # noqa: BLE001
+            return SlackJoinChannelResult(ok=False, error=_slack_error_code(e))
+        return SlackJoinChannelResult(ok=True)
 
     @route(
         "GET",
@@ -271,6 +384,33 @@ class SlackService:
         principal.require(Scope.CONFIG_WRITE)
         ok = pairing_store.revoke("slack", cmd.sender_id)
         return SlackPairingRevokeResult(ok=ok)
+
+
+def _configured_slack_value(*keys: str) -> str | None:
+    """Resolve a slack config value from the live config (``${secret:...}`` aware)."""
+    try:
+        from durin.config.loader import get_config_path, load_config
+        from durin.security.secrets import resolve_secret
+
+        cfg = load_config(get_config_path())
+        raw = (cfg.channels.model_extra or {}).get("slack") or {}
+        if not isinstance(raw, dict):
+            return None
+        for key in keys:
+            if raw.get(key):
+                value = resolve_secret(raw[key])
+                return str(value) if value else None
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _configured_bot_token() -> str | None:
+    return _configured_slack_value("bot_token", "botToken")
+
+
+def _configured_app_token() -> str | None:
+    return _configured_slack_value("app_token", "appToken")
 
 
 def _slack_error_code(e: Exception) -> str:

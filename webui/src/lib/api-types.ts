@@ -40,6 +40,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/slack/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List workspace channels with the bot's membership status */
+        get: operations["slack_channels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/slack/channels/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Join the bot to a public channel (private ones need /invite) */
+        post: operations["slack_join_channel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels/slack/manifest": {
         parameters: {
             query?: never;
@@ -4241,6 +4275,37 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** SlackChannelsListQuery */
+        SlackChannelsListQuery: Record<string, never>;
+        /** SlackChannelsListResult */
+        SlackChannelsListResult: {
+            /** Channels */
+            channels: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /** Ok */
+            ok: boolean;
+        };
+        /** SlackJoinChannelCommand */
+        SlackJoinChannelCommand: {
+            /** Channel Id */
+            channel_id: string;
+        };
+        /** SlackJoinChannelResult */
+        SlackJoinChannelResult: {
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /** Ok */
+            ok: boolean;
+        };
         /** SlackManifestQuery */
         SlackManifestQuery: {
             /**
@@ -4760,6 +4825,54 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChannelsListResult"];
+                };
+            };
+        };
+    };
+    slack_channels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlackChannelsListQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlackChannelsListResult"];
+                };
+            };
+        };
+    };
+    slack_join_channel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlackJoinChannelCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlackJoinChannelResult"];
                 };
             };
         };

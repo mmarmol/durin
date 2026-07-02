@@ -2345,6 +2345,14 @@ export async function denySlackPairing(token: string, code: string, base = ""): 
 export async function revokeSlackPairing(token: string, senderId: string, base = ""): Promise<{ ok: boolean }> {
   return post(`${base}/api/v1/channels/slack/pairing/revoke`, token, { sender_id: senderId });
 }
+export interface SlackChannelEntry { id: string; name: string; is_member: boolean; is_private: boolean; }
+export interface SlackChannelsList { ok: boolean; channels: SlackChannelEntry[]; error: string | null; }
+export async function getSlackChannels(token: string, base = ""): Promise<SlackChannelsList> {
+  return request<SlackChannelsList>(`${base}/api/v1/channels/slack/channels`, token);
+}
+export async function joinSlackChannel(token: string, channelId: string, base = ""): Promise<{ ok: boolean; error?: string | null }> {
+  return post(`${base}/api/v1/channels/slack/channels/join`, token, { channel_id: channelId });
+}
 
 export async function startChannel(token: string, name: string, base = ""): Promise<{ ok: boolean; error?: string | null }> {
   return post(`${base}/api/v1/channels/start`, token, { name });
