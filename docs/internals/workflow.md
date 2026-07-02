@@ -461,10 +461,14 @@ End-to-end for a single `run_workflow` call:
   workspace's local workflows (name, `description`, and I/O), with an optional `query` that
   filters by name/description, so the agent can pick which one to run; `run_workflow` runs it.
   The field is optional and backward-compatible — a workflow without it parses and runs fine.
-- **Surface:** the `run_workflow(name, task, output_format?, input_files?, background?)` LLM
-  tool — auto-discovered into the agent's tool registry at core scope (see [tools.md](tools.md)).
-  `input_files` (absolute paths) are seeded into the run's shared working folder so every node
-  can read them, and the terminal `output_dir` is reported back in the run summary. A node with
+- **Surface:** the `run_workflow(name, task, output_format?, input_files?, background?,
+  resume_run_id?)` LLM tool — auto-discovered into the agent's tool registry at core scope
+  (see [tools.md](tools.md)). `input_files` (absolute paths) are seeded into the run's shared
+  working folder so every node can read them, and the terminal `output_dir` is reported back
+  in the run summary. When a run ends `needs_input`, calling the tool again with
+  `resume_run_id` set to that run's id and the user's answers as `task` resumes the same run
+  (same run id, working folder, node sessions, and visit counts) at the node that asked,
+  instead of restarting the workflow from scratch. A node with
   `tools: "default"` receives the user's configured tool set; `tools: "none"` (the
   default) runs the node without tools. A node may also name `skills` (injected into
   its prompt) and `mcps` (a subset of the configured MCP servers, reused live).

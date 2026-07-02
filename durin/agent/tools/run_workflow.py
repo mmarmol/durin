@@ -81,6 +81,15 @@ _PARAMETERS = {
                 "result directly). Default to background so the chat is never blocked."
             ),
         },
+        "resume_run_id": {
+            "type": "string",
+            "description": (
+                "Optional. The run_id of a prior run of THIS workflow that ended asking for "
+                "more information (needs_input). Pass the user's answers as 'task': the run "
+                "resumes at the node that asked — same working folder, sessions and visit "
+                "counts — instead of restarting from scratch."
+            ),
+        },
     },
     "required": ["name", "task"],
 }
@@ -105,11 +114,17 @@ def _format_result(result: Any, output_files: bool = False) -> str:
         lines.append(
             "The workflow needs more information before it can finish — it did NOT fail. "
             "You own the conversation with the user, so ask them the questions below "
-            "(via ask_user_question or just in your reply), then call this workflow again "
-            "with the SAME task plus the user's answers appended."
+            "(via ask_user_question or just in your reply), then call this workflow again."
         )
         if result.final_output:
             lines.append(f"\nNeeds clarification:\n{result.final_output}")
+        # A needs_input result without a needs_input_node has no manifest to resume from
+        # (e.g. an engine pre-flight check) — only offer resume when one is set.
+        if result.needs_input_node:
+            lines.append(
+                f"\nTo continue after the user answers, call run_workflow again with "
+                f"resume_run_id='{result.run_id}' and the answers as the task."
+            )
     elif result.status != "completed":
         if result.status == "exhausted" and result.exhausted_node:
             lines.append(
@@ -200,7 +215,8 @@ class RunWorkflowTool(Tool, ContextAware):
             "to work on — they are placed in the run's shared working folder for every node to read. "
             "If the summary says the workflow needs more information, "
             "it ENDED asking for clarification (it did not fail) — ask the user those questions "
-            "and call this tool again with the same task plus their answers. "
+            "and call this tool again with resume_run_id set to the run's id and the user's "
+            "answers as the task. "
             "Pass background=false to block and get the result inline only when you need it "
             "to continue right now; otherwise it runs in the background and its result is "
             "delivered as a follow-up message. A background launch returns the run's id; "
@@ -225,8 +241,8 @@ class RunWorkflowTool(Tool, ContextAware):
         content = (
             f"[Background workflow '{name}' finished]\n\n{summary}\n\n"
             "Summarize the outcome for the user. If it says the workflow needs more "
-            "information, ask the user those questions and re-run the workflow with the "
-            "same task plus their answers."
+            "information, ask the user those questions and re-run the workflow with "
+            "resume_run_id set to the run's id and their answers as the task."
         )
         msg = InboundMessage(
             channel="system",
@@ -241,7 +257,7 @@ class RunWorkflowTool(Tool, ContextAware):
         except Exception:  # noqa: BLE001 - best-effort; the run already persisted its manifest
             pass
 
-    async def execute(self, name: str, task: str, output_format: str = "", input_files: list[str] | None = None, background: bool = True) -> str:  # type: ignore[override]
+    async def execute(self, name: str, task: str, output_format: str = "", input_files: list[str] | None = None, background: bool = True, resume_run_id: str = "") -> str:  # type: ignore[override]
         from durin.agent.runner import AgentRunner
         from durin.providers.factory import make_provider
         from durin.workflow.engine import WorkflowEngine
@@ -255,6 +271,35 @@ class RunWorkflowTool(Tool, ContextAware):
             workflow = load_workflow(self._workspace, name)
         except WorkflowNotFound as exc:
             return f"Error: {exc}"
+
+        resume = None
+        if resume_run_id:
+            from durin.workflow import run_log
+            from durin.workflow.engine import ResumeState
+            manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
+            if manifest is None:
+                return f"Error: no run '{resume_run_id}' recorded for workflow '{name}'."
+            if manifest.get("status") != "needs_input" or not manifest.get("needs_input_node"):
+                return (f"Error: run '{resume_run_id}' has status "
+                        f"'{manifest.get('status')}' and cannot be resumed — only a "
+                        f"needs_input run can.")
+            visits: dict[str, int] = {}
+            for r in manifest.get("runs", []):
+                nid, it = r.get("node_id"), r.get("iteration", 1)
+                if nid:
+                    visits[nid] = max(visits.get(nid, 0), int(it))
+            questions = manifest.get("final_output") or ""
+            resume = ResumeState(
+                run_id=resume_run_id,
+                start_at=manifest["needs_input_node"],
+                visits=visits,
+                upstream=(
+                    "This run previously stopped to ask for more information.\n\n"
+                    f"--- Your questions were ---\n{questions}\n\n"
+                    f"--- The user's answers ---\n{task}\n\nContinue from here."
+                ),
+            )
+            task = manifest.get("task") or task
 
         # Snapshot the current definitions into the workflow version history (captures
         # any edit since the last run). Best-effort: never blocks the run.
@@ -313,7 +358,7 @@ class RunWorkflowTool(Tool, ContextAware):
         # the engine's cooperative cancel is keyed by it.
         from durin.workflow.cancellation import clear as _clear_cancel
         from durin.workflow.cancellation import is_cancelled as _is_cancelled
-        run_id = uuid.uuid4().hex[:12]
+        run_id = resume.run_id if resume is not None else uuid.uuid4().hex[:12]
         engine = WorkflowEngine(
             node_runner=node_runner,
             run_id_factory=lambda: run_id,
@@ -339,6 +384,7 @@ class RunWorkflowTool(Tool, ContextAware):
                         root_session_key=root_session_key,
                         input_files=input_files or None,
                         output_format=output_format or None,
+                        resume=resume,
                     )
                     if progress_emit is not None:
                         progress_emit(_terminal_progress_payload(workflow, run_id, result.runs))
@@ -365,6 +411,7 @@ class RunWorkflowTool(Tool, ContextAware):
             root_session_key=root_session_key,
             input_files=input_files or None,
             output_format=output_format or None,
+            resume=resume,
         )
         if progress_emit is not None:
             progress_emit(_terminal_progress_payload(workflow, run_id, result.runs))
