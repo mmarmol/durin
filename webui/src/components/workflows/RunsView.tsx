@@ -51,9 +51,11 @@ function TrayEntry({
     <div className="flex flex-col gap-1.5 rounded-md border border-accent bg-accent/40 px-3 py-2 text-accent-foreground">
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
         <span className="font-mono font-medium">{entry.workflow}</span>
-        <span className="text-[10px] opacity-70">
-          {t("runs.pausedAt", { when: relativeTime((entry.started_at ?? 0) * 1000) })}
-        </span>
+        {!!entry.started_at && (
+          <span className="text-[10px] opacity-70">
+            {t("runs.pausedAt", { when: relativeTime(entry.started_at * 1000) })}
+          </span>
+        )}
       </div>
       {entry.questions && (
         <div className="whitespace-pre-wrap break-words text-xs">{entry.questions}</div>
@@ -104,9 +106,11 @@ function FeedRow({
         <span className={cn("rounded border px-1 py-0.5 text-[10px]", runChipTone(entry.status))}>
           {t("workflows.runStatus." + entry.status, entry.status)}
         </span>
-        <span className="text-[10px] text-muted-foreground">
-          {relativeTime((entry.started_at ?? 0) * 1000)}
-        </span>
+        {!!entry.started_at && (
+          <span className="text-[10px] text-muted-foreground">
+            {relativeTime(entry.started_at * 1000)}
+          </span>
+        )}
       </div>
       {entry.task && (
         <span className="truncate text-[11px] text-muted-foreground">{entry.task}</span>
