@@ -36,6 +36,11 @@ class BuiltinCommandSpec:
     description: str
     icon: str
     arg_hint: str = ""
+    # Where this command appears in user-facing listings (palette, autocomplete,
+    # channel menus). It stays dispatchable everywhere regardless.
+    surfaces: tuple[str, ...] = ("webui", "tui", "channels")
+    # Admin commands stay functional but are never listed on any surface.
+    admin: bool = False
 
     def as_dict(self) -> dict[str, str]:
         return {
@@ -59,12 +64,14 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "Stop current task",
         "Cancel the active agent turn for this chat.",
         "square",
+        surfaces=("tui", "channels"),
     ),
     BuiltinCommandSpec(
         "/restart",
         "Restart durin",
         "Restart the bot process in place.",
         "rotate-cw",
+        admin=True,
     ),
     BuiltinCommandSpec(
         "/status",
@@ -87,11 +94,19 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "[name|default]",
     ),
     BuiltinCommandSpec(
+        "/effort",
+        "Set reasoning effort",
+        "Show or set the reasoning effort for the active model.",
+        "gauge",
+        "[none|low|medium|high|max]",
+    ),
+    BuiltinCommandSpec(
         "/history",
         "Show conversation history",
         "Print the last N persisted conversation messages.",
         "history",
         "[n]",
+        surfaces=("channels",),
     ),
     BuiltinCommandSpec(
         "/goal",
@@ -105,6 +120,7 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "Show help",
         "List available slash commands.",
         "circle-help",
+        surfaces=("tui", "channels"),
     ),
     BuiltinCommandSpec(
         "/plan",
@@ -157,6 +173,7 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "Copy last response",
         "Copy the last assistant message to the system clipboard.",
         "copy",
+        surfaces=("tui",),
     ),
     BuiltinCommandSpec(
         "/name",
@@ -170,6 +187,7 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "Keyboard shortcuts",
         "List the keyboard shortcuts available in interactive mode.",
         "keyboard",
+        surfaces=("tui",),
     ),
     BuiltinCommandSpec(
         "/memory",
@@ -224,13 +242,27 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "Show version",
         "Display the installed durin version.",
         "tag",
+        admin=True,
     ),
 )
 
 
-def builtin_command_palette() -> list[dict[str, str]]:
+def specs_for_surface(surface: str) -> list[BuiltinCommandSpec]:
+    """Non-admin specs listed on *surface* ("webui" | "tui" | "channels")."""
+    return [s for s in BUILTIN_COMMAND_SPECS if not s.admin and surface in s.surfaces]
+
+
+def builtin_command_palette(surface: str = "webui") -> list[dict[str, str]]:
     """Return structured command metadata for UI command palettes."""
-    return [spec.as_dict() for spec in BUILTIN_COMMAND_SPECS]
+    return [spec.as_dict() for spec in specs_for_surface(surface)]
+
+
+def channel_menu_commands() -> list[tuple[str, str]]:
+    """(telegram-safe name, title) pairs for channel command-menu registration."""
+    return [
+        (spec.command.lstrip("/").replace("-", "_"), spec.title)
+        for spec in specs_for_surface("channels")
+    ]
 
 
 async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
