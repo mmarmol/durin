@@ -1120,7 +1120,7 @@
         "type": "object"
       },
       "DreamEvent": {
-        "description": "One notable thing the nightly dream did.\n\n``kind`` is the operation: \"merged\" | \"created\" | \"improved\" | \"flagged\".\n``ref`` / ``ref_kind`` let the UI deep-link to the affected entity or skill;\nboth are None when the event is not tied to a specific ref (e.g. a bulk\nskill-extract pass with no individual ref emitted).  ``at_ms`` is epoch\nmilliseconds so JS Date can consume it directly.",
+        "description": "One notable thing the nightly dream did.\n\n``kind`` is the operation: \"merged\" | \"created\" | \"improved\" | \"flagged\" |\n\"warning\" (degraded/unparseable \u2014 needs operator attention) | \"run\"\n(per-run summary line).\n``ref`` / ``ref_kind`` let the UI deep-link to the affected entity or skill;\nboth are None when the event is not tied to a specific ref (e.g. a bulk\nskill-extract pass with no individual ref emitted).  ``at_ms`` is epoch\nmilliseconds so JS Date can consume it directly.",
         "properties": {
           "at_ms": {
             "title": "At Ms",

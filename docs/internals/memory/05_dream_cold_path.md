@@ -335,7 +335,18 @@ An LLM response that cannot be parsed at all (unloadable JSON, wrong top-level
 type) emits `memory.dream.parse_failure` with the stage and source, and that
 call yields an empty result — distinguishing "model returned garbage" from
 "nothing to extract". The cursor still advances, so a persistent parse failure
-surfaces in telemetry rather than blocking the pass.
+surfaces in telemetry rather than blocking the pass. Each parse failure also
+appears in the webui Dream feed as a `warning` item (one per unparseable
+response, deep-linked to the entity when the source is an entity ref) — a run
+full of them makes a misbehaving dream model loudly visible, which is the
+intent.
+
+A run that starts with vector memory enabled but no vector backend available
+(lancedb not importable) emits `memory.dream.vector_unavailable` once from
+`dream_vector_index` and surfaces the same way as a feed `warning`: semantic
+dedup (refine + discovery) is degraded to alias matching for that run. A
+deliberate `memory.enabled = false` stays silent — that degradation is chosen,
+not accidental.
 
 ### Concurrency and the cursor
 

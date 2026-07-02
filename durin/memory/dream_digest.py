@@ -27,6 +27,8 @@ DREAM_ACTIVITY_TYPES = frozenset({
     "memory.dream.skill_signals",
     "memory.dream.learnings",
     "memory.dream.flagged",
+    "memory.dream.parse_failure",
+    "memory.dream.vector_unavailable",
     "memory.dream.run_summary",
 })
 
@@ -40,8 +42,9 @@ DREAM_EVENT_TYPES = DREAM_ACTIVITY_TYPES | RUN_MARKER_TYPES
 def map_dream_event(event_type: str, data: dict[str, Any], at_ms: int) -> list[dict[str, Any]]:
     """Map one raw telemetry event to zero or more activity dicts.
 
-    Each dict has ``kind`` ("merged" | "created" | "improved" | "flagged"),
-    a human ``summary``, an optional ``ref`` / ``ref_kind`` deep-link target,
+    Each dict has ``kind`` ("merged" | "created" | "improved" | "flagged" |
+    "warning" | "run"), a human ``summary``, an optional ``ref`` / ``ref_kind``
+    deep-link target,
     and ``at_ms`` (epoch milliseconds). Pure and dependency-free — safe to call
     from any thread (the dream passes run in worker threads).
     """
@@ -142,6 +145,37 @@ def map_dream_event(event_type: str, data: dict[str, Any], at_ms: int) -> list[d
             "summary": "Flagged a memory pair for review",
             "ref": canonical or None,
             "ref_kind": "entity" if canonical else None,
+            "at_ms": at_ms,
+        }]
+
+    if event_type == "memory.dream.parse_failure":
+        # One warning per unparseable LLM response. These are rare in steady
+        # state (json_repair absorbs formatting quirks); a run that produces
+        # many of them means the dream model is misbehaving, and a loud feed
+        # is exactly the signal the operator needs.
+        stage = data.get("stage", "?")
+        source = data.get("source") or ""
+        is_entity_ref = ":" in source and "/" not in source
+        summary = f"Dream output unparseable during {stage}"
+        if source:
+            summary += f" ({source})"
+        return [{
+            "kind": "warning",
+            "summary": summary,
+            "ref": source if is_entity_ref else None,
+            "ref_kind": "entity" if is_entity_ref else None,
+            "at_ms": at_ms,
+        }]
+
+    if event_type == "memory.dream.vector_unavailable":
+        # Emitted once per run (dream_vector_index) when vector memory is
+        # enabled but the backend is unavailable: semantic dedup degraded
+        # to alias matching for this run.
+        return [{
+            "kind": "warning",
+            "summary": "Dream ran without the vector index — semantic dedup degraded to alias matching",
+            "ref": None,
+            "ref_kind": None,
             "at_ms": at_ms,
         }]
 

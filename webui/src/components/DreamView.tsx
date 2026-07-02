@@ -36,6 +36,7 @@ function relativeTime(ms: number): string {
 
 function kindDot(kind: string): string {
   if (kind === "run") return "#64748b"; // muted — a per-run summary, not a content change
+  if (kind === "warning") return "#ef4444"; // degraded run / unparseable model output
   if (kind === "merged" || kind === "created" || kind === "flagged") return "#14b8a6";
   if (kind === "improved") return "#d97706";
   return "#14b8a6";

@@ -177,3 +177,84 @@ def test_logger_sink_tee_fires_alongside_persistence(tmp_path: Path) -> None:
     files = list(tel_dir.glob("*.jsonl"))
     assert len(files) == 1
     assert "memory.dream.flagged" in files[0].read_text(encoding="utf-8")
+
+
+def test_parse_failure_maps_to_warning_with_entity_deep_link() -> None:
+    from durin.memory.dream_digest import map_dream_event
+
+    items = map_dream_event(
+        "memory.dream.parse_failure",
+        {"stage": "extract", "source": "person:ana", "raw_head": "garbage"}, 5)
+    assert len(items) == 1
+    assert items[0]["kind"] == "warning"
+    assert "extract" in items[0]["summary"]
+    assert items[0]["ref"] == "person:ana"
+    assert items[0]["ref_kind"] == "entity"
+
+
+def test_parse_failure_without_entity_source_has_no_ref() -> None:
+    from durin.memory.dream_digest import map_dream_event
+
+    items = map_dream_event(
+        "memory.dream.parse_failure",
+        {"stage": "derived_from", "source": "session-stem", "raw_head": "x"}, 5)
+    assert len(items) == 1
+    assert items[0]["kind"] == "warning"
+    assert items[0]["ref"] is None
+    assert items[0]["ref_kind"] is None
+
+
+def test_sink_forwards_parse_failure_items() -> None:
+    captured: list[dict] = []
+    sink = DreamProgressSink(captured.append)
+    sink.log("memory.dream.parse_failure",
+             {"stage": "learnings", "source": None, "raw_head": "??"})
+    assert len(captured) == 1
+    assert captured[0]["item"]["kind"] == "warning"
+
+
+def test_vector_unavailable_maps_to_warning() -> None:
+    from durin.memory.dream_digest import map_dream_event
+
+    items = map_dream_event("memory.dream.vector_unavailable", {}, 5)
+    assert len(items) == 1
+    assert items[0]["kind"] == "warning"
+    assert items[0]["ref"] is None
+
+
+def test_dream_vector_index_emits_when_enabled_but_unavailable(monkeypatch, tmp_path) -> None:
+    """memory.enabled=true but lancedb missing -> the run degrades semantic
+    dedup silently; that must emit memory.dream.vector_unavailable."""
+    import durin.agent.tools._telemetry as tel
+    import durin.memory.dream_passes as dp
+
+    events: list[tuple] = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    monkeypatch.setattr(dp, "vector_index_available", lambda: False)
+
+    class _Cfg:
+        class memory:
+            enabled = True
+
+    assert dp.dream_vector_index(tmp_path, _Cfg) is None
+    assert [n for n, _ in events] == ["memory.dream.vector_unavailable"]
+
+
+def test_dream_vector_index_silent_when_memory_disabled(monkeypatch, tmp_path) -> None:
+    """Vectors deliberately off (memory.enabled=false) is expected degradation,
+    not a warning."""
+    import durin.agent.tools._telemetry as tel
+    import durin.memory.dream_passes as dp
+
+    events: list[tuple] = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    monkeypatch.setattr(dp, "vector_index_available", lambda: False)
+
+    class _Cfg:
+        class memory:
+            enabled = False
+
+    assert dp.dream_vector_index(tmp_path, _Cfg) is None
+    assert events == []

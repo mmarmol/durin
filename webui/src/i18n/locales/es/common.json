@@ -1525,7 +1525,8 @@
       "created": "creado",
       "improved": "mejorado",
       "flagged": "marcado",
-      "run": "corrida"
+      "run": "corrida",
+      "warning": "aviso"
     },
     "close": "Cerrar",
     "openFull": "Abrir completo",

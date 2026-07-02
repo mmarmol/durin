@@ -1278,6 +1278,20 @@ class MemoryDreamParseFailureEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryDreamVectorUnavailableEvent(TypedDict):
+    """A dream run started with vector memory enabled but no vector backend.
+
+    Emitted once per run by ``dream_vector_index`` when lancedb is not
+    importable while ``memory.enabled`` is true: semantic dedup (refine +
+    discovery) degrades to alias matching for that run. Without this event,
+    "no duplicates found" and "no vectors to find them with" are
+    indistinguishable. A deliberate ``memory.enabled = false`` stays silent.
+    """
+
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryUpsertEntityEvent(TypedDict):
     """memory_upsert_entity tool write (entity page authored/extended)."""
 
@@ -1378,6 +1392,7 @@ EVENTS: dict[str, type] = {
     "memory.dream.always_on": MemoryDreamAlwaysOnEvent,
     "memory.dream.flagged": MemoryDreamFlaggedEvent,
     "memory.dream.parse_failure": MemoryDreamParseFailureEvent,
+    "memory.dream.vector_unavailable": MemoryDreamVectorUnavailableEvent,
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
