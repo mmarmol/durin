@@ -164,16 +164,25 @@ class TestRestartCommand:
             await asyncio.wait_for(run_task, timeout=1.0)
 
     @pytest.mark.asyncio
-    async def test_help_includes_restart(self):
+    async def test_restart_hidden_from_help_but_dispatchable(self):
+        from durin.command.builtin import register_builtin_commands
+        from durin.command.router import CommandRouter
+
         loop, bus = _make_loop()
         msg = InboundMessage(channel="telegram", sender_id="u1", chat_id="c1", content="/help")
 
         response = await loop._process_message(msg)
 
         assert response is not None
-        assert "/restart" in response.content
+        # Admin commands hidden from help output
+        assert "/restart" not in response.content
         assert "/status" in response.content
         assert response.metadata == {"render_as": "text"}
+
+        # Verify /restart is still registered and dispatchable
+        router = CommandRouter()
+        register_builtin_commands(router)
+        assert "/restart" in router._priority
 
     @pytest.mark.asyncio
     async def test_status_reports_runtime_info(self):

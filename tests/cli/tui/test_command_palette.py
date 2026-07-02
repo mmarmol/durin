@@ -110,3 +110,19 @@ async def test_command_registry_builds_entries() -> None:
     kinds = {e.kind for e in entries}
     assert "command" in kinds
     assert "action" in kinds
+
+
+def test_tui_palette_derives_from_builtin_registry() -> None:
+    from durin.cli.tui.command_registry import build_command_entries
+
+    labels = {e.id for e in build_command_entries() if e.kind == "command"}
+    # Derived from the registry: newly-specced commands appear automatically.
+    assert "cmd:/effort" in labels
+    assert "cmd:/usage" in labels
+    # Phantom commands (never implemented) are gone.
+    for phantom in ("cmd:/pairing", "cmd:/dream", "cmd:/dream-log", "cmd:/dream-restore"):
+        assert phantom not in labels
+    # TUI-local command survives the derivation.
+    assert "cmd:/voice" in labels
+    # Channel-only commands don't clutter the TUI palette.
+    assert "cmd:/history" not in labels

@@ -297,10 +297,6 @@
             "title": "Hiển thị trạng thái",
             "description": "Hiển thị trạng thái runtime, provider và channel."
           },
-          "history": {
-            "title": "Hiển thị lịch sử",
-            "description": "In N tin nhắn hội thoại đã lưu gần nhất."
-          },
           "dream": {
             "title": "Chạy Dream",
             "description": "Kích hoạt thủ công quá trình hợp nhất bộ nhớ."

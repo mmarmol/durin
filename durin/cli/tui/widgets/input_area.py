@@ -22,9 +22,25 @@ from pathlib import Path
 from textual.suggester import Suggester
 from textual.widgets import Input
 
-from durin.command.builtin import BUILTIN_COMMAND_SPECS
-
 __all__ = ["AtFileSuggester", "InputArea", "MultiModeSuggester", "SlashCommandSuggester"]
+
+
+# Commands handled locally by the TUI app (not dispatched through the shared
+# command registry), added on top of the derived registry list below.
+_TUI_LOCAL_COMMANDS: tuple[str, ...] = ("/theme", "/voice")
+
+
+def _slash_command_names() -> list[str]:
+    # Imported lazily, matching command_registry.py's derivation — keeps
+    # this widget module decoupled from the bus/router import chain that
+    # durin.command.builtin pulls in at module load time.
+    from durin.command.builtin import specs_for_surface
+
+    names = [spec.command for spec in specs_for_surface("tui")]
+    for extra in _TUI_LOCAL_COMMANDS:
+        if extra not in names:
+            names.append(extra)
+    return names
 
 
 # Known subcommand sets for slash commands that take a verb as their first
@@ -59,14 +75,7 @@ class SlashCommandSuggester(Suggester):
 
     def __init__(self) -> None:
         super().__init__(use_cache=False, case_sensitive=False)
-        # `/theme` is handled inside the TUI (palette picker), not the
-        # command router, so it isn't in BUILTIN_COMMAND_SPECS — add it
-        # here so the autocomplete still surfaces it.
-        self._commands: list[str] = [
-            spec.command for spec in BUILTIN_COMMAND_SPECS
-        ]
-        if "/theme" not in self._commands:
-            self._commands.append("/theme")
+        self._commands: list[str] = _slash_command_names()
 
     async def get_suggestion(self, value: str) -> str | None:
         if not value.startswith("/") or value == "/":

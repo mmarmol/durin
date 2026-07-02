@@ -36,6 +36,11 @@ class BuiltinCommandSpec:
     description: str
     icon: str
     arg_hint: str = ""
+    # Where this command appears in user-facing listings (palette, autocomplete,
+    # channel menus). It stays dispatchable everywhere regardless.
+    surfaces: tuple[str, ...] = ("webui", "tui", "channels")
+    # Admin commands stay functional but are never listed on any surface.
+    admin: bool = False
 
     def as_dict(self) -> dict[str, str]:
         return {
@@ -59,18 +64,32 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "Stop current task",
         "Cancel the active agent turn for this chat.",
         "square",
+        surfaces=("tui", "channels"),
     ),
     BuiltinCommandSpec(
         "/restart",
         "Restart durin",
         "Restart the bot process in place.",
         "rotate-cw",
+        admin=True,
     ),
     BuiltinCommandSpec(
         "/status",
         "Show status",
         "Display runtime, provider, and channel status.",
         "activity",
+    ),
+    BuiltinCommandSpec(
+        "/usage",
+        "Token usage",
+        "Show cumulative token usage for this session.",
+        "bar-chart-3",
+    ),
+    BuiltinCommandSpec(
+        "/retry",
+        "Retry last message",
+        "Send the previous user message to the agent again.",
+        "rotate-ccw",
     ),
     BuiltinCommandSpec(
         "/model",
@@ -87,11 +106,19 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "[name|default]",
     ),
     BuiltinCommandSpec(
+        "/effort",
+        "Set reasoning effort",
+        "Show or set the reasoning effort for the active model.",
+        "gauge",
+        "[none|low|medium|high|max]",
+    ),
+    BuiltinCommandSpec(
         "/history",
         "Show conversation history",
         "Print the last N persisted conversation messages.",
         "history",
         "[n]",
+        surfaces=("channels",),
     ),
     BuiltinCommandSpec(
         "/goal",
@@ -105,6 +132,7 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "Show help",
         "List available slash commands.",
         "circle-help",
+        surfaces=("tui", "channels"),
     ),
     BuiltinCommandSpec(
         "/plan",
@@ -157,6 +185,7 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "Copy last response",
         "Copy the last assistant message to the system clipboard.",
         "copy",
+        surfaces=("tui",),
     ),
     BuiltinCommandSpec(
         "/name",
@@ -170,6 +199,7 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "Keyboard shortcuts",
         "List the keyboard shortcuts available in interactive mode.",
         "keyboard",
+        surfaces=("tui",),
     ),
     BuiltinCommandSpec(
         "/memory",
@@ -224,13 +254,35 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "Show version",
         "Display the installed durin version.",
         "tag",
+        admin=True,
+    ),
+    BuiltinCommandSpec(
+        "/pairing",
+        "Manage pairing",
+        "Approve, deny, or revoke channel pairing requests (owner only).",
+        "link",
+        "[list|approve <code>|deny <code>|revoke <user_id>]",
+        admin=True,
     ),
 )
 
 
-def builtin_command_palette() -> list[dict[str, str]]:
+def specs_for_surface(surface: str) -> list[BuiltinCommandSpec]:
+    """Non-admin specs listed on *surface* ("webui" | "tui" | "channels")."""
+    return [s for s in BUILTIN_COMMAND_SPECS if not s.admin and surface in s.surfaces]
+
+
+def builtin_command_palette(surface: str = "webui") -> list[dict[str, str]]:
     """Return structured command metadata for UI command palettes."""
-    return [spec.as_dict() for spec in BUILTIN_COMMAND_SPECS]
+    return [spec.as_dict() for spec in specs_for_surface(surface)]
+
+
+def channel_menu_commands() -> list[tuple[str, str]]:
+    """(telegram-safe name, title) pairs for channel command-menu registration."""
+    return [
+        (spec.command.lstrip("/").replace("-", "_"), spec.title)
+        for spec in specs_for_surface("channels")
+    ]
 
 
 async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
@@ -312,6 +364,96 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
         ),
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
+
+
+_USAGE_KEYS = ("prompt_tokens", "completion_tokens", "total_tokens")
+
+
+def accumulate_session_usage(session, usage: dict | None) -> None:
+    """Fold one turn's provider usage dict into session.metadata["token_usage"].
+
+    Best-effort: bad shapes are ignored, never raises.
+    """
+    if not usage or not isinstance(usage, dict):
+        return
+    try:
+        bucket = session.metadata.setdefault(
+            "token_usage",
+            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "turns": 0},
+        )
+        for key in _USAGE_KEYS:
+            bucket[key] += int(usage.get(key, 0) or 0)
+        bucket["turns"] += 1
+    except Exception:  # noqa: BLE001 — accounting must never break the turn
+        return
+
+
+async def cmd_usage(ctx: CommandContext) -> OutboundMessage:
+    """Show cumulative token usage for this session plus the last turn."""
+    session = ctx.session or ctx.loop.sessions.get_or_create(ctx.key)
+    bucket = (getattr(session, "metadata", None) or {}).get("token_usage")
+    meta = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+    if not bucket:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="No token usage recorded for this session yet.",
+            metadata=meta,
+        )
+    last = getattr(ctx.loop, "_last_usage", {}) or {}
+    lines = [
+        f"Session usage ({bucket['turns']} turn(s)):",
+        f"- prompt tokens: {bucket['prompt_tokens']:,}",
+        f"- completion tokens: {bucket['completion_tokens']:,}",
+        f"- total tokens: {bucket['total_tokens']:,}",
+    ]
+    if last:
+        lines.append(
+            f"Last turn: {last.get('prompt_tokens', 0):,} prompt / "
+            f"{last.get('completion_tokens', 0):,} completion"
+        )
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content="\n".join(lines), metadata=meta,
+    )
+
+
+def _extract_user_text(msg: dict) -> str:
+    """Plain text of a history message; '' when there is none."""
+    content = msg.get("content") or ""
+    if isinstance(content, list):
+        parts = [
+            b.get("text", "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        content = " ".join(parts)
+    return str(content).strip()
+
+
+async def cmd_retry(ctx: CommandContext) -> OutboundMessage | None:
+    """Rewrite /retry into a resend of the last user message."""
+    session = ctx.session or ctx.loop.sessions.get_or_create(ctx.key)
+    last_text = ""
+    for message in reversed(getattr(session, "messages", []) or []):
+        if message.get("role") != "user":
+            continue
+        text = _extract_user_text(message)
+        if text and not text.startswith("/"):
+            last_text = text
+            break
+    if not last_text:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="Nothing to retry — no previous user message in this session.",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+    ctx.msg.metadata = {
+        **dict(ctx.msg.metadata or {}),
+        "original_command": "/retry",
+        "original_content": ctx.raw,
+    }
+    ctx.msg.content = last_text
+    return None
 
 
 async def cmd_new(ctx: CommandContext) -> OutboundMessage:
@@ -1938,12 +2080,20 @@ async def cmd_persona(ctx: CommandContext) -> OutboundMessage:
     return _reply(f"Switched persona to `{name}` for this conversation.")
 
 
+_HELP_SURFACE_BY_CHANNEL = {"websocket": "webui", "cli": "tui", "tui": "tui"}
+
+
+def _surface_for_channel(channel: str | None) -> str:
+    """Map channel type to help surface (webui|tui|channels)."""
+    return _HELP_SURFACE_BY_CHANNEL.get((channel or "").lower(), "channels")
+
+
 async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     """Return available slash commands."""
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
-        content=build_help_text(),
+        content=build_help_text(_surface_for_channel(ctx.msg.channel)),
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
 
@@ -1958,10 +2108,73 @@ async def cmd_version(ctx: CommandContext) -> OutboundMessage:
     )
 
 
-def build_help_text() -> str:
-    """Build canonical help text shared across channels."""
+_OWNER_SURFACE_CHANNELS = {"websocket", "cli", "tui"}
+
+
+def _channel_allow_from(channels_cfg: Any, channel: str) -> list[str]:
+    """Read `allow_from` for *channel* off the channels config.
+
+    Built-in channel configs live as extra fields on the ChannelsConfig
+    model; pydantic's `extra="allow"` stores each one as a plain dict
+    rather than a sub-model, so both dict-style (`cfg["allow_from"]`) and
+    attribute-style (`cfg.allow_from`) access must be supported.
+    """
+    channel_cfg = None
+    if isinstance(channels_cfg, dict):
+        channel_cfg = channels_cfg.get(channel)
+    elif channels_cfg is not None:
+        channel_cfg = getattr(channels_cfg, channel, None)
+    if isinstance(channel_cfg, dict):
+        allow = channel_cfg.get("allow_from")
+    else:
+        allow = getattr(channel_cfg, "allow_from", None)
+    return [str(a) for a in (allow or [])]
+
+
+def _sender_is_owner(ctx: CommandContext) -> bool:
+    """True for owner surfaces (webui/TUI) or channel senders on the static
+    allowlist. Pairing-store-approved guests are NOT owners."""
+    channel = (getattr(ctx.msg, "channel", "") or "").lower()
+    if channel in _OWNER_SURFACE_CHANNELS:
+        return True
+    channels_cfg = getattr(getattr(ctx.loop, "app_config", None), "channels", None)
+    allow = _channel_allow_from(channels_cfg, channel)
+    sender = str(getattr(ctx.msg, "sender_id", "") or "")
+
+    if "*" in allow or sender in allow:
+        return True
+
+    # For composite senders "sid|username", match either half against allowlist.
+    # Mirror Telegram's shape validation: exactly one "|", numeric sid, non-empty username.
+    if sender.count("|") == 1:
+        sid, username = sender.split("|", 1)
+        if sid.isdigit() and username:
+            return sid in allow or username in allow
+
+    return False
+
+
+async def cmd_pairing(ctx: CommandContext) -> OutboundMessage:
+    """Manage channel pairing approvals: list/approve/deny/revoke."""
+    meta = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+    if not _sender_is_owner(ctx):
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="Only the owner can manage pairing.", metadata=meta,
+        )
+    from durin.pairing import handle_pairing_command
+
+    reply = handle_pairing_command(ctx.msg.channel, ctx.args.strip() or "list")
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content=reply, metadata=meta,
+    )
+
+
+def build_help_text(surface: str = "channels") -> str:
+    """Build canonical help text for a surface (webui|tui|channels)."""
     lines = ["⚒️ durin commands:"]
-    for spec in BUILTIN_COMMAND_SPECS:
+    for spec in specs_for_surface(surface):
         command = spec.command
         if spec.arg_hint:
             command = f"{command} {spec.arg_hint}"
@@ -1976,6 +2189,8 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.priority("/status", cmd_status)
     router.exact("/new", cmd_new)
     router.exact("/status", cmd_status)
+    router.exact("/usage", cmd_usage)
+    router.exact("/retry", cmd_retry)
     router.exact("/model", cmd_model)
     router.prefix("/model ", cmd_model)
     router.exact("/persona", cmd_persona)
@@ -2016,3 +2231,5 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/why", cmd_why)
     router.prefix("/why ", cmd_why)
     router.exact("/version", cmd_version)
+    router.exact("/pairing", cmd_pairing)
+    router.prefix("/pairing ", cmd_pairing)

@@ -400,7 +400,6 @@ export async function listSlashCommands(
   };
   const body = await request<{ commands: Row[] }>(`${base}/api/v1/commands`, token);
   return body.commands
-    .filter((command) => !["/stop", "/restart"].includes(command.command))
     .map((command) => ({
       command: command.command,
       title: command.title,

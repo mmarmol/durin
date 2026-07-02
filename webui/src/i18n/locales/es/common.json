@@ -1222,9 +1222,17 @@
             "title": "Mostrar estado",
             "description": "Muestra el estado del runtime, provider y channels."
           },
-          "history": {
-            "title": "Mostrar historial",
-            "description": "Imprime los últimos N mensajes persistidos de la conversación."
+          "effort": {
+            "title": "Esfuerzo de razonamiento",
+            "description": "Muestra o cambia el esfuerzo de razonamiento del modelo activo."
+          },
+          "usage": {
+            "title": "Uso de tokens",
+            "description": "Muestra el uso acumulado de tokens de esta sesión."
+          },
+          "retry": {
+            "title": "Reintentar último mensaje",
+            "description": "Vuelve a enviar el último mensaje del usuario."
           },
           "dream": {
             "title": "Ejecutar Dream",

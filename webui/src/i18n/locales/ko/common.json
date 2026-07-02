@@ -297,10 +297,6 @@
             "title": "상태 보기",
             "description": "런타임, provider, channel 상태를 표시합니다."
           },
-          "history": {
-            "title": "대화 기록 보기",
-            "description": "저장된 최근 N개의 대화 메시지를 출력합니다."
-          },
           "dream": {
             "title": "Dream 실행",
             "description": "메모리 정리를 수동으로 트리거합니다."

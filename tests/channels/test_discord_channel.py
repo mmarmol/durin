@@ -865,7 +865,7 @@ async def test_slash_new_is_blocked_for_disallowed_user() -> None:
     assert handled == []
 
 
-@pytest.mark.parametrize("slash_name", ["stop", "restart", "status", "history"])
+@pytest.mark.parametrize("slash_name", ["stop", "usage", "status", "history"])
 @pytest.mark.asyncio
 async def test_slash_commands_forward_via_handle_message(slash_name: str) -> None:
     channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
@@ -889,6 +889,18 @@ async def test_slash_commands_forward_via_handle_message(slash_name: str) -> Non
     assert len(handled) == 1
     assert handled[0]["content"] == f"/{slash_name}"
     assert handled[0]["metadata"]["is_slash_command"] is True
+
+
+def test_app_commands_derive_from_registry() -> None:
+    channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    client = DiscordBotClient(channel, intents=discord.Intents.none())
+
+    names = {c.name for c in client.tree.get_commands()}
+
+    assert {"new", "stop", "status", "compact", "persona", "effort", "usage", "retry"} <= names
+    assert "restart" not in names  # admin — not listed
+    assert "copy" not in names  # tui-only — not a channel command
+    assert "help" in names
 
 
 @pytest.mark.asyncio
