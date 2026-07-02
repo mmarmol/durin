@@ -433,13 +433,34 @@ LLM. Because it is read per iteration, a mid-run `/plan` or `/build` takes effec
 on the very next iteration. If the model emits a tool call for a denied tool
 anyway (e.g. a cached name), `_run_tool` returns a synthetic "not available in
 this mode" result — tool-by-tool denial, not a stopped run. Built-ins:
-`build` (full access), `plan` (read-only plus `exit_plan_mode`), `explore`
-(read-only, for sub-agents), and `read` (read-only with a neutral posture — no
-interactive framing, for workflow nodes that inspect or judge).
+`build` (full access), `plan` (read-only planning), `explore` (read-only, for
+sub-agents), and `read` (read-only with a neutral posture — no interactive
+framing, for workflow nodes that inspect or judge). `explore` and `read` share
+one read-only tool surface by design; only their `prompt_suffix` posture differs.
+
+The restricted built-ins carry **hand-curated** allowlists (only `build` grows
+automatically as new tools are added). `plan` allows read-only investigation plus
+project-memory recall and capability discovery (skills/workflows), so it can
+plan against what already exists; `explore`/`read` allow read-only investigation
+plus memory recall. A new tool does **not** join these allowlists on its own — the
+list is maintained deliberately, because "side-effect-free" (`read_only`) is not
+the same as "appropriate for a restricted mode" (e.g. the secret-read tools are
+`read_only` yet excluded).
+
+Two gates apply to a read-only mode's effective surface: the mode allowlist AND
+the tool's `_scopes` (see [tools.md](tools.md)). A subagent or workflow node loads
+only `subagent`-scoped tools, then the mode allowlist filters that set — so a tool
+must carry the `subagent` scope to be reachable there at all (the memory-recall
+tools do, which is why `explore`/`read` can surface them).
 
 The registered modes are listed over `/api/v1/modes` (`ModesService`), which the
 webui composer's mode picker renders by `name`. The picker is mode-agnostic: it
-shows whatever the registry holds, so it follows new modes without UI changes.
+shows whatever the registry holds, so it follows new modes without UI changes. The
+same service exposes `GET /api/v1/tools` — the catalog of tools a mode allowlist
+can reference (name, description, `read_only`, built-in vs MCP), read from the live
+loop's registry so it matches exactly what the agent can call. The settings
+editor uses it to offer a checklist of the real tool set (rather than free-text
+tool names) and to surface read-only tools left out of an allowlist.
 
 User-defined modes are persisted as `ModeConfig` entries under `agent_modes` in
 config and registered into the same registry at startup (`register_config_modes`,

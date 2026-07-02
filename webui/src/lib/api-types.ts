@@ -1623,6 +1623,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List agent tools available to reference in a mode allowlist */
+        get: operations["modes_tools"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows": {
         parameters: {
             query?: never;
@@ -4141,6 +4158,18 @@ export interface components {
             scopes: string[];
             /** Token Id */
             token_id: string;
+        };
+        /**
+         * ToolsListQuery
+         * @description No inputs — lists every agent tool a mode allowlist can reference.
+         */
+        ToolsListQuery: Record<string, never>;
+        /** ToolsResult */
+        ToolsResult: {
+            /** Tools */
+            tools: {
+                [key: string]: unknown;
+            }[];
         };
         /** WebuiThreadQuery */
         WebuiThreadQuery: {
@@ -7074,6 +7103,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TasksListResult"];
+                };
+            };
+        };
+    };
+    modes_tools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ToolsListQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ToolsResult"];
                 };
             };
         };

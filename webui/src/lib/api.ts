@@ -398,6 +398,22 @@ export async function deleteMode(
   return body.ok;
 }
 
+export interface ToolInfo {
+  name: string;
+  description: string;
+  read_only: boolean;
+  source: "builtin" | "mcp";
+}
+
+/** The catalog of agent tools a mode allowlist can reference (the real tool set). */
+export async function listTools(
+  token: string,
+  base: string = "",
+): Promise<ToolInfo[]> {
+  const body = await request<{ tools: ToolInfo[] }>(`${base}/api/v1/tools`, token);
+  return body.tools;
+}
+
 export async function updateSettings(
   token: string,
   update: SettingsUpdate,

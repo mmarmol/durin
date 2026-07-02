@@ -75,6 +75,11 @@ class MemoryDrillTool(Tool):
     """Drill one or many memory URIs in a single call."""
 
     config_key = "memory"
+    # Subagent-scoped alongside `memory_search` (its companion): a search hit
+    # marked ``preview N/M`` is truncated, and drill fetches the full body. An
+    # investigator that can search but not drill can't read what it found, so
+    # the two share the "subagent" scope and the read-only mode allowlists.
+    _scopes = {"core", "subagent"}
 
     def __init__(self, workspace: str | Path) -> None:
         self._workspace = Path(workspace).expanduser()
