@@ -320,6 +320,33 @@ export async function listWorkflowRuns(
   return body.runs;
 }
 
+// One row of the global run feed (GET .../workflows/runs with no `session`), across
+// every workflow, newest-first. `questions` is present only on a needs_input entry
+// (the manifest's final_output, capped at 500 chars).
+export type WorkflowGlobalRun = {
+  workflow: string;
+  run_id: string;
+  status: string;
+  started_at: number | null;
+  finished_at: number | null;
+  task: string;
+  needs_input_node: string | null;
+  parent_run_id?: string | null;
+  questions?: string;
+};
+
+export async function listAllWorkflowRuns(
+  token: string,
+  limit: number = 50,
+  base: string = "",
+): Promise<WorkflowGlobalRun[]> {
+  const body = await request<{ runs: WorkflowGlobalRun[] }>(
+    `${base}/api/v1/workflows/runs?limit=${encodeURIComponent(String(limit))}`,
+    token,
+  );
+  return body.runs;
+}
+
 export async function getWorkflowRunManifest(
   token: string,
   name: string,
