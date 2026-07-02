@@ -13,7 +13,6 @@ import { useTranslation } from "react-i18next";
 
 import { ChatList } from "@/components/ChatList";
 import { ConnectionBadge } from "@/components/ConnectionBadge";
-import { SaturationChip } from "@/components/concurrency/SaturationChip";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
@@ -36,7 +35,6 @@ interface SidebarProps {
   workflowsActive?: boolean;
   onOpenDream?: () => void;
   dreamActive?: boolean;
-  onOpenConcurrency?: () => void;
   onCollapse: () => void;
 }
 
@@ -258,11 +256,8 @@ export function Sidebar(props: SidebarProps) {
           <Settings className="h-3.5 w-3.5" aria-hidden />
           {t("sidebar.settings")}
         </Button>
-        <div className="flex items-center justify-between gap-2 px-0.5">
+        <div className="flex items-center gap-2 px-0.5">
           <ConnectionBadge />
-          {props.onOpenConcurrency ? (
-            <SaturationChip onOpen={props.onOpenConcurrency} />
-          ) : null}
         </div>
       </div>
     </nav>

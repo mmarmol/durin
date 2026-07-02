@@ -90,7 +90,7 @@ import { PersonasSettings } from "./PersonasSettings";
 import { ModesSettings } from "./ModesSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
 
-export type SettingsSectionKey =
+type SettingsSectionKey =
   | "general"
   | "providers"
   | "web-search"
@@ -119,15 +119,6 @@ interface SettingsViewProps {
   onRestart?: () => void;
   isRestarting?: boolean;
   onOpenSession?: (sessionKey: string) => void;
-  /** Deep-links to a settings section on mount (e.g. from the saturation
-   * chip). Optional and backward-compatible: absent means "general". */
-  initialSection?: SettingsSectionKey | null;
-  /** Called right after `initialSection` is applied to `activeSection`, so
-   * the parent can clear it back to null. Without this, the deep-link value
-   * stays set in the parent forever: since SettingsView unmounts on every
-   * leave, its lazy `activeSection` initializer would keep re-reading the
-   * stale value on every reopen, permanently overriding manual navigation. */
-  onInitialSectionConsumed?: () => void;
 }
 
 export function SettingsView({
@@ -141,8 +132,6 @@ export function SettingsView({
   onRestart,
   isRestarting = false,
   onOpenSession,
-  initialSection,
-  onInitialSectionConsumed,
 }: SettingsViewProps) {
   const { t } = useTranslation();
   const { token } = useClient();
@@ -152,9 +141,7 @@ export function SettingsView({
   const [providerSaving, setProviderSaving] = useState<string | null>(null);
   const [webSearchSaving, setWebSearchSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<SettingsSectionKey>(
-    () => initialSection ?? "general",
-  );
+  const [activeSection, setActiveSection] = useState<SettingsSectionKey>("general");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [providerForms, setProviderForms] = useState<Record<string, { apiKey: string; apiBase: string }>>({});
   const [visibleProviderKeys, setVisibleProviderKeys] = useState<Record<string, boolean>>({});
@@ -166,12 +153,6 @@ export function SettingsView({
   });
   const [webSearchKeyVisible, setWebSearchKeyVisible] = useState(false);
   const [webSearchKeyEditing, setWebSearchKeyEditing] = useState(false);
-
-  useEffect(() => {
-    if (!initialSection) return;
-    setActiveSection(initialSection);
-    onInitialSectionConsumed?.();
-  }, [initialSection, onInitialSectionConsumed]);
 
   const applyPayload = useCallback((payload: SettingsPayload) => {
     setSettings(payload);

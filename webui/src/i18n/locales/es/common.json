@@ -880,20 +880,6 @@
       }
     }
   },
-  "concurrency": {
-    "chip": {
-      "label": "Concurrencia: {{active}} de {{limit}} espacios en uso",
-      "unlimited": "{{active}} activos",
-      "queued": "{{count}} en cola"
-    },
-    "panel": {
-      "title": "Actividad — todas las sesiones",
-      "empty": "Nada en ejecución",
-      "turn": "Turno",
-      "subagent": "Sub-agente",
-      "close": "Cerrar"
-    }
-  },
   "skills": {
     "view": "Ver",
     "remove": "Eliminar",
