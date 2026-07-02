@@ -22,6 +22,15 @@ from durin.agent.skills_store import _safe_name, _skills_dir, _store_init
 
 logger = logging.getLogger(__name__)
 
+
+def _emit(event: str, **data) -> None:
+    """Best-effort skill-loop telemetry."""
+    try:
+        from durin.agent.tools._telemetry import emit_tool_event
+        emit_tool_event(event, data)
+    except Exception:  # noqa: BLE001 — telemetry must never break observation logging
+        pass
+
 KINDS = ("correction", "gap", "improvement", "simplify")
 PRINCIPLES_CAP = 12
 
@@ -147,6 +156,8 @@ def log_observation(workspace: Path, *, skill: str, kind: str, issue: str,
             _write_records(_active_path(workspace), records)
             sha = store.auto_commit(
                 f"observation(#{rec['id']} {skill}): recurred x{rec['count']}")
+            _emit("skill.observation_logged", skill=skill, kind=kind,
+                 dedup_bumped=True, count=rec["count"])
             return {"ok": True, "id": rec["id"], "count": rec["count"], "commit": sha}
 
     rec = {
@@ -165,6 +176,8 @@ def log_observation(workspace: Path, *, skill: str, kind: str, issue: str,
     records.append(rec)
     _write_records(_active_path(workspace), records)
     sha = store.auto_commit(f"observation(#{rec['id']} {skill}): {kind} logged")
+    _emit("skill.observation_logged", skill=skill, kind=kind,
+         dedup_bumped=False, count=1)
     return {"ok": True, "id": rec["id"], "count": 1, "commit": sha}
 
 

@@ -20,7 +20,7 @@ from durin.agent.hook import AgentHook, CompositeHook
 from durin.agent.memory import Consolidator
 from durin.agent.progress_hook import AgentProgressHook
 from durin.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
-from durin.agent.skill_usage import extract_skill_calls
+from durin.agent.skill_usage import emit_skill_used, extract_skill_calls
 from durin.agent.subagent import SubagentManager
 from durin.agent.tools.context import AuxProviderHandle
 from durin.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
@@ -2512,6 +2512,7 @@ class AgentLoop:
         _skill_calls = extract_skill_calls(_new_messages)
         if _skill_calls:
             ctx.session.metadata.setdefault("skill_calls", []).extend(_skill_calls)
+            emit_skill_used(_skill_calls)
 
         emit_memory_usage_rollup(ctx.tools_used)
 

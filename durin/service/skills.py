@@ -36,6 +36,15 @@ from durin.service.types import (
     ValidationFailedError,
 )
 
+
+def _emit(event: str, **data: Any) -> None:
+    """Best-effort telemetry (never breaks the request)."""
+    try:
+        from durin.agent.tools._telemetry import emit_tool_event
+        emit_tool_event(event, data)
+    except Exception:  # noqa: BLE001 — telemetry must never break the endpoint
+        pass
+
 # ---------------------------------------------------------------------------
 # Shared result — all web_* calls return (status, payload)
 # ---------------------------------------------------------------------------
@@ -616,10 +625,14 @@ class SkillsService:
         rec = sg.get_suggestion(self._workspace, cmd.id)
         if rec is None:
             raise NotFoundError(f"suggestion {cmd.id!r} not found")
-        res = sg.apply_suggestion(self._workspace, rec["action"])
+        action = rec["action"]
+        res = sg.apply_suggestion(self._workspace, action)
         if res.get("error"):
             raise ConflictError(str(res["error"]), details=res)
         sg.remove_suggestion(self._workspace, cmd.id)
+        _emit("skill.suggestion_resolved",
+             skill=action.get("name") or action.get("target", ""),
+             action=action.get("type", ""), resolution="accepted")
         return _skills_result(200, {"ok": True})
 
     @route(
@@ -636,8 +649,14 @@ class SkillsService:
         principal.require(Scope.SKILLS_WRITE)
         from durin.agent import skill_suggestions as sg
 
+        rec = sg.get_suggestion(self._workspace, cmd.id)
         sg.add_tombstone(self._workspace, cmd.id)
         sg.remove_suggestion(self._workspace, cmd.id)
+        if rec is not None:
+            action = rec["action"]
+            _emit("skill.suggestion_resolved",
+                 skill=action.get("name") or action.get("target", ""),
+                 action=action.get("type", ""), resolution="rejected")
         return _skills_result(200, {"ok": True})
 
     @route(

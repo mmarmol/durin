@@ -152,6 +152,53 @@ def test_curation_backfills_missing_description(tmp_path):
     assert "description:" in md.read_text(encoding="utf-8")
 
 
+# -- telemetry -----------------------------------------------------------------
+
+
+def test_curate_emits_action_and_run_events(tmp_path, monkeypatch):
+    import durin.agent.tools._telemetry as tel
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    ws = tmp_path / "ws"
+    _mk(ws, "demo", "old body")
+
+    def fake_judge(prompt):
+        return ('{"actions": [{"type": "evolve", "name": "demo", '
+                '"old": "old body", "new": "new body", "rationale": "r"}]}')
+
+    res = curate_catalog(ws, judge=fake_judge)
+    assert res["applied"] == 1
+
+    actions = [d for n, d in events if n == "skill.curation_action"]
+    assert {"action": "evolve", "skill": "demo", "applied": True} in actions
+
+    runs = [d for n, d in events if n == "skill.curation_run"]
+    assert len(runs) == 1
+    assert runs[0]["reviewed"] == 1
+    assert runs[0]["applied"] == 1
+    assert runs[0]["deferred"] == 0
+    assert runs[0]["backfilled"] == 0
+
+
+def test_curate_backfill_emits_action_event(tmp_path, monkeypatch):
+    import durin.agent.tools._telemetry as tel
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    body = "# QR Reader\n\nDecode QR codes from images.\n\n## Triggers\n\n- QR image attached\n"
+    assert ss.dream_create_skill(tmp_path, "qr-reader", body, "seed").get("ok")
+    md = tmp_path / "skills" / "qr-reader" / "SKILL.md"
+    md.write_text(_strip_surface_fields(md.read_text(encoding="utf-8")), encoding="utf-8")
+
+    curate_catalog(tmp_path, judge=lambda p: '{"actions": [], "observations": []}')
+
+    actions = [d for n, d in events if n == "skill.curation_action"]
+    assert {"action": "backfill", "skill": "qr-reader", "applied": True} in actions
+    runs = [d for n, d in events if n == "skill.curation_run"]
+    assert runs[-1]["backfilled"] == 1
+
+
 def test_backfill_of_already_curated_skill_reenters_delta(tmp_path):
     # Realistic repair case: the skill was already curated (provenance
     # stamped) and only later loses its description — a pure frontmatter

@@ -35,6 +35,15 @@ logger = logging.getLogger(__name__)
 _NO_OBS = {"applied": 0, "declined": 0, "kept": 0}
 
 
+def _emit(event: str, **data) -> None:
+    """Best-effort curation telemetry."""
+    try:
+        from durin.agent.tools._telemetry import emit_tool_event
+        emit_tool_event(event, data)
+    except Exception:  # noqa: BLE001 — telemetry must never break curation
+        pass
+
+
 def curate_catalog(workspace, *, judge: Callable[[str], str],
                    usage: dict | None = None, budget: int = DEFAULT_BUDGET,
                    drift_check: Callable | None = None,
@@ -64,6 +73,8 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
         if s["name"] in auto and not s["description"].strip():
             if ss.backfill_surface_frontmatter(workspace, s["name"]):
                 backfilled_names.add(s["name"])
+                _emit("skill.curation_action", action="backfill",
+                     skill=s["name"], applied=True)
     backfilled = len(backfilled_names)
 
     delta = [n for n in auto if ss.needs_curation(workspace, n)]
@@ -75,6 +86,8 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
     delta += sorted(n for n in {r.get("skill") for r in open_obs}
                     if n in auto and n not in delta)
     if not delta:
+        _emit("skill.curation_run", reviewed=0, applied=0, deferred=0,
+             backfilled=backfilled)
         return {"reviewed": 0, "applied": 0, "deferred": 0, "backfilled": backfilled,
                 "observations": {**_NO_OBS, "open": len(open_obs)},
                 "principles": len(so.active_principles(workspace))}
@@ -144,14 +157,18 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             r = ss.dream_fuse_skills(workspace, target=a["target"], content=a["content"],
                                      sources=a["sources"], rationale=a.get("rationale", "fuse"),
                                      attribution=ss.Attribution(actor="curation"))
-            applied += 1 if r.get("ok") else 0
+            ok = bool(r.get("ok"))
+            applied += 1 if ok else 0
+            _emit("skill.curation_action", action="fuse", skill=a["target"], applied=ok)
         elif t == "evolve":
             if a.get("name") not in selected:
                 logger.warning("curation: skipping evolve of out-of-scope skill %s", a.get("name"))
                 continue
             r = ss.apply_skill_edit(workspace, a["name"], old=a["old"], new=a["new"],
                                     rationale=a.get("rationale", "evolve"))
-            applied += 1 if r.get("ok") else 0
+            ok = bool(r.get("ok"))
+            applied += 1 if ok else 0
+            _emit("skill.curation_action", action="evolve", skill=a["name"], applied=ok)
         elif t == "retire":
             # Remove a fully-obsolete skill outright (git-recoverable via
             # remove_skill, which refuses builtins). The body-change/empty-body
@@ -160,20 +177,26 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                 logger.warning("curation: skipping retire of out-of-scope skill %s", a.get("name"))
                 continue
             r = ss.remove_skill(workspace, a["name"])
-            applied += 1 if r.get("ok") else 0
+            ok = bool(r.get("ok"))
+            applied += 1 if ok else 0
+            _emit("skill.curation_action", action="retire", skill=a["name"], applied=ok)
         elif t == "principle":
             r = so.add_principle(workspace, str(a.get("text", "")),
                                  rationale=str(a.get("rationale", "")))
-            if r.get("ok"):
+            ok = bool(r.get("ok"))
+            if ok:
                 applied += 1
             else:
                 logger.warning("curation: principle action rejected: %s", r.get("error"))
+            _emit("skill.curation_action", action="principle", applied=ok)
         elif t == "retire_principle":
             r = so.retire_principle(workspace, a.get("id", 0))
-            if r.get("ok"):
+            ok = bool(r.get("ok"))
+            if ok:
                 applied += 1
             else:
                 logger.warning("curation: retire_principle rejected: %s", r.get("error"))
+            _emit("skill.curation_action", action="retire_principle", applied=ok)
 
     # Per-observation dispositions — only for records the judge actually saw.
     shown_ids = {r.get("id") for r in obs_shown}
@@ -185,6 +208,8 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
     for n in selected:
         if ss.read_skill_content(workspace, n) is not None:
             ss.mark_curated(workspace, n)
+    _emit("skill.curation_run", reviewed=len(selected), applied=applied,
+         deferred=deferred, backfilled=backfilled)
     return {"reviewed": len(selected), "applied": applied, "deferred": deferred,
             "backfilled": backfilled,
             "observations": {**{k: obs_res.get(k, 0) for k in _NO_OBS},

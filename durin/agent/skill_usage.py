@@ -33,6 +33,22 @@ def _tool_name_and_args(tc: Any) -> tuple[str, dict]:
     return name, raw if isinstance(raw, dict) else {}
 
 
+def emit_skill_used(calls: list[dict]) -> None:
+    """Emit one ``skill.used`` event per skill call (best-effort).
+
+    Called from ``AgentLoop._state_save`` right after ``calls`` are recorded
+    into ``session.metadata["skill_calls"]``.
+    """
+    if not calls:
+        return
+    try:
+        from durin.agent.tools._telemetry import emit_tool_event
+        for call in calls:
+            emit_tool_event("skill.used", dict(call))
+    except Exception:  # noqa: BLE001 — telemetry must never break the loop
+        pass
+
+
 def extract_skill_calls(messages: list[dict]) -> list[dict]:
     calls: list[dict] = []
     for i, message in enumerate(messages):

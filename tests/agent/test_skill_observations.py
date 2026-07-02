@@ -230,3 +230,34 @@ def test_unrelated_issue_same_skill_does_not_dedup(tmp_path):
     _log(ws, issue="step 2 installs from the wrong source registry entirely")
     res = _log(ws, issue="the restart step forgets to check the pid file first")
     assert res["id"] == 2
+
+
+# -- telemetry -----------------------------------------------------------------
+
+
+def test_log_observation_emits_event(tmp_path, monkeypatch):
+    import durin.agent.tools._telemetry as tel
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    ws = tmp_path / "ws"
+    _log(ws)
+    logged = [d for n, d in events if n == "skill.observation_logged"]
+    assert len(logged) == 1
+    assert logged[0] == {"skill": "deploy-gateway", "kind": "correction",
+                          "dedup_bumped": False, "count": 1}
+
+
+def test_log_observation_dedup_bump_emits_event(tmp_path, monkeypatch):
+    import durin.agent.tools._telemetry as tel
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    ws = tmp_path / "ws"
+    _log(ws, session="s1")
+    events.clear()
+    _log(ws, issue="User corrected the wheel build  step", session="s2")
+    logged = [d for n, d in events if n == "skill.observation_logged"]
+    assert len(logged) == 1
+    assert logged[0] == {"skill": "deploy-gateway", "kind": "correction",
+                          "dedup_bumped": True, "count": 2}

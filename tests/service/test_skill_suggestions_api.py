@@ -55,3 +55,36 @@ async def test_list_accept_reject_roundtrip(tmp_path):
     await svc.reject_suggestion(RejectSuggestionCommand(id=rec2["id"]), pr)
     assert sg.read_suggestions(ws) == []
     assert sg.is_tombstoned(ws, rec2["id"]) is True
+
+
+@pytest.mark.asyncio
+async def test_accept_and_reject_emit_suggestion_resolved_events(tmp_path, monkeypatch):
+    import durin.agent.tools._telemetry as tel
+
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+
+    ws = tmp_path
+    (ws / "skills" / "x").mkdir(parents=True)
+    (ws / "skills" / "x" / "SKILL.md").write_text(
+        "---\nname: x\ndescription: d\ndurin:\n  mode: manual\n---\nold body\n",
+        encoding="utf-8",
+    )
+    action = {"type": "evolve", "name": "x", "old": "old body",
+              "new": "new body", "rationale": "improve"}
+
+    svc = SkillsService(workspace=ws)
+    pr = Principal.local()
+
+    rec = sg.add_suggestion(ws, action)
+    await svc.accept_suggestion(AcceptSuggestionCommand(id=rec["id"]), pr)
+
+    rec2 = sg.add_suggestion(ws, action)
+    await svc.reject_suggestion(RejectSuggestionCommand(id=rec2["id"]), pr)
+
+    resolved = [d for n, d in events if n == "skill.suggestion_resolved"]
+    assert resolved == [
+        {"skill": "x", "action": "evolve", "resolution": "accepted"},
+        {"skill": "x", "action": "evolve", "resolution": "rejected"},
+    ]
