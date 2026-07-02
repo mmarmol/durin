@@ -7,6 +7,62 @@ def _wf(nodes, start):
     return parse_workflow({"name": "w", "start": start, "nodes": nodes})
 
 
+def _parallel_wf(reconcile):
+    return parse_workflow({
+        "name": "w", "start": "seed",
+        "nodes": [
+            {"id": "seed", "kind": "work", "tools": "default", "next": "par"},
+            {"id": "par", "kind": "parallel", "branches": ["b1"],
+             "reconcile": reconcile, "next": None,
+             **({"criteria": "best"} if reconcile == "choose" else {})},
+            {"id": "b1", "kind": "work", "tools": "default"},
+        ],
+    })
+
+
+def test_writing_branch_sees_and_extends_the_shared_work_folder(tmp_path):
+    seen = {}
+    def runner(req):
+        if req.node.id == "seed":
+            Path(req.output_dir, "draft.md").write_text("v1")
+        if req.node.id == "b1":
+            seen["saw"] = Path(req.output_dir, "draft.md").read_text()
+            Path(req.output_dir, "draft.md").write_text("v2")
+        return NodeRunResponse(output=f"out-{req.node.id}")
+    eng = WorkflowEngine(runner, workspace=str(tmp_path),
+                         pick_runner=lambda c, outs, m: 0)
+    result = eng.run(_parallel_wf("choose"), "t")
+    assert result.status == "completed"
+    assert seen["saw"] == "v1"                                # fork was seeded
+    work = Path(tmp_path) / ".workflow" / result.run_id / "work"
+    assert (work / "draft.md").read_text() == "v2"            # write reconciled back
+
+
+def test_read_branch_and_dynamic_worker_get_the_shared_folder(tmp_path):
+    seen = {}
+    def runner(req):
+        seen[(req.node.id, req.worker_index)] = req.output_dir
+        if req.node.id == "lister":
+            return NodeRunResponse(output='["s1", "s2"]')
+        return NodeRunResponse(output="x")
+    wf = parse_workflow({
+        "name": "w", "start": "lister",
+        "nodes": [
+            {"id": "lister", "kind": "work", "tools": "default", "next": "read_par"},
+            {"id": "read_par", "kind": "parallel", "branches": ["rb"],
+             "reconcile": "read", "next": "fan"},
+            {"id": "rb", "kind": "work", "tools": "default"},
+            {"id": "fan", "kind": "parallel", "worker": "wk", "list_from": "lister", "next": None},
+            {"id": "wk", "kind": "work", "tools": "default"},
+        ],
+    })
+    WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
+    shared = seen[("lister", None)]
+    assert seen[("rb", None)] == shared                       # read branch told the folder
+    assert seen[("wk", 0)] == shared                          # dynamic worker told the folder
+    assert seen[("wk", 1)] == shared
+
+
 def test_sequential_nodes_share_one_working_folder(tmp_path):
     seen = {}
     def runner(req):

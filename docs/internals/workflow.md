@@ -77,11 +77,12 @@ tools shares ONE **working folder** for the run (`<workspace>/.workflow/<run>/wo
 Because it is one shared folder, created and edited files accumulate in a single place and
 each stage (including a loop's re-iterations) sees the prior work, so stages can collaborate
 on an evolving fileset (e.g. a debug loop's reproduction test, code, and fix) rather than
-hand a copy down a chain. Parallel branches are the exception: each writing branch forks a
-private copy and its changes are reconciled back (choose/union, with conflict detection), so
-concurrent writers can't clobber each other. The `.workflow` tree gitignores itself, is
-excluded from parallel-fork reconciliation, and is pruned to recent runs. (Real deliverables
-a node writes into the workspace proper are the separate, already-shared filesystem channel.) **When a node routes**, the engine derives a verdict from what the node produced
+hand a copy down a chain. Parallel branches fork the run's working folder along with the
+workspace: a writing branch starts from the folder's current files, and its folder writes
+reconcile back (choose/union) exactly like workspace writes; read branches and dynamic
+fan-out workers are handed the shared folder directly. The `.workflow` tree gitignores
+itself and is pruned to recent runs. (Real deliverables a node writes into the workspace
+proper are the separate, already-shared filesystem channel.) **When a node routes**, the engine derives a verdict from what the node produced
 and follows an edge. A node may route in one of two shapes:
 
 **Binary routing** (`on_pass`/`on_fail`): a routing node ends its own reply with a `PASS`/`FAIL`

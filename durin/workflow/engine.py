@@ -539,13 +539,11 @@ class WorkflowEngine:
                 if node.worker is not None:
                     merged, abort = self._run_dynamic_parallel(
                         workflow, node, task, run_id, iteration, root_session_key,
-                        upstream_output, runs
-                    )
+                        upstream_output, runs, work_dir=work_dir)
                 else:
                     merged, abort = self._run_parallel(
                         workflow, node, task, run_id, iteration, root_session_key,
-                        upstream_output, runs
-                    )
+                        upstream_output, runs, work_dir=work_dir)
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=merged))
                 if abort is not None:
                     return WorkflowResult(
@@ -589,15 +587,13 @@ class WorkflowEngine:
             output_dir=terminal_output_dir, output_files=output_files,
         )
 
-    def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key, workspace_override, fork_dir=None):
-        out_dir: str | None = None
-        if fork_dir is not None:
-            out_dir = str(artifact_dir(fork_dir, run_id, branch.id, iteration))
+    def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key,
+                        workspace_override, out_dir=None):
         return self._node_runner(NodeRunRequest(
             node=branch, task=task, upstream_output=upstream, shared_context=[],
             run_id=run_id, iteration=iteration, root_session_key=root_key,
             workspace_override=workspace_override,
-            output_dir=out_dir,
+            output_dir=out_dir if getattr(branch, "tools", "none") == "default" else None,
         ))
 
     @staticmethod
@@ -652,7 +648,7 @@ class WorkflowEngine:
         items = [line.strip() for line in candidate.splitlines() if line.strip()]
         return items[:50]
 
-    def _run_dynamic_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs):
+    def _run_dynamic_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs, work_dir=None):
         """Run a dynamic parallel node: parse a runtime list and run the worker once per item.
 
         Returns ``(merged_output, abort_message)``.  Each worker run is appended to
@@ -690,6 +686,7 @@ class WorkflowEngine:
                     iteration=iteration,
                     root_session_key=root_key,
                     worker_index=idx,
+                    output_dir=work_dir if worker_node.tools == "default" else None,
                 ))
                 return idx, resp.output, resp.session_key, None, resp.persist_failed
             except NodeExecutionError as exc:
@@ -716,15 +713,17 @@ class WorkflowEngine:
         )
         return merged, None
 
-    def _run_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs):
+    def _run_parallel(self, workflow, node, task, run_id, iteration, root_key, upstream, runs, work_dir=None):
         """Run a parallel node's branches concurrently and reconcile their writes.
 
         Returns ``(merged_output, abort_message)``; ``abort_message`` is None on
         success or a string when the run must abort (e.g. a union conflict, or a
         misconfiguration). 'read' branches run against the shared workspace (no writes
-        applied); 'choose'/'union' branches each run against a private copy and their
-        file changes are reconciled back. Each branch is appended to ``runs`` so its
-        session stays attributable in the trace.
+        applied) but are still handed the run's shared working folder; 'choose'/'union'
+        branches each run against a private copy of the workspace WITH the working
+        folder's current files seeded in, and their folder writes reconcile back
+        (choose/union) exactly like their other workspace writes. Each branch is
+        appended to ``runs`` so its session stays attributable in the trace.
 
         Per-branch progress is emitted via ``_progress_emit`` as branches start and
         finish.  The parallel node's entry in the frame carries a ``"branches"`` list
@@ -735,6 +734,13 @@ class WorkflowEngine:
 
         branches = node.branches
         workers = max(1, min(len(branches), node.max_concurrency))
+        # The run's shared working folder, expressed relative to the workspace, so it
+        # can be exempted from the fork/diff exclusion — the folder IS branch output,
+        # not machine-managed state. None when there is no work_dir or no workspace.
+        rel_work = (
+            str(Path(work_dir).resolve().relative_to(Path(self._workspace).resolve()))
+            if (work_dir and self._workspace) else None
+        )
 
         # Shared branch-status map, guarded by a lock because branches run in
         # ThreadPoolExecutor workers concurrently.
@@ -775,7 +781,8 @@ class WorkflowEngine:
                 # failure so survivors still complete (per-branch isolation, like fan-out).
                 try:
                     resp = self._run_one_branch(
-                        workflow.nodes[bid], task, upstream, run_id, iteration, root_key, None)
+                        workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
+                        None, out_dir=work_dir)
                     with _branch_lock:
                         branch_status[bid] = "done"
                     _emit_branches()
@@ -802,20 +809,25 @@ class WorkflowEngine:
         if self._workspace is None:
             return "", f"parallel node {node.id!r}: reconcile={node.reconcile!r} needs a workspace"
 
-        base = workspace_fork.snapshot(self._workspace)
+        base = workspace_fork.snapshot(self._workspace, extra_include=rel_work)
         forks: list = []
 
         def _run(bid):
-            fork_dir = workspace_fork.fork(self._workspace)
+            fork_dir = workspace_fork.fork(self._workspace, extra_include=rel_work)
             forks.append(fork_dir)
             try:
+                if rel_work is not None:
+                    branch_out = Path(fork_dir) / rel_work
+                    branch_out.mkdir(parents=True, exist_ok=True)   # fork copy may be empty
+                else:
+                    branch_out = artifact_dir(fork_dir, run_id, bid, iteration)
                 resp = self._run_one_branch(
                     workflow.nodes[bid], task, upstream, run_id, iteration, root_key,
-                    str(fork_dir), fork_dir=fork_dir)
+                    str(fork_dir), out_dir=str(branch_out))
                 with _branch_lock:
                     branch_status[bid] = "done"
                 _emit_branches()
-                return bid, resp.output, resp.session_key, workspace_fork.diff(base, fork_dir)
+                return bid, resp.output, resp.session_key, workspace_fork.diff(base, fork_dir, extra_include=rel_work)
             except Exception:
                 with _branch_lock:
                     branch_status[bid] = "failed"
