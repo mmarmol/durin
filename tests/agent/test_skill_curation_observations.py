@@ -21,7 +21,7 @@ def _mk(ws, name, body="body"):
     d = ws / "skills" / name
     d.mkdir(parents=True)
     (d / "SKILL.md").write_text(
-        f"---\nname: {name}\nmetadata:\n  durin:\n    mode: auto\n"
+        f"---\nname: {name}\ndescription: {name} skill\nmetadata:\n  durin:\n    mode: auto\n"
         f"    provenance:\n      source: dream\n---\n{body}\n", encoding="utf-8")
 
 

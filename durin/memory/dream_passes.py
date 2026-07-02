@@ -294,6 +294,12 @@ uncovered while working, with a working name. Treat each gap as a strong \
 candidate; when you author a skill for one, use its working name VERBATIM as \
 the skill name so the gap can be closed automatically.
 
+Every skill you write MUST carry YAML frontmatter with `name` and `description`.
+The description is the ONLY text the agent later reads to decide when the skill
+applies — state what the skill does and its concrete trigger conditions in 1-4
+sentences. Keep the whole skill focused: prefer under ~150 lines; link or bundle
+reference material instead of inlining it.
+
 EXISTING SKILLS: {existing}{principles}
 """
 
@@ -340,24 +346,48 @@ def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict]
     ]
 
 
+def _norm(s: str) -> str:
+    """Normalize a skill name for gap matching: lowercase, replace non-alphanumeric
+    with hyphens, strip hyphens from edges."""
+    import re
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+
+
 def _resolve_gap_observations(workspace: Path) -> int:
     """Mark gap observations APPLIED when their working name now exists as a
     skill (the extractor is told to author under the gap's name verbatim).
-    Unmatched gaps stay OPEN and feed the next pass."""
+    Unmatched gaps stay OPEN and feed the next pass.
+
+    Matching uses both exact and normalized name comparison: a gap "Release Runbook"
+    matches skill "release-runbook" via normalization."""
     from durin.agent.skill_observations import apply_dispositions, open_observations
 
     existing = set(_list_skills(workspace))
-    done = [{"id": r.get("id"), "disposition": "applied"}
-            for r in open_observations(workspace)
-            if str(r.get("skill", "")).startswith("new:")
-            and str(r.get("skill"))[4:] in existing]
+    existing_normalized = {_norm(s): s for s in existing}
+
+    done = []
+    for r in open_observations(workspace):
+        if not str(r.get("skill", "")).startswith("new:"):
+            continue
+        gap_name = str(r.get("skill"))[4:]
+        # Fast path: exact match
+        if gap_name in existing:
+            done.append({"id": r.get("id"), "disposition": "applied"})
+        # Fallback: normalized match
+        elif _norm(gap_name) in existing_normalized:
+            done.append({"id": r.get("id"), "disposition": "applied"})
+
     if not done:
         return 0
     return apply_dispositions(workspace, done).get("applied", 0)
 
 
 def _recent_sessions_text(workspace: Path, max_sessions: int) -> str:
-    """The newest sessions' conversation text (user + assistant turns)."""
+    """The newest sessions' conversation text (user + assistant turns).
+
+    Long inputs are trimmed to preserve both head and tail: keeps first 6000
+    chars, then middle truncation marker, then last 6000 chars. This ensures
+    late-session procedures (which live in the tail) survive truncation."""
     from durin.memory.extract_runner import load_session
     sdir = Path(workspace) / "sessions"
     if not sdir.is_dir():
@@ -375,7 +405,10 @@ def _recent_sessions_text(workspace: Path, max_sessions: int) -> str:
         )
         if turns.strip():
             blocks.append(f"=== session {jsonl.stem} ===\n{turns}")
-    return "\n\n".join(blocks)[:12000]
+    text = "\n\n".join(blocks)
+    if len(text) <= 12000:
+        return text
+    return text[:6000] + "\n\n[... middle truncated ...]\n\n" + text[-6000:]
 
 
 def _list_skills(workspace: Path) -> list[str]:

@@ -67,3 +67,34 @@ def test_collect_skill_calls_within_hours_filters_old_sidecars(tmp_path):
 
     assert collect_recent_skill_calls(tmp_path)["git-helper"]["read"] == 2
     assert collect_recent_skill_calls(tmp_path, within_hours=48)["git-helper"]["read"] == 1
+
+
+# -- telemetry -----------------------------------------------------------------
+
+
+def test_emit_skill_used_emits_one_event_per_call(monkeypatch):
+    import durin.agent.tools._telemetry as tel
+    from durin.agent.skill_usage import emit_skill_used
+
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    calls = [{"skill": "git-helper", "op": "read", "turn": 1},
+             {"skill": "deploy-flow", "op": "edit", "turn": 2}]
+    emit_skill_used(calls)
+    used = [(n, d) for n, d in events if n == "skill.used"]
+    assert used == [
+        ("skill.used", {"skill": "git-helper", "op": "read", "turn": 1}),
+        ("skill.used", {"skill": "deploy-flow", "op": "edit", "turn": 2}),
+    ]
+
+
+def test_emit_skill_used_noop_on_empty_list(monkeypatch):
+    import durin.agent.tools._telemetry as tel
+    from durin.agent.skill_usage import emit_skill_used
+
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    emit_skill_used([])
+    assert events == []

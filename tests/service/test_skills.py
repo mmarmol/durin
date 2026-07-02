@@ -100,6 +100,26 @@ async def test_list_returns_skills(tmp_path: Path) -> None:
     assert "hello" in names
 
 
+async def test_list_includes_use_count_from_recent_skill_calls(tmp_path: Path) -> None:
+    """A skill viewed in a session (recorded in its .meta.json sidecar under
+    ``derived.skill_calls``) surfaces a ``use_count >= 1`` on its list row —
+    the webui usage badge reads this field."""
+    from durin.session.manager import SessionManager
+
+    ws = _make_workspace(tmp_path)
+    sm = SessionManager(ws)
+    s = sm.get_or_create("websocket:abc")
+    s.add_message("user", "load the hello skill")
+    s.metadata["skill_calls"] = [{"skill": "hello", "op": "view", "turn": 1}]
+    sm.save(s)
+
+    svc = _svc(ws)
+    result = await svc.list(SkillsListQuery(), Principal.local())
+    row = next(s for s in result.data["skills"] if s["name"] == "hello")
+    assert row["use_count"] >= 1
+    assert row["open_observations"] == 0
+
+
 async def test_list_requires_read_scope(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     svc = _svc(ws)

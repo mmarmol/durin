@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -26,6 +27,11 @@ from durin.agent.skills_frontmatter import ensure_durin, join_frontmatter, split
 from durin.utils.gitstore import GitStore
 
 logger = logging.getLogger(__name__)
+
+# Bump this constant whenever a curation rule is added to skill_curation.md.
+# `needs_curation` will re-check skills with stale rules versions, pulling them
+# back through the curation gate once per rules update cycle.
+CURATION_RULES_VERSION = 2
 
 
 @dataclass
@@ -91,6 +97,58 @@ def _durin_blob(text: str) -> dict:
     meta = data.get("metadata")
     durin = meta.get("durin") if isinstance(meta, dict) else None
     return durin if isinstance(durin, dict) else {}
+
+
+_TRIGGER_HEADING = re.compile(r"^##\s*Triggers?\b.*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _frontmatter_description(content: str) -> str:
+    """Read `description` from the raw frontmatter, if any (reuses the
+    module's existing frontmatter reader instead of a second YAML parser)."""
+    data, _body = split_frontmatter(content)
+    return str(data.get("description") or "").strip()
+
+
+def _derive_description(body: str) -> str:
+    """Description from the body: first prose paragraph after the H1 plus a
+    collapsed Triggers section, capped. Empty string when nothing usable."""
+    text = body
+    m = re.match(r"^---\n.*?\n---\n?", text, re.DOTALL)
+    if m:
+        text = text[m.end():]
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text)]
+    prose = next((p for p in paras
+                  if p and not p.startswith("#") and not p.startswith("---")), "")
+    # Collapse internal newlines: wrapped markdown paragraphs must not land
+    # verbatim in the frontmatter, or a later exact-match edit targeting that
+    # paragraph would find two occurrences and fail the uniqueness check.
+    prose = " ".join(prose.split())
+    trig = ""
+    tm = _TRIGGER_HEADING.search(text)
+    if tm:
+        tail = text[tm.end():]
+        nxt = re.search(r"^#{1,6}\s", tail, re.MULTILINE)
+        section = tail[: nxt.start()] if nxt else tail
+        trig = " ".join(line.strip("-* \t") for line in section.splitlines()
+                        if line.strip()).strip()
+    out = " ".join(x for x in (prose, ("Triggers: " + trig) if trig else "") if x)
+    return out[:500].strip()
+
+
+def _ensure_surface_frontmatter(md: Path, name: str) -> None:
+    """Guarantee the frontmatter carries name + description — the only fields
+    the agent reads to decide when a skill applies. Derive from the body when
+    the author omitted them (the prompt-summary fallback is just the name,
+    which makes the skill invisible)."""
+    text = md.read_text(encoding="utf-8")
+
+    def _fill(data: dict) -> None:
+        if not data.get("name"):
+            data["name"] = name
+        if not data.get("description"):
+            data["description"] = _derive_description(text)
+
+    _update_md(md, _fill)
 
 
 def _body_hash(text: str) -> str:
@@ -362,17 +420,23 @@ def _unsync_index(workspace: Path, name: str) -> None:
 
 
 def needs_curation(workspace: Path, name: str) -> bool:
-    """True when the skill is new or its BODY changed since last curated."""
+    """True when the skill is new or its BODY changed since last curated, or when
+    the stored curation rules version is absent or older than the current version."""
     text = read_skill_content(workspace, name)
     if text is None:
         return False
-    prov = _durin_blob(text).get("provenance")
+    durin = _durin_blob(text)
+    prov = durin.get("provenance")
     stored = prov.get("dream_processed_through") if isinstance(prov, dict) else None
-    return stored != _body_hash(text)
+    body_hash_mismatch = stored != _body_hash(text)
+    # Re-check if rules version is absent or stale
+    stored_rules = durin.get("curation_rules")
+    rules_version_stale = stored_rules is None or stored_rules < CURATION_RULES_VERSION
+    return body_hash_mismatch or rules_version_stale
 
 
 def mark_curated(workspace: Path, name: str) -> str | None:
-    """Stamp provenance.dream_processed_through = current body hash + commit."""
+    """Stamp provenance.dream_processed_through = current body hash + curation_rules version + commit."""
     if not _safe_name(name):
         return None
     store = _store_init(workspace)
@@ -386,11 +450,32 @@ def mark_curated(workspace: Path, name: str) -> str | None:
             prov = {"source": "unknown", "created_at": _today()}
         prov["dream_processed_through"] = h
         durin["provenance"] = prov
+        durin["curation_rules"] = CURATION_RULES_VERSION
 
     _update_md(dest / "SKILL.md", _set)
     sha = store.auto_commit(f"skill({name}): curated @ {h}")
     _sync_index(workspace, name)
     return sha
+
+
+def backfill_surface_frontmatter(workspace: Path, name: str) -> bool:
+    """Deterministically fill a missing name/description in `name`'s
+    frontmatter (see `_ensure_surface_frontmatter`) and commit if it changed
+    anything. Returns True only when the file was actually modified."""
+    if not _safe_name(name):
+        return False
+    store = _store_init(workspace)
+    dest = fork_on_write(workspace, name)
+    md = dest / "SKILL.md"
+    before = md.read_text(encoding="utf-8")
+    _ensure_surface_frontmatter(md, name)
+    after = md.read_text(encoding="utf-8")
+    if after == before:
+        return False
+    store.auto_commit(f"skill({name}): backfill frontmatter description [curation]",
+                      trailers=attribution_to_trailers(Attribution(actor="curation")))
+    _sync_index(workspace, name)
+    return True
 
 
 def read_mode(workspace: Path, name: str, loader: SkillsLoader | None = None) -> str:
@@ -569,7 +654,9 @@ def apply_skill_edit(
         if n == 0:
             return {"error": "old text not found"}
         if n > 1:
-            return {"error": "old text not unique"}
+            return {"error": ("old text not unique — it may appear in both the "
+                              "frontmatter description and the body; include "
+                              "surrounding lines to pin one occurrence")}
         updated = content.replace(old, new, 1)
 
     if mode == "manual" and not confirm:
@@ -609,6 +696,10 @@ def dream_create_skill(workspace: Path, name: str, content: str,
     store = _store_init(workspace)  # ensure git repo exists before mutating files
     md.parent.mkdir(parents=True, exist_ok=True)
     md.write_text(content, encoding="utf-8")
+    if not (content.strip() and (_frontmatter_description(content) or _derive_description(content))):
+        md.unlink()
+        return {"error": "skill body has no derivable description"}
+    _ensure_surface_frontmatter(md, name)
 
     def _stamp(data: dict) -> None:
         durin = ensure_durin(data)
@@ -641,6 +732,7 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
     md = _skill_md(workspace, target)
     md.parent.mkdir(parents=True, exist_ok=True)
     md.write_text(content, encoding="utf-8")
+    _ensure_surface_frontmatter(md, target)
 
     def _stamp(data: dict) -> None:
         durin = ensure_durin(data)
