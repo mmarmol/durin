@@ -14,3 +14,14 @@ def test_needs_curation_tracks_body_changes(tmp_path):
 
     md.write_text("---\nname: git-helper\n---\nv2 changed\n", encoding="utf-8")
     assert ss.needs_curation(ws, "git-helper") is True          # body changed
+
+
+def test_needs_curation_true_when_rules_version_stale(tmp_path):
+    assert ss.dream_create_skill(tmp_path, "s", "---\nname: s\ndescription: d\n---\n# S\n\nBody.\n", "seed").get("ok")
+    ss.mark_curated(tmp_path, "s")
+    assert not ss.needs_curation(tmp_path, "s")          # hash + rules current
+    ss.CURATION_RULES_VERSION += 1                        # simulate a rules bump
+    try:
+        assert ss.needs_curation(tmp_path, "s")           # stale rules -> recheck
+    finally:
+        ss.CURATION_RULES_VERSION -= 1

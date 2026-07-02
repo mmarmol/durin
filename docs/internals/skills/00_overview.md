@@ -2,7 +2,11 @@
 
 > Single as-built reference for durin's skills subsystem: what it does today,
 > how the pieces fit, and where each lives in code. For the SKILL.md format
-> contract, see [`01_format_and_interop.md`](01_format_and_interop.md).
+> contract, see [`01_format_and_interop.md`](01_format_and_interop.md); for the
+> cold-path lifecycle (skill-extract, observations, curation, suggestions), see
+> [`02_lifecycle_and_curation.md`](02_lifecycle_and_curation.md); for the
+> `skill.*` telemetry and how usage/effectiveness reach the webui, see
+> [`03_telemetry_and_effectiveness.md`](03_telemetry_and_effectiveness.md).
 > Citations are **file + symbol** (grep-stable).
 
 ---
@@ -137,12 +141,15 @@ Two paths produce new skills:
 
 **In-loop agent.** The `skill_write` core tool calls
 `skills_store.dream_create_skill`, which stamps provenance frontmatter
-(`source`, `created_at`, `content_hash`), initializes the `SKILL.md`, and
-calls `GitStore.auto_commit` with Attribution trailers (Actor, Session, Agent).
+(`source`, `created_at`), fills in a missing `name` or `description` derived
+from the body when the caller omitted them (refusing outright if no
+description can be derived either way), initializes the `SKILL.md`, and calls
+`GitStore.auto_commit` with Attribution trailers (Actor, Session, Agent).
 `skill_edit` (bounded update) forks a builtin into the workspace via
 `fork_on_write` before applying the diff, so the builtin package is never
 touched. Both paths call `_sync_index` to update FTS and vector after the
-commit.
+commit. See `02_lifecycle_and_curation.md` for the derivation contract and why
+create derives while import (below) refuses instead.
 
 **Dream skill-extract pass.** `durin/memory/dream_passes.py::run_skill_extract_pass`
 runs a sub-agent (`AgentRunner`, `max_iterations=8`) over recent sessions plus
@@ -197,16 +204,24 @@ before routing it through the import gate.
 ### Evolve
 
 `durin/agent/skill_curation.py::curate_catalog` runs as the final step of the
-daily dream cron. It reviews only the change-gated delta: `mode="auto"` AND
-`source="workspace"` skills that `needs_curation` (body changed since last
-pass), plus any auto workspace skill with an OPEN observation even if its body
-is unchanged. An LLM judge proposes `evolve` (surgical edit), `fuse` (merge
+daily dream cron. Before anything is judged, it deterministically backfills any
+`auto` skill missing a frontmatter description (derived from the body — see
+Create above) and folds those repairs into the delta. It then reviews the
+change-gated delta: `mode="auto"` AND `source="workspace"` skills that
+`needs_curation` (body changed since last pass, **or** the stored
+`curation_rules` stamp is older than the current `CURATION_RULES_VERSION`,
+which forces a one-time recheck of the whole set after a rules change), plus
+any auto workspace skill with an OPEN observation even if its body is
+unchanged. An LLM judge proposes `evolve` (surgical edit), `fuse` (merge
 near-duplicates via `dream_fuse_skills`), `retire` (delete via `remove_skill`,
 git-recoverable), `principle` (add a cross-cutting rule), or `retire_principle`
 actions. The judge receives OPEN observations as evidence and DECLINED history
 to prevent re-proposing rejected changes. Imported skills are `mode=manual` and
 are not auto-curated — instead, they are handled by the suggestion path
-described below.
+described below. See `02_lifecycle_and_curation.md` for the full delta-build
+sequence, the observation queue and skill-signal hindsight detection that feed
+it, and `03_telemetry_and_effectiveness.md` for the `skill.*` events each step
+emits.
 
 The judge is also told which reviewed skills carry a **recent user hand-edit**,
 read straight from the skill git editorial: `user_edits_since_curation` returns
@@ -253,7 +268,10 @@ observation. A hindsight pass during the dream extract
 **tail** of post-cursor session turns (tail-windowed, not head, so corrections
 at the end of long sessions are not missed). Observations accumulate with
 dedup-by-count; `count >= 2` is the recurrence signal that licenses curation
-action.
+action. See `02_lifecycle_and_curation.md` for the full observation lifecycle
+(OPEN/APPLIED/DECLINED, paraphrase-tolerant dedup, archival) and
+`03_telemetry_and_effectiveness.md` for how usage and observation counts reach
+the webui Skills panel.
 
 **Cross-cutting principles** are promoted by the curation judge into
 `skills/.principles.jsonl` (capped at 12 entries). They are injected into both

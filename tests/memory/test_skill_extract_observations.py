@@ -14,6 +14,7 @@ from durin.agent.skill_observations import (
 from durin.memory.dream_passes import (
     _resolve_gap_observations,
     _skill_extract_messages,
+    _recent_sessions_text,
 )
 
 
@@ -67,3 +68,51 @@ def test_resolve_gap_marks_applied_when_skill_materializes(tmp_path):
     assert resolved == 1
     remaining = open_observations(tmp_path)
     assert [r["skill"] for r in remaining] == ["new:never-built"]
+
+
+def test_gap_resolution_matches_normalized_names(tmp_path):
+    """Gap logged as 'new:Release Runbook' should match skill 'release-runbook'
+    via normalized name comparison."""
+    from durin.agent.skill_observations import log_observation
+    from durin.agent import skills_store as ss
+
+    log_observation(tmp_path, skill="new:Release Runbook", kind="gap",
+                    issue="no runbook", improvement="write one")
+    body = "---\nname: release-runbook\ndescription: run releases\n---\n# R\n\nSteps.\n"
+    assert ss.dream_create_skill(tmp_path, "release-runbook", body, "seed").get("ok")
+    assert _resolve_gap_observations(tmp_path) == 1
+    assert not [r for r in open_observations(tmp_path)
+                if r.get("skill") == "new:Release Runbook"]
+
+
+def test_recent_sessions_text_preserves_head_and_tail_when_truncating(tmp_path):
+    """Long session windows keep both head (first 6000 chars) and tail (last 6000).
+    This ensures late-session procedures survive truncation."""
+    # Build a session with unique markers in head and tail, total > 12000 chars
+    head_marker = "===HEAD_MARKER_UNIQUE_123==="
+    tail_marker = "===TAIL_MARKER_UNIQUE_456==="
+
+    # Create a long session: head section + filler + tail section
+    head_text = f"{head_marker}\n" + "X" * 5000
+    middle_text = "MIDDLE_" * 1000  # ~7000 chars
+    tail_text = "Y" * 5500 + f"\n{tail_marker}"
+    full_text = head_text + middle_text + tail_text
+
+    sdir = tmp_path / "sessions"
+    sdir.mkdir(parents=True)
+    session_file = sdir / "s_long.jsonl"
+    session_file.write_text(
+        json.dumps({"role": "user", "content": full_text}) + "\n",
+        encoding="utf-8"
+    )
+
+    result = _recent_sessions_text(tmp_path, max_sessions=1)
+
+    # Both markers should be present
+    assert head_marker in result, f"Head marker missing from result (len={len(result)})"
+    assert tail_marker in result, f"Tail marker missing from result (len={len(result)})"
+    # Total length should be under ~12100 (6000 + separator + 6000)
+    assert len(result) <= 12100, f"Result too long: {len(result)} chars"
+    # Truncation marker should be present (when > 12000 chars)
+    if len(full_text) > 12000:
+        assert "[... middle truncated ...]" in result

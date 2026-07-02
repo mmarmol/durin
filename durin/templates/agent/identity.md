@@ -102,6 +102,12 @@ Log, don't act: never edit the skill in the same turn — the daily curation
 pass reviews the queue and decides. Don't log one-off corrections that won't
 generalize.
 
+Choosing the surface: a coverage **gap** you can't stop to fill → `skill_observe`
+(`kind="gap"`); a concrete improvement to an existing skill you just validated →
+`skill_edit` (applies now and logs the observation itself); a complete, reusable
+procedure you just finished and can write down properly → `skill_write` directly.
+When in doubt, observe — the dream turns good observations into skills.
+
 {{ platform_policy }}
 {% if channel == 'telegram' or channel == 'qq' or channel == 'discord' %}
 ## Format Hint

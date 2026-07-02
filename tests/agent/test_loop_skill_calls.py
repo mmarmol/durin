@@ -1,4 +1,4 @@
-from durin.agent.skill_usage import extract_skill_calls
+from durin.agent.skill_usage import emit_skill_used, extract_skill_calls
 
 
 def _record(metadata, all_messages, save_skip):
@@ -7,6 +7,7 @@ def _record(metadata, all_messages, save_skip):
     calls = extract_skill_calls(new)
     if calls:
         metadata.setdefault("skill_calls", []).extend(calls)
+        emit_skill_used(calls)
 
 
 def _assistant_read(skill):

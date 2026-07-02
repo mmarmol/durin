@@ -1301,6 +1301,64 @@ class MemoryUpsertEntityEvent(TypedDict):
 
 
 # ===========================================================================
+# Skill loop (use / observe / curate / suggest)
+# ===========================================================================
+
+
+class SkillUsedEvent(TypedDict):
+    """The agent touched a skill during a turn (view/read/edit).
+
+    Emitted once per entry in ``extract_skill_calls`` output, right after
+    ``_state_save`` records it into ``session.metadata["skill_calls"]``.
+    """
+
+    skill: str
+    op: str  # "view" | "read" | "edit"
+    turn: int
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class SkillObservationLoggedEvent(TypedDict):
+    """A live skill observation was appended, or bumped an existing OPEN
+    record (dedup). ``count`` is the record's count after this call."""
+
+    skill: str
+    kind: str
+    dedup_bumped: bool
+    count: int
+
+
+class SkillCurationActionEvent(TypedDict):
+    """One curation action was applied (or attempted) during a curation run."""
+
+    action: str  # "evolve" | "fuse" | "retire" | "principle" | "retire_principle" | "backfill"
+    skill: NotRequired[str]
+    applied: bool
+
+
+class SkillCurationRunEvent(TypedDict):
+    """One curation pass completed — summary counts.
+
+    ``deferred > 0`` means the day's delta exceeded ``budget``; the rest
+    carries over to a later run (visible throttle signal).
+    """
+
+    reviewed: int
+    applied: int
+    deferred: int
+    backfilled: NotRequired[int]
+
+
+class SkillSuggestionResolvedEvent(TypedDict):
+    """A manual-skill curation suggestion was accepted or rejected by the user."""
+
+    skill: str
+    action: str
+    resolution: str  # "accepted" | "rejected"
+
+
+# ===========================================================================
 # Catalog — single source of truth
 # ===========================================================================
 
@@ -1412,6 +1470,12 @@ EVENTS: dict[str, type] = {
     "memory.health_check": MemoryHealthCheckEvent,
     "memory.health.critical": MemoryHealthCriticalEvent,
     "memory.fallback_tool_used": MemoryFallbackToolUsedEvent,
+    # Skill loop (use / observe / curate / suggest)
+    "skill.used": SkillUsedEvent,
+    "skill.observation_logged": SkillObservationLoggedEvent,
+    "skill.curation_action": SkillCurationActionEvent,
+    "skill.curation_run": SkillCurationRunEvent,
+    "skill.suggestion_resolved": SkillSuggestionResolvedEvent,
 }
 
 
@@ -1496,4 +1560,10 @@ __all__ = [
     "MemoryIndexWriteEvent",
     "MemoryIndexRebuildEvent",
     "MemoryIndexStalenessDetectedEvent",
+    # Skill loop
+    "SkillUsedEvent",
+    "SkillObservationLoggedEvent",
+    "SkillCurationActionEvent",
+    "SkillCurationRunEvent",
+    "SkillSuggestionResolvedEvent",
 ]

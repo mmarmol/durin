@@ -22,6 +22,7 @@ import { SkillHistory } from "@/components/SkillHistory";
 import { TriageRequirements } from "@/components/TriageRequirements";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { relativeTime } from "@/lib/format";
 import {
   addTrustPattern,
   ApiError,
@@ -87,6 +88,39 @@ function ModeBadge({ mode }: { mode: "auto" | "manual" }) {
       )}
     >
       {mode}
+    </span>
+  );
+}
+
+/** Usage summary for an active skill's row: 30-day call count + last-used
+ * relative time, when there's any usage to report. A skill never called in
+ * the window renders nothing here — silence, not a "0" — to keep a healthy
+ * catalog's list from being cluttered with zeros. */
+function UsageLine({ useCount, lastUsedMs }: { useCount?: number | null; lastUsedMs?: number | null }) {
+  const { t } = useTranslation();
+  if (!useCount) return null;
+  return (
+    <span className="truncate text-[11px] text-muted-foreground/70">
+      {t("skills.usage", { count: useCount })}
+      {lastUsedMs ? (
+        <span title={t("skills.lastUsedApprox")}>
+          {` · ${t("skills.lastUsed", { when: relativeTime(lastUsedMs) })}`}
+        </span>
+      ) : (
+        ""
+      )}
+    </span>
+  );
+}
+
+/** Open-observation backlog badge — only shown when there's something to see,
+ * same "absence is the healthy signal" convention as {@link VerdictBadge}. */
+function ObservationsBadge({ count }: { count?: number }) {
+  const { t } = useTranslation();
+  if (!count) return null;
+  return (
+    <span className="shrink-0 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium leading-none text-amber-600 dark:text-amber-400">
+      {t("skills.openObservations", { count })}
     </span>
   );
 }
@@ -959,6 +993,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                         {row.name}
                       </span>
                       <span className="flex shrink-0 items-center gap-1.5">
+                        <ObservationsBadge count={row.open_observations} />
                         {row.review ? <ReviewedChip by={row.review.by} /> : <VerdictBadge verdict={row.verdict} />}
                         <ModeBadge mode={row.mode} />
                       </span>
@@ -967,6 +1002,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                       {row.source}
                       {row.provenance?.source ? ` · ${row.provenance.source}` : ""}
                     </span>
+                    <UsageLine useCount={row.use_count} lastUsedMs={row.last_used_ms} />
                   </button>
                 ))
               )
