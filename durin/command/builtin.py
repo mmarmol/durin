@@ -86,6 +86,12 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "bar-chart-3",
     ),
     BuiltinCommandSpec(
+        "/retry",
+        "Retry last message",
+        "Send the previous user message to the agent again.",
+        "rotate-ccw",
+    ),
+    BuiltinCommandSpec(
         "/model",
         "Switch model preset",
         "Show or switch the active model preset.",
@@ -401,6 +407,45 @@ async def cmd_usage(ctx: CommandContext) -> OutboundMessage:
         channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
         content="\n".join(lines), metadata=meta,
     )
+
+
+def _extract_user_text(msg: dict) -> str:
+    """Plain text of a history message; '' when there is none."""
+    content = msg.get("content") or ""
+    if isinstance(content, list):
+        parts = [
+            b.get("text", "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        content = " ".join(parts)
+    return str(content).strip()
+
+
+async def cmd_retry(ctx: CommandContext) -> OutboundMessage | None:
+    """Rewrite /retry into a resend of the last user message."""
+    session = ctx.session or ctx.loop.sessions.get_or_create(ctx.key)
+    last_text = ""
+    for message in reversed(getattr(session, "messages", []) or []):
+        if message.get("role") != "user":
+            continue
+        text = _extract_user_text(message)
+        if text and not text.startswith("/"):
+            last_text = text
+            break
+    if not last_text:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="Nothing to retry — no previous user message in this session.",
+            metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+        )
+    ctx.msg.metadata = {
+        **dict(ctx.msg.metadata or {}),
+        "original_command": "/retry",
+        "original_content": ctx.raw,
+    }
+    ctx.msg.content = last_text
+    return None
 
 
 async def cmd_new(ctx: CommandContext) -> OutboundMessage:
@@ -2074,6 +2119,7 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/new", cmd_new)
     router.exact("/status", cmd_status)
     router.exact("/usage", cmd_usage)
+    router.exact("/retry", cmd_retry)
     router.exact("/model", cmd_model)
     router.prefix("/model ", cmd_model)
     router.exact("/persona", cmd_persona)
