@@ -214,7 +214,9 @@ guided mode walks through the whole flow: it generates an **app manifest**
 at [api.slack.com/apps](https://api.slack.com/apps?new_app=1) via
 *Create from a manifest*, validates both tokens live, stores them as durin
 secrets, and enables the channel. Once active, the same panel manages DM
-pairing (approve/deny/revoke senders). A *Manual* toggle exposes every config
+pairing (approve/deny/revoke senders) and lets you join the bot to public
+workspace channels directly (private channels still need a manual
+`/invite @bot` from inside Slack). A *Manual* toggle exposes every config
 field for advanced setups; both modes write the same config keys.
 
 **Manual setup:**
@@ -231,11 +233,13 @@ group_policy = "mention"  # "open", "mention", or "allowlist"
 1. Fetch the app manifest from a running gateway
    (`GET /api/v1/channels/slack/manifest`) or build the app by hand at
    [api.slack.com/apps](https://api.slack.com/apps): enable **Socket Mode**,
-   subscribe to the `app_mention` and `message.*` bot events, and grant the
+   subscribe to the `app_mention` and `message.*` bot events, grant the
    bot scopes the channel uses (`app_mentions:read`, `chat:write`,
    `im:history`, `im:read`, `im:write`, `files:read`, `files:write`,
    `reactions:write`, `channels:history`, `channels:read`, `groups:history`,
-   `groups:read`, `mpim:history`, `mpim:read`, `users:read`).
+   `groups:read`, `mpim:history`, `mpim:read`, `users:read`), and under
+   **App Home → Messages Tab** allow users to send messages — without it
+   Slack blocks all DMs to the bot.
 2. Under **Basic Information → App-Level Tokens**, generate a token with the
    `connections:write` scope. This is your `app_token`.
 3. Under **Install App**, install to your workspace and copy the
