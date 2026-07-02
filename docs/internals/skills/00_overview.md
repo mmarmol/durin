@@ -208,9 +208,11 @@ to prevent re-proposing rejected changes. Imported skills are `mode=manual` and
 are not auto-curated — instead, they are handled by the suggestion path
 described below.
 
-The judge is also told which reviewed skills carry a **recent user hand-edit**
-(a commit with `Actor: user` since the last `curated @` stamp, via
-`user_edits_since_curation`). `auto` means dream *may* improve a skill, not that
+The judge is also told which reviewed skills carry a **recent user hand-edit**,
+read straight from the skill git editorial: `user_edits_since_curation` returns
+each `Actor: user` commit since the last `curated @` stamp **with its unified
+diff**, so the judge sees exactly what the user changed by hand, not merely that
+a change happened. `auto` means dream *may* improve a skill, not that
 the user is locked out of it: a user may edit an auto skill directly (see the
 web editor note under Format & interop), and the edit stays `auto`. The judge
 is instructed to treat such edits as intentional — it may still evolve them for

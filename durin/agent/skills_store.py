@@ -724,23 +724,38 @@ def skill_history(workspace: Path, name: str) -> dict:
     return {"provenance": prov if isinstance(prov, dict) else {}, "commits": commits}
 
 
-def user_edits_since_curation(workspace: Path, name: str) -> list[dict]:
-    """User-authored commits (Actor: user) since the last curation stamp.
+_USER_EDIT_DIFF_CAP = 4000  # chars per commit diff shown to the curation judge
 
-    Dream's curation reads this so it can treat a recent hand-edit as
-    intentional — evolving it only for a concrete reason, never reverting it
-    silently. Walks the skill's subtree log newest-first, stopping at the last
-    `curated @` stamp."""
+
+def user_edits_since_curation(workspace: Path, name: str) -> list[dict]:
+    """User-authored commits (Actor: user) since the last curation stamp, each
+    with its (path-scoped, bounded) unified diff.
+
+    Dream's curation reads this straight from the skill git editorial so it can
+    see WHAT the user changed by hand — not merely that a change happened — and
+    treat it as intentional: evolve it only for a concrete reason, never revert
+    it silently. Walks the skill's subtree log newest-first, stopping at the
+    last `curated @` stamp."""
     if _resolve_skill_dir(workspace, name) is None:
         return []
+    store = _store(workspace)
     out: list[dict] = []
-    for c in _store(workspace).log(max_entries=200, path=name):
+    for c in store.log(max_entries=200, path=name):
         subject = c.message.splitlines()[0] if c.message else ""
         if ": curated @" in subject:
             break  # reached the last curation stamp — earlier edits already seen
         actor = _parse_trailers(c.message).get("Actor") or _derive_actor(subject)
-        if actor == "user":
-            out.append({"sha": c.sha, "timestamp": c.timestamp, "subject": subject})
+        if actor != "user":
+            continue
+        diff = ""
+        res = store.commit_diff(c.sha, path=name)
+        if res is not None:
+            _, patch = res
+            diff = patch[:_USER_EDIT_DIFF_CAP]
+            if len(patch) > _USER_EDIT_DIFF_CAP:
+                diff += "\n… (diff truncated)"
+        out.append({"sha": c.sha, "timestamp": c.timestamp,
+                    "subject": subject, "diff": diff})
     return out
 
 

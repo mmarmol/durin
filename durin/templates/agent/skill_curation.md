@@ -46,8 +46,10 @@ the user's edits are yours to undo. For any skill listed here:
   `rationale`. Style or preference is never such a reason.
 - You may still add to or extend the skill around the user's edit.
 
-The map below is `skill name -> [recent user edit commit subjects]`. When empty,
-ignore this section.
+The map below is `skill name -> [{subject, diff}]`, read straight from the skill's
+git history: each entry is one `Actor: user` commit since your last pass, with the
+unified `diff` of exactly what the user changed (possibly truncated). Use the diff
+to see what NOT to undo. When empty, ignore this section.
 
 ```json
 {{ user_edits_json }}

@@ -58,6 +58,8 @@ def test_user_edits_since_curation_stops_at_last_stamp(tmp_path: Path):
     edits = user_edits_since_curation(tmp_path, "demo")
     assert len(edits) == 1
     assert edits[0]["subject"] == "skill(demo): edited SKILL.md via web"
+    # The diff read from the git editorial shows exactly what the user changed.
+    assert "+new" in edits[0]["diff"]
 
 
 def test_user_edits_since_curation_ignores_non_user(tmp_path: Path):

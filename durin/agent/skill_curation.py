@@ -255,6 +255,7 @@ def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None,
                                [{"id": p.get("id"), "text": p.get("text")}
                                 for p in principles or []], ensure_ascii=False),
                            user_edits_json=json.dumps(
-                               {n: [e.get("subject") for e in ev]
+                               {n: [{"subject": e.get("subject"),
+                                     "diff": e.get("diff", "")} for e in ev]
                                 for n, ev in (user_edits or {}).items()},
                                ensure_ascii=False))
