@@ -1693,6 +1693,9 @@ class AgentLoop:
                 from durin.telemetry.logger import reset_telemetry
                 reset_telemetry(telemetry_token)
         self._last_usage = result.usage
+        if session is not None:
+            from durin.command.builtin import accumulate_session_usage
+            accumulate_session_usage(session, result.usage)
         if session_key is not None:
             # Optional model-latency metric; a result that doesn't model timing
             # (test doubles) defaults to 0.0 — the breakdown just shows no LLM time.

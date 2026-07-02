@@ -80,6 +80,12 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "activity",
     ),
     BuiltinCommandSpec(
+        "/usage",
+        "Token usage",
+        "Show cumulative token usage for this session.",
+        "bar-chart-3",
+    ),
+    BuiltinCommandSpec(
         "/model",
         "Switch model preset",
         "Show or switch the active model preset.",
@@ -343,6 +349,57 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
             composition_payload=composition_payload,
         ),
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
+_USAGE_KEYS = ("prompt_tokens", "completion_tokens", "total_tokens")
+
+
+def accumulate_session_usage(session, usage: dict | None) -> None:
+    """Fold one turn's provider usage dict into session.metadata["token_usage"].
+
+    Best-effort: bad shapes are ignored, never raises.
+    """
+    if not usage or not isinstance(usage, dict):
+        return
+    try:
+        bucket = session.metadata.setdefault(
+            "token_usage",
+            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "turns": 0},
+        )
+        for key in _USAGE_KEYS:
+            bucket[key] += int(usage.get(key, 0) or 0)
+        bucket["turns"] += 1
+    except Exception:  # noqa: BLE001 — accounting must never break the turn
+        return
+
+
+async def cmd_usage(ctx: CommandContext) -> OutboundMessage:
+    """Show cumulative token usage for this session plus the last turn."""
+    session = ctx.session or ctx.loop.sessions.get_or_create(ctx.key)
+    bucket = (getattr(session, "metadata", None) or {}).get("token_usage")
+    meta = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+    if not bucket:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="No token usage recorded for this session yet.",
+            metadata=meta,
+        )
+    last = getattr(ctx.loop, "_last_usage", {}) or {}
+    lines = [
+        f"Session usage ({bucket['turns']} turn(s)):",
+        f"- prompt tokens: {bucket['prompt_tokens']:,}",
+        f"- completion tokens: {bucket['completion_tokens']:,}",
+        f"- total tokens: {bucket['total_tokens']:,}",
+    ]
+    if last:
+        lines.append(
+            f"Last turn: {last.get('prompt_tokens', 0):,} prompt / "
+            f"{last.get('completion_tokens', 0):,} completion"
+        )
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content="\n".join(lines), metadata=meta,
     )
 
 
@@ -2016,6 +2073,7 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.priority("/status", cmd_status)
     router.exact("/new", cmd_new)
     router.exact("/status", cmd_status)
+    router.exact("/usage", cmd_usage)
     router.exact("/model", cmd_model)
     router.prefix("/model ", cmd_model)
     router.exact("/persona", cmd_persona)
