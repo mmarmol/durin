@@ -34,6 +34,25 @@ When unsure, do nothing. Prefer an empty action list over a speculative change.
   your `evolve`/`fuse` edits are versioned on top. The original is always
   recoverable/diffable — evolve toward a concrete improvement without fear of losing it.
 
+## User edits — treat as intentional
+
+Some skills below were edited **by the user by hand** since you last curated them.
+An `auto` skill still belongs to the user; `auto` means you MAY improve it, not that
+the user's edits are yours to undo. For any skill listed here:
+
+- Treat the user's edit as deliberate. Do NOT revert it, and do NOT "evolve" it back
+  toward a previous wording, unless you have a concrete, stated reason (a factual
+  error, a broken step, a principle violation) — in which case say so in the
+  `rationale`. Style or preference is never such a reason.
+- You may still add to or extend the skill around the user's edit.
+
+The map below is `skill name -> [recent user edit commit subjects]`. When empty,
+ignore this section.
+
+```json
+{{ user_edits_json }}
+```
+
 ## Skills to review
 
 The full content of each `auto` skill, as JSON (name -> body):

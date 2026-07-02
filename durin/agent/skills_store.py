@@ -232,12 +232,16 @@ def _lint_script(relpath: str, content: str) -> dict | None:
 def save_skill_file(workspace: Path, name: str, relpath: str, content: str, *,
                     rationale: str = "edit via web",
                     attribution: "Attribution | None" = None) -> dict:
-    """Save one text file in a MANUAL skill: fork-on-write, script lint (blocking),
-    write, commit (with attribution trailers), security re-scan (non-blocking)."""
+    """Save one text file in a skill: fork-on-write, script lint (blocking),
+    write, commit (with attribution trailers), security re-scan (non-blocking).
+
+    Editable in either mode. `manual` means "the user owns this skill"; `auto`
+    means "dream may auto-improve it" — neither locks the user out of editing.
+    A user edit to an `auto` skill is committed with the user's attribution and
+    left `auto`, so dream keeps curating it (respecting the edit, not reverting
+    it blindly)."""
     if not _safe_name(name):
         return {"error": "invalid skill name"}
-    if read_mode(workspace, name) != "manual":
-        return {"error": "skill is not manual; flip it to manual to edit"}
     lint = _lint_script(relpath, content)
     if lint is not None:
         return lint  # blocked - nothing written
@@ -584,7 +588,8 @@ def apply_skill_edit(
 def save_skill_content(workspace: Path, name: str, content: str,
                        rationale: str = "edit via web",
                        attribution: "Attribution | None" = None) -> dict:
-    """Full-content overwrite of a MANUAL skill's SKILL.md (web edit surface)."""
+    """Full-content overwrite of a skill's SKILL.md (web edit surface), in
+    either mode — see :func:`save_skill_file` for the mode semantics."""
     return save_skill_file(workspace, name, "SKILL.md", content,
                            rationale=rationale, attribution=attribution)
 
@@ -717,6 +722,26 @@ def skill_history(workspace: Path, name: str) -> dict:
             "agent": tr.get("Agent"),
         })
     return {"provenance": prov if isinstance(prov, dict) else {}, "commits": commits}
+
+
+def user_edits_since_curation(workspace: Path, name: str) -> list[dict]:
+    """User-authored commits (Actor: user) since the last curation stamp.
+
+    Dream's curation reads this so it can treat a recent hand-edit as
+    intentional — evolving it only for a concrete reason, never reverting it
+    silently. Walks the skill's subtree log newest-first, stopping at the last
+    `curated @` stamp."""
+    if _resolve_skill_dir(workspace, name) is None:
+        return []
+    out: list[dict] = []
+    for c in _store(workspace).log(max_entries=200, path=name):
+        subject = c.message.splitlines()[0] if c.message else ""
+        if ": curated @" in subject:
+            break  # reached the last curation stamp — earlier edits already seen
+        actor = _parse_trailers(c.message).get("Actor") or _derive_actor(subject)
+        if actor == "user":
+            out.append({"sha": c.sha, "timestamp": c.timestamp, "subject": subject})
+    return out
 
 
 def web_list(workspace: Path) -> tuple[int, dict]:

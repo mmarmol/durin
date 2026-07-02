@@ -84,10 +84,11 @@ def test_web_mode_sets_and_validates(tmp_path):
     assert ss.web_mode(ws, "mine", "bogus")[0] == 400
 
 
-def test_web_save_requires_manual(tmp_path):
+def test_web_save_editable_in_both_modes(tmp_path):
+    # auto is not a user lock: the web save endpoint works in either mode.
     ws = tmp_path / "ws"
     ws.mkdir()
     _user_skill(ws, "mine")
     assert ss.web_save(ws, "mine", "---\nname: mine\ndescription: d\n---\nNEW\n")[0] == 200
     ss.web_mode(ws, "mine", "auto")
-    assert ss.web_save(ws, "mine", "x")[0] == 400
+    assert ss.web_save(ws, "mine", "---\nname: mine\ndescription: d\n---\nAUTO\n")[0] == 200

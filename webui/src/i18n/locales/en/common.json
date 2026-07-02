@@ -1008,8 +1008,6 @@
     "empty": "No skills yet. Add one to get started.",
     "selectPrompt": "Select a skill to view it, or add a new one.",
     "discardPrompt": "Discard unsaved changes?",
-    "editHint": "Switch to manual to edit",
-    "autoReadonly": "Read-only: this skill is in auto mode (managed by the agent). Switch it to manual to edit.",
     "add": "Add skill",
     "acquireTitle": "Add a skill",
     "acquireHint": "Import from a path, URL, or repo, or search the registry. Every skill you bring in waits in Pending until you approve it.",
