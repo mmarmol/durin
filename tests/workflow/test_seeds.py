@@ -25,6 +25,13 @@ def _seed_path(name: str) -> Path:
     return Path(str(tpl / f"{name}.json"))
 
 
+def _load_seed(name: str):
+    """Load and parse a seed workflow by name."""
+    path = _seed_path(name)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return parse_workflow(data)
+
+
 @pytest.mark.parametrize("name", _SEED_NAMES)
 def test_seed_file_exists(name: str):
     path = _seed_path(name)
@@ -86,3 +93,13 @@ def test_seed_does_not_hardcode_a_model_or_persona(name: str):
                 f"seed {name!r} node {node.get('id')!r} hardcodes {field!r}="
                 f"{node.get(field)!r}; omit it so the node uses the default"
             )
+
+
+def test_looping_seed_producers_use_persistent_sessions():
+    # Nodes that loop back (self-loop or targeted by on_fail) must use persistent
+    # sessions to maintain context across re-entries. This test verifies the looping
+    # producers in seed workflows are configured correctly.
+    for name, nodes in [("execute-plan", ["implement"]), ("debug", ["diagnose"])]:
+        wf = _load_seed(name)
+        for node_id in nodes:
+            assert wf.nodes[node_id].session == "persistent", f"{name}:{node_id}"

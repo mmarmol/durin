@@ -19,6 +19,7 @@
       "kind": "work",
       "mode": "read",
       "tools": "default",
+      "session": "persistent",
       "max_visits": 8,
       "prompt": "Find the ROOT CAUSE of the failing reproduction. Trace from the symptom back through the code to the specific line(s) responsible — read, don't guess. If an earlier fix attempt failed, use what its rerun showed to revise the hypothesis rather than repeating it. State the root cause precisely and the minimal change that would fix it. Do not edit code yet.",
       "next": "fix"
