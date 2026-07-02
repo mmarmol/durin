@@ -163,3 +163,17 @@ def test_fuse_derives_missing_frontmatter(tmp_path):
     assert out.get("ok"), out
     text = read_skill_content(tmp_path, "ab")
     assert "name: ab" in text and "description:" in text
+
+
+def test_derived_description_collapses_wrapped_paragraphs(tmp_path):
+    """A wrapped markdown paragraph must not land verbatim in the frontmatter:
+    the derived copy collapses newlines so exact-match edits targeting the
+    paragraph still find exactly one occurrence in the file."""
+    from durin.agent.skills_store import apply_skill_edit, dream_create_skill
+    para = "Convert PDF files to Markdown format\nwhile preserving headings and tables."
+    body = f"# PDF Convert\n\n{para}\n\n## Triggers\n\n- pdf attached\n"
+    assert dream_create_skill(tmp_path, "pdf-convert", body, "seed").get("ok")
+    out = apply_skill_edit(tmp_path, "pdf-convert", old=para,
+                           new="Convert PDFs to clean Markdown.",
+                           rationale="test edit")
+    assert out.get("ok"), out

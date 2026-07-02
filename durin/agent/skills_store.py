@@ -114,6 +114,10 @@ def _derive_description(body: str) -> str:
     paras = [p.strip() for p in re.split(r"\n\s*\n", text)]
     prose = next((p for p in paras
                   if p and not p.startswith("#") and not p.startswith("---")), "")
+    # Collapse internal newlines: wrapped markdown paragraphs must not land
+    # verbatim in the frontmatter, or a later exact-match edit targeting that
+    # paragraph would find two occurrences and fail the uniqueness check.
+    prose = " ".join(prose.split())
     trig = ""
     tm = _TRIGGER_HEADING.search(text)
     if tm:
@@ -618,7 +622,9 @@ def apply_skill_edit(
         if n == 0:
             return {"error": "old text not found"}
         if n > 1:
-            return {"error": "old text not unique"}
+            return {"error": ("old text not unique — it may appear in both the "
+                              "frontmatter description and the body; include "
+                              "surrounding lines to pin one occurrence")}
         updated = content.replace(old, new, 1)
 
     if mode == "manual" and not confirm:
