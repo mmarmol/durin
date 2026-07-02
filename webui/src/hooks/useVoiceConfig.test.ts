@@ -33,7 +33,9 @@ describe("useVoiceConfig", () => {
       config: { voice: { enabled: true }, tts: { provider: "local" } },
       schema: {},
     });
-    mockGetExtraStatus.mockResolvedValue({ present: true, extra: "tts" });
+    mockGetExtraStatus.mockResolvedValue({
+      present: true, extra: "tts", approx_size: "~1 GB", needs_restart: false, label: "Local TTS",
+    });
     const { result } = renderHook(() => useVoiceConfig("tok"));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.available).toBe(true);
@@ -44,7 +46,9 @@ describe("useVoiceConfig", () => {
       config: { voice: { enabled: true }, tts: { provider: "local" } },
       schema: {},
     });
-    mockGetExtraStatus.mockResolvedValue({ present: false, extra: "tts" });
+    mockGetExtraStatus.mockResolvedValue({
+      present: false, extra: "tts", approx_size: "~1 GB", needs_restart: false, label: "Local TTS",
+    });
     const { result } = renderHook(() => useVoiceConfig("tok"));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.available).toBe(false);

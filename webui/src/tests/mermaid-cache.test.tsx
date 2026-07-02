@@ -1,5 +1,5 @@
 // webui/src/tests/mermaid-cache.test.tsx
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Mock the lazily-imported mermaid module so we can count render calls and

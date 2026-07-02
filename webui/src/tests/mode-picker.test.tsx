@@ -5,9 +5,9 @@ import { ModePicker } from "@/components/thread/ModePicker";
 import type { ModeInfo } from "@/lib/api";
 
 const MODES: ModeInfo[] = [
-  { name: "build", description: "Full access to all tools.", icon: null, builtin: true },
-  { name: "plan", description: "Read-only planning mode.", icon: null, builtin: true },
-  { name: "explore", description: "Read-only exploration.", icon: null, builtin: true },
+  { name: "build", description: "Full access to all tools.", icon: null, builtin: true, allowed: null, denied: [], prompt_suffix: "" },
+  { name: "plan", description: "Read-only planning mode.", icon: null, builtin: true, allowed: null, denied: ["write_file"], prompt_suffix: "" },
+  { name: "explore", description: "Read-only exploration.", icon: null, builtin: true, allowed: ["read_file"], denied: [], prompt_suffix: "" },
 ];
 
 describe("ModePicker", () => {

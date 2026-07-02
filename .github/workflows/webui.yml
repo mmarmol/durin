@@ -57,5 +57,10 @@ jobs:
       - name: Test
         run: bun run test
 
+      # The build typechecks with tsconfig.build.json, which excludes src/tests/** —
+      # this full-config pass is what keeps test files (and their fixtures) type-clean.
+      - name: Typecheck (full, includes tests)
+        run: bunx tsc --noEmit
+
       - name: Build
         run: bun run build
