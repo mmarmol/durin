@@ -1079,7 +1079,9 @@
     "statusAll": "all",
     "allWorkflows": "all workflows",
     "empty": "No runs match this filter.",
-    "subOf": "sub of {{id}}"
+    "subOf": "sub of {{id}}",
+    "countLabel_one": "{{count}} run",
+    "countLabel_other": "{{count}} runs"
   },
   "skills": {
     "view": "View",
