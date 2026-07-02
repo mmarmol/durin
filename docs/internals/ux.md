@@ -328,14 +328,14 @@ provides browser-based interaction over WebSocket.
 **Composer toolbar.** Above the text input, two pill buttons control the model
 and agent:
 - **Agent pill** (left, icon + "mode · persona"): Opens a popover with two
-  sections. The mode section lists available agent modes (e.g. Build, Analyze);
+  sections. The mode section lists available agent modes (build, plan, explore, read);
   selecting one publishes `/mode <name>`. The persona section lists all configured
   personas (each with name and optional description); selecting one publishes
   `/persona <name>`. Personas lazy-load on first popover open.
 - **Model pill** (right, icon + model name + "effort" badge): Opens a popover
   with two sections. The model section lists configured model presets and provides
   a custom provider/model entry; selecting one publishes `/model <ref>`. The effort
-  section lists reasoning levels (none / low / medium / high / max); selecting one
+  section lists reasoning levels (Default / Off / High / Max); selecting one
   publishes `/effort <level>`. The current effort level (if any) is extracted from
   the active model preset's suffix (e.g. `default:high` → `high`).
 
@@ -347,11 +347,12 @@ two types of chips:
 - **Audit chip**: A single "What do you know about me?" chip that sends the
   `/audit` command, triggering a memory and capability check.
 
-**Edit affordance.** Each user message carries a dim edit hint; clicking the
+**Edit affordance.** The last user message carries a dim edit hint; clicking the
 message reloads its text into the composer input for revision. This is a refill
 only — it does not truncate history or automatically resend.
 
 ### TUI features
+
 
 The Textual TUI (`durin agent --tui`) provides richer interaction affordances
 than the interactive CLI.
