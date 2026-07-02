@@ -354,7 +354,9 @@ function ChannelRow({
                     : t("settings.channels.enable")}
                 </Button>
               ) : null}
-              {hasFields && !channel.enabled ? (
+              {/* Slack is excluded: enabling without tokens strands the channel,
+                  so its guided wizard owns the save-and-enable step. */}
+              {hasFields && !channel.enabled && channel.name !== "slack" ? (
                 <Button
                   size="sm"
                   variant="outline"
@@ -395,7 +397,12 @@ function ChannelRow({
           {/* Slack wraps the generic form in a guided/manual panel; the form
               below doubles as its manual mode so both write the same keys */}
           {channel.name === "slack" ? (
-            <SlackGuided channel={channel} token={token} onChanged={onChanged}>
+            <SlackGuided
+              channel={channel}
+              channelValues={channelValues}
+              token={token}
+              onChanged={onChanged}
+            >
               {schemaForm}
             </SlackGuided>
           ) : null}
@@ -589,7 +596,11 @@ export function ChannelsSettings({ token }: { token: string }) {
     [token, load, t],
   );
 
-  if (loading) {
+  // Full-screen spinner ONLY on the very first load. Later reloads (field
+  // edits, the periodic auth-token refresh changing the `token` prop) refresh
+  // data in place — unmounting the rows here would collapse open accordions
+  // and wipe in-progress wizard input mid-setup.
+  if (loading && channels.length === 0) {
     return (
       <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />

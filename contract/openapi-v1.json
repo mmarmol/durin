@@ -5124,6 +5124,85 @@
         "title": "SkillsResult",
         "type": "object"
       },
+      "SlackChannelsListQuery": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "SlackChannelsListQuery",
+        "type": "object"
+      },
+      "SlackChannelsListResult": {
+        "properties": {
+          "channels": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Channels",
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "channels"
+        ],
+        "title": "SlackChannelsListResult",
+        "type": "object"
+      },
+      "SlackJoinChannelCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "channel_id": {
+            "title": "Channel Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel_id"
+        ],
+        "title": "SlackJoinChannelCommand",
+        "type": "object"
+      },
+      "SlackJoinChannelResult": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "SlackJoinChannelResult",
+        "type": "object"
+      },
       "SlackManifestQuery": {
         "additionalProperties": false,
         "properties": {
@@ -6209,6 +6288,64 @@
         },
         "summary": "Discovered channels with their enabled state and primary credential field",
         "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/slack/channels": {
+      "get": {
+        "operationId": "slack_channels",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackChannelsListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackChannelsListResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List workspace channels with the bot's membership status",
+        "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/slack/channels/join": {
+      "post": {
+        "operationId": "slack_join_channel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlackJoinChannelCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlackJoinChannelResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Join the bot to a public channel (private ones need /invite)",
+        "x-required-scope": "config:write"
       }
     },
     "/api/v1/channels/slack/manifest": {

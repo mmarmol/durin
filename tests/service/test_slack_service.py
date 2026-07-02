@@ -10,6 +10,8 @@ from durin.pairing import store
 from durin.service.channels_slack import (
     SLACK_BOT_EVENTS,
     SLACK_BOT_SCOPES,
+    SlackChannelsListQuery,
+    SlackJoinChannelCommand,
     SlackManifestQuery,
     SlackPairingApproveCommand,
     SlackPairingDenyCommand,
@@ -221,3 +223,110 @@ def test_gateway_registry_registers_slack_like_the_catalog():
     assert {b.service_name for b in build_catalog_registry().routes} == wnames
     assert any(b.spec.path.endswith("/slack/manifest") for b in wiring.routes)
     assert any(b.spec.path.endswith("/slack/test") for b in wiring.routes)
+
+
+async def test_manifest_enables_dm_messages_tab():
+    """Without app_home.messages_tab_enabled Slack blocks DMs to the bot."""
+    res = await SlackService().manifest(SlackManifestQuery(), Principal.local())
+    app_home = res.manifest["features"]["app_home"]
+    assert app_home["messages_tab_enabled"] is True
+    assert app_home["messages_tab_read_only_enabled"] is False
+
+
+async def test_token_test_detects_swapped_tokens():
+    res = await SlackService().test(
+        SlackTestCommand(bot_token="xapp-1-A1-x", app_token="xoxb-123-x"), Principal.local()
+    )
+    assert res.ok is False
+    assert res.bot_error == "swapped_tokens"
+    assert res.app_error == "swapped_tokens"
+
+
+async def test_token_test_rejects_wrong_prefixes_without_calling_slack(fake_web_client):
+    res = await SlackService().test(
+        SlackTestCommand(bot_token="xoxp-user-token", app_token="xapp-good"), Principal.local()
+    )
+    assert res.ok is False
+    assert res.bot_error == "expected_bot_token"
+    assert res.app_error is None
+
+    res = await SlackService().test(
+        SlackTestCommand(bot_token="xoxb-good", app_token="xoxa-something"), Principal.local()
+    )
+    assert res.ok is False
+    assert res.bot_error is None
+    assert res.app_error == "expected_app_token"
+
+
+# ---------------------------------------------------------------------------
+# Channel listing / joining
+# ---------------------------------------------------------------------------
+
+
+class _FakeChannelsClient:
+    joined: list[str] = []
+
+    def __init__(self, token: str):
+        self._token = token
+
+    async def conversations_list(self, **kwargs):
+        return {
+            "channels": [
+                {"id": "C1", "name": "general", "is_member": False, "is_private": False},
+                {"id": "C2", "name": "dev", "is_member": True, "is_private": False},
+                {"id": "G1", "name": "secret", "is_member": False, "is_private": True},
+            ],
+            "response_metadata": {"next_cursor": ""},
+        }
+
+    async def conversations_join(self, *, channel: str):
+        if channel.startswith("G"):
+            raise RuntimeError("method_not_supported_for_channel_type")
+        _FakeChannelsClient.joined.append(channel)
+        return {"ok": True}
+
+
+@pytest.fixture
+def configured_channels_client(monkeypatch):
+    _FakeChannelsClient.joined = []
+    monkeypatch.setattr("slack_sdk.web.async_client.AsyncWebClient", _FakeChannelsClient)
+    monkeypatch.setattr(
+        "durin.service.channels_slack._configured_bot_token", lambda: "xoxb-configured"
+    )
+
+
+async def test_channels_list_reports_membership(configured_channels_client):
+    res = await SlackService().channels(SlackChannelsListQuery(), Principal.local())
+    assert res.ok is True
+    by_id = {c["id"]: c for c in res.channels}
+    assert by_id["C2"]["is_member"] is True
+    assert by_id["G1"]["is_private"] is True
+    # Members sort first, then by name.
+    assert res.channels[0]["id"] == "C2"
+
+
+async def test_channels_list_requires_configured_token(monkeypatch):
+    monkeypatch.setattr(
+        "durin.service.channels_slack._configured_bot_token", lambda: None
+    )
+    res = await SlackService().channels(SlackChannelsListQuery(), Principal.local())
+    assert res.ok is False
+    assert res.error == "not_configured"
+
+
+async def test_join_channel_public_ok_private_error(configured_channels_client):
+    res = await SlackService().join_channel(
+        SlackJoinChannelCommand(channel_id="C1"), Principal.local()
+    )
+    assert res.ok is True
+    assert _FakeChannelsClient.joined == ["C1"]
+
+    res = await SlackService().join_channel(
+        SlackJoinChannelCommand(channel_id="G1"), Principal.local()
+    )
+    assert res.ok is False
+    assert res.error == "RuntimeError"
+
+
+async def test_manifest_includes_channels_join_scope():
+    assert "channels:join" in SLACK_BOT_SCOPES
