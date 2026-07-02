@@ -1322,6 +1322,9 @@
         "title": "Persona",
         "empty": "No personas available"
       },
+      "agent": {
+        "title": "Agent"
+      },
       "add": {
         "title": "Add",
         "attach": "Upload file or photo",
