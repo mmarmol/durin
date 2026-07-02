@@ -224,6 +224,7 @@ The per-node entries in the manifest's `runs` array carry:
 | `status` | `"ok"` / `"persist_failed"` (save raised) / `"node_failed"` (agent turn raised) |
 | `passed` | binary routing verdict (`true`/`false`/`null` for non-binary nodes) |
 | `route_label` | matched case label for multi-way nodes (`null` otherwise) |
+| `needs_input_node` | the node that routed to `__needs_input__` (`null` otherwise) — the resume re-entry point |
 
 `read_runs_since` (used by the dream self-improvement pass) returns all records for a
 workflow; callers that need only terminal runs should skip records whose `status` is
@@ -367,6 +368,14 @@ through the unified `tasks` tool — `tasks(action='status', id=…)` reads the 
 manifest, `tasks(action='stop', id=…)` requests cancellation. The same merge of
 sub-agents and workflow runs that backs `GET /api/v1/tasks`
 (`durin/agent/background_tasks.py`) is what `tasks` renders.
+
+**Resuming a needs_input run.** A run that ended needs_input can be resumed
+instead of restarted: the engine re-enters the graph AT the asking node, with
+the same run_id (same shared working folder, same node-session keys), the
+visit counts already consumed, and the user's answers as that node's upstream
+input. The shared-context buffer is not reconstructed across a resume —
+persistent-session nodes recover their own history, and files live in the
+working folder.
 
 **Cooperative cancellation.** `tasks(action='stop', …)` marks the `run_id` in a
 process-global registry (`durin/workflow/cancellation.py`); the engine polls it

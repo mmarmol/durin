@@ -36,3 +36,5 @@ class WorkflowResult:
     exhausted_node: str | None = None  # set when status=="exhausted": the node that hit its budget
     failed_node: str | None = None  # set when a node's agent turn raised: the node that failed
     failed_iteration: int | None = None  # the iteration of the failed node (with failed_node)
+    needs_input_node: str | None = None  # set when status=="needs_input": the node that asked
+    output_files: list[str] = field(default_factory=list)  # relative paths in output_dir (completed runs)

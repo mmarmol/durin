@@ -718,3 +718,38 @@ def test_sequential_nodes_share_one_working_dir(tmp_path):
     assert len(seen["loop"]) == 3                    # the loop still looped three times
     assert len(set(all_dirs)) == 1                   # every node + iteration shares one dir
     assert all_dirs[0].endswith("/work")             # the run's shared working folder
+
+
+def test_needs_input_result_names_the_asking_node():
+    wf = parse_workflow({
+        "name": "d", "start": "gate",
+        "nodes": [{"id": "gate", "kind": "work", "prompt": "clarify?",
+                   "cases": {"OK": None, "NEED_INFO": "__needs_input__"}}],
+    })
+    eng, _ = _engine({"gate": "what env?\nNEED_INFO"})
+    result = eng.run(wf, "t")
+    assert result.status == "needs_input"
+    assert result.needs_input_node == "gate"
+
+
+def test_resume_reenters_at_the_asking_node_with_carried_visits(tmp_path):
+    from durin.workflow.engine import ResumeState
+    wf = parse_workflow({
+        "name": "d", "start": "plan",
+        "nodes": [
+            {"id": "plan", "kind": "work", "next": "gate"},
+            {"id": "gate", "kind": "work", "prompt": "clarify?",
+             "cases": {"OK": None, "NEED_INFO": "__needs_input__"}},
+        ],
+    })
+    eng, calls = _engine({"plan": "the plan", "gate": "OK"})
+    result = eng.run(wf, "answers text", resume=ResumeState(
+        run_id="fixed-run", start_at="gate",
+        visits={"plan": 1, "gate": 1}, upstream="User answers:\nprod env",
+    ))
+    assert result.status == "completed"
+    assert result.run_id == "fixed-run"
+    assert [c.node.id for c in calls] == ["gate"]        # plan NOT re-run
+    gate_call = calls[0]
+    assert gate_call.iteration == 2                       # continues the count
+    assert "prod env" in (gate_call.upstream_output or "")

@@ -134,6 +134,7 @@ def finalize_run(
         # The terminal output (the answer, the plan, or — on needs_input — the questions),
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],
+        "needs_input_node": getattr(result, "needs_input_node", None),
         "runs": _node_records(result),
     }
     path = _record_path(workspace, name, result.run_id)

@@ -105,6 +105,16 @@ def test_finalize_run_writes_terminal_status(tmp_path):
     assert [r["run_id"] for r in got] == ["r1"]
 
 
+def test_finalize_records_needs_input_node(tmp_path):
+    from durin.workflow.result import WorkflowResult
+    result = WorkflowResult(status="needs_input", final_output="what env?",
+                            runs=[], run_id="r9", needs_input_node="gate")
+    run_log.finalize_run(tmp_path, "w", result, root_session_key=None,
+                         started_at=1.0, finished_at=2.0)
+    rec = run_log.read_manifest(tmp_path, "w", "r9")
+    assert rec["needs_input_node"] == "gate"
+
+
 def test_runs_for_session_matches_root_newest_first(tmp_path):
     run_log.finalize_run(tmp_path, "wf", _result("old"), root_session_key="sess:1",
                          started_at=1.0, finished_at=2.0)

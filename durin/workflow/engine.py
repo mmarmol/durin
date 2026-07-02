@@ -86,6 +86,18 @@ class NodeRunResponse:
 
 NodeRunner = Callable[[NodeRunRequest], NodeRunResponse]
 
+
+@dataclass
+class ResumeState:
+    """Where to re-enter a run that ended needs_input: the same run_id (same working
+    folder and node-session keys), the node that asked, the visit counts already
+    consumed, and the composed answers context fed to that node as upstream input."""
+
+    run_id: str
+    start_at: str
+    visits: dict[str, int]
+    upstream: str | None = None
+
 # Upper bound on messages carried in the running shared-context buffer. A long
 # chain of 'shared' nodes would otherwise grow this without limit and balloon the
 # prompt for every later node; keep only the most recent N messages.
@@ -150,6 +162,7 @@ class WorkflowEngine:
         root_session_key: str | None = None,
         input_files: list[str] | None = None,
         output_format: str | None = None,
+        resume: ResumeState | None = None,
     ) -> WorkflowResult:
         """Run the workflow. A node-execution failure (provider/MCP/tool error) does not
         propagate — it ends the run as a typed ``aborted`` result carrying the partial
@@ -158,8 +171,13 @@ class WorkflowEngine:
 
         When the engine has a workspace it owns a live run manifest: a ``running`` record
         written before the walk, updated after each node, and finalized on every exit
-        path. Manifest writes are best-effort — a record failure never breaks the run."""
-        run_id = self._run_id_factory()
+        path. Manifest writes are best-effort — a record failure never breaks the run.
+
+        When ``resume`` is given, the walk re-enters at ``resume.start_at`` under the
+        same ``run_id`` (so it shares the prior run's working folder and node-session
+        keys) with the visit counts already consumed and ``resume.upstream`` as that
+        node's upstream input, instead of starting a fresh run at the workflow's start."""
+        run_id = resume.run_id if resume is not None else self._run_id_factory()
         if self._workspace is not None:
             prune_runs(self._workspace)
         runs: list[NodeRun] = []
@@ -177,8 +195,11 @@ class WorkflowEngine:
             result = self._walk(
                 workflow, self._frame_task(workflow, task, output_format), run_id, runs,
                 root_session_key=root_session_key,
-                input_files=input_files,
+                input_files=None if resume else input_files,
                 update_manifest=_update,
+                start_at=resume.start_at if resume else None,
+                initial_visits=dict(resume.visits) if resume else None,
+                initial_upstream=resume.upstream if resume else None,
             )
         except WorkflowConfigError as exc:
             # A config/wiring error is fatal and re-raised, but finalize the manifest first
@@ -265,10 +286,13 @@ class WorkflowEngine:
         root_session_key: str | None = None,
         input_files: list[str] | None = None,
         update_manifest: Callable[[], None] | None = None,
+        start_at: str | None = None,
+        initial_visits: dict[str, int] | None = None,
+        initial_upstream: str | None = None,
     ) -> WorkflowResult:
         shared_context: list[dict] = []
-        visits: dict[str, int] = {}
-        upstream_output: str | None = None
+        visits: dict[str, int] = dict(initial_visits or {})
+        upstream_output: str | None = initial_upstream
         # One shared working folder per run: every sequential node reads and writes here,
         # so created/edited files accumulate in one place and each stage sees the prior
         # work (collaboration). Parallel branches fork this and reconcile (see _run_parallel).
@@ -278,7 +302,7 @@ class WorkflowEngine:
         )
         terminal_output_dir: str | None = work_dir
         final_output: str | None = None
-        current: str | None = workflow.start
+        current: str | None = start_at or workflow.start
 
         # Seed input_files into the shared working folder so the start node reads them as
         # the run's starting files.
@@ -426,7 +450,7 @@ class WorkflowEngine:
                         # asks the user and re-runs the workflow with the answers.
                         return WorkflowResult(
                             status="needs_input", final_output=output,
-                            runs=runs, run_id=run_id,
+                            runs=runs, run_id=run_id, needs_input_node=node.id,
                         )
                     if target is not None:
                         # Thread this node's output as neutral context before routing to
