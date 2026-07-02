@@ -325,6 +325,10 @@ class GitHubCopilotProvider(OpenAICompatProvider):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, object] | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        repeat_penalty: float | None = None,
+        extra_body: dict[str, object] | None = None,
     ):
         await self._refresh_client_api_key()
         return await super().chat(
@@ -335,6 +339,10 @@ class GitHubCopilotProvider(OpenAICompatProvider):
             temperature=temperature,
             reasoning_effort=reasoning_effort,
             tool_choice=tool_choice,
+            top_p=top_p,
+            top_k=top_k,
+            repeat_penalty=repeat_penalty,
+            extra_body=extra_body,
         )
 
     async def chat_stream(
@@ -348,6 +356,10 @@ class GitHubCopilotProvider(OpenAICompatProvider):
         tool_choice: str | dict[str, object] | None = None,
         on_content_delta: Callable[[str], None] | None = None,
         on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        repeat_penalty: float | None = None,
+        extra_body: dict[str, object] | None = None,
     ):
         await self._refresh_client_api_key()
         return await super().chat_stream(
@@ -360,4 +372,8 @@ class GitHubCopilotProvider(OpenAICompatProvider):
             tool_choice=tool_choice,
             on_content_delta=on_content_delta,
             on_thinking_delta=on_thinking_delta,
+            top_p=top_p,
+            top_k=top_k,
+            repeat_penalty=repeat_penalty,
+            extra_body=extra_body,
         )

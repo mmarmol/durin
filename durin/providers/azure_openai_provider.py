@@ -85,6 +85,8 @@ class AzureOpenAIProvider(LLMProvider):
         temperature: float,
         reasoning_effort: str | None,
         tool_choice: str | dict[str, Any] | None,
+        top_p: float | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build the Responses API request body from Chat-Completions-style args."""
         deployment = model or self.default_model
@@ -109,6 +111,12 @@ class AzureOpenAIProvider(LLMProvider):
         if tools:
             body["tools"] = convert_tools(tools)
             body["tool_choice"] = tool_choice or "auto"
+
+        if top_p is not None:
+            body["top_p"] = top_p
+
+        if extra_body:
+            body["extra_body"] = extra_body
 
         return body
 
@@ -135,10 +143,16 @@ class AzureOpenAIProvider(LLMProvider):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        top_p: float | None = None,
+        # Accepted for retry-wrapper signature compatibility; not wired to this backend yet.
+        top_k: int | None = None,
+        repeat_penalty: float | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> LLMResponse:
         body = self._build_body(
             messages, tools, model, max_tokens, temperature,
             reasoning_effort, tool_choice,
+            top_p=top_p, extra_body=extra_body,
         )
         try:
             response = await self._client.responses.create(**body)
@@ -157,11 +171,17 @@ class AzureOpenAIProvider(LLMProvider):
         tool_choice: str | dict[str, Any] | None = None,
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
         on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
+        top_p: float | None = None,
+        # Accepted for retry-wrapper signature compatibility; not wired to this backend yet.
+        top_k: int | None = None,
+        repeat_penalty: float | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> LLMResponse:
         _ = on_thinking_delta
         body = self._build_body(
             messages, tools, model, max_tokens, temperature,
             reasoning_effort, tool_choice,
+            top_p=top_p, extra_body=extra_body,
         )
         body["stream"] = True
 
