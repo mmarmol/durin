@@ -64,3 +64,46 @@ async def test_pairing_allowed_with_dict_shaped_channel_config(monkeypatch):
     )
     out = await cmd_pairing(ctx)
     assert "No pending pairing requests" in out.content
+
+
+@pytest.mark.asyncio
+async def test_pairing_composite_sender_allowed_by_numeric_half(monkeypatch):
+    """Composite Telegram sender "555|owner_handle" is allowed if numeric half in allowlist."""
+    monkeypatch.setattr(
+        "durin.pairing.store.list_pending", lambda: [], raising=True
+    )
+    out = await cmd_pairing(_ctx(sender="555|owner_handle", allow_from=("555",)))
+    assert "No pending pairing requests" in out.content
+
+
+@pytest.mark.asyncio
+async def test_pairing_composite_sender_allowed_by_username_half(monkeypatch):
+    """Composite Telegram sender "555|owner_handle" is allowed if username half in allowlist."""
+    monkeypatch.setattr(
+        "durin.pairing.store.list_pending", lambda: [], raising=True
+    )
+    out = await cmd_pairing(_ctx(sender="555|owner_handle", allow_from=("owner_handle",)))
+    assert "No pending pairing requests" in out.content
+
+
+@pytest.mark.asyncio
+async def test_pairing_composite_sender_denied_for_non_matching_halves(monkeypatch):
+    """Composite sender "555|owner_handle" is denied if neither half is in allowlist."""
+    out = await cmd_pairing(_ctx(sender="555|owner_handle", allow_from=("999",)))
+    assert "owner" in out.content.lower()
+
+
+@pytest.mark.asyncio
+async def test_pairing_malformed_composite_sender_denied(monkeypatch):
+    """Malformed composite senders (non-numeric sid, empty username, multiple pipes) are denied."""
+    # Non-numeric sid
+    out1 = await cmd_pairing(_ctx(sender="abc|owner_handle", allow_from=("abc",)))
+    assert "owner" in out1.content.lower()
+
+    # Empty username
+    out2 = await cmd_pairing(_ctx(sender="555|", allow_from=("555",)))
+    assert "owner" in out2.content.lower()
+
+    # Multiple pipes
+    out3 = await cmd_pairing(_ctx(sender="evil|x|y", allow_from=("evil",)))
+    assert "owner" in out3.content.lower()

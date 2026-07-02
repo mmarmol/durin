@@ -2140,7 +2140,18 @@ def _sender_is_owner(ctx: CommandContext) -> bool:
     channels_cfg = getattr(getattr(ctx.loop, "app_config", None), "channels", None)
     allow = _channel_allow_from(channels_cfg, channel)
     sender = str(getattr(ctx.msg, "sender_id", "") or "")
-    return "*" in allow or sender in allow or sender.split("|")[0] in allow
+
+    if "*" in allow or sender in allow:
+        return True
+
+    # For composite senders "sid|username", match either half against allowlist.
+    # Mirror Telegram's shape validation: exactly one "|", numeric sid, non-empty username.
+    if sender.count("|") == 1:
+        sid, username = sender.split("|", 1)
+        if sid.isdigit() and username:
+            return sid in allow or username in allow
+
+    return False
 
 
 async def cmd_pairing(ctx: CommandContext) -> OutboundMessage:
