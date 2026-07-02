@@ -70,7 +70,7 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
     # delta explicitly below (same pattern as the observation-driven pull-in).
     backfilled_names: set[str] = set()
     for s in skills_info:
-        if s["name"] in auto and not s["description"].strip():
+        if s["name"] in auto and not str(s["description"] or "").strip():
             if ss.backfill_surface_frontmatter(workspace, s["name"]):
                 backfilled_names.add(s["name"])
                 _emit("skill.curation_action", action="backfill",
@@ -153,6 +153,7 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
         if t == "fuse":
             if not set(a.get("sources", [])) <= set(selected):
                 logger.warning("curation: skipping fuse with out-of-scope sources %s", a.get("sources"))
+                _emit("skill.curation_action", action="fuse", skill=a.get("target"), applied=False)
                 continue
             r = ss.dream_fuse_skills(workspace, target=a["target"], content=a["content"],
                                      sources=a["sources"], rationale=a.get("rationale", "fuse"),
@@ -163,6 +164,7 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
         elif t == "evolve":
             if a.get("name") not in selected:
                 logger.warning("curation: skipping evolve of out-of-scope skill %s", a.get("name"))
+                _emit("skill.curation_action", action="evolve", skill=a.get("name"), applied=False)
                 continue
             r = ss.apply_skill_edit(workspace, a["name"], old=a["old"], new=a["new"],
                                     rationale=a.get("rationale", "evolve"))
@@ -175,6 +177,7 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             # path can only `evolve` toward an empty SKILL.md, leaving clutter.
             if a.get("name") not in selected:
                 logger.warning("curation: skipping retire of out-of-scope skill %s", a.get("name"))
+                _emit("skill.curation_action", action="retire", skill=a.get("name"), applied=False)
                 continue
             r = ss.remove_skill(workspace, a["name"])
             ok = bool(r.get("ok"))

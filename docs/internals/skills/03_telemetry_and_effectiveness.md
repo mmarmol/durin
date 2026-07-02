@@ -226,7 +226,7 @@ them — there is no separate skills-specific telemetry sink.
   `../memory/05_dream_cold_path.md` §6 for the full Resumen/Bandeja layout.
 - The **Skills panel** (`SkillsView.tsx`) reads `use_count`, `last_used_ms`,
   and `open_observations` per skill from `GET /api/v1/skills`, enriched
-  server-side by `SkillsService._enrich_usage`
+  server-side by `_enrich_usage`
   (`durin/service/skills.py`) via `skill_usage.collect_usage_and_last_used` —
   a single glob-and-read pass over `sessions/*.meta.json` within a 30-day
   (720-hour) window, summing each skill's `view`+`read`+`edit` op counts for

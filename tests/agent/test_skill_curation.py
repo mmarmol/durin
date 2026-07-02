@@ -181,6 +181,29 @@ def test_curate_emits_action_and_run_events(tmp_path, monkeypatch):
     assert runs[0]["backfilled"] == 0
 
 
+def test_curate_emits_action_event_for_out_of_scope_evolve(tmp_path, monkeypatch):
+    # An out-of-scope judge proposal (skill not in `selected`) must still be
+    # visible in the event stream as applied=False, not silently dropped —
+    # otherwise judge drift (proposing actions on skills it wasn't shown) is
+    # invisible to telemetry.
+    import durin.agent.tools._telemetry as tel
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    ws = tmp_path / "ws"
+    _mk(ws, "git-a", "body a")
+
+    def fake_judge(prompt):
+        return ('{"actions": [{"type": "evolve", "name": "ghost", '
+                '"old": "x", "new": "y", "rationale": "r"}]}')
+
+    res = curate_catalog(ws, judge=fake_judge)
+    assert res["applied"] == 0
+
+    actions = [d for n, d in events if n == "skill.curation_action"]
+    assert {"action": "evolve", "skill": "ghost", "applied": False} in actions
+
+
 def test_curate_backfill_emits_action_event(tmp_path, monkeypatch):
     import durin.agent.tools._telemetry as tel
     events = []
@@ -197,6 +220,23 @@ def test_curate_backfill_emits_action_event(tmp_path, monkeypatch):
     assert {"action": "backfill", "skill": "qr-reader", "applied": True} in actions
     runs = [d for n, d in events if n == "skill.curation_run"]
     assert runs[-1]["backfilled"] == 1
+
+
+def test_curation_backfills_null_description(tmp_path):
+    # A bare `description:` key parses to None (PyYAML), not "" — the naive
+    # s["description"].strip() call would crash on this instead of repairing it.
+    body = "# QR Reader\n\nDecode QR codes from images.\n\n## Triggers\n\n- QR image attached\n"
+    assert ss.dream_create_skill(tmp_path, "qr-reader", body, "seed").get("ok")
+    md = tmp_path / "skills" / "qr-reader" / "SKILL.md"
+    text = md.read_text(encoding="utf-8")
+    nulled = re.sub(r"^description:.*\n", "description:\n", text, flags=re.MULTILINE)
+    assert "description:\n" in nulled
+    md.write_text(nulled, encoding="utf-8")
+    out = curate_catalog(tmp_path, judge=lambda p: '{"actions": [], "observations": []}')
+    assert out.get("backfilled") == 1
+    assert "description:" in md.read_text(encoding="utf-8")
+    repaired = ss._frontmatter_description(md.read_text(encoding="utf-8"))
+    assert repaired.strip() != ""
 
 
 def test_backfill_of_already_curated_skill_reenters_delta(tmp_path):

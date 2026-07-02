@@ -1560,4 +1560,10 @@ __all__ = [
     "MemoryIndexWriteEvent",
     "MemoryIndexRebuildEvent",
     "MemoryIndexStalenessDetectedEvent",
+    # Skill loop
+    "SkillUsedEvent",
+    "SkillObservationLoggedEvent",
+    "SkillCurationActionEvent",
+    "SkillCurationRunEvent",
+    "SkillSuggestionResolvedEvent",
 ]
