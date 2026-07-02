@@ -110,6 +110,49 @@ def collect_recent_skill_calls(workspace, within_hours: float | None = None) -> 
     return agg
 
 
+def collect_usage_and_last_used(
+    workspace, within_hours: float | None = None,
+) -> tuple[dict[str, dict[str, int]], dict[str, int]]:
+    """One pass over the session sidecars: (op counts, newest mtime) per skill.
+
+    Same aggregation as :func:`collect_recent_skill_calls` plus the newest
+    sidecar mtime (epoch ms) per skill named in its ``skill_calls`` — the
+    webui's "last used" signal. Combined into one glob+read pass so the
+    skills-list endpoint doesn't scan ``sessions/*.meta.json`` twice.
+    """
+    import time as _time
+    from pathlib import Path
+
+    from durin.session.session_meta import read_derived
+
+    workspace = Path(workspace)
+    sessions_dir = workspace / "sessions"
+    agg: dict[str, dict[str, int]] = {}
+    last_used_ms: dict[str, int] = {}
+    if not sessions_dir.is_dir():
+        return agg, last_used_ms
+    cutoff = (_time.time() - within_hours * 3600) if within_hours is not None else None
+    for meta in sessions_dir.glob("*.meta.json"):
+        try:
+            mtime = meta.stat().st_mtime
+            if cutoff is not None and mtime < cutoff:
+                continue
+            derived = read_derived(meta)
+        except Exception:
+            continue
+        mtime_ms = int(mtime * 1000)
+        for call in (derived.get("skill_calls") or []):
+            skill = call.get("skill")
+            op = call.get("op")
+            if not skill or not op:
+                continue
+            agg.setdefault(skill, {}).setdefault(op, 0)
+            agg[skill][op] += 1
+            if mtime_ms > last_used_ms.get(skill, 0):
+                last_used_ms[skill] = mtime_ms
+    return agg, last_used_ms
+
+
 def compute_working_set(
     workspace,
     candidates: list[str],

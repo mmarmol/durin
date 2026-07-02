@@ -241,19 +241,21 @@ class SkillUnreviewCommand(Command):
 def _enrich_usage(workspace: Path, skills: list[dict]) -> None:
     """Add ``use_count``/``last_used_ms``/``open_observations`` to each row (in place).
 
-    ``use_count`` is the 30-day call count (view+read+edit summed) from
-    ``collect_recent_skill_calls``; ``last_used_ms`` is the mtime (epoch ms) of
-    the most-recently-modified session sidecar that mentions the skill — the
-    sidecars carry no per-call timestamp, only an aggregated ``derived.skill_calls``
-    list, so the sidecar's own mtime is the closest available signal.
+    ``use_count`` is the 30-day call count (view+read+edit summed) and
+    ``last_used_ms`` the mtime (epoch ms) of the most-recently-modified
+    session sidecar that mentions the skill, both from one
+    ``collect_usage_and_last_used`` pass over ``sessions/*.meta.json`` — the
+    sidecars carry no per-call timestamp, only an aggregated
+    ``derived.skill_calls`` list, so the sidecar's own mtime is the closest
+    available last-used signal.
     ``open_observations`` counts OPEN records whose ``skill`` field names this
     skill exactly (``new:<name>``/``all`` records are not attributed to any
     installed skill).
     """
     from durin.agent.skill_observations import open_observations
-    from durin.agent.skill_usage import collect_recent_skill_calls
+    from durin.agent.skill_usage import collect_usage_and_last_used
 
-    usage = collect_recent_skill_calls(workspace, within_hours=720)
+    usage, last_used_ms = collect_usage_and_last_used(workspace, within_hours=720)
     open_obs = open_observations(workspace)
     obs_counts: dict[str, int] = {}
     for rec in open_obs:
@@ -261,43 +263,12 @@ def _enrich_usage(workspace: Path, skills: list[dict]) -> None:
         if isinstance(skill, str):
             obs_counts[skill] = obs_counts.get(skill, 0) + 1
 
-    last_used_ms = _last_used_ms_by_skill(workspace)
-
     for entry in skills:
         name = entry.get("name")
         ops = usage.get(name, {})
         entry["use_count"] = sum(ops.values()) if ops else None
         entry["last_used_ms"] = last_used_ms.get(name)
         entry["open_observations"] = obs_counts.get(name, 0)
-
-
-def _last_used_ms_by_skill(workspace: Path) -> dict[str, int]:
-    """Newest sidecar mtime (epoch ms) per skill named in its ``skill_calls``.
-
-    No per-call timestamp exists in the sidecar (``derived.skill_calls`` is an
-    aggregated list), so the sidecar file's own mtime is used as the
-    last-used signal — it moves forward every time the session (and its
-    skill_calls) is saved.
-    """
-    from durin.session.session_meta import read_derived
-
-    sessions_dir = Path(workspace) / "sessions"
-    out: dict[str, int] = {}
-    if not sessions_dir.is_dir():
-        return out
-    for meta in sessions_dir.glob("*.meta.json"):
-        try:
-            mtime_ms = int(meta.stat().st_mtime * 1000)
-            derived = read_derived(meta)
-        except Exception:  # noqa: BLE001 — a corrupt sidecar must not break the list
-            continue
-        for call in (derived.get("skill_calls") or []):
-            skill = call.get("skill")
-            if not skill:
-                continue
-            if mtime_ms > out.get(skill, 0):
-                out[skill] = mtime_ms
-    return out
 
 
 class SkillsService:
@@ -324,9 +295,16 @@ class SkillsService:
         principal.require(Scope.SKILLS_READ)
         from durin.agent import skills_store as ss
 
-        status, payload = ss.web_list(self._workspace)
-        if 200 <= status < 300 and isinstance(payload.get("skills"), list):
-            _enrich_usage(self._workspace, payload["skills"])
+        def _list_and_enrich() -> tuple[int, dict]:
+            status, payload = ss.web_list(self._workspace)
+            if 200 <= status < 300 and isinstance(payload.get("skills"), list):
+                _enrich_usage(self._workspace, payload["skills"])
+            return status, payload
+
+        # Off the event loop: web_list scans the skill catalog + security
+        # findings and _enrich_usage globs every session sidecar; both are
+        # blocking filesystem work that would stall the loop inline.
+        status, payload = await asyncio.to_thread(_list_and_enrich)
         return _skills_result(status, payload)
 
     @route(

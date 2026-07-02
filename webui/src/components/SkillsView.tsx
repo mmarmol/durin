@@ -102,7 +102,13 @@ function UsageLine({ useCount, lastUsedMs }: { useCount?: number | null; lastUse
   return (
     <span className="truncate text-[11px] text-muted-foreground/70">
       {t("skills.usage", { count: useCount })}
-      {lastUsedMs ? ` · ${t("skills.lastUsed", { when: relativeTime(lastUsedMs) })}` : ""}
+      {lastUsedMs ? (
+        <span title={t("skills.lastUsedApprox")}>
+          {` · ${t("skills.lastUsed", { when: relativeTime(lastUsedMs) })}`}
+        </span>
+      ) : (
+        ""
+      )}
     </span>
   );
 }
