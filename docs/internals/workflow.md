@@ -240,7 +240,13 @@ its partial trace) so an auditor sees a truthful status rather than a permanentl
 The engine never shares the calling session with a node. Every unit of work — every
 agent node, every fan-out worker, every static branch — runs in its own fresh session
 keyed `workflow:<run_id>:<node_id>:<iteration>` (plus `:<worker_index>` for fan-out
-workers), with exactly one recorded parent.
+workers), with exactly one recorded parent. A node may opt into a persistent session
+(`"session": "persistent"`): its visits share ONE session keyed
+`workflow:<run_id>:<node_id>` — when a loop returns to it, the node resumes its own
+conversation (its prior reasoning, decisions, and file knowledge) and receives only the
+new input (loop feedback + the pass counter) as a revisit turn. Parallel units cannot be
+persistent, and persistent excludes `context="shared"` (two competing continuity
+mechanisms).
 
 **Reverse lineage** (child → parent): each node session carries a `parent_session_id`
 pointing to the calling session. **Forward reference** (caller → node sessions): the
@@ -322,6 +328,13 @@ own session; there is no shared buffer across concurrent threads), and only thei
 outputs are merged (`[0] … [1] …`). A routing node may not use `context="shared"`;
 the spec rejects that combination at parse time because a routing node reads its own
 output to derive a verdict, not the shared buffer.
+
+A node may opt into a persistent session (`"session": "persistent"`): its visits share
+ONE session keyed `workflow:<run_id>:<node_id>` — when a loop returns to it, the node
+resumes its own conversation (its prior reasoning, decisions, and file knowledge) and
+receives only the new input (loop feedback + the pass counter) as a revisit turn.
+Parallel units cannot be persistent, and persistent excludes `context="shared"` (two
+competing continuity mechanisms).
 
 ### 4f. HTTP surface for run data
 

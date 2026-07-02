@@ -69,6 +69,7 @@ class WorkNode:
     model: str | None = None              # None = engine default
     persona: str | None = None            # named persona (xor model; None = no persona)
     context: Literal["own", "shared"] = "own"
+    session: Literal["fresh", "persistent"] = "fresh"  # persistent = revisits resume the SAME session
     prompt: str = ""                      # agent system/role framing (empty = upstream context only)
     next: str | None = None              # next node id; None = end (mutually exclusive with on_pass/on_fail)
     mode: str = "build"                   # AgentMode name: build (full) / plan / explore / custom
@@ -164,6 +165,17 @@ def _build_node(raw: dict[str, Any]) -> Node:
         if context not in ("own", "shared"):
             raise WorkflowError(
                 f"node {node_id!r}: context must be 'own' or 'shared', got {context!r}"
+            )
+        session = raw.get("session", "fresh")
+        if session not in ("fresh", "persistent"):
+            raise WorkflowError(
+                f"node {node_id!r}: session must be 'fresh' or 'persistent', got {session!r}"
+            )
+        # Persistent session and the shared buffer are two competing continuity
+        # mechanisms; combining them would re-feed a node its own history twice.
+        if session == "persistent" and context == "shared":
+            raise WorkflowError(
+                f"node {node_id!r}: session='persistent' requires context='own'"
             )
         tools = raw.get("tools", "none")
         if tools not in ("none", "default"):
@@ -267,6 +279,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
             model=model,
             persona=persona,
             context=context,
+            session=session,
             prompt=raw.get("prompt", ""),
             next=next_node,
             mode=mode,
@@ -396,6 +409,16 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
                 if not isinstance(nodes[branch], WorkNode):
                     raise WorkflowError(
                         f"node {node.id!r}: parallel branch {branch!r} must be a work node"
+                    )
+
+    for node in nodes.values():
+        if isinstance(node, ParallelNode):
+            for ref in (*node.branches, node.worker):
+                target = nodes.get(ref) if ref else None
+                if isinstance(target, WorkNode) and target.session == "persistent":
+                    raise WorkflowError(
+                        f"node {node.id!r}: parallel unit {ref!r} cannot use session='persistent' "
+                        f"(concurrent units have per-unit sessions)"
                     )
 
     # Anti-Goodhart guard: a routing agent node must not be structurally identical

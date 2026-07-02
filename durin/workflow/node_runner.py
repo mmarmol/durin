@@ -119,6 +119,21 @@ class AgentNodeRunner:
             "Deliver your best complete, final result."
         )
 
+    @staticmethod
+    def _is_persistent(req: NodeRunRequest) -> bool:
+        # Parallel units (worker fan-out / branch forks) always get per-unit fresh
+        # sessions; the parser also rejects persistent on them (defense in depth).
+        return (getattr(req.node, "session", "fresh") == "persistent"
+                and req.worker_index is None and req.workspace_override is None)
+
+    @classmethod
+    def _session_key(cls, req: NodeRunRequest) -> str:
+        if cls._is_persistent(req):
+            return f"workflow:{req.run_id}:{req.node.id}"
+        if req.worker_index is not None:
+            return f"workflow:{req.run_id}:{req.node.id}:{req.iteration}:{req.worker_index}"
+        return f"workflow:{req.run_id}:{req.node.id}:{req.iteration}"
+
     def _build_tools(self, node, workspace_override: str | None = None) -> ToolRegistry:
         """Build the node's tool registry: its built-in set ('none'→empty,
         'default'→the standard subagent tool set) plus a scoped subset of the
@@ -209,7 +224,23 @@ class AgentNodeRunner:
                 "after you see them."
             )
         user = f"{user}{self._pass_note(req)}"
-        messages.append({"role": "user", "content": user})
+        prior_messages: list[dict] | None = None
+        if self._is_persistent(req) and req.iteration > 1:
+            try:
+                existing = self.sessions.get_or_create(self._session_key(req))
+                prior_messages = list(existing.messages) or None
+            except Exception:  # noqa: BLE001 - a broken prior session degrades to fresh
+                logger.exception("persistent node session reload failed for {}", req.node.id)
+        if prior_messages:
+            # Resume the node's own conversation: don't rebuild system/task — append a
+            # revisit turn carrying only what is NEW (loop feedback + the pass counter).
+            revisit = "The flow has returned to this step."
+            if req.upstream_output:
+                revisit += f"\n\n--- New input for this pass ---\n{req.upstream_output}"
+            revisit += self._pass_note(req)
+            messages = prior_messages + [{"role": "user", "content": revisit}]
+        else:
+            messages.append({"role": "user", "content": user})
 
         # Persona model when a persona is set, else the node's explicit model, else
         # the runner's default. The parser's persona-xor-model guard ensures at most
@@ -218,6 +249,9 @@ class AgentNodeRunner:
 
         node_max_turns = getattr(req.node, "max_turns", None)
         if node_max_turns is not None:
+            # messages[0] is always the system turn — the fresh path's own, or (on a
+            # resumed persistent session) the original system turn from the first
+            # pass, which the budget note may still be appended to.
             # Prepend a budget note so the model knows to be efficient.
             budget_note = (
                 f"\n\nYou have up to {node_max_turns} rounds of tool use. "
@@ -347,10 +381,7 @@ class AgentNodeRunner:
         return None
 
     def _persist(self, req: NodeRunRequest, messages: list[dict]) -> str | None:
-        if req.worker_index is not None:
-            key = f"workflow:{req.run_id}:{req.node.id}:{req.iteration}:{req.worker_index}"
-        else:
-            key = f"workflow:{req.run_id}:{req.node.id}:{req.iteration}"
+        key = self._session_key(req)
         try:
             # Headless runs (no calling session) would otherwise self-root each node
             # session at its own key, leaving them as orphans. Root them all under a

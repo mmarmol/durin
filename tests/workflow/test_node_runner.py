@@ -662,3 +662,39 @@ def test_no_definitive_note_when_loop_can_continue(tmp_path):
     nr(_req(node, iteration=1, budget=3, fail_would_exhaust=False))
     spec = nr.runner.run.call_args.args[0]
     assert "final review" not in spec.initial_messages[0]["content"].lower()
+
+
+def test_persistent_node_uses_a_stable_session_key(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    nr = _faithful_runner(sessions)
+    node = WorkNode(id="impl", prompt="Do it.", session="persistent", next=None)
+    resp = nr(_req(node, iteration=1, budget=3))
+    assert resp.session_key == "workflow:r1:impl"          # no :iteration suffix
+
+
+def test_persistent_revisit_resumes_prior_conversation(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    nr = _faithful_runner(sessions, reply="v1")
+    node = WorkNode(id="impl", prompt="Do it.", session="persistent", next=None)
+    nr(_req(node, iteration=1, budget=3))
+
+    nr2 = _faithful_runner(sessions, reply="v2")
+    req = _req(node, iteration=2, budget=3)
+    req.upstream_output = "Reviewer feedback (address this):\nfix the tests"
+    resp = nr2(req)
+    spec = nr2.runner.run.call_args.args[0]
+    contents = [m.get("content", "") for m in spec.initial_messages]
+    assert any("v1" in c for c in contents)                 # prior turn resumed
+    assert contents.count("Do it.") == 1 or sum("Do it." in c for c in contents) == 1
+    last_user = [m for m in spec.initial_messages if m["role"] == "user"][-1]["content"]
+    assert "returned to this step" in last_user.lower()
+    assert "fix the tests" in last_user
+    assert "pass 2 of 3" in last_user.lower()
+    assert resp.session_key == "workflow:r1:impl"
+
+
+def test_fresh_node_keeps_per_iteration_keys(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    nr = _faithful_runner(sessions)
+    node = WorkNode(id="impl", prompt="Do it.", next=None)
+    assert nr(_req(node, iteration=2)).session_key == "workflow:r1:impl:2"
