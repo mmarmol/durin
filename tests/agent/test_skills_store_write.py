@@ -114,3 +114,52 @@ def test_set_mode_raises_on_invalid_mode(tmp_path):
     _user_skill(ws, "mine")
     with pytest.raises(ValueError):
         ss.set_mode(ws, "mine", "bogus")
+
+
+def test_create_derives_missing_frontmatter(tmp_path):
+    from durin.agent.skills_store import dream_create_skill, read_skill_content
+    body = (
+        "# Weather Lookup\n\n"
+        "Look up current weather for a location.\n\n"
+        "## Triggers\n\n- user asks about weather\n- forecast questions\n"
+    )
+    out = dream_create_skill(tmp_path, "weather-lookup", body, "test create")
+    assert out.get("ok"), out
+    text = read_skill_content(tmp_path, "weather-lookup")
+    assert "name: weather-lookup" in text
+    assert "description:" in text
+    # derived description carries prose + trigger text so the skill can surface
+    assert "weather" in text.split("---")[1].lower()
+
+
+def test_create_keeps_existing_frontmatter(tmp_path):
+    from durin.agent.skills_store import dream_create_skill, read_skill_content
+    content = (
+        "---\nname: my-skill\ndescription: An explicit description with triggers.\n---\n"
+        "# My Skill\n\nBody.\n"
+    )
+    out = dream_create_skill(tmp_path, "my-skill", content, "test create")
+    assert out.get("ok"), out
+    text = read_skill_content(tmp_path, "my-skill")
+    assert "An explicit description with triggers." in text
+
+
+def test_create_rejects_underivable_body(tmp_path):
+    from durin.agent.skills_store import dream_create_skill
+    out = dream_create_skill(tmp_path, "empty-skill", "   \n", "test create")
+    assert out.get("error")
+
+
+def test_fuse_derives_missing_frontmatter(tmp_path):
+    from durin.agent.skills_store import (
+        dream_create_skill, dream_fuse_skills, read_skill_content)
+    a = "---\nname: a\ndescription: d-a\n---\n# A\n\nProc A.\n"
+    b = "---\nname: b\ndescription: d-b\n---\n# B\n\nProc B.\n"
+    assert dream_create_skill(tmp_path, "a", a, "seed").get("ok")
+    assert dream_create_skill(tmp_path, "b", b, "seed").get("ok")
+    merged = "# AB\n\nMerged procedure for A and B.\n"
+    out = dream_fuse_skills(tmp_path, target="ab", content=merged,
+                            sources=["a", "b"], rationale="merge")
+    assert out.get("ok"), out
+    text = read_skill_content(tmp_path, "ab")
+    assert "name: ab" in text and "description:" in text

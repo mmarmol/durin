@@ -35,7 +35,7 @@ def test_dream_create_stamps_attribution(tmp_path: Path):
 
 def test_apply_skill_edit_stamps_attribution(tmp_path: Path):
     dream_create_skill(tmp_path, "made", "---\nname: made\n---\nbody\n", "init")
-    apply_skill_edit(tmp_path, "made", old="body", new="body2", rationale="improve",
+    apply_skill_edit(tmp_path, "made", old="\nbody\n", new="\nbody2\n", rationale="improve",
                      attribution=Attribution(actor="agent", session="s2"))
     msg = _top_msg(tmp_path)
     assert "skill(made): improve" in msg and "Actor: agent" in msg and "Session: s2" in msg

@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -91,6 +92,54 @@ def _durin_blob(text: str) -> dict:
     meta = data.get("metadata")
     durin = meta.get("durin") if isinstance(meta, dict) else None
     return durin if isinstance(durin, dict) else {}
+
+
+_TRIGGER_HEADING = re.compile(r"^##\s*Triggers?\b.*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _frontmatter_description(content: str) -> str:
+    """Read `description` from the raw frontmatter, if any (reuses the
+    module's existing frontmatter reader instead of a second YAML parser)."""
+    data, _body = split_frontmatter(content)
+    return str(data.get("description") or "").strip()
+
+
+def _derive_description(body: str) -> str:
+    """Description from the body: first prose paragraph after the H1 plus a
+    collapsed Triggers section, capped. Empty string when nothing usable."""
+    text = body
+    m = re.match(r"^---\n.*?\n---\n?", text, re.DOTALL)
+    if m:
+        text = text[m.end():]
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text)]
+    prose = next((p for p in paras
+                  if p and not p.startswith("#") and not p.startswith("---")), "")
+    trig = ""
+    tm = _TRIGGER_HEADING.search(text)
+    if tm:
+        tail = text[tm.end():]
+        nxt = re.search(r"^#{1,6}\s", tail, re.MULTILINE)
+        section = tail[: nxt.start()] if nxt else tail
+        trig = " ".join(line.strip("-* \t") for line in section.splitlines()
+                        if line.strip()).strip()
+    out = " ".join(x for x in (prose, ("Triggers: " + trig) if trig else "") if x)
+    return out[:500].strip()
+
+
+def _ensure_surface_frontmatter(md: Path, name: str) -> None:
+    """Guarantee the frontmatter carries name + description — the only fields
+    the agent reads to decide when a skill applies. Derive from the body when
+    the author omitted them (the prompt-summary fallback is just the name,
+    which makes the skill invisible)."""
+    text = md.read_text(encoding="utf-8")
+
+    def _fill(data: dict) -> None:
+        if not data.get("name"):
+            data["name"] = name
+        if not data.get("description"):
+            data["description"] = _derive_description(text)
+
+    _update_md(md, _fill)
 
 
 def _body_hash(text: str) -> str:
@@ -609,6 +658,10 @@ def dream_create_skill(workspace: Path, name: str, content: str,
     store = _store_init(workspace)  # ensure git repo exists before mutating files
     md.parent.mkdir(parents=True, exist_ok=True)
     md.write_text(content, encoding="utf-8")
+    if not (content.strip() and (_frontmatter_description(content) or _derive_description(content))):
+        md.unlink()
+        return {"error": "skill body has no derivable description"}
+    _ensure_surface_frontmatter(md, name)
 
     def _stamp(data: dict) -> None:
         durin = ensure_durin(data)
@@ -641,6 +694,7 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
     md = _skill_md(workspace, target)
     md.parent.mkdir(parents=True, exist_ok=True)
     md.write_text(content, encoding="utf-8")
+    _ensure_surface_frontmatter(md, target)
 
     def _stamp(data: dict) -> None:
         durin = ensure_durin(data)
