@@ -182,7 +182,21 @@ auth or content filter errors), it tries each fallback preset in order. Failover
 skipped when content has already started streaming. A circuit breaker trips the primary
 after three consecutive failures and gates it for 60 seconds before retrying.
 
-### 4.5 Capability lookup
+### 4.5 One transport: every completion streams
+
+`chat_with_retry` (the request entry point every caller uses, directly or via
+`chat_stream_with_retry`) rides the streaming transport internally even when the
+caller consumes no deltas. The reason is connection survival, not UX: with a
+non-streaming request no bytes flow while a long generation runs, and endpoints
+kill such silent connections mid-response — out-of-loop callers (dream passes,
+curation judge, consolidation) exhausted their retries this way on every long
+generation. Streaming keeps bytes flowing, so the retry policy only has to guard
+the stream open, and the provider-level idle timeout (`DURIN_STREAM_IDLE_TIMEOUT_S`)
+covers stalls mid-stream. Providers without native streaming inherit the base
+`chat_stream` fallback, which delegates to `chat()` and delivers the full content
+as a single delta — behaviorally identical for those backends.
+
+### 4.6 Capability lookup
 
 `get_model_capabilities(model, provider, overrides)` (`durin/providers/capabilities.py`)
 implements a four-tier fallthrough:
@@ -205,7 +219,7 @@ The `source` field is informational; bridge tools do not inspect it for activati
 `ctx.aux_providers["vision"]` or `ctx.aux_providers["audio"]` is configured — if
 the aux model entry is absent, the tool is not registered in the tool list at all.
 
-### 4.6 Auxiliary model resolution
+### 4.7 Auxiliary model resolution
 
 `resolve_aux_preset(config, purpose="memory"|"judge")` (`durin/memory/model_resolve.py`)
 resolves the model used by out-of-loop LLM calls (dream passes, skill security judge).
@@ -220,7 +234,7 @@ For purpose `"memory"`:
 The function always returns a `ModelPresetConfig`. Bridge tools and dream passes build
 their provider from this preset using the same factory path as the primary model.
 
-### 4.7 Per-turn provider snapshot
+### 4.8 Per-turn provider snapshot
 
 `build_provider_snapshot` (`durin/providers/factory.py`) wraps the full chain
 (resolved preset + provider instance + fallback chain) into a `ProviderSnapshot`. The

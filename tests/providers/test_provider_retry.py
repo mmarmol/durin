@@ -634,3 +634,43 @@ async def test_chat_stream_with_retry_normalizes_explicit_none_max_tokens() -> N
     assert response.content == "ok"
     assert provider.last_kwargs["max_tokens"] == 4096
     assert provider.last_kwargs["temperature"] == 0.7
+
+
+@pytest.mark.asyncio
+async def test_chat_with_retry_uses_streaming_transport() -> None:
+    """chat_with_retry must ride the STREAMING transport internally: with a
+    non-streaming request no bytes flow while a long generation runs, and
+    endpoints kill such silent connections mid-response — every out-of-loop
+    caller (dream, curation, consolidation, sub-agents) was exhausting its
+    retries on long generations this way. Streaming keeps bytes flowing; a
+    provider without native streaming still works via the base chat_stream
+    fallback, which delegates to chat()."""
+
+    class StreamOnlyProvider(LLMProvider):
+        async def chat(self, *args, **kwargs) -> LLMResponse:
+            raise AssertionError("non-streaming chat() must not be reached directly")
+
+        async def chat_stream(self, *args, **kwargs) -> LLMResponse:
+            return LLMResponse(content="streamed ok", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "test-model"
+
+    provider = StreamOnlyProvider()
+    resp = await provider.chat_with_retry(
+        messages=[{"role": "user", "content": "hi"}], model="test-model",
+    )
+    assert resp.content == "streamed ok"
+
+
+@pytest.mark.asyncio
+async def test_chat_with_retry_fallback_provider_still_works() -> None:
+    """A provider that only implements chat() (no native streaming) keeps
+    working: base chat_stream falls back to chat() and delivers the full
+    content — the transport switch must not break such providers."""
+    provider = ScriptedProvider([LLMResponse(content="plain ok", finish_reason="stop")])
+    resp = await provider.chat_with_retry(
+        messages=[{"role": "user", "content": "hi"}], model="test-model",
+    )
+    assert resp.content == "plain ok"
+    assert provider.calls == 1

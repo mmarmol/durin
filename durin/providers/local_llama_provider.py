@@ -201,6 +201,11 @@ class LocalLlamaProvider(LLMProvider):
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        # Accepted for retry-wrapper signature compatibility; not wired to this backend yet.
+        top_p: float | None = None,
+        top_k: int | None = None,
+        repeat_penalty: float | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> LLMResponse:
         model_name = model or self._model_names[0]
         instance = await self._get_instance(model_name)

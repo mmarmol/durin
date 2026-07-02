@@ -544,15 +544,6 @@ class LLMProvider(ABC):
                         found = True
         return found
 
-    async def _safe_chat(self, **kwargs: Any) -> LLMResponse:
-        """Call chat() and convert unexpected exceptions to error responses."""
-        try:
-            return await self.chat(**kwargs)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            return LLMResponse(content=f"Error calling LLM: {exc}", finish_reason="error")
-
     async def chat_stream(
         self,
         messages: list[dict[str, Any]],
@@ -699,8 +690,15 @@ class LLMProvider(ABC):
             top_p=top_p, top_k=top_k, repeat_penalty=repeat_penalty,
             extra_body=extra_body,
         )
+        # Ride the STREAMING transport even though no deltas are consumed:
+        # with a non-streaming request no bytes flow while a long generation
+        # runs, and endpoints kill such silent connections mid-response
+        # ("connection error" until the retries exhaust — long dream/curation
+        # calls failed persistently this way). Streaming keeps bytes flowing,
+        # so retries only guard the stream open; providers without native
+        # streaming inherit the base chat_stream fallback (delegates to chat).
         return await self._run_with_retry(
-            self._safe_chat,
+            self._safe_chat_stream,
             kw,
             messages,
             retry_mode=retry_mode,
