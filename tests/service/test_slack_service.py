@@ -59,7 +59,7 @@ async def test_manifest_scopes_cover_channel_api_calls():
 class _FakeWebClient:
     """Stands in for AsyncWebClient; behavior keyed on the token value."""
 
-    def __init__(self, token: str):
+    def __init__(self, token: str = ""):
         self._token = token
 
     async def auth_test(self):
@@ -67,8 +67,10 @@ class _FakeWebClient:
             return {"user": "durin", "team": "Acme"}
         raise RuntimeError("invalid_auth xoxb-secret-value")
 
-    async def apps_connections_open(self):
-        if self._token.startswith("xapp-good"):
+    async def apps_connections_open(self, *, app_token: str):
+        # Signature mirrors slack_sdk: app_token is a required keyword — a
+        # no-arg fake previously hid a TypeError shipped to production.
+        if app_token.startswith("xapp-good"):
             return {"ok": True}
         raise RuntimeError("invalid_auth xapp-secret-value")
 
