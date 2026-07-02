@@ -203,32 +203,9 @@
     "loadingConversation": "正在加载对话…",
     "empty": {
       "greeting": "我可以帮你做什么？",
-      "quickActions": {
-        "plan": {
-          "title": "创建项目计划",
-          "prompt": "帮我为接下来要做的事情写一份简洁的项目计划。"
-        },
-        "analyze": {
-          "title": "分析这些数据",
-          "prompt": "帮我分析这些数据，并指出最重要的模式。"
-        },
-        "brainstorm": {
-          "title": "头脑风暴想法",
-          "prompt": "围绕这个问题头脑风暴几个实用方案，并说明取舍。"
-        },
-        "code": {
-          "title": "编写代码",
-          "prompt": "帮我为这个任务写代码，先从最小可用改动开始。"
-        },
-        "summarize": {
-          "title": "总结这份文档",
-          "prompt": "帮我总结这份文档，并列出关键要点。"
-        },
-        "more": {
-          "title": "更多",
-          "prompt": "展示几个你在这个工作区里可以帮我的实用方式。"
-        }
-      },
+      "resumeLast": "继续：{{name}}",
+      "continueSession": "继续：{{name}}",
+      "whatDoYouKnow": "你了解我什么？",
       "imageQuickActions": {
         "icon": {
           "title": "设计应用图标",

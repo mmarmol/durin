@@ -882,6 +882,52 @@ describe("ThreadShell", () => {
     }
   });
 
+  it("renders durin-native empty-state chips", () => {
+    const client = makeClient();
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={null}
+          title="durin"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+          recentSessions={[
+            { ...session("s1"), title: "workflow engine" },
+            { ...session("s2"), title: "memory bench" },
+          ]}
+          onOpenSession={vi.fn()}
+        />,
+      ),
+    );
+
+    expect(screen.getByRole("button", { name: /workflow engine/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /know about me/i })).toBeInTheDocument();
+    // The generic canned prompts are gone.
+    expect(screen.queryByText(/project plan/i)).toBeNull();
+  });
+
+  it("opens a recent session from its chip", () => {
+    const client = makeClient();
+    const onOpenSession = vi.fn();
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={null}
+          title="durin"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+          recentSessions={[{ ...session("s1"), title: "workflow engine", key: "s1" }]}
+          onOpenSession={onOpenSession}
+        />,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /workflow engine/ }));
+    expect(onOpenSession).toHaveBeenCalledWith("s1");
+  });
+
   it("opens slash commands on the blank welcome page", async () => {
     const client = makeClient();
     vi.stubGlobal(
