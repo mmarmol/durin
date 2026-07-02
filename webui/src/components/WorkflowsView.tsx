@@ -868,7 +868,8 @@ function statusTone(status: string): string {
 function runChipTone(status: string): string {
   if (status === "needs_input") return "border-accent text-accent-foreground";
   if (status === "exhausted") return "border-warn/60 text-warn";
-  if (status === "aborted") return "border-destructive/60 text-destructive";
+  if (status === "aborted" || status === "crashed") return "border-destructive/60 text-destructive";
+  if (status === "cancelled") return "border-dashed text-muted-foreground";
   return "text-muted-foreground hover:text-foreground";
 }
 
@@ -1878,7 +1879,7 @@ export function WorkflowsView() {
                             key={r.run_id}
                             type="button"
                             onClick={() => onSelectRun(r.run_id)}
-                            title={r.run_id}
+                            title={`${r.run_id} · ${r.status}`}
                             disabled={manifestLoading === r.run_id}
                             className={cn(
                               "rounded border px-1.5 py-0.5 font-mono text-[10px]",
