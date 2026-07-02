@@ -157,11 +157,14 @@ def build_link_prompt(
 
 def parse_links(
     raw: str, *, valid_refs: set[str], valid_entities: set[str],
-) -> dict[str, list[str]]:
+) -> dict[str, list[str]] | None:
     """Tolerant parse of the LLM's ``{entity_ref: [reference_ref, ...]}`` map.
 
     Keeps only known entity refs mapped to known reference refs — the LLM can
     neither invent a document nor link an entity we didn't ask about.
+    Returns ``None`` when the output cannot be parsed at all (unloadable
+    JSON or wrong top-level type) — distinct from ``{}`` for a valid
+    object with no usable links.
     """
     s = raw.strip()
     m = re.search(r"```(?:json)?\s*(.*?)```", s, re.DOTALL)
@@ -170,9 +173,9 @@ def parse_links(
     try:
         obj = json.loads(repair_json(s))
     except Exception:  # noqa: BLE001
-        return {}
+        return None
     if not isinstance(obj, dict):
-        return {}
+        return None
     out: dict[str, list[str]] = {}
     for ent, docs in obj.items():
         if ent not in valid_entities:

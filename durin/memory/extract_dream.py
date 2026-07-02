@@ -73,11 +73,14 @@ def build_extract_prompt(page: EntityPage, turns: str) -> str:
     )
 
 
-def parse_attributes(raw: str) -> dict[str, Any]:
+def parse_attributes(raw: str) -> dict[str, Any] | None:
     """Tolerant parse of the LLM's JSON attribute object.
 
     Strips code fences, repairs small-model JSON quirks, and keeps only
     scalar / list-of-scalar values (drops prose blobs and nested dicts).
+    Returns ``None`` when the output cannot be parsed at all (unloadable
+    JSON or wrong top-level type) — distinct from ``{}`` for a valid
+    object with nothing usable.
     """
     s = raw.strip()
     m = re.search(r"```(?:json)?\s*(.*?)```", s, re.DOTALL)
@@ -86,9 +89,9 @@ def parse_attributes(raw: str) -> dict[str, Any]:
     try:
         obj = json.loads(repair_json(s))
     except Exception:
-        return {}
+        return None
     if not isinstance(obj, dict):
-        return {}
+        return None
     out: dict[str, Any] = {}
     for k, v in obj.items():
         if isinstance(v, (str, int, float, bool)):
@@ -207,7 +210,7 @@ def build_discover_prompt(turns: str, existing: str = "") -> str:
     )
 
 
-def parse_discoveries(raw: str) -> list[dict[str, Any]]:
+def parse_discoveries(raw: str) -> list[dict[str, Any]] | None:
     """Tolerant parse of the discovery LLM's JSON array of entity proposals.
 
     Each item needs a well-formed ``ref`` (``<type>:<slug>``) and a non-empty
@@ -215,6 +218,9 @@ def parse_discoveries(raw: str) -> list[dict[str, Any]]:
     (scalars / lists of scalars only). Optional fields ``aliases``, ``relations``,
     ``significance``, and ``turn`` are included with malformed sub-values dropped.
     Malformed items are dropped, not raised.
+    Returns ``None`` when the output cannot be parsed at all (unloadable
+    JSON or wrong top-level type) — distinct from ``[]`` for a valid
+    array with no usable items.
     """
     s = raw.strip()
     m = re.search(r"```(?:json)?\s*(.*?)```", s, re.DOTALL)
@@ -223,9 +229,9 @@ def parse_discoveries(raw: str) -> list[dict[str, Any]]:
     try:
         obj = json.loads(repair_json(s))
     except Exception:
-        return []
+        return None
     if not isinstance(obj, list):
-        return []
+        return None
     out: list[dict[str, Any]] = []
     for item in obj:
         if not isinstance(item, dict):
@@ -236,7 +242,7 @@ def parse_discoveries(raw: str) -> list[dict[str, Any]]:
             continue
         attrs_raw = item.get("attributes")
         attrs = (
-            parse_attributes(json.dumps(attrs_raw))
+            parse_attributes(json.dumps(attrs_raw)) or {}
             if isinstance(attrs_raw, dict) else {}
         )
         aliases = [a.strip() for a in (item.get("aliases") or [])
@@ -368,6 +374,8 @@ def discover_entities(
     resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
     raw = resp.text if hasattr(resp, "text") else str(resp)
     proposals = parse_discoveries(raw)
+    if not proposals:
+        return []
 
     index = alias_index
     if index is None:
@@ -457,12 +465,15 @@ def discover_entities(
 _LEARNING_TYPES = ("feedback", "stance", "practice")
 
 
-def _parse_learnings(raw: str) -> list[dict[str, Any]]:
+def _parse_learnings(raw: str) -> list[dict[str, Any]] | None:
     """Tolerant parse of the learnings LLM's JSON array.
 
     Strips code fences, repairs small-model JSON quirks, and keeps only items
     that are dicts with a colon-bearing ``ref``, a non-empty ``name``, and a
     non-empty ``body``. Malformed items and any non-list output yield ``[]``.
+    Returns ``None`` when the output cannot be parsed at all (unloadable
+    JSON or wrong top-level type) — distinct from ``[]`` for a valid
+    array with no usable items.
     """
     s = raw.strip()
     m = re.search(r"```(?:json)?\s*(.*?)```", s, re.DOTALL)
@@ -471,9 +482,9 @@ def _parse_learnings(raw: str) -> list[dict[str, Any]]:
     try:
         obj = json.loads(repair_json(s))
     except Exception:
-        return []
+        return None
     if not isinstance(obj, list):
-        return []
+        return None
     out: list[dict[str, Any]] = []
     for item in obj:
         if not isinstance(item, dict):
@@ -524,6 +535,8 @@ def mine_learnings(
         raw = resp.text if hasattr(resp, "text") else str(resp)
         learnings = _parse_learnings(raw)
     except Exception:
+        return []
+    if not learnings:
         return []
 
     index = alias_index

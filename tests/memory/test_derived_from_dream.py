@@ -134,3 +134,11 @@ def test_link_skips_when_no_references(tmp_path: Path) -> None:
 
     out = link_derived_from_for_session(tmp_path, jsonl, llm_invoke=fake_llm)
     assert out["skipped"] == "no_references"
+
+
+def test_parse_links_none_on_unparseable():
+    assert parse_links("not json", valid_refs=set(), valid_entities=set()) is None
+
+
+def test_parse_links_empty_map_is_empty_not_none():
+    assert parse_links("{}", valid_refs=set(), valid_entities=set()) == {}

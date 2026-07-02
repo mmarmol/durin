@@ -261,3 +261,33 @@ def test_discover_prompt_type_list_is_wired_from_suggested_types_ordered() -> No
     assert canonical == "person/place/project/topic/organization/event/artifact/stance/practice"
     prompt = build_discover_prompt("dummy turns")
     assert canonical in prompt
+
+
+def test_parse_attributes_none_on_unparseable():
+    assert parse_attributes("I could not produce JSON, sorry.") is None
+
+
+def test_parse_attributes_none_on_wrong_top_level():
+    assert parse_attributes("[1, 2, 3]") is None
+
+
+def test_parse_attributes_empty_dict_is_empty_not_none():
+    assert parse_attributes("{}") == {}
+
+
+def test_parse_discoveries_none_on_unparseable():
+    assert parse_discoveries("no json here") is None
+
+
+def test_parse_discoveries_empty_list_is_empty_not_none():
+    assert parse_discoveries("[]") == []
+
+
+def test_parse_learnings_none_on_unparseable():
+    from durin.memory.extract_dream import _parse_learnings
+    assert _parse_learnings("plain prose answer") is None
+
+
+def test_parse_learnings_empty_list_is_empty_not_none():
+    from durin.memory.extract_dream import _parse_learnings
+    assert _parse_learnings("[]") == []
