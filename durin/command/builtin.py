@@ -1970,12 +1970,20 @@ async def cmd_persona(ctx: CommandContext) -> OutboundMessage:
     return _reply(f"Switched persona to `{name}` for this conversation.")
 
 
+_HELP_SURFACE_BY_CHANNEL = {"websocket": "webui", "cli": "tui", "tui": "tui"}
+
+
+def _surface_for_channel(channel: str | None) -> str:
+    """Map channel type to help surface (webui|tui|channels)."""
+    return _HELP_SURFACE_BY_CHANNEL.get((channel or "").lower(), "channels")
+
+
 async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     """Return available slash commands."""
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
-        content=build_help_text(),
+        content=build_help_text(_surface_for_channel(ctx.msg.channel)),
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
 
@@ -1990,10 +1998,10 @@ async def cmd_version(ctx: CommandContext) -> OutboundMessage:
     )
 
 
-def build_help_text() -> str:
-    """Build canonical help text shared across channels."""
+def build_help_text(surface: str = "channels") -> str:
+    """Build canonical help text for a surface (webui|tui|channels)."""
     lines = ["⚒️ durin commands:"]
-    for spec in BUILTIN_COMMAND_SPECS:
+    for spec in specs_for_surface(surface):
         command = spec.command
         if spec.arg_hint:
             command = f"{command} {spec.arg_hint}"

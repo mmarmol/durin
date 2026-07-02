@@ -47,3 +47,39 @@ def test_channel_menu_names_are_telegram_safe():
 def test_effort_has_a_spec():
     spec = _spec("/effort")
     assert spec.arg_hint
+
+
+from durin.command.builtin import build_help_text, register_builtin_commands
+from durin.command.router import CommandRouter
+
+
+def test_every_spec_command_has_a_registered_handler():
+    router = CommandRouter()
+    register_builtin_commands(router)
+    for spec in BUILTIN_COMMAND_SPECS:
+        cmd = spec.command
+        registered = (
+            cmd in router._priority
+            or cmd in router._exact
+            or any(pfx.strip() == cmd for pfx, _ in router._prefix)
+        )
+        assert registered, f"{cmd} is listed in SPECS but has no handler"
+
+
+def test_every_registered_command_has_a_spec():
+    router = CommandRouter()
+    register_builtin_commands(router)
+    spec_cmds = {s.command for s in BUILTIN_COMMAND_SPECS}
+    registered = set(router._priority) | set(router._exact) | {
+        pfx.strip() for pfx, _ in router._prefix
+    }
+    assert registered <= spec_cmds, f"handlers without spec: {registered - spec_cmds}"
+
+
+def test_help_text_is_surface_scoped_and_hides_admin():
+    channels_help = build_help_text("channels")
+    assert "/history" in channels_help
+    assert "/copy" not in channels_help
+    assert "/restart" not in channels_help
+    tui_help = build_help_text("tui")
+    assert "/copy" in tui_help

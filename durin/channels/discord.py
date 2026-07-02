@@ -217,7 +217,7 @@ if DISCORD_AVAILABLE:
                 if not await self._interaction_channel_allowed(interaction, channel):
                     await self._reply_ephemeral(interaction, "This channel is not allowed for this bot.")
                     return
-                await self._reply_ephemeral(interaction, build_help_text())
+                await self._reply_ephemeral(interaction, build_help_text("channels"))
 
             @self.tree.error
             async def on_app_command_error(
