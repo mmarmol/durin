@@ -29,9 +29,12 @@ _PARAMETERS = tool_parameters_schema(
     ),
     required=["name", "content", "rationale"],
     description=(
-        "Create a new skill. Writes skills/<name>/SKILL.md through the "
-        "sanctioned store (provenance source=dream, mode=auto, committed). Use "
-        "for a recurring pattern that no existing skill covers."
+        "Create a new skill (a step-by-step procedure to follow later). Writes "
+        "skills/<name>/SKILL.md through the sanctioned store: versioned, committed, and "
+        "attributed to whoever calls it (you in-session, or the dream). Include YAML "
+        "frontmatter with `name` and `description` — the description is the only text "
+        "used to decide when the skill surfaces, so state its trigger conditions. Use "
+        "for a recurring pattern no existing skill covers; search first."
     ),
 )
 
