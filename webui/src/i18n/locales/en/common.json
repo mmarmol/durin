@@ -1004,7 +1004,9 @@
     "exhaustedNode": "exhausted at",
     "loopLimitReached": "Loop limit reached",
     "finalOutput": "final output",
+    "finalOutputFrom": "final output from {{node}}",
     "runHistory": "runs",
+    "historyRetention": "shows the most recent runs — older runs keep their record, but their working folders are pruned (workflow.keep_runs)",
     "copySession": "copy session key",
     "sessionCopied": "session key copied",
     "workerLabel": "worker {{index}}",
@@ -1717,7 +1719,8 @@
     "status": {
       "needs_input": "Needs input"
     },
-    "needsInputHint": "Handed to the calling agent — it may answer from its own context or ask you, then resume this run."
+    "needsInputHint": "Handed to the calling agent — it may answer from its own context or ask you, then resume this run.",
+    "questions": "Questions"
   },
   "work": {
     "steps": "{{count}} steps",

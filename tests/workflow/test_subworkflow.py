@@ -58,3 +58,19 @@ def test_subworkflow_cycle_is_detected(tmp_path):
     out = runner("A", task="go")
     assert "cycle detected" in out
     assert "A -> A" in out
+
+
+def test_nested_nodes_work_in_the_parent_folder(tmp_path):
+    _write(tmp_path, "child", {
+        "name": "child", "start": "c",
+        "nodes": [{"id": "c", "kind": "work", "tools": "default", "next": None}],
+    })
+    seen = {}
+    def node_runner(req):
+        seen["c"] = req.output_dir
+        return NodeRunResponse(output="child-out")
+    parent_work = tmp_path / "parent-work"
+    parent_work.mkdir()
+    out = SubworkflowRunner(tmp_path, node_runner)("child", "task", None, work_dir=str(parent_work))
+    assert out == "child-out"
+    assert seen["c"] == str(parent_work)

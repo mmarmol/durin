@@ -132,6 +132,8 @@ export interface WorkItem {
   steps?: number;
   /** The task (user input) given to this workflow run; absent for sub-agents and older runs. */
   task?: string;
+  /** The gate's questions when status=="needs_input"; absent otherwise. */
+  needsInputDetail?: string;
   startedAt: number;
   endedAt: number | null;
 }

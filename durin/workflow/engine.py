@@ -18,6 +18,7 @@ AgentRunner + persists node sessions is Task 5.
 from __future__ import annotations
 
 import concurrent.futures
+import os
 import shutil
 import time
 import uuid
@@ -153,7 +154,7 @@ class WorkflowEngine:
         node_runner: NodeRunner,
         *,
         run_id_factory: Callable[[], str] | None = None,
-        subworkflow_runner: Callable[..., str] | None = None,
+        subworkflow_runner: Callable[..., str] | None = None,  # (name, task, root_session_key, work_dir=None) -> str
         workspace: str | None = None,
         pick_runner: Callable[[str, list[str], "str | None"], int] | None = None,
         max_node_visits: int = 1000,
@@ -189,6 +190,7 @@ class WorkflowEngine:
         input_files: list[str] | None = None,
         output_format: str | None = None,
         resume: ResumeState | None = None,
+        work_dir_override: str | None = None,
     ) -> WorkflowResult:
         """Run the workflow. A node-execution failure (provider/MCP/tool error) does not
         propagate — it ends the run as a typed ``aborted`` result carrying the partial
@@ -202,7 +204,10 @@ class WorkflowEngine:
         When ``resume`` is given, the walk re-enters at ``resume.start_at`` under the
         same ``run_id`` (so it shares the prior run's working folder and node-session
         keys) with the visit counts already consumed and ``resume.upstream`` as that
-        node's upstream input, instead of starting a fresh run at the workflow's start."""
+        node's upstream input, instead of starting a fresh run at the workflow's start.
+
+        When ``work_dir_override`` is given, the run uses this folder as its working
+        directory instead of creating its own folder under the workspace."""
         run_id = resume.run_id if resume is not None else self._run_id_factory()
 
         # Pre-flight input validation: check for missing/colliding files and declared-file contracts
@@ -212,7 +217,7 @@ class WorkflowEngine:
         if preflight is not None:
             return preflight
 
-        if self._workspace is not None:
+        if self._workspace is not None and work_dir_override is None:
             prune_runs(self._workspace, keep=self._prune_keep)
         runs: list[NodeRun] = []
         # The effective root MUST match node_runner's headless rooting: a None calling
@@ -234,6 +239,7 @@ class WorkflowEngine:
                 start_at=resume.start_at if resume else None,
                 initial_visits=dict(resume.visits) if resume else None,
                 initial_upstream=resume.upstream if resume else None,
+                work_dir_override=work_dir_override,
             )
         except WorkflowConfigError as exc:
             # A config/wiring error is fatal and re-raised, but finalize the manifest first
@@ -352,6 +358,7 @@ class WorkflowEngine:
         start_at: str | None = None,
         initial_visits: dict[str, int] | None = None,
         initial_upstream: str | None = None,
+        work_dir_override: str | None = None,
     ) -> WorkflowResult:
         shared_context: list[dict] = []
         visits: dict[str, int] = dict(initial_visits or {})
@@ -359,17 +366,19 @@ class WorkflowEngine:
         # One shared working folder per run: every sequential node reads and writes here,
         # so created/edited files accumulate in one place and each stage sees the prior
         # work (collaboration). Parallel branches fork this and reconcile (see _run_parallel).
-        work_dir: str | None = (
+        work_dir: str | None = work_dir_override or (
             str(artifact_dir(self._workspace, run_id, "work", None))
             if self._workspace is not None else None
         )
         terminal_output_dir: str | None = work_dir
         final_output: str | None = None
+        final_output_node: str | None = None
         current: str | None = start_at or workflow.start
 
         # Seed input_files into the shared working folder so the start node reads them as
         # the run's starting files.
         if input_files and work_dir is not None:
+            Path(work_dir).mkdir(parents=True, exist_ok=True)
             for path in input_files:
                 shutil.copy(path, Path(work_dir) / Path(path).name)
 
@@ -380,7 +389,7 @@ class WorkflowEngine:
             if self._cancel_check is not None and self._cancel_check():
                 return WorkflowResult(
                     status="cancelled", final_output=final_output, runs=runs,
-                    run_id=run_id,
+                    run_id=run_id, final_output_node=final_output_node,
                 )
             visits[current] = visits.get(current, 0) + 1
             node = workflow.nodes[current]
@@ -388,7 +397,7 @@ class WorkflowEngine:
             if visits[current] > budget:
                 return WorkflowResult(
                     status="exhausted", final_output=final_output, runs=runs,
-                    run_id=run_id, exhausted_node=current,
+                    run_id=run_id, exhausted_node=current, final_output_node=final_output_node,
                 )
             iteration = visits[current]
 
@@ -518,6 +527,7 @@ class WorkflowEngine:
                         return WorkflowResult(
                             status="needs_input", final_output=output,
                             runs=runs, run_id=run_id, needs_input_node=node.id,
+                            final_output_node=node.id,
                         )
                     if target is not None:
                         # Thread this node's output as neutral context before routing to
@@ -534,6 +544,7 @@ class WorkflowEngine:
                         residue = strip_label_line(output, node.cases)
                         if residue:
                             final_output = residue
+                            final_output_node = node.id
                     current = target
                 elif node.routes:
                     if not passed:
@@ -547,9 +558,11 @@ class WorkflowEngine:
                         residue = strip_verdict_line(output)
                         if residue:
                             final_output = residue
+                            final_output_node = node.id
                 else:
                     upstream_output = output
                     final_output = output
+                    final_output_node = node.id
                     current = node.next
 
             elif isinstance(node, SubworkflowNode):
@@ -557,10 +570,11 @@ class WorkflowEngine:
                     raise WorkflowConfigError(
                         f"node {node.id!r} is a subworkflow but the engine has no subworkflow_runner"
                     )
-                output = self._subworkflow_runner(node.workflow, upstream_output or task, root_session_key)
+                output = self._subworkflow_runner(node.workflow, upstream_output or task, root_session_key, work_dir=work_dir)
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=output))
                 upstream_output = output
                 final_output = output
+                final_output_node = node.id
                 current = node.next
 
             elif isinstance(node, ParallelNode):
@@ -579,12 +593,18 @@ class WorkflowEngine:
                     )
                 upstream_output = merged
                 final_output = merged
+                final_output_node = node.id
                 current = node.next
 
             # The node's record(s) are now appended — refresh the live manifest so an
             # in-flight run is observable before the next node starts.
             if update_manifest is not None:
                 update_manifest()
+            if work_dir is not None and work_dir_override is None:
+                try:
+                    os.utime(Path(work_dir).parent, None)   # keep .workflow/<run_id>/ recent while running
+                except OSError:
+                    pass
             if self._progress_emit is not None:
                 nodes = [
                     {
@@ -615,6 +635,7 @@ class WorkflowEngine:
         return WorkflowResult(
             status="completed", final_output=final_output, runs=runs, run_id=run_id,
             output_dir=terminal_output_dir, output_files=output_files,
+            final_output_node=final_output_node,
         )
 
     def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key,

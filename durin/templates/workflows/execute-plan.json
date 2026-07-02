@@ -19,6 +19,7 @@
       "kind": "work",
       "mode": "build",
       "tools": "default",
+      "session": "persistent",
       "max_visits": 20,
       "prompt": "You are executing an implementation plan ONE step at a time — fresh each turn, so you must orient from the workspace, not memory. FIRST list the files in your working directory and read enough of them to see which plan steps are already DONE. Then carry out the SINGLE next not-yet-done step: create or edit exactly the files that step calls for, and keep every earlier step's work intact. Run a quick check if the step is verifiable. Do NOT do more than one step, and do NOT guess past a real obstacle. End your reply with EXACTLY one word on its own final line:\nMORE    — you completed a step and at least one step still remains.\nDONE    — every step in the plan is now complete.\nBLOCKED — you cannot proceed without help (a prerequisite is missing, a check keeps failing for a reason you cannot resolve, or the next step is genuinely ambiguous). BEFORE the label, state precisely what is blocking you and what you need to continue.",
       "cases": {"MORE": "implement", "DONE": "review", "BLOCKED": "__needs_input__"}

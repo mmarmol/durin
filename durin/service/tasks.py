@@ -36,6 +36,7 @@ class BackgroundTask(Result):
     session_key: str | None  # for drill-in into the chat thread view
     nodes: list[dict] | None = None  # workflow node tree; None for sub-agents
     task: str | None = None  # workflow run task (the input given to this run); None for sub-agents
+    needs_input_detail: str | None = None  # the gate's questions when status=="needs_input"; None otherwise
 
 
 class TasksListQuery(Query):

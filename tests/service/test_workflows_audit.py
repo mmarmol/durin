@@ -9,6 +9,7 @@ from durin.service.types import NotFoundError
 from durin.service.workflows import (
     WorkflowRunManifestQuery,
     WorkflowRunResult,
+    WorkflowRunsListQuery,
     WorkflowSessionRunsQuery,
     WorkflowsService,
 )
@@ -55,6 +56,14 @@ def test_run_result_carries_run_id_and_per_node_attribution():
     assert dto.runs[1]["status"] == "ok"
 
 
+def test_run_result_carries_final_output_node():
+    dto = WorkflowRunResult(
+        status="completed", final_output="done", run_id="abc123", runs=[],
+        final_output_node="gate",
+    )
+    assert dto.final_output_node == "gate"
+
+
 @pytest.mark.asyncio
 async def test_run_manifest_route_returns_the_run(tmp_path):
     """GET .../runs/{run_id} returns the manifest with its per-node trace."""
@@ -98,3 +107,38 @@ async def test_session_runs_route_lists_the_session_runs(tmp_path):
     # A session with no runs yields an empty list (not an error).
     none = await svc.session_runs(WorkflowSessionRunsQuery(session="root-other"), p)
     assert none.runs == []
+
+
+@pytest.mark.asyncio
+async def test_runs_list_route_returns_newest_first_summaries(tmp_path):
+    """GET /workflows/{name}/runs lists that workflow's persisted runs, newest-first."""
+    run_log.finalize_run(
+        tmp_path, "wf", WorkflowResult(status="completed", final_output="a", run_id="old"),
+        root_session_key=None, started_at=1.0, finished_at=2.0,
+    )
+    run_log.finalize_run(
+        tmp_path, "wf", WorkflowResult(status="completed", final_output="b", run_id="new"),
+        root_session_key=None, started_at=10.0, finished_at=20.0,
+    )
+    svc, p = _svc(tmp_path), Principal.local()
+    got = await svc.runs_list(WorkflowRunsListQuery(name="wf"), p)
+    assert [r["run_id"] for r in got.runs] == ["new", "old"]
+
+
+@pytest.mark.asyncio
+async def test_runs_list_route_respects_limit(tmp_path):
+    for i in range(3):
+        run_log.finalize_run(
+            tmp_path, "wf", WorkflowResult(status="completed", final_output="x", run_id=f"r{i}"),
+            root_session_key=None, started_at=float(i), finished_at=float(i) + 1,
+        )
+    svc, p = _svc(tmp_path), Principal.local()
+    got = await svc.runs_list(WorkflowRunsListQuery(name="wf", limit=2), p)
+    assert [r["run_id"] for r in got.runs] == ["r2", "r1"]
+
+
+@pytest.mark.asyncio
+async def test_runs_list_route_empty_for_unknown_workflow(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    got = await svc.runs_list(WorkflowRunsListQuery(name="ghost"), p)
+    assert got.runs == []

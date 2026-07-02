@@ -115,6 +115,16 @@ def test_finalize_records_needs_input_node(tmp_path):
     assert rec["needs_input_node"] == "gate"
 
 
+def test_finalize_records_final_output_node(tmp_path):
+    from durin.workflow.result import WorkflowResult
+    result = WorkflowResult(status="completed", final_output="done", final_output_node="gate",
+                            runs=[], run_id="r11")
+    run_log.finalize_run(tmp_path, "w", result, root_session_key=None,
+                         started_at=1.0, finished_at=2.0)
+    rec = run_log.read_manifest(tmp_path, "w", "r11")
+    assert rec["final_output_node"] == "gate"
+
+
 def test_finalize_records_output_files(tmp_path):
     from durin.workflow.result import WorkflowResult
     result = WorkflowResult(status="completed", final_output="done",
@@ -215,3 +225,40 @@ def test_read_runs_since_tolerates_old_schema(tmp_path):
     got = run_log.read_runs_since(tmp_path, "wf")
     assert [r["run_id"] for r in got] == ["legacy"]
     assert "root_session_key" not in got[0]
+
+
+def test_list_runs_newest_first_summaries(tmp_path):
+    from durin.workflow.result import WorkflowResult
+    run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+        status="completed", final_output="a" * 300, runs=[], run_id="old"),
+        root_session_key=None, started_at=1.0, finished_at=2.0)
+    run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+        status="needs_input", final_output="q", runs=[], run_id="new",
+        needs_input_node="gate"),
+        root_session_key=None, started_at=10.0, finished_at=20.0)
+    got = run_log.list_runs(tmp_path, "wf")
+    assert [r["run_id"] for r in got] == ["new", "old"]
+    assert got[0]["status"] == "needs_input"
+    assert got[0]["needs_input_node"] == "gate"
+    assert got[1]["task"] == ""
+    assert len(got[1]["task"]) <= 200
+
+
+def test_list_runs_caps_task_at_200_chars(tmp_path):
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key=None, started_at=1.0,
+                      task="x" * 500)
+    got = run_log.list_runs(tmp_path, "wf")
+    assert len(got[0]["task"]) == 200
+
+
+def test_list_runs_respects_limit(tmp_path):
+    for i in range(3):
+        run_log.start_run(tmp_path, "wf", f"r{i}", root_session_key=None,
+                          started_at=float(i))
+    got = run_log.list_runs(tmp_path, "wf", limit=2)
+    assert len(got) == 2
+    assert [r["run_id"] for r in got] == ["r2", "r1"]
+
+
+def test_list_runs_no_directory_is_empty(tmp_path):
+    assert run_log.list_runs(tmp_path, "nope") == []
