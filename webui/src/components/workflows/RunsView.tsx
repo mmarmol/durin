@@ -27,10 +27,13 @@ type StatusFilter = (typeof STATUS_FILTERS)[number];
 
 const selectCls = "h-8 rounded-md border border-border bg-background px-2 text-xs";
 
-// Every stranded needs_input run — the ones this tab's tray surfaces so a user can
-// resume them without hunting down which workflow/session they belong to.
+// Every stranded needs_input run that is actually resumable — the ones this tab's
+// tray (and the Workflows sidebar badge) surfaces so a user can resume them without
+// hunting down which workflow/session they belong to. A needs_input run written
+// before the resume feature shipped has no needs_input_node and can't be resumed;
+// it still shows up in the ordinary feed, just not here.
 export function strandedRuns(runs: WorkflowGlobalRun[]): WorkflowGlobalRun[] {
-  return runs.filter((r) => r.status === "needs_input");
+  return runs.filter((r) => r.status === "needs_input" && !!r.needs_input_node);
 }
 
 function TrayEntry({
