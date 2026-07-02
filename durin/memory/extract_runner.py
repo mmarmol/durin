@@ -132,7 +132,7 @@ def run_extract_for_session(
     skill_signals: bool = True,
     learnings: bool = True,
     confidence_threshold: int = 95,
-    semantic_distance_threshold: float = 0.20,
+    semantic_distance_threshold: float = 0.30,
     alias_index: "Any | None" = None,
     vector_index: "Any | None" = None,
 ) -> dict:

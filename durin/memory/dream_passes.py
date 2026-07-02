@@ -92,7 +92,7 @@ def run_extract_pass(
     skill_signals: bool = True,
     learnings: bool = True,
     confidence_threshold: int = 95,
-    semantic_distance_threshold: float = 0.20,
+    semantic_distance_threshold: float = 0.30,
     vector_index: object | None = None,
 ) -> dict:
     """Run the extract dream over every session that has new turns.
@@ -208,7 +208,7 @@ def run_refine_pass(
     enabled: bool = True,
     confidence_threshold: int = 95,
     escalate_floor: int = 0,
-    semantic_distance_threshold: float = 0.20,
+    semantic_distance_threshold: float = 0.30,
     run_started_at: "datetime | None" = None,
     vector_index: object | None = None,
 ) -> dict:

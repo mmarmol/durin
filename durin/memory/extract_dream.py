@@ -355,7 +355,7 @@ def discover_entities(
     alias_index: "AliasIndex | None" = None,
     vector_index: object | None = None,
     confidence_threshold: int = 95,
-    semantic_distance_threshold: float = 0.20,
+    semantic_distance_threshold: float = 0.30,
 ) -> list[dict[str, Any]]:
     """Discover entities mentioned in ``turns`` that the agent did NOT upsert and
     write them as dream-authored pages.
@@ -514,7 +514,7 @@ def mine_learnings(
     alias_index: "AliasIndex | None" = None,
     vector_index: object | None = None,
     confidence_threshold: int = 95,
-    semantic_distance_threshold: float = 0.20,
+    semantic_distance_threshold: float = 0.30,
 ) -> list[dict[str, Any]]:
     """Mine durable learnings (preferences/corrections) from a session-turn span
     and write them as feedback/stance/practice entities.
