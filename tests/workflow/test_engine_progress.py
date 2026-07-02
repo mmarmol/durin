@@ -199,6 +199,27 @@ def test_engine_progress_frames_carry_iteration_and_budget_for_looping_node():
     assert any(n.get("iteration") == 1 and n.get("budget") == 2 for n in gate_entries), gate_entries
     assert any(n.get("iteration") == 2 and n.get("budget") == 2 for n in gate_entries), gate_entries
 
+    # Separately: a "node started" frame for the second visit must carry iteration=2
+    # and budget=2 (not deferred to the finished status only).
+    second_pass_started = [
+        n for c in calls for n in c["nodes"]
+        if n["id"] == "gate" and n.get("iteration") == 2 and n.get("status") == "running"
+    ]
+    assert len(second_pass_started) > 0, (
+        "No 'running' status frame found for gate's second iteration (iteration=2, status='running')"
+    )
+    assert all(n.get("budget") == 2 for n in second_pass_started), second_pass_started
+
+    # A finished-status entry for the second pass must also carry them (status='done').
+    second_pass_finished = [
+        n for c in calls for n in c["nodes"]
+        if n["id"] == "gate" and n.get("iteration") == 2 and n.get("status") == "done"
+    ]
+    assert len(second_pass_finished) > 0, (
+        "No 'done' status frame entry found for gate's second iteration (iteration=2, status='done')"
+    )
+    assert all(n.get("budget") == 2 for n in second_pass_finished), second_pass_finished
+
 
 def test_parallel_branches_carry_label():
     """Branch dicts inside parallel nodes must carry a 'label' key."""

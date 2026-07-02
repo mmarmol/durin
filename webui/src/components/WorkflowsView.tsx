@@ -987,6 +987,12 @@ function RunDetail({
   const continues = continuesSessionFlags(result.runs);
   const outputFiles = result.output_files ?? [];
 
+  // Reset answers when the run identity or needs_input status changes to avoid stale
+  // textarea content on nested resume (same component instance with new result props).
+  useEffect(() => {
+    setAnswers("");
+  }, [result.run_id, result.status]);
+
   return (
     <div className="flex flex-col gap-2">
       {result.status === "needs_input" && (
