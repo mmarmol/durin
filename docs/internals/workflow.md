@@ -228,11 +228,11 @@ The per-node entries in the manifest's `runs` array carry:
 | `passed` | binary routing verdict (`true`/`false`/`null` for non-binary nodes) |
 | `route_label` | matched case label for multi-way nodes (`null` otherwise) |
 | `budget` | the node's effective visit budget at this pass (`null` for parallel branches/workers, which are not loop targets) |
-| `needs_input_node` | the node that routed to `__needs_input__` (`null` otherwise) — the resume re-entry point |
 
-The finalized manifest also carries `output_files`: the relative paths (within the run's
-output folder) a completed run produced — empty for a run that ended any other status or
-produced no files.
+The finalized manifest also carries two top-level fields: `needs_input_node` — the node
+that routed to `__needs_input__` (`null` otherwise), the resume re-entry point — and
+`output_files`: the relative paths (within the run's output folder) a completed run
+produced, empty for a run that ended any other status or produced no files.
 
 `read_runs_since` (used by the dream self-improvement pass) returns all records for a
 workflow; callers that need only terminal runs should skip records whose `status` is
