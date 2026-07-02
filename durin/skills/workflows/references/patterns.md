@@ -25,7 +25,10 @@ The baseline: each node hands its text output to the next; a `null` `next` ends 
 
 A reviewer node emits `PASS`/`FAIL`. `on_fail` loops back to the producer (its feedback is
 threaded in), capped by `max_visits`. The reviewer differs from the producer (`mode`/`prompt`)
-to satisfy the anti-Goodhart guard.
+to satisfy the anti-Goodhart guard. `session: "persistent"` on the producer makes each
+loop-back **resume its conversation** — it keeps its prior reasoning and receives only the
+reviewer's feedback plus an automatic pass counter ("Pass 2 of 3"; the last allowed pass is
+marked FINAL). Use it whenever the looping node does incremental work.
 
 ```json
 {
@@ -34,6 +37,7 @@ to satisfy the anti-Goodhart guard.
   "max_visits": 3,
   "nodes": [
     { "id": "make",   "kind": "work", "mode": "build", "tools": "default",
+      "session": "persistent",
       "prompt": "Implement the change.", "next": "check" },
     { "id": "check",  "kind": "work", "mode": "read",  "tools": "default",
       "prompt": "Run the tests. End with PASS on the first line if green, else FAIL and say what broke.",
@@ -45,7 +49,9 @@ to satisfy the anti-Goodhart guard.
 ## Multi-way routing + `__needs_input__` (`cases`)
 
 A node ends with exactly one declared label; the engine follows that edge. `null` ends the
-run; `__needs_input__` pauses the run to ask the caller for more information.
+run; `__needs_input__` pauses the run to ask the caller for more information. To continue,
+call `run_workflow` again with `resume_run_id=<run id>` and the answers as `task` — the run
+resumes at the asking node with its working folder, sessions, and loop counters intact.
 
 ```json
 {
@@ -111,7 +117,9 @@ private workspace copy and a judge picks one (needs `criteria`). Use `"union"` t
 
 ## Subworkflow composition (`kind: "subworkflow"`)
 
-Run another named workflow as one step and use its output.
+Run another named workflow as one step and use its output. The nested run works in the
+parent's shared working folder, so a file the parent produced is readable by the child's
+nodes and vice versa — composition passes files, not just text.
 
 ```json
 {
@@ -149,11 +157,14 @@ Any `work` node can be tuned independently. `model` and `persona` are mutually e
 - **Files** live in ONE shared working folder per run: every sequential node with file tools
   (`tools: "default"`, `mode: "build"`) reads earlier steps' files there and writes its own,
   so file-producing stages build on each other (a plan's code accumulates; a debug loop's
-  reproduction, fix, and test live together). Parallel writing branches fork a private copy
-  that is reconciled back (see the static-parallel pattern). You do not declare the folder —
-  it exists per run; just have nodes read and write files normally. To hand produced files
-  back to the caller, declare `output: {"file": true}` on the envelope: the run result then
-  reports the working-folder path so the caller reads the files there.
+  reproduction, fix, and test live together). Subworkflows run in the parent's folder;
+  parallel writing branches fork the folder along with the workspace and their writes
+  reconcile back; read branches and dynamic workers are handed the folder directly. You do
+  not declare the folder — it exists per run; just have nodes read and write files normally.
+  To hand produced files back to the caller, declare `output: {"file": true}` on the
+  envelope: the run result then reports the working-folder path AND the list of produced
+  files. Copy out anything that must outlive the run — working folders are pruned once
+  `workflow.keep_runs` newer runs accumulate.
 
 ## Input / Output descriptors (envelope)
 
