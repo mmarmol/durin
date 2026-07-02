@@ -291,33 +291,36 @@ export function RunsView() {
                         entry={entry}
                         indent={!!entry.parent_run_id}
                         active={selected?.run_id === entry.run_id}
-                        onClick={() => onSelectEntry(entry)}
+                        onClick={() =>
+                          selected?.run_id === entry.run_id
+                            ? setSelected(null)
+                            : void onSelectEntry(entry)
+                        }
                       />
+                      {selected?.run_id === entry.run_id && (
+                        <div className="mb-1 mt-0.5 rounded-md border p-3 text-xs">
+                          <div className="mb-2 font-mono text-[11px] text-muted-foreground">
+                            {selected.workflow} · {selected.run_id}
+                          </div>
+                          {manifestLoading ? (
+                            <div className="flex items-center gap-2 text-muted-foreground">
+                              <Loader2 className="h-4 w-4 animate-spin" /> {t("workflows.loading")}
+                            </div>
+                          ) : (
+                            manifest && (
+                              <RunDetail
+                                result={manifest}
+                                resuming={resumingId === selected.run_id}
+                                onResume={onResumeFromDetail}
+                              />
+                            )
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
-
-              {selected && (
-                <div className="rounded-md border p-3 text-xs">
-                  <div className="mb-2 font-mono text-[11px] text-muted-foreground">
-                    {selected.workflow} · {selected.run_id}
-                  </div>
-                  {manifestLoading ? (
-                    <div className="flex items-center gap-2 text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" /> {t("workflows.loading")}
-                    </div>
-                  ) : (
-                    manifest && (
-                      <RunDetail
-                        result={manifest}
-                        resuming={resumingId === selected.run_id}
-                        onResume={onResumeFromDetail}
-                      />
-                    )
-                  )}
-                </div>
-              )}
             </>
           )}
         </div>
