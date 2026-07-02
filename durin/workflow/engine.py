@@ -55,6 +55,11 @@ class NodeRunRequest:
     # key includes this suffix so each worker gets a distinct session rather than
     # all workers overwriting the same key.
     worker_index: int | None = None
+    # The node's effective visit budget (min of its own max_visits / the workflow
+    # default / the global ceiling). Lets the runner tell the model which pass this
+    # is and that the final allowed pass IS final. None when budgets don't apply
+    # (parallel branches/workers, which are not loop targets).
+    budget: int | None = None
 
 
 @dataclass
@@ -337,6 +342,7 @@ class WorkflowEngine:
                     iteration=iteration,
                     root_session_key=root_session_key,
                     output_dir=out_dir,
+                    budget=budget,
                 )
 
                 # Run a full agent turn; for a multi-way node the verdict is a matched

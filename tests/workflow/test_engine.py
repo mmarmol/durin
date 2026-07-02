@@ -658,6 +658,22 @@ def test_frame_task_output_format_works_without_a_declared_output():
     assert "JSON with fields x,y" in framed
 
 
+def test_engine_passes_the_visit_budget_to_the_runner():
+    wf = parse_workflow({
+        "name": "d", "start": "make", "max_visits": 4,
+        "nodes": [
+            {"id": "make", "kind": "work", "next": "gate", "max_visits": 2},
+            {"id": "gate", "kind": "work", "prompt": "ok?", "on_pass": None, "on_fail": "make"},
+        ],
+    })
+    eng, calls = _engine({"make": "draft", "gate": "PASS"})
+    eng.run(wf, "t")
+    make_call = [c for c in calls if c.node.id == "make"][0]
+    gate_call = [c for c in calls if c.node.id == "gate"][0]
+    assert make_call.budget == 2      # per-node override
+    assert gate_call.budget == 4      # workflow default
+
+
 def test_sequential_nodes_share_one_working_dir(tmp_path):
     # Every sequential node — looping or hand-off — reads and writes ONE shared per-run
     # folder, so files accumulate in one place and each stage sees the prior work. (Before,

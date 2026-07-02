@@ -141,7 +141,7 @@ both are clamped by the global config ceiling `workflow.max_node_visits` (defaul
 settings) — the runaway backstop no node may exceed. Exceeding the budget ends the run
 with status `exhausted` carrying `exhausted_node`; the `run_workflow` tool and the editor's
 runner surface it gracefully (the node, its last FAIL reason, and the best partial), so the
-caller learns it did not complete and why instead of treating a partial as done.
+caller learns it did not complete and why instead of treating a partial as done. The engine hands each work node its effective budget; on a revisit the runner tells the model which pass this is ("Pass X of Y"), and on the last allowed pass says explicitly that no further iteration will happen, so loops converge deliberately instead of being cut off by the cap.
 
 **`max_turns`** (distinct from `max_visits`) caps how many tool-use rounds the model gets
 within a single node execution. When set on a `WorkNode`, the node runner (1) prepends a

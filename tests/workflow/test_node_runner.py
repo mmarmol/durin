@@ -13,6 +13,13 @@ from durin.workflow.node_runner import AgentNodeRunner
 from durin.workflow.spec import WorkNode
 
 
+def _req(node, iteration=1, budget=None, **kw):
+    return NodeRunRequest(
+        node=node, task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=iteration, root_session_key=None, budget=budget, **kw,
+    )
+
+
 def _runner(sessions, fake_result):
     provider = MagicMock(spec=LLMProvider)
     provider.get_default_model.return_value = "test-model"
@@ -612,3 +619,28 @@ def test_response_messages_exclude_system_and_inherited_shared_context(tmp_path)
     # exactly: the node's own user turn + its new assistant turn
     assert resp.messages[0]["role"] == "user"
     assert resp.messages[-1] == {"role": "assistant", "content": "out-b"}
+
+
+def test_first_pass_has_no_pass_note(tmp_path):
+    nr = _faithful_runner(SessionManager(workspace=tmp_path))
+    nr(_req(WorkNode(id="a", next=None), iteration=1, budget=3))
+    spec = nr.runner.run.call_args.args[0]
+    user = [m for m in spec.initial_messages if m["role"] == "user"][-1]
+    assert "pass" not in user["content"].lower()
+
+
+def test_revisit_gets_pass_counter(tmp_path):
+    nr = _faithful_runner(SessionManager(workspace=tmp_path))
+    nr(_req(WorkNode(id="a", next=None), iteration=2, budget=3))
+    spec = nr.runner.run.call_args.args[0]
+    user = [m for m in spec.initial_messages if m["role"] == "user"][-1]
+    assert "pass 2 of 3" in user["content"].lower()
+
+
+def test_final_pass_is_explicit(tmp_path):
+    nr = _faithful_runner(SessionManager(workspace=tmp_path))
+    nr(_req(WorkNode(id="a", next=None), iteration=3, budget=3))
+    spec = nr.runner.run.call_args.args[0]
+    user = [m for m in spec.initial_messages if m["role"] == "user"][-1]
+    assert "final pass" in user["content"].lower()
+    assert "no further iteration" in user["content"].lower()

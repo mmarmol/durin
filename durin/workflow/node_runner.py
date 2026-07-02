@@ -91,6 +91,27 @@ class AgentNodeRunner:
         self._main_loop = main_loop
         self._app_config = app_config
 
+    @staticmethod
+    def _pass_note(req: NodeRunRequest) -> str:
+        """The loop-awareness note appended to the node's user turn. Empty on a first
+        pass (a node that never loops must not be primed to iterate); on a revisit it
+        states pass X of Y; on the last allowed pass it says so explicitly so the
+        model delivers a final, complete result instead of another increment."""
+        if req.budget is None or req.iteration <= 1:
+            return ""
+        remaining = req.budget - req.iteration
+        if remaining > 0:
+            return (
+                f"\n\n--- Pass {req.iteration} of {req.budget} ---\n"
+                f"This step already ran {req.iteration - 1} time(s); after this pass, "
+                f"{remaining} more remain(s)."
+            )
+        return (
+            f"\n\n--- FINAL PASS ({req.iteration} of {req.budget}) ---\n"
+            "This is this step's last allowed pass; there will be no further iteration. "
+            "Deliver your best complete, final result."
+        )
+
     def _build_tools(self, node, workspace_override: str | None = None) -> ToolRegistry:
         """Build the node's tool registry: its built-in set ('none'→empty,
         'default'→the standard subagent tool set) plus a scoped subset of the
@@ -178,6 +199,7 @@ class AgentNodeRunner:
                 "Earlier steps' files are here; create and edit files here so the steps "
                 "after you see them."
             )
+        user = f"{user}{self._pass_note(req)}"
         messages.append({"role": "user", "content": user})
 
         # Persona model when a persona is set, else the node's explicit model, else
