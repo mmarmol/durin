@@ -62,13 +62,59 @@ def test_terminal_progress_payload_marks_workflow_done():
 
     # Empty `nodes` map -> label falls back to node_id (skips node_label).
     workflow = SimpleNamespace(nodes={})
-    runs = [
-        SimpleNamespace(node_id="scan", status="passed", route_label="pass", iteration=1, budget=None),
-        SimpleNamespace(node_id="fix", status="node_failed", route_label=None, iteration=1, budget=None),
-    ]
-    payload = _terminal_progress_payload(workflow, "run-1", runs)
+    result = SimpleNamespace(
+        status="completed", needs_input_node=None, final_output="42",
+        runs=[
+            SimpleNamespace(node_id="scan", status="passed", route_label="pass", iteration=1, budget=None),
+            SimpleNamespace(node_id="fix", status="node_failed", route_label=None, iteration=1, budget=None),
+        ],
+    )
+    payload = _terminal_progress_payload(workflow, "run-1", result)
 
     assert payload["done"] is True
     assert payload["run_id"] == "run-1"
+    assert payload["status"] == "completed"
+    assert "detail" not in payload  # questions ride only on needs_input
     statuses = {n["id"]: n["status"] for n in payload["nodes"]}
     assert statuses == {"scan": "done", "fix": "failed"}
+
+
+def test_terminal_progress_payload_needs_input_carries_questions():
+    """A paused run must be distinguishable from a completed one in the terminal
+    frame: run-level status rides the payload and the asking node is marked, so
+    the WORK panels can show 'waiting for input' plus the questions."""
+    from types import SimpleNamespace
+
+    from durin.agent.tools.run_workflow import _terminal_progress_payload
+
+    workflow = SimpleNamespace(nodes={})
+    result = SimpleNamespace(
+        status="needs_input", needs_input_node="ask",
+        final_output="Which environment: staging or prod?",
+        runs=[
+            SimpleNamespace(node_id="ask", status="passed", route_label=None, iteration=1, budget=None),
+            SimpleNamespace(node_id="ask", status="passed", route_label=None, iteration=2, budget=None),
+        ],
+    )
+    payload = _terminal_progress_payload(workflow, "run-2", result)
+
+    assert payload["status"] == "needs_input"
+    assert payload["detail"] == "Which environment: staging or prod?"
+    # Only the LAST run row of the asking node represents the pause; the
+    # earlier row is a completed loop iteration.
+    assert [n["status"] for n in payload["nodes"]] == ["done", "needs_input"]
+
+
+def test_terminal_progress_payload_caps_detail():
+    from types import SimpleNamespace
+
+    from durin.agent.tools.run_workflow import _terminal_progress_payload
+
+    workflow = SimpleNamespace(nodes={})
+    result = SimpleNamespace(
+        status="needs_input", needs_input_node="ask",
+        final_output="q" * 2000,
+        runs=[SimpleNamespace(node_id="ask", status="passed", route_label=None, iteration=1, budget=None)],
+    )
+    payload = _terminal_progress_payload(workflow, "run-3", result)
+    assert len(payload["detail"]) == 500

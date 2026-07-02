@@ -125,3 +125,79 @@ def test_concurrent_items():
     markup = store.render_markup()
     assert "parallel-task" in markup
     assert "research" in markup
+
+
+def test_workflow_needs_input_is_waiting_not_finished():
+    """A terminal frame with status=needs_input renders as an active 'waiting'
+    item (glyph ?, its own style, first question line) — not under Finished."""
+    store = WorkStore()
+    store.ingest({
+        "name": "workflow_progress", "phase": "running",
+        "call_id": "workflow:n1",
+        "arguments": {"workflow": "triage"},
+        "nodes": [{"id": "ask", "label": "ask", "status": "running"}],
+    })
+    store.ingest({
+        "name": "workflow_progress", "phase": "end",
+        "call_id": "workflow:n1",
+        "status": "needs_input",
+        "detail": "Which environment: staging or prod?",
+        "arguments": {"workflow": "triage"},
+        "nodes": [{"id": "ask", "label": "ask", "status": "needs_input"}],
+    })
+    # Paused run is waiting on the user: no spinner animation needed…
+    assert store.active_count() == 0
+    markup = store.render_markup()
+    # …but it stays in the active section, styled and explained.
+    assert "Finished" not in markup
+    assert "1 waiting" in markup
+    assert "work-needs-input" in markup
+    assert "? triage" in markup
+    assert "waiting for your reply in chat" in markup
+    assert "Which environment" in markup
+
+
+def test_workflow_needs_input_detail_escapes_markup():
+    """LLM question text may contain literal brackets — they must not be parsed
+    as Rich markup tags when rendered in the sidebar."""
+    store = WorkStore()
+    store.ingest({
+        "name": "workflow_progress", "phase": "end",
+        "call_id": "workflow:n2",
+        "status": "needs_input",
+        "detail": "Pick one of [staging] or [prod]",
+        "arguments": {"workflow": "deploy"},
+        "nodes": [],
+    })
+    markup = store.render_markup()
+    assert r"\[staging]" in markup
+
+
+def test_workflow_end_without_status_stays_done():
+    """Back-compat: terminal frames from emitters that don't send a run status
+    keep the plain end→done mapping."""
+    store = WorkStore()
+    store.ingest({
+        "name": "workflow_progress", "phase": "end",
+        "call_id": "workflow:old1",
+        "arguments": {"workflow": "legacy"},
+        "nodes": [],
+    })
+    markup = store.render_markup()
+    assert "Finished" in markup
+    assert "work-done" in markup
+
+
+def test_workflow_end_non_completed_status_is_failed():
+    store = WorkStore()
+    store.ingest({
+        "name": "workflow_progress", "phase": "end",
+        "call_id": "workflow:x1",
+        "status": "exhausted",
+        "arguments": {"workflow": "flaky"},
+        "nodes": [],
+    })
+    assert store.active_count() == 0
+    markup = store.render_markup()
+    assert "Finished" in markup
+    assert "work-failed" in markup

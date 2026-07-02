@@ -101,6 +101,7 @@ class SidebarPanel(Static):
     SidebarPanel .work-done { color: $success; }
     SidebarPanel .work-failed { color: $error; }
     SidebarPanel .work-pending { color: $text-muted; }
+    SidebarPanel .work-needs-input { color: $warning; text-style: bold; }
 
     SidebarPanel .sidebar-foot {
         color: $text-muted;
