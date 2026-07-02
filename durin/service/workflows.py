@@ -79,6 +79,7 @@ class WorkflowRunCommand(Command):
     task: str
     input_files: list[str] = []
     output_format: str = ""   # optional: how to deliver the result this run (overrides the workflow's output contract)
+    resume_run_id: str = ""   # optional: resume a needs_input run of THIS workflow; task carries the user's answers
 
 
 class WorkflowRunResult(Result):
@@ -88,6 +89,8 @@ class WorkflowRunResult(Result):
     runs: list[dict[str, Any]]        # per-node trace: node_id/iteration/passed/session_key/worker_index/status/route_label/output
     output_dir: str = ""
     exhausted_node: str = ""
+    needs_input_node: str = ""        # set when status=="needs_input": the node that asked
+    output_files: list[str] = []      # relative paths in output_dir (completed runs)
 
 
 class WorkflowRunManifestQuery(Query):
@@ -248,10 +251,22 @@ class WorkflowsService:
 
         from durin.agent.runner import AgentRunner
         from durin.providers.factory import make_provider
-        from durin.workflow.engine import WorkflowEngine
+        from durin.workflow.engine import WorkflowEngine, build_resume_state
         from durin.workflow.judge import AgentJudgeRunner
         from durin.workflow.node_runner import AgentNodeRunner
         from durin.workflow.subworkflow import SubworkflowRunner
+
+        resume = None
+        task = cmd.task
+        if cmd.resume_run_id:
+            manifest = run_log.read_manifest(self._workspace, cmd.name, cmd.resume_run_id)
+            if manifest is None or manifest.get("status") != "needs_input" or not manifest.get("needs_input_node"):
+                raise ValidationFailedError(
+                    f"run {cmd.resume_run_id!r} of workflow {cmd.name!r} cannot be resumed — "
+                    "only a needs_input run can."
+                )
+            resume = build_resume_state(manifest, cmd.task)
+            task = manifest.get("task") or cmd.task
 
         preset = self._app_config.resolve_default_preset()
         provider = make_provider(self._app_config, preset=preset)
@@ -269,9 +284,10 @@ class WorkflowsService:
             workspace=ws, pick_runner=judge.pick,
             max_node_visits=self._app_config.workflow.max_node_visits)
         result = await asyncio.to_thread(
-            engine.run, workflow, cmd.task,
+            engine.run, workflow, task,
             input_files=cmd.input_files or None,
             output_format=cmd.output_format or None,
+            resume=resume,
         )
         # The engine owns the run manifest (started→updated→finalized); no record write here.
         return WorkflowRunResult(
@@ -287,6 +303,8 @@ class WorkflowsService:
             ],
             output_dir=result.output_dir or "",
             exhausted_node=result.exhausted_node or "",
+            needs_input_node=result.needs_input_node or "",
+            output_files=list(result.output_files or []),
         )
 
     @route(

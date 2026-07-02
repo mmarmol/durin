@@ -22,6 +22,7 @@ class NodeRun:
     route_label: str | None = None   # for a multi-way routing node: the matched case label (None otherwise)
     worker_index: int | None = None  # for a fan-out worker: its index in the batch (None otherwise)
     branch_id: str | None = None     # for a static-parallel branch: the branch node id (None otherwise)
+    budget: int | None = None        # the node's effective visit budget at this pass (None for parallel units)
     status: str = "ok"               # "ok" (node persisted) | "persist_failed" (save raised) | "node_failed" (the node's agent turn raised)
     error: str | None = None         # failure detail when status is "node_failed"/"persist_failed" (None otherwise)
 

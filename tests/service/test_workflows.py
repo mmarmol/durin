@@ -1,7 +1,12 @@
 """Tests for WorkflowsService (list / load / save / delete)."""
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
 import pytest
 
+from durin.config.schema import ToolsConfig, WorkflowConfig
+from durin.providers.base import LLMProvider
 from durin.service.principal import Principal
 from durin.service.types import NotFoundError, ValidationFailedError
 from durin.service.workflows import (
@@ -14,6 +19,8 @@ from durin.service.workflows import (
     WorkflowsListQuery,
     WorkflowsService,
 )
+from durin.session.manager import SessionManager
+from durin.workflow import run_log
 from durin.workflow.result import NodeRun, WorkflowResult
 
 _VALID = {"name": "wf", "start": "a", "nodes": [{"id": "a", "kind": "work"}]}
@@ -21,6 +28,16 @@ _VALID = {"name": "wf", "start": "a", "nodes": [{"id": "a", "kind": "work"}]}
 
 def _svc(tmp_path):
     return WorkflowsService(workspace=tmp_path)
+
+
+def _runnable_svc(tmp_path):
+    # A service wired for the run route: app_config + sessions, like the gateway builds it.
+    app_config = SimpleNamespace(
+        resolve_default_preset=lambda: object(),
+        tools=ToolsConfig(), workflow=WorkflowConfig(),
+    )
+    sessions = SessionManager(workspace=tmp_path)
+    return WorkflowsService(workspace=tmp_path, app_config=app_config, sessions=sessions)
 
 
 @pytest.mark.asyncio
@@ -167,3 +184,75 @@ def test_workflow_run_result_exhausted_node_defaults_empty():
         exhausted_node=engine_result.exhausted_node or "",
     )
     assert dto.exhausted_node == ""
+
+
+@pytest.mark.asyncio
+async def test_run_response_carries_needs_input_node_and_output_files(tmp_path):
+    svc, p = _runnable_svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "m"
+
+    def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
+                 output_format=None, resume=None):
+        return WorkflowResult(
+            status="needs_input", run_id="r1", final_output="what env?",
+            needs_input_node="a", runs=[], output_files=["a.md"],
+        )
+
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.workflow.engine.WorkflowEngine.run", fake_run):
+        result = await svc.run(WorkflowRunCommand(name="wf", task="go"), p)
+
+    assert result.needs_input_node == "a"
+    assert result.output_files == ["a.md"]
+
+
+@pytest.mark.asyncio
+async def test_run_resumes_a_needs_input_manifest_with_the_original_task(tmp_path):
+    svc, p = _runnable_svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    needs_input = WorkflowResult(
+        status="needs_input", run_id="r1", final_output="what env?", needs_input_node="a",
+        runs=[NodeRun(node_id="a", iteration=1, output="asking")],
+    )
+    run_log.finalize_run(
+        tmp_path, "wf", needs_input,
+        root_session_key=None, started_at=1.0, finished_at=2.0, task="original task",
+    )
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "m"
+    captured = {}
+
+    def fake_run(self, workflow, task, *, root_session_key=None, input_files=None,
+                 output_format=None, resume=None):
+        captured["task"] = task
+        captured["resume"] = resume
+        return WorkflowResult(status="completed", run_id="r1", final_output="ok", runs=[])
+
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.workflow.engine.WorkflowEngine.run", fake_run):
+        await svc.run(WorkflowRunCommand(name="wf", task="prod env", resume_run_id="r1"), p)
+
+    assert captured["resume"] is not None
+    assert captured["resume"].start_at == "a"
+    assert captured["task"] == "original task"           # the manifest's original task, not the answers
+    assert "prod env" in captured["resume"].upstream      # the answers are threaded as upstream input
+
+
+@pytest.mark.asyncio
+async def test_run_resume_of_a_non_needs_input_run_is_rejected_without_running_the_engine(tmp_path):
+    svc, p = _runnable_svc(tmp_path), Principal.local()
+    await svc.save(WorkflowSaveCommand(name="wf", definition=_VALID), p)
+    completed = WorkflowResult(status="completed", run_id="r1", final_output="done", runs=[])
+    run_log.finalize_run(
+        tmp_path, "wf", completed,
+        root_session_key=None, started_at=1.0, finished_at=2.0, task="original task",
+    )
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "m"
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider), \
+         patch("durin.workflow.engine.WorkflowEngine.run") as fake_run:
+        with pytest.raises(ValidationFailedError):
+            await svc.run(WorkflowRunCommand(name="wf", task="prod env", resume_run_id="r1"), p)
+    fake_run.assert_not_called()

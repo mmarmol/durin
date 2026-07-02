@@ -691,6 +691,19 @@ def test_engine_passes_the_visit_budget_to_the_runner():
     assert gate_call.budget == 4      # workflow default
 
 
+def test_node_run_records_the_effective_budget():
+    wf = parse_workflow({
+        "name": "d", "start": "make", "max_visits": 4,
+        "nodes": [
+            {"id": "make", "kind": "work", "next": None, "max_visits": 2},
+        ],
+    })
+    eng, _calls = _engine({"make": "draft"})
+    res = eng.run(wf, "t")
+    assert res.runs[0].node_id == "make"
+    assert res.runs[0].budget == 2
+
+
 def test_gate_learns_when_a_fail_would_exhaust_the_producer():
     wf = parse_workflow({
         "name": "d", "start": "make", "max_visits": 2,

@@ -98,6 +98,30 @@ class ResumeState:
     visits: dict[str, int]
     upstream: str | None = None
 
+
+def build_resume_state(manifest: dict, answers: str) -> ResumeState:
+    """The ResumeState for re-entering a needs_input run, built from its manifest.
+    The caller validates the manifest first (status == "needs_input" and a
+    needs_input_node present); this only folds the mechanical parts: max iteration
+    per node as the consumed visit counts, and the answers framed against the
+    questions the run ended with."""
+    visits: dict[str, int] = {}
+    for r in manifest.get("runs", []):
+        nid, it = r.get("node_id"), r.get("iteration", 1)
+        if nid:
+            visits[nid] = max(visits.get(nid, 0), int(it))
+    questions = manifest.get("final_output") or ""
+    return ResumeState(
+        run_id=manifest["run_id"],
+        start_at=manifest["needs_input_node"],
+        visits=visits,
+        upstream=(
+            "This run previously stopped to ask for more information.\n\n"
+            f"--- Your questions were ---\n{questions}\n\n"
+            f"--- The user's answers ---\n{answers}\n\nContinue from here."
+        ),
+    )
+
 # Upper bound on messages carried in the running shared-context buffer. A long
 # chain of 'shared' nodes would otherwise grow this without limit and balloon the
 # prompt for every later node; keep only the most recent N messages.
@@ -434,6 +458,7 @@ class WorkflowEngine:
                     # then re-raise to abort the walk — run() names the node.
                     runs.append(NodeRun(node_id=node.id, iteration=iteration,
                                         output="", session_key=exc.session_key,
+                                        budget=budget,
                                         status="node_failed", error=str(exc.cause)))
                     if update_manifest is not None:
                         update_manifest()
@@ -449,7 +474,7 @@ class WorkflowEngine:
                     passed = None
                 runs.append(NodeRun(node_id=node.id, iteration=iteration,
                                     output=output, session_key=resp.session_key,
-                                    passed=passed,
+                                    passed=passed, budget=budget,
                                     status="persist_failed" if resp.persist_failed else "ok"))
                 if node.context == "shared":
                     shared_context.extend(resp.messages)

@@ -282,7 +282,7 @@ class RunWorkflowTool(Tool, ContextAware):
         resume = None
         if resume_run_id:
             from durin.workflow import run_log
-            from durin.workflow.engine import ResumeState
+            from durin.workflow.engine import build_resume_state
             manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
             if manifest is None:
                 return f"Error: no run '{resume_run_id}' recorded for workflow '{name}'."
@@ -290,22 +290,7 @@ class RunWorkflowTool(Tool, ContextAware):
                 return (f"Error: run '{resume_run_id}' has status "
                         f"'{manifest.get('status')}' and cannot be resumed — only a "
                         f"needs_input run can.")
-            visits: dict[str, int] = {}
-            for r in manifest.get("runs", []):
-                nid, it = r.get("node_id"), r.get("iteration", 1)
-                if nid:
-                    visits[nid] = max(visits.get(nid, 0), int(it))
-            questions = manifest.get("final_output") or ""
-            resume = ResumeState(
-                run_id=resume_run_id,
-                start_at=manifest["needs_input_node"],
-                visits=visits,
-                upstream=(
-                    "This run previously stopped to ask for more information.\n\n"
-                    f"--- Your questions were ---\n{questions}\n\n"
-                    f"--- The user's answers ---\n{task}\n\nContinue from here."
-                ),
-            )
+            resume = build_resume_state(manifest, task)
             task = manifest.get("task") or task
 
         # Snapshot the current definitions into the workflow version history (captures
