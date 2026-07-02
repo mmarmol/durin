@@ -269,6 +269,38 @@ describe("DurinClient", () => {
     });
   });
 
+  it("replays the last concurrency snapshot to a late subscriber", () => {
+    const client = new DurinClient({
+      url: "ws://test",
+      reconnect: false,
+      socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
+    });
+    client.connect();
+    lastSocket().fakeOpen();
+
+    // A snapshot arrives (e.g. the connect-time hydrate) before anyone subscribes.
+    lastSocket().fakeMessage({
+      event: "concurrency_snapshot",
+      lanes: {
+        interactive: { active: 1, limit: 4, waiting: 0 },
+        ceiling: { active: 3, limit: 12, waiting: 0 },
+        subagents: { active: 2, limit: 3 },
+      },
+      queued: 0,
+      work: [],
+    });
+
+    // A panel mounts and subscribes afterwards — it must get the cached value
+    // immediately rather than waiting for the next boundary broadcast.
+    const handler = vi.fn();
+    client.onConcurrencySnapshot(handler);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toMatchObject({
+      lanes: { ceiling: { active: 3, limit: 12 } },
+      queued: 0,
+    });
+  });
+
   it("resolves newChat() via the server-assigned chat_id", async () => {
     const client = new DurinClient({
       url: "ws://test",

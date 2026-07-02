@@ -133,6 +133,10 @@ export class DurinClient {
   private sessionUpdateHandlers = new Set<SessionUpdateHandler>();
   private dreamProgressHandlers = new Set<DreamProgressHandler>();
   private concurrencySnapshotHandlers = new Set<ConcurrencySnapshotHandler>();
+  // Last snapshot seen (from the connect-time hydrate or a boundary broadcast).
+  // Replayed to any late subscriber so a panel mounted mid-session shows live
+  // values immediately instead of blanks until the next sparse broadcast.
+  private lastConcurrencySnapshot: ConcurrencySnapshotEvent | null = null;
   private errorHandlers = new Set<ErrorHandler>();
   // chat_id -> handlers listening on it
   private chatHandlers = new Map<string, Set<EventHandler>>();
@@ -238,6 +242,12 @@ export class DurinClient {
    * work), broadcast globally and coalesced on turn/subagent boundaries. */
   onConcurrencySnapshot(handler: ConcurrencySnapshotHandler): Unsubscribe {
     this.concurrencySnapshotHandlers.add(handler);
+    // Replay the last-known snapshot so a subscriber that mounts between
+    // broadcasts (e.g. opening the Concurrency settings card while idle) renders
+    // live values at once rather than waiting for the next boundary frame.
+    if (this.lastConcurrencySnapshot) {
+      handler(this.lastConcurrencySnapshot);
+    }
     return () => {
       this.concurrencySnapshotHandlers.delete(handler);
     };
@@ -606,6 +616,7 @@ export class DurinClient {
   }
 
   private emitConcurrencySnapshot(ev: ConcurrencySnapshotEvent): void {
+    this.lastConcurrencySnapshot = ev;
     for (const handler of this.concurrencySnapshotHandlers) {
       handler(ev);
     }
