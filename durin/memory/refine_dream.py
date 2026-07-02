@@ -203,7 +203,7 @@ def run_refine(
     escalate_floor: int = 0,
     run_started_at: "datetime | None" = None,
     vector_index: object | None = None,
-    semantic_distance_threshold: float = 0.20,
+    semantic_distance_threshold: float = 0.30,
 ) -> dict:
     """Dedup pass: judge alias-overlap candidate pairs and merge the same ones.
 

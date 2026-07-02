@@ -12,7 +12,7 @@ def test_semantic_distance_signature_defaults_match_config():
     a stale literal here means direct callers silently use an old threshold."""
     from inspect import signature
     from durin.config.schema import AutoAbsorbConfig
-    from durin.memory import dream_passes, extract_dream, extract_runner
+    from durin.memory import dream_passes, extract_dream, extract_runner, refine_dream
 
     cfg_default = AutoAbsorbConfig().semantic_distance_threshold
     for fn in (
@@ -21,6 +21,7 @@ def test_semantic_distance_signature_defaults_match_config():
         extract_runner.run_extract_for_session,
         dream_passes.run_extract_pass,
         dream_passes.run_refine_pass,
+        refine_dream.run_refine,
     ):
         default = signature(fn).parameters["semantic_distance_threshold"].default
         assert default == cfg_default, fn.__qualname__
