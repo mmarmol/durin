@@ -31,7 +31,7 @@ from durin.workflow import run_log, workspace_fork
 from durin.workflow.artifacts import artifact_dir, prune_runs
 from durin.workflow.result import NodeRun, WorkflowResult
 from durin.workflow.spec import NEEDS_INPUT_TARGET, ParallelNode, SubworkflowNode, WorkNode, Workflow, node_label
-from durin.workflow.verdict import parse_label, parse_verdict
+from durin.workflow.verdict import parse_label, parse_verdict, strip_label_line, strip_verdict_line
 
 
 @dataclass
@@ -498,6 +498,12 @@ class WorkflowEngine:
                         upstream_output = (
                             f"{prior}\n\nContext from {node.id!r}:\n{output}"
                         )
+                    if target is None:
+                        # The run ends at this multi-way node: whatever it produced
+                        # besides the label line is its real contribution.
+                        residue = strip_label_line(output, node.cases)
+                        if residue:
+                            final_output = residue
                     current = target
                 elif node.routes:
                     if not passed:
@@ -507,6 +513,10 @@ class WorkflowEngine:
                             f"{prior}\n\nReviewer feedback (address this):\n{output}"
                         )
                     current = node.on_pass if passed else node.on_fail
+                    if current is None:
+                        residue = strip_verdict_line(output)
+                        if residue:
+                            final_output = residue
                 else:
                     upstream_output = output
                     final_output = output

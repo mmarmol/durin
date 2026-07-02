@@ -311,6 +311,8 @@ text irrelevant in the normal case. It still matters when the fallback runs — 
 `PASS`/`FAIL` should be its first line, a multi-way label its last — so a verdict still
 survives if the forced tool call is ever unavailable.
 
+**Terminal routing output.** When a routing node ends the run (its followed edge is null), its output minus the verdict/label line becomes the run's final output when non-empty; a bare-verdict gate leaves the previous node's output in place. A terminal gate that produced real content (a verification summary, a final synthesis) is therefore not silently discarded.
+
 ### 4e. Context vs. session
 
 `context` controls what a node **sees**, not where its work is stored.

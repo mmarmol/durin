@@ -78,3 +78,35 @@ def test_parse_label_skips_empty_lines():
 def test_parse_label_preserves_original_label_case():
     # The label "Grounded" (mixed case) should be returned as-is when matched.
     assert parse_label("GROUNDED", ["Grounded", "Missing"]) == "Grounded"
+
+
+# --- strip_verdict_line tests ---
+
+
+def test_strip_verdict_line_removes_leading_pass():
+    from durin.workflow.verdict import strip_verdict_line
+    assert strip_verdict_line("PASS\nAll good, ship it.") == "All good, ship it."
+
+
+def test_strip_verdict_line_keeps_text_without_verdict():
+    from durin.workflow.verdict import strip_verdict_line
+    assert strip_verdict_line("just prose") == "just prose"
+
+
+def test_strip_verdict_line_empty_when_only_verdict():
+    from durin.workflow.verdict import strip_verdict_line
+    assert strip_verdict_line("PASS") == ""
+
+
+# --- strip_label_line tests ---
+
+
+def test_strip_label_line_removes_trailing_label():
+    from durin.workflow.verdict import strip_label_line
+    assert strip_label_line("The claims are grounded.\n\nGROUNDED", ["GROUNDED", "MISSING"]) \
+        == "The claims are grounded."
+
+
+def test_strip_label_line_tolerates_punctuation():
+    from durin.workflow.verdict import strip_label_line
+    assert strip_label_line("done\n**GROUNDED**", ["GROUNDED"]) == "done"

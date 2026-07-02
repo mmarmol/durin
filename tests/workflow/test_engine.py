@@ -770,3 +770,44 @@ def test_resume_reenters_at_the_asking_node_with_carried_visits(tmp_path):
     gate_call = calls[0]
     assert gate_call.iteration == 2                       # continues the count
     assert "prod env" in (gate_call.upstream_output or "")
+
+
+def test_terminal_binary_gate_contributes_its_output():
+    wf = parse_workflow({
+        "name": "d", "start": "make",
+        "nodes": [
+            {"id": "make", "kind": "work", "next": "gate"},
+            {"id": "gate", "kind": "work", "prompt": "ok?", "on_pass": None, "on_fail": "make"},
+        ],
+    })
+    eng, _ = _engine({"make": "the draft", "gate": "PASS\nVerified: tests green, docs updated."})
+    result = eng.run(wf, "t")
+    assert result.status == "completed"
+    assert result.final_output == "Verified: tests green, docs updated."
+
+
+def test_terminal_gate_with_bare_verdict_keeps_producer_output():
+    wf = parse_workflow({
+        "name": "d", "start": "make",
+        "nodes": [
+            {"id": "make", "kind": "work", "next": "gate"},
+            {"id": "gate", "kind": "work", "prompt": "ok?", "on_pass": None, "on_fail": "make"},
+        ],
+    })
+    eng, _ = _engine({"make": "the draft", "gate": "PASS"})
+    result = eng.run(wf, "t")
+    assert result.final_output == "the draft"      # bare verdict adds nothing
+
+
+def test_terminal_cases_node_contributes_its_output():
+    wf = parse_workflow({
+        "name": "d", "start": "synth",
+        "nodes": [
+            {"id": "synth", "kind": "work", "next": "gate"},
+            {"id": "gate", "kind": "work", "prompt": "grounded?",
+             "cases": {"GROUNDED": None, "MISSING": "synth"}},
+        ],
+    })
+    eng, _ = _engine({"synth": "draft answer", "gate": "Final answer: 42.\nGROUNDED"})
+    result = eng.run(wf, "t")
+    assert result.final_output == "Final answer: 42."
