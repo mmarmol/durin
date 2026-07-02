@@ -35,7 +35,7 @@ with dynamic fan-out (a worker per file). The terminal node's text output and th
 exposed in the run result. Absent ⇒ today's text-task behavior. The optional free-text `description`
 is a lightweight contract: the engine frames every node's task with the input description (what the
 run received) and the output description (what it must deliver), so the agents are steered and the
-interface is documented — it is a hint, not enforced.
+interface is documented — descriptions are hints, not enforced. However, **provided input files are validated pre-flight** (existence check, distinct basenames) and return an `aborted` result naming any missing or colliding file; and a workflow that declares file input (`file: true`) given none ends the run immediately with a `needs_input` result before any node runs, so the invoking agent asks the user for the files instead of burning node turns.
 
 A caller may also pass a per-run **`output_format`** (the `run_workflow` tool, the run command):
 a delivery instruction for THIS call — "a bulleted list", "JSON with fields x,y", "a 3-line
@@ -44,6 +44,8 @@ workflow can deliver its result in whatever shape the caller needs without being
 same callers may pass **`input_files`** (absolute paths) — seeded into the run's shared working
 folder before the start node runs — and read the terminal **`output_dir`** back from the result;
 both the `run_workflow` tool and the HTTP run surface accept files in and report the folder out.
+The run result also reports the relative list of files in the shared folder, so the invoking agent
+sees what deliverables were produced and where to copy them from.
 
 **A node runs its body, then optionally routes.** `WorkflowEngine.run`
 (`durin/workflow/engine.py`) walks the graph from `start`. For an agent node it calls a
@@ -75,18 +77,19 @@ tools shares ONE **working folder** for the run (`<workspace>/.workflow/<run>/wo
 Because it is one shared folder, created and edited files accumulate in a single place and
 each stage (including a loop's re-iterations) sees the prior work, so stages can collaborate
 on an evolving fileset (e.g. a debug loop's reproduction test, code, and fix) rather than
-hand a copy down a chain. Parallel branches are the exception: each writing branch forks a
-private copy and its changes are reconciled back (choose/union, with conflict detection), so
-concurrent writers can't clobber each other. The `.workflow` tree gitignores itself, is
-excluded from parallel-fork reconciliation, and is pruned to recent runs. (Real deliverables
-a node writes into the workspace proper are the separate, already-shared filesystem channel.) **When a node routes**, the engine derives a verdict from what the node produced
+hand a copy down a chain. Parallel branches fork the run's working folder along with the
+workspace: a writing branch starts from the folder's current files, and its folder writes
+reconcile back (choose/union) exactly like workspace writes; read branches and dynamic
+fan-out workers are handed the shared folder directly. The `.workflow` tree gitignores
+itself and is pruned to recent runs. (Real deliverables a node writes into the workspace
+proper are the separate, already-shared filesystem channel.) **When a node routes**, the engine derives a verdict from what the node produced
 and follows an edge. A node may route in one of two shapes:
 
 **Binary routing** (`on_pass`/`on_fail`): a routing node ends its own reply with a `PASS`/`FAIL`
 line the engine parses (`durin/workflow/verdict.py`) — so a routing node can *verify* (read
 the diff, run the tests) before ruling, not just read text. The engine routes to `on_pass` or
 `on_fail`; on a fail the node's feedback is threaded into the loop-back so the producer re-runs
-knowing what to fix.
+knowing what to fix. When the on_fail target has no visits left, the gate is told a FAIL now ends the run (no further revision), so its last verdict is definitive — PASS with noted caveats, or FAIL with a final summary — rather than another loop instruction that can never be acted on.
 
 **Multi-way routing** (`cases`): an agent node declares a set of labeled outcomes
 (`{"GROUNDED": null, "MISSING": "plan", "MISUSED": "synthesize"}`). It ends its reply with
@@ -141,7 +144,7 @@ both are clamped by the global config ceiling `workflow.max_node_visits` (defaul
 settings) — the runaway backstop no node may exceed. Exceeding the budget ends the run
 with status `exhausted` carrying `exhausted_node`; the `run_workflow` tool and the editor's
 runner surface it gracefully (the node, its last FAIL reason, and the best partial), so the
-caller learns it did not complete and why instead of treating a partial as done.
+caller learns it did not complete and why instead of treating a partial as done. The engine hands each work node its effective budget; on a revisit the runner tells the model which pass this is ("Pass X of Y"), and on the last allowed pass says explicitly that no further iteration will happen, so loops converge deliberately instead of being cut off by the cap.
 
 **`max_turns`** (distinct from `max_visits`) caps how many tool-use rounds the model gets
 within a single node execution. When set on a `WorkNode`, the node runner (1) prepends a
@@ -218,12 +221,18 @@ The per-node entries in the manifest's `runs` array carry:
 |---|---|
 | `node_id` | the node's id in the graph |
 | `iteration` | how many times this node has executed (loop-back counting) |
-| `session_key` | the persisted session containing the node's conversation (`workflow:<run_id>:<node_id>:<iteration>`, or with a `:<worker_index>` suffix for fan-out workers) |
+| `session_key` | the persisted session containing the node's conversation (`workflow:<run_id>:<node_id>:<iteration>`, with a `:<worker_index>` suffix for fan-out workers; a persistent-session node's key omits the iteration suffix — one session across its passes) |
 | `worker_index` | fan-out worker index (0-based; `null` for non-fan-out nodes) |
 | `branch_id` | static-parallel branch node id (`null` for non-branch nodes) |
 | `status` | `"ok"` / `"persist_failed"` (save raised) / `"node_failed"` (agent turn raised) |
 | `passed` | binary routing verdict (`true`/`false`/`null` for non-binary nodes) |
 | `route_label` | matched case label for multi-way nodes (`null` otherwise) |
+| `budget` | the node's effective visit budget at this pass (`null` for parallel branches/workers, which are not loop targets) |
+
+The finalized manifest also carries two top-level fields: `needs_input_node` — the node
+that routed to `__needs_input__` (`null` otherwise), the resume re-entry point — and
+`output_files`: the relative paths (within the run's output folder) a completed run
+produced, empty for a run that ended any other status or produced no files.
 
 `read_runs_since` (used by the dream self-improvement pass) returns all records for a
 workflow; callers that need only terminal runs should skip records whose `status` is
@@ -240,7 +249,13 @@ its partial trace) so an auditor sees a truthful status rather than a permanentl
 The engine never shares the calling session with a node. Every unit of work — every
 agent node, every fan-out worker, every static branch — runs in its own fresh session
 keyed `workflow:<run_id>:<node_id>:<iteration>` (plus `:<worker_index>` for fan-out
-workers), with exactly one recorded parent.
+workers), with exactly one recorded parent. A node may opt into a persistent session
+(`"session": "persistent"`): its visits share ONE session keyed
+`workflow:<run_id>:<node_id>` — when a loop returns to it, the node resumes its own
+conversation (its prior reasoning, decisions, and file knowledge) and receives only the
+new input (loop feedback + the pass counter) as a revisit turn. Parallel units cannot be
+persistent, and persistent excludes `context="shared"` (two competing continuity
+mechanisms).
 
 **Reverse lineage** (child → parent): each node session carries a `parent_session_id`
 pointing to the calling session. **Forward reference** (caller → node sessions): the
@@ -304,6 +319,8 @@ text irrelevant in the normal case. It still matters when the fallback runs — 
 `PASS`/`FAIL` should be its first line, a multi-way label its last — so a verdict still
 survives if the forced tool call is ever unavailable.
 
+**Terminal routing output.** When a routing node ends the run (its followed edge is null), its output minus the verdict/label line becomes the run's final output when non-empty; a bare-verdict gate leaves the previous node's output in place. A terminal gate that produced real content (a verification summary, a final synthesis) is therefore not silently discarded.
+
 ### 4e. Context vs. session
 
 `context` controls what a node **sees**, not where its work is stored.
@@ -313,13 +330,22 @@ survives if the forced tool call is ever unavailable.
 - **`shared`:** the node additionally receives a running buffer of all preceding
   `shared` nodes' conversation turns as extra context before its user message, and its
   own turns are appended to that buffer for subsequent `shared` nodes. The buffer is
-  capped to bound prompt growth on long shared chains.
+  capped to bound prompt growth on long shared chains. The buffer carries each shared
+  node's own turns only — never its system prompt nor the context it inherited — so a
+  chain of shared nodes cannot re-accumulate (duplicate) earlier context.
 
 **`shared` is sequential-only.** Parallel workers are always isolated (each gets its
 own session; there is no shared buffer across concurrent threads), and only their text
 outputs are merged (`[0] … [1] …`). A routing node may not use `context="shared"`;
 the spec rejects that combination at parse time because a routing node reads its own
 output to derive a verdict, not the shared buffer.
+
+A node may opt into a persistent session (`"session": "persistent"`): its visits share
+ONE session keyed `workflow:<run_id>:<node_id>` — when a loop returns to it, the node
+resumes its own conversation (its prior reasoning, decisions, and file knowledge) and
+receives only the new input (loop feedback + the pass counter) as a revisit turn.
+Parallel units cannot be persistent, and persistent excludes `context="shared"` (two
+competing continuity mechanisms).
 
 ### 4f. HTTP surface for run data
 
@@ -330,8 +356,12 @@ The `WorkflowsService` exposes read routes for run manifests:
 | `GET /api/v1/workflows/{name}/runs/{run_id}` | one run's manifest (live or terminal) |
 | `GET /api/v1/workflows/runs?session=<key>` | all run manifests whose `root_session_key` matches, newest-first |
 
-The `POST /api/v1/workflows/{name}/run` response carries `run_id` and a per-node trace
-with `session_key`, `worker_index`, `status`, and `route_label` for each entry.
+The `POST /api/v1/workflows/{name}/run` request accepts an optional `resume_run_id`:
+the run_id of a prior run of the same workflow that ended `needs_input`, with `task`
+carrying the user's answers. The response carries `run_id`, a per-node trace with
+`session_key`, `worker_index`, `branch_id`, `budget`, `status`, and `route_label` for
+each entry, plus `needs_input_node` (the node that asked, when the run ends
+`needs_input`) and `output_files` (relative paths in `output_dir`, for a completed run).
 
 ### 4g. Background mode and live progress
 
@@ -353,6 +383,14 @@ manifest, `tasks(action='stop', id=…)` requests cancellation. The same merge o
 sub-agents and workflow runs that backs `GET /api/v1/tasks`
 (`durin/agent/background_tasks.py`) is what `tasks` renders.
 
+**Resuming a needs_input run.** A run that ended needs_input can be resumed
+instead of restarted: the engine re-enters the graph AT the asking node, with
+the same run_id (same shared working folder, same node-session keys), the
+visit counts already consumed, and the user's answers as that node's upstream
+input. The shared-context buffer is not reconstructed across a resume —
+persistent-session nodes recover their own history, and files live in the
+working folder.
+
 **Cooperative cancellation.** `tasks(action='stop', …)` marks the `run_id` in a
 process-global registry (`durin/workflow/cancellation.py`); the engine polls it
 via a `cancel_check` callback at the top of its node walk. A cancel therefore
@@ -370,7 +408,10 @@ executes on a worker thread (`asyncio.to_thread`), frames are marshalled back to
 the gateway's event loop via
 `asyncio.run_coroutine_threadsafe(bus.publish_outbound(...), main_loop)` before
 being published on the message bus. The WebSocket channel propagates them as
-`tool_events` frames that the work panel consumes in real time.
+`tool_events` frames that the work panel consumes in real time. Each node entry
+in a frame also carries its `iteration` (current pass number) and `budget`
+(effective visit limit, `null` where not applicable) so the panels can render
+loop progress live, not just after the run completes.
 
 ## 5. How it works
 
@@ -437,13 +478,22 @@ End-to-end for a single `run_workflow` call:
   workspace's local workflows (name, `description`, and I/O), with an optional `query` that
   filters by name/description, so the agent can pick which one to run; `run_workflow` runs it.
   The field is optional and backward-compatible — a workflow without it parses and runs fine.
-- **Surface:** the `run_workflow(name, task, output_format?, input_files?, background?)` LLM
-  tool — auto-discovered into the agent's tool registry at core scope (see [tools.md](tools.md)).
-  `input_files` (absolute paths) are seeded into the run's shared working folder so every node
-  can read them, and the terminal `output_dir` is reported back in the run summary. A node with
+- **Surface:** the `run_workflow(name, task, output_format?, input_files?, background?,
+  resume_run_id?)` LLM tool — auto-discovered into the agent's tool registry at core scope
+  (see [tools.md](tools.md)). `input_files` (absolute paths) are seeded into the run's shared
+  working folder so every node can read them, and the terminal `output_dir` is reported back
+  in the run summary. When a run ends `needs_input`, calling the tool again with
+  `resume_run_id` set to that run's id and the user's answers as `task` resumes the same run
+  (same run id, working folder, node sessions, and visit counts) at the node that asked,
+  instead of restarting the workflow from scratch. A node with
   `tools: "default"` receives the user's configured tool set; `tools: "none"` (the
   default) runs the node without tools. A node may also name `skills` (injected into
   its prompt) and `mcps` (a subset of the configured MCP servers, reused live).
+- **Engine settings:** `workflow.max_node_visits` (default 25) and `workflow.keep_runs` (default 20)
+  control global defaults. `max_node_visits` caps how many times any node can iterate (a safety
+  ceiling on visit budgets declared per-node). `keep_runs` bounds how many runs' working folders
+  (`.workflow/<run_id>/`) are retained on disk; older runs are pruned automatically, so deliverables
+  that must outlive retention should be copied to the workspace proper or elsewhere.
 - **Management API:** `WorkflowsService` (`durin/service/workflows.py`) exposes, over HTTP
   at `/api/v1/workflows[/{name}]` and in the OpenAPI contract: list / load / save / delete
   (save validates via `parse_workflow` and writes atomically under the version lock — the
@@ -494,25 +544,47 @@ End-to-end for a single `run_workflow` call:
   `union` reconciliation (private copy per branch + content-aware conflict detection); a
   **shared working folder** per run that sequential nodes read and write, so file-producing
   stages collaborate on one evolving fileset (and a self-loop accumulates) instead of handing
-  copies down a chain — parallel branches fork it as above;
+  copies down a chain — parallel branches fork it the same way (writing branches seed from
+  the current files and reconcile back, read branches and dynamic workers share it directly);
   per-node **work mode** (`build`/`read` neutral postures for nodes; `plan`/`explore` carry interactive framing) / **model or persona** (SOUL + model,
   mutually exclusive) / context / tools; **optional routing** in two shapes — **binary**
   (`on_pass`/`on_fail`: `PASS`/`FAIL` verdict from the agent, feedback-threaded loop-back)
   and **multi-way** (`cases`: agent emits one of N declared labels, last-line match,
   `default` fallback, aborts clearly when no label matched), with an anti-Goodhart guard
-  that a routing node not be structurally identical to its producer; a multi-way case may
+  that a routing node not be structurally identical to its producer; a terminal routing node's
+  own output (minus its verdict/label line) becomes the run's final output when non-empty, so a
+  gate that produces real content is not silently discarded; a multi-way case may
   route to the reserved **`__needs_input__`** terminal, ending the run with status
   `needs_input` and the node's output carrying the questions — the human-in-the-loop lives
   in the agent that invoked the workflow (it asks the user and re-runs with the answers),
-  so the engine never blocks for input; **sub-workflow** composition (depth-capped);
-  runs **anchored to the invoking session**; **git-versioned definitions** (each run
-  snapshots them); **dream-driven self-improvement in manual mode** (recommendations from
+  so the engine never blocks for input; a run that ends `needs_input` can be **resumed**
+  instead of restarted, re-entering the graph at the asking node with the same run id,
+  working folder, node sessions and consumed visit counts, and the user's answers as that
+  node's input; before any of that, **pre-flight input validation** rejects a call whose
+  declared input files are missing or collide on name (an `aborted` result naming the
+  problem, before any node or manifest exists), and a workflow that declares file input
+  but received none ends `needs_input` immediately rather than burning a node turn on it;
+  a looping node is told **which pass it is on** ("Pass X of Y") on a revisit, and on its
+  last allowed pass is told explicitly that no further iteration will happen, so it
+  delivers a final result instead of being cut off mid-increment — and a binary gate whose
+  FAIL would exhaust the producer's remaining visits is told its verdict is definitive
+  (PASS with caveats, or a final FAIL summary) rather than issuing another unactionable
+  loop instruction; a node may opt into a **persistent session** (`session: "persistent"`,
+  requires `context: "own"`, rejected on parallel units) so its revisits resume the same
+  session and prior reasoning instead of starting fresh each pass; **sub-workflow**
+  composition (depth-capped); runs **anchored to the invoking session**; **git-versioned
+  definitions** (each run snapshots them); a completed run reports its **output files**
+  (relative paths in the shared working folder) alongside `output_dir`, and
+  `workflow.keep_runs` (default 20) bounds how many runs' working folders are retained,
+  so the run summary tells the caller to copy out anything that must outlive that window;
+  **dream-driven self-improvement in manual mode** (recommendations from
   recurring run diagnostics); a **webui Workflows pane** (React Flow) with an editor that
   has clickable Input/Output canvas objects (toggle text and/or files plus a free-text
   description; file input is supplied as paths in the run bar), a palette that adds
   work / parallel / subflow nodes (a routing node is a work node — shown by its pass/fail
   edges, never a separate type), draggable nodes with a persisted layout, a **"runs as"**
-  picker (model or persona), body/mode/context/routing config, static and dynamic fan-out
+  picker (model or persona), body/mode/context/routing config (including the session
+  fresh/persistent choice, shown only for `context: "own"`), static and dynamic fan-out
   authoring with a concurrency cap, a subflow target picker that excludes cycle-creating
   workflows, and a recommendations banner. Not yet built — see
   [roadmap.md](../roadmap.md) for direction — auto-mode self-improvement (apply +

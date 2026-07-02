@@ -7,6 +7,62 @@ def _wf(nodes, start):
     return parse_workflow({"name": "w", "start": start, "nodes": nodes})
 
 
+def _parallel_wf(reconcile):
+    return parse_workflow({
+        "name": "w", "start": "seed",
+        "nodes": [
+            {"id": "seed", "kind": "work", "tools": "default", "next": "par"},
+            {"id": "par", "kind": "parallel", "branches": ["b1"],
+             "reconcile": reconcile, "next": None,
+             **({"criteria": "best"} if reconcile == "choose" else {})},
+            {"id": "b1", "kind": "work", "tools": "default"},
+        ],
+    })
+
+
+def test_writing_branch_sees_and_extends_the_shared_work_folder(tmp_path):
+    seen = {}
+    def runner(req):
+        if req.node.id == "seed":
+            Path(req.output_dir, "draft.md").write_text("v1")
+        if req.node.id == "b1":
+            seen["saw"] = Path(req.output_dir, "draft.md").read_text()
+            Path(req.output_dir, "draft.md").write_text("v2")
+        return NodeRunResponse(output=f"out-{req.node.id}")
+    eng = WorkflowEngine(runner, workspace=str(tmp_path),
+                         pick_runner=lambda c, outs, m: 0)
+    result = eng.run(_parallel_wf("choose"), "t")
+    assert result.status == "completed"
+    assert seen["saw"] == "v1"                                # fork was seeded
+    work = Path(tmp_path) / ".workflow" / result.run_id / "work"
+    assert (work / "draft.md").read_text() == "v2"            # write reconciled back
+
+
+def test_read_branch_and_dynamic_worker_get_the_shared_folder(tmp_path):
+    seen = {}
+    def runner(req):
+        seen[(req.node.id, req.worker_index)] = req.output_dir
+        if req.node.id == "lister":
+            return NodeRunResponse(output='["s1", "s2"]')
+        return NodeRunResponse(output="x")
+    wf = parse_workflow({
+        "name": "w", "start": "lister",
+        "nodes": [
+            {"id": "lister", "kind": "work", "tools": "default", "next": "read_par"},
+            {"id": "read_par", "kind": "parallel", "branches": ["rb"],
+             "reconcile": "read", "next": "fan"},
+            {"id": "rb", "kind": "work", "tools": "default"},
+            {"id": "fan", "kind": "parallel", "worker": "wk", "list_from": "lister", "next": None},
+            {"id": "wk", "kind": "work", "tools": "default"},
+        ],
+    })
+    WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
+    shared = seen[("lister", None)]
+    assert seen[("rb", None)] == shared                       # read branch told the folder
+    assert seen[("wk", 0)] == shared                          # dynamic worker told the folder
+    assert seen[("wk", 1)] == shared
+
+
 def test_sequential_nodes_share_one_working_folder(tmp_path):
     seen = {}
     def runner(req):
@@ -131,3 +187,85 @@ def test_output_dir_none_when_no_workspace():
     wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
     result = WorkflowEngine(runner).run(wf, "t")   # no workspace=
     assert result.output_dir is None
+
+
+# Input validation + declared-file entry contract
+
+def test_missing_input_file_aborts_naming_the_path(tmp_path):
+    wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
+    result = WorkflowEngine(lambda req: NodeRunResponse(output="x"),
+                            workspace=str(tmp_path)).run(
+        wf, "t", input_files=[str(tmp_path / "nope.txt")])
+    assert result.status == "aborted"
+    assert "nope.txt" in result.final_output
+    assert result.runs == []                     # nothing ran
+
+
+def test_colliding_input_basenames_abort(tmp_path):
+    (tmp_path / "d1").mkdir(); (tmp_path / "d2").mkdir()
+    (tmp_path / "d1" / "r.txt").write_text("1")
+    (tmp_path / "d2" / "r.txt").write_text("2")
+    wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
+    result = WorkflowEngine(lambda req: NodeRunResponse(output="x"),
+                            workspace=str(tmp_path)).run(
+        wf, "t", input_files=[str(tmp_path / "d1" / "r.txt"), str(tmp_path / "d2" / "r.txt")])
+    assert result.status == "aborted"
+    assert "r.txt" in result.final_output
+
+
+def test_declared_file_input_with_no_files_ends_needs_input(tmp_path):
+    wf = parse_workflow({
+        "name": "w", "start": "a",
+        "input": {"file": True, "description": "the report to summarize"},
+        "nodes": [{"id": "a", "kind": "work", "tools": "default", "next": None}],
+    })
+    calls = []
+    result = WorkflowEngine(lambda req: calls.append(req) or NodeRunResponse(output="x"),
+                            workspace=str(tmp_path)).run(wf, "t")
+    assert result.status == "needs_input"
+    assert calls == []                            # zero LLM cost
+    assert "file" in result.final_output.lower()
+    assert "the report to summarize" in result.final_output
+
+
+def test_preflight_rejection_writes_no_manifest_and_prunes_nothing(tmp_path):
+    """Pre-flight rejection must not create the manifest record or artifact folders.
+    When a preflight check (declared file input without files) rejects the run,
+    no manifest should be written and the artifact tree should not be created."""
+    wf = parse_workflow({
+        "name": "w", "start": "a",
+        "input": {"file": True},
+        "nodes": [{"id": "a", "kind": "work", "tools": "default", "next": None}],
+    })
+    result = WorkflowEngine(lambda req: NodeRunResponse(output="x"),
+                            workspace=str(tmp_path)).run(wf, "t")
+    assert result.status == "needs_input"
+    # Pre-flight rejection must not create the manifest folder
+    assert not (Path(tmp_path) / "workflows-runs").exists()
+
+
+def test_completed_result_lists_output_files(tmp_path):
+    def runner(req):
+        Path(req.output_dir, "report.md").write_text("done")
+        Path(req.output_dir, "sub").mkdir(exist_ok=True)
+        Path(req.output_dir, "sub", "data.csv").write_text("a,b")
+        return NodeRunResponse(output="x")
+    wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
+    result = WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
+    assert sorted(result.output_files) == ["report.md", "sub/data.csv"]
+
+
+def test_engine_prune_keep_is_wired(tmp_path):
+    import durin.workflow.engine as engine_mod
+    seen = {}
+    def fake_prune(base, keep=20):
+        seen["keep"] = keep
+    orig = engine_mod.prune_runs
+    engine_mod.prune_runs = fake_prune
+    try:
+        wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
+        WorkflowEngine(lambda req: NodeRunResponse(output="x"),
+                       workspace=str(tmp_path), prune_keep=5).run(wf, "t")
+    finally:
+        engine_mod.prune_runs = orig
+    assert seen["keep"] == 5

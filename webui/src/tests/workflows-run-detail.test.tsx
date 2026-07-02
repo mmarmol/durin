@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,7 +34,7 @@ beforeEach(() => {
   }
   vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
   vi.mocked(api.listWorkflows).mockResolvedValue(["demo"]);
-  vi.mocked(api.listPersonas).mockResolvedValue({ personas: [] });
+  vi.mocked(api.listPersonas).mockResolvedValue({ personas: [], default: null });
   vi.mocked(api.getWorkflow).mockResolvedValue({
     name: "demo",
     start: "start",
@@ -156,5 +156,115 @@ describe("WorkflowsView run detail", () => {
     // Click the older run (#1) and assert its detail comes back.
     await user.click(within(history).getByRole("button", { name: "#1" }));
     expect(await screen.findByText("first answer")).toBeInTheDocument();
+  });
+
+  it("shows a needs_input banner with the resume form and resumes into the same run_id", async () => {
+    const needsInput: api.WorkflowRunResult = {
+      status: "needs_input",
+      final_output: "What is your budget?",
+      run_id: "run-pause",
+      needs_input_node: "ask",
+      runs: [],
+    };
+    const resumed: api.WorkflowRunResult = {
+      status: "completed",
+      final_output: "all done",
+      run_id: "run-pause",
+      runs: [],
+    };
+    vi.mocked(api.runWorkflow).mockResolvedValueOnce(needsInput).mockResolvedValueOnce(resumed);
+
+    const user = await openRunnerAndRun();
+
+    await screen.findByText("Waiting for your input");
+    expect(screen.getByText(/What is your budget\?/)).toBeInTheDocument();
+
+    const answers = screen.getByPlaceholderText(/Type your answers/i);
+    await user.type(answers, "$500");
+    await user.click(screen.getByRole("button", { name: /Resume run/i }));
+
+    await screen.findByText("all done");
+    // The resume call must carry the SAME run_id and the answers as the task.
+    expect(api.runWorkflow).toHaveBeenLastCalledWith(
+      "tok", "demo", "$500", [], "", "", "run-pause",
+    );
+
+    // History still has exactly one entry for this run (replaced, not appended).
+    const historyLabel = screen.queryByText(/^runs$/i);
+    expect(historyLabel).not.toBeInTheDocument();
+  });
+
+  it("shows an aborted banner with the failure reason", async () => {
+    vi.mocked(api.runWorkflow).mockResolvedValue({
+      status: "aborted",
+      final_output: "node 'gate' failed: boom",
+      run_id: "run-abort",
+      runs: [],
+    });
+    await openRunnerAndRun();
+    await screen.findByText("Run aborted");
+    expect(screen.getByText("node 'gate' failed: boom")).toBeInTheDocument();
+  });
+
+  it("shows a cancelled banner", async () => {
+    vi.mocked(api.runWorkflow).mockResolvedValue({
+      status: "cancelled",
+      final_output: "",
+      run_id: "run-cancel",
+      runs: [],
+    });
+    await openRunnerAndRun();
+    await screen.findByText("Run cancelled");
+  });
+
+  it("shows a loop-limit banner for an exhausted run", async () => {
+    vi.mocked(api.runWorkflow).mockResolvedValue({
+      status: "exhausted",
+      final_output: "",
+      run_id: "run-exhausted",
+      exhausted_node: "gate",
+      runs: [],
+    });
+    await openRunnerAndRun();
+    await screen.findByText("Loop limit reached");
+    expect(screen.getByText("gate")).toBeInTheDocument();
+  });
+
+  it("lists output files (capped at 20) for a completed run", async () => {
+    const files = Array.from({ length: 22 }, (_, i) => `out/file-${i}.md`);
+    vi.mocked(api.runWorkflow).mockResolvedValue({
+      ...RUN_RESULT,
+      output_files: files,
+    });
+    await openRunnerAndRun();
+    await screen.findByText("out/file-0.md");
+    expect(screen.getByText("out/file-19.md")).toBeInTheDocument();
+    expect(screen.queryByText("out/file-20.md")).not.toBeInTheDocument();
+    expect(screen.getByText(/and 2 more/)).toBeInTheDocument();
+  });
+
+  it("shows pass X of budget and a FINAL PASS chip for a looping node", async () => {
+    vi.mocked(api.runWorkflow).mockResolvedValue({
+      status: "completed",
+      final_output: "done",
+      run_id: "run-loop",
+      runs: [
+        {
+          node_id: "gate",
+          iteration: 2,
+          passed: true,
+          output: "looked good",
+          session_key: "workflow:run-loop:gate:2",
+          worker_index: null,
+          branch_id: null,
+          budget: 2,
+          status: "ok",
+          route_label: null,
+        },
+      ],
+    });
+    await openRunnerAndRun();
+    await screen.findByText(/pass 2 of 2/);
+    expect(screen.getByText("final pass")).toBeInTheDocument();
   });
 });

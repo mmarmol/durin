@@ -58,3 +58,34 @@ def parse_label(text: str, labels: Iterable[str]) -> str | None:
         if norm_line in label_map:
             return label_map[norm_line]
     return None
+
+
+def strip_verdict_line(text: str) -> str:
+    """The binary routing node's output minus its leading PASS/FAIL verdict line —
+    what the node said BESIDES the verdict. Used when a gate ends the run, so a
+    terminal gate that produced real content (a verification summary, a final
+    answer) contributes it instead of the run returning a stale upstream output."""
+    lines = (text or "").splitlines()
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if not s:
+            continue
+        if s.upper().startswith(("PASS", "FAIL")):
+            return "\n".join(lines[:i] + lines[i + 1:]).strip()
+        break
+    return (text or "").strip()
+
+
+def strip_label_line(text: str, labels: Iterable[str]) -> str:
+    """The multi-way node's output minus its trailing case-label line (same
+    normalization as parse_label). See strip_verdict_line for why."""
+    norms = {normalize_label(label) for label in labels}
+    lines = (text or "").splitlines()
+    for i in range(len(lines) - 1, -1, -1):
+        s = lines[i].strip()
+        if not s:
+            continue
+        if normalize_label(s) in norms:
+            return "\n".join(lines[:i] + lines[i + 1:]).strip()
+        break
+    return (text or "").strip()

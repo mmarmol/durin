@@ -4262,6 +4262,11 @@ export interface components {
              * @default
              */
             output_format: string;
+            /**
+             * Resume Run Id
+             * @default
+             */
+            resume_run_id: string;
             /** Task */
             task: string;
         };
@@ -4289,10 +4294,20 @@ export interface components {
             /** Final Output */
             final_output: string;
             /**
+             * Needs Input Node
+             * @default
+             */
+            needs_input_node: string;
+            /**
              * Output Dir
              * @default
              */
             output_dir: string;
+            /**
+             * Output Files
+             * @default []
+             */
+            output_files: string[];
             /** Run Id */
             run_id: string;
             /** Runs */

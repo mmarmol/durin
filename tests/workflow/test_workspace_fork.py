@@ -3,12 +3,36 @@
 from pathlib import Path
 
 from durin.workflow import workspace_fork as wf
+from durin.workflow.workspace_fork import cleanup, diff, fork, snapshot
 
 
 def _write(root: Path, rel: str, text: str) -> None:
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text)
+
+
+def test_extra_include_exempts_the_work_subtree(tmp_path):
+    (tmp_path / ".workflow" / "r1" / "work").mkdir(parents=True)
+    (tmp_path / ".workflow" / "r1" / "work" / "draft.md").write_text("v1")
+    (tmp_path / ".workflow" / "r1" / "other.txt").write_text("not included")
+    (tmp_path / "code.py").write_text("x = 1")
+
+    inc = ".workflow/r1/work"
+    base = snapshot(tmp_path, extra_include=inc)
+    assert f"{inc}/draft.md" in base
+    assert ".workflow/r1/other.txt" not in base       # only the work subtree
+
+    fork_dir = fork(tmp_path, extra_include=inc)
+    try:
+        assert (fork_dir / inc / "draft.md").read_text() == "v1"   # seeded
+        (fork_dir / inc / "draft.md").write_text("v2")
+        (fork_dir / inc / "new.md").write_text("added")
+        cs = diff(base, fork_dir, extra_include=inc)
+        assert f"{inc}/draft.md" in cs.modified
+        assert f"{inc}/new.md" in cs.created
+    finally:
+        cleanup(fork_dir)
 
 
 def test_fork_copies_files_and_excludes_heavy_dirs(tmp_path):

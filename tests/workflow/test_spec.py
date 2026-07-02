@@ -567,3 +567,39 @@ def test_non_routing_shared_node_still_parses():
         {"id": "a", "kind": "work", "context": "shared", "next": "b"},
         {"id": "b", "kind": "work", "next": None}]})
     assert wf.nodes["a"].context == "shared"
+
+
+def test_session_field_parses_and_defaults_to_fresh():
+    wf = parse_workflow({
+        "name": "w", "start": "a",
+        "nodes": [
+            {"id": "a", "kind": "work", "session": "persistent", "next": "b"},
+            {"id": "b", "kind": "work", "next": None},
+        ],
+    })
+    assert wf.nodes["a"].session == "persistent"
+    assert wf.nodes["b"].session == "fresh"
+
+
+def test_session_rejects_unknown_value():
+    with pytest.raises(WorkflowError, match="session"):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "session": "sticky", "next": None}]})
+
+
+def test_persistent_session_excludes_shared_context():
+    with pytest.raises(WorkflowError, match="persistent"):
+        parse_workflow({"name": "w", "start": "a",
+                        "nodes": [{"id": "a", "kind": "work", "session": "persistent",
+                                   "context": "shared", "next": None}]})
+
+
+def test_persistent_session_rejected_on_parallel_units():
+    with pytest.raises(WorkflowError, match="persistent"):
+        parse_workflow({
+            "name": "w", "start": "p",
+            "nodes": [
+                {"id": "p", "kind": "parallel", "branches": ["b1"], "next": None},
+                {"id": "b1", "kind": "work", "session": "persistent"},
+            ],
+        })
