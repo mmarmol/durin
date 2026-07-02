@@ -103,38 +103,17 @@ _TUI_ACTIONS: list[CommandEntry] = [
 ]
 
 
-# Slash commands with human-readable descriptions.
-_SLASH_COMMANDS: list[tuple[str, str]] = [
-    ("/new", "Start a fresh conversation"),
-    ("/status", "Show agent and session status"),
-    ("/model", "Switch or inspect the active model"),
-    ("/sessions", "List saved sessions"),
-    ("/resume", "Resume a session by key"),
-    ("/compact", "Compact the conversation context"),
-    ("/history", "Browse recent goal/task history"),
-    ("/goal", "Set or inspect the active goal"),
-    ("/plan", "Switch to plan mode"),
-    ("/build", "Switch to build mode"),
-    ("/mode", "Show or change the agent mode"),
-    ("/copy", "Copy the last assistant reply"),
-    ("/name", "Rename the current session"),
-    ("/memory", "Search agent memory"),
-    ("/skills", "List or manage skills"),
-    ("/remember", "Save a memory fragment"),
-    ("/forget", "Remove a memory fragment"),
-    ("/sources", "Show sources for the last reply"),
-    ("/audit", "Show the audit trail"),
-    ("/why", "Explain a past decision"),
-    ("/help", "Show full command help"),
-    ("/pairing", "Pair a messaging channel"),
-    ("/hotkeys", "List all keyboard shortcuts"),
-    ("/dream", "Trigger dream consolidation"),
-    ("/dream-log", "View dream log entries"),
-    ("/dream-restore", "Restore a dream snapshot"),
-    ("/stop", "Stop the current turn (same as Esc)"),
-    ("/restart", "Restart the agent loop"),
+# Commands implemented locally by the TUI app (not in the shared registry).
+_TUI_LOCAL_COMMANDS: list[tuple[str, str]] = [
     ("/voice", "Record audio with the mic and transcribe it ([voice] extra)"),
 ]
+
+
+def _slash_commands() -> list[tuple[str, str]]:
+    from durin.command.builtin import specs_for_surface
+
+    derived = [(spec.command, spec.description) for spec in specs_for_surface("tui")]
+    return derived + _TUI_LOCAL_COMMANDS
 
 
 def build_command_entries() -> list[CommandEntry]:
@@ -149,6 +128,6 @@ def build_command_entries() -> list[CommandEntry]:
             kind="command",
             description=desc,
         )
-        for name, desc in _SLASH_COMMANDS
+        for name, desc in _slash_commands()
     ]
     return commands + list(_TUI_ACTIONS)

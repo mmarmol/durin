@@ -53,6 +53,22 @@ async def test_suggester_returns_none_on_unknown_prefix() -> None:
     assert (await s.get_suggestion("/zzzz")) is None
 
 
+def test_suggester_derives_from_builtin_registry() -> None:
+    s = SlashCommandSuggester()
+    commands = set(s._commands)
+    # Derived from the registry: newly-specced commands appear automatically.
+    assert "/effort" in commands
+    assert "/usage" in commands
+    # Phantom commands (never implemented) are gone.
+    for phantom in ("/pairing", "/dream", "/dream-log", "/dream-restore"):
+        assert phantom not in commands
+    # TUI-local commands survive the derivation.
+    assert "/voice" in commands
+    assert "/theme" in commands
+    # Channel-only commands don't clutter the TUI suggester.
+    assert "/history" not in commands
+
+
 # ---------------------------------------------------------------------------
 # Input plumbing
 # ---------------------------------------------------------------------------
