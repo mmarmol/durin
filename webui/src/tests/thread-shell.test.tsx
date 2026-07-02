@@ -907,6 +907,27 @@ describe("ThreadShell", () => {
     expect(screen.queryByText(/project plan/i)).toBeNull();
   });
 
+  it("falls back to the preview snippet when a session has no title", () => {
+    // Most sessions never get an explicit title (set only via /name or
+    // auto-titling), so the chip must still render from the preview.
+    const client = makeClient();
+    render(
+      wrap(
+        client,
+        <ThreadShell
+          session={null}
+          title="durin"
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+          recentSessions={[{ ...session("s1"), title: "", preview: "usage" }]}
+          onOpenSession={vi.fn()}
+        />,
+      ),
+    );
+
+    expect(screen.getByRole("button", { name: /usage/ })).toBeInTheDocument();
+  });
+
   it("opens a recent session from its chip", () => {
     const client = makeClient();
     const onOpenSession = vi.fn();

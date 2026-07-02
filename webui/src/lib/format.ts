@@ -8,6 +8,14 @@ export function deriveTitle(preview: string | undefined, fallback: string): stri
   return oneLine.length > 60 ? `${oneLine.slice(0, 57)}…` : oneLine;
 }
 
+/** Resolve a session's display label: explicit title, falling back to the
+ *  first-message preview snippet. Most sessions never get an explicit title
+ *  (set only via /name or auto-titling), so the preview fallback is the
+ *  common case. Returns "" when neither is set. */
+export function sessionDisplayLabel(session: { title?: string; preview?: string }): string {
+  return (session.title || session.preview || "").trim();
+}
+
 /** Loose ISO-or-epoch parser; returns ``null`` for missing/invalid input. */
 function parseDate(value: string | number | null | undefined): Date | null {
   if (value === null || value === undefined || value === "") return null;

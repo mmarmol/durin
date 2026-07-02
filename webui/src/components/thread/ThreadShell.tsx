@@ -15,6 +15,7 @@ import { useModes } from "@/hooks/useModes";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { useWorkState } from "@/hooks/useWorkState";
 import { listSlashCommands, getModelCapabilities } from "@/lib/api";
+import { sessionDisplayLabel } from "@/lib/format";
 import type { ChatSummary, SlashCommand, UIMessage } from "@/lib/types";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
 import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
@@ -508,9 +509,10 @@ export function ThreadShell({
       </h1>
       <div className="mt-6 flex max-w-[40rem] flex-wrap items-center justify-center gap-2">
         {(recentSessions ?? [])
-          .filter((s) => s.title)
+          .map((s) => ({ session: s, label: sessionDisplayLabel(s) }))
+          .filter(({ label }) => label)
           .slice(0, 3)
-          .map((s, index) => (
+          .map(({ session: s, label }, index) => (
             <button
               key={s.key}
               type="button"
@@ -519,8 +521,8 @@ export function ThreadShell({
               className={chipClass}
             >
               {index === 0
-                ? t("thread.empty.resumeLast", { name: s.title })
-                : t("thread.empty.continueSession", { name: s.title })}
+                ? t("thread.empty.resumeLast", { name: label })
+                : t("thread.empty.continueSession", { name: label })}
             </button>
           ))}
         <button
