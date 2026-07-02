@@ -2,11 +2,17 @@
 
 import asyncio
 import re
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from pydantic import Field
+from slack_sdk.errors import SlackApiError
+from slack_sdk.http_retry.builtin_async_handlers import (
+    AsyncConnectionErrorRetryHandler,
+    AsyncRateLimitErrorRetryHandler,
+)
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 from slack_sdk.socket_mode.websockets import SocketModeClient
@@ -18,36 +24,34 @@ from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 from durin.config.paths import get_media_dir
 from durin.config.schema import Base
-from durin.pairing import is_approved
 from durin.utils.helpers import safe_filename, split_message
 
 
-class SlackDMConfig(Base):
-    """Slack DM policy configuration."""
-
-    enabled: bool = True
-    policy: str = "open"
-    allow_from: list[str] = Field(default_factory=list)
-
-
 class SlackConfig(Base):
-    """Slack channel configuration."""
+    """Slack channel configuration.
+
+    Sender authorization (who may talk to durin) lives in ``allow_from`` and is
+    enforced by the central bus-ingress gate; unapproved DM senders receive a
+    pairing code. ``dm_enabled`` and ``group_policy`` are routing, not auth:
+    whether the bot listens in DMs and when it responds in channels.
+    """
 
     enabled: bool = False
-    mode: str = "socket"
-    webhook_path: str = "/slack/events"
-    bot_token: str = ""
-    app_token: str = ""
-    user_token_read_only: bool = True
-    reply_in_thread: bool = True
+    bot_token: str = Field(default="", json_schema_extra={"secret": True, "required": True})
+    app_token: str = Field(default="", json_schema_extra={"secret": True, "required": True})
+    allow_from: list[str] = Field(default_factory=list, json_schema_extra={"group": "access"})
+    dm_enabled: bool = Field(default=True, json_schema_extra={"group": "access"})
+    group_policy: Literal["open", "mention", "allowlist"] = Field(
+        default="mention", json_schema_extra={"group": "access"}
+    )
+    group_allow_from: list[str] = Field(
+        default_factory=list, json_schema_extra={"group": "access"}
+    )
+    reply_in_thread: bool = Field(default=True, json_schema_extra={"group": "behavior"})
+    include_thread_context: bool = Field(default=True, json_schema_extra={"group": "behavior"})
+    thread_context_limit: int = 20
     react_emoji: str = "eyes"
     done_emoji: str = "white_check_mark"
-    include_thread_context: bool = True
-    thread_context_limit: int = 20
-    allow_from: list[str] = Field(default_factory=list)
-    group_policy: str = "mention"
-    group_allow_from: list[str] = Field(default_factory=list)
-    dm: SlackDMConfig = Field(default_factory=SlackDMConfig)
 
 
 SLACK_MAX_MESSAGE_LEN = 39_000  # Slack API allows ~40k; leave margin
@@ -56,6 +60,21 @@ SLACK_DOWNLOAD_TIMEOUT = 30.0
 # succeed while WSS blocks (firewall / region). slack-sdk does not apply HTTP(S)_PROXY
 # to websockets.connect — see slack_sdk.socket_mode.websockets.SocketModeClient.connect.
 SLACK_SOCKET_CONNECT_TIMEOUT_S = 45.0
+# Initial-connect retries and the disconnect watchdog share this backoff ladder;
+# the last step repeats until connected or the channel stops.
+SLACK_CONNECT_BACKOFF_S = (2.0, 5.0, 15.0, 30.0, 60.0)
+SLACK_WATCHDOG_INTERVAL_S = 15.0
+# How long is_connected() may stay false before the watchdog forces a reconnect.
+# The SDK auto-reconnects on its own; the watchdog only acts when that stalls.
+SLACK_RECONNECT_GRACE_S = 90.0
+# Auth errors no amount of retrying will fix — surface loudly and stop.
+SLACK_FATAL_AUTH_ERRORS = frozenset(
+    {"invalid_auth", "account_inactive", "token_revoked", "not_authed", "team_disabled"}
+)
+# Socket Mode redelivers events after reconnects; remember recently seen
+# event IDs for this long (seconds) and drop duplicates.
+SLACK_EVENT_DEDUP_TTL_S = 300.0
+SLACK_EVENT_DEDUP_MAX = 2000
 _HTML_DOWNLOAD_PREFIXES = (b"<!doctype html", b"<html")
 
 
@@ -72,6 +91,10 @@ class SlackChannel(BaseChannel):
     def default_config(cls) -> dict[str, Any]:
         return SlackConfig().model_dump(by_alias=False)
 
+    @classmethod
+    def config_model(cls) -> type | None:
+        return SlackConfig
+
     _THREAD_CONTEXT_CACHE_LIMIT = 10_000
 
     def __init__(self, config: Any, bus: MessageBus):
@@ -84,19 +107,21 @@ class SlackChannel(BaseChannel):
         self._bot_user_id: str | None = None
         self._target_cache: dict[str, str] = {}
         self._thread_context_attempted: set[str] = set()
+        self._seen_events: dict[str, float] = {}  # event_id -> monotonic deadline
 
     async def start(self) -> None:
-        """Start the Slack Socket Mode client."""
+        """Start the Slack Socket Mode client and keep it connected."""
         if not self.config.bot_token or not self.config.app_token:
             self.logger.error("bot/app token not configured")
-            return
-        if self.config.mode != "socket":
-            self.logger.error("Unsupported mode: {}", self.config.mode)
             return
 
         self._running = True
 
         self._web_client = AsyncWebClient(token=self.config.bot_token)
+        # Built-in SDK handlers: transparent retry on 429 (honors Retry-After)
+        # and on transient connection errors, for every Web API call.
+        self._web_client.retry_handlers.append(AsyncRateLimitErrorRetryHandler(max_retry_count=2))
+        self._web_client.retry_handlers.append(AsyncConnectionErrorRetryHandler(max_retry_count=1))
         self._socket_client = SocketModeClient(
             app_token=self.config.app_token,
             web_client=self._web_client,
@@ -109,30 +134,88 @@ class SlackChannel(BaseChannel):
             auth = await self._web_client.auth_test()
             self._bot_user_id = auth.get("user_id")
             self.logger.info("bot connected as {}", self._bot_user_id)
+        except SlackApiError as e:
+            error_code = str((e.response or {}).get("error") or "")
+            if error_code in SLACK_FATAL_AUTH_ERRORS:
+                self.logger.error("bot token rejected ({}); fix the Slack config", error_code)
+                await self.stop()
+                raise
+            self.logger.warning("auth_test failed: {}", e)
         except Exception as e:
             self.logger.warning("auth_test failed: {}", e)
 
         self.logger.info("Starting Socket Mode client...")
-        try:
-            await asyncio.wait_for(
-                self._socket_client.connect(),
-                timeout=SLACK_SOCKET_CONNECT_TIMEOUT_S,
-            )
-        except asyncio.TimeoutError:
-            self.logger.error(
-                "Slack Socket Mode WebSocket handshake timed out after {:.0f}s. "
-                "auth_test uses HTTPS and may still succeed while WSS is blocked. "
-                "Check outbound access to Slack WebSockets; slack-sdk Socket Mode "
-                "does not apply HTTP(S)_PROXY to websockets.connect.",
-                SLACK_SOCKET_CONNECT_TIMEOUT_S,
-            )
-            await self.stop()
-            raise RuntimeError("Slack Socket Mode WebSocket connect timed out") from None
-
+        await self._connect_with_backoff()
+        if not self._running:
+            return  # stopped while retrying the initial connect
         self.logger.info("Slack Socket Mode WebSocket connected (events enabled)")
 
+        # Keepalive + watchdog: the SDK auto-reconnects on its own; only force a
+        # reconnect when the session stays down past the grace window.
+        disconnected_since: float | None = None
         while self._running:
-            await asyncio.sleep(1)
+            await asyncio.sleep(SLACK_WATCHDOG_INTERVAL_S)
+            if not self._running or not self._socket_client:
+                break
+            try:
+                connected = await self._socket_client.is_connected()
+            except Exception:
+                connected = False
+            if connected:
+                disconnected_since = None
+                continue
+            now = time.monotonic()
+            if disconnected_since is None:
+                disconnected_since = now
+                self.logger.warning("Socket Mode disconnected; waiting for SDK auto-reconnect")
+                continue
+            if now - disconnected_since >= SLACK_RECONNECT_GRACE_S:
+                self.logger.warning(
+                    "Socket Mode still down after {:.0f}s; forcing reconnect",
+                    now - disconnected_since,
+                )
+                await self._connect_with_backoff()
+                disconnected_since = None
+
+    async def _connect_with_backoff(self) -> None:
+        """Connect the Socket Mode WebSocket, retrying with capped backoff.
+
+        Retries forever on transient failures (network flaps, WSS blocked) so a
+        daemon deploy self-heals; fatal auth errors (revoked/invalid app token)
+        stop the channel instead, since retrying cannot fix them.
+        """
+        attempt = 0
+        while self._running:
+            try:
+                await asyncio.wait_for(
+                    self._socket_client.connect(),
+                    timeout=SLACK_SOCKET_CONNECT_TIMEOUT_S,
+                )
+                return
+            except asyncio.TimeoutError:
+                self.logger.warning(
+                    "Slack Socket Mode WSS handshake timed out after {:.0f}s. "
+                    "auth_test uses HTTPS and may still succeed while WSS is blocked. "
+                    "Check outbound access to Slack WebSockets; slack-sdk Socket Mode "
+                    "does not apply HTTP(S)_PROXY to websockets.connect.",
+                    SLACK_SOCKET_CONNECT_TIMEOUT_S,
+                )
+            except SlackApiError as e:
+                error_code = str((e.response or {}).get("error") or "")
+                if error_code in SLACK_FATAL_AUTH_ERRORS:
+                    self.logger.error(
+                        "Slack app token rejected ({}); fix the Slack config", error_code
+                    )
+                    await self.stop()
+                    raise
+                self.logger.warning("Socket Mode connect failed: {}", e)
+            except Exception as e:
+                self.logger.warning("Socket Mode connect failed: {}", e)
+
+            delay = SLACK_CONNECT_BACKOFF_S[min(attempt, len(SLACK_CONNECT_BACKOFF_S) - 1)]
+            attempt += 1
+            self.logger.info("Retrying Socket Mode connect in {:.0f}s", delay)
+            await asyncio.sleep(delay)
 
     async def stop(self) -> None:
         """Stop the Slack client."""
@@ -330,6 +413,16 @@ class SlackChannel(BaseChannel):
         if event_type not in ("message", "app_mention"):
             return
 
+        # Socket Mode redelivers events after reconnects — drop duplicates.
+        # The fallback key includes event_type because Slack emits distinct
+        # `message` and `app_mention` events for the same channel:ts.
+        dedup_key = str(payload.get("event_id") or "") or (
+            f"{event_type}:{event.get('channel')}:{event.get('ts')}"
+        )
+        if self._is_duplicate_event(dedup_key):
+            self.logger.debug("Dropping redelivered event {}", dedup_key)
+            return
+
         sender_id = event.get("user")
         chat_id = event.get("channel")
 
@@ -361,19 +454,20 @@ class SlackChannel(BaseChannel):
             return
 
         channel_type = event.get("channel_type") or ""
+        is_dm = channel_type == "im"
 
-        if not self._is_allowed(sender_id, chat_id, channel_type):
-            if channel_type == "im" and self.config.dm.enabled:
-                await self._handle_message(
-                    sender_id=sender_id,
-                    chat_id=chat_id,
-                    content="",
-                    is_dm=True,
-                )
+        # Routing only — sender authorization is enforced once at the central
+        # bus-ingress gate, which also sends pairing codes to unapproved DMs.
+        if is_dm:
+            if not self.config.dm_enabled:
+                return
+        elif not self._should_respond_in_channel(event_type, text, chat_id):
             return
 
-        if channel_type != "im" and not self._should_respond_in_channel(event_type, text, chat_id):
-            return
+        # Cheap local pre-check to skip API-expensive work (reactions, thread
+        # context, file downloads) for senders the gate is about to deny. The
+        # gate still makes the actual authorization decision.
+        sender_allowed = self.is_allowed(sender_id)
 
         text = self._strip_bot_mention(text)
 
@@ -391,7 +485,7 @@ class SlackChannel(BaseChannel):
             thread_ts = event_ts
         # Add :eyes: reaction to the triggering message (best-effort)
         try:
-            if self._web_client and event.get("ts"):
+            if sender_allowed and self._web_client and event.get("ts"):
                 await self._web_client.reactions_add(
                     channel=chat_id,
                     name=self.config.react_emoji,
@@ -408,17 +502,18 @@ class SlackChannel(BaseChannel):
         )
         media_paths: list[str] = []
         file_markers: list[str] = []
-        for file_info in event.get("files") or []:
-            if not isinstance(file_info, dict):
-                continue
-            file_path, marker = await self._download_slack_file(file_info)
-            if file_path:
-                media_paths.append(file_path)
-            if marker:
-                file_markers.append(marker)
+        if sender_allowed:
+            for file_info in event.get("files") or []:
+                if not isinstance(file_info, dict):
+                    continue
+                file_path, marker = await self._download_slack_file(file_info)
+                if file_path:
+                    media_paths.append(file_path)
+                if marker:
+                    file_markers.append(marker)
 
         is_slash = text.strip().startswith("/")
-        content = text if is_slash else await self._with_thread_context(
+        content = text if is_slash or not sender_allowed else await self._with_thread_context(
             text,
             chat_id=chat_id,
             channel_type=channel_type,
@@ -445,6 +540,7 @@ class SlackChannel(BaseChannel):
                     },
                 },
                 session_key=session_key,
+                is_dm=is_dm,
             )
         except Exception:
             self.logger.exception("Error handling message from {}", sender_id)
@@ -515,8 +611,6 @@ class SlackChannel(BaseChannel):
         message_info = payload.get("message") or {}
         thread_ts = message_info.get("thread_ts") or message_info.get("ts")
         channel_type = self._infer_channel_type(chat_id)
-        if not self._is_allowed(sender_id, chat_id, channel_type):
-            return
         session_key = f"slack:{chat_id}:{thread_ts}" if thread_ts else None
         try:
             await self._handle_message(
@@ -525,6 +619,7 @@ class SlackChannel(BaseChannel):
                 content=value,
                 metadata={"slack": {"thread_ts": thread_ts, "channel_type": channel_type}},
                 session_key=session_key,
+                is_dm=channel_type == "im",
             )
         except Exception:
             self.logger.exception("Error handling button click from {}", sender_id)
@@ -635,18 +730,20 @@ class SlackChannel(BaseChannel):
             except Exception as e:
                 self.logger.debug("done reaction failed: {}", e)
 
-    def _is_allowed(self, sender_id: str, chat_id: str, channel_type: str) -> bool:
-        if channel_type == "im":
-            if not self.config.dm.enabled:
-                return False
-            if self.config.dm.policy == "allowlist":
-                return sender_id in self.config.dm.allow_from or is_approved(self.name, sender_id)
+    def _is_duplicate_event(self, dedup_key: str) -> bool:
+        """Record *dedup_key* and report whether it was seen within the TTL."""
+        now = time.monotonic()
+        deadline = self._seen_events.get(dedup_key)
+        if deadline is not None and deadline > now:
             return True
-
-        # Group / channel messages
-        if self.config.group_policy == "allowlist":
-            return chat_id in self.config.group_allow_from
-        return True
+        if len(self._seen_events) >= SLACK_EVENT_DEDUP_MAX:
+            self._seen_events = {
+                key: exp for key, exp in self._seen_events.items() if exp > now
+            }
+            if len(self._seen_events) >= SLACK_EVENT_DEDUP_MAX:
+                self._seen_events.clear()
+        self._seen_events[dedup_key] = now + SLACK_EVENT_DEDUP_TTL_S
+        return False
 
     def _should_respond_in_channel(self, event_type: str, text: str, chat_id: str) -> bool:
         if self.config.group_policy == "open":
@@ -658,11 +755,6 @@ class SlackChannel(BaseChannel):
         if self.config.group_policy == "allowlist":
             return chat_id in self.config.group_allow_from
         return False
-
-    def is_allowed(self, sender_id: str) -> bool:
-        # Slack needs channel-aware policy checks, so _on_socket_request and
-        # _on_block_action call _is_allowed before handing off to BaseChannel.
-        return True
 
     @staticmethod
     def _infer_channel_type(chat_id: str) -> str:

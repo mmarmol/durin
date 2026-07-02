@@ -332,7 +332,7 @@ function ChannelRow({
             />
           ) : null}
 
-          {/* Schema-driven grouped field form (websocket / email) */}
+          {/* Schema-driven grouped field form (websocket / email / slack) */}
           {hasFields && channel.name !== "telegram" ? (
             <div className="mt-3 space-y-4">
               {ESSENTIAL_GROUPS.map((g) => (
@@ -389,7 +389,7 @@ function ChannelRow({
             </div>
           ) : null}
 
-          {/* Legacy single-credential path: channels with empty fields (slack/discord/etc) */}
+          {/* Legacy single-credential path: channels with empty fields (discord/etc) */}
           {!hasFields && channel.name !== "telegram" ? (
             <div className="mt-3 flex flex-wrap items-center gap-2">
               {channel.credential_field ? (

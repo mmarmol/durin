@@ -1,7 +1,6 @@
 """Tests for the per-channel field schema returned by ConfigService.channels_list."""
 
 import durin.config.loader as _loader
-
 from durin.service.config import ChannelsListQuery, ConfigService
 from durin.service.principal import Principal
 
@@ -43,3 +42,30 @@ async def test_websocket_always_on_when_webui_enabled(monkeypatch):
     # (a signing secret) must NOT appear in the UI schema.
     names = {f["name"] for f in ws["fields"]}
     assert names == {"token"}
+
+
+async def test_slack_returns_typed_field_schema():
+    import pytest
+
+    pytest.importorskip("slack_sdk")
+    svc = ConfigService()
+    result = await svc.channels_list(query=ChannelsListQuery(), principal=_principal())
+    slack = next(c for c in result.channels if c["name"] == "slack")
+    by_name = {f["name"]: f for f in slack["fields"]}
+    assert by_name["bot_token"]["secret"] is True
+    assert by_name["app_token"]["secret"] is True
+    assert by_name["allow_from"]["type"] == "string_list"
+    assert by_name["dm_enabled"]["type"] == "bool"
+    assert by_name["group_policy"]["group"] == "access"
+    assert by_name["reply_in_thread"]["group"] == "behavior"
+    # Emoji + thread_context_limit stay config-file-only (no group/secret marker).
+    assert set(by_name) == {
+        "bot_token",
+        "app_token",
+        "allow_from",
+        "dm_enabled",
+        "group_policy",
+        "group_allow_from",
+        "reply_in_thread",
+        "include_thread_context",
+    }
