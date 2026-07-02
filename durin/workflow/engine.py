@@ -153,7 +153,7 @@ class WorkflowEngine:
         node_runner: NodeRunner,
         *,
         run_id_factory: Callable[[], str] | None = None,
-        subworkflow_runner: Callable[..., str] | None = None,
+        subworkflow_runner: Callable[..., str] | None = None,  # (name, task, root_session_key, work_dir=None) -> str
         workspace: str | None = None,
         pick_runner: Callable[[str, list[str], "str | None"], int] | None = None,
         max_node_visits: int = 1000,
@@ -189,6 +189,7 @@ class WorkflowEngine:
         input_files: list[str] | None = None,
         output_format: str | None = None,
         resume: ResumeState | None = None,
+        work_dir_override: str | None = None,
     ) -> WorkflowResult:
         """Run the workflow. A node-execution failure (provider/MCP/tool error) does not
         propagate — it ends the run as a typed ``aborted`` result carrying the partial
@@ -202,7 +203,10 @@ class WorkflowEngine:
         When ``resume`` is given, the walk re-enters at ``resume.start_at`` under the
         same ``run_id`` (so it shares the prior run's working folder and node-session
         keys) with the visit counts already consumed and ``resume.upstream`` as that
-        node's upstream input, instead of starting a fresh run at the workflow's start."""
+        node's upstream input, instead of starting a fresh run at the workflow's start.
+
+        When ``work_dir_override`` is given, the run uses this folder as its working
+        directory instead of creating its own folder under the workspace."""
         run_id = resume.run_id if resume is not None else self._run_id_factory()
 
         # Pre-flight input validation: check for missing/colliding files and declared-file contracts
@@ -234,6 +238,7 @@ class WorkflowEngine:
                 start_at=resume.start_at if resume else None,
                 initial_visits=dict(resume.visits) if resume else None,
                 initial_upstream=resume.upstream if resume else None,
+                work_dir_override=work_dir_override,
             )
         except WorkflowConfigError as exc:
             # A config/wiring error is fatal and re-raised, but finalize the manifest first
@@ -352,6 +357,7 @@ class WorkflowEngine:
         start_at: str | None = None,
         initial_visits: dict[str, int] | None = None,
         initial_upstream: str | None = None,
+        work_dir_override: str | None = None,
     ) -> WorkflowResult:
         shared_context: list[dict] = []
         visits: dict[str, int] = dict(initial_visits or {})
@@ -359,7 +365,7 @@ class WorkflowEngine:
         # One shared working folder per run: every sequential node reads and writes here,
         # so created/edited files accumulate in one place and each stage sees the prior
         # work (collaboration). Parallel branches fork this and reconcile (see _run_parallel).
-        work_dir: str | None = (
+        work_dir: str | None = work_dir_override or (
             str(artifact_dir(self._workspace, run_id, "work", None))
             if self._workspace is not None else None
         )
@@ -557,7 +563,7 @@ class WorkflowEngine:
                     raise WorkflowConfigError(
                         f"node {node.id!r} is a subworkflow but the engine has no subworkflow_runner"
                     )
-                output = self._subworkflow_runner(node.workflow, upstream_output or task, root_session_key)
+                output = self._subworkflow_runner(node.workflow, upstream_output or task, root_session_key, work_dir=work_dir)
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=output))
                 upstream_output = output
                 final_output = output

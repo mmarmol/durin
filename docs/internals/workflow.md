@@ -110,7 +110,8 @@ independent reviewer (the anti-Goodhart guard). A node can also be a **sub-workf
 (`durin/workflow/subworkflow.py`): it runs another named workflow as a nested run
 (reusing the same node and branch-pick runners, bounded by three recursion layers) and uses its output;
 the nested run carries the same root session key, so its node sessions anchor to the
-invoking conversation too. The three layers are: (1) the editor excludes cycle-creating
+invoking conversation too. A sub-workflow runs in the **parent run's shared working folder** — its nodes read and extend the same fileset as the parent's sequential nodes (text still travels the edge; files never needed copying).
+The three layers are: (1) the editor excludes cycle-creating
 targets from the sub-workflow picker, so a cycle cannot be authored in the UI; (2) the
 runner maintains a call-stack of workflow names currently executing — if a name is about
 to reenter the chain, it stops immediately with a cycle error (`"Error: workflow cycle

@@ -77,6 +77,16 @@ step is multi-way (`GROUNDED` ends the run, `MISSING` loops back to
 re-plan, `MISUSED` loops back to re-synthesize); `debug`'s verify step is
 binary (`PASS` ends, `FAIL` loops back to diagnose).
 
+## Nested workflows (subflows)
+
+Instead of a work node, you can have a node that runs another workflow as a
+nested run. A subworkflow node runs in the **same working folder as the
+parent** — it reads and extends the same set of files that earlier nodes
+created, so the nested workflow's steps collaborate on the parent's
+evolving fileset just as if they were sequential steps in the parent workflow.
+The nested run's session traces anchor to the invoking conversation, so its
+work is navigable as part of the parent.
+
 ## Loops
 
 A `FAIL` (or a case that targets an earlier node) can send the flow back to
