@@ -3,7 +3,6 @@ import {
   Menu,
   Moon,
   Network,
-  PlayCircle,
   Search,
   Settings,
   Sparkles,
@@ -34,8 +33,6 @@ interface SidebarProps {
   skillsActive?: boolean;
   onOpenWorkflows?: () => void;
   workflowsActive?: boolean;
-  onOpenRuns?: () => void;
-  runsActive?: boolean;
   strandedRunsCount?: number;
   onOpenDream?: () => void;
   dreamActive?: boolean;
@@ -227,25 +224,6 @@ export function Sidebar(props: SidebarProps) {
           >
             <Workflow className="h-3.5 w-3.5" aria-hidden />
             {t("workflows.title")}
-          </Button>
-        </div>
-      ) : null}
-      {props.onOpenRuns ? (
-        <div className="px-2.5 pb-2">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={props.onOpenRuns}
-            className={cn(
-              "h-8 w-full justify-start gap-2 rounded-full px-2.5 text-[12.5px] font-medium",
-              props.runsActive
-                ? "bg-sidebar-accent/80 text-sidebar-foreground"
-                : "text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
-            )}
-            aria-pressed={!!props.runsActive}
-          >
-            <PlayCircle className="h-3.5 w-3.5" aria-hidden />
-            {t("runs.title")}
             {!!props.strandedRunsCount && (
               <span className="ml-auto rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-medium text-accent-foreground">
                 {props.strandedRunsCount}

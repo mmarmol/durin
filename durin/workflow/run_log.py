@@ -360,8 +360,17 @@ def prune_manifests(workspace: str | Path, name: str, keep: int = 20) -> None:
                 rec = json.loads(f.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue   # malformed/unreadable: skip, never delete
-            if rec.get("status") not in _TERMINAL_STATUSES:
-                continue   # running/needs_input: never delete, never counted
+            status = rec.get("status")
+            if status == "running":
+                continue   # live record: never delete, never counted
+            if status == "needs_input":
+                if rec.get("needs_input_node"):
+                    continue   # a resumable pause point: never delete, never counted
+                # A needs_input with no re-entry node predates the resume feature;
+                # the resume endpoints reject it, so protecting it would only
+                # accumulate unactionable ghosts — retain it like any terminal.
+            elif status not in _TERMINAL_STATUSES:
+                continue   # unknown/foreign status: fail open, never delete
             terminal.append((rec.get("ts", 0.0), f))
         terminal.sort(key=lambda pair: pair[0], reverse=True)   # newest first
         for _ts, path in terminal[keep:]:

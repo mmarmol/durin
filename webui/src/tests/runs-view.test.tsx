@@ -59,6 +59,19 @@ const COMPLETED: api.WorkflowGlobalRun = {
   needs_input_node: null,
 };
 
+// A needs_input manifest written before the resume feature shipped: no
+// needs_input_node (and thus no resume target), so it isn't an actionable
+// stranded run even though its status is needs_input.
+const LEGACY_NEEDS_INPUT: api.WorkflowGlobalRun = {
+  workflow: "onboarding",
+  run_id: "run-legacy",
+  status: "needs_input",
+  started_at: 500,
+  finished_at: null,
+  task: "old paused run",
+  needs_input_node: null,
+};
+
 describe("strandedRuns", () => {
   it("filters to only needs_input entries", () => {
     expect(strandedRuns([NEEDS_INPUT, COMPLETED]).map((r) => r.run_id)).toEqual(["run-waiting"]);
@@ -66,6 +79,12 @@ describe("strandedRuns", () => {
 
   it("is empty when nothing is waiting", () => {
     expect(strandedRuns([COMPLETED])).toEqual([]);
+  });
+
+  it("excludes needs_input entries with no needs_input_node (not resumable)", () => {
+    expect(strandedRuns([NEEDS_INPUT, LEGACY_NEEDS_INPUT]).map((r) => r.run_id)).toEqual([
+      "run-waiting",
+    ]);
   });
 });
 
@@ -152,5 +171,18 @@ describe("RunsView", () => {
     vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([]);
     render(wrap(<RunsView />));
     expect(await screen.findByText(/No runs match this filter/i)).toBeInTheDocument();
+  });
+
+  it("keeps a legacy (non-resumable) needs_input run out of the tray but in the feed", async () => {
+    vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([NEEDS_INPUT, LEGACY_NEEDS_INPUT]);
+    render(wrap(<RunsView />));
+
+    // Feed shows both entries as ordinary history rows.
+    await screen.findByText("set up the account");
+    expect(screen.getByText("old paused run")).toBeInTheDocument();
+
+    // Tray (built from strandedRuns) surfaces only the resumable one: its resume
+    // form/textarea appears exactly once, not twice.
+    expect(screen.getAllByPlaceholderText(/Type your answers/i)).toHaveLength(1);
   });
 });
