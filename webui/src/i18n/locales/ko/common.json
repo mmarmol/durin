@@ -192,32 +192,9 @@
     "empty": {
       "description": "질문을 하거나, 로컬 작업을 이어가거나, 새 스레드를 시작할 수 있습니다.",
       "greeting": "무엇을 도와드릴까요?",
-      "quickActions": {
-        "plan": {
-          "title": "프로젝트 계획 만들기",
-          "prompt": "다음에 만들 것에 대한 간결한 프로젝트 계획을 작성해 주세요."
-        },
-        "analyze": {
-          "title": "이 데이터 분석하기",
-          "prompt": "이 데이터를 분석하고 가장 중요한 패턴을 짚어 주세요."
-        },
-        "brainstorm": {
-          "title": "아이디어 브레인스토밍",
-          "prompt": "이 문제에 대한 실용적인 아이디어와 트레이드오프를 몇 가지 제안해 주세요."
-        },
-        "code": {
-          "title": "코드 작성하기",
-          "prompt": "이 작업을 위한 코드를 작성해 주세요. 가장 작은 유용한 변경부터 시작해 주세요."
-        },
-        "summarize": {
-          "title": "문서 요약하기",
-          "prompt": "이 문서를 요약하고 핵심 내용을 정리해 주세요."
-        },
-        "more": {
-          "title": "더 보기",
-          "prompt": "이 워크스페이스에서 도와줄 수 있는 유용한 방법을 몇 가지 보여 주세요."
-        }
-      },
+      "resumeLast": "이어서: {{name}}",
+      "continueSession": "계속하기: {{name}}",
+      "whatDoYouKnow": "저에 대해 무엇을 알고 있나요?",
       "imageQuickActions": {
         "icon": {
           "title": "앱 아이콘 디자인",

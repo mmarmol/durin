@@ -9,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { sessionDisplayLabel } from "@/lib/format";
 import type { ChatSummary } from "@/lib/types";
 
 interface ChatListProps {
@@ -110,7 +111,7 @@ export function ChatList({
                 const fallbackTitle = t("chat.fallbackTitle", {
                   id: s.chatId.slice(0, 6),
                 });
-                const rawLabel = (s.title || s.preview)?.trim();
+                const rawLabel = sessionDisplayLabel(s);
                 const title = rawLabel || fallbackTitle;
                 const isEditing = editingKey === s.key;
                 return (

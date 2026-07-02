@@ -192,32 +192,9 @@
     "empty": {
       "description": "你可以提問、延續本地工作，或是開始新的執行緒。",
       "greeting": "我可以幫你做什麼？",
-      "quickActions": {
-        "plan": {
-          "title": "建立專案計畫",
-          "prompt": "幫我為接下來要做的事情寫一份簡潔的專案計畫。"
-        },
-        "analyze": {
-          "title": "分析這些資料",
-          "prompt": "幫我分析這些資料，並指出最重要的模式。"
-        },
-        "brainstorm": {
-          "title": "腦力激盪想法",
-          "prompt": "圍繞這個問題腦力激盪幾個實用方案，並說明取捨。"
-        },
-        "code": {
-          "title": "撰寫程式碼",
-          "prompt": "幫我為這個任務撰寫程式碼，先從最小可用改動開始。"
-        },
-        "summarize": {
-          "title": "總結這份文件",
-          "prompt": "幫我總結這份文件，並列出關鍵重點。"
-        },
-        "more": {
-          "title": "更多",
-          "prompt": "展示幾個你在這個工作區裡可以幫我的實用方式。"
-        }
-      },
+      "resumeLast": "繼續：{{name}}",
+      "continueSession": "繼續：{{name}}",
+      "whatDoYouKnow": "你了解我什麼？",
       "imageQuickActions": {
         "icon": {
           "title": "設計應用程式圖示",

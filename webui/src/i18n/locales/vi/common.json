@@ -192,32 +192,9 @@
     "empty": {
       "description": "Hãy đặt câu hỏi, tiếp tục công việc cục bộ hoặc bắt đầu một luồng mới.",
       "greeting": "Tôi có thể giúp gì cho bạn?",
-      "quickActions": {
-        "plan": {
-          "title": "Tạo kế hoạch dự án",
-          "prompt": "Tạo một kế hoạch dự án ngắn gọn cho việc tôi nên xây dựng tiếp theo."
-        },
-        "analyze": {
-          "title": "Phân tích dữ liệu này",
-          "prompt": "Giúp tôi phân tích dữ liệu này và chỉ ra các mẫu quan trọng nhất."
-        },
-        "brainstorm": {
-          "title": "Động não ý tưởng",
-          "prompt": "Động não vài ý tưởng thực tế và các đánh đổi cho vấn đề này."
-        },
-        "code": {
-          "title": "Viết mã",
-          "prompt": "Giúp tôi viết mã cho nhiệm vụ này, bắt đầu từ thay đổi hữu ích nhỏ nhất."
-        },
-        "summarize": {
-          "title": "Tóm tắt tài liệu này",
-          "prompt": "Tóm tắt tài liệu này và liệt kê các ý chính."
-        },
-        "more": {
-          "title": "Thêm",
-          "prompt": "Cho tôi xem vài cách hữu ích mà bạn có thể giúp trong workspace này."
-        }
-      },
+      "resumeLast": "Tiếp tục: {{name}}",
+      "continueSession": "Tiếp tục với: {{name}}",
+      "whatDoYouKnow": "Bạn biết gì về tôi?",
       "imageQuickActions": {
         "icon": {
           "title": "Thiết kế biểu tượng app",
