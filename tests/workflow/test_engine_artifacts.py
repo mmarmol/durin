@@ -131,3 +131,42 @@ def test_output_dir_none_when_no_workspace():
     wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
     result = WorkflowEngine(runner).run(wf, "t")   # no workspace=
     assert result.output_dir is None
+
+
+# Input validation + declared-file entry contract
+
+def test_missing_input_file_aborts_naming_the_path(tmp_path):
+    wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
+    result = WorkflowEngine(lambda req: NodeRunResponse(output="x"),
+                            workspace=str(tmp_path)).run(
+        wf, "t", input_files=[str(tmp_path / "nope.txt")])
+    assert result.status == "aborted"
+    assert "nope.txt" in result.final_output
+    assert result.runs == []                     # nothing ran
+
+
+def test_colliding_input_basenames_abort(tmp_path):
+    (tmp_path / "d1").mkdir(); (tmp_path / "d2").mkdir()
+    (tmp_path / "d1" / "r.txt").write_text("1")
+    (tmp_path / "d2" / "r.txt").write_text("2")
+    wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
+    result = WorkflowEngine(lambda req: NodeRunResponse(output="x"),
+                            workspace=str(tmp_path)).run(
+        wf, "t", input_files=[str(tmp_path / "d1" / "r.txt"), str(tmp_path / "d2" / "r.txt")])
+    assert result.status == "aborted"
+    assert "r.txt" in result.final_output
+
+
+def test_declared_file_input_with_no_files_ends_needs_input(tmp_path):
+    wf = parse_workflow({
+        "name": "w", "start": "a",
+        "input": {"file": True, "description": "the report to summarize"},
+        "nodes": [{"id": "a", "kind": "work", "tools": "default", "next": None}],
+    })
+    calls = []
+    result = WorkflowEngine(lambda req: calls.append(req) or NodeRunResponse(output="x"),
+                            workspace=str(tmp_path)).run(wf, "t")
+    assert result.status == "needs_input"
+    assert calls == []                            # zero LLM cost
+    assert "file" in result.final_output.lower()
+    assert "the report to summarize" in result.final_output

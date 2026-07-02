@@ -35,7 +35,7 @@ with dynamic fan-out (a worker per file). The terminal node's text output and th
 exposed in the run result. Absent ⇒ today's text-task behavior. The optional free-text `description`
 is a lightweight contract: the engine frames every node's task with the input description (what the
 run received) and the output description (what it must deliver), so the agents are steered and the
-interface is documented — it is a hint, not enforced.
+interface is documented — descriptions are hints, not enforced. However, **provided input files are validated pre-flight** (existence check, distinct basenames) and return an `aborted` result naming any missing or colliding file; and a workflow that declares file input (`file: true`) given none ends the run immediately with a `needs_input` result before any node runs, so the invoking agent asks the user for the files instead of burning node turns.
 
 A caller may also pass a per-run **`output_format`** (the `run_workflow` tool, the run command):
 a delivery instruction for THIS call — "a bulleted list", "JSON with fields x,y", "a 3-line

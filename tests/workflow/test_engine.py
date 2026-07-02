@@ -84,7 +84,7 @@ def test_io_descriptions_frame_the_task():
 def test_task_unchanged_without_io_descriptions():
     wf = parse_workflow({
         "name": "d", "start": "a",
-        "input": {"file": True},  # declared, but no description
+        "input": {"text": True},  # declared, but no description
         "nodes": [{"id": "a", "kind": "work", "next": None}],
     })
     eng, calls = _engine({"a": "out-a"})

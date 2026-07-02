@@ -188,6 +188,13 @@ class WorkflowEngine:
         started_at = time.time()
         self._start_manifest(workflow, run_id, effective_root, started_at, task)
 
+        # Pre-flight input validation: check for missing/colliding files and declared-file contracts
+        preflight = self._preflight_inputs(workflow, input_files, run_id,
+                                           resuming=resume is not None)
+        if preflight is not None:
+            self._finalize_manifest(workflow, preflight, effective_root, started_at)
+            return preflight
+
         def _update() -> None:
             self._update_manifest(workflow, run_id, runs)
 
@@ -227,6 +234,35 @@ class WorkflowEngine:
             )
         self._finalize_manifest(workflow, result, effective_root, started_at)
         return result
+
+    @staticmethod
+    def _preflight_inputs(workflow, input_files, run_id, *, resuming: bool):
+        """Validate the run's inputs before any node (or manifest) exists. Returns a
+        terminal WorkflowResult on a problem, else None. Deterministic and LLM-free:
+        a missing/colliding input file is the caller's error (aborted, naming it); a
+        workflow that declares file input given none ends needs_input immediately so
+        the invoking agent asks the user for the file instead of burning node turns."""
+        if input_files:
+            for p in input_files:
+                if not Path(p).is_file():
+                    return WorkflowResult(status="aborted", runs=[], run_id=run_id,
+                                          final_output=f"input file not found: {p}")
+            names = [Path(p).name for p in input_files]
+            dupes = sorted({n for n in names if names.count(n) > 1})
+            if dupes:
+                return WorkflowResult(
+                    status="aborted", runs=[], run_id=run_id,
+                    final_output=("input files collide on the same name(s): "
+                                  f"{', '.join(dupes)} — pass files with distinct names"))
+        wants_file = bool((workflow.input or {}).get("file"))
+        if wants_file and not input_files and not resuming:
+            desc = (workflow.input or {}).get("description") or ""
+            hint = f" ({desc})" if desc else ""
+            return WorkflowResult(
+                status="needs_input", runs=[], run_id=run_id,
+                final_output=("This workflow expects one or more input files"
+                              f"{hint}. Please provide them (input_files) and run it again."))
+        return None
 
     def _start_manifest(self, workflow, run_id, root_session_key, started_at, task=None) -> None:
         if self._workspace is None:
