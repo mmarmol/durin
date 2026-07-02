@@ -303,6 +303,19 @@ def test_refine_non_escalated_kept_not_flagged(tmp_path):
     assert records == []
 
 
+def test_refine_judge_error_emits_skipped_event(tmp_path, monkeypatch):
+    import durin.agent.tools._telemetry as tel
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    _two_dupes(tmp_path)
+    # An invoke that never yields a parseable verdict -> JudgeError after retries.
+    out = run_refine(tmp_path, llm_invoke=lambda prompt, **kw: "no verdict markers")
+    assert any(s["reason"].startswith("judge_error") for s in out["skipped"])
+    skips = [d for n, d in events if n == "memory.absorb.skipped"]
+    assert any(d.get("reason") == "judge_error" for d in skips)
+
+
 def test_flagged_empty_workspace(tmp_path):
     """read_flagged on a workspace with no flagged file returns empty list."""
     assert read_flagged(tmp_path) == []

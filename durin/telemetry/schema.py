@@ -772,6 +772,8 @@ class MemoryAbsorbSkippedEvent(TypedDict):
     - ``"verdict_different"`` / ``"verdict_unclear"``: judge declined.
     - ``"judge_failed"``: LLM call or parse failure after all retries.
     - ``"page_load_failed"``: one of the two pages couldn't be loaded.
+    - ``"judge_error"``: the judge raised ``JudgeError`` (unparseable verdict
+      after all retries) and the pair was skipped for this run.
     """
 
     canonical: str
@@ -1252,6 +1254,23 @@ class MemoryDreamFlaggedEvent(TypedDict):
     absorbed: str
 
 
+class MemoryDreamParseFailureEvent(TypedDict):
+    """A dream-pass LLM response could not be parsed at all.
+
+    Distinct from a valid-but-empty response: this fires only when the
+    output is unloadable JSON or the wrong top-level type after fence
+    stripping and repair. Without it, "model returned garbage" is
+    indistinguishable from "nothing to extract" — the pass silently
+    yields nothing and the per-session cursor still advances.
+    """
+
+    stage: str  # "extract" | "discover" | "learnings" | "derived_from"
+    source: NotRequired[str | None]  # entity ref or session stem
+    raw_head: str  # first 200 chars of the raw response
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryUpsertEntityEvent(TypedDict):
     """memory_upsert_entity tool write (entity page authored/extended)."""
 
@@ -1351,6 +1370,7 @@ EVENTS: dict[str, type] = {
     "memory.dream.throttled": MemoryDreamThrottledEvent,
     "memory.dream.always_on": MemoryDreamAlwaysOnEvent,
     "memory.dream.flagged": MemoryDreamFlaggedEvent,
+    "memory.dream.parse_failure": MemoryDreamParseFailureEvent,
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,

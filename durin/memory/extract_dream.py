@@ -25,7 +25,7 @@ from durin.memory.entity_manifest import build_entity_manifest
 from durin.memory.entities import SUGGESTED_TYPES_ORDERED
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
-from durin.memory.llm_invoke import default_llm_invoke
+from durin.memory.llm_invoke import default_llm_invoke, emit_parse_failure
 from durin.memory.memory_writer import WriteResult, write_entity
 
 
@@ -130,6 +130,9 @@ def extract_entity(
     resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
     raw = resp.text if hasattr(resp, "text") else str(resp)
     attrs = parse_attributes(raw)
+    if attrs is None:
+        emit_parse_failure("extract", source=entity_ref, raw=raw)
+        attrs = {}
     if not attrs:
         return WriteResult(entity_ref, committed=False, retries=0)
 
@@ -374,6 +377,9 @@ def discover_entities(
     resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
     raw = resp.text if hasattr(resp, "text") else str(resp)
     proposals = parse_discoveries(raw)
+    if proposals is None:
+        emit_parse_failure("discover", source=source_ref, raw=raw)
+        proposals = []
     if not proposals:
         return []
 
@@ -534,6 +540,9 @@ def mine_learnings(
         resp = llm_invoke(prompt, model=model) if model else llm_invoke(prompt)
         raw = resp.text if hasattr(resp, "text") else str(resp)
         learnings = _parse_learnings(raw)
+        if learnings is None:
+            emit_parse_failure("learnings", source=source_ref, raw=raw)
+            learnings = []
     except Exception:
         return []
     if not learnings:

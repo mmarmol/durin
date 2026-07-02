@@ -141,6 +141,7 @@ Additional dream events:
 - **`memory.dream.run_summary`** — one rollup per run (cron and reactive), emitted after all passes complete. Carries `sessions`, `entities`, `merged`, `skills_created` (new skills authored by the skill-extract pass) and `skills_improved` (existing skills edited by the curation pass). Drives the Dream feed's per-run entry so that an empty run still shows "ran — no new changes" rather than silently updating only the last-run timestamp.
 - **`memory.dream.max_seconds_reached`** — extract pass hit its wall-clock cap and yielded. `sessions_done` gives progress before yielding; the per-session cursor resumes on the next trigger.
 - **`memory.dream.throttled`** — a reactive trigger (`post_compaction` or `session_close`) was skipped by the in-process gate. `reason` is `locked` or `throttled`.
+- **`memory.dream.parse_failure`** — a pass's LLM response was unparseable (fence-strip + repair still failed, or wrong top-level type). `stage` is `extract | discover | learnings | derived_from`; `source` is the entity ref or session stem; `raw_head` carries the first 200 chars for diagnosis. Valid-but-empty responses do not fire this.
 
 ### Absorb events
 
@@ -148,7 +149,7 @@ These fire during the refine pass and via the manual `durin memory` commands:
 
 - **`memory.absorb.judged`** — a candidate pair reached the LLM judge. `verdict` is `same | different | unclear`; `confidence` is 0–100. Emitted for every pair that survived the cross-type filter and quarantine check.
 - **`memory.absorb.auto_merged`** — pair was auto-merged (`verdict == same` and `confidence >= threshold`). `sha` is the merge commit.
-- **`memory.absorb.skipped`** — pair was not merged. `reason` is one of: `cross_type`, `quarantine`, `below_threshold`, `verdict_different`, `verdict_unclear`, `judge_failed`, `page_load_failed`.
+- **`memory.absorb.skipped`** — pair was not merged. `reason` is one of: `cross_type`, `quarantine`, `below_threshold`, `verdict_different`, `verdict_unclear`, `judge_failed`, `page_load_failed`, `judge_error`.
 - **`memory.absorb.reverted`** — a prior auto-merge was undone via `durin memory revert`. This is the regret-rate signal: a high revert count indicates the confidence threshold is too low.
 
 ### Relation-cap events (alert-only)

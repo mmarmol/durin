@@ -24,7 +24,7 @@ from json_repair import repair_json
 from durin.memory.entity_page import EntityPage
 from durin.memory.extract_runner import entity_refs_in_messages, load_session
 from durin.memory.field_patch import FieldPatch
-from durin.memory.llm_invoke import LLMResponse, default_llm_invoke
+from durin.memory.llm_invoke import LLMResponse, default_llm_invoke, emit_parse_failure
 from durin.memory.memory_writer import write_entity
 
 __all__ = [
@@ -223,6 +223,9 @@ def link_derived_from_for_session(
         valid_refs=set(references),
         valid_entities={ref for ref, _page in pages},
     )
+    if links is None:
+        emit_parse_failure("derived_from", source=jsonl_path.stem, raw=raw)
+        links = {}
     if not links:
         return {"session": jsonl_path.stem, "linked": []}
 

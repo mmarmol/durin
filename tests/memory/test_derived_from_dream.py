@@ -142,3 +142,38 @@ def test_parse_links_none_on_unparseable():
 
 def test_parse_links_empty_map_is_empty_not_none():
     assert parse_links("{}", valid_refs=set(), valid_entities=set()) == {}
+
+
+def test_link_derived_from_emits_parse_failure(tmp_path: Path, monkeypatch) -> None:
+    import durin.agent.tools._telemetry as tel
+    from datetime import datetime, timezone
+
+    from durin.memory.field_patch import FieldPatch
+    from durin.memory.memory_writer import write_entity
+
+    ingest_reference(tmp_path, "Rabies Investigation", "viral disease notes")
+    ref = "reference:rabies-investigation"
+    write_entity(
+        tmp_path, "topic:rabies",
+        [FieldPatch(kind="body_append",
+                    value="A viral disease distilled from the investigation.",
+                    author="agent", source_ref="setup",
+                    at=datetime(2026, 6, 1, tzinfo=timezone.utc))],
+        create=True, name="Rabies",
+    )
+    msgs = [
+        {"role": "tool", "content": json.dumps({"id": "x", "reference": ref})},
+        _upsert_call("topic:rabies"),
+    ]
+    jsonl = _session(tmp_path, msgs)
+
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+
+    def fake_llm(prompt: str, **_kw):
+        return "not json at all"
+
+    link_derived_from_for_session(tmp_path, jsonl, llm_invoke=fake_llm)
+    failures = [d for n, d in events if n == "memory.dream.parse_failure"]
+    assert failures and failures[0]["stage"] == "derived_from"

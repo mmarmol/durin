@@ -277,6 +277,8 @@ def run_refine(
             )
         except JudgeError as exc:
             skipped.append({"pair": [ref_a, ref_b], "reason": f"judge_error:{exc}"})
+            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b,
+                  reason="judge_error")
             continue
         _emit("memory.absorb.judged", canonical=ref_a, absorbed=ref_b,
               verdict=judged.verdict, confidence=judged.confidence,

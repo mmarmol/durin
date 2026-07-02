@@ -329,6 +329,12 @@ A per-entity relation count is checked on every write (soft 50 / hard 200) and
 emits a warning telemetry event on a crossing, but this is **alert-only** — no
 write is blocked and no relation is dropped.
 
+An LLM response that cannot be parsed at all (unloadable JSON, wrong top-level
+type) emits `memory.dream.parse_failure` with the stage and source, and that
+call yields an empty result — distinguishing "model returned garbage" from
+"nothing to extract". The cursor still advances, so a persistent parse failure
+surfaces in telemetry rather than blocking the pass.
+
 ### Concurrency and the cursor
 
 The reactive hooks each fire on a daemon thread in the gateway process.
