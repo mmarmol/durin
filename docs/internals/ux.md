@@ -375,9 +375,13 @@ turn and the active agent mode.
 message reloads its text into the composer input for revision. This is a refill
 only — it does not truncate history or automatically resend.
 
-**Empty-thread quick actions.** When the thread is empty, action chips
-(Plan / Analyze / Brainstorm / Code / Summarize) are shown in the chat area.
-Selecting a chip fills the composer with the corresponding starter prompt. A
+**Empty-thread landing chips.** When the thread is empty, the chat area shows
+the same chip set as the WebUI landing: up to three recent-session chips
+("Resume: <label>" for the most recent, "Continue: <label>" for the rest,
+where `<label>` is the session's title falling back to its message preview)
+plus a trailing "What do you know about me?" chip. Clicking a session chip
+resumes that session (`/resume <key>`); clicking the audit chip sends
+`/audit` — both act immediately rather than seeding the composer. A
 scroll-to-bottom control appears when the user has scrolled up from the latest
 message.
 
