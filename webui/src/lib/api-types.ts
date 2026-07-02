@@ -1664,7 +1664,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List the run manifests a session spawned (forward lineage), newest-first. */
+        /** List a session's run manifests (forward lineage); without `session`, the global feed across every workflow, newest-first. */
         get: operations["workflows_session_runs"];
         put?: never;
         post?: never;
@@ -4379,7 +4379,15 @@ export interface components {
         };
         /** WorkflowSessionRunsQuery */
         WorkflowSessionRunsQuery: {
-            /** Session */
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+            /**
+             * Session
+             * @default
+             */
             session: string;
         };
         /** WorkflowSessionRunsResult */

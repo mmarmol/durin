@@ -14,16 +14,12 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  AlertTriangle,
   Check,
   Copy,
-  FileIcon,
-  HelpCircle,
   Lightbulb,
   Loader2,
   Play,
   Plus,
-  RefreshCw,
   Sparkles,
   Trash2,
   Workflow as WorkflowIcon,
@@ -48,7 +44,6 @@ import {
   saveWorkflow,
   type PersonaItem,
   type WorkflowRecommendation,
-  type WorkflowRunNode,
   type WorkflowRunResult,
   type WorkflowRunSummary,
 } from "@/lib/api";
@@ -62,6 +57,7 @@ import {
 } from "@/lib/workflow-graph";
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
+import { RunDetail, runChipTone } from "@/components/workflows/RunDetail";
 
 function errMsg(e: unknown): string {
   if (e instanceof ApiError) return e.detail ? `HTTP ${e.status}: ${e.detail}` : `HTTP ${e.status}`;
@@ -848,278 +844,6 @@ function IOConfigPanel({
       >
         <Trash2 className="h-3.5 w-3.5" /> {t("workflows.removeIo")}
       </button>
-    </div>
-  );
-}
-
-// A node's run status mapped to a chip tone. "ok"/"no_session" are normal; the two
-// failure statuses ("persist_failed", "node_failed") render in the destructive tone.
-function statusTone(status: string): string {
-  if (status === "node_failed" || status === "persist_failed") {
-    return "bg-destructive/10 text-destructive";
-  }
-  if (status === "no_session") return "bg-muted text-muted-foreground";
-  return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
-}
-
-// A run's overall status mapped to a history-chip border tone: needs_input draws
-// attention (accent), exhausted is a soft warning, aborted is a hard failure, and
-// completed (or any other terminal/live status) stays neutral.
-function runChipTone(status: string): string {
-  if (status === "needs_input") return "border-accent text-accent-foreground";
-  if (status === "exhausted") return "border-warn/60 text-warn";
-  if (status === "aborted" || status === "crashed") return "border-destructive/60 text-destructive";
-  if (status === "cancelled") return "border-dashed text-muted-foreground";
-  return "text-muted-foreground hover:text-foreground";
-}
-
-// A workflow node session is headless (not a chat in the sidebar), so there is no
-// in-app viewer to open it by key. Surface the key as a labelled, copyable reference
-// so an auditor can look the session up by hand.
-function CopyableKey({ value }: { value: string }) {
-  const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const onCopy = useCallback(() => {
-    if (!navigator.clipboard) return;
-    void navigator.clipboard.writeText(value).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1_500);
-    });
-  }, [value]);
-  return (
-    <button
-      type="button"
-      onClick={onCopy}
-      title={t("workflows.copySession")}
-      aria-label={copied ? t("workflows.sessionCopied") : t("workflows.copySession")}
-      className="inline-flex max-w-full items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground hover:text-foreground"
-    >
-      {copied ? <Check className="h-3 w-3 shrink-0" /> : <Copy className="h-3 w-3 shrink-0" />}
-      <span className="truncate">{value}</span>
-    </button>
-  );
-}
-
-// One per-node/worker row in a run's trace: identity (node_id#iteration, or
-// "pass N of budget" once the node has a known visit budget), fan-out
-// worker_index / static branch_id so concurrent units are legible, a status
-// chip and route verdict, a "continues session" chip when this row picks up
-// an earlier row's session (a resumed/looping node), the copyable session
-// key, and the node's (truncated) output.
-function RunNodeRow({ run, continuesSession }: { run: WorkflowRunNode; continuesSession: boolean }) {
-  const { t } = useTranslation();
-  const verdict =
-    run.route_label != null && run.route_label !== ""
-      ? run.route_label
-      : run.passed === true
-        ? "✓"
-        : run.passed === false
-          ? "✗"
-          : null;
-  const isFinalPass = run.budget != null && run.iteration === run.budget;
-  return (
-    <div className="flex flex-col gap-1 rounded border px-2 py-1.5">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="font-mono text-[11px] font-medium">
-          {run.budget != null
-            ? `${run.node_id} · ${t("workflows.passOf", { iteration: run.iteration, budget: run.budget })}`
-            : `${run.node_id}#${run.iteration}`}
-        </span>
-        {isFinalPass && (
-          <span className="rounded bg-warn/10 px-1 py-0.5 text-[10px] text-warn">
-            {t("workflows.finalPass")}
-          </span>
-        )}
-        {continuesSession && (
-          <span className="inline-flex items-center gap-0.5 rounded bg-accent px-1 py-0.5 text-[10px] text-accent-foreground">
-            <RefreshCw className="h-2.5 w-2.5" aria-hidden />
-            {t("workflows.continuesSession")}
-          </span>
-        )}
-        {run.worker_index != null && (
-          <span className="rounded bg-violet-500/10 px-1 py-0.5 text-[10px] text-violet-700 dark:text-violet-300">
-            {t("workflows.workerLabel", { index: run.worker_index })}
-          </span>
-        )}
-        {run.branch_id && (
-          <span className="rounded bg-sky-500/10 px-1 py-0.5 text-[10px] text-sky-700 dark:text-sky-300">
-            {t("workflows.branchLabel", { id: run.branch_id })}
-          </span>
-        )}
-        <span className={cn("rounded px-1 py-0.5 text-[10px]", statusTone(run.status))}>
-          {t("workflows.runStatus." + run.status, run.status)}
-        </span>
-        {verdict != null && (
-          <span
-            className={cn(
-              "rounded px-1 py-0.5 text-[10px]",
-              run.passed === false ? "bg-destructive/10 text-destructive" : "bg-muted",
-            )}
-          >
-            {verdict}
-          </span>
-        )}
-        {run.session_key && <CopyableKey value={run.session_key} />}
-      </div>
-      {run.output && (
-        <div className="whitespace-pre-wrap break-words text-[11px] text-muted-foreground">
-          {run.output}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Which rows "continue" an earlier row's session: a row whose session_key matches
-// an EARLIER row's session_key for the same node_id (a loop pass picking back up
-// a persistent session, or a resumed run re-entering the node it stopped at).
-function continuesSessionFlags(runs: WorkflowRunNode[]): boolean[] {
-  const seen = new Map<string, Set<string>>(); // node_id -> session_keys seen so far
-  return runs.map((run) => {
-    if (!run.session_key) return false;
-    const keys = seen.get(run.node_id);
-    const continues = keys != null && keys.has(run.session_key);
-    seen.set(run.node_id, new Set(keys).add(run.session_key));
-    return continues;
-  });
-}
-
-// The detail view of a single run: a status banner (needs_input/exhausted/aborted/
-// cancelled), a row per node/worker (status, output, session affordance, loop pass),
-// the resume form (needs_input only), the final output, output folder and files.
-function RunDetail({
-  result,
-  onResume,
-  resuming,
-}: {
-  result: WorkflowRunResult;
-  onResume: (answers: string) => void;
-  resuming: boolean;
-}) {
-  const { t } = useTranslation();
-  const [answers, setAnswers] = useState("");
-  const continues = continuesSessionFlags(result.runs);
-  const outputFiles = result.output_files ?? [];
-
-  // Reset answers when the run identity or needs_input status changes to avoid stale
-  // textarea content on nested resume (same component instance with new result props).
-  useEffect(() => {
-    setAnswers("");
-  }, [result.run_id, result.status]);
-
-  return (
-    <div className="flex flex-col gap-2">
-      {result.status === "needs_input" && (
-        <div className="flex flex-col gap-1.5 rounded bg-accent px-2 py-1.5 text-accent-foreground">
-          <div className="flex items-center gap-1.5">
-            <HelpCircle className="h-3.5 w-3.5 shrink-0" aria-hidden />
-            <span className="font-medium">{t("workflows.needsInputTitle")}</span>
-          </div>
-          <p>
-            {t("workflows.needsInputBody", { node: result.needs_input_node || "?" })}
-          </p>
-          {result.final_output && (
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[10px] uppercase tracking-wide opacity-70">
-                {t("workflows.questionsFromRun")}
-              </span>
-              <div className="whitespace-pre-wrap break-words">{result.final_output}</div>
-            </div>
-          )}
-          {result.needs_input_node && (
-            <>
-              <Textarea
-                rows={2}
-                value={answers}
-                onChange={(e) => setAnswers(e.target.value)}
-                placeholder={t("workflows.answersPlaceholder")}
-                className="bg-background text-foreground"
-              />
-              <Button
-                size="sm"
-                className="self-start"
-                disabled={resuming || !answers.trim()}
-                onClick={() => onResume(answers)}
-              >
-                {resuming ? <Loader2 className="h-4 w-4 animate-spin" /> : t("workflows.resumeRun")}
-              </Button>
-              <span className="text-[10px] opacity-70">
-                {t("workflows.resumeCaption", { node: result.needs_input_node, runId: result.run_id })}
-              </span>
-            </>
-          )}
-        </div>
-      )}
-      {result.status === "exhausted" && (
-        <div className="flex flex-col gap-0.5 rounded bg-warn/10 px-2 py-1.5 text-warn">
-          <span className="font-medium">{t("workflows.loopLimitReached")}</span>
-          <span>
-            {t("workflows.exhausted")}
-            {result.exhausted_node && (
-              <>
-                {" "}— {t("workflows.exhaustedNode")}: <span className="font-mono">{result.exhausted_node}</span>
-              </>
-            )}
-          </span>
-        </div>
-      )}
-      {result.status === "aborted" && (
-        <div className="flex flex-col gap-1 rounded bg-destructive/10 px-2 py-1.5 text-destructive">
-          <div className="flex items-center gap-1.5">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
-            <span className="font-medium">{t("workflows.abortedTitle")}</span>
-          </div>
-          {result.final_output && <p className="whitespace-pre-wrap break-words">{result.final_output}</p>}
-        </div>
-      )}
-      {result.status === "cancelled" && (
-        <div className="rounded bg-muted px-2 py-1.5 text-muted-foreground">
-          <span className="font-medium">{t("workflows.cancelledTitle")}</span>
-        </div>
-      )}
-      <div className="flex flex-col gap-1.5">
-        {result.runs.map((run, i) => (
-          <RunNodeRow key={`${run.node_id}#${run.iteration}#${i}`} run={run} continuesSession={continues[i]} />
-        ))}
-      </div>
-      {result.status === "completed" && result.final_output && (
-        <div className="flex flex-col gap-0.5">
-          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-            {t("workflows.finalOutput")}
-            {result.final_output_node && (
-              <> · {t("workflows.finalOutputFrom", { node: result.final_output_node })}</>
-            )}
-          </span>
-          <div className="whitespace-pre-wrap break-words text-muted-foreground">
-            {result.final_output}
-          </div>
-        </div>
-      )}
-      {result.output_dir && (
-        <div className="font-mono text-[11px] text-muted-foreground">
-          {t("workflows.outputDir")}: {result.output_dir}
-        </div>
-      )}
-      {result.status === "completed" && outputFiles.length > 0 && (
-        <div className="flex flex-col gap-0.5">
-          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-            {t("workflows.outputFiles")}
-          </span>
-          {outputFiles.slice(0, 20).map((f) => (
-            <span key={f} className="flex items-center gap-1 font-mono text-[11px] text-muted-foreground">
-              <FileIcon className="h-3 w-3 shrink-0" aria-hidden /> {f}
-            </span>
-          ))}
-          {outputFiles.length > 20 && (
-            <span className="text-[11px] text-muted-foreground">
-              {t("workflows.andNMore", { count: outputFiles.length - 20 })}
-            </span>
-          )}
-          <span className="text-[10px] text-muted-foreground opacity-70">
-            {t("workflows.outputPruneHint")}
-          </span>
-        </div>
-      )}
     </div>
   );
 }

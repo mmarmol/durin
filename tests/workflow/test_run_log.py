@@ -428,3 +428,86 @@ def test_prune_below_unconsumed_cursor_dream_still_works(tmp_path):
     assert [r["run_id"] for r in records] == ["r3", "r4"]   # gap: r0-r2 silently gone
     diag = compute_diagnostics(records)
     assert diag.total_runs == 2   # no crash; diagnostics just sees fewer records
+
+
+# --- list_all_runs (F8) -------------------------------------------------------
+
+
+def test_list_all_runs_merges_across_workflows_newest_first(tmp_path):
+    from durin.workflow.result import WorkflowResult
+
+    run_log.finalize_run(tmp_path, "alpha", WorkflowResult(
+        status="completed", final_output="a", runs=[], run_id="old"),
+        root_session_key=None, started_at=1.0, finished_at=2.0)
+    run_log.finalize_run(tmp_path, "beta", WorkflowResult(
+        status="completed", final_output="b", runs=[], run_id="new"),
+        root_session_key=None, started_at=10.0, finished_at=20.0)
+    got = run_log.list_all_runs(tmp_path)
+    assert [r["run_id"] for r in got] == ["new", "old"]
+    assert {r["workflow"] for r in got} == {"alpha", "beta"}
+
+
+def test_list_all_runs_each_entry_carries_its_workflow_name(tmp_path):
+    from durin.workflow.result import WorkflowResult
+
+    run_log.finalize_run(tmp_path, "alpha", WorkflowResult(
+        status="completed", final_output="a", runs=[], run_id="r1"),
+        root_session_key=None, started_at=1.0, finished_at=2.0)
+    got = run_log.list_all_runs(tmp_path)
+    assert got[0]["workflow"] == "alpha"
+    assert got[0]["run_id"] == "r1"
+
+
+def test_list_all_runs_respects_limit_for_terminal_entries(tmp_path):
+    from durin.workflow.result import WorkflowResult
+
+    for i in range(5):
+        run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+            status="completed", final_output="x", runs=[], run_id=f"r{i}"),
+            root_session_key=None, started_at=float(i), finished_at=float(i))
+    got = run_log.list_all_runs(tmp_path, limit=2)
+    assert len(got) == 2
+    assert [r["run_id"] for r in got] == ["r4", "r3"]
+
+
+def test_list_all_runs_needs_input_exempt_from_cap(tmp_path):
+    """needs_input entries are always included, even beyond `limit` — they are
+    actionable resume points the tray must never lose to the cap."""
+    from durin.workflow.result import WorkflowResult
+
+    run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+        status="needs_input", final_output="q?", runs=[], run_id="waiting",
+        needs_input_node="gate"), root_session_key=None, started_at=0.0, finished_at=0.0)
+    for i in range(3):
+        run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+            status="completed", final_output="x", runs=[], run_id=f"r{i}"),
+            root_session_key=None, started_at=float(i + 10), finished_at=float(i + 10))
+    got = run_log.list_all_runs(tmp_path, limit=1)
+    ids = [r["run_id"] for r in got]
+    assert "waiting" in ids            # exempt from the cap
+    assert len(ids) == 2               # 1 terminal (cap) + the needs_input entry
+    assert ids == ["r2", "waiting"]    # still newest-first overall (r2 ts=12 > waiting ts=0)
+
+
+def test_list_all_runs_questions_field_on_needs_input_capped_at_500(tmp_path):
+    from durin.workflow.result import WorkflowResult
+
+    run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+        status="needs_input", final_output="q" * 900, runs=[], run_id="r1",
+        needs_input_node="gate"), root_session_key=None, started_at=1.0, finished_at=1.0)
+    got = run_log.list_all_runs(tmp_path)
+    assert got[0]["questions"] == "q" * 500
+
+
+def test_list_all_runs_terminal_entries_have_no_questions_field(tmp_path):
+    from durin.workflow.result import WorkflowResult
+
+    run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+        status="completed", final_output="done", runs=[], run_id="r1"),
+        root_session_key=None, started_at=1.0, finished_at=1.0)
+    got = run_log.list_all_runs(tmp_path)
+    assert "questions" not in got[0]
+
+
+def test_list_all_runs_no_workflows_is_empty(tmp_path):
+    assert run_log.list_all_runs(tmp_path) == []
