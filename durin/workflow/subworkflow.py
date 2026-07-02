@@ -36,7 +36,7 @@ class SubworkflowRunner:
         self._depth = _depth
         self._stack = _stack
 
-    def __call__(self, name: str, task: str, root_session_key: str | None = None) -> str:
+    def __call__(self, name: str, task: str, root_session_key: str | None = None, work_dir: str | None = None) -> str:
         if name in self._stack:
             chain = " -> ".join(self._stack + (name,))
             return f"Error: workflow cycle detected: {chain}"
@@ -58,5 +58,5 @@ class SubworkflowRunner:
         )
         # Anchor the sub-workflow's node sessions to the invoking conversation too,
         # so nested work is navigable under it (no orphan subtrees).
-        result = engine.run(workflow, task, root_session_key=root_session_key)
+        result = engine.run(workflow, task, root_session_key=root_session_key, work_dir_override=work_dir)
         return result.final_output or ""

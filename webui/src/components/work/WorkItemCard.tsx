@@ -78,6 +78,16 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
         </div>
       )}
 
+      {/* The gate's actual questions, when the manifest carried them. */}
+      {item.needsInputDetail && (
+        <div className="mt-2 ml-5 rounded-md bg-muted px-3 py-2 text-xs">
+          <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+            {t("tasks.questions")}
+          </div>
+          <div className="whitespace-pre-wrap">{item.needsInputDetail}</div>
+        </div>
+      )}
+
       {/* Workflow: node list with optional nested parallel branches */}
       {item.kind === "workflow" && item.nodes && item.nodes.length > 0 && (
         <ul className="mt-1.5 flex flex-col gap-0.5 pl-5">

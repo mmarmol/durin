@@ -1673,7 +1673,9 @@
     "exhaustedNode": "agotado en",
     "loopLimitReached": "Se alcanzó el límite del loop",
     "finalOutput": "salida final",
+    "finalOutputFrom": "resultado final de {{node}}",
     "runHistory": "ejecuciones",
+    "historyRetention": "muestra los runs más recientes — los antiguos conservan su registro, pero sus carpetas de trabajo se podan (workflow.keep_runs)",
     "copySession": "copiar clave de sesión",
     "sessionCopied": "clave de sesión copiada",
     "workerLabel": "worker {{index}}",
@@ -1709,7 +1711,8 @@
     "status": {
       "needs_input": "Necesita input"
     },
-    "needsInputHint": "En manos del agente que lo llamó — puede responder con su propio contexto o preguntarte, y luego reanuda este run."
+    "needsInputHint": "En manos del agente que lo llamó — puede responder con su propio contexto o preguntarte, y luego reanuda este run.",
+    "questions": "Preguntas"
   },
   "work": {
     "steps": "{{count}} pasos",

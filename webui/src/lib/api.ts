@@ -123,6 +123,7 @@ export interface BackgroundTask {
   session_key: string | null;
   nodes?: Array<{ id: string; label?: string; status: string; branches?: Array<{ id: string; label?: string; status: string }> | null }> | null;
   task?: string | null;
+  needs_input_detail?: string | null;
 }
 
 export async function listBackgroundTasks(
@@ -263,11 +264,13 @@ export async function duplicateWorkflow(
 // session_key points at the fresh session that produced the row; worker_index/branch_id
 // identify a fan-out worker or a static parallel branch so concurrent units stay legible;
 // status is "ok" | "persist_failed" | "node_failed".
+// `output` is present on a freshly-run result but absent from a persisted run's manifest
+// (the on-disk record omits per-node output text) — callers must tolerate it being unset.
 export type WorkflowRunNode = {
   node_id: string;
   iteration: number;
   passed: boolean | null;
-  output: string;
+  output?: string;
   session_key: string | null;
   worker_index: number | null;
   branch_id?: string | null;
@@ -281,6 +284,8 @@ export type WorkflowRunNode = {
 export type WorkflowRunResult = {
   status: string;
   final_output: string;
+  // which node's output became final_output (breadcrumb on the completed banner)
+  final_output_node?: string;
   run_id: string;
   runs: WorkflowRunNode[];
   output_dir?: string;
@@ -290,6 +295,42 @@ export type WorkflowRunResult = {
   // relative paths in output_dir (completed runs)
   output_files?: string[];
 };
+
+// One row of a workflow's persisted run history (GET .../runs), newest-first.
+export type WorkflowRunSummary = {
+  run_id: string;
+  status: string;
+  started_at: number | null;
+  finished_at: number | null;
+  task: string;
+  needs_input_node: string | null;
+};
+
+export async function listWorkflowRuns(
+  token: string,
+  name: string,
+  limit: number = 20,
+  base: string = "",
+): Promise<WorkflowRunSummary[]> {
+  const body = await request<{ runs: WorkflowRunSummary[] }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}/runs?limit=${encodeURIComponent(String(limit))}`,
+    token,
+  );
+  return body.runs;
+}
+
+export async function getWorkflowRunManifest(
+  token: string,
+  name: string,
+  runId: string,
+  base: string = "",
+): Promise<WorkflowRunResult> {
+  const body = await request<{ manifest: WorkflowRunResult }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}/runs/${encodeURIComponent(runId)}`,
+    token,
+  );
+  return body.manifest;
+}
 
 export async function runWorkflow(
   token: string,

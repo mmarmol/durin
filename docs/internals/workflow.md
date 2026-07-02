@@ -115,7 +115,9 @@ targets from the sub-workflow picker, so a cycle cannot be authored in the UI; (
 runner maintains a call-stack of workflow names currently executing — if a name is about
 to reenter the chain, it stops immediately with a cycle error (`"Error: workflow cycle
 detected: A -> B -> A"`) rather than recursing; (3) a `max_depth` counter is the backstop
-for deep non-cyclic chains, returning an error at the limit.
+for deep non-cyclic chains, returning an error at the limit. A sub-workflow runs in the
+**parent run's shared working folder** — its nodes read and extend the same fileset as
+the parent's sequential nodes (text still travels the edge; files never needed copying).
 **A node's "runs as" is a single choice:** either a specific model (or omitted ⇒ default) or
 a **Persona** (a named SOUL + its model, mutually exclusive with `model`). Setting `persona`
 on a node injects the SOUL body into the node's system prompt and selects the persona's model.
@@ -229,10 +231,12 @@ The per-node entries in the manifest's `runs` array carry:
 | `route_label` | matched case label for multi-way nodes (`null` otherwise) |
 | `budget` | the node's effective visit budget at this pass (`null` for parallel branches/workers, which are not loop targets) |
 
-The finalized manifest also carries two top-level fields: `needs_input_node` — the node
-that routed to `__needs_input__` (`null` otherwise), the resume re-entry point — and
-`output_files`: the relative paths (within the run's output folder) a completed run
-produced, empty for a run that ended any other status or produced no files.
+The finalized manifest also carries top-level fields: `needs_input_node` — the node
+that routed to `__needs_input__` (`null` otherwise), the resume re-entry point;
+`final_output_node` — which node's output became `final_output` (`null` when no node
+contributed, e.g. an aborted run); and `output_files`: the relative paths (within the
+run's output folder) a completed run produced, empty for a run that ended any other
+status or produced no files.
 
 `read_runs_since` (used by the dream self-improvement pass) returns all records for a
 workflow; callers that need only terminal runs should skip records whose `status` is
@@ -353,6 +357,7 @@ The `WorkflowsService` exposes read routes for run manifests:
 
 | Route | What it returns |
 |---|---|
+| `GET /api/v1/workflows/{name}/runs?limit=` | that workflow's persisted run summaries (`run_id`, `status`, `started_at`, `finished_at`, `task` capped at 200 chars, `needs_input_node`), newest-first, capped at `limit` (default 20) |
 | `GET /api/v1/workflows/{name}/runs/{run_id}` | one run's manifest (live or terminal) |
 | `GET /api/v1/workflows/runs?session=<key>` | all run manifests whose `root_session_key` matches, newest-first |
 
@@ -360,8 +365,9 @@ The `POST /api/v1/workflows/{name}/run` request accepts an optional `resume_run_
 the run_id of a prior run of the same workflow that ended `needs_input`, with `task`
 carrying the user's answers. The response carries `run_id`, a per-node trace with
 `session_key`, `worker_index`, `branch_id`, `budget`, `status`, and `route_label` for
-each entry, plus `needs_input_node` (the node that asked, when the run ends
-`needs_input`) and `output_files` (relative paths in `output_dir`, for a completed run).
+each entry, plus `final_output_node` (which node's output became `final_output`),
+`needs_input_node` (the node that asked, when the run ends `needs_input`) and
+`output_files` (relative paths in `output_dir`, for a completed run).
 
 ### 4g. Background mode and live progress
 
@@ -381,7 +387,9 @@ engine as its `run_id_factory`) so the agent can observe or cancel the run
 through the unified `tasks` tool — `tasks(action='status', id=…)` reads the run
 manifest, `tasks(action='stop', id=…)` requests cancellation. The same merge of
 sub-agents and workflow runs that backs `GET /api/v1/tasks`
-(`durin/agent/background_tasks.py`) is what `tasks` renders.
+(`durin/agent/background_tasks.py`) is what `tasks` renders. For a run that
+ends `needs_input`, this same surface carries the gate's questions so panels
+(like the web UI's Work panel) can show what is being asked.
 
 **Resuming a needs_input run.** A run that ended needs_input can be resumed
 instead of restarted: the engine re-enters the graph AT the asking node, with

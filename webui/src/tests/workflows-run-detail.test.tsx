@@ -16,6 +16,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
     getWorkflow: vi.fn(),
     getWorkflowRecommendations: vi.fn(),
     runWorkflow: vi.fn(),
+    listWorkflowRuns: vi.fn(),
+    getWorkflowRunManifest: vi.fn(),
   };
 });
 
@@ -41,6 +43,7 @@ beforeEach(() => {
     nodes: [{ id: "start", kind: "work", mode: "build", prompt: "", next: null }],
   } as never);
   vi.mocked(api.getWorkflowRecommendations).mockResolvedValue([]);
+  vi.mocked(api.listWorkflowRuns).mockResolvedValue([]);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -95,6 +98,14 @@ async function openRunnerAndRun() {
   const textarea = await screen.findByPlaceholderText(/Task to run/i);
   await user.type(textarea, "do the thing");
   await user.click(screen.getByRole("button", { name: /Run/i }));
+  return user;
+}
+
+async function openRunner() {
+  const user = userEvent.setup();
+  render(wrap(<WorkflowsView />));
+  const runner = await screen.findByText(/Test run/);
+  await user.click(runner);
   return user;
 }
 
@@ -190,8 +201,8 @@ describe("WorkflowsView run detail", () => {
     );
 
     // History still has exactly one entry for this run (replaced, not appended).
-    const historyLabel = screen.queryByText(/^runs$/i);
-    expect(historyLabel).not.toBeInTheDocument();
+    const history = screen.getByText(/^runs$/i).parentElement as HTMLElement;
+    expect(within(history).getAllByRole("button")).toHaveLength(1);
   });
 
   it("shows an aborted banner with the failure reason", async () => {
@@ -266,5 +277,85 @@ describe("WorkflowsView run detail", () => {
     await openRunnerAndRun();
     await screen.findByText(/pass 2 of 2/);
     expect(screen.getByText("final pass")).toBeInTheDocument();
+  });
+
+  it("renders persisted history chips and shows a manifest's detail when one is clicked", async () => {
+    vi.mocked(api.listWorkflowRuns).mockResolvedValue([
+      {
+        run_id: "run-old-2",
+        status: "completed",
+        started_at: 200,
+        finished_at: 210,
+        task: "second task",
+        needs_input_node: null,
+      },
+      {
+        run_id: "run-old-1",
+        status: "needs_input",
+        started_at: 100,
+        finished_at: null,
+        task: "first task",
+        needs_input_node: "ask",
+      },
+    ]);
+    vi.mocked(api.getWorkflowRunManifest).mockResolvedValue({
+      status: "completed",
+      final_output: "persisted answer",
+      run_id: "run-old-2",
+      // Persisted node records never carry per-node output text.
+      runs: [
+        {
+          node_id: "research",
+          iteration: 0,
+          passed: true,
+          session_key: "workflow:run-old-2:research",
+          worker_index: null,
+          branch_id: null,
+          status: "ok",
+          route_label: null,
+        },
+      ],
+    });
+
+    const user = await openRunner();
+    const history = (await screen.findByText(/^runs$/i)).parentElement as HTMLElement;
+    // Two persisted chips render newest-first: #2 is run-old-2, #1 is run-old-1.
+    expect(within(history).getByRole("button", { name: "#2" })).toBeInTheDocument();
+    const olderChip = within(history).getByRole("button", { name: "#1" });
+    expect(olderChip).toBeInTheDocument();
+
+    await user.click(within(history).getByRole("button", { name: "#2" }));
+
+    expect(await screen.findByText("persisted answer")).toBeInTheDocument();
+    // The node row renders without per-node output text (manifest records omit it).
+    expect(screen.getByText("research#0")).toBeInTheDocument();
+    expect(screen.queryByText("worker two output")).not.toBeInTheDocument();
+    expect(api.getWorkflowRunManifest).toHaveBeenCalledWith("tok", "demo", "run-old-2");
+  });
+
+  it("shows the retention hint next to the history strip", async () => {
+    vi.mocked(api.listWorkflowRuns).mockResolvedValue([
+      {
+        run_id: "run-old-1",
+        status: "completed",
+        started_at: 100,
+        finished_at: 110,
+        task: "a task",
+        needs_input_node: null,
+      },
+    ]);
+    await openRunner();
+    await screen.findByText(/^runs$/i);
+    expect(screen.getByText(/working folders are pruned/i)).toBeInTheDocument();
+  });
+
+  it("shows a breadcrumb naming the node that produced the final output", async () => {
+    vi.mocked(api.runWorkflow).mockResolvedValue({
+      ...RUN_RESULT,
+      final_output_node: "summarize",
+    });
+    await openRunnerAndRun();
+    await screen.findByText("the merged answer");
+    expect(screen.getByText(/final output from summarize/i)).toBeInTheDocument();
   });
 });

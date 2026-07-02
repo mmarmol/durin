@@ -9,8 +9,10 @@ persisted sub-agent lineage so history survives a gateway restart.
 Returns plain dicts with a stable shape — ``kind`` ("subagent" | "workflow"),
 ``id``, ``label``, ``status`` ("running" | "needs_input" | "done" | "failed" |
 "cancelled"), ``started_at`` (wall-clock epoch), ``ended_at``, ``session_key``,
-and for workflows a ``nodes`` tree and the run ``task``. The service wraps these
-into its pydantic ``BackgroundTask`` response model; the tool renders them.
+and for workflows a ``nodes`` tree, the run ``task``, and (only when the run's
+status is ``needs_input``) ``needs_input_detail`` — the gate's questions, capped
+at 500 chars. The service wraps these into its pydantic ``BackgroundTask``
+response model; the tool renders them.
 """
 
 from __future__ import annotations
@@ -117,6 +119,9 @@ def collect_tasks(
                 label_map = {nid: node_label(node) for nid, node in wf_def.nodes.items()}
             except (WorkflowNotFound, WorkflowError, Exception):
                 pass
+        needs_input_detail = None
+        if rec.get("status") == "needs_input":
+            needs_input_detail = (rec.get("final_output") or "")[:500] or None
         tasks.append({
             "kind": "workflow", "id": rec.get("run_id", ""),
             "label": wf_name,
@@ -126,6 +131,7 @@ def collect_tasks(
             "session_key": drill,
             "nodes": _node_tree(node_runs, label_map),
             "task": rec.get("task"),
+            "needs_input_detail": needs_input_detail,
         })
 
     # Reconstruct finished sub-agents from persisted session lineage so the history

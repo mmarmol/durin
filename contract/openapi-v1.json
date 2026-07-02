@@ -41,6 +41,18 @@
             "title": "Label",
             "type": "string"
           },
+          "needs_input_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Needs Input Detail"
+          },
           "nodes": {
             "anyOf": [
               {
@@ -5610,6 +5622,11 @@
             "title": "Final Output",
             "type": "string"
           },
+          "final_output_node": {
+            "default": "",
+            "title": "Final Output Node",
+            "type": "string"
+          },
           "needs_input_node": {
             "default": "",
             "title": "Needs Input Node",
@@ -5652,6 +5669,42 @@
           "runs"
         ],
         "title": "WorkflowRunResult",
+        "type": "object"
+      },
+      "WorkflowRunsListQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 20,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkflowRunsListQuery",
+        "type": "object"
+      },
+      "WorkflowRunsListResult": {
+        "properties": {
+          "runs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "WorkflowRunsListResult",
         "type": "object"
       },
       "WorkflowSaveCommand": {
@@ -9326,6 +9379,35 @@
         },
         "summary": "Run a workflow on a task (no live MCP \u2014 that path is the agent's).",
         "x-required-scope": "workflows:write"
+      }
+    },
+    "/api/v1/workflows/{name}/runs": {
+      "get": {
+        "operationId": "workflows_runs_list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowRunsListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunsListResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List one workflow's persisted runs, newest-first.",
+        "x-required-scope": "workflows:read"
       }
     },
     "/api/v1/workflows/{name}/runs/{run_id}": {

@@ -40,6 +40,8 @@ import {
   duplicateWorkflow,
   getWorkflow,
   getWorkflowRecommendations,
+  getWorkflowRunManifest,
+  listWorkflowRuns,
   listWorkflows,
   listPersonas,
   runWorkflow,
@@ -48,6 +50,7 @@ import {
   type WorkflowRecommendation,
   type WorkflowRunNode,
   type WorkflowRunResult,
+  type WorkflowRunSummary,
 } from "@/lib/api";
 import {
   safeSubflowTargets,
@@ -859,6 +862,17 @@ function statusTone(status: string): string {
   return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
 }
 
+// A run's overall status mapped to a history-chip border tone: needs_input draws
+// attention (accent), exhausted is a soft warning, aborted is a hard failure, and
+// completed (or any other terminal/live status) stays neutral.
+function runChipTone(status: string): string {
+  if (status === "needs_input") return "border-accent text-accent-foreground";
+  if (status === "exhausted") return "border-warn/60 text-warn";
+  if (status === "aborted" || status === "crashed") return "border-destructive/60 text-destructive";
+  if (status === "cancelled") return "border-dashed text-muted-foreground";
+  return "text-muted-foreground hover:text-foreground";
+}
+
 // A workflow node session is headless (not a chat in the sidebar), so there is no
 // in-app viewer to open it by key. Surface the key as a labelled, copyable reference
 // so an auditor can look the session up by hand.
@@ -1072,6 +1086,9 @@ function RunDetail({
         <div className="flex flex-col gap-0.5">
           <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
             {t("workflows.finalOutput")}
+            {result.final_output_node && (
+              <> · {t("workflows.finalOutputFrom", { node: result.final_output_node })}</>
+            )}
           </span>
           <div className="whitespace-pre-wrap break-words text-muted-foreground">
             {result.final_output}
@@ -1129,6 +1146,11 @@ export function WorkflowsView() {
   // Minimal run history: the runs triggered for the selected workflow this session,
   // newest-first. Clicking one re-shows its detail (the full result is kept in memory).
   const [runHistory, setRunHistory] = useState<WorkflowRunResult[]>([]);
+  // Persisted run history for the selected workflow (survives a reload), fetched on
+  // workflow select. A chip here has only the summary until clicked, at which point
+  // its manifest is fetched and cached in `runHistory` alongside this session's live runs.
+  const [persistedRuns, setPersistedRuns] = useState<WorkflowRunSummary[]>([]);
+  const [manifestLoading, setManifestLoading] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [duplicating, setDuplicating] = useState(false);
@@ -1401,11 +1423,13 @@ export function WorkflowsView() {
   useEffect(() => {
     setRunResult(null);
     setRunHistory([]);
+    setPersistedRuns([]);
     if (!selected) {
       setRecs([]);
       return;
     }
     getWorkflowRecommendations(token, selected).then(setRecs).catch(() => setRecs([]));
+    listWorkflowRuns(token, selected).then(setPersistedRuns).catch(() => setPersistedRuns([]));
   }, [selected, token]);
 
   const onRun = useCallback(async () => {
@@ -1447,6 +1471,44 @@ export function WorkflowsView() {
     },
     [selected, token, outFmt],
   );
+
+  // Show a run's detail: a live/already-fetched run is already in `runHistory` and just
+  // gets re-shown; a persisted-only chip fetches its manifest (raw, no per-node output
+  // text) and caches it into `runHistory` so re-clicking it is instant.
+  const onSelectRun = useCallback(
+    async (runId: string) => {
+      const cached = runHistory.find((r) => r.run_id === runId);
+      if (cached) {
+        setRunResult(cached);
+        return;
+      }
+      if (!selected) return;
+      setManifestLoading(runId);
+      setError(null);
+      try {
+        const manifest = await getWorkflowRunManifest(token, selected, runId);
+        setRunResult(manifest);
+        setRunHistory((prev) => [manifest, ...prev.filter((r) => r.run_id !== manifest.run_id)]);
+      } catch (e) {
+        setError(errMsg(e));
+      } finally {
+        setManifestLoading(null);
+      }
+    },
+    [runHistory, selected, token],
+  );
+
+  // Merge this session's live runs with the persisted history for the strip: a run_id
+  // present in both is shown once (live entry wins, since it may be more current — e.g.
+  // right after a resume — than what was last persisted). Newest-first by construction:
+  // runHistory is already newest-first, and persisted entries not seen live are appended
+  // in their own newest-first order from the server.
+  const historyStrip: { run_id: string; status: string; needs_input_node: string | null }[] = [
+    ...runHistory.map((r) => ({ run_id: r.run_id, status: r.status, needs_input_node: r.needs_input_node ?? null })),
+    ...persistedRuns
+      .filter((p) => !runHistory.some((r) => r.run_id === p.run_id))
+      .map((p) => ({ run_id: p.run_id, status: p.status, needs_input_node: p.needs_input_node })),
+  ];
 
   const onApplyRec = useCallback(
     async (id: string) => {
@@ -1806,28 +1868,35 @@ export function WorkflowsView() {
                       )}
                     </Button>
                   </div>
-                  {runHistory.length > 1 && (
-                    <div className="mt-2 flex flex-wrap items-center gap-1">
-                      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                        {t("workflows.runHistory")}
+                  {historyStrip.length > 0 && (
+                    <div className="mt-2 flex flex-col gap-1">
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                          {t("workflows.runHistory")}
+                        </span>
+                        {historyStrip.map((r, i) => (
+                          <button
+                            key={r.run_id}
+                            type="button"
+                            onClick={() => onSelectRun(r.run_id)}
+                            title={`${r.run_id} · ${r.status}`}
+                            disabled={manifestLoading === r.run_id}
+                            className={cn(
+                              "rounded border px-1.5 py-0.5 font-mono text-[10px]",
+                              runResult?.run_id === r.run_id ? "border-primary text-foreground" : runChipTone(r.status),
+                            )}
+                          >
+                            {manifestLoading === r.run_id ? (
+                              <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                            ) : (
+                              `#${historyStrip.length - i}`
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                      <span className="text-[10px] text-muted-foreground opacity-70">
+                        {t("workflows.historyRetention")}
                       </span>
-                      {runHistory.map((r, i) => (
-                        <button
-                          key={r.run_id}
-                          type="button"
-                          onClick={() => setRunResult(r)}
-                          title={r.run_id}
-                          className={cn(
-                            "rounded border px-1.5 py-0.5 font-mono text-[10px]",
-                            runResult?.run_id === r.run_id
-                              ? "border-primary text-foreground"
-                              : "text-muted-foreground hover:text-foreground",
-                            r.status !== "completed" && "border-amber-500/60",
-                          )}
-                        >
-                          #{runHistory.length - i}
-                        </button>
-                      ))}
                     </div>
                   )}
                   {runResult && (

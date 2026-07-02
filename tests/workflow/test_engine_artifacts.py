@@ -269,3 +269,61 @@ def test_engine_prune_keep_is_wired(tmp_path):
     finally:
         engine_mod.prune_runs = orig
     assert seen["keep"] == 5
+
+
+# work_dir_override: nested/subworkflow runs must not prune or crash the parent's folder
+
+def test_override_run_never_prunes(tmp_path):
+    import durin.workflow.engine as engine_mod
+    called = {}
+    orig = engine_mod.prune_runs
+    engine_mod.prune_runs = lambda base, keep=20: called.setdefault("hit", True)
+    try:
+        override = tmp_path / "pw"
+        override.mkdir()
+        wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
+        WorkflowEngine(lambda req: NodeRunResponse(output="x"),
+                       workspace=str(tmp_path)).run(wf, "t", work_dir_override=str(override))
+    finally:
+        engine_mod.prune_runs = orig
+    assert "hit" not in called
+
+
+def test_active_run_folder_mtime_refreshes_per_node(tmp_path):
+    import os
+    import time
+    seen = {}
+    def runner(req):
+        seen.setdefault("dir", req.output_dir)
+        run_root = Path(req.output_dir).parent
+        old = run_root.stat().st_mtime - 3600
+        os.utime(run_root, (old, old))          # simulate a stale folder mid-run
+        return NodeRunResponse(output="x")
+    wf = _wf([
+        {"id": "a", "kind": "work", "tools": "default", "next": "b"},
+        {"id": "b", "kind": "work", "tools": "default", "next": None},
+    ], "a")
+    WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
+    run_root = Path(seen["dir"]).parent
+    assert time.time() - run_root.stat().st_mtime < 60   # engine re-touched it after the node
+
+
+# work_dir_override + input_files: the override dir may not exist yet
+
+def test_input_files_seeded_into_a_not_yet_existing_override_dir(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "report.txt").write_text("hello")
+    override = tmp_path / "not-yet"                # deliberately not created
+
+    seen = {}
+    def runner(req):
+        seen[req.node.id] = req.output_dir
+        return NodeRunResponse(output="x")
+
+    wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
+    result = WorkflowEngine(runner, workspace=str(tmp_path)).run(
+        wf, "t", input_files=[str(src / "report.txt")], work_dir_override=str(override))
+
+    assert result.status == "completed"
+    assert (override / "report.txt").read_text() == "hello"

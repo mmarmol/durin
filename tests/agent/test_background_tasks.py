@@ -49,3 +49,49 @@ def test_collect_returns_dicts_with_stable_shape(tmp_path, monkeypatch):
 def test_collect_empty_without_sources(tmp_path):
     assert collect_tasks(str(tmp_path), subagent_manager=None, sessions=None,
                          session_key="websocket:chatA") == []
+
+
+def test_needs_input_run_carries_the_questions(tmp_path, monkeypatch):
+    import durin.workflow.run_log as run_log
+    monkeypatch.setattr(run_log, "runs_for_session", lambda ws, key: [
+        {"run_id": "r1", "workflow": "w", "status": "needs_input",
+         "started_at": time.time(), "finished_at": time.time() + 1,
+         "task": "do it", "final_output": "Which env — staging or prod?", "runs": []},
+    ])
+
+    rows = collect_tasks(str(tmp_path), subagent_manager=None, sessions=None,
+                         session_key="websocket:chatA")
+
+    wf = next(r for r in rows if r["id"] == "r1")
+    assert wf["needs_input_detail"] == "Which env — staging or prod?"
+
+
+def test_non_needs_input_run_has_no_questions(tmp_path, monkeypatch):
+    import durin.workflow.run_log as run_log
+    monkeypatch.setattr(run_log, "runs_for_session", lambda ws, key: [
+        {"run_id": "r2", "workflow": "w", "status": "completed",
+         "started_at": time.time(), "finished_at": time.time() + 1,
+         "task": "do it", "final_output": "the answer", "runs": []},
+    ])
+
+    rows = collect_tasks(str(tmp_path), subagent_manager=None, sessions=None,
+                         session_key="websocket:chatA")
+
+    wf = next(r for r in rows if r["id"] == "r2")
+    assert wf["needs_input_detail"] is None
+
+
+def test_needs_input_questions_capped_at_500_chars(tmp_path, monkeypatch):
+    import durin.workflow.run_log as run_log
+    long_questions = "q" * 600
+    monkeypatch.setattr(run_log, "runs_for_session", lambda ws, key: [
+        {"run_id": "r3", "workflow": "w", "status": "needs_input",
+         "started_at": time.time(), "finished_at": time.time() + 1,
+         "task": "do it", "final_output": long_questions, "runs": []},
+    ])
+
+    rows = collect_tasks(str(tmp_path), subagent_manager=None, sessions=None,
+                         session_key="websocket:chatA")
+
+    wf = next(r for r in rows if r["id"] == "r3")
+    assert wf["needs_input_detail"] == "q" * 500
