@@ -39,12 +39,12 @@ Every node has:
   servers) — scoped per node, so a node only sees what its job needs.
 - **A mode.** Non-routing work nodes default to `mode: "build"` (full
   access, neutral posture); routing nodes (those with `on_pass`/`on_fail` or
-  `cases`) default to `mode: "read"` (read-only, neutral posture) — a
-  deliberate gate that can inspect but not modify. You can override either
-  default by setting `mode` explicitly, but avoid the interactive
-  `plan`/`explore` modes on workflow nodes; they carry conversational
-  framing (e.g. "the parent should /build") that derails a step running
-  unattended. Prefer the neutral `read` mode for any read-only work step.
+  `cases`) default to `mode: "explore"` (read-only) — a deliberate gate
+  that can inspect but not modify. You can override either default by
+  setting `mode` explicitly. When you do, prefer the neutral `read` mode
+  for a read-only work step and avoid `plan`: the interactive modes carry
+  conversational framing (e.g. "the parent should /build") that can derail
+  a step running unattended.
 
 ## Routing: deciding what happens next
 
