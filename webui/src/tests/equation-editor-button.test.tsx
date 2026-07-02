@@ -14,7 +14,7 @@ describe("EquationEditorButton", () => {
 
   it("wraps the entered value in $…$ and calls onInsert", async () => {
     const onInsert = vi.fn();
-    const { container } = render(<EquationEditorButton onInsert={onInsert} />);
+    render(<EquationEditorButton onInsert={onInsert} />);
     fireEvent.click(screen.getByRole("button", { name: "Equation editor" }));
     await screen.findByText("Write an equation");
     // Drive the real <math-field> element — in happy-dom an unregistered
