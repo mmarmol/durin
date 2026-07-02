@@ -203,9 +203,6 @@
     "loadingConversation": "正在加载对话…",
     "empty": {
       "greeting": "我可以帮你做什么？",
-      "resumeLast": "继续：{{name}}",
-      "continueSession": "继续：{{name}}",
-      "whatDoYouKnow": "你了解我什么？",
       "imageQuickActions": {
         "icon": {
           "title": "设计应用图标",

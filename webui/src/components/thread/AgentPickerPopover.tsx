@@ -17,7 +17,8 @@ interface AgentPickerPopoverProps {
 
 /** Composer pill combining agent mode + persona. One trigger showing
  *  "mode · persona"; the popover lists both sections. Personas lazy-load on
- *  first open. */
+ *  first open, or eagerly on mount when no persona is active yet so the pill
+ *  and listbox can fall back to the server's default persona. */
 export function AgentPickerPopover({
   activeMode,
   modes,
@@ -31,20 +32,32 @@ export function AgentPickerPopover({
   const [open, setOpen] = useState(false);
   const [personas, setPersonas] = useState<PersonaItem[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [defaultPersona, setDefaultPersona] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const showModes = !!onModeSelect && modes.length > 0;
   const showPersonas = !!onPersonaSelect;
 
   useEffect(() => {
-    if (!open || loaded || !showPersonas) return;
+    if (loaded || !showPersonas || !(open || activePersona === null)) return;
+    let cancelled = false;
     listPersonas(token)
-      .then(({ personas: items }) => {
+      .then(({ personas: items, default: def }) => {
+        if (cancelled) return;
         setPersonas(items);
+        setDefaultPersona(def);
         setLoaded(true);
       })
       .catch(() => {});
-  }, [open, loaded, showPersonas, token]);
+    return () => {
+      cancelled = true;
+    };
+  }, [open, loaded, showPersonas, activePersona, token]);
+
+  // The pill and the listbox both need a persona to show as "current" even
+  // before the user ever picks one explicitly — fall back to the server's
+  // default persona once it's known.
+  const effectivePersona = activePersona ?? defaultPersona;
 
   useEffect(() => {
     if (!open) return;
@@ -61,7 +74,7 @@ export function AgentPickerPopover({
 
   const label = [
     showModes ? activeMode : null,
-    showPersonas ? activePersona : null,
+    showPersonas ? effectivePersona : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -143,7 +156,7 @@ export function AgentPickerPopover({
                 </div>
               ) : null}
               {personas.map((persona) => {
-                const selected = persona.name === activePersona;
+                const selected = persona.name === effectivePersona;
                 return (
                   <button
                     key={persona.name}

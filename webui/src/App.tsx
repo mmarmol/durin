@@ -680,8 +680,6 @@ function Shell({
             onEnterVoice={voiceAvailable ? handleEnterVoice : undefined}
             voiceActive={voiceActive}
             voiceState={voiceState}
-            recentSessions={sessions}
-            onOpenSession={onSelectChat}
           />
         </div>
         {view === "settings" && (

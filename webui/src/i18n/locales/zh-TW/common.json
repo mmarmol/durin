@@ -192,9 +192,6 @@
     "empty": {
       "description": "你可以提問、延續本地工作，或是開始新的執行緒。",
       "greeting": "我可以幫你做什麼？",
-      "resumeLast": "繼續：{{name}}",
-      "continueSession": "繼續：{{name}}",
-      "whatDoYouKnow": "你了解我什麼？",
       "imageQuickActions": {
         "icon": {
           "title": "設計應用程式圖示",

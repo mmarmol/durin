@@ -57,4 +57,49 @@ describe("AgentPickerPopover", () => {
     fireEvent.click(screen.getByRole("option", { name: /durin/ }));
     expect(onPersonaSelect).toHaveBeenCalledWith("durin");
   });
+
+  it("falls back to the default persona in the pill label when none is active", async () => {
+    render(
+      <AgentPickerPopover
+        activeMode="build"
+        modes={MODES}
+        onModeSelect={() => {}}
+        activePersona={null}
+        onPersonaSelect={() => {}}
+      />,
+    );
+    const pill = screen.getByRole("button", { name: /agent/i });
+    await waitFor(() => expect(pill.textContent).toContain("durin"));
+    expect(pill.textContent).toContain("build");
+  });
+
+  it("marks the default persona selected in the popover when none is active", async () => {
+    render(
+      <AgentPickerPopover
+        activeMode="build"
+        modes={MODES}
+        onModeSelect={() => {}}
+        activePersona={null}
+        onPersonaSelect={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /agent/i }));
+    const option = await screen.findByRole("option", { name: /durin/ });
+    await waitFor(() => expect(option).toHaveAttribute("aria-selected", "true"));
+  });
+
+  it("keeps an explicit activePersona over the default", async () => {
+    render(
+      <AgentPickerPopover
+        activeMode="build"
+        modes={MODES}
+        onModeSelect={() => {}}
+        activePersona="other"
+        onPersonaSelect={() => {}}
+      />,
+    );
+    const pill = screen.getByRole("button", { name: /agent/i });
+    expect(pill.textContent).toContain("other");
+    expect(pill.textContent).not.toContain("durin");
+  });
 });
