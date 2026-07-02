@@ -1694,6 +1694,17 @@
       "node_failed": "falló"
     }
   },
+  "runs": {
+    "title": "Ejecuciones",
+    "trayTitle": "Esperando respuesta",
+    "pausedAt": "pausada {{when}}",
+    "statusFilterAria": "Filtrar por estado",
+    "workflowFilterAria": "Filtrar por workflow",
+    "statusAll": "todas",
+    "allWorkflows": "todos los workflows",
+    "empty": "Ningún run coincide con este filtro.",
+    "subOf": "sub-run de {{id}}"
+  },
   "goal": {
     "banner": {
       "label": "Objetivo activo"

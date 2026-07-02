@@ -6,6 +6,7 @@ import { MemoryGraphView } from "@/components/MemoryGraphView";
 import { DreamView } from "@/components/DreamView";
 import { SkillsView } from "@/components/SkillsView";
 import { WorkflowsView } from "@/components/WorkflowsView";
+import { RunsView, strandedRuns } from "@/components/workflows/RunsView";
 import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
@@ -18,7 +19,7 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { useSessions } from "@/hooks/useSessions";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
-import { setApiReauthHandler } from "@/lib/api";
+import { listAllWorkflowRuns, setApiReauthHandler } from "@/lib/api";
 import { deriveWsUrl, fetchBootstrap, signout } from "@/lib/bootstrap";
 import { DurinClient } from "@/lib/durin-client";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
@@ -47,7 +48,7 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "durin-webui.sidebar";
 const RESTART_STARTED_KEY = "durin-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
-type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows" | "dream";
+type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows" | "runs" | "dream";
 
 function AuthForm({
   failed,
@@ -325,6 +326,7 @@ function Shell({
   const restartSawDisconnectRef = useRef(false);
   const [restartToast, setRestartToast] = useState<string | null>(null);
   const [isRestarting, setIsRestarting] = useState(false);
+  const [strandedRunsCount, setStrandedRunsCount] = useState(0);
 
   useEffect(() => {
     try {
@@ -470,6 +472,11 @@ function Shell({
     setMobileSidebarOpen(false);
   }, []);
 
+  const onOpenRuns = useCallback(() => {
+    setView("runs");
+    setMobileSidebarOpen(false);
+  }, []);
+
   const onOpenDream = useCallback(() => {
     setView("dream");
     setMobileSidebarOpen(false);
@@ -503,6 +510,28 @@ function Shell({
       onModelNameChange(modelName, modelPreset ?? null);
     });
   }, [client, onModelNameChange]);
+
+  // Poll the global run feed for the sidebar's stranded-needs_input badge count.
+  // On the runs tab itself, RunsView shows the live tray directly; this poll just
+  // keeps the badge honest while the user is elsewhere.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      listAllWorkflowRuns(token)
+        .then((runs) => {
+          if (!cancelled) setStrandedRunsCount(strandedRuns(runs).length);
+        })
+        .catch(() => {
+          if (!cancelled) setStrandedRunsCount(0);
+        });
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [token]);
 
   useEffect(() => {
     return client.onStatus((status) => {
@@ -586,6 +615,9 @@ function Shell({
     skillsActive: view === "skills",
     onOpenWorkflows,
     workflowsActive: view === "workflows",
+    onOpenRuns,
+    runsActive: view === "runs",
+    strandedRunsCount,
     onOpenDream,
     dreamActive: view === "dream",
   };
@@ -697,6 +729,11 @@ function Shell({
         {view === "workflows" && (
           <div className="absolute inset-0 flex flex-col">
             <WorkflowsView />
+          </div>
+        )}
+        {view === "runs" && (
+          <div className="absolute inset-0 flex flex-col">
+            <RunsView />
           </div>
         )}
         {view === "dream" && (

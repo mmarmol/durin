@@ -16,6 +16,7 @@ from durin.service.workflows import (
     WorkflowRunCommand,
     WorkflowRunResult,
     WorkflowSaveCommand,
+    WorkflowSessionRunsQuery,
     WorkflowsListQuery,
     WorkflowsService,
 )
@@ -256,3 +257,56 @@ async def test_run_resume_of_a_non_needs_input_run_is_rejected_without_running_t
         with pytest.raises(ValidationFailedError):
             await svc.run(WorkflowRunCommand(name="wf", task="prod env", resume_run_id="r1"), p)
     fake_run.assert_not_called()
+
+
+# --- session_runs route: optional session -> global feed (F8) ---------------
+
+
+@pytest.mark.asyncio
+async def test_session_runs_with_session_is_unchanged(tmp_path):
+    """Passing `session` keeps the existing lineage behavior exactly."""
+    svc, p = _svc(tmp_path), Principal.local()
+    run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+        status="completed", final_output="a", runs=[], run_id="r1"),
+        root_session_key="sess:1", started_at=1.0, finished_at=2.0)
+    run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+        status="completed", final_output="b", runs=[], run_id="r2"),
+        root_session_key="sess:2", started_at=3.0, finished_at=4.0)
+    result = await svc.session_runs(WorkflowSessionRunsQuery(session="sess:1"), p)
+    assert [r["run_id"] for r in result.runs] == ["r1"]
+
+
+@pytest.mark.asyncio
+async def test_session_runs_without_session_returns_global_feed(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    run_log.finalize_run(tmp_path, "alpha", WorkflowResult(
+        status="completed", final_output="a", runs=[], run_id="r1"),
+        root_session_key="sess:1", started_at=1.0, finished_at=2.0)
+    run_log.finalize_run(tmp_path, "beta", WorkflowResult(
+        status="completed", final_output="b", runs=[], run_id="r2"),
+        root_session_key="sess:2", started_at=3.0, finished_at=4.0)
+    result = await svc.session_runs(WorkflowSessionRunsQuery(), p)
+    assert {r["run_id"] for r in result.runs} == {"r1", "r2"}
+    assert {r["workflow"] for r in result.runs} == {"alpha", "beta"}
+
+
+@pytest.mark.asyncio
+async def test_session_runs_without_session_respects_limit(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    for i in range(3):
+        run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+            status="completed", final_output="x", runs=[], run_id=f"r{i}"),
+            root_session_key=None, started_at=float(i), finished_at=float(i))
+    result = await svc.session_runs(WorkflowSessionRunsQuery(limit=2), p)
+    assert len(result.runs) == 2
+    assert [r["run_id"] for r in result.runs] == ["r2", "r1"]
+
+
+@pytest.mark.asyncio
+async def test_session_runs_global_feed_carries_questions_on_needs_input(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+        status="needs_input", final_output="which env?", runs=[], run_id="r1",
+        needs_input_node="gate"), root_session_key=None, started_at=1.0, finished_at=1.0)
+    result = await svc.session_runs(WorkflowSessionRunsQuery(), p)
+    assert result.runs[0]["questions"] == "which env?"

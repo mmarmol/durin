@@ -299,6 +299,37 @@ def list_runs(workspace: str | Path, name: str, limit: int = 20) -> list[dict]:
     return out[:max(1, int(limit))]
 
 
+def list_all_runs(workspace: str | Path, limit: int = 50) -> list[dict]:
+    """Newest-first run summaries across every workflow — the global feed the runs
+    sidebar tab reads. Each entry is a ``list_runs``-style summary plus ``"workflow"``
+    (which workflow it belongs to).
+
+    ``needs_input`` entries are exempt from ``limit``: they are actionable resume
+    points, and the tray must never lose one to the cap. Terminal entries are capped
+    at ``limit`` after the needs_input entries are set aside, then the two groups are
+    merged back into one newest-first list. A ``needs_input`` entry also carries
+    ``"questions"`` — the manifest's ``final_output`` capped at 500 chars, the same
+    convention as the tasks API's ``needs_input_detail`` — so the tray can show what
+    the run is waiting on without a second fetch.
+    """
+    needs_input: list[dict] = []
+    terminal: list[dict] = []
+    for name in workflow_names_with_runs(workspace):
+        for entry in list_runs(workspace, name, limit=10**9):
+            entry = {**entry, "workflow": name}
+            if entry.get("status") == "needs_input":
+                manifest = read_manifest(workspace, name, entry["run_id"]) or {}
+                entry["questions"] = (manifest.get("final_output") or "")[:500]
+                needs_input.append(entry)
+            else:
+                terminal.append(entry)
+    terminal.sort(key=lambda r: r.get("started_at") or 0.0, reverse=True)
+    terminal = terminal[:max(1, int(limit))]
+    out = needs_input + terminal
+    out.sort(key=lambda r: r.get("started_at") or 0.0, reverse=True)
+    return out
+
+
 # A manifest with one of these statuses is done for good — eligible for pruning and
 # counted against `keep`. "running" and "needs_input" are excluded on purpose: a running
 # record is live, and a needs_input manifest is a resume point (deleting it would strand

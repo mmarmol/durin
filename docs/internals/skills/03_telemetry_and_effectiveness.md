@@ -151,6 +151,19 @@ still emitted with `applied=false`, so the event stream captures judge
 proposals that didn't stick, not only successful mutations. `skill` names the
 target when the action has one (absent for a bare `principle` add).
 
+### Judge parse failures — `memory.dream.parse_failure` with `stage=curation|suggestions`
+
+When the curation judge's raw output cannot be parsed at all (unloadable JSON
+or wrong top-level type — a degraded provider, prose instead of the action
+object), the pass emits the shared `memory.dream.parse_failure` event with
+`stage=curation` (auto path) or `stage=suggestions` (manual path) and stops
+without stamping: the reviewed skills keep their stale curation marker and the
+suggestion cursor does not advance, so the same delta re-enters the next run
+instead of the review being silently consumed as a no-op. A valid response with
+empty `actions` is a completed review and stamps normally. The event surfaces
+in the webui Dream feed as a `warning` item via the shared digest mapping, and
+the run's summary carries `judge_parse_failed: true`.
+
 ### `skill.curation_run` — the pass summary
 
 Emitted once per `curate_catalog` invocation, whether or not the delta was

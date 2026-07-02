@@ -104,7 +104,9 @@ class WorkflowRunManifestResult(Result):
 
 
 class WorkflowSessionRunsQuery(Query):
-    session: str   # a root session key; lists the runs that session spawned
+    session: str = ""   # a root session key; lists the runs that session spawned.
+                         # Omitted: the global feed across every workflow (the runs sidebar tab).
+    limit: int = 50      # global-feed cap (ignored when `session` is set)
 
 
 class WorkflowSessionRunsResult(Result):
@@ -323,11 +325,13 @@ class WorkflowsService:
         "GET", "/api/v1/workflows/runs",
         scope=Scope.WORKFLOWS_READ.value,
         request_model=WorkflowSessionRunsQuery, response_model=WorkflowSessionRunsResult,
-        summary="List the run manifests a session spawned (forward lineage), newest-first.",
+        summary="List a session's run manifests (forward lineage); without `session`, the global feed across every workflow, newest-first.",
     )
     async def session_runs(self, query: WorkflowSessionRunsQuery, principal: Principal) -> WorkflowSessionRunsResult:
         principal.require(Scope.WORKFLOWS_READ)
-        return WorkflowSessionRunsResult(runs=run_log.runs_for_session(self._workspace, query.session))
+        if query.session:
+            return WorkflowSessionRunsResult(runs=run_log.runs_for_session(self._workspace, query.session))
+        return WorkflowSessionRunsResult(runs=run_log.list_all_runs(self._workspace, query.limit))
 
     @route(
         "GET", "/api/v1/workflows/{name}/runs",

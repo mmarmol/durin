@@ -1033,6 +1033,17 @@
       "node_failed": "failed"
     }
   },
+  "runs": {
+    "title": "Runs",
+    "trayTitle": "Waiting for input",
+    "pausedAt": "paused {{when}}",
+    "statusFilterAria": "Filter by status",
+    "workflowFilterAria": "Filter by workflow",
+    "statusAll": "all",
+    "allWorkflows": "all workflows",
+    "empty": "No runs match this filter.",
+    "subOf": "sub of {{id}}"
+  },
   "skills": {
     "view": "View",
     "remove": "Remove",

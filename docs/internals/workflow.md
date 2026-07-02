@@ -380,6 +380,7 @@ The `WorkflowsService` exposes read routes for run manifests:
 | `GET /api/v1/workflows/{name}/runs?limit=` | that workflow's persisted run summaries (`run_id`, `status`, `started_at`, `finished_at`, `task` capped at 200 chars, `needs_input_node`, `parent_run_id`), newest-first, capped at `limit` (default 20) |
 | `GET /api/v1/workflows/{name}/runs/{run_id}` | one run's manifest (live or terminal) |
 | `GET /api/v1/workflows/runs?session=<key>` | all run manifests whose `root_session_key` matches, newest-first |
+| `GET /api/v1/workflows/runs?limit=` (no `session`) | the global feed across every workflow, newest-first, capped at `limit` (default 50) — except `needs_input` entries, which are always included regardless of the cap since they are actionable resume points |
 
 The `POST /api/v1/workflows/{name}/run` request accepts an optional `resume_run_id`:
 the run_id of a prior run of the same workflow that ended `needs_input`, with `task`
@@ -448,6 +449,12 @@ additionally carries the run-level `status` (`completed` / `needs_input` /
 iterations) and the questions ride in a capped `detail` field, so push-fed
 panels (the TUI sidebar) can show a paused run and what it is waiting for
 without polling the tasks API or reading the manifest.
+
+**The web UI's Runs sidebar tab** reads the global feed (§4f) to show every run
+across all origins (sessions, HTTP, cron, editor) in one place, with a tray of
+stranded `needs_input` runs on top — each with its questions and a direct resume
+form — so a paused run started from any surface can be found and answered without
+knowing which session or workflow it came from.
 
 ## 5. How it works
 
