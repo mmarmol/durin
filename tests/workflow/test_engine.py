@@ -279,8 +279,8 @@ def test_subworkflow_node_runs_and_threads_output():
     ]})
     calls = []
 
-    def subworkflow_runner(name, task, root_session_key=None, work_dir=None):
-        calls.append((name, task, root_session_key, work_dir))
+    def subworkflow_runner(name, task, root_session_key=None, work_dir=None, parent_run_id=None):
+        calls.append((name, task, root_session_key, work_dir, parent_run_id))
         return "child-output"
 
     seen = []
@@ -294,8 +294,9 @@ def test_subworkflow_node_runs_and_threads_output():
     res = eng.run(wf, "the task", root_session_key="conv:1")
     assert res.status == "completed"
     # the sub-workflow is invoked with the run's root session key, so its nested
-    # node sessions anchor to the invoking conversation (no orphan subtrees).
-    assert calls == [("child", "the task", "conv:1", None)]
+    # node sessions anchor to the invoking conversation (no orphan subtrees); the
+    # engine's OWN run_id is passed as the child's parent_run_id.
+    assert calls == [("child", "the task", "conv:1", None, "r1")]
     # the work node after the subworkflow saw the child's output as upstream
     assert "child-output" in seen
 
@@ -316,7 +317,7 @@ def test_subworkflow_node_without_runner_raises():
 
 def test_subworkflow_receives_the_parent_work_dir(tmp_path):
     calls = {}
-    def sub_runner(name, task, root_key, work_dir=None):
+    def sub_runner(name, task, root_key, work_dir=None, parent_run_id=None):
         calls["work_dir"] = work_dir
         return "sub-out"
     wf = parse_workflow({

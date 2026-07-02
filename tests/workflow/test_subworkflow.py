@@ -60,6 +60,35 @@ def test_subworkflow_cycle_is_detected(tmp_path):
     assert "A -> A" in out
 
 
+def test_parent_run_id_forwarded_to_nested_manifest(tmp_path):
+    from durin.workflow import run_log
+
+    _write(tmp_path, "child", {"name": "child", "start": "a",
+                               "nodes": [{"id": "a", "kind": "work", "next": None}]})
+    runner = SubworkflowRunner(tmp_path, _node_runner("child-result"), judge_runner=None)
+    runner("child", "do the child", parent_run_id="parent1")
+
+    wf_dir = tmp_path / "workflows-runs" / "child"
+    manifests = list(wf_dir.glob("*.json"))
+    assert len(manifests) == 1
+    rec = run_log.read_manifest(tmp_path, "child", manifests[0].stem)
+    assert rec["parent_run_id"] == "parent1"
+
+
+def test_parent_run_id_defaults_to_none(tmp_path):
+    from durin.workflow import run_log
+
+    _write(tmp_path, "child", {"name": "child", "start": "a",
+                               "nodes": [{"id": "a", "kind": "work", "next": None}]})
+    runner = SubworkflowRunner(tmp_path, _node_runner("child-result"), judge_runner=None)
+    runner("child", "do the child")
+
+    wf_dir = tmp_path / "workflows-runs" / "child"
+    manifests = list(wf_dir.glob("*.json"))
+    rec = run_log.read_manifest(tmp_path, "child", manifests[0].stem)
+    assert rec["parent_run_id"] is None
+
+
 def test_nested_nodes_work_in_the_parent_folder(tmp_path):
     _write(tmp_path, "child", {
         "name": "child", "start": "c",

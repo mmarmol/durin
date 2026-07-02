@@ -1503,11 +1503,26 @@ export function WorkflowsView() {
   // right after a resume — than what was last persisted). Newest-first by construction:
   // runHistory is already newest-first, and persisted entries not seen live are appended
   // in their own newest-first order from the server.
-  const historyStrip: { run_id: string; status: string; needs_input_node: string | null }[] = [
-    ...runHistory.map((r) => ({ run_id: r.run_id, status: r.status, needs_input_node: r.needs_input_node ?? null })),
+  const historyStrip: {
+    run_id: string;
+    status: string;
+    needs_input_node: string | null;
+    parent_run_id: string | null;
+  }[] = [
+    ...runHistory.map((r) => ({
+      run_id: r.run_id,
+      status: r.status,
+      needs_input_node: r.needs_input_node ?? null,
+      parent_run_id: null,
+    })),
     ...persistedRuns
       .filter((p) => !runHistory.some((r) => r.run_id === p.run_id))
-      .map((p) => ({ run_id: p.run_id, status: p.status, needs_input_node: p.needs_input_node })),
+      .map((p) => ({
+        run_id: p.run_id,
+        status: p.status,
+        needs_input_node: p.needs_input_node,
+        parent_run_id: p.parent_run_id ?? null,
+      })),
   ];
 
   const onApplyRec = useCallback(
@@ -1879,7 +1894,11 @@ export function WorkflowsView() {
                             key={r.run_id}
                             type="button"
                             onClick={() => onSelectRun(r.run_id)}
-                            title={`${r.run_id} · ${r.status}`}
+                            title={
+                              r.parent_run_id
+                                ? `${r.run_id} · ${r.status} · sub of ${r.parent_run_id}`
+                                : `${r.run_id} · ${r.status}`
+                            }
                             disabled={manifestLoading === r.run_id}
                             className={cn(
                               "rounded border px-1.5 py-0.5 font-mono text-[10px]",

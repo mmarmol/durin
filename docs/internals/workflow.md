@@ -234,9 +234,11 @@ The per-node entries in the manifest's `runs` array carry:
 The finalized manifest also carries top-level fields: `needs_input_node` — the node
 that routed to `__needs_input__` (`null` otherwise), the resume re-entry point;
 `final_output_node` — which node's output became `final_output` (`null` when no node
-contributed, e.g. an aborted run); and `output_files`: the relative paths (within the
+contributed, e.g. an aborted run); `output_files`: the relative paths (within the
 run's output folder) a completed run produced, empty for a run that ended any other
-status or produced no files.
+status or produced no files; and `parent_run_id` — the calling run's `run_id` when this
+run is a nested subworkflow invocation, `None` for a top-level run (including on
+manifests written before this field existed).
 
 `read_runs_since` (used by the dream self-improvement pass) returns all records for a
 workflow; callers that need only terminal runs should skip records whose `status` is
@@ -247,6 +249,21 @@ threshold can only be a run whose process died before finalizing. The gateway's 
 sweep (`reconcile_running`) rewrites any such record's status to `"crashed"` (preserving
 its partial trace) so an auditor sees a truthful status rather than a permanently stale
 `running`. The threshold is deliberately generous; real runs finalize fast.
+
+**Retention.** `prune_manifests(workspace, name, keep=workflow.keep_runs)` bounds how
+many manifests accumulate per workflow name: after each successful `finalize_run`, the
+engine deletes the oldest *terminal* records (completed/exhausted/aborted/cancelled/crashed)
+beyond `keep`, run best-effort and never fatal to the run. A `running` or `needs_input`
+manifest is never deleted and never counts against `keep` — a running record is live,
+and a needs_input manifest is the resume point a caller may still act on (the deliberate
+consequence: needs_input records that are never resumed accumulate outside the retention
+bound until they are resumed or abandoned runs are cleaned by hand). Malformed or
+unreadable files are skipped, never deleted. A nested subworkflow run prunes its own
+(child workflow name's) manifest store independently of its parent's, since manifests
+are keyed per workflow name. Because pruning is intentionally decoupled from the dream
+pass's read cursor (coupling them would let a disabled dream block pruning forever), a
+terminal run the dream has not yet consumed can be pruned before it is read — the dream
+pass tolerates the resulting gap and simply sees fewer records.
 
 ### 4b. The session invariant
 
@@ -357,7 +374,7 @@ The `WorkflowsService` exposes read routes for run manifests:
 
 | Route | What it returns |
 |---|---|
-| `GET /api/v1/workflows/{name}/runs?limit=` | that workflow's persisted run summaries (`run_id`, `status`, `started_at`, `finished_at`, `task` capped at 200 chars, `needs_input_node`), newest-first, capped at `limit` (default 20) |
+| `GET /api/v1/workflows/{name}/runs?limit=` | that workflow's persisted run summaries (`run_id`, `status`, `started_at`, `finished_at`, `task` capped at 200 chars, `needs_input_node`, `parent_run_id`), newest-first, capped at `limit` (default 20) |
 | `GET /api/v1/workflows/{name}/runs/{run_id}` | one run's manifest (live or terminal) |
 | `GET /api/v1/workflows/runs?session=<key>` | all run manifests whose `root_session_key` matches, newest-first |
 
@@ -499,8 +516,9 @@ End-to-end for a single `run_workflow` call:
   its prompt) and `mcps` (a subset of the configured MCP servers, reused live).
 - **Engine settings:** `workflow.max_node_visits` (default 25) and `workflow.keep_runs` (default 20)
   control global defaults. `max_node_visits` caps how many times any node can iterate (a safety
-  ceiling on visit budgets declared per-node). `keep_runs` bounds how many runs' working folders
-  (`.workflow/<run_id>/`) are retained on disk; older runs are pruned automatically, so deliverables
+  ceiling on visit budgets declared per-node). `keep_runs` bounds, per workflow name, both how many
+  runs' working folders (`.workflow/<run_id>/`) are retained on disk and how many terminal run
+  manifests are kept (see §4a Retention) — older ones are pruned automatically, so deliverables
   that must outlive retention should be copied to the workspace proper or elsewhere.
 - **Management API:** `WorkflowsService` (`durin/service/workflows.py`) exposes, over HTTP
   at `/api/v1/workflows[/{name}]` and in the OpenAPI contract: list / load / save / delete
@@ -583,8 +601,9 @@ End-to-end for a single `run_workflow` call:
   composition (depth-capped); runs **anchored to the invoking session**; **git-versioned
   definitions** (each run snapshots them); a completed run reports its **output files**
   (relative paths in the shared working folder) alongside `output_dir`, and
-  `workflow.keep_runs` (default 20) bounds how many runs' working folders are retained,
-  so the run summary tells the caller to copy out anything that must outlive that window;
+  `workflow.keep_runs` (default 20) bounds how many runs' working folders and terminal
+  manifests are retained, so the run summary tells the caller to copy out anything that
+  must outlive that window;
   **dream-driven self-improvement in manual mode** (recommendations from
   recurring run diagnostics); a **webui Workflows pane** (React Flow) with an editor that
   has clickable Input/Output canvas objects (toggle text and/or files plus a free-text
