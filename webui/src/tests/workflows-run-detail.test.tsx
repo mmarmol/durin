@@ -17,6 +17,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     getWorkflowRecommendations: vi.fn(),
     runWorkflow: vi.fn(),
     listWorkflowRuns: vi.fn(),
+    listAllWorkflowRuns: vi.fn(),
     getWorkflowRunManifest: vi.fn(),
   };
 });
@@ -44,6 +45,7 @@ beforeEach(() => {
   } as never);
   vi.mocked(api.getWorkflowRecommendations).mockResolvedValue([]);
   vi.mocked(api.listWorkflowRuns).mockResolvedValue([]);
+  vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([]);
 });
 afterEach(() => vi.restoreAllMocks());
 
