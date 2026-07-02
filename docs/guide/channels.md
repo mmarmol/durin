@@ -204,10 +204,20 @@ without pairing, or leave it empty to require pairing for every new user.
 
 ## Slack
 
-Slack uses **Socket Mode** — no public URL is needed. Tokens and access
-policies can also be configured from the webui **Channels** tab. The channel
-reconnects automatically when the WebSocket drops, deduplicates events that
-Slack redelivers after a reconnect, and retries Web API calls on rate limits.
+Slack uses **Socket Mode** — no public URL is needed. The channel reconnects
+automatically when the WebSocket drops, deduplicates events that Slack
+redelivers after a reconnect, and retries Web API calls on rate limits.
+
+**Guided setup (recommended):** open the webui **Channels** tab → Slack. The
+guided mode walks through the whole flow: it generates an **app manifest**
+(all bot scopes, event subscriptions, and Socket Mode pre-configured) to paste
+at [api.slack.com/apps](https://api.slack.com/apps?new_app=1) via
+*Create from a manifest*, validates both tokens live, stores them as durin
+secrets, and enables the channel. Once active, the same panel manages DM
+pairing (approve/deny/revoke senders). A *Manual* toggle exposes every config
+field for advanced setups; both modes write the same config keys.
+
+**Manual setup:**
 
 ```toml
 [channels.slack]
@@ -218,19 +228,19 @@ allow_from = []           # leave empty for pairing on DMs
 group_policy = "mention"  # "open", "mention", or "allowlist"
 ```
 
-**How to create a Slack app:**
-
-1. Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new
-   app from scratch in your workspace.
-2. Under **Socket Mode**, enable it and generate an **App-Level Token** with
-   the `connections:write` scope. This is your `app_token`.
-3. Under **OAuth & Permissions**, add the bot scopes your use case needs
-   (at minimum: `app_mentions:read`, `chat:write`, `im:history`,
-   `im:read`, `im:write`, `reactions:write`). Install the app to get the
+1. Fetch the app manifest from a running gateway
+   (`GET /api/v1/channels/slack/manifest`) or build the app by hand at
+   [api.slack.com/apps](https://api.slack.com/apps): enable **Socket Mode**,
+   subscribe to the `app_mention` and `message.*` bot events, and grant the
+   bot scopes the channel uses (`app_mentions:read`, `chat:write`,
+   `im:history`, `im:read`, `im:write`, `files:read`, `files:write`,
+   `reactions:write`, `channels:history`, `channels:read`, `groups:history`,
+   `groups:read`, `mpim:history`, `mpim:read`, `users:read`).
+2. Under **Basic Information → App-Level Tokens**, generate a token with the
+   `connections:write` scope. This is your `app_token`.
+3. Under **Install App**, install to your workspace and copy the
    **Bot User OAuth Token**. This is your `bot_token`.
-4. Under **Event Subscriptions**, enable events and subscribe to
-   `message.im` and `app_mention` bot events.
-5. Store the tokens:
+4. Store the tokens:
    ```sh
    durin secret set SLACK_BOT_TOKEN
    durin secret set SLACK_APP_TOKEN

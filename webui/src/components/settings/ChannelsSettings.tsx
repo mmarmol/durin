@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, Loader2, Mail, MessageCircle, Plug, Send, type LucideIcon } from "lucide-react";
+import { ChevronDown, Loader2, Mail, MessageCircle, Plug, Send, Slack, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { ChannelSecretField } from "@/components/settings/secrets/ChannelSecretF
 import { useClient } from "@/providers/ClientProvider";
 import { getConfig, listChannels, setConfigValue, startChannel, stopChannel, type ChannelField, type ChannelInfo } from "@/lib/api";
 import { TelegramGuided } from "@/components/settings/channels/TelegramGuided";
+import { SlackGuided } from "@/components/settings/channels/SlackGuided";
 
 // Groups that are always visible in the form.
 const ESSENTIAL_GROUPS = ["access", "imap", "smtp"] as const;
@@ -35,6 +36,7 @@ const CHANNEL_ICONS: Record<string, LucideIcon> = {
   email: Mail,
   websocket: Plug,
   telegram: Send,
+  slack: Slack,
 };
 
 /** Icon container mirroring the Providers tab's ProviderIcon treatment. */
@@ -234,6 +236,64 @@ function ChannelRow({
     (g) => channel.fields.some((f) => f.group === g),
   );
 
+  // Schema-driven grouped field form. Rendered directly for generic channels
+  // and passed to SlackGuided as its manual mode.
+  const schemaForm = hasFields ? (
+    <div className="mt-3 space-y-4">
+      {ESSENTIAL_GROUPS.map((g) => (
+        <FieldGroup
+          key={g}
+          groupKey={g}
+          channel={channel}
+          channelValues={channelValues}
+          token={token}
+          busy={busy}
+          onFieldChange={onFieldChange}
+        />
+      ))}
+      {/* Ungrouped fields (group === "") */}
+      <FieldGroup
+        groupKey=""
+        channel={channel}
+        channelValues={channelValues}
+        token={token}
+        busy={busy}
+        onFieldChange={onFieldChange}
+      />
+      {hasAdvancedFields ? (
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            aria-expanded={advancedOpen}
+            className="flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground hover:text-foreground"
+          >
+            <ChevronDown
+              className={`h-3.5 w-3.5 transition-transform ${advancedOpen ? "" : "-rotate-90"}`}
+              aria-hidden
+            />
+            {t("settings.channels.advanced")}
+          </button>
+          {advancedOpen ? (
+            <div className="mt-3 space-y-4">
+              {ADVANCED_GROUPS.map((g) => (
+                <FieldGroup
+                  key={g}
+                  groupKey={g}
+                  channel={channel}
+                  channelValues={channelValues}
+                  token={token}
+                  busy={busy}
+                  onFieldChange={onFieldChange}
+                />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  ) : null;
+
   return (
     <div className="px-4 py-3 sm:px-5">
       {/* Accordion header — clicking anywhere here toggles open, except the action buttons */}
@@ -332,62 +392,18 @@ function ChannelRow({
             />
           ) : null}
 
-          {/* Schema-driven grouped field form (websocket / email / slack) */}
-          {hasFields && channel.name !== "telegram" ? (
-            <div className="mt-3 space-y-4">
-              {ESSENTIAL_GROUPS.map((g) => (
-                <FieldGroup
-                  key={g}
-                  groupKey={g}
-                  channel={channel}
-                  channelValues={channelValues}
-                  token={token}
-                  busy={busy}
-                  onFieldChange={onFieldChange}
-                />
-              ))}
-              {/* Ungrouped fields (group === "") */}
-              <FieldGroup
-                groupKey=""
-                channel={channel}
-                channelValues={channelValues}
-                token={token}
-                busy={busy}
-                onFieldChange={onFieldChange}
-              />
-              {hasAdvancedFields ? (
-                <div className="mt-3">
-                  <button
-                    type="button"
-                    onClick={() => setAdvancedOpen((v) => !v)}
-                    aria-expanded={advancedOpen}
-                    className="flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground hover:text-foreground"
-                  >
-                    <ChevronDown
-                      className={`h-3.5 w-3.5 transition-transform ${advancedOpen ? "" : "-rotate-90"}`}
-                      aria-hidden
-                    />
-                    {t("settings.channels.advanced")}
-                  </button>
-                  {advancedOpen ? (
-                    <div className="mt-3 space-y-4">
-                      {ADVANCED_GROUPS.map((g) => (
-                        <FieldGroup
-                          key={g}
-                          groupKey={g}
-                          channel={channel}
-                          channelValues={channelValues}
-                          token={token}
-                          busy={busy}
-                          onFieldChange={onFieldChange}
-                        />
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
+          {/* Slack wraps the generic form in a guided/manual panel; the form
+              below doubles as its manual mode so both write the same keys */}
+          {channel.name === "slack" ? (
+            <SlackGuided channel={channel} token={token} onChanged={onChanged}>
+              {schemaForm}
+            </SlackGuided>
           ) : null}
+
+          {/* Schema-driven grouped field form (websocket / email) */}
+          {hasFields && channel.name !== "telegram" && channel.name !== "slack"
+            ? schemaForm
+            : null}
 
           {/* Legacy single-credential path: channels with empty fields (discord/etc) */}
           {!hasFields && channel.name !== "telegram" ? (
