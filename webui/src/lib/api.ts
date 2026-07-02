@@ -304,6 +304,7 @@ export type WorkflowRunSummary = {
   finished_at: number | null;
   task: string;
   needs_input_node: string | null;
+  parent_run_id?: string | null;
 };
 
 export async function listWorkflowRuns(

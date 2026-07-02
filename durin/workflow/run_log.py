@@ -69,8 +69,16 @@ def start_run(
     workspace: str | Path, name: str, run_id: str, *,
     root_session_key: str | None, started_at: float,
     task: str | None = None,
+    parent_run_id: str | None = None,
 ) -> Path:
-    """Write the ``running`` manifest before the walk begins. Returns the record path."""
+    """Write the ``running`` manifest before the walk begins. Returns the record path.
+    ``parent_run_id`` marks a nested subworkflow run with the run_id of its caller —
+    ``None`` for a top-level run. When ``None`` and a prior manifest for this run_id
+    exists (a resume rewrites the record), the prior value is preserved so the
+    nested-run marker survives every rewrite."""
+    if parent_run_id is None:
+        prior = read_manifest(workspace, name, run_id) or {}
+        parent_run_id = prior.get("parent_run_id")
     record = {
         "schema": SCHEMA,
         "run_id": run_id,
@@ -80,6 +88,7 @@ def start_run(
         "started_at": started_at,
         "ts": started_at,   # cursor field; finalize bumps it to finished_at
         "task": task,
+        "parent_run_id": parent_run_id,
         "runs": [],
     }
     path = _record_path(workspace, name, run_id)
@@ -103,6 +112,7 @@ def update_run(
         "started_at": base.get("started_at"),
         "ts": base.get("ts", base.get("started_at")),
         "task": base.get("task"),
+        "parent_run_id": base.get("parent_run_id"),
         "runs": _node_records(result),
     }
     path.write_text(json.dumps(record), encoding="utf-8")
@@ -112,16 +122,16 @@ def finalize_run(
     workspace: str | Path, name: str, result, *,
     root_session_key: str | None, started_at: float, finished_at: float,
     task: str | None = None,
+    parent_run_id: str | None = None,
 ) -> Path:
     """Terminal write: the run's final status, ``finished_at``, and full per-node trace.
     ``ts`` advances to ``finished_at`` so the dream cursor consumes the completed run."""
-    # Preserve the task from the running manifest when the caller does not supply one
-    # (the engine's _finalize_manifest does not hold the task; reading it here keeps
-    # finalize_run safe without requiring the engine to carry the value separately).
-    effective_task = task
-    if effective_task is None:
-        prior = read_manifest(workspace, name, result.run_id) or {}
-        effective_task = prior.get("task")
+    # Preserve the task/parent_run_id from the running manifest when the caller does not
+    # supply them (the engine's _finalize_manifest does not hold either; reading them here
+    # keeps finalize_run safe without requiring the engine to carry the values separately).
+    prior = read_manifest(workspace, name, result.run_id) or {}
+    effective_task = task if task is not None else prior.get("task")
+    effective_parent_run_id = parent_run_id if parent_run_id is not None else prior.get("parent_run_id")
     record = {
         "schema": SCHEMA,
         "run_id": result.run_id,
@@ -132,6 +142,7 @@ def finalize_run(
         "finished_at": finished_at,
         "ts": finished_at,
         "task": effective_task,
+        "parent_run_id": effective_parent_run_id,
         # The terminal output (the answer, the plan, or — on needs_input — the questions),
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],
@@ -282,6 +293,47 @@ def list_runs(workspace: str | Path, name: str, limit: int = 20) -> list[dict]:
             "finished_at": rec.get("finished_at"),
             "task": (rec.get("task") or "")[:200],
             "needs_input_node": rec.get("needs_input_node"),
+            "parent_run_id": rec.get("parent_run_id"),
         })
     out.sort(key=lambda r: r.get("started_at") or 0.0, reverse=True)
     return out[:max(1, int(limit))]
+
+
+# A manifest with one of these statuses is done for good — eligible for pruning and
+# counted against `keep`. "running" and "needs_input" are excluded on purpose: a running
+# record is live, and a needs_input manifest is a resume point (deleting it would strand
+# a workflow the caller can no longer resume). Malformed/unreadable files are skipped —
+# never deleted — so a read glitch cannot destroy a record (fail open).
+_TERMINAL_STATUSES = {"completed", "exhausted", "aborted", "cancelled", "crashed"}
+
+
+def prune_manifests(workspace: str | Path, name: str, keep: int = 20) -> None:
+    """Delete the oldest terminal run manifests for *name* beyond the *keep* most
+    recent, keyed by ``ts``. Best-effort: any OSError is swallowed, so a failure here
+    never breaks the caller (mirrors ``artifacts.prune_runs``).
+
+    Pruning is deliberately independent of the dream-pass cursor: an unconsumed
+    terminal record older than the retained window may be deleted before the dream
+    pass reads it (a documented gap, not a bug) — coupling pruning to the cursor
+    would let a disabled/stalled dream pass block pruning forever.
+    """
+    try:
+        d = _wf_dir(workspace, name)
+        if not d.is_dir():
+            return
+        terminal: list[tuple[float, Path]] = []
+        for f in d.glob("*.json"):
+            if f.name == ".cursor.json":
+                continue
+            try:
+                rec = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue   # malformed/unreadable: skip, never delete
+            if rec.get("status") not in _TERMINAL_STATUSES:
+                continue   # running/needs_input: never delete, never counted
+            terminal.append((rec.get("ts", 0.0), f))
+        terminal.sort(key=lambda pair: pair[0], reverse=True)   # newest first
+        for _ts, path in terminal[keep:]:
+            path.unlink()
+    except OSError:
+        pass

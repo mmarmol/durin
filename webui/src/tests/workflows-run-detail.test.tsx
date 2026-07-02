@@ -346,7 +346,25 @@ describe("WorkflowsView run detail", () => {
     ]);
     await openRunner();
     await screen.findByText(/^runs$/i);
-    expect(screen.getByText(/working folders are pruned/i)).toBeInTheDocument();
+    expect(screen.getByText(/keep the most recent runs/i)).toBeInTheDocument();
+  });
+
+  it("marks a sub-run's history chip with its parent run in the tooltip", async () => {
+    vi.mocked(api.listWorkflowRuns).mockResolvedValue([
+      {
+        run_id: "run-child-1",
+        status: "completed",
+        started_at: 100,
+        finished_at: 110,
+        task: "a task",
+        needs_input_node: null,
+        parent_run_id: "run-parent-1",
+      },
+    ]);
+    await openRunner();
+    const history = (await screen.findByText(/^runs$/i)).parentElement as HTMLElement;
+    const chip = within(history).getByRole("button", { name: "#1" });
+    expect(chip).toHaveAttribute("title", expect.stringContaining("· sub of run-parent-1"));
   });
 
   it("shows a breadcrumb naming the node that produced the final output", async () => {

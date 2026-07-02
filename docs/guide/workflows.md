@@ -232,15 +232,20 @@ clean up.
   you can see how a workflow evolved over time.
 - **Run records:** each run writes a manifest under
   `<workspace>/workflows-runs/<name>/<run_id>.json` with the outcome and a
-  per-node trace (status, verdict, and the session each node produced).
-  The web dashboard's Workflows pane reads these to show run history.
+  per-node trace (status, verdict, and the session each node produced). A
+  run started by a subworkflow node records its caller's run id, so the
+  dashboard can mark it as a sub-run of the parent. The web dashboard's
+  Workflows pane reads these to show run history.
 - **Node sessions:** every node's conversation is a normal, searchable
   durin session (`workflow:<run_id>:<node_id>:...`), so a node's reasoning
   is navigable after the fact the same way a sub-agent's is.
-- **The shared working folder:** `<workspace>/.workflow/<run_id>/work/` —
-  gitignored and pruned automatically. `workflow.keep_runs` (default 20)
-  controls how many recent runs' folders are kept; copy out anything you
-  need to keep before it ages out.
+- **Retention:** both the shared working folder
+  (`<workspace>/.workflow/<run_id>/work/`, gitignored) and the run
+  manifests are pruned automatically, keeping the most recent runs per
+  workflow. `workflow.keep_runs` (default 20) controls how many are kept;
+  a run still waiting on your input is never pruned, and completed runs
+  keep their history entry until they age out — copy out any deliverable
+  you need to keep before then.
 
 ## Editing visually
 

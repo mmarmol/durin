@@ -262,3 +262,169 @@ def test_list_runs_respects_limit(tmp_path):
 
 def test_list_runs_no_directory_is_empty(tmp_path):
     assert run_log.list_runs(tmp_path, "nope") == []
+
+
+# --- prune_manifests (F6) ----------------------------------------------------
+
+
+def test_prune_manifests_keeps_newest_terminal_and_deletes_older(tmp_path):
+    for i in range(5):
+        run_log.finalize_run(tmp_path, "wf", _result(f"r{i}"), root_session_key=None,
+                             started_at=float(i), finished_at=float(i))
+    run_log.prune_manifests(tmp_path, "wf", keep=2)
+    remaining = {p.stem for p in (tmp_path / "workflows-runs" / "wf").glob("*.json")}
+    assert remaining == {"r3", "r4"}   # the two newest by ts survive
+
+
+def test_prune_manifests_never_deletes_running_or_needs_input(tmp_path):
+    run_log.start_run(tmp_path, "wf", "live", root_session_key=None, started_at=0.0)
+    from durin.workflow.result import WorkflowResult
+    run_log.finalize_run(tmp_path, "wf", WorkflowResult(
+        status="needs_input", final_output="q", runs=[], run_id="waiting",
+        needs_input_node="gate"), root_session_key=None, started_at=1.0, finished_at=1.0)
+    for i in range(5):
+        run_log.finalize_run(tmp_path, "wf", _result(f"r{i}"), root_session_key=None,
+                             started_at=float(i + 10), finished_at=float(i + 10))
+    run_log.prune_manifests(tmp_path, "wf", keep=1)
+    remaining = {p.stem for p in (tmp_path / "workflows-runs" / "wf").glob("*.json")}
+    assert "live" in remaining
+    assert "waiting" in remaining
+    assert "r4" in remaining   # the single newest terminal record survives
+    assert len(remaining) == 3
+
+
+def test_prune_manifests_running_and_needs_input_do_not_count_against_keep(tmp_path):
+    run_log.start_run(tmp_path, "wf", "live", root_session_key=None, started_at=0.0)
+    for i in range(3):
+        run_log.finalize_run(tmp_path, "wf", _result(f"r{i}"), root_session_key=None,
+                             started_at=float(i + 10), finished_at=float(i + 10))
+    run_log.prune_manifests(tmp_path, "wf", keep=3)
+    remaining = {p.stem for p in (tmp_path / "workflows-runs" / "wf").glob("*.json")}
+    assert remaining == {"live", "r0", "r1", "r2"}   # all 3 terminal fit within keep=3
+
+
+def test_prune_manifests_skips_malformed_files(tmp_path):
+    d = tmp_path / "workflows-runs" / "wf"
+    d.mkdir(parents=True)
+    (d / "junk.json").write_text("not json", encoding="utf-8")
+    for i in range(3):
+        run_log.finalize_run(tmp_path, "wf", _result(f"r{i}"), root_session_key=None,
+                             started_at=float(i), finished_at=float(i))
+    run_log.prune_manifests(tmp_path, "wf", keep=1)
+    remaining = {p.stem for p in d.glob("*.json")}
+    assert "junk" in remaining   # malformed file is skipped, never deleted
+    assert "r2" in remaining
+
+
+def test_prune_manifests_ignores_cursor_file(tmp_path):
+    run_log.advance_cursor(tmp_path, "wf", 5.0)
+    for i in range(3):
+        run_log.finalize_run(tmp_path, "wf", _result(f"r{i}"), root_session_key=None,
+                             started_at=float(i), finished_at=float(i))
+    run_log.prune_manifests(tmp_path, "wf", keep=1)
+    d = tmp_path / "workflows-runs" / "wf"
+    assert (d / ".cursor.json").exists()
+
+
+def test_prune_manifests_no_directory_is_a_noop(tmp_path):
+    run_log.prune_manifests(tmp_path, "nope", keep=5)   # must not raise
+
+
+def test_prune_manifests_survives_oserror(tmp_path, monkeypatch):
+    for i in range(3):
+        run_log.finalize_run(tmp_path, "wf", _result(f"r{i}"), root_session_key=None,
+                             started_at=float(i), finished_at=float(i))
+
+    def _boom(self, *a, **kw):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr("pathlib.Path.unlink", _boom)
+    run_log.prune_manifests(tmp_path, "wf", keep=0)   # best-effort: must not raise
+
+
+# --- parent_run_id (F6) ------------------------------------------------------
+
+
+def test_start_run_records_parent_run_id(tmp_path):
+    run_log.start_run(tmp_path, "wf", "child1", root_session_key=None, started_at=1.0,
+                      parent_run_id="parent1")
+    rec = run_log.read_manifest(tmp_path, "wf", "child1")
+    assert rec["parent_run_id"] == "parent1"
+
+
+def test_start_run_parent_run_id_defaults_to_none(tmp_path):
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key=None, started_at=1.0)
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["parent_run_id"] is None
+
+
+def test_finalize_run_records_parent_run_id(tmp_path):
+    run_log.finalize_run(tmp_path, "wf", _result("r1"), root_session_key=None,
+                         started_at=1.0, finished_at=2.0, parent_run_id="parent1")
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["parent_run_id"] == "parent1"
+
+
+def test_update_run_preserves_parent_run_id(tmp_path):
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key=None, started_at=1.0,
+                      parent_run_id="parent1")
+    run_log.update_run(tmp_path, "wf", "r1", _result("r1", status="running"))
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["parent_run_id"] == "parent1"
+
+
+def test_finalize_run_preserves_parent_run_id_from_start(tmp_path):
+    # finalize_run does not take parent_run_id explicitly here; it must fall back to
+    # what start_run recorded, mirroring how it already preserves `task`.
+    run_log.start_run(tmp_path, "wf", "r1", root_session_key=None, started_at=1.0,
+                      parent_run_id="parent1")
+    run_log.finalize_run(tmp_path, "wf", _result("r1"), root_session_key=None,
+                         started_at=1.0, finished_at=2.0)
+    rec = run_log.read_manifest(tmp_path, "wf", "r1")
+    assert rec["parent_run_id"] == "parent1"
+
+
+def test_list_runs_includes_parent_run_id(tmp_path):
+    run_log.finalize_run(tmp_path, "wf", _result("r1"), root_session_key=None,
+                         started_at=1.0, finished_at=2.0, parent_run_id="parent1")
+    run_log.finalize_run(tmp_path, "wf", _result("r2"), root_session_key=None,
+                         started_at=3.0, finished_at=4.0)
+    got = {r["run_id"]: r for r in run_log.list_runs(tmp_path, "wf")}
+    assert got["r1"]["parent_run_id"] == "parent1"
+    assert got["r2"]["parent_run_id"] is None
+
+
+def test_list_runs_parent_run_id_absent_in_old_manifest_is_none(tmp_path):
+    import json
+    d = tmp_path / "workflows-runs" / "wf"
+    d.mkdir(parents=True)
+    (d / "legacy.json").write_text(json.dumps({
+        "run_id": "legacy", "workflow": "wf", "status": "completed", "ts": 1.0, "runs": [],
+    }), encoding="utf-8")
+    got = run_log.list_runs(tmp_path, "wf")
+    assert got[0]["parent_run_id"] is None
+
+
+# --- dream-cursor degradation under pruning (F6) -----------------------------
+
+
+def test_prune_below_unconsumed_cursor_dream_still_works(tmp_path):
+    """Pruning is not coupled to the dream cursor: when more than `keep` terminal runs
+    accumulate before a dream pass consumes them, older unconsumed records may be
+    deleted. The surviving recent window must still feed read_runs_since and
+    compute_diagnostics without crashing — fewer records, not a broken pass."""
+    from durin.workflow.diagnostics import compute_diagnostics
+
+    for i in range(5):
+        run_log.finalize_run(tmp_path, "wf", _result(f"r{i}"), root_session_key=None,
+                             started_at=float(i), finished_at=float(i))
+    # The dream cursor has not advanced past any of these runs yet.
+    cursor = run_log.read_cursor(tmp_path, "wf")
+    assert cursor == 0.0
+
+    run_log.prune_manifests(tmp_path, "wf", keep=2)   # r0..r2 pruned; r3, r4 survive
+
+    records = run_log.read_runs_since(tmp_path, "wf", cursor)
+    assert [r["run_id"] for r in records] == ["r3", "r4"]   # gap: r0-r2 silently gone
+    diag = compute_diagnostics(records)
+    assert diag.total_runs == 2   # no crash; diagnostics just sees fewer records
