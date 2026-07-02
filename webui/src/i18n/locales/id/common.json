@@ -479,9 +479,6 @@
     "empty": {
       "description": "Ajukan pertanyaan, lanjutkan pekerjaan lokal, atau mulai thread baru.",
       "greeting": "Apa yang bisa saya bantu?",
-      "resumeLast": "Lanjutkan: {{name}}",
-      "continueSession": "Teruskan: {{name}}",
-      "whatDoYouKnow": "Apa yang kamu tahu tentang saya?",
       "imageQuickActions": {
         "icon": {
           "title": "Desain ikon aplikasi",

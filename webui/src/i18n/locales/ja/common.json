@@ -192,9 +192,6 @@
     "empty": {
       "description": "質問したり、ローカル作業を続けたり、新しいスレッドを始めたりできます。",
       "greeting": "何をお手伝いしましょうか？",
-      "resumeLast": "再開：{{name}}",
-      "continueSession": "続ける：{{name}}",
-      "whatDoYouKnow": "私について何を知っていますか？",
       "imageQuickActions": {
         "icon": {
           "title": "アプリアイコンを作る",

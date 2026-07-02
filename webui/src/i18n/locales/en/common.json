@@ -1292,9 +1292,6 @@
     "loadingConversation": "Loading conversation…",
     "empty": {
       "greeting": "What can I do for you?",
-      "resumeLast": "Resume: {{name}}",
-      "continueSession": "Continue: {{name}}",
-      "whatDoYouKnow": "What do you know about me?",
       "imageQuickActions": {
         "icon": {
           "title": "Design an app icon",

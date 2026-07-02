@@ -95,13 +95,6 @@ async def test_user_bubble_renders_text_and_stays_leaf() -> None:
         assert "VISIBLE_USER_TEXT" in str(bubble._Static__content)
 
 
-def test_session_chips_empty_with_no_agent_loop() -> None:
-    from durin.cli.tui.widgets.chat_view import ChatView
-
-    app = DurinApp(agent_loop=None)
-    assert ChatView.session_chips(app) == []
-
-
 @pytest.mark.asyncio
 async def test_scroll_to_bottom_button_visibility() -> None:
     """watch_scroll_y toggles the scroll button: visible when scrolled up, hidden at bottom."""
@@ -137,29 +130,18 @@ async def test_scroll_to_bottom_button_visibility() -> None:
 
 
 @pytest.mark.asyncio
-async def test_chips_visible_for_banner_messages() -> None:
-    """Chips should remain visible when adding decorative banner/logo messages."""
-    from durin.cli.tui.widgets.chat_view import ChatView
+async def test_decorative_and_real_messages_coexist() -> None:
+    """Decorative (banner/logo) and real messages can all be added to the thread."""
+    from durin.cli.tui.widgets.chat_view import ChatView, MessageBubble
 
     app = DurinApp(agent_loop=None)
     async with app.run_test(size=(100, 32)) as pilot:
         await pilot.pause()
         chat = app.query_one(ChatView)
-        chips = chat.query_one("#qa-chips")
-        # Chips should be visible initially
-        assert chips.display is True
-        # Add banner message
+        before = len(list(chat.query(MessageBubble)))
         chat.add_message("banner", "Welcome to durin")
-        await pilot.pause()
-        # Chips should still be visible after banner
-        assert chips.display is True
-        # Add logo message
         chat.add_message("logo", "durin ASCII art")
-        await pilot.pause()
-        # Chips should still be visible after logo
-        assert chips.display is True
-        # Add real user message
         chat.add_message("user", "hello")
         await pilot.pause()
-        # Now chips should be hidden
-        assert chips.display is False
+        bubbles = list(chat.query(MessageBubble))
+        assert [b._role for b in bubbles[before:]] == ["banner", "logo", "user"]

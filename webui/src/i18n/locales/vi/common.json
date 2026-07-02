@@ -192,9 +192,6 @@
     "empty": {
       "description": "Hãy đặt câu hỏi, tiếp tục công việc cục bộ hoặc bắt đầu một luồng mới.",
       "greeting": "Tôi có thể giúp gì cho bạn?",
-      "resumeLast": "Tiếp tục: {{name}}",
-      "continueSession": "Tiếp tục với: {{name}}",
-      "whatDoYouKnow": "Bạn biết gì về tôi?",
       "imageQuickActions": {
         "icon": {
           "title": "Thiết kế biểu tượng app",
