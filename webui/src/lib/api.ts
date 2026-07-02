@@ -654,6 +654,12 @@ export interface SkillRow {
    *  "revert" (forked builtin → shipped version), or null/absent (pure builtin). */
   removable?: "remove" | "revert" | null;
   requirements?: SkillRequirements | null;
+  /** 30-day call count (view+read+edit summed); null when never used in the window. */
+  use_count?: number | null;
+  /** Epoch ms of the most-recently-modified session sidecar mentioning this skill. */
+  last_used_ms?: number | null;
+  /** Count of OPEN observations logged against this skill by name. */
+  open_observations?: number;
 }
 
 /** A skill awaiting an import decision in `.durin/import-quarantine/` (§6.B fills these). */
