@@ -1740,7 +1740,9 @@
     "statusAll": "todas",
     "allWorkflows": "todos los workflows",
     "empty": "Ningún run coincide con este filtro.",
-    "subOf": "sub-run de {{id}}"
+    "subOf": "sub-run de {{id}}",
+    "countLabel_one": "{{count}} ejecución",
+    "countLabel_other": "{{count}} ejecuciones"
   },
   "goal": {
     "banner": {

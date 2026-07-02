@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, PlayCircle } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -212,10 +212,9 @@ export function RunsView() {
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
-      <div className="flex items-center gap-2 border-b px-4 py-3">
-        <PlayCircle className="h-4 w-4 text-muted-foreground" aria-hidden />
-        <h1 className="text-sm font-semibold">{t("runs.title")}</h1>
-      </div>
+      {/* No panel title here — the Workflows/Runs pane switcher above already
+          names this view; repeating it was pure noise. The first row is a
+          toolbar: run count (orientation) + filters. */}
       <div className="flex min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 px-4 py-4">
           {error && (
@@ -251,6 +250,9 @@ export function RunsView() {
               )}
 
               <div className="flex flex-wrap items-center gap-2">
+                <span className="flex-1 text-xs text-muted-foreground">
+                  {t("runs.countLabel", { count: feed.length })}
+                </span>
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
