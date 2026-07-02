@@ -48,7 +48,10 @@ def _slash_command_names() -> list[str]:
 # the second token of e.g. `/memory list`, `/mode plan`, `/pairing approve`.
 #
 # Keep this hand-curated — derived statically from `BUILTIN_COMMAND_SPECS`
-# arg_hints, but typed out so we don't parse hint strings at runtime.
+# arg_hints, but typed out so we don't parse hint strings at runtime. Entries
+# for commands not listed on this surface (e.g. `/pairing`, which is admin-only)
+# are simply never reached — `_subcommands_for` filters against the same
+# top-level command list, so this map doesn't need to be kept in sync by hand.
 _SLASH_SUBCOMMANDS: dict[str, tuple[str, ...]] = {
     "/memory": ("list", "show", "search", "drill", "ingest"),
     "/mode": ("build", "plan"),
@@ -77,6 +80,18 @@ class SlashCommandSuggester(Suggester):
         super().__init__(use_cache=False, case_sensitive=False)
         self._commands: list[str] = _slash_command_names()
 
+    def _subcommands_for(self, head: str) -> tuple[str, ...]:
+        """Subcommands for `head`, or `()` if `head` isn't a listed command.
+
+        Filters `_SLASH_SUBCOMMANDS` against the same top-level command list
+        used for first-level completion, so hidden/admin commands (e.g.
+        `/pairing`) never get second-level completions without needing the
+        subcommand map hand-pruned in sync.
+        """
+        if head not in self._commands:
+            return ()
+        return _SLASH_SUBCOMMANDS.get(head, ())
+
     async def get_suggestion(self, value: str) -> str | None:
         if not value.startswith("/") or value == "/":
             return None
@@ -84,7 +99,7 @@ class SlashCommandSuggester(Suggester):
         # subcommand for ``cmd``.
         if " " in value:
             head, _, partial = value.partition(" ")
-            subcommands = _SLASH_SUBCOMMANDS.get(head.lower())
+            subcommands = self._subcommands_for(head.lower())
             if not subcommands:
                 return None
             partial_low = partial.lower()
@@ -108,7 +123,7 @@ class SlashCommandSuggester(Suggester):
             return []
         if " " in value:
             head, _, partial = value.partition(" ")
-            subcommands = _SLASH_SUBCOMMANDS.get(head.lower())
+            subcommands = self._subcommands_for(head.lower())
             if not subcommands:
                 return []
             partial_low = partial.lower()
