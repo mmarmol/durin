@@ -375,7 +375,10 @@ export function SettingsView({
             </h1>
           </div>
 
-          {loading ? (
+          {/* Spinner only before the FIRST payload: the periodic auth-token
+              re-mint re-runs the fetch, and unmounting every section here made
+              the whole settings area "refresh" and lose open state. */}
+          {loading && !settings ? (
             <div className="flex h-48 items-center justify-center rounded-[24px] border border-border/50 bg-card/75 text-sm text-muted-foreground shadow-[0_20px_70px_rgba(15,23,42,0.07)]">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               {t("settings.status.loading")}
@@ -2118,9 +2121,9 @@ function SecretsSettings({ token }: { token: string }) {
       <section>
         <SettingsSectionTitle>{t("settings.secrets.stored")}</SettingsSectionTitle>
         <SettingsGroup>
-          {loading ? (
+          {loading && secrets.length === 0 ? (
             <SettingsRow title={t("settings.status.loading")} />
-          ) : secrets.length === 0 ? (
+          ) : secrets.length === 0 && !loading ? (
             <SettingsRow title={t("settings.secrets.empty")} />
           ) : (
             secrets.map((secret) => {

@@ -482,7 +482,7 @@ export function CronSettings({
         ) : null}
 
         <SettingsGroup>
-          {loading ? (
+          {loading && jobs === null ? (
             <SettingsRow title={t("settings.cron.loading")}>
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden />
             </SettingsRow>

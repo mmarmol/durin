@@ -501,7 +501,7 @@ export function PersonasSettings({ token }: { token: string }) {
         ) : null}
 
         <SettingsGroup>
-          {loading ? (
+          {loading && souls === null ? (
             <SettingsRow title={t("settings.personas.soulsLoading")}>
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden />
             </SettingsRow>
@@ -603,7 +603,7 @@ export function PersonasSettings({ token }: { token: string }) {
         ) : null}
 
         <SettingsGroup>
-          {loading ? (
+          {loading && personas === null ? (
             <SettingsRow title={t("settings.personas.personasLoading")}>
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden />
             </SettingsRow>
