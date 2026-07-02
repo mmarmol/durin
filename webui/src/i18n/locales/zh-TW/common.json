@@ -297,10 +297,6 @@
             "title": "查看狀態",
             "description": "顯示執行環境、provider 和 channel 狀態。"
           },
-          "history": {
-            "title": "查看對話歷史",
-            "description": "列印最近 N 則已持久化的對話訊息。"
-          },
           "dream": {
             "title": "執行 Dream",
             "description": "手動觸發記憶整理。"

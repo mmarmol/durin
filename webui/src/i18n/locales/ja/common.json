@@ -297,10 +297,6 @@
             "title": "ステータスを表示",
             "description": "ランタイム、provider、channel の状態を表示します。"
           },
-          "history": {
-            "title": "会話履歴を表示",
-            "description": "保存済みの直近 N 件の会話メッセージを表示します。"
-          },
           "dream": {
             "title": "Dream を実行",
             "description": "メモリ統合を手動で開始します。"

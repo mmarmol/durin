@@ -112,6 +112,20 @@ User input at any surface is sanitized and published as an `InboundMessage`:
 interrupt an active turn. All other slash commands match exact or longest-prefix
 tiers inside the lock; non-commands enter the agent path.
 
+**Slash-command registry.** `BUILTIN_COMMAND_SPECS` (`durin/command/builtin.py`)
+is the single source of truth for every built-in slash command: its handler,
+help text, and the surfaces it is listed on. The WebUI palette, the TUI
+autocomplete, `/help` output, and channel command menus (e.g. Telegram's
+bot command list) all derive their listings from this registry instead of
+maintaining their own copies. Each spec declares which surfaces list it
+(`webui`, `tui`, `channels`); a command can be dispatchable everywhere while
+being listed on only some surfaces — for example a TUI-only shortcut stays
+usable if typed elsewhere, it just doesn't appear in other surfaces' menus.
+Commands marked `admin` stay fully functional but are never listed on any
+surface. `GET /api/v1/commands` serves the registry scoped to a surface
+(the WebUI calls it with the `webui` surface, so its palette only shows
+webui-listed commands).
+
 ### Agent execution
 
 `AgentRunner` iterates LLM calls and tool batches. During execution:
