@@ -128,6 +128,17 @@ highlighting (`webui/.../SkillsView.tsx`) still covers only `.py`/`.sh`. Open:
 trivial, zero risk; (2) optional `.js` lint via `node --check`, degrading gracefully
 when the interpreter is absent (mirror the `bash -n` best-effort pattern).
 
+**Workflows: auto-mode self-improvement + auto-merge.** Two open pieces in the
+workflow engine (`docs/internals/workflow.md`). (1) Self-improvement currently
+only proposes recommendations for a human to review and apply (`manual` mode);
+`auto` mode (apply directly) needs an external validation anchor — some signal
+independent of the workflow's own gates — so an automatic edit can't win by
+quietly loosening the criteria it's judged against. (2) Parallel `union`
+reconcile currently aborts a run when two writing branches touch the same file
+with different content; an auto-merge step (diff-and-combine, or an LLM
+merge judge) would resolve the common case without a human in the loop, falling
+back to today's abort when the merge itself is ambiguous.
+
 **Unified GitHub credential section + connect UX.** GitHub recurs across skills
 (`skills.security.github_token_secret`), MCP discovery (`mcp_discovery.github_token_secret`), the
 GitHub MCP server, and the Copilot OAuth provider — each configures its token in its own place.

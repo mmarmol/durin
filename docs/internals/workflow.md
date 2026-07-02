@@ -532,25 +532,47 @@ End-to-end for a single `run_workflow` call:
   `union` reconciliation (private copy per branch + content-aware conflict detection); a
   **shared working folder** per run that sequential nodes read and write, so file-producing
   stages collaborate on one evolving fileset (and a self-loop accumulates) instead of handing
-  copies down a chain — parallel branches fork it as above;
+  copies down a chain — parallel branches fork it the same way (writing branches seed from
+  the current files and reconcile back, read branches and dynamic workers share it directly);
   per-node **work mode** (`build`/`read` neutral postures for nodes; `plan`/`explore` carry interactive framing) / **model or persona** (SOUL + model,
   mutually exclusive) / context / tools; **optional routing** in two shapes — **binary**
   (`on_pass`/`on_fail`: `PASS`/`FAIL` verdict from the agent, feedback-threaded loop-back)
   and **multi-way** (`cases`: agent emits one of N declared labels, last-line match,
   `default` fallback, aborts clearly when no label matched), with an anti-Goodhart guard
-  that a routing node not be structurally identical to its producer; a multi-way case may
+  that a routing node not be structurally identical to its producer; a terminal routing node's
+  own output (minus its verdict/label line) becomes the run's final output when non-empty, so a
+  gate that produces real content is not silently discarded; a multi-way case may
   route to the reserved **`__needs_input__`** terminal, ending the run with status
   `needs_input` and the node's output carrying the questions — the human-in-the-loop lives
   in the agent that invoked the workflow (it asks the user and re-runs with the answers),
-  so the engine never blocks for input; **sub-workflow** composition (depth-capped);
-  runs **anchored to the invoking session**; **git-versioned definitions** (each run
-  snapshots them); **dream-driven self-improvement in manual mode** (recommendations from
+  so the engine never blocks for input; a run that ends `needs_input` can be **resumed**
+  instead of restarted, re-entering the graph at the asking node with the same run id,
+  working folder, node sessions and consumed visit counts, and the user's answers as that
+  node's input; before any of that, **pre-flight input validation** rejects a call whose
+  declared input files are missing or collide on name (an `aborted` result naming the
+  problem, before any node or manifest exists), and a workflow that declares file input
+  but received none ends `needs_input` immediately rather than burning a node turn on it;
+  a looping node is told **which pass it is on** ("Pass X of Y") on a revisit, and on its
+  last allowed pass is told explicitly that no further iteration will happen, so it
+  delivers a final result instead of being cut off mid-increment — and a binary gate whose
+  FAIL would exhaust the producer's remaining visits is told its verdict is definitive
+  (PASS with caveats, or a final FAIL summary) rather than issuing another unactionable
+  loop instruction; a node may opt into a **persistent session** (`session: "persistent"`,
+  requires `context: "own"`, rejected on parallel units) so its revisits resume the same
+  session and prior reasoning instead of starting fresh each pass; **sub-workflow**
+  composition (depth-capped); runs **anchored to the invoking session**; **git-versioned
+  definitions** (each run snapshots them); a completed run reports its **output files**
+  (relative paths in the shared working folder) alongside `output_dir`, and
+  `workflow.keep_runs` (default 20) bounds how many runs' working folders are retained,
+  so the run summary tells the caller to copy out anything that must outlive that window;
+  **dream-driven self-improvement in manual mode** (recommendations from
   recurring run diagnostics); a **webui Workflows pane** (React Flow) with an editor that
   has clickable Input/Output canvas objects (toggle text and/or files plus a free-text
   description; file input is supplied as paths in the run bar), a palette that adds
   work / parallel / subflow nodes (a routing node is a work node — shown by its pass/fail
   edges, never a separate type), draggable nodes with a persisted layout, a **"runs as"**
-  picker (model or persona), body/mode/context/routing config, static and dynamic fan-out
+  picker (model or persona), body/mode/context/routing config (including the session
+  fresh/persistent choice, shown only for `context: "own"`), static and dynamic fan-out
   authoring with a concurrency cap, a subflow target picker that excludes cycle-creating
   workflows, and a recommendations banner. Not yet built — see
   [roadmap.md](../roadmap.md) for direction — auto-mode self-improvement (apply +
