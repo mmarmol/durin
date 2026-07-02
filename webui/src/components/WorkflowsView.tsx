@@ -58,6 +58,7 @@ import {
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
 import { RunDetail, runChipTone } from "@/components/workflows/RunDetail";
+import { RunsView } from "@/components/workflows/RunsView";
 
 function errMsg(e: unknown): string {
   if (e instanceof ApiError) return e.detail ? `HTTP ${e.status}: ${e.detail}` : `HTTP ${e.status}`;
@@ -850,9 +851,12 @@ function IOConfigPanel({
 
 let _idSeq = 0;
 
+type WorkflowsPane = "editor" | "runs";
+
 export function WorkflowsView() {
   const { t } = useTranslation();
   const { token } = useClient();
+  const [pane, setPane] = useState<WorkflowsPane>("editor");
   const [names, setNames] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [def, setDef] = useState<WorkflowDef | null>(null);
@@ -1270,7 +1274,35 @@ export function WorkflowsView() {
     selectedNodeId === "__input__" ? "input" : selectedNodeId === "__output__" ? "output" : null;
 
   return (
-    <div className="flex h-full w-full">
+    <div className="flex h-full w-full flex-col">
+      <div className="flex items-center gap-2 border-b px-3 py-2">
+        <div
+          className="flex h-7 rounded-full bg-muted p-0.5"
+          role="group"
+          aria-label={t("workflows.title")}
+        >
+          {(["editor", "runs"] as const).map((opt) => (
+            <button
+              key={opt}
+              type="button"
+              onClick={() => setPane(opt)}
+              aria-pressed={pane === opt}
+              className={cn(
+                "rounded-full px-3 text-[12.5px] font-medium transition-colors",
+                pane === opt
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {opt === "editor" ? t("workflows.title") : t("runs.title")}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className={cn("flex min-h-0 flex-1", pane !== "runs" && "hidden")}>
+        <RunsView />
+      </div>
+      <div className={cn("flex min-h-0 flex-1", pane !== "editor" && "hidden")}>
       <aside className="w-56 shrink-0 overflow-y-auto border-r p-2">
         <div className="flex items-center gap-2 px-2 py-1 text-sm font-medium">
           <WorkflowIcon className="h-4 w-4" aria-hidden />
@@ -1686,6 +1718,7 @@ export function WorkflowsView() {
             />
           </aside>
         )}
+      </div>
       </div>
     </div>
   );

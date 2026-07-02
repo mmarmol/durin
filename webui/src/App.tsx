@@ -6,7 +6,7 @@ import { MemoryGraphView } from "@/components/MemoryGraphView";
 import { DreamView } from "@/components/DreamView";
 import { SkillsView } from "@/components/SkillsView";
 import { WorkflowsView } from "@/components/WorkflowsView";
-import { RunsView, strandedRuns } from "@/components/workflows/RunsView";
+import { strandedRuns } from "@/components/workflows/RunsView";
 import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
@@ -48,7 +48,7 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "durin-webui.sidebar";
 const RESTART_STARTED_KEY = "durin-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
-type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows" | "runs" | "dream";
+type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "workflows" | "dream";
 
 function AuthForm({
   failed,
@@ -472,11 +472,6 @@ function Shell({
     setMobileSidebarOpen(false);
   }, []);
 
-  const onOpenRuns = useCallback(() => {
-    setView("runs");
-    setMobileSidebarOpen(false);
-  }, []);
-
   const onOpenDream = useCallback(() => {
     setView("dream");
     setMobileSidebarOpen(false);
@@ -511,9 +506,10 @@ function Shell({
     });
   }, [client, onModelNameChange]);
 
-  // Poll the global run feed for the sidebar's stranded-needs_input badge count.
-  // On the runs tab itself, RunsView shows the live tray directly; this poll just
-  // keeps the badge honest while the user is elsewhere.
+  // Poll the global run feed for the Workflows sidebar button's stranded-needs_input
+  // badge count. Runs live inside the Workflows section now, where its Runs pane shows
+  // the live tray directly; this poll just keeps the badge honest while the user is
+  // elsewhere, and keeps running regardless of which view is active.
   useEffect(() => {
     let cancelled = false;
     const load = () => {
@@ -615,8 +611,6 @@ function Shell({
     skillsActive: view === "skills",
     onOpenWorkflows,
     workflowsActive: view === "workflows",
-    onOpenRuns,
-    runsActive: view === "runs",
     strandedRunsCount,
     onOpenDream,
     dreamActive: view === "dream",
@@ -729,11 +723,6 @@ function Shell({
         {view === "workflows" && (
           <div className="absolute inset-0 flex flex-col">
             <WorkflowsView />
-          </div>
-        )}
-        {view === "runs" && (
-          <div className="absolute inset-0 flex flex-col">
-            <RunsView />
           </div>
         )}
         {view === "dream" && (

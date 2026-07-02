@@ -450,11 +450,13 @@ iterations) and the questions ride in a capped `detail` field, so push-fed
 panels (the TUI sidebar) can show a paused run and what it is waiting for
 without polling the tasks API or reading the manifest.
 
-**The web UI's Runs sidebar tab** reads the global feed (§4f) to show every run
-across all origins (sessions, HTTP, cron, editor) in one place, with a tray of
-stranded `needs_input` runs on top — each with its questions and a direct resume
-form — so a paused run started from any surface can be found and answered without
-knowing which session or workflow it came from.
+**The web UI's Runs pane** (a top-level pane inside the Workflows section,
+alongside the editor) reads the global feed (§4f) to show every run across all
+origins (sessions, HTTP, cron, editor) in one place, with a tray of stranded
+`needs_input` runs on top — each with its questions and a direct resume form —
+so a paused run started from any surface can be found and answered without
+knowing which session or workflow it came from. The sidebar's Workflows button
+carries a badge with the stranded-run count so it stays visible from any view.
 
 ## 5. How it works
 

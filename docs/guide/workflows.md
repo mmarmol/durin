@@ -257,11 +257,13 @@ Output are clickable canvas objects where you toggle text/file and write
 the free-text description. Runs launched from the editor show live,
 per-node progress as the graph executes.
 
-The sidebar's **Runs** tab is where to look across *all* workflows and origins
-(sessions, HTTP, cron, the editor) at once: a global, filterable run feed, with
-any run stranded on `needs_input` surfaced in a tray up top — questions and a
-resume form included — so you can find and answer a paused run without knowing
-which session or workflow started it.
+The Workflows section's **Runs** pane is where to look across *all* workflows
+and origins (sessions, HTTP, cron, the editor) at once: a global, filterable
+run feed, with any run stranded on `needs_input` surfaced in a tray up top —
+questions and a resume form included — so you can find and answer a paused run
+without knowing which session or workflow started it. A badge on the sidebar's
+**Workflows** button shows the count of stranded runs even while you're
+elsewhere in the app.
 
 Each workflow also has a self-improvement mode (`manual` by default): a
 background pass looks at recurring trouble (a node that keeps looping, a
