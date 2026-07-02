@@ -51,6 +51,7 @@ def _node_records(result) -> list[dict]:
             "session_key": r.session_key,
             "worker_index": r.worker_index,
             "branch_id": r.branch_id,
+            "budget": getattr(r, "budget", None),
             "status": r.status,
             "route_label": r.route_label,
         }
@@ -134,6 +135,8 @@ def finalize_run(
         # The terminal output (the answer, the plan, or — on needs_input — the questions),
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],
+        "needs_input_node": getattr(result, "needs_input_node", None),
+        "output_files": list(getattr(result, "output_files", []) or []),
         "runs": _node_records(result),
     }
     path = _record_path(workspace, name, result.run_id)

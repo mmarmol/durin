@@ -27,9 +27,13 @@ export { setApiReauthHandler } from "./http";
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  // The server's problem+json "detail" when the error body could be parsed
+  // (best-effort; undefined for a non-JSON or unreadable body).
+  detail?: string;
+  constructor(status: number, message: string, detail?: string) {
     super(message);
     this.status = status;
+    this.detail = detail;
     this.name = "ApiError";
   }
 }
@@ -42,7 +46,14 @@ async function request<T>(
 ): Promise<T> {
   const res = await fetchWithReauth(url, token, init, retryOn401);
   if (!res.ok) {
-    throw new ApiError(res.status, `HTTP ${res.status}`);
+    let detail: string | undefined;
+    try {
+      const body = await res.clone().json();
+      if (typeof body?.detail === "string") detail = body.detail;
+    } catch {
+      // Non-JSON or unreadable body — leave detail undefined.
+    }
+    throw new ApiError(res.status, `HTTP ${res.status}`, detail);
   }
   return (await res.json()) as T;
 }
@@ -260,6 +271,9 @@ export type WorkflowRunNode = {
   session_key: string | null;
   worker_index: number | null;
   branch_id?: string | null;
+  // The node's effective visit budget at this pass (null for parallel branches/workers,
+  // which are not loop targets).
+  budget?: number | null;
   status: string;
   route_label: string | null;
 };
@@ -271,6 +285,10 @@ export type WorkflowRunResult = {
   runs: WorkflowRunNode[];
   output_dir?: string;
   exhausted_node?: string;
+  // set when status=="needs_input": the node that asked
+  needs_input_node?: string;
+  // relative paths in output_dir (completed runs)
+  output_files?: string[];
 };
 
 export async function runWorkflow(
@@ -280,10 +298,12 @@ export async function runWorkflow(
   inputFiles: string[] = [],
   outputFormat: string = "",
   base: string = "",
+  resumeRunId: string = "",
 ): Promise<WorkflowRunResult> {
-  const body: { task: string; input_files?: string[]; output_format?: string } = { task };
+  const body: { task: string; input_files?: string[]; output_format?: string; resume_run_id?: string } = { task };
   if (inputFiles.length > 0) body.input_files = inputFiles;
   if (outputFormat.trim()) body.output_format = outputFormat.trim();
+  if (resumeRunId) body.resume_run_id = resumeRunId;
   return post<WorkflowRunResult>(
     `${base}/api/v1/workflows/${encodeURIComponent(name)}/run`,
     token,

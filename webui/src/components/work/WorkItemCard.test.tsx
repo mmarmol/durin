@@ -195,4 +195,51 @@ describe("WorkItemCard", () => {
     );
     expect(screen.getByText("step1")).toBeInTheDocument();
   });
+
+  it("renders pass chip for looping node on second+ iteration", () => {
+    render(
+      <WorkItemCard
+        item={{
+          kind: "workflow",
+          id: "r6",
+          label: "looping-wf",
+          status: "running",
+          nodes: [
+            {
+              id: "looper",
+              status: "running",
+              iteration: 2,
+              budget: 3,
+            },
+          ],
+          startedAt: 0,
+          endedAt: null,
+        }}
+      />,
+    );
+    // Expects "pass 2 of 3" based on en/common.json passOf template
+    expect(screen.getByText("pass 2 of 3")).toBeInTheDocument();
+  });
+
+  it("renders needs_input hand-off hint in workflow card", () => {
+    render(
+      <WorkItemCard
+        item={{
+          kind: "workflow",
+          id: "r7",
+          label: "handed-off",
+          status: "needs_input",
+          nodes: [],
+          startedAt: 0,
+          endedAt: null,
+        }}
+      />,
+    );
+    // Expects the hint text based on en/common.json needsInputHint
+    expect(
+      screen.getByText(
+        "Handed to the calling agent — it may answer from its own context or ask you, then resume this run.",
+      ),
+    ).toBeInTheDocument();
+  });
 });

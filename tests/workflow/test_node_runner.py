@@ -13,12 +13,37 @@ from durin.workflow.node_runner import AgentNodeRunner
 from durin.workflow.spec import WorkNode
 
 
+def _req(node, iteration=1, budget=None, **kw):
+    return NodeRunRequest(
+        node=node, task="t", upstream_output=None, shared_context=[],
+        run_id="r1", iteration=iteration, root_session_key=None, budget=budget, **kw,
+    )
+
+
 def _runner(sessions, fake_result):
     provider = MagicMock(spec=LLMProvider)
     provider.get_default_model.return_value = "test-model"
     from durin.agent.runner import AgentRunner
     ar = AgentRunner(provider)
     ar.run = AsyncMock(return_value=fake_result)
+    return AgentNodeRunner(ar, sessions, default_model="test-model")
+
+
+def _faithful_runner(sessions, reply="ok"):
+    """A fake AgentRunner faithful to the real contract: result.messages is a
+    SUPERSET of spec.initial_messages (initial + new assistant turns)."""
+    provider = MagicMock(spec=LLMProvider)
+    provider.get_default_model.return_value = "test-model"
+    from durin.agent.runner import AgentRunner
+    ar = AgentRunner(provider)
+
+    async def fake_run(spec):
+        return AgentRunResult(
+            final_content=reply,
+            messages=list(spec.initial_messages) + [{"role": "assistant", "content": reply}],
+        )
+
+    ar.run = AsyncMock(side_effect=fake_run)
     return AgentNodeRunner(ar, sessions, default_model="test-model")
 
 
@@ -573,3 +598,131 @@ def test_model_error_stop_reason_is_treated_as_a_node_failure(tmp_path):
     assert ei.value.node_id == "plan"
     assert ei.value.session_key   # the failed node's partial conversation was persisted
     SessionManager(workspace=tmp_path).get_or_create(ei.value.session_key)
+
+
+def test_response_messages_exclude_system_and_inherited_shared_context(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    nr = _faithful_runner(sessions, reply="out-b")
+    inherited = [{"role": "user", "content": "earlier shared turn"},
+                 {"role": "assistant", "content": "earlier shared reply"}]
+    req = NodeRunRequest(
+        node=WorkNode(id="b", prompt="Continue.", context="shared", next=None),
+        task="t", upstream_output=None, shared_context=inherited,
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    resp = nr(req)
+    roles = [m["role"] for m in resp.messages]
+    assert "system" not in roles                       # no system prompt leaked
+    contents = [m.get("content") for m in resp.messages]
+    assert "earlier shared turn" not in contents       # inherited buffer not re-emitted
+    assert contents == ["t", "out-b"] or contents[-1] == "out-b"
+    # exactly: the node's own user turn + its new assistant turn
+    assert resp.messages[0]["role"] == "user"
+    assert resp.messages[-1] == {"role": "assistant", "content": "out-b"}
+
+
+def test_first_pass_has_no_pass_note(tmp_path):
+    nr = _faithful_runner(SessionManager(workspace=tmp_path))
+    nr(_req(WorkNode(id="a", next=None), iteration=1, budget=3))
+    spec = nr.runner.run.call_args.args[0]
+    user = [m for m in spec.initial_messages if m["role"] == "user"][-1]
+    assert "pass" not in user["content"].lower()
+
+
+def test_revisit_gets_pass_counter(tmp_path):
+    nr = _faithful_runner(SessionManager(workspace=tmp_path))
+    nr(_req(WorkNode(id="a", next=None), iteration=2, budget=3))
+    spec = nr.runner.run.call_args.args[0]
+    user = [m for m in spec.initial_messages if m["role"] == "user"][-1]
+    assert "pass 2 of 3" in user["content"].lower()
+
+
+def test_final_pass_is_explicit(tmp_path):
+    nr = _faithful_runner(SessionManager(workspace=tmp_path))
+    nr(_req(WorkNode(id="a", next=None), iteration=3, budget=3))
+    spec = nr.runner.run.call_args.args[0]
+    user = [m for m in spec.initial_messages if m["role"] == "user"][-1]
+    assert "final pass" in user["content"].lower()
+    assert "no further iteration" in user["content"].lower()
+
+
+def test_fail_would_exhaust_adds_definitive_verdict_note(tmp_path):
+    nr = _faithful_runner(SessionManager(workspace=tmp_path), reply="PASS")
+    node = WorkNode(id="gate", prompt="ok?", on_pass=None, on_fail="make")
+    nr(_req(node, iteration=2, budget=3, fail_would_exhaust=True))
+    spec = nr.runner.run.call_args.args[0]
+    system = spec.initial_messages[0]["content"]
+    assert "final review" in system.lower()
+    assert "no further revision" in system.lower()
+
+
+def test_no_definitive_note_when_loop_can_continue(tmp_path):
+    nr = _faithful_runner(SessionManager(workspace=tmp_path), reply="PASS")
+    node = WorkNode(id="gate", prompt="ok?", on_pass=None, on_fail="make")
+    nr(_req(node, iteration=1, budget=3, fail_would_exhaust=False))
+    spec = nr.runner.run.call_args.args[0]
+    assert "final review" not in spec.initial_messages[0]["content"].lower()
+
+
+def test_persistent_node_uses_a_stable_session_key(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    nr = _faithful_runner(sessions)
+    node = WorkNode(id="impl", prompt="Do it.", session="persistent", next=None)
+    resp = nr(_req(node, iteration=1, budget=3))
+    assert resp.session_key == "workflow:r1:impl"          # no :iteration suffix
+
+
+def test_persistent_revisit_resumes_prior_conversation(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    nr = _faithful_runner(sessions, reply="v1")
+    node = WorkNode(id="impl", prompt="Do it.", session="persistent", next=None)
+    nr(_req(node, iteration=1, budget=3))
+
+    nr2 = _faithful_runner(sessions, reply="v2")
+    req = _req(node, iteration=2, budget=3)
+    req.upstream_output = "Reviewer feedback (address this):\nfix the tests"
+    resp = nr2(req)
+    spec = nr2.runner.run.call_args.args[0]
+    contents = [m.get("content", "") for m in spec.initial_messages]
+    assert any("v1" in c for c in contents)                 # prior turn resumed
+    assert contents.count("Do it.") == 1 or sum("Do it." in c for c in contents) == 1
+    last_user = [m for m in spec.initial_messages if m["role"] == "user"][-1]["content"]
+    assert "returned to this step" in last_user.lower()
+    assert "fix the tests" in last_user
+    assert "pass 2 of 3" in last_user.lower()
+    assert resp.session_key == "workflow:r1:impl"
+
+
+def test_fresh_node_keeps_per_iteration_keys(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    nr = _faithful_runner(sessions)
+    node = WorkNode(id="impl", prompt="Do it.", next=None)
+    assert nr(_req(node, iteration=2)).session_key == "workflow:r1:impl:2"
+
+
+def test_persistent_routing_revisit_keeps_final_review_signal(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    node = WorkNode(id="gate", prompt="ok?", session="persistent",
+                    on_pass=None, on_fail="gate")
+    nr = _faithful_runner(sessions, reply="FAIL not yet")
+    nr(_req(node, iteration=1, budget=2))
+    nr2 = _faithful_runner(sessions, reply="PASS")
+    nr2(_req(node, iteration=2, budget=2, fail_would_exhaust=True))
+    spec = nr2.runner.run.call_args.args[0]
+    last_user = [m for m in spec.initial_messages if m["role"] == "user"][-1]["content"]
+    assert "final review round" in last_user.lower()
+
+
+def test_persistent_max_turns_budget_note_does_not_stack(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    node = WorkNode(id="impl", prompt="Do it.", session="persistent",
+                    next=None, max_turns=5)
+    nr = _faithful_runner(sessions, reply="v1")
+    nr(_req(node, iteration=1, budget=3))
+    nr2 = _faithful_runner(sessions, reply="v2")
+    nr2(_req(node, iteration=2, budget=3))
+    spec = nr2.runner.run.call_args.args[0]
+    system = spec.initial_messages[0]["content"]
+    assert system.count("rounds of tool use") == 1     # not re-appended to the reloaded system turn
+    last_user = [m for m in spec.initial_messages if m["role"] == "user"][-1]["content"]
+    assert "rounds of tool use" in last_user            # delivered in the revisit turn instead

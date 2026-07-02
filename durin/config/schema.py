@@ -988,6 +988,8 @@ class WorkflowConfig(Base):
     """Workflow engine configuration."""
 
     max_node_visits: int = Field(default=25, ge=1)
+    # How many recent runs' working folders (.workflow/<run_id>/) to keep on disk.
+    keep_runs: int = Field(default=20, ge=1)
 
 
 class GatewayConfig(Base):

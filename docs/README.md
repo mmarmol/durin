@@ -38,6 +38,8 @@ How to install, configure, and run durin.
   the other chat surfaces.
 - [Providers & models](guide/providers.md) — choosing LLM providers and models,
   API keys, and aux-model presets.
+- [Workflows](guide/workflows.md) — defining and running multi-step flow
+  graphs: nodes, routing, loops, and parallel branches.
 
 ### Internals — for contributors and curious readers
 

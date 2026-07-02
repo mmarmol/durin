@@ -94,6 +94,8 @@ export interface ToolProgressEvent {
     label?: string;
     status: "running" | "done" | "failed";
     route_label?: string | null;
+    iteration?: number | null;
+    budget?: number | null;
     branches?: Array<{ id: string; label?: string; status: "running" | "done" | "failed" }>;
   }>;
 }
@@ -113,6 +115,10 @@ export interface WorkNode {
   label?: string;
   status: "running" | "done" | "failed" | "pending";
   branches?: WorkBranch[];
+  /** This node's current pass number, when it has a known visit budget. */
+  iteration?: number;
+  /** The node's effective visit budget (undefined when not applicable, e.g. parallel units). */
+  budget?: number;
 }
 
 export interface WorkItem {
