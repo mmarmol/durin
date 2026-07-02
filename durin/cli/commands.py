@@ -1489,9 +1489,11 @@ def _run_gateway(
                 _skills_improved = summary.get("applied", 0)
                 _obs = summary.get("observations", {})
                 logger.info(
-                    "skill curation: reviewed={} applied={} deferred={} "
+                    "skill curation: reviewed={} applied={} deferred={} backfilled={} "
+                    "judge_parse_failed={} "
                     "obs_applied={} obs_declined={} obs_kept={} obs_open={} principles={}",
                     summary["reviewed"], summary["applied"], summary["deferred"],
+                    summary.get("backfilled", 0), summary.get("judge_parse_failed", False),
                     _obs.get("applied", 0), _obs.get("declined", 0), _obs.get("kept", 0),
                     _obs.get("open", 0), summary.get("principles", 0),
                 )
