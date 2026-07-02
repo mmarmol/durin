@@ -63,6 +63,13 @@ class _CrossLoopTool(Tool):
 _VERDICT = ("\n\nAfter your assessment, end your reply with a single final line: "
             "'PASS' if the work meets the criteria, or 'FAIL' followed by what to fix.")
 
+_FINAL_REVIEW = (
+    "\n\nThis is the final review round: the producing step has no passes left, so a "
+    "FAIL ends the run with the work as-is — there will be no further revision. Give "
+    "your definitive verdict: PASS with explicitly noted caveats only if the work is "
+    "genuinely acceptable, or FAIL with a clear, final summary of what is missing."
+)
+
 
 class AgentNodeRunner:
     def __init__(
@@ -187,6 +194,8 @@ class AgentNodeRunner:
             system = f"{system}{suffix}" if system else suffix.lstrip()
         if getattr(req.node, "routes", False):
             system = f"{system}{_VERDICT}" if system else _VERDICT.lstrip()
+        if getattr(req, "fail_would_exhaust", False):
+            system = f"{system}{_FINAL_REVIEW}"
         messages: list[dict] = [{"role": "system", "content": system}]
         messages.extend(req.shared_context)
         user = req.task

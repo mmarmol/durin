@@ -644,3 +644,21 @@ def test_final_pass_is_explicit(tmp_path):
     user = [m for m in spec.initial_messages if m["role"] == "user"][-1]
     assert "final pass" in user["content"].lower()
     assert "no further iteration" in user["content"].lower()
+
+
+def test_fail_would_exhaust_adds_definitive_verdict_note(tmp_path):
+    nr = _faithful_runner(SessionManager(workspace=tmp_path), reply="PASS")
+    node = WorkNode(id="gate", prompt="ok?", on_pass=None, on_fail="make")
+    nr(_req(node, iteration=2, budget=3, fail_would_exhaust=True))
+    spec = nr.runner.run.call_args.args[0]
+    system = spec.initial_messages[0]["content"]
+    assert "final review" in system.lower()
+    assert "no further revision" in system.lower()
+
+
+def test_no_definitive_note_when_loop_can_continue(tmp_path):
+    nr = _faithful_runner(SessionManager(workspace=tmp_path), reply="PASS")
+    node = WorkNode(id="gate", prompt="ok?", on_pass=None, on_fail="make")
+    nr(_req(node, iteration=1, budget=3, fail_would_exhaust=False))
+    spec = nr.runner.run.call_args.args[0]
+    assert "final review" not in spec.initial_messages[0]["content"].lower()

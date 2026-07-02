@@ -60,6 +60,10 @@ class NodeRunRequest:
     # is and that the final allowed pass IS final. None when budgets don't apply
     # (parallel branches/workers, which are not loop targets).
     budget: int | None = None
+    # True when this is a binary routing node whose on_fail target has no visits
+    # left: a FAIL verdict now ends the run as 'exhausted' instead of looping. The
+    # runner tells the gate so its last verdict is definitive, not another loop turn.
+    fail_would_exhaust: bool = False
 
 
 @dataclass
@@ -331,6 +335,16 @@ class WorkflowEngine:
                 # no-tools node does no file I/O and gets none.
                 out_dir: str | None = work_dir if node.tools == "default" else None
 
+                fail_would_exhaust = False
+                if node.cases is None and node.on_fail is not None:
+                    t = workflow.nodes.get(node.on_fail)
+                    if t is not None:
+                        t_budget = min(
+                            getattr(t, "max_visits", None) or workflow.max_visits,
+                            self._max_node_visits,
+                        )
+                        fail_would_exhaust = visits.get(node.on_fail, 0) >= t_budget
+
                 req = NodeRunRequest(
                     node=node,
                     task=task,
@@ -343,6 +357,7 @@ class WorkflowEngine:
                     root_session_key=root_session_key,
                     output_dir=out_dir,
                     budget=budget,
+                    fail_would_exhaust=fail_would_exhaust,
                 )
 
                 # Run a full agent turn; for a multi-way node the verdict is a matched

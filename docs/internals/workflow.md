@@ -86,7 +86,7 @@ and follows an edge. A node may route in one of two shapes:
 line the engine parses (`durin/workflow/verdict.py`) — so a routing node can *verify* (read
 the diff, run the tests) before ruling, not just read text. The engine routes to `on_pass` or
 `on_fail`; on a fail the node's feedback is threaded into the loop-back so the producer re-runs
-knowing what to fix.
+knowing what to fix. When the on_fail target has no visits left, the gate is told a FAIL now ends the run (no further revision), so its last verdict is definitive — PASS with noted caveats, or FAIL with a final summary — rather than another loop instruction that can never be acted on.
 
 **Multi-way routing** (`cases`): an agent node declares a set of labeled outcomes
 (`{"GROUNDED": null, "MISSING": "plan", "MISUSED": "synthesize"}`). It ends its reply with

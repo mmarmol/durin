@@ -674,6 +674,23 @@ def test_engine_passes_the_visit_budget_to_the_runner():
     assert gate_call.budget == 4      # workflow default
 
 
+def test_gate_learns_when_a_fail_would_exhaust_the_producer():
+    wf = parse_workflow({
+        "name": "d", "start": "make", "max_visits": 2,
+        "nodes": [
+            {"id": "make", "kind": "work", "next": "gate"},
+            {"id": "gate", "kind": "work", "prompt": "ok?", "on_pass": None, "on_fail": "make"},
+        ],
+    })
+    eng, calls = _engine({"make": "draft", "gate": "FAIL nope"})
+    eng.run(wf, "t")
+    gate_calls = [c for c in calls if c.node.id == "gate"]
+    # 1st gate visit: producer has 1 visit of 2 → a FAIL still loops (False).
+    # 2nd gate visit: producer consumed 2 of 2 → a FAIL would exhaust (True).
+    assert gate_calls[0].fail_would_exhaust is False
+    assert gate_calls[1].fail_would_exhaust is True
+
+
 def test_sequential_nodes_share_one_working_dir(tmp_path):
     # Every sequential node — looping or hand-off — reads and writes ONE shared per-run
     # folder, so files accumulate in one place and each stage sees the prior work. (Before,
