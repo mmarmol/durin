@@ -164,6 +164,13 @@ def _format_result(result: Any, output_files: bool = False) -> str:
     # holds any seeded input files. Pure-text workflows stay silent (no noise).
     if output_files and result.output_dir:
         lines.append(f"\nThe workflow's output files are in: {result.output_dir}")
+        for rel in (result.output_files or [])[:20]:
+            lines.append(f"  - {rel}")
+        overflow = len(result.output_files or []) - 20
+        if overflow > 0:
+            lines.append(f"  … and {overflow} more")
+        lines.append("Copy out any deliverable you need to keep: this folder is pruned "
+                     "after newer runs accumulate.")
 
     return "\n".join(lines)
 
@@ -368,6 +375,7 @@ class RunWorkflowTool(Tool, ContextAware):
             max_node_visits=self._app_config.workflow.max_node_visits,
             progress_emit=progress_emit,
             cancel_check=lambda: _is_cancelled(run_id),
+            prune_keep=self._app_config.workflow.keep_runs,
         )
         root_session_key = self._session_key.get()
         inject_target = {

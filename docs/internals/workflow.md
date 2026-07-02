@@ -44,6 +44,8 @@ workflow can deliver its result in whatever shape the caller needs without being
 same callers may pass **`input_files`** (absolute paths) — seeded into the run's shared working
 folder before the start node runs — and read the terminal **`output_dir`** back from the result;
 both the `run_workflow` tool and the HTTP run surface accept files in and report the folder out.
+The run result also reports the relative list of files in the shared folder, so the invoking agent
+sees what deliverables were produced and where to copy them from.
 
 **A node runs its body, then optionally routes.** `WorkflowEngine.run`
 (`durin/workflow/engine.py`) walks the graph from `start`. For an agent node it calls a
@@ -474,6 +476,11 @@ End-to-end for a single `run_workflow` call:
   `tools: "default"` receives the user's configured tool set; `tools: "none"` (the
   default) runs the node without tools. A node may also name `skills` (injected into
   its prompt) and `mcps` (a subset of the configured MCP servers, reused live).
+- **Engine settings:** `workflow.max_node_visits` (default 25) and `workflow.keep_runs` (default 20)
+  control global defaults. `max_node_visits` caps how many times any node can iterate (a safety
+  ceiling on visit budgets declared per-node). `keep_runs` bounds how many runs' working folders
+  (`.workflow/<run_id>/`) are retained on disk; older runs are pruned automatically, so deliverables
+  that must outlive retention should be copied to the workspace proper or elsewhere.
 - **Management API:** `WorkflowsService` (`durin/service/workflows.py`) exposes, over HTTP
   at `/api/v1/workflows[/{name}]` and in the OpenAPI contract: list / load / save / delete
   (save validates via `parse_workflow` and writes atomically under the version lock — the

@@ -186,3 +186,30 @@ def test_preflight_rejection_writes_no_manifest_and_prunes_nothing(tmp_path):
     assert result.status == "needs_input"
     # Pre-flight rejection must not create the manifest folder
     assert not (Path(tmp_path) / "workflows-runs").exists()
+
+
+def test_completed_result_lists_output_files(tmp_path):
+    def runner(req):
+        Path(req.output_dir, "report.md").write_text("done")
+        Path(req.output_dir, "sub").mkdir(exist_ok=True)
+        Path(req.output_dir, "sub", "data.csv").write_text("a,b")
+        return NodeRunResponse(output="x")
+    wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
+    result = WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "t")
+    assert sorted(result.output_files) == ["report.md", "sub/data.csv"]
+
+
+def test_engine_prune_keep_is_wired(tmp_path):
+    import durin.workflow.engine as engine_mod
+    seen = {}
+    def fake_prune(base, keep=20):
+        seen["keep"] = keep
+    orig = engine_mod.prune_runs
+    engine_mod.prune_runs = fake_prune
+    try:
+        wf = _wf([{"id": "a", "kind": "work", "tools": "default", "next": None}], "a")
+        WorkflowEngine(lambda req: NodeRunResponse(output="x"),
+                       workspace=str(tmp_path), prune_keep=5).run(wf, "t")
+    finally:
+        engine_mod.prune_runs = orig
+    assert seen["keep"] == 5

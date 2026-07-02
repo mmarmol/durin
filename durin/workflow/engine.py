@@ -135,6 +135,7 @@ class WorkflowEngine:
         max_node_visits: int = 1000,
         progress_emit: Callable[[dict], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        prune_keep: int = 20,
     ) -> None:
         self._node_runner = node_runner
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex[:12])
@@ -153,6 +154,7 @@ class WorkflowEngine:
         # background run can be stopped between nodes. None means the run is never
         # cancelled from outside (CLI/test callers).
         self._cancel_check = cancel_check
+        self._prune_keep = prune_keep
 
     def run(
         self,
@@ -187,7 +189,7 @@ class WorkflowEngine:
             return preflight
 
         if self._workspace is not None:
-            prune_runs(self._workspace)
+            prune_runs(self._workspace, keep=self._prune_keep)
         runs: list[NodeRun] = []
         # The effective root MUST match node_runner's headless rooting: a None calling
         # session means node sessions are rooted under workflow:<run_id>:root, so the
@@ -576,9 +578,15 @@ class WorkflowEngine:
                 except Exception:  # noqa: BLE001 - progress is best-effort; never break the run
                     pass
 
+        output_files: list[str] = []
+        if terminal_output_dir is not None:
+            root_dir = Path(terminal_output_dir)
+            output_files = sorted(
+                str(p.relative_to(root_dir)) for p in root_dir.rglob("*") if p.is_file()
+            )
         return WorkflowResult(
             status="completed", final_output=final_output, runs=runs, run_id=run_id,
-            output_dir=terminal_output_dir,
+            output_dir=terminal_output_dir, output_files=output_files,
         )
 
     def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key, workspace_override, fork_dir=None):
