@@ -1,11 +1,18 @@
+import re
+
 from durin.agent import skills_store as ss
 from durin.agent.skill_curation import curate_catalog
+
+
+def _strip_surface_fields(text):
+    """Remove name:/description: frontmatter lines, simulating a legacy skill."""
+    return re.sub(r"^(name|description):.*\n", "", text, flags=re.MULTILINE)
 
 
 def _mk(ws, name, body="body"):
     d = ws / "skills" / name; d.mkdir(parents=True)
     (d / "SKILL.md").write_text(
-        f"---\nname: {name}\nmetadata:\n  durin:\n    mode: auto\n"
+        f"---\nname: {name}\ndescription: {name} skill\nmetadata:\n  durin:\n    mode: auto\n"
         f"    provenance:\n      source: dream\n---\n{body}\n", encoding="utf-8")
 
 
@@ -72,7 +79,7 @@ def test_curate_noop_on_empty_delta(tmp_path):
     calls = []
     res = curate_catalog(ws / ".", judge=lambda p: calls.append(p) or '{"actions": []}')
     # NOTE: ws has one stable skill → delta empty → judge never called
-    assert res == {"reviewed": 0, "applied": 0, "deferred": 0, "observations": {"applied": 0, "declined": 0, "kept": 0, "open": 0}, "principles": 0}
+    assert res == {"reviewed": 0, "applied": 0, "deferred": 0, "backfilled": 0, "observations": {"applied": 0, "declined": 0, "kept": 0, "open": 0}, "principles": 0}
     assert calls == []
 
 
@@ -82,7 +89,7 @@ def test_curate_excludes_pristine_builtins(tmp_path):
     ws = tmp_path / "ws"; ws.mkdir()
     calls = []
     res = curate_catalog(ws, judge=lambda p: calls.append(p) or '{"actions": []}')
-    assert res == {"reviewed": 0, "applied": 0, "deferred": 0, "observations": {"applied": 0, "declined": 0, "kept": 0, "open": 0}, "principles": 0}
+    assert res == {"reviewed": 0, "applied": 0, "deferred": 0, "backfilled": 0, "observations": {"applied": 0, "declined": 0, "kept": 0, "open": 0}, "principles": 0}
     assert calls == []
 
 
@@ -129,3 +136,37 @@ def test_curate_skips_retire_of_out_of_scope_skill(tmp_path):
     res = curate_catalog(ws, judge=judge)
     assert res["applied"] == 0
     assert (ws / "skills" / "git-a").exists()
+
+
+def test_curation_backfills_missing_description(tmp_path):
+    body = "# QR Reader\n\nDecode QR codes from images.\n\n## Triggers\n\n- QR image attached\n"
+    assert ss.dream_create_skill(tmp_path, "qr-reader", body, "seed").get("ok")
+    # simulate a legacy skill: strip the frontmatter surface fields
+    md = tmp_path / "skills" / "qr-reader" / "SKILL.md"
+    text = md.read_text(encoding="utf-8")
+    stripped = _strip_surface_fields(text)
+    assert "description:" not in stripped
+    md.write_text(stripped, encoding="utf-8")
+    out = curate_catalog(tmp_path, judge=lambda p: '{"actions": [], "observations": []}')
+    assert out.get("backfilled") == 1
+    assert "description:" in md.read_text(encoding="utf-8")
+
+
+def test_backfill_of_already_curated_skill_reenters_delta(tmp_path):
+    # Realistic repair case: the skill was already curated (provenance
+    # stamped) and only later loses its description — a pure frontmatter
+    # backfill doesn't change the body hash, so it must be pulled into the
+    # delta explicitly or the judge would never see it.
+    body = "# QR Reader\n\nDecode QR codes from images.\n\n## Triggers\n\n- QR image attached\n"
+    assert ss.dream_create_skill(tmp_path, "qr-reader", body, "seed").get("ok")
+    ss.mark_curated(tmp_path, "qr-reader")
+    md = tmp_path / "skills" / "qr-reader" / "SKILL.md"
+    md.write_text(_strip_surface_fields(md.read_text(encoding="utf-8")), encoding="utf-8")
+    assert ss.needs_curation(tmp_path, "qr-reader") is False  # body untouched
+
+    calls = []
+    out = curate_catalog(tmp_path,
+                         judge=lambda p: calls.append(p) or '{"actions": [], "observations": []}')
+    assert out.get("backfilled") == 1
+    assert out["reviewed"] == 1
+    assert calls and "qr-reader" in calls[0]

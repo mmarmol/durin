@@ -446,6 +446,26 @@ def mark_curated(workspace: Path, name: str) -> str | None:
     return sha
 
 
+def backfill_surface_frontmatter(workspace: Path, name: str) -> bool:
+    """Deterministically fill a missing name/description in `name`'s
+    frontmatter (see `_ensure_surface_frontmatter`) and commit if it changed
+    anything. Returns True only when the file was actually modified."""
+    if not _safe_name(name):
+        return False
+    store = _store_init(workspace)
+    dest = fork_on_write(workspace, name)
+    md = dest / "SKILL.md"
+    before = md.read_text(encoding="utf-8")
+    _ensure_surface_frontmatter(md, name)
+    after = md.read_text(encoding="utf-8")
+    if after == before:
+        return False
+    store.auto_commit(f"skill({name}): backfill frontmatter description [curation]",
+                      trailers=attribution_to_trailers(Attribution(actor="curation")))
+    _sync_index(workspace, name)
+    return True
+
+
 def read_mode(workspace: Path, name: str, loader: SkillsLoader | None = None) -> str:
     """Explicit metadata.durin.mode, else default by origin (builtin=auto, user=manual)."""
     if not _safe_name(name):
