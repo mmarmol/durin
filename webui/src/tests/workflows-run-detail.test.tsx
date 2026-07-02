@@ -17,6 +17,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     getWorkflowRecommendations: vi.fn(),
     runWorkflow: vi.fn(),
     listWorkflowRuns: vi.fn(),
+    listAllWorkflowRuns: vi.fn(),
     getWorkflowRunManifest: vi.fn(),
   };
 });
@@ -44,6 +45,7 @@ beforeEach(() => {
   } as never);
   vi.mocked(api.getWorkflowRecommendations).mockResolvedValue([]);
   vi.mocked(api.listWorkflowRuns).mockResolvedValue([]);
+  vi.mocked(api.listAllWorkflowRuns).mockResolvedValue([]);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -97,7 +99,7 @@ async function openRunnerAndRun() {
   await user.click(runner);
   const textarea = await screen.findByPlaceholderText(/Task to run/i);
   await user.type(textarea, "do the thing");
-  await user.click(screen.getByRole("button", { name: /Run/i }));
+  await user.click(screen.getByRole("button", { name: /^Run$/i }));
   return user;
 }
 
@@ -160,10 +162,10 @@ describe("WorkflowsView run detail", () => {
     await screen.findByText("first answer");
 
     // Trigger a second run; history now has two entries and shows the latest.
-    await user.click(screen.getByRole("button", { name: /Run/i }));
+    await user.click(screen.getByRole("button", { name: /^Run$/i }));
     await screen.findByText("second answer");
 
-    const history = screen.getByText(/^runs$/i).parentElement as HTMLElement;
+    const history = screen.getByText(/^runs$/i, { selector: "span" }).parentElement as HTMLElement;
     // Click the older run (#1) and assert its detail comes back.
     await user.click(within(history).getByRole("button", { name: "#1" }));
     expect(await screen.findByText("first answer")).toBeInTheDocument();
@@ -201,7 +203,7 @@ describe("WorkflowsView run detail", () => {
     );
 
     // History still has exactly one entry for this run (replaced, not appended).
-    const history = screen.getByText(/^runs$/i).parentElement as HTMLElement;
+    const history = screen.getByText(/^runs$/i, { selector: "span" }).parentElement as HTMLElement;
     expect(within(history).getAllByRole("button")).toHaveLength(1);
   });
 
@@ -318,7 +320,7 @@ describe("WorkflowsView run detail", () => {
     });
 
     const user = await openRunner();
-    const history = (await screen.findByText(/^runs$/i)).parentElement as HTMLElement;
+    const history = (await screen.findByText(/^runs$/i, { selector: "span" })).parentElement as HTMLElement;
     // Two persisted chips render newest-first: #2 is run-old-2, #1 is run-old-1.
     expect(within(history).getByRole("button", { name: "#2" })).toBeInTheDocument();
     const olderChip = within(history).getByRole("button", { name: "#1" });
@@ -345,7 +347,7 @@ describe("WorkflowsView run detail", () => {
       },
     ]);
     await openRunner();
-    await screen.findByText(/^runs$/i);
+    await screen.findByText(/^runs$/i, { selector: "span" });
     expect(screen.getByText(/keep the most recent runs/i)).toBeInTheDocument();
   });
 
@@ -362,7 +364,7 @@ describe("WorkflowsView run detail", () => {
       },
     ]);
     await openRunner();
-    const history = (await screen.findByText(/^runs$/i)).parentElement as HTMLElement;
+    const history = (await screen.findByText(/^runs$/i, { selector: "span" })).parentElement as HTMLElement;
     const chip = within(history).getByRole("button", { name: "#1" });
     expect(chip).toHaveAttribute("title", expect.stringContaining("· sub of run-parent-1"));
   });
