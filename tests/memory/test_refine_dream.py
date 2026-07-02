@@ -360,3 +360,22 @@ def test_remove_flagged_noop_on_missing(tmp_path):
                 verdict="unclear", confidence=70, reasoning="r")
     remove_flagged(tmp_path, "company:a", "company:b")  # different pair — no error
     assert len(read_flagged(tmp_path)) == 1
+
+
+def test_refine_capped_escalation_flags_pair(tmp_path, monkeypatch):
+    """Past the per-run escalation cap, a borderline pair is flagged for the
+    Bandeja instead of silently keeping the cheap verdict."""
+    import durin.memory.refine_dream as rd
+
+    _two_dupes(tmp_path)
+    monkeypatch.setattr(rd, "_MAX_ESCALATIONS_PER_RUN", 0)
+    monkeypatch.setattr(
+        rd, "_escalate_judge",
+        lambda ws, a, b, **kw: (_ for _ in ()).throw(
+            AssertionError("must not escalate past the cap")))
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("unclear", 80),
+                     confidence_threshold=95, escalate_floor=70)
+    assert not out["merged"]
+    flagged = read_flagged(tmp_path)
+    assert len(flagged) == 1
+    assert flagged[0]["reasoning"].startswith("escalation cap")

@@ -30,8 +30,9 @@ LLMInvoke = Callable[..., Any]
 _TOMBSTONE_FILE = ".refine_tombstones.json"
 _FLAGGED_FILE = ".flagged_pairs.json"
 # Cost bound: a single refine run never fans out more than this many Tier-2
-# sub-agent investigations. Past it, borderline pairs keep the cheap verdict
-# and a `memory.absorb.escalation_capped` event is emitted (never silent).
+# sub-agent investigations. Past it, borderline pairs keep the cheap verdict,
+# emit a `memory.absorb.escalation_capped` event, and are flagged for manual
+# review in the Bandeja (never silent).
 _MAX_ESCALATIONS_PER_RUN = 25
 
 
@@ -294,6 +295,11 @@ def run_refine(
             if escalations >= _MAX_ESCALATIONS_PER_RUN:
                 _emit("memory.absorb.escalation_capped",
                       canonical=ref_a, absorbed=ref_b)
+                add_flagged(workspace, ref_a, ref_b,
+                            verdict=judged.verdict,
+                            confidence=judged.confidence,
+                            reasoning=("escalation cap reached this run; "
+                                       "Tier-1 verdict kept — review manually"))
             else:
                 escalations += 1
                 try:

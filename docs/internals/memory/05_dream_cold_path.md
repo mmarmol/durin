@@ -279,9 +279,11 @@ threaded through; it is `None` when the vector index is unavailable.
    **and** `confidence >= confidence_threshold`. Every other outcome keeps the
    pair separate.
 7. **Flag surface:** when the Tier 2 sub-agent investigated a pair and did not
-   confirm it as `"same"`, the pair is recorded in `memory/.flagged_pairs.json`.
-   `durin memory absorb-suggest` surfaces these under "Flagged by the agent —
-   needs review" so the operator can inspect and merge or dismiss them manually.
+   confirm it as `"same"`, or a borderline pair hit the per-run escalation cap
+   before it could be investigated, the pair is recorded in
+   `memory/.flagged_pairs.json`. `durin memory absorb-suggest` and the webui
+   Bandeja surface these so the operator can inspect and merge or dismiss them
+   manually.
 
 `EntityAbsorption.absorb` does a deterministic structural merge (union of
 aliases / attributes / relations / provenance; canonical wins attribute
