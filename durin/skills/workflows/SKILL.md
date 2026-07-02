@@ -39,7 +39,11 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   the user is the `__needs_input__` terminal. Planning-with-the-user or exploring-with-the-user
   belongs in the normal conversation, not a workflow.
 - **Small instances** — coverage value scales with the number of items. For a handful, a
-  prompt matches the workflow without the orchestration overhead.
+  prompt matches the workflow without the orchestration overhead — especially since one
+  turn can already fan tool calls out in parallel (batch `web_fetch`, parallel reads).
+  Reach for a workflow fan-out when each item needs *fresh, focused context*, not merely
+  parallel I/O; and inside a workflow, every node runs its own independent tool calls in
+  parallel anyway.
 
 ## Components
 

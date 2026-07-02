@@ -50,7 +50,10 @@ sees what deliverables were produced and where to copy them from.
 **A node runs its body, then optionally routes.** `WorkflowEngine.run`
 (`durin/workflow/engine.py`) walks the graph from `start`. For an agent node it calls a
 `NodeRunner` — by default `AgentNodeRunner` (`durin/workflow/node_runner.py`), which
-runs one `AgentRunner` turn with that node's model and tool registry, then persists
+runs one `AgentRunner` turn with that node's model and tool registry (with
+`concurrent_tools` enabled, so a node's independent concurrency-safe tool calls — batch
+fetches, parallel reads — run in parallel like the main loop's and subagents'; mutations
+stay serial), then persists
 the node's conversation as a session keyed `workflow:<run_id>:<node_id>:<iteration>`
 with lineage (`origin_type="workflow_node"`). A node is configured independently and
 focused by default. Its **work mode** is an `AgentMode` (`durin/agent/agent_mode.py`) —
