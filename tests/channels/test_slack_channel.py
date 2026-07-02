@@ -20,6 +20,7 @@ from durin.channels.slack import SLACK_MAX_MESSAGE_LEN, SlackChannel, SlackConfi
 class _FakeAsyncWebClient:
     def __init__(self) -> None:
         self.chat_post_calls: list[dict[str, object | None]] = []
+        self.chat_update_calls: list[dict[str, object | None]] = []
         self.file_upload_calls: list[dict[str, object | None]] = []
         self.reactions_add_calls: list[dict[str, object | None]] = []
         self.reactions_remove_calls: list[dict[str, object | None]] = []
@@ -39,7 +40,7 @@ class _FakeAsyncWebClient:
         text: str,
         thread_ts: str | None = None,
         blocks: list[dict[str, object]] | None = None,
-    ) -> None:
+    ) -> dict[str, object]:
         call: dict[str, object | None] = {
             "channel": channel,
             "text": text,
@@ -48,6 +49,17 @@ class _FakeAsyncWebClient:
         if blocks is not None:
             call["blocks"] = blocks
         self.chat_post_calls.append(call)
+        return {"ts": f"1700000001.{len(self.chat_post_calls):06d}"}
+
+    async def chat_update(  # noqa: N802 - mirrors Slack SDK method name
+        self,
+        *,
+        channel: str,
+        ts: str,
+        text: str,
+    ) -> dict[str, object]:
+        self.chat_update_calls.append({"channel": channel, "ts": ts, "text": text})
+        return {"ts": ts}
 
     async def files_upload_v2(
         self,
@@ -775,4 +787,224 @@ async def test_group_allowlist_policy_gates_by_channel() -> None:
     assert channel._handle_message.await_args.kwargs["is_dm"] is False
 
     await channel._on_socket_request(client, group_request("C_DENIED", "env-b"))
+    assert channel._handle_message.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Streaming (send_delta)
+# ---------------------------------------------------------------------------
+
+
+def _delta_meta(*, stream_id: str = "s:1:0", end: bool = False, event_ts: str | None = None):
+    meta: dict[str, object] = {
+        "_stream_id": stream_id,
+        "slack": {"thread_ts": "111.000", "event": {"ts": event_ts or "111.000"}},
+    }
+    meta["_stream_end" if end else "_stream_delta"] = True
+    return meta
+
+
+@pytest.mark.asyncio
+async def test_send_delta_posts_edits_and_finalizes_with_mrkdwn() -> None:
+    channel = SlackChannel(SlackConfig(enabled=True, streaming=True), MessageBus())
+    fake_web = _FakeAsyncWebClient()
+    channel._web_client = fake_web
+
+    await channel.send_delta("C123", "Hello ", _delta_meta())
+    assert len(fake_web.chat_post_calls) == 1
+    assert fake_web.chat_post_calls[0]["thread_ts"] == "111.000"
+
+    # Within the edit interval nothing is sent; force the throttle open.
+    await channel.send_delta("C123", "**wor", _delta_meta())
+    assert fake_web.chat_update_calls == []
+    channel._stream_bufs["C123"].last_edit = 0.0
+    await channel.send_delta("C123", "ld**", _delta_meta())
+    assert len(fake_web.chat_update_calls) == 1
+    assert fake_web.chat_update_calls[0]["text"] == "Hello **world**"
+
+    # Final edit converts to mrkdwn and swaps the progress reaction.
+    await channel.send_delta("C123", "", _delta_meta(end=True))
+    assert fake_web.chat_update_calls[-1]["text"] == "Hello *world*"
+    assert fake_web.reactions_remove_calls == [
+        {"channel": "C123", "name": "eyes", "timestamp": "111.000"}
+    ]
+    assert fake_web.reactions_add_calls == [
+        {"channel": "C123", "name": "white_check_mark", "timestamp": "111.000"}
+    ]
+    assert "C123" not in channel._stream_bufs
+
+
+@pytest.mark.asyncio
+async def test_send_delta_new_stream_id_resets_buffer() -> None:
+    channel = SlackChannel(SlackConfig(enabled=True, streaming=True), MessageBus())
+    fake_web = _FakeAsyncWebClient()
+    channel._web_client = fake_web
+
+    await channel.send_delta("C123", "first segment", _delta_meta(stream_id="s:1:0"))
+    await channel.send_delta("C123", "second segment", _delta_meta(stream_id="s:1:1"))
+    # Each segment opens its own message.
+    assert len(fake_web.chat_post_calls) == 2
+    assert channel._stream_bufs["C123"].text == "second segment"
+
+
+@pytest.mark.asyncio
+async def test_stream_end_without_buffer_is_noop() -> None:
+    channel = SlackChannel(SlackConfig(enabled=True, streaming=True), MessageBus())
+    fake_web = _FakeAsyncWebClient()
+    channel._web_client = fake_web
+
+    await channel.send_delta("C123", "", _delta_meta(end=True))
+    assert fake_web.chat_update_calls == []
+    assert fake_web.reactions_add_calls == []
+
+
+def test_slack_supports_streaming_by_default() -> None:
+    channel = SlackChannel(SlackConfig(enabled=True), MessageBus())
+    assert channel.supports_streaming is True
+    channel_off = SlackChannel(SlackConfig(enabled=True, streaming=False), MessageBus())
+    assert channel_off.supports_streaming is False
+
+
+# ---------------------------------------------------------------------------
+# Quoted / forwarded content extraction
+# ---------------------------------------------------------------------------
+
+
+def test_extract_quoted_context_surfaces_hidden_quote() -> None:
+    channel = SlackChannel(SlackConfig(enabled=True), MessageBus())
+    event = {
+        "blocks": [
+            {
+                "type": "rich_text",
+                "elements": [
+                    {
+                        "type": "rich_text_quote",
+                        "elements": [
+                            {"type": "text", "text": "deploy failed on "},
+                            {"type": "link", "url": "https://ci.example.com/1"},
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+    lines = channel._extract_quoted_context(event, "what happened here?")
+    assert lines == ["[quoted] deploy failed on https://ci.example.com/1"]
+
+
+def test_extract_quoted_context_skips_quotes_already_in_text() -> None:
+    channel = SlackChannel(SlackConfig(enabled=True), MessageBus())
+    event = {
+        "blocks": [
+            {
+                "type": "rich_text",
+                "elements": [
+                    {
+                        "type": "rich_text_quote",
+                        "elements": [{"type": "text", "text": "line one\nline two"}],
+                    },
+                ],
+            }
+        ],
+    }
+    text = "&gt; line one\n&gt; line two\nthoughts?"
+    assert channel._extract_quoted_context(event, text) == []
+
+
+def test_extract_quoted_context_surfaces_shared_message_attachment() -> None:
+    channel = SlackChannel(SlackConfig(enabled=True), MessageBus())
+    event = {
+        "attachments": [
+            {"author_name": "alice", "text": "the original forwarded message"},
+        ],
+    }
+    lines = channel._extract_quoted_context(event, "fyi")
+    assert lines == ["[shared] alice — the original forwarded message"]
+
+
+# ---------------------------------------------------------------------------
+# Thread auto-follow
+# ---------------------------------------------------------------------------
+
+
+def _channel_event(*, event_type: str, text: str, ts: str, thread_ts: str | None = None,
+                   envelope_id: str = "env-f1"):
+    event: dict[str, object] = {
+        "type": event_type,
+        "user": "U1",
+        "channel": "C123",
+        "channel_type": "channel",
+        "text": text,
+        "ts": ts,
+    }
+    if thread_ts:
+        event["thread_ts"] = thread_ts
+    return SimpleNamespace(
+        type="events_api",
+        envelope_id=envelope_id,
+        payload={"event_id": f"Ev-{envelope_id}", "event": event},
+    )
+
+
+@pytest.mark.asyncio
+async def test_mentioned_thread_is_followed_without_re_mention() -> None:
+    channel = SlackChannel(
+        SlackConfig(enabled=True, allow_from=["*"], group_policy="mention"), MessageBus()
+    )
+    channel._bot_user_id = "UBOT"
+    channel._web_client = _FakeAsyncWebClient()
+    channel._handle_message = AsyncMock()  # type: ignore[method-assign]
+    channel._with_thread_context = AsyncMock(side_effect=lambda text, **kw: text)  # type: ignore[method-assign]
+    client = SimpleNamespace(send_socket_mode_response=AsyncMock())
+
+    # Top-level mention: reply_in_thread makes ts the thread root and follows it.
+    await channel._on_socket_request(
+        client,
+        _channel_event(event_type="app_mention", text="<@UBOT> hola", ts="200.000", envelope_id="f1"),
+    )
+    assert channel._handle_message.await_count == 1
+    assert "C123:200.000" in channel._followed_threads
+
+    # Follow-up inside that thread WITHOUT a mention still gets an answer.
+    await channel._on_socket_request(
+        client,
+        _channel_event(event_type="message", text="and the details?", ts="201.000",
+                       thread_ts="200.000", envelope_id="f2"),
+    )
+    assert channel._handle_message.await_count == 2
+
+    # A message in an unrelated thread is still mention-gated.
+    await channel._on_socket_request(
+        client,
+        _channel_event(event_type="message", text="unrelated", ts="301.000",
+                       thread_ts="300.000", envelope_id="f3"),
+    )
+    assert channel._handle_message.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_thread_auto_follow_can_be_disabled() -> None:
+    channel = SlackChannel(
+        SlackConfig(enabled=True, allow_from=["*"], group_policy="mention",
+                    thread_auto_follow=False),
+        MessageBus(),
+    )
+    channel._bot_user_id = "UBOT"
+    channel._web_client = _FakeAsyncWebClient()
+    channel._handle_message = AsyncMock()  # type: ignore[method-assign]
+    channel._with_thread_context = AsyncMock(side_effect=lambda text, **kw: text)  # type: ignore[method-assign]
+    client = SimpleNamespace(send_socket_mode_response=AsyncMock())
+
+    await channel._on_socket_request(
+        client,
+        _channel_event(event_type="app_mention", text="<@UBOT> hola", ts="400.000", envelope_id="g1"),
+    )
+    assert channel._handle_message.await_count == 1
+    assert channel._followed_threads == set()
+
+    await channel._on_socket_request(
+        client,
+        _channel_event(event_type="message", text="follow up", ts="401.000",
+                       thread_ts="400.000", envelope_id="g2"),
+    )
     assert channel._handle_message.await_count == 1

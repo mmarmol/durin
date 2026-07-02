@@ -68,4 +68,6 @@ async def test_slack_returns_typed_field_schema():
         "group_allow_from",
         "reply_in_thread",
         "include_thread_context",
+        "streaming",
+        "thread_auto_follow",
     }

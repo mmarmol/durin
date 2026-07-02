@@ -358,6 +358,8 @@
         "group_allow_from": "Allowed channels",
         "reply_in_thread": "Reply in thread",
         "include_thread_context": "Include thread context",
+        "streaming": "Streaming replies",
+        "thread_auto_follow": "Follow mentioned threads",
         "imap_host": "IMAP server",
         "imap_port": "Port",
         "imap_username": "Username",
