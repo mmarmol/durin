@@ -151,8 +151,7 @@ def test_create_rejects_underivable_body(tmp_path):
 
 
 def test_fuse_derives_missing_frontmatter(tmp_path):
-    from durin.agent.skills_store import (
-        dream_create_skill, dream_fuse_skills, read_skill_content)
+    from durin.agent.skills_store import dream_create_skill, dream_fuse_skills, read_skill_content
     a = "---\nname: a\ndescription: d-a\n---\n# A\n\nProc A.\n"
     b = "---\nname: b\ndescription: d-b\n---\n# B\n\nProc B.\n"
     assert dream_create_skill(tmp_path, "a", a, "seed").get("ok")
