@@ -463,7 +463,7 @@ class SkillsService:
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillFileSaveCommand,
         response_model=SkillsResult,
-        summary="Save one text file in a skill (manual)",
+        summary="Save one text file in a skill",
     )
     async def file_save(self, cmd: SkillFileSaveCommand, principal: Principal) -> SkillsResult:
         principal.require(Scope.SKILLS_WRITE)

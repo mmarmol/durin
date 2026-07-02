@@ -896,8 +896,6 @@
     "empty": "Aún no tenés skills. Agregá una para empezar.",
     "selectPrompt": "Elegí una skill para verla, o agregá una nueva.",
     "discardPrompt": "¿Descartar los cambios sin guardar?",
-    "editHint": "Pasá a manual para editar",
-    "autoReadonly": "Solo lectura: esta skill está en modo auto (la gestiona el agente). Pasala a manual para editar.",
     "add": "Agregar",
     "acquireTitle": "Agregar una skill",
     "acquireHint": "Importá desde una ruta, URL o repo, o buscá en el registro. Toda skill que traés queda en Pendientes hasta que la apruebes.",

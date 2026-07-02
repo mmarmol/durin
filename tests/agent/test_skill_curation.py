@@ -24,6 +24,22 @@ def test_curate_reviews_only_the_changed_delta(tmp_path):
     assert "changed" in calls[0] and "stable" not in calls[0]
 
 
+def test_curate_surfaces_recent_user_edits(tmp_path):
+    ws = tmp_path / "ws"
+    _mk(ws, "demo", "body")
+    ss.mark_curated(ws, "demo")
+    # A hand edit by the user after curation: dream must be told about it.
+    ss.save_skill_file(ws, "demo", "SKILL.md",
+                       "---\nname: demo\nmetadata:\n  durin:\n    mode: auto\n---\nuser body\n",
+                       rationale="edited SKILL.md via web",
+                       attribution=ss.Attribution(actor="user"))
+
+    calls = []
+    curate_catalog(ws, judge=lambda p: calls.append(p) or '{"actions": [], "observations": []}')
+    assert calls, "user edit should pull the skill into the delta"
+    assert "edited SKILL.md via web" in calls[0]  # surfaced in the user-edits section
+
+
 def test_curate_fuses_when_judge_says_overlap(tmp_path):
     ws = tmp_path / "ws"
     _mk(ws, "git-a", "git rebase steps")

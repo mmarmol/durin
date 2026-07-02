@@ -704,7 +704,9 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
 
   const curDraft = drafts[selFile] ?? fileBody;
   const dirty = curDraft !== fileBody;
-  const editable = detail?.mode === "manual" && fileText;
+  // Both modes are user-editable: `auto` means dream may auto-improve it, not
+  // that the user is locked out. Only binary files are non-editable.
+  const editable = !!fileText;
 
   const setCurDraft = useCallback(
     (v: string) => setDrafts((d) => ({ ...d, [selFile]: v })),
@@ -846,7 +848,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
         delete n["SKILL.md"];
         return n;
       });
-      if (next !== "manual") setTab("view");
+      setTab("view");
       await refresh();
     } catch (e) {
       setError(errMsg(e));
@@ -1469,7 +1471,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                         type="button"
                         onClick={() => editable && setTab("edit")}
                         disabled={!editable}
-                        title={editable ? undefined : t("skills.editHint")}
+                        title={editable ? undefined : t("skills.binaryFile")}
                         className={cn(
                           "rounded-[6px] px-2.5 py-1 text-[12px] transition-colors disabled:opacity-40",
                           tab === "edit"
@@ -1693,11 +1695,6 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                   </div>
                 ) : null}
 
-                {!editable && tab !== "history" && detail?.mode === "auto" ? (
-                  <div className="shrink-0 border-t border-border/30 px-4 py-3 text-[12px] text-muted-foreground sm:px-6">
-                    {t("skills.autoReadonly")}
-                  </div>
-                ) : null}
                 </div>
               </div>
             )}

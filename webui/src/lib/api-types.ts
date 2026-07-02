@@ -1442,7 +1442,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Save one text file in a skill (manual) */
+        /** Save one text file in a skill */
         post: operations["skills_file_save"];
         delete?: never;
         options?: never;

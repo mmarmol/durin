@@ -73,15 +73,20 @@ def test_apply_edit_rejects_non_unique_old(tmp_path):
     assert "unique" in res["error"]
 
 
-def test_save_skill_content_requires_manual(tmp_path):
+def test_save_skill_content_editable_in_both_modes(tmp_path):
+    # auto is not a user lock: the web save works in either mode.
     ws = tmp_path / "ws"
     ws.mkdir()
     _user_skill(ws, "mine")
     ok = ss.save_skill_content(ws, "mine", "---\nname: mine\ndescription: d\n---\nNEW\n")
     assert ok["ok"] is True
     ss.set_mode(ws, "mine", "auto")
-    rej = ss.save_skill_content(ws, "mine", "whatever")
-    assert "error" in rej
+    # The web editor round-trips the full frontmatter, so the mode is preserved.
+    auto = ss.save_skill_content(
+        ws, "mine",
+        "---\nname: mine\ndescription: d\nmetadata:\n  durin:\n    mode: auto\n---\nAUTO\n")
+    assert auto["ok"] is True
+    assert ss.read_mode(ws, "mine") == "auto"  # a user edit leaves it auto
 
 
 def test_apply_edit_create_file_with_empty_old(tmp_path):
