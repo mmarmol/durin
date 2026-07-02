@@ -18,6 +18,7 @@ AgentRunner + persists node sessions is Task 5.
 from __future__ import annotations
 
 import concurrent.futures
+import os
 import shutil
 import time
 import uuid
@@ -216,7 +217,7 @@ class WorkflowEngine:
         if preflight is not None:
             return preflight
 
-        if self._workspace is not None:
+        if self._workspace is not None and work_dir_override is None:
             prune_runs(self._workspace, keep=self._prune_keep)
         runs: list[NodeRun] = []
         # The effective root MUST match node_runner's headless rooting: a None calling
@@ -376,6 +377,7 @@ class WorkflowEngine:
         # Seed input_files into the shared working folder so the start node reads them as
         # the run's starting files.
         if input_files and work_dir is not None:
+            Path(work_dir).mkdir(parents=True, exist_ok=True)
             for path in input_files:
                 shutil.copy(path, Path(work_dir) / Path(path).name)
 
@@ -591,6 +593,11 @@ class WorkflowEngine:
             # in-flight run is observable before the next node starts.
             if update_manifest is not None:
                 update_manifest()
+            if work_dir is not None and work_dir_override is None:
+                try:
+                    os.utime(Path(work_dir).parent, None)   # keep .workflow/<run_id>/ recent while running
+                except OSError:
+                    pass
             if self._progress_emit is not None:
                 nodes = [
                     {
