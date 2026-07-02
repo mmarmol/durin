@@ -164,6 +164,42 @@ def test_engine_progress_nodes_carry_label():
     assert by_id["gather"]["label"] == "Collect the results"
 
 
+def test_engine_progress_frames_carry_iteration_and_budget_for_looping_node():
+    """A node that loops back onto itself (on_fail -> itself) must carry its
+    per-pass 'iteration' and effective 'budget' in every progress frame, both
+    for the in-flight ('running') entry and for its finished ('done') entries."""
+    calls = []
+    outputs = iter(["FAIL first pass", "PASS second pass"])
+    wf = parse_workflow({
+        "name": "loop-prog", "start": "gate", "max_visits": 5,
+        "nodes": [
+            {"id": "gate", "kind": "work", "on_pass": None, "on_fail": "gate", "max_visits": 2},
+        ],
+    })
+
+    def runner(req: NodeRunRequest) -> NodeRunResponse:
+        return NodeRunResponse(
+            output=next(outputs),
+            session_key=f"workflow:{req.run_id}:{req.node.id}:{req.iteration}",
+            messages=[],
+        )
+
+    eng = WorkflowEngine(
+        node_runner=runner,
+        run_id_factory=lambda: "r-loop",
+        progress_emit=lambda p: calls.append(p),
+    )
+    result = eng.run(wf, "do it", root_session_key="websocket:chatLoop")
+    assert result.status == "completed"
+
+    # At least one frame's finished-gate entry must show iteration=1, budget=2
+    # (the first pass), and at least one must show iteration=2, budget=2 (the
+    # second/final pass).
+    gate_entries = [n for c in calls for n in c["nodes"] if n["id"] == "gate"]
+    assert any(n.get("iteration") == 1 and n.get("budget") == 2 for n in gate_entries), gate_entries
+    assert any(n.get("iteration") == 2 and n.get("budget") == 2 for n in gate_entries), gate_entries
+
+
 def test_parallel_branches_carry_label():
     """Branch dicts inside parallel nodes must carry a 'label' key."""
     frames = []

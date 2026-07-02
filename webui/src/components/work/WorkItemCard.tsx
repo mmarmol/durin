@@ -1,4 +1,4 @@
-import { Check, GitBranch, Loader2, X } from "lucide-react";
+import { Check, GitBranch, HelpCircle, Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
@@ -14,6 +14,18 @@ function NodeStatusIcon({ status }: { status: WorkNode["status"] }) {
   return <span className="h-3 w-3 flex items-center justify-center text-muted-foreground/50" aria-hidden>·</span>;
 }
 
+// "pass N of budget" chip for a looping node, shown only once it has entered a
+// second (or later) pass — a first pass carries no useful loop information.
+function PassChip({ iteration, budget }: { iteration?: number; budget?: number }) {
+  const { t } = useTranslation();
+  if (budget == null || iteration == null || iteration <= 1) return null;
+  return (
+    <span className="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
+      {t("workflows.passOf", { iteration, budget })}
+    </span>
+  );
+}
+
 function BranchStatusIcon({ status }: { status: WorkBranch["status"] }) {
   if (status === "done") return <Check className="h-3 w-3 text-emerald-600" aria-hidden />;
   if (status === "failed") return <X className="h-3 w-3 text-destructive" aria-hidden />;
@@ -25,8 +37,8 @@ function ItemStatusIcon({ status }: { status: WorkItem["status"] }) {
   if (status === "done") return <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden />;
   if (status === "failed") return <X className="h-3.5 w-3.5 text-destructive" aria-hidden />;
   if (status === "running") return <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600" aria-hidden />;
-  // needs_input — a distinct marker; reuses amber but shows a static pause glyph.
-  return <span className="h-3.5 w-3.5 flex items-center justify-center text-amber-500 text-[11px] font-bold" aria-hidden>?</span>;
+  // needs_input — accent-tinted: the run paused, it did not fail.
+  return <HelpCircle className="h-3.5 w-3.5 text-accent-foreground" aria-hidden />;
 }
 
 /** Presentational card for one WorkItem (workflow or sub-agent). */
@@ -51,12 +63,20 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
           )}
         </div>
         {item.status === "needs_input" && (
-          <span className="text-[11px] text-amber-500">
+          <span className="rounded bg-accent px-1.5 py-0.5 text-[11px] text-accent-foreground">
             {t("tasks.status.needs_input")}
           </span>
         )}
         <ItemStatusIcon status={item.status} />
       </div>
+
+      {/* needs_input: neutral hand-off copy — the calling agent owns the resume,
+          not this card, so there is no resume form here. */}
+      {item.status === "needs_input" && (
+        <div className="mt-1 pl-5 text-[11px] text-muted-foreground">
+          {t("tasks.needsInputHint")}
+        </div>
+      )}
 
       {/* Workflow: node list with optional nested parallel branches */}
       {item.kind === "workflow" && item.nodes && item.nodes.length > 0 && (
@@ -74,6 +94,7 @@ export function WorkItemCard({ item }: { item: WorkItem }): JSX.Element {
                 >
                   {node.label ?? node.id}
                 </span>
+                <PassChip iteration={node.iteration} budget={node.budget} />
               </div>
               {/* Parallel branches: indented beneath the node with a left rail */}
               {node.branches && node.branches.length > 0 && (

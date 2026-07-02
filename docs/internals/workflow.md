@@ -359,9 +359,9 @@ The `WorkflowsService` exposes read routes for run manifests:
 The `POST /api/v1/workflows/{name}/run` request accepts an optional `resume_run_id`:
 the run_id of a prior run of the same workflow that ended `needs_input`, with `task`
 carrying the user's answers. The response carries `run_id`, a per-node trace with
-`session_key`, `worker_index`, `status`, and `route_label` for each entry, plus
-`needs_input_node` (the node that asked, when the run ends `needs_input`) and
-`output_files` (relative paths in `output_dir`, for a completed run).
+`session_key`, `worker_index`, `branch_id`, `budget`, `status`, and `route_label` for
+each entry, plus `needs_input_node` (the node that asked, when the run ends
+`needs_input`) and `output_files` (relative paths in `output_dir`, for a completed run).
 
 ### 4g. Background mode and live progress
 
@@ -408,7 +408,10 @@ executes on a worker thread (`asyncio.to_thread`), frames are marshalled back to
 the gateway's event loop via
 `asyncio.run_coroutine_threadsafe(bus.publish_outbound(...), main_loop)` before
 being published on the message bus. The WebSocket channel propagates them as
-`tool_events` frames that the work panel consumes in real time.
+`tool_events` frames that the work panel consumes in real time. Each node entry
+in a frame also carries its `iteration` (current pass number) and `budget`
+(effective visit limit, `null` where not applicable) so the panels can render
+loop progress live, not just after the run completes.
 
 ## 5. How it works
 

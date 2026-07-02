@@ -1664,14 +1664,32 @@
     "setAsStart": "marcar como inicio",
     "maxVisits": "máximo de visitas",
     "maxVisitsHint": "vacío = default del workflow",
+    "maxVisitsWorkflow": "Máximo de pasadas por nodo (default del workflow)",
+    "effectivePassLimit": "límite de pasadas efectivo: {{limit}}",
     "exhausted": "no se completó — reintentos agotados",
     "exhaustedNode": "agotado en",
+    "loopLimitReached": "Se alcanzó el límite del loop",
     "finalOutput": "salida final",
     "runHistory": "ejecuciones",
     "copySession": "copiar clave de sesión",
     "sessionCopied": "clave de sesión copiada",
     "workerLabel": "worker {{index}}",
     "branchLabel": "rama {{id}}",
+    "needsInputTitle": "Esperando tu respuesta",
+    "needsInputBody": "La ejecución se pausó en {{node}} — no falló. Responde abajo para continuar esta misma ejecución.",
+    "questionsFromRun": "Preguntas de la ejecución",
+    "answersPlaceholder": "Escribe tus respuestas…",
+    "resumeRun": "Reanudar ejecución",
+    "resumeCaption": "reanuda en {{node}} · misma carpeta de trabajo y sesiones · ejecución {{runId}}",
+    "abortedTitle": "Ejecución abortada",
+    "cancelledTitle": "Ejecución cancelada",
+    "outputFiles": "archivos de salida",
+    "outputPruneHint": "se eliminan cuando se acumulan ejecuciones más nuevas — copia lo que necesites",
+    "andNMore": "… y {{count}} más",
+    "passOf": "pasada {{iteration}} de {{budget}}",
+    "finalPass": "pasada final",
+    "continuesSession": "continúa sesión",
+    "persistentInParallelWarning": "Este nodo es una rama de {{parallelId}} — las sesiones persistentes no están permitidas en unidades paralelas. Guardar fallará.",
     "runStatus": {
       "ok": "ok",
       "no_session": "sin sesión",
@@ -1687,7 +1705,8 @@
   "tasks": {
     "status": {
       "needs_input": "Necesita input"
-    }
+    },
+    "needsInputHint": "En manos del agente que lo llamó — puede responder con su propio contexto o preguntarte, y luego reanuda este run."
   },
   "work": {
     "steps": "{{count}} pasos",

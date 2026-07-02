@@ -36,6 +36,8 @@ def _terminal_progress_payload(workflow: Any, run_id: str, runs: Any) -> dict:
             "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
             "status": "failed" if r.status in ("node_failed", "persist_failed") else "done",
             "route_label": getattr(r, "route_label", None),
+            "iteration": r.iteration,
+            "budget": getattr(r, "budget", None),
         }
         for r in runs
     ]

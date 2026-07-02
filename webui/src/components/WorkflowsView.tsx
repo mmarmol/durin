@@ -13,7 +13,21 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Check, Copy, Lightbulb, Loader2, Play, Plus, Sparkles, Trash2, Workflow as WorkflowIcon } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  Copy,
+  FileIcon,
+  HelpCircle,
+  Lightbulb,
+  Loader2,
+  Play,
+  Plus,
+  RefreshCw,
+  Sparkles,
+  Trash2,
+  Workflow as WorkflowIcon,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -47,7 +61,8 @@ import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
 
 function errMsg(e: unknown): string {
-  return e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message;
+  if (e instanceof ApiError) return e.detail ? `HTTP ${e.status}: ${e.detail}` : `HTTP ${e.status}`;
+  return (e as Error).message;
 }
 
 const KIND_RING: Record<string, string> = {
@@ -287,6 +302,18 @@ function CasesEditor({
   );
 }
 
+// The id of the parallel node (if any) that references `nodeId` as a static branch
+// or as its dynamic worker — used to warn that a persistent session on `nodeId` is
+// invalid there (each parallel unit needs its own fresh session).
+function parallelParentOf(nodeId: string, allNodes: WorkflowNodeDef[]): string | null {
+  for (const n of allNodes) {
+    if (n.kind !== "parallel") continue;
+    if (n.worker === nodeId) return n.id;
+    if (Array.isArray(n.branches) && n.branches.includes(nodeId)) return n.id;
+  }
+  return null;
+}
+
 function NodeConfigPanel({
   node,
   nodeIds,
@@ -294,6 +321,8 @@ function NodeConfigPanel({
   personas,
   allWorkflowNames,
   currentWorkflowName,
+  allNodes,
+  workflowMaxVisits,
   token,
   onChange,
   onMakeStart,
@@ -305,6 +334,8 @@ function NodeConfigPanel({
   personas: PersonaItem[];
   allWorkflowNames: string[];
   currentWorkflowName: string;
+  allNodes: WorkflowNodeDef[];
+  workflowMaxVisits?: number;
   token: string;
   onChange: (patch: Partial<WorkflowNodeDef>) => void;
   onMakeStart: () => void;
@@ -475,6 +506,15 @@ function NodeConfigPanel({
                 </Field>
               )}
 
+              {(node.session as string) === "persistent" && (() => {
+                const parallelId = parallelParentOf(node.id, allNodes);
+                return parallelId ? (
+                  <p className="rounded bg-warn/10 px-2 py-1.5 text-[11px] text-warn">
+                    {t("workflows.persistentInParallelWarning", { parallelId })}
+                  </p>
+                ) : null;
+              })()}
+
               <div className="flex-1 min-h-0 flex flex-col gap-1">
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-muted-foreground">{t("workflows.prompt")}</span>
@@ -582,6 +622,11 @@ function NodeConfigPanel({
               className="h-8"
             />
           </Field>
+          <span className="text-[11px] text-muted-foreground">
+            {t("workflows.effectivePassLimit", {
+              limit: (node.max_visits as number | undefined) ?? workflowMaxVisits ?? 3,
+            })}
+          </span>
         </>
       )}
 
@@ -841,10 +886,13 @@ function CopyableKey({ value }: { value: string }) {
   );
 }
 
-// One per-node/worker row in a run's trace: identity (node_id#iteration, plus fan-out
-// worker_index / static branch_id so concurrent units are legible), a status chip and
-// route verdict, the copyable session key, and the node's (truncated) output.
-function RunNodeRow({ run }: { run: WorkflowRunNode }) {
+// One per-node/worker row in a run's trace: identity (node_id#iteration, or
+// "pass N of budget" once the node has a known visit budget), fan-out
+// worker_index / static branch_id so concurrent units are legible, a status
+// chip and route verdict, a "continues session" chip when this row picks up
+// an earlier row's session (a resumed/looping node), the copyable session
+// key, and the node's (truncated) output.
+function RunNodeRow({ run, continuesSession }: { run: WorkflowRunNode; continuesSession: boolean }) {
   const { t } = useTranslation();
   const verdict =
     run.route_label != null && run.route_label !== ""
@@ -854,12 +902,26 @@ function RunNodeRow({ run }: { run: WorkflowRunNode }) {
         : run.passed === false
           ? "✗"
           : null;
+  const isFinalPass = run.budget != null && run.iteration === run.budget;
   return (
     <div className="flex flex-col gap-1 rounded border px-2 py-1.5">
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="font-mono text-[11px] font-medium">
-          {run.node_id}#{run.iteration}
+          {run.budget != null
+            ? `${run.node_id} · ${t("workflows.passOf", { iteration: run.iteration, budget: run.budget })}`
+            : `${run.node_id}#${run.iteration}`}
         </span>
+        {isFinalPass && (
+          <span className="rounded bg-warn/10 px-1 py-0.5 text-[10px] text-warn">
+            {t("workflows.finalPass")}
+          </span>
+        )}
+        {continuesSession && (
+          <span className="inline-flex items-center gap-0.5 rounded bg-accent px-1 py-0.5 text-[10px] text-accent-foreground">
+            <RefreshCw className="h-2.5 w-2.5" aria-hidden />
+            {t("workflows.continuesSession")}
+          </span>
+        )}
         {run.worker_index != null && (
           <span className="rounded bg-violet-500/10 px-1 py-0.5 text-[10px] text-violet-700 dark:text-violet-300">
             {t("workflows.workerLabel", { index: run.worker_index })}
@@ -894,28 +956,113 @@ function RunNodeRow({ run }: { run: WorkflowRunNode }) {
   );
 }
 
-// The detail view of a single run: the exhausted/incomplete banner (if any), a row per
-// node/worker (status, output, session affordance), the final output and output folder.
-function RunDetail({ result }: { result: WorkflowRunResult }) {
+// Which rows "continue" an earlier row's session: a row whose session_key matches
+// an EARLIER row's session_key for the same node_id (a loop pass picking back up
+// a persistent session, or a resumed run re-entering the node it stopped at).
+function continuesSessionFlags(runs: WorkflowRunNode[]): boolean[] {
+  const seen = new Map<string, Set<string>>(); // node_id -> session_keys seen so far
+  return runs.map((run) => {
+    if (!run.session_key) return false;
+    const keys = seen.get(run.node_id);
+    const continues = keys != null && keys.has(run.session_key);
+    seen.set(run.node_id, new Set(keys).add(run.session_key));
+    return continues;
+  });
+}
+
+// The detail view of a single run: a status banner (needs_input/exhausted/aborted/
+// cancelled), a row per node/worker (status, output, session affordance, loop pass),
+// the resume form (needs_input only), the final output, output folder and files.
+function RunDetail({
+  result,
+  onResume,
+  resuming,
+}: {
+  result: WorkflowRunResult;
+  onResume: (answers: string) => void;
+  resuming: boolean;
+}) {
   const { t } = useTranslation();
+  const [answers, setAnswers] = useState("");
+  const continues = continuesSessionFlags(result.runs);
+  const outputFiles = result.output_files ?? [];
+
   return (
     <div className="flex flex-col gap-2">
-      {result.status !== "completed" && (
-        <div className="rounded bg-amber-500/10 px-2 py-1.5 text-amber-700 dark:text-amber-400">
-          <span className="font-medium">{t("workflows.exhausted")}</span>
-          {result.exhausted_node && (
-            <span className="ml-1">
-              — {t("workflows.exhaustedNode")}: <span className="font-mono">{result.exhausted_node}</span>
-            </span>
+      {result.status === "needs_input" && (
+        <div className="flex flex-col gap-1.5 rounded bg-accent px-2 py-1.5 text-accent-foreground">
+          <div className="flex items-center gap-1.5">
+            <HelpCircle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="font-medium">{t("workflows.needsInputTitle")}</span>
+          </div>
+          <p>
+            {t("workflows.needsInputBody", { node: result.needs_input_node || "?" })}
+          </p>
+          {result.final_output && (
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[10px] uppercase tracking-wide opacity-70">
+                {t("workflows.questionsFromRun")}
+              </span>
+              <div className="whitespace-pre-wrap break-words">{result.final_output}</div>
+            </div>
           )}
+          {result.needs_input_node && (
+            <>
+              <Textarea
+                rows={2}
+                value={answers}
+                onChange={(e) => setAnswers(e.target.value)}
+                placeholder={t("workflows.answersPlaceholder")}
+                className="bg-background text-foreground"
+              />
+              <Button
+                size="sm"
+                className="self-start"
+                disabled={resuming || !answers.trim()}
+                onClick={() => onResume(answers)}
+              >
+                {resuming ? <Loader2 className="h-4 w-4 animate-spin" /> : t("workflows.resumeRun")}
+              </Button>
+              <span className="text-[10px] opacity-70">
+                {t("workflows.resumeCaption", { node: result.needs_input_node, runId: result.run_id })}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+      {result.status === "exhausted" && (
+        <div className="flex flex-col gap-0.5 rounded bg-warn/10 px-2 py-1.5 text-warn">
+          <span className="font-medium">{t("workflows.loopLimitReached")}</span>
+          <span>
+            {t("workflows.exhausted")}
+            {result.exhausted_node && (
+              <>
+                {" "}— {t("workflows.exhaustedNode")}: <span className="font-mono">{result.exhausted_node}</span>
+              </>
+            )}
+          </span>
+        </div>
+      )}
+      {result.status === "aborted" && (
+        <div className="flex flex-col gap-1 rounded bg-destructive/10 px-2 py-1.5 text-destructive">
+          <div className="flex items-center gap-1.5">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="font-medium">{t("workflows.abortedTitle")}</span>
+          </div>
+          {result.final_output && <p className="whitespace-pre-wrap break-words">{result.final_output}</p>}
+        </div>
+      )}
+      {result.status === "cancelled" && (
+        <div className="rounded bg-muted px-2 py-1.5 text-muted-foreground">
+          <span className="font-medium">{t("workflows.cancelledTitle")}</span>
         </div>
       )}
       <div className="flex flex-col gap-1.5">
         {result.runs.map((run, i) => (
-          <RunNodeRow key={`${run.node_id}#${run.iteration}#${i}`} run={run} />
+          <RunNodeRow key={`${run.node_id}#${run.iteration}#${i}`} run={run} continuesSession={continues[i]} />
         ))}
       </div>
-      {result.final_output && (
+      {result.status === "completed" && result.final_output && (
         <div className="flex flex-col gap-0.5">
           <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
             {t("workflows.finalOutput")}
@@ -928,6 +1075,26 @@ function RunDetail({ result }: { result: WorkflowRunResult }) {
       {result.output_dir && (
         <div className="font-mono text-[11px] text-muted-foreground">
           {t("workflows.outputDir")}: {result.output_dir}
+        </div>
+      )}
+      {result.status === "completed" && outputFiles.length > 0 && (
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            {t("workflows.outputFiles")}
+          </span>
+          {outputFiles.slice(0, 20).map((f) => (
+            <span key={f} className="flex items-center gap-1 font-mono text-[11px] text-muted-foreground">
+              <FileIcon className="h-3 w-3 shrink-0" aria-hidden /> {f}
+            </span>
+          ))}
+          {outputFiles.length > 20 && (
+            <span className="text-[11px] text-muted-foreground">
+              {t("workflows.andNMore", { count: outputFiles.length - 20 })}
+            </span>
+          )}
+          <span className="text-[10px] text-muted-foreground opacity-70">
+            {t("workflows.outputPruneHint")}
+          </span>
         </div>
       )}
     </div>
@@ -951,6 +1118,7 @@ export function WorkflowsView() {
   const [recs, setRecs] = useState<WorkflowRecommendation[]>([]);
   const [task, setTask] = useState("");
   const [running, setRunning] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const [runResult, setRunResult] = useState<WorkflowRunResult | null>(null);
   // Minimal run history: the runs triggered for the selected workflow this session,
   // newest-first. Clicking one re-shows its detail (the full result is kept in memory).
@@ -1252,6 +1420,28 @@ export function WorkflowsView() {
     }
   }, [selected, task, token, inputPaths, outFmt]);
 
+  // Resume a needs_input run with the user's answers. Reuses the same run_id, so the
+  // result REPLACES that run's entry in history (in place) rather than appending a
+  // new chip — the run history stays one entry per run_id regardless of how many
+  // times it pauses and resumes.
+  const onResume = useCallback(
+    async (runId: string, answers: string) => {
+      if (!selected || !answers.trim()) return;
+      setResuming(true);
+      setError(null);
+      try {
+        const result = await runWorkflow(token, selected, answers, [], outFmt, "", runId);
+        setRunResult(result);
+        setRunHistory((prev) => prev.map((r) => (r.run_id === result.run_id ? result : r)));
+      } catch (e) {
+        setError(errMsg(e));
+      } finally {
+        setResuming(false);
+      }
+    },
+    [selected, token, outFmt],
+  );
+
   const onApplyRec = useCallback(
     async (id: string) => {
       if (!selected) return;
@@ -1422,6 +1612,27 @@ export function WorkflowsView() {
 
                 {/* Workflow-level — self-improvement setting + actions */}
                 <div className="pointer-events-auto flex items-center gap-2">
+                  {/* Workflow-level default pass budget, inherited by any node without its own max_visits. */}
+                  <label
+                    className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground"
+                    title={t("workflows.maxVisitsWorkflow")}
+                  >
+                    <span>{t("workflows.maxVisitsWorkflow")}</span>
+                    <Input
+                      type="number"
+                      min={1}
+                      value={(def.max_visits as number | undefined) ?? ""}
+                      placeholder="3"
+                      onChange={(e) => {
+                        const n = parseInt(e.target.value, 10);
+                        mutate((d) => ({
+                          ...d,
+                          max_visits: e.target.value === "" || !Number.isFinite(n) ? undefined : Math.max(1, n),
+                        }));
+                      }}
+                      className="h-6 w-14 text-sm"
+                    />
+                  </label>
                   {/* Self-improvement — two states (manual/auto) like a skill's, as one cohesive control. */}
                   <label
                     className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground"
@@ -1615,7 +1826,11 @@ export function WorkflowsView() {
                   )}
                   {runResult && (
                     <div className="mt-2 max-h-72 overflow-y-auto rounded border p-2 text-xs">
-                      <RunDetail result={runResult} />
+                      <RunDetail
+                        result={runResult}
+                        resuming={resuming}
+                        onResume={(answers) => onResume(runResult.run_id, answers)}
+                      />
                     </div>
                   )}
                 </div>
@@ -1633,6 +1848,8 @@ export function WorkflowsView() {
               personas={personas}
               allWorkflowNames={names}
               currentWorkflowName={selected ?? ""}
+              allNodes={def?.nodes ?? []}
+              workflowMaxVisits={def?.max_visits}
               token={token}
               onChange={updateNode}
               onMakeStart={() => mutate((d) => ({ ...d, start: selectedNode.id }))}

@@ -403,7 +403,8 @@ class WorkflowEngine:
                     {"id": r.node_id,
                      "label": node_label(workflow.nodes[r.node_id]) if r.node_id in workflow.nodes else r.node_id,
                      "status": ("failed" if r.status in ("node_failed", "persist_failed") else "done"),
-                     "route_label": r.route_label}
+                     "route_label": r.route_label,
+                     "iteration": r.iteration, "budget": r.budget}
                     for r in runs
                 ]
                 started.append({
@@ -411,6 +412,8 @@ class WorkflowEngine:
                     "label": node_label(node),
                     "status": "running",
                     "route_label": None,
+                    "iteration": iteration,
+                    "budget": budget if isinstance(node, WorkNode) else None,
                 })
                 try:
                     self._progress_emit({"run_id": run_id, "nodes": started, "done": False})
@@ -593,6 +596,8 @@ class WorkflowEngine:
                             else "done"
                         ),
                         "route_label": r.route_label,
+                        "iteration": r.iteration,
+                        "budget": r.budget,
                     }
                     for r in runs
                 ]

@@ -996,14 +996,32 @@
     "setAsStart": "set as start",
     "maxVisits": "max visits",
     "maxVisitsHint": "blank = workflow default",
+    "maxVisitsWorkflow": "Max passes per node (workflow default)",
+    "effectivePassLimit": "effective pass limit: {{limit}}",
     "exhausted": "did not complete — retries exhausted",
     "exhaustedNode": "exhausted at",
+    "loopLimitReached": "Loop limit reached",
     "finalOutput": "final output",
     "runHistory": "runs",
     "copySession": "copy session key",
     "sessionCopied": "session key copied",
     "workerLabel": "worker {{index}}",
     "branchLabel": "branch {{id}}",
+    "needsInputTitle": "Waiting for your input",
+    "needsInputBody": "The run paused at {{node}} — it did not fail. Answer below to continue this same run.",
+    "questionsFromRun": "Questions from the run",
+    "answersPlaceholder": "Type your answers…",
+    "resumeRun": "Resume run",
+    "resumeCaption": "resumes at {{node}} · same working folder and sessions · run {{runId}}",
+    "abortedTitle": "Run aborted",
+    "cancelledTitle": "Run cancelled",
+    "outputFiles": "output files",
+    "outputPruneHint": "pruned after older runs accumulate — copy out what you need",
+    "andNMore": "… and {{count}} more",
+    "passOf": "pass {{iteration}} of {{budget}}",
+    "finalPass": "final pass",
+    "continuesSession": "continues session",
+    "persistentInParallelWarning": "This node is a branch of {{parallelId}} — persistent sessions aren't allowed on parallel units. Saving will fail.",
     "runStatus": {
       "ok": "ok",
       "no_session": "no session",
@@ -1695,7 +1713,8 @@
   "tasks": {
     "status": {
       "needs_input": "Needs input"
-    }
+    },
+    "needsInputHint": "Handed to the calling agent — it may answer from its own context or ask you, then resume this run."
   },
   "work": {
     "steps": "{{count}} steps",

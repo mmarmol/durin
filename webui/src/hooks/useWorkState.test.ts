@@ -252,6 +252,50 @@ describe("useWorkState", () => {
     });
   });
 
+  it("a resumed run's new progress frame flips a needs_input item back to running (no sticky pause)", async () => {
+    // Seed the poll with a needs_input run — this is how a paused run first
+    // surfaces (the manifest status), before any live frame arrives for it.
+    const { client, emit } = makeFakeClient();
+    mockUseClient.mockReturnValue({
+      client: client as unknown as ReturnType<typeof useClient>["client"],
+      token: "tok",
+      modelName: null,
+      modelPreset: null,
+    });
+    mockListBackgroundTasks.mockResolvedValue([
+      {
+        kind: "workflow",
+        id: "run-resume",
+        label: "flow-run-resume",
+        status: "needs_input",
+        started_at: 1000,
+        ended_at: null,
+        session_key: null,
+      },
+    ]);
+
+    const { result } = renderHook(() => useWorkState("c1", "websocket:c1"));
+
+    await waitFor(() => {
+      const item = result.current.active.find((w) => w.id === "run-resume");
+      expect(item).toBeDefined();
+      expect(item!.status).toBe("needs_input");
+    });
+
+    // The calling agent resumes the SAME run_id; the engine emits a fresh
+    // "running" progress frame for it — the card must return to running, not
+    // stay stuck on needs_input.
+    act(() => {
+      emit(workflowProgressFrame("run-resume", [{ id: "gate", status: "running" }]));
+    });
+
+    await waitFor(() => {
+      const item = result.current.active.find((w) => w.id === "run-resume");
+      expect(item).toBeDefined();
+      expect(item!.status).toBe("running");
+    });
+  });
+
   it("refresh() triggers an immediate poll", async () => {
     mockListBackgroundTasks.mockResolvedValue([]);
     const { result } = renderUseWorkState("c1", "websocket:c1");

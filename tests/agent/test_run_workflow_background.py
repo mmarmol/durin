@@ -63,8 +63,8 @@ def test_terminal_progress_payload_marks_workflow_done():
     # Empty `nodes` map -> label falls back to node_id (skips node_label).
     workflow = SimpleNamespace(nodes={})
     runs = [
-        SimpleNamespace(node_id="scan", status="passed", route_label="pass"),
-        SimpleNamespace(node_id="fix", status="node_failed", route_label=None),
+        SimpleNamespace(node_id="scan", status="passed", route_label="pass", iteration=1, budget=None),
+        SimpleNamespace(node_id="fix", status="node_failed", route_label=None, iteration=1, budget=None),
     ]
     payload = _terminal_progress_payload(workflow, "run-1", runs)
 
