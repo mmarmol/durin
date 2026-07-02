@@ -2560,49 +2560,133 @@ def channels_login(
 
 
 @app.command()
-def status():
-    """Show durin's current configuration — a factual snapshot.
+def status(
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output."),
+):
+    """Show what is set up AND what is running right now.
 
-    ``status`` answers "what is set up?"; ``doctor`` answers "is
-    anything broken?". status passes no judgement — it shows only the
-    sections that have content (configured providers, enabled
-    channels, …) so it stays readable instead of dumping every
-    possible provider.
+    ``status`` answers "what do I have and is it up?"; ``doctor`` answers
+    "is anything broken (and fix it)?". status passes no judgement — it
+    probes the live gateway for runtime state (version, uptime, channel
+    connections, cron) and shows only the sections that have content so
+    it stays a tight snapshot.
     """
     from durin.config.loader import get_config_path, load_config
 
     config_path = get_config_path()
     config = load_config()
+    runtime = _probe_gateway_runtime(config)
+
+    if as_json:
+        import json as _json
+
+        print(_json.dumps(_status_data(config, config_path, runtime), indent=2))
+        return
 
     console.print(f"{__logo__} [bold]durin[/bold] · {__version__}\n")
 
-    for label, value in _status_sections(config, config_path):
+    for label, value in _status_sections(config, config_path, runtime):
         console.print(f"  [cyan]{label:<10}[/cyan] {value}")
 
 
-def _status_sections(config: Any, config_path: Path) -> list[tuple[str, str]]:
-    """Build the (label, value) rows for ``durin status``. Sections with
-    no content are omitted so the output stays a tight snapshot."""
+def _gateway_base_url(config: Any) -> str:
+    """Base URL of the gateway HTTP surface (the websocket channel's port)."""
+    ws_section = getattr(config.channels, "websocket", None)
+    host = "127.0.0.1"
+    port = 8765  # websocket channel default
+    if ws_section is not None:
+        if isinstance(ws_section, dict):
+            host = ws_section.get("host", host) or host
+            port = ws_section.get("port", port) or port
+        else:
+            host = getattr(ws_section, "host", host) or host
+            port = getattr(ws_section, "port", port) or port
+    return f"http://{host}:{port}"
+
+
+def _probe_gateway_runtime(config: Any, *, timeout: float = 1.5) -> dict[str, Any] | None:
+    """Ask the live gateway what it is running. Returns ``None`` when it
+    doesn't respond (not running, or bound elsewhere).
+
+    Two calls: the unauthenticated ``/api/v1/health`` (version + uptime,
+    enough to detect a stale install), then the authenticated
+    ``/api/v1/status`` (channel runtime state + cron) using the websocket
+    channel's static token. Auth failure degrades gracefully — the health
+    half still renders.
+    """
+    base = _gateway_base_url(config)
+    try:
+        import httpx
+
+        with httpx.Client(timeout=timeout) as client:
+            r = client.get(f"{base}/api/v1/health")
+            if r.status_code != 200:
+                return None
+            health = r.json()
+            out: dict[str, Any] = {
+                "url": f"{base}/",
+                "version": health.get("version"),
+                "uptime_s": health.get("uptime_s"),
+                "channels": None,
+                "cron": None,
+            }
+            ws_section = getattr(config.channels, "websocket", None)
+            token = (
+                ws_section.get("token")
+                if isinstance(ws_section, dict)
+                else getattr(ws_section, "token", "")
+            ) or ""
+            if token:
+                rs = client.get(
+                    f"{base}/api/v1/status",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                if rs.status_code == 200:
+                    body = rs.json()
+                    out["channels"] = body.get("channels")
+                    out["cron"] = body.get("cron")
+            return out
+    except Exception:  # noqa: BLE001 — any network error means "not reachable"
+        return None
+
+
+def _format_uptime(seconds: float) -> str:
+    s = int(seconds)
+    if s < 3600:
+        return f"{s // 60}m"
+    if s < 86400:
+        return f"{s // 3600}h {(s % 3600) // 60}m"
+    return f"{s // 86400}d {(s % 86400) // 3600}h"
+
+
+def _status_data(
+    config: Any, config_path: Path, runtime: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Structured snapshot backing both the rendered rows and ``--json``."""
+    from durin.cli.tui.startup import memory_summary
+    from durin.config.loader import _is_split_layout
     from durin.providers.registry import PROVIDERS
     from durin.utils.oauth import any_token_present
 
-    rows: list[tuple[str, str]] = []
+    data: dict[str, Any] = {"version": __version__}
 
     # --- Model -------------------------------------------------------
     model, preset_tag = _model_display(config)
     d = config.agents.defaults
-    ctx = f"{d.context_window_tokens:,} ctx" if d.context_window_tokens else ""
-    model_line = " · ".join(p for p in (f"{model}{preset_tag}", d.provider, ctx) if p)
-    rows.append(("Model", model_line))
+    data["model"] = {
+        "model": model,
+        "preset_tag": preset_tag,
+        "provider": d.provider,
+        "context_window_tokens": d.context_window_tokens,
+    }
     aux = getattr(config.agents, "aux_models", None)
-    aux_bits = []
+    aux_map: dict[str, str] = {}
     if aux is not None:
         if getattr(aux, "vision", None) is not None and aux.vision.model:
-            aux_bits.append(f"vision: {aux.vision.model}")
+            aux_map["vision"] = aux.vision.model
         if getattr(aux, "audio", None) is not None and aux.audio.model:
-            aux_bits.append(f"audio: {aux.audio.model}")
-    if aux_bits:
-        rows.append(("", "[dim]" + " · ".join(aux_bits) + "[/dim]"))
+            aux_map["audio"] = aux.audio.model
+    data["aux_models"] = aux_map
 
     # --- Providers (only the configured ones) ------------------------
     configured: list[str] = []
@@ -2618,65 +2702,179 @@ def _status_sections(config: Any, config_path: Path) -> list[tuple[str, str]]:
                 configured.append(spec.label)
         elif getattr(p, "api_key", None):
             configured.append(spec.label)
-    if configured:
-        rows.append((
-            "Providers",
-            f"{', '.join(configured)}  [dim]({len(configured)} configured)[/dim]",
-        ))
-    else:
-        rows.append(("Providers", "[dim]none configured — run `durin onboard`[/dim]"))
+    data["providers"] = configured
 
-    # --- Channels (only the enabled ones) ----------------------------
-    enabled_channels: list[str] = []
-    channels_obj = config.channels
-    extra = getattr(channels_obj, "__pydantic_extra__", None) or {}
+    # --- Channels: config-enabled, overlaid with live runtime state ---
+    runtime_channels = {
+        c["name"]: c for c in (runtime or {}).get("channels") or [] if "name" in c
+    }
+    channels: list[dict[str, Any]] = []
+    extra = getattr(config.channels, "__pydantic_extra__", None) or {}
     for name, section in extra.items():
         en = section.get("enabled") if isinstance(section, dict) else getattr(section, "enabled", False)
-        if en:
-            port = section.get("port") if isinstance(section, dict) else getattr(section, "port", None)
-            enabled_channels.append(f"{name}:{port}" if port else name)
-    if enabled_channels:
-        rows.append(("Channels", ", ".join(enabled_channels)))
+        if not en:
+            continue
+        port = section.get("port") if isinstance(section, dict) else getattr(section, "port", None)
+        entry: dict[str, Any] = {"name": name, "enabled": True, "port": port}
+        # running: True/False from the live gateway; None when unknown
+        # (gateway down or token missing).
+        rc = runtime_channels.get(name)
+        entry["running"] = rc.get("running") if rc is not None else None
+        channels.append(entry)
+    data["channels"] = channels
 
     # --- Gateway -----------------------------------------------------
+    gw_data: dict[str, Any] | None = None
+    pid: int | None = None
     try:
         from durin.cli.gateway_daemon import daemon_status
 
         gw = daemon_status()
         if gw.state == "running":
-            url = _resolved_webui_url() or ""
-            rows.append(("Gateway", f"running (pid {gw.pid}){'  ' + url if url else ''}"))
+            pid = gw.pid
     except Exception:  # noqa: BLE001
         pass
+    if runtime is not None or pid is not None:
+        gw_version = (runtime or {}).get("version")
+        gw_data = {
+            "running": runtime is not None or pid is not None,
+            "pid": pid,
+            "version": gw_version,
+            "uptime_s": (runtime or {}).get("uptime_s"),
+            "url": (runtime or {}).get("url") or _resolved_webui_url(),
+            "stale": bool(gw_version) and gw_version != __version__,
+        }
+    data["gateway"] = gw_data
+
+    # --- Cron --------------------------------------------------------
+    data["cron"] = (runtime or {}).get("cron")
 
     # --- Memory ------------------------------------------------------
+    mem_data: dict[str, Any] | None = None
     try:
-        ws = config.workspace_path
-        mem_dir = ws / "memory"
-        docs = len(list(mem_dir.glob("**/*.md"))) if mem_dir.exists() else 0
-        sess_dir = ws / "sessions"
-        sessions = len(list(sess_dir.glob("*.jsonl"))) if sess_dir.exists() else 0
-        memory_enabled = bool(getattr(config.memory, "enabled", False))
-        if memory_enabled:
-            short_model = config.memory.embedding.model.rsplit("/", 1)[-1]
-            mem_line = f"{docs} docs · {sessions} sessions · vector on ({short_model})"
-        else:
-            mem_line = f"{docs} docs · {sessions} sessions · vector off"
-        rows.append(("Memory", mem_line))
+        stats = memory_summary(config.workspace_path)
+        mem_data = {
+            "docs": stats["memory_docs"],
+            "sessions": stats["sessions"],
+            "skills": stats["skills"],
+            "vector": bool(getattr(config.memory, "enabled", False)),
+            "embedding_model": (
+                config.memory.embedding.model
+                if getattr(config.memory, "enabled", False)
+                else None
+            ),
+        }
     except Exception:  # noqa: BLE001
         pass
+    data["memory"] = mem_data
 
     # --- Config ------------------------------------------------------
-    from durin.config.loader import _is_split_layout
+    data["config"] = {
+        "path": str(config_path),
+        "exists": config_path.exists(),
+        "layout": "split" if _is_split_layout(config_path) else "single file",
+    }
+    data["workspace"] = str(config.workspace_path)
+    return data
 
-    layout = "split" if _is_split_layout(config_path) else "single file"
+
+def _status_sections(
+    config: Any, config_path: Path, runtime: dict[str, Any] | None
+) -> list[tuple[str, str]]:
+    """Render the (label, value) rows for ``durin status`` from the
+    structured snapshot. Sections with no content are omitted so the
+    output stays tight."""
+    data = _status_data(config, config_path, runtime)
+    rows: list[tuple[str, str]] = []
+
+    # --- Model -------------------------------------------------------
+    m = data["model"]
+    ctx = f"{m['context_window_tokens']:,} ctx" if m["context_window_tokens"] else ""
+    model_line = " · ".join(
+        p for p in (f"{m['model']}{m['preset_tag']}", m["provider"], ctx) if p
+    )
+    rows.append(("Model", model_line))
+    if data["aux_models"]:
+        aux_bits = [f"{k}: {v}" for k, v in data["aux_models"].items()]
+        rows.append(("", "[dim]" + " · ".join(aux_bits) + "[/dim]"))
+
+    # --- Providers ----------------------------------------------------
+    if data["providers"]:
+        rows.append((
+            "Providers",
+            f"{', '.join(data['providers'])}  [dim]({len(data['providers'])} configured)[/dim]",
+        ))
+    else:
+        rows.append(("Providers", "[dim]none configured — run `durin onboard`[/dim]"))
+
+    # --- Channels: enabled + live state -------------------------------
+    if data["channels"]:
+        bits = []
+        for ch in data["channels"]:
+            label = f"{ch['name']}:{ch['port']}" if ch.get("port") else ch["name"]
+            if ch["running"] is True:
+                bits.append(f"{label} [green]✓[/green]")
+            elif ch["running"] is False:
+                bits.append(f"{label} [red]not running[/red]")
+            else:
+                bits.append(label)
+        rows.append(("Channels", ", ".join(bits)))
+
+    # --- Gateway -------------------------------------------------------
+    gw = data["gateway"]
+    if gw is not None:
+        bits = [f"running (pid {gw['pid']})" if gw["pid"] else "running"]
+        if gw["version"]:
+            bits.append(f"v{gw['version']}")
+        if gw["uptime_s"] is not None:
+            bits.append(f"up {_format_uptime(gw['uptime_s'])}")
+        if gw["url"]:
+            bits.append(gw["url"])
+        rows.append(("Gateway", " · ".join(bits)))
+        if gw["stale"]:
+            rows.append((
+                "",
+                f"[yellow]gateway v{gw['version']} ≠ CLI v{__version__} — "
+                "`durin gateway restart` to pick up the new install[/yellow]",
+            ))
+
+    # --- Cron ----------------------------------------------------------
+    cron = data["cron"]
+    if cron and cron.get("jobs"):
+        line = f"{cron['jobs']} job{'s' if cron['jobs'] != 1 else ''}"
+        next_ms = cron.get("next_wake_at_ms")
+        if next_ms:
+            import time as _time
+
+            delta = max(0, int(next_ms / 1000 - _time.time()))
+            line += f" · next in {_format_uptime(delta) if delta >= 60 else f'{delta}s'}"
+        if not cron.get("enabled", True):
+            line += " · [yellow]scheduler off[/yellow]"
+        rows.append(("Cron", line))
+
+    # --- Memory --------------------------------------------------------
+    mem = data["memory"]
+    if mem is not None:
+        if mem["vector"] and mem["embedding_model"]:
+            short_model = mem["embedding_model"].rsplit("/", 1)[-1]
+            vector_part = f"vector on ({short_model})"
+        else:
+            vector_part = "vector off"
+        rows.append((
+            "Memory",
+            f"{mem['docs']} docs · {mem['sessions']} sessions · "
+            f"{mem['skills']} skills · {vector_part}",
+        ))
+
+    # --- Config --------------------------------------------------------
+    cfg = data["config"]
     rows.append((
         "Config",
-        f"{config_path} [dim]({layout})[/dim]"
-        if config_path.exists()
+        f"{cfg['path']} [dim]({cfg['layout']})[/dim]"
+        if cfg["exists"]
         else "[red]missing — run `durin onboard`[/red]",
     ))
-    rows.append(("Workspace", str(config.workspace_path)))
+    rows.append(("Workspace", data["workspace"]))
 
     return rows
 

@@ -278,6 +278,19 @@ per-branch progress. See the generated OpenAPI contract
 (`contract/openapi-v1.json`) and `TasksService` (`durin/service/tasks.py`) for
 the authoritative field definitions.
 
+**`GET /api/v1/health`** is the only unauthenticated route: a liveness probe
+that also reports the running package `version` and process `uptime_s`
+(marked by the app factory via `durin/utils/process_runtime.py`). Local CLI
+tools use it to detect a gateway serving stale code after a reinstall —
+`durin doctor` warns on a version mismatch and `durin doctor --fix` offers
+the restart.
+
+**`GET /api/v1/status`** (scope `system:read`, `HealthService.status`) is the
+one-call runtime snapshot behind `durin status`: version, uptime, per-channel
+enabled/running state (config overlaid with the live `ChannelManager`), and
+the cron scheduler summary. Surfaces wired without a channel manager or cron
+scheduler degrade to config-only data.
+
 All mutations are POST/DELETE/PATCH with a JSON body; there are no
 GET-with-query mutations. Responses use snake_case field names
 (`model_dump()` without alias); inputs accept both camelCase and snake_case

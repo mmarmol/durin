@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
+from durin.cli import doctor
 from durin.cli.commands import app
 from durin.cli.doctor import (
     CheckResult,
@@ -73,7 +74,7 @@ def valid_config(fake_home: Path) -> Path:
 def hermetic_state_probes(monkeypatch: pytest.MonkeyPatch):
     """Make the aggregate exit-code tests deterministic across machines.
 
-    Two probes depend on host state that is irrelevant to the exit-code
+    These probes depend on host state that is irrelevant to the exit-code
     aggregation those tests assert, and make a "clean" run non-deterministic:
 
     - ``check_embedding_model_loads`` does a real model load+embed. On a box
@@ -82,8 +83,11 @@ def hermetic_state_probes(monkeypatch: pytest.MonkeyPatch):
       there — the failure only surfaces on dev machines).
     - ``check_durin_on_path`` warns when more than one ``durin`` executable is
       on PATH (a dev box with e.g. a pipx + venv install).
+    - ``check_gateway_version`` probes the websocket port over HTTP. On a dev
+      box a REAL gateway may be serving there (possibly an older version),
+      which would leak into the test and even trigger the --fix restart path.
 
-    Both probes have their own dedicated unit tests above; here we stub them to
+    All probes have their own dedicated unit tests; here we stub them to
     their clean result so these tests exercise the aggregation, not the host.
     """
     monkeypatch.setattr(
@@ -93,6 +97,10 @@ def hermetic_state_probes(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         "durin.cli.doctor.check_durin_on_path",
         lambda: CheckResult("durin on PATH", "ok", "stubbed in test"),
+    )
+    monkeypatch.setattr(
+        "durin.cli.doctor.check_gateway_version",
+        lambda: CheckResult("gateway version", "ok", "stubbed in test", category="services"),
     )
 
 
@@ -465,3 +473,201 @@ def test_cli_doctor_exits_one_when_config_invalid(fake_home: Path) -> None:
          patch("durin.config.loader.get_config_path", return_value=cfg):
         result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 1
+
+
+# ---------------------------------------------------------------------------
+# check_gateway_daemon — PID file is ground truth
+# ---------------------------------------------------------------------------
+
+
+class _FakeDaemonStatus:
+    def __init__(self, state: str, pid: int | None = None) -> None:
+        self.state = state
+        self.pid = pid
+
+
+def test_gateway_daemon_running_is_ok(valid_config: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "durin.cli.gateway_daemon.daemon_status",
+        lambda: _FakeDaemonStatus("running", 4242),
+    )
+    r = doctor.check_gateway_daemon()
+    assert r.status == "ok"
+    assert "4242" in r.message
+
+
+def test_gateway_daemon_stale_pid_fails_even_with_daemon_flag_off(
+    valid_config: Path, monkeypatch
+) -> None:
+    """A crashed daemon must be reported regardless of config.gateway.daemon —
+    the daemon is routinely started with the flag off (`durin gateway start`)."""
+    monkeypatch.setattr(
+        "durin.cli.gateway_daemon.daemon_status",
+        lambda: _FakeDaemonStatus("stale_pid", 4242),
+    )
+    r = doctor.check_gateway_daemon()
+    assert r.status == "fail"
+
+
+def test_gateway_daemon_not_running_without_request_is_ok(
+    valid_config: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "durin.cli.gateway_daemon.daemon_status",
+        lambda: _FakeDaemonStatus("not_running"),
+    )
+    r = doctor.check_gateway_daemon()
+    assert r.status == "ok"
+
+
+def test_gateway_daemon_not_running_with_daemon_requested_fails(
+    fake_home: Path, monkeypatch
+) -> None:
+    cfg = fake_home / ".durin" / "config.json"
+    cfg.parent.mkdir(parents=True)
+    data = Config().model_dump(mode="json", by_alias=True)
+    data.setdefault("gateway", {}).update({"daemon": True})
+    cfg.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    monkeypatch.setattr(
+        "durin.cli.gateway_daemon.daemon_status",
+        lambda: _FakeDaemonStatus("not_running"),
+    )
+    with patch("durin.config.loader.get_config_path", return_value=cfg):
+        r = doctor.check_gateway_daemon()
+    assert r.status == "fail"
+
+
+# ---------------------------------------------------------------------------
+# check_gateway_version — stale-install detection
+# ---------------------------------------------------------------------------
+
+
+class _FakeHttpResponse:
+    def __init__(self, status_code: int = 200, payload: dict | None = None) -> None:
+        self.status_code = status_code
+        self._payload = payload or {}
+
+    def json(self) -> dict:
+        return self._payload
+
+
+class _FakeHttpClient:
+    def __init__(self, response: _FakeHttpResponse | Exception) -> None:
+        self._response = response
+
+    def __call__(self, *a, **k):  # stands in for httpx.Client(...)
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def get(self, url: str):
+        if isinstance(self._response, Exception):
+            raise self._response
+        return self._response
+
+
+def _patch_httpx_client(monkeypatch, response) -> None:
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", _FakeHttpClient(response))
+
+
+def test_gateway_version_match_is_ok(valid_config: Path, monkeypatch) -> None:
+    from durin import __version__
+
+    _patch_httpx_client(
+        monkeypatch, _FakeHttpResponse(200, {"status": "ok", "version": __version__})
+    )
+    r = doctor.check_gateway_version()
+    assert r.status == "ok"
+
+
+def test_gateway_version_mismatch_warns_with_restart_fix(
+    valid_config: Path, monkeypatch
+) -> None:
+    _patch_httpx_client(
+        monkeypatch, _FakeHttpResponse(200, {"status": "ok", "version": "0.0.0-old"})
+    )
+    r = doctor.check_gateway_version()
+    assert r.status == "warn"
+    assert "0.0.0-old" in r.message
+    assert "restart" in (r.fix or "")
+
+
+def test_gateway_version_unreachable_is_skipped(valid_config: Path, monkeypatch) -> None:
+    _patch_httpx_client(monkeypatch, ConnectionError("refused"))
+    r = doctor.check_gateway_version()
+    assert r.status == "ok"
+    assert "skipped" in r.message
+
+
+def test_gateway_version_missing_field_warns(valid_config: Path, monkeypatch) -> None:
+    """An older gateway whose /health predates version reporting IS stale."""
+    _patch_httpx_client(monkeypatch, _FakeHttpResponse(200, {"status": "ok"}))
+    r = doctor.check_gateway_version()
+    assert r.status == "warn"
+
+
+# ---------------------------------------------------------------------------
+# apply_service_repairs
+# ---------------------------------------------------------------------------
+
+
+def _report_with(name: str, status: str) -> doctor.DoctorReport:
+    report = doctor.DoctorReport()
+    report.add(CheckResult(name, status, "x", category="services"))
+    return report
+
+
+def test_repairs_relaunch_dead_daemon(valid_config: Path, monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "durin.cli.gateway_daemon.start_daemon", lambda *a, **k: calls.append("start") or 4242
+    )
+    monkeypatch.setattr("durin.cli.doctor._wait_for_gateway_health", lambda **k: True)
+    msgs = doctor.apply_service_repairs(_report_with("gateway daemon", "fail"))
+    assert calls == ["start"]
+    assert any("Relaunched" in m for m in msgs)
+
+
+def test_repairs_restart_stale_gateway_with_yes(valid_config: Path, monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "durin.cli.gateway_daemon.stop_daemon", lambda *a, **k: calls.append("stop")
+    )
+    monkeypatch.setattr(
+        "durin.cli.gateway_daemon.start_daemon", lambda *a, **k: calls.append("start") or 4242
+    )
+    monkeypatch.setattr("durin.cli.doctor._wait_for_gateway_health", lambda **k: True)
+    msgs = doctor.apply_service_repairs(
+        _report_with("gateway version", "warn"), assume_yes=True
+    )
+    assert calls == ["stop", "start"]
+    assert any("Restarted" in m for m in msgs)
+
+
+def test_repairs_stale_gateway_declined_does_nothing(
+    valid_config: Path, monkeypatch
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "durin.cli.gateway_daemon.stop_daemon", lambda *a, **k: calls.append("stop")
+    )
+    monkeypatch.setattr("typer.confirm", lambda *a, **k: False)
+    msgs = doctor.apply_service_repairs(_report_with("gateway version", "warn"))
+    assert calls == []
+    assert msgs == []
+
+
+def test_repairs_clean_report_does_nothing(valid_config: Path, monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "durin.cli.gateway_daemon.start_daemon", lambda *a, **k: calls.append("start") or 1
+    )
+    msgs = doctor.apply_service_repairs(_report_with("gateway version", "ok"))
+    assert calls == []
+    assert msgs == []

@@ -87,9 +87,15 @@ def write_only_token(token_store):
 
 
 def test_health_no_auth(client):
+    from durin import __version__
+
     r = client.get("/api/v1/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    body = r.json()
+    assert body["status"] == "ok"
+    # The probe carries the running version (+ uptime once the factory has
+    # marked process start) so CLI tools can detect a stale gateway.
+    assert body["version"] == __version__
 
 
 def test_health_with_auth_still_200(client):

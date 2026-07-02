@@ -392,6 +392,9 @@ def build_api_app(
         static_token: If non-empty, this plaintext token grants ADMIN access
                       (the bootstrap/static token from gateway config).
     """
+    from durin.utils.process_runtime import mark_started
+
+    mark_started()
     routes: list[Route] = [
         Route("/api/v1/health", _health_handler, methods=["GET"]),
     ]
@@ -423,7 +426,21 @@ def build_api_app(
 
 
 async def _health_handler(_request: Request) -> Response:
-    return JSONResponse({"status": "ok"})
+    """Unauthenticated liveness probe.
+
+    Beyond the bare ``status``, it reports the running package ``version``
+    and ``uptime_s`` so local CLI tools (``durin status`` / ``durin doctor``)
+    can detect a gateway serving stale code after a reinstall. Version and
+    uptime are not secrets on a loopback-bound single-user gateway.
+    """
+    from durin import __version__
+    from durin.utils.process_runtime import uptime_s
+
+    payload: dict[str, Any] = {"status": "ok", "version": __version__}
+    up = uptime_s()
+    if up is not None:
+        payload["uptime_s"] = up
+    return JSONResponse(payload)
 
 
 # ---------------------------------------------------------------------------

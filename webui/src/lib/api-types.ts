@@ -1708,6 +1708,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One-call runtime snapshot: version, uptime, channels, cron */
+        get: operations["health_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tasks": {
         parameters: {
             query?: never;
@@ -3769,6 +3786,35 @@ export interface components {
         RevokeTokenResult: {
             /** Ok */
             ok: boolean;
+        };
+        /**
+         * RuntimeStatusQuery
+         * @description No inputs — one aggregate snapshot.
+         */
+        RuntimeStatusQuery: Record<string, never>;
+        /** RuntimeStatusResult */
+        RuntimeStatusResult: {
+            /**
+             * Channels
+             * @default []
+             */
+            channels: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Cron
+             * @default null
+             */
+            cron: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Uptime S
+             * @default null
+             */
+            uptime_s: number | null;
+            /** Version */
+            version: string;
         };
         /** SecretDeleteCommand */
         SecretDeleteCommand: {
@@ -7498,6 +7544,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SoulDeleteResult"];
+                };
+            };
+        };
+    };
+    health_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuntimeStatusQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeStatusResult"];
                 };
             };
         };
