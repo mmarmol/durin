@@ -8625,7 +8625,7 @@
             "description": "Success"
           }
         },
-        "summary": "Save one text file in a skill (manual)",
+        "summary": "Save one text file in a skill",
         "x-required-scope": "skills:write"
       }
     },

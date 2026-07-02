@@ -60,11 +60,18 @@ def test_save_skill_file_rejects_directory_path(tmp_path: Path):
     assert "error" in res
 
 
-def test_save_skill_file_refuses_auto(tmp_path: Path):
-    _mk_skill(tmp_path, "demo")  # workspace skill defaults to manual; force auto
+def test_save_skill_file_edits_auto(tmp_path: Path):
+    # auto means "dream may auto-improve it", not "user is locked out": a user
+    # edit on an auto skill is written and committed, and the skill stays auto.
+    _mk_skill(tmp_path, "demo")
     set_mode(tmp_path, "demo", "auto")
-    res = save_skill_file(tmp_path, "demo", "references/notes.md", "new", rationale="r")
-    assert "error" in res and "manual" in res["error"]
+    res = save_skill_file(tmp_path, "demo", "references/notes.md", "new",
+                          rationale="edited references/notes.md via web",
+                          attribution=Attribution(actor="user"))
+    assert res["ok"] is True and res["commit"]
+    assert (tmp_path / "skills" / "demo" / "references" / "notes.md").read_text() == "new"
+    from durin.agent.skills_store import read_mode
+    assert read_mode(tmp_path, "demo") == "auto"
 
 
 def test_save_skill_file_writes_commits_and_rescans(tmp_path: Path):

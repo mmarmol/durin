@@ -107,8 +107,15 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
 
     principles = so.active_principles(workspace)
 
+    # User hand-edits since the last curation: dream must treat these as
+    # intentional — evolve only for a concrete reason, never revert silently.
+    user_edits = {
+        n: ev for n in selected
+        if (ev := ss.user_edits_since_curation(workspace, n))
+    }
+
     prompt = _build_prompt(catalog, usage or {}, upstream, obs_shown,
-                           declined_shown, principles)
+                           declined_shown, principles, user_edits)
     try:
         parsed = json.loads(judge(prompt)) or {}
     except (ValueError, TypeError):
@@ -235,7 +242,8 @@ def _build_suggestion_prompt(catalog: dict) -> str:
 def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None,
                   observations: list[dict] | None = None,
                   declined: list[dict] | None = None,
-                  principles: list[dict] | None = None) -> str:
+                  principles: list[dict] | None = None,
+                  user_edits: dict | None = None) -> str:
     from durin.utils.prompt_templates import render_template
     return render_template("agent/skill_curation.md", strip=True,
                            catalog_json=json.dumps(catalog, ensure_ascii=False),
@@ -245,4 +253,9 @@ def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None,
                            declined_json=json.dumps(declined or [], ensure_ascii=False),
                            principles_json=json.dumps(
                                [{"id": p.get("id"), "text": p.get("text")}
-                                for p in principles or []], ensure_ascii=False))
+                                for p in principles or []], ensure_ascii=False),
+                           user_edits_json=json.dumps(
+                               {n: [{"subject": e.get("subject"),
+                                     "diff": e.get("diff", "")} for e in ev]
+                                for n, ev in (user_edits or {}).items()},
+                               ensure_ascii=False))
