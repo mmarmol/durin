@@ -43,6 +43,18 @@ async def test_subcommand_completion_returns_none_for_unknown_parent() -> None:
     assert (await s.get_suggestion("/help foo")) is None
 
 
+@pytest.mark.asyncio
+async def test_pairing_subcommand_completion_is_suppressed() -> None:
+    """`/pairing` is admin-only (hidden on the tui surface) — its entry in
+    `_SLASH_SUBCOMMANDS` must not produce completions even though the map
+    still lists it."""
+    s = SlashCommandSuggester()
+    assert (await s.get_suggestion("/pairing l")) is None
+    assert s.candidates("/pairing l") == []
+    # A surfaced command with subcommands still completes normally.
+    assert (await s.get_suggestion("/memory l")) == "/memory list"
+
+
 def test_candidates_top_level_lists_all_matches() -> None:
     s = SlashCommandSuggester()
     cands = s.candidates("/s")

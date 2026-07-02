@@ -95,10 +95,11 @@ async def test_user_bubble_renders_text_and_stays_leaf() -> None:
         assert "VISIBLE_USER_TEXT" in str(bubble._Static__content)
 
 
-def test_quick_actions_present() -> None:
+def test_session_chips_empty_with_no_agent_loop() -> None:
     from durin.cli.tui.widgets.chat_view import ChatView
 
-    assert ChatView.quick_actions() == ["Plan", "Analyze", "Brainstorm", "Code", "Summarize"]
+    app = DurinApp(agent_loop=None)
+    assert ChatView.session_chips(app) == []
 
 
 @pytest.mark.asyncio
