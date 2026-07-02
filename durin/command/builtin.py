@@ -256,6 +256,14 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "tag",
         admin=True,
     ),
+    BuiltinCommandSpec(
+        "/pairing",
+        "Manage pairing",
+        "Approve, deny, or revoke channel pairing requests (owner only).",
+        "link",
+        "[list|approve <code>|deny <code>|revoke <user_id>]",
+        admin=True,
+    ),
 )
 
 
@@ -2100,6 +2108,58 @@ async def cmd_version(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+_OWNER_SURFACE_CHANNELS = {"websocket", "cli", "tui"}
+
+
+def _channel_allow_from(channels_cfg: Any, channel: str) -> list[str]:
+    """Read `allow_from` for *channel* off the channels config.
+
+    Built-in channel configs live as extra fields on the ChannelsConfig
+    model; pydantic's `extra="allow"` stores each one as a plain dict
+    rather than a sub-model, so both dict-style (`cfg["allow_from"]`) and
+    attribute-style (`cfg.allow_from`) access must be supported.
+    """
+    channel_cfg = None
+    if isinstance(channels_cfg, dict):
+        channel_cfg = channels_cfg.get(channel)
+    elif channels_cfg is not None:
+        channel_cfg = getattr(channels_cfg, channel, None)
+    if isinstance(channel_cfg, dict):
+        allow = channel_cfg.get("allow_from")
+    else:
+        allow = getattr(channel_cfg, "allow_from", None)
+    return [str(a) for a in (allow or [])]
+
+
+def _sender_is_owner(ctx: CommandContext) -> bool:
+    """True for owner surfaces (webui/TUI) or channel senders on the static
+    allowlist. Pairing-store-approved guests are NOT owners."""
+    channel = (getattr(ctx.msg, "channel", "") or "").lower()
+    if channel in _OWNER_SURFACE_CHANNELS:
+        return True
+    channels_cfg = getattr(getattr(ctx.loop, "app_config", None), "channels", None)
+    allow = _channel_allow_from(channels_cfg, channel)
+    sender = str(getattr(ctx.msg, "sender_id", "") or "")
+    return "*" in allow or sender in allow or sender.split("|")[0] in allow
+
+
+async def cmd_pairing(ctx: CommandContext) -> OutboundMessage:
+    """Manage channel pairing approvals: list/approve/deny/revoke."""
+    meta = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+    if not _sender_is_owner(ctx):
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="Only the owner can manage pairing.", metadata=meta,
+        )
+    from durin.pairing import handle_pairing_command
+
+    reply = handle_pairing_command(ctx.msg.channel, ctx.args.strip() or "list")
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content=reply, metadata=meta,
+    )
+
+
 def build_help_text(surface: str = "channels") -> str:
     """Build canonical help text for a surface (webui|tui|channels)."""
     lines = ["⚒️ durin commands:"]
@@ -2160,3 +2220,5 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/why", cmd_why)
     router.prefix("/why ", cmd_why)
     router.exact("/version", cmd_version)
+    router.exact("/pairing", cmd_pairing)
+    router.prefix("/pairing ", cmd_pairing)
