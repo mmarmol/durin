@@ -275,6 +275,146 @@ async def test_empty_sessions_shows_message(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Landing chips (ChatView.session_chips + _QuickActionChips)
+# ---------------------------------------------------------------------------
+
+
+def _fake_agent_loop_with_manager(bus: MessageBus, tmp_path) -> SimpleNamespace:
+    """Like `_fake_agent_loop`, but backs `sessions` with a real SessionManager
+    so `list_sessions()` (title/preview) works — the landing chips read that,
+    not the raw jsonl walk the session picker uses."""
+    async def _idle_run() -> None:
+        await asyncio.Event().wait()
+
+    from durin.session.manager import SessionManager
+
+    manager = SessionManager(tmp_path)
+    return SimpleNamespace(
+        bus=bus,
+        workspace=str(tmp_path),
+        model="m",
+        model_preset="default",
+        model_presets={"default": ModelPresetConfig(model="glm-5.2")},
+        context_window_tokens=200_000,
+        sessions=manager,
+        run=_idle_run,
+    )
+
+
+def _write_titled_session(
+    sessions_dir, key: str, *, updated_at: str, title: str = "", preview_text: str = ""
+) -> None:
+    """Write a session jsonl with a `title` in metadata (what SessionManager.list_sessions
+    reads) and an optional user message so the preview-fallback path has content."""
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    safe_key = key.replace(":", "_")
+    path = sessions_dir / f"{safe_key}.jsonl"
+    metadata: dict = {"title": title} if title else {}
+    lines = [
+        json.dumps({
+            "_type": "metadata",
+            "key": key,
+            "updated_at": updated_at,
+            "metadata": metadata,
+        }),
+    ]
+    if preview_text:
+        lines.append(json.dumps({"role": "user", "content": preview_text}))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_session_chips_use_title_and_preview_fallback(tmp_path) -> None:
+    from durin.cli.tui.widgets.chat_view import ChatView
+
+    bus = MessageBus()
+    loop = _fake_agent_loop_with_manager(bus, tmp_path)
+    sessions_dir = loop.sessions.sessions_dir
+    _write_titled_session(sessions_dir, "cli:alpha", updated_at="2026-05-20T12:00:00", title="Alpha project")
+    _write_titled_session(
+        sessions_dir, "cli:beta", updated_at="2026-05-20T11:00:00", preview_text="what is the plan"
+    )
+
+    app = DurinApp(agent_loop=loop, cli_channel="cli", cli_chat_id="current")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        chips = ChatView.session_chips(app)
+    assert chips[0] == ("Resume: Alpha project", "cli:alpha")
+    assert chips[1] == ("Continue: what is the plan", "cli:beta")
+
+
+@pytest.mark.asyncio
+async def test_session_chips_skip_current_session(tmp_path) -> None:
+    from durin.cli.tui.widgets.chat_view import ChatView
+
+    bus = MessageBus()
+    loop = _fake_agent_loop_with_manager(bus, tmp_path)
+    sessions_dir = loop.sessions.sessions_dir
+    _write_titled_session(sessions_dir, "cli:current", updated_at="2026-05-20T12:00:00", title="Current one")
+    _write_titled_session(sessions_dir, "cli:alpha", updated_at="2026-05-20T11:00:00", title="Alpha project")
+
+    app = DurinApp(agent_loop=loop, cli_channel="cli", cli_chat_id="current")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        chips = ChatView.session_chips(app)
+    assert chips == [("Resume: Alpha project", "cli:alpha")]
+
+
+@pytest.mark.asyncio
+async def test_audit_chip_always_present_with_no_sessions(tmp_path) -> None:
+    from durin.cli.tui.widgets.chat_view import ChatView, _QuickActionChips
+
+    bus = MessageBus()
+    loop = _fake_agent_loop_with_manager(bus, tmp_path)
+
+    app = DurinApp(agent_loop=loop, cli_channel="cli", cli_chat_id="current")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert ChatView.session_chips(app) == []
+        chips_widget = app.query_one(_QuickActionChips)
+        chip_texts = [str(c._Static__content) for c in chips_widget.query(".qa-chip")]
+    assert chip_texts == [ChatView.AUDIT_LABEL]
+
+
+@pytest.mark.asyncio
+async def test_clicking_audit_chip_publishes_audit(tmp_path) -> None:
+    from durin.cli.tui.widgets.chat_view import _QuickActionChips
+
+    bus = MessageBus()
+    loop = _fake_agent_loop_with_manager(bus, tmp_path)
+
+    app = DurinApp(agent_loop=loop, cli_channel="cli", cli_chat_id="current")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        chips_widget = app.query_one(_QuickActionChips)
+        audit_chip = chips_widget.query_one(".qa-chip-audit")
+        chips_widget.on_click(SimpleNamespace(widget=audit_chip))
+        await pilot.pause()
+        received = await _drain(bus)
+    assert any(m.content == "/audit" for m in received)
+
+
+@pytest.mark.asyncio
+async def test_clicking_resume_chip_publishes_resume(tmp_path) -> None:
+    from durin.cli.tui.widgets.chat_view import _QuickActionChips
+
+    bus = MessageBus()
+    loop = _fake_agent_loop_with_manager(bus, tmp_path)
+    sessions_dir = loop.sessions.sessions_dir
+    _write_titled_session(sessions_dir, "cli:alpha", updated_at="2026-05-20T11:00:00", title="Alpha project")
+
+    app = DurinApp(agent_loop=loop, cli_channel="cli", cli_chat_id="current")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        chips_widget = app.query_one(_QuickActionChips)
+        resume_chip = chips_widget.query_one(".qa-chip-resume")
+        chips_widget.on_click(SimpleNamespace(widget=resume_chip))
+        await pilot.pause()
+        received = await _drain(bus)
+    assert any(m.content == "/resume cli:alpha" for m in received)
+
+
+# ---------------------------------------------------------------------------
 # Persona picker
 # ---------------------------------------------------------------------------
 
