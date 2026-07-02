@@ -846,6 +846,7 @@ def test_terminal_gate_with_bare_verdict_keeps_producer_output():
     eng, _ = _engine({"make": "the draft", "gate": "PASS"})
     result = eng.run(wf, "t")
     assert result.final_output == "the draft"      # bare verdict adds nothing
+    assert result.final_output_node == "make"      # residue empty — stays the producer's id
 
 
 def test_terminal_cases_node_contributes_its_output():
@@ -860,3 +861,21 @@ def test_terminal_cases_node_contributes_its_output():
     eng, _ = _engine({"synth": "draft answer", "gate": "Final answer: 42.\nGROUNDED"})
     result = eng.run(wf, "t")
     assert result.final_output == "Final answer: 42."
+
+
+def test_final_output_node_names_the_linear_terminal():
+    wf = parse_workflow({"name": "w", "start": "a",
+                         "nodes": [{"id": "a", "kind": "work", "next": None}]})
+    eng, _ = _engine({"a": "out"})
+    assert eng.run(wf, "t").final_output_node == "a"
+
+
+def test_final_output_node_names_a_contributing_terminal_gate():
+    wf = parse_workflow({"name": "w", "start": "make",
+                         "nodes": [
+                             {"id": "make", "kind": "work", "next": "gate"},
+                             {"id": "gate", "kind": "work", "prompt": "ok?",
+                              "on_pass": None, "on_fail": "make"}]})
+    eng, _ = _engine({"make": "draft", "gate": "PASS\nVerified."})
+    r = eng.run(wf, "t")
+    assert r.final_output == "Verified." and r.final_output_node == "gate"

@@ -372,6 +372,7 @@ class WorkflowEngine:
         )
         terminal_output_dir: str | None = work_dir
         final_output: str | None = None
+        final_output_node: str | None = None
         current: str | None = start_at or workflow.start
 
         # Seed input_files into the shared working folder so the start node reads them as
@@ -388,7 +389,7 @@ class WorkflowEngine:
             if self._cancel_check is not None and self._cancel_check():
                 return WorkflowResult(
                     status="cancelled", final_output=final_output, runs=runs,
-                    run_id=run_id,
+                    run_id=run_id, final_output_node=final_output_node,
                 )
             visits[current] = visits.get(current, 0) + 1
             node = workflow.nodes[current]
@@ -396,7 +397,7 @@ class WorkflowEngine:
             if visits[current] > budget:
                 return WorkflowResult(
                     status="exhausted", final_output=final_output, runs=runs,
-                    run_id=run_id, exhausted_node=current,
+                    run_id=run_id, exhausted_node=current, final_output_node=final_output_node,
                 )
             iteration = visits[current]
 
@@ -526,6 +527,7 @@ class WorkflowEngine:
                         return WorkflowResult(
                             status="needs_input", final_output=output,
                             runs=runs, run_id=run_id, needs_input_node=node.id,
+                            final_output_node=node.id,
                         )
                     if target is not None:
                         # Thread this node's output as neutral context before routing to
@@ -542,6 +544,7 @@ class WorkflowEngine:
                         residue = strip_label_line(output, node.cases)
                         if residue:
                             final_output = residue
+                            final_output_node = node.id
                     current = target
                 elif node.routes:
                     if not passed:
@@ -555,9 +558,11 @@ class WorkflowEngine:
                         residue = strip_verdict_line(output)
                         if residue:
                             final_output = residue
+                            final_output_node = node.id
                 else:
                     upstream_output = output
                     final_output = output
+                    final_output_node = node.id
                     current = node.next
 
             elif isinstance(node, SubworkflowNode):
@@ -569,6 +574,7 @@ class WorkflowEngine:
                 runs.append(NodeRun(node_id=node.id, iteration=iteration, output=output))
                 upstream_output = output
                 final_output = output
+                final_output_node = node.id
                 current = node.next
 
             elif isinstance(node, ParallelNode):
@@ -587,6 +593,7 @@ class WorkflowEngine:
                     )
                 upstream_output = merged
                 final_output = merged
+                final_output_node = node.id
                 current = node.next
 
             # The node's record(s) are now appended — refresh the live manifest so an
@@ -628,6 +635,7 @@ class WorkflowEngine:
         return WorkflowResult(
             status="completed", final_output=final_output, runs=runs, run_id=run_id,
             output_dir=terminal_output_dir, output_files=output_files,
+            final_output_node=final_output_node,
         )
 
     def _run_one_branch(self, branch, task, upstream, run_id, iteration, root_key,

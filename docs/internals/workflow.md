@@ -231,10 +231,12 @@ The per-node entries in the manifest's `runs` array carry:
 | `route_label` | matched case label for multi-way nodes (`null` otherwise) |
 | `budget` | the node's effective visit budget at this pass (`null` for parallel branches/workers, which are not loop targets) |
 
-The finalized manifest also carries two top-level fields: `needs_input_node` — the node
-that routed to `__needs_input__` (`null` otherwise), the resume re-entry point — and
-`output_files`: the relative paths (within the run's output folder) a completed run
-produced, empty for a run that ended any other status or produced no files.
+The finalized manifest also carries top-level fields: `needs_input_node` — the node
+that routed to `__needs_input__` (`null` otherwise), the resume re-entry point;
+`final_output_node` — which node's output became `final_output` (`null` when no node
+contributed, e.g. an aborted run); and `output_files`: the relative paths (within the
+run's output folder) a completed run produced, empty for a run that ended any other
+status or produced no files.
 
 `read_runs_since` (used by the dream self-improvement pass) returns all records for a
 workflow; callers that need only terminal runs should skip records whose `status` is
@@ -355,6 +357,7 @@ The `WorkflowsService` exposes read routes for run manifests:
 
 | Route | What it returns |
 |---|---|
+| `GET /api/v1/workflows/{name}/runs?limit=` | that workflow's persisted run summaries (`run_id`, `status`, `started_at`, `finished_at`, `task` capped at 200 chars, `needs_input_node`), newest-first, capped at `limit` (default 20) |
 | `GET /api/v1/workflows/{name}/runs/{run_id}` | one run's manifest (live or terminal) |
 | `GET /api/v1/workflows/runs?session=<key>` | all run manifests whose `root_session_key` matches, newest-first |
 
@@ -362,8 +365,9 @@ The `POST /api/v1/workflows/{name}/run` request accepts an optional `resume_run_
 the run_id of a prior run of the same workflow that ended `needs_input`, with `task`
 carrying the user's answers. The response carries `run_id`, a per-node trace with
 `session_key`, `worker_index`, `branch_id`, `budget`, `status`, and `route_label` for
-each entry, plus `needs_input_node` (the node that asked, when the run ends
-`needs_input`) and `output_files` (relative paths in `output_dir`, for a completed run).
+each entry, plus `final_output_node` (which node's output became `final_output`),
+`needs_input_node` (the node that asked, when the run ends `needs_input`) and
+`output_files` (relative paths in `output_dir`, for a completed run).
 
 ### 4g. Background mode and live progress
 

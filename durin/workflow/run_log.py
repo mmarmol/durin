@@ -135,6 +135,7 @@ def finalize_run(
         # The terminal output (the answer, the plan, or — on needs_input — the questions),
         # capped, so a historical audit of the run shows the result, not only the trace.
         "final_output": (result.final_output or "")[:8000],
+        "final_output_node": getattr(result, "final_output_node", None),
         "needs_input_node": getattr(result, "needs_input_node", None),
         "output_files": list(getattr(result, "output_files", []) or []),
         "runs": _node_records(result),
@@ -258,3 +259,29 @@ def workflow_names_with_runs(workspace: str | Path) -> list[str]:
     if not root.is_dir():
         return []
     return sorted(p.name for p in root.iterdir() if p.is_dir())
+
+
+def list_runs(workspace: str | Path, name: str, limit: int = 20) -> list[dict]:
+    """Newest-first manifest summaries for one workflow — the run-history listing.
+    Full manifests stay one read away via read_manifest."""
+    d = _wf_dir(workspace, name)
+    if not d.is_dir():
+        return []
+    out: list[dict] = []
+    for f in d.glob("*.json"):
+        if f.name == ".cursor.json":
+            continue
+        try:
+            rec = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        out.append({
+            "run_id": rec.get("run_id"),
+            "status": rec.get("status"),
+            "started_at": rec.get("started_at"),
+            "finished_at": rec.get("finished_at"),
+            "task": (rec.get("task") or "")[:200],
+            "needs_input_node": rec.get("needs_input_node"),
+        })
+    out.sort(key=lambda r: r.get("started_at") or 0.0, reverse=True)
+    return out[:max(1, int(limit))]

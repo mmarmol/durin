@@ -85,6 +85,7 @@ class WorkflowRunCommand(Command):
 class WorkflowRunResult(Result):
     status: str
     final_output: str
+    final_output_node: str = ""       # which node's output became final_output
     run_id: str                       # the run's manifest id — the key for the read routes below
     runs: list[dict[str, Any]]        # per-node trace: node_id/iteration/passed/session_key/worker_index/branch_id/budget/status/route_label/output
     output_dir: str = ""
@@ -108,6 +109,15 @@ class WorkflowSessionRunsQuery(Query):
 
 class WorkflowSessionRunsResult(Result):
     runs: list[dict[str, Any]]   # matching run manifests, newest-first
+
+
+class WorkflowRunsListQuery(Query):
+    name: str
+    limit: int = 20
+
+
+class WorkflowRunsListResult(Result):
+    runs: list[dict[str, Any]]   # newest-first manifest summaries for this workflow
 
 
 class WorkflowRecsQuery(Query):
@@ -293,6 +303,7 @@ class WorkflowsService:
         return WorkflowRunResult(
             status=result.status,
             final_output=result.final_output or "",
+            final_output_node=result.final_output_node or "",
             run_id=result.run_id,
             runs=[
                 {"node_id": r.node_id, "iteration": r.iteration, "passed": r.passed,
@@ -317,6 +328,16 @@ class WorkflowsService:
     async def session_runs(self, query: WorkflowSessionRunsQuery, principal: Principal) -> WorkflowSessionRunsResult:
         principal.require(Scope.WORKFLOWS_READ)
         return WorkflowSessionRunsResult(runs=run_log.runs_for_session(self._workspace, query.session))
+
+    @route(
+        "GET", "/api/v1/workflows/{name}/runs",
+        scope=Scope.WORKFLOWS_READ.value,
+        request_model=WorkflowRunsListQuery, response_model=WorkflowRunsListResult,
+        summary="List one workflow's persisted runs, newest-first.",
+    )
+    async def runs_list(self, query: WorkflowRunsListQuery, principal: Principal) -> WorkflowRunsListResult:
+        principal.require(Scope.WORKFLOWS_READ)
+        return WorkflowRunsListResult(runs=run_log.list_runs(self._workspace, query.name, query.limit))
 
     @route(
         "GET", "/api/v1/workflows/{name}/runs/{run_id}",

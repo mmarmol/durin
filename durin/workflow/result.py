@@ -31,6 +31,7 @@ class NodeRun:
 class WorkflowResult:
     status: Literal["completed", "needs_input", "exhausted", "aborted", "cancelled"]
     final_output: str | None
+    final_output_node: str | None = None  # which node's output became final_output
     runs: list[NodeRun] = field(default_factory=list)
     run_id: str = ""
     output_dir: str | None = None  # the terminal node's output folder, if any
