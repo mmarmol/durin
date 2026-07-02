@@ -511,3 +511,29 @@ def test_list_all_runs_terminal_entries_have_no_questions_field(tmp_path):
 
 def test_list_all_runs_no_workflows_is_empty(tmp_path):
     assert run_log.list_all_runs(tmp_path) == []
+
+
+def test_legacy_needs_input_without_reentry_node_is_prunable(tmp_path):
+    # A needs_input manifest WITHOUT needs_input_node (written before the resume
+    # feature) is not a resume point — the resume endpoints reject it. It must
+    # count as terminal for pruning instead of living forever as an unactionable
+    # ghost; a RESUMABLE needs_input (node set) stays protected.
+    for i in range(3):
+        result = WorkflowResult(status="completed", final_output="done",
+                                runs=[], run_id=f"t{i}")
+        run_log.finalize_run(tmp_path, "w", result, root_session_key=None,
+                             started_at=float(i), finished_at=float(i))
+    legacy = WorkflowResult(status="needs_input", final_output="", runs=[], run_id="ghost")
+    run_log.finalize_run(tmp_path, "w", legacy, root_session_key=None,
+                         started_at=0.5, finished_at=0.5)
+    resumable = WorkflowResult(status="needs_input", final_output="q?",
+                               runs=[], run_id="live", needs_input_node="gate")
+    run_log.finalize_run(tmp_path, "w", resumable, root_session_key=None,
+                         started_at=0.6, finished_at=0.6)
+
+    run_log.prune_manifests(tmp_path, "w", keep=2)
+
+    assert run_log.read_manifest(tmp_path, "w", "ghost") is None       # legacy pruned (oldest beyond keep)
+    assert run_log.read_manifest(tmp_path, "w", "live") is not None    # resumable never pruned
+    kept = [f"t{i}" for i in range(3) if run_log.read_manifest(tmp_path, "w", f"t{i}")]
+    assert kept == ["t1", "t2"]                                        # newest 2 terminals kept

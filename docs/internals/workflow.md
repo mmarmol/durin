@@ -256,12 +256,15 @@ its partial trace) so an auditor sees a truthful status rather than a permanentl
 **Retention.** `prune_manifests(workspace, name, keep=workflow.keep_runs)` bounds how
 many manifests accumulate per workflow name: after each successful `finalize_run`, the
 engine deletes the oldest *terminal* records (completed/exhausted/aborted/cancelled/crashed)
-beyond `keep`, run best-effort and never fatal to the run. A `running` or `needs_input`
-manifest is never deleted and never counts against `keep` — a running record is live,
-and a needs_input manifest is the resume point a caller may still act on (the deliberate
-consequence: needs_input records that are never resumed accumulate outside the retention
-bound until they are resumed or abandoned runs are cleaned by hand). Malformed or
-unreadable files are skipped, never deleted. A nested subworkflow run prunes its own
+beyond `keep`, run best-effort and never fatal to the run. A `running` manifest, or a
+`needs_input` manifest carrying its `needs_input_node`, is never deleted and never counts
+against `keep` — a running record is live, and a resumable needs_input manifest is the
+pause point a caller may still act on (the deliberate consequence: resumable records that
+are never resumed accumulate outside the retention bound until acted on). A `needs_input`
+manifest WITHOUT a re-entry node — written before resume existed — is not resumable (the
+resume endpoints reject it) and retains like any terminal record, so legacy pauses cannot
+accumulate as unactionable ghosts; the runs UI likewise counts only resumable pauses in
+its stranded tray and badge. Malformed or unreadable files are skipped, never deleted. A nested subworkflow run prunes its own
 (child workflow name's) manifest store independently of its parent's, since manifests
 are keyed per workflow name. Because pruning is intentionally decoupled from the dream
 pass's read cursor (coupling them would let a disabled dream block pruning forever), a
