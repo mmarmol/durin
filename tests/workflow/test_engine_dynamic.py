@@ -104,6 +104,22 @@ def test_dynamic_fanout_records_worker_runs(tmp_path):
     assert outputs == {"did a", "did b"}
 
 
+def test_dynamic_fanout_worker_runs_have_no_budget(tmp_path):
+    # Fan-out workers are not loop targets, so their NodeRun carries no visit budget.
+    def runner(req):
+        if req.node.id == "orch":
+            return NodeRunResponse(output='["a","b"]')
+        if req.node.id == "done":
+            return NodeRunResponse(output="final")
+        return NodeRunResponse(output=f"did {req.task}")
+
+    wf = _wf()
+    res = WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "go")
+    worker_runs = [r for r in res.runs if r.node_id == "dev"]
+    assert len(worker_runs) == 2
+    assert all(r.budget is None for r in worker_runs)
+
+
 def test_dynamic_fanout_empty_list_does_not_crash(tmp_path):
     def runner(req):
         if req.node.id == "orch":

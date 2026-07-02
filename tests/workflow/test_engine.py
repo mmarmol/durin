@@ -84,13 +84,30 @@ def test_io_descriptions_frame_the_task():
 def test_task_unchanged_without_io_descriptions():
     wf = parse_workflow({
         "name": "d", "start": "a",
-        "input": {"file": True},  # declared, but no description
+        "input": {"text": True},  # declared, but no description
         "nodes": [{"id": "a", "kind": "work", "next": None}],
     })
     eng, calls = _engine({"a": "out-a"})
     eng.run(wf, "do it")
     assert calls[0].task == "do it"
 
+
+def test_file_input_workflow_with_files_keeps_task_unchanged(tmp_path):
+    """A file-input workflow that receives input files should not frame the task.
+    The node receives the task unchanged when no I/O descriptions are present."""
+    src = tmp_path / "in.txt"
+    src.write_text("data")
+    wf = parse_workflow({
+        "name": "w", "start": "a",
+        "input": {"file": True},
+        "nodes": [{"id": "a", "kind": "work", "tools": "default", "next": None}],
+    })
+    calls = []
+    def runner(req):
+        calls.append(req)
+        return NodeRunResponse(output="x")
+    WorkflowEngine(runner, workspace=str(tmp_path)).run(wf, "the task", input_files=[str(src)])
+    assert calls and calls[0].task == "the task"
 
 
 def test_per_node_max_visits_overrides_workflow_default():
@@ -153,6 +170,32 @@ def test_shared_buffer_accumulates_across_shared_nodes():
     b_call = [c for c in calls if c.node.id == "b"][0]
     # b is the second shared node: it must receive a's appended message
     assert b_call.shared_context == [{"role": "assistant", "content": "out-a"}]
+
+
+def test_shared_buffer_does_not_duplicate_across_three_shared_nodes():
+    wf = parse_workflow({
+        "name": "d", "start": "a",
+        "nodes": [
+            {"id": "a", "kind": "work", "context": "shared", "next": "b"},
+            {"id": "b", "kind": "work", "context": "shared", "next": "c"},
+            {"id": "c", "kind": "work", "context": "shared", "next": None},
+        ],
+    })
+    seen = {}
+
+    def runner(req):
+        seen[req.node.id] = list(req.shared_context)
+        # Faithful to the FIXED contract: only this node's own contribution.
+        return NodeRunResponse(output=f"out-{req.node.id}", messages=[
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": f"out-{req.node.id}"},
+        ])
+
+    WorkflowEngine(runner).run(wf, "t")
+    c_ctx = seen["c"]
+    assert len(c_ctx) == 4                                     # a's 2 + b's 2, no dupes
+    assert [m["role"] for m in c_ctx].count("system") == 0
+    assert [m["content"] for m in c_ctx].count("out-a") == 1   # each turn appears once
 
 
 def test_shared_buffer_is_capped_dropping_oldest(tmp_path):
@@ -632,6 +675,52 @@ def test_frame_task_output_format_works_without_a_declared_output():
     assert "JSON with fields x,y" in framed
 
 
+def test_engine_passes_the_visit_budget_to_the_runner():
+    wf = parse_workflow({
+        "name": "d", "start": "make", "max_visits": 4,
+        "nodes": [
+            {"id": "make", "kind": "work", "next": "gate", "max_visits": 2},
+            {"id": "gate", "kind": "work", "prompt": "ok?", "on_pass": None, "on_fail": "make"},
+        ],
+    })
+    eng, calls = _engine({"make": "draft", "gate": "PASS"})
+    eng.run(wf, "t")
+    make_call = [c for c in calls if c.node.id == "make"][0]
+    gate_call = [c for c in calls if c.node.id == "gate"][0]
+    assert make_call.budget == 2      # per-node override
+    assert gate_call.budget == 4      # workflow default
+
+
+def test_node_run_records_the_effective_budget():
+    wf = parse_workflow({
+        "name": "d", "start": "make", "max_visits": 4,
+        "nodes": [
+            {"id": "make", "kind": "work", "next": None, "max_visits": 2},
+        ],
+    })
+    eng, _calls = _engine({"make": "draft"})
+    res = eng.run(wf, "t")
+    assert res.runs[0].node_id == "make"
+    assert res.runs[0].budget == 2
+
+
+def test_gate_learns_when_a_fail_would_exhaust_the_producer():
+    wf = parse_workflow({
+        "name": "d", "start": "make", "max_visits": 2,
+        "nodes": [
+            {"id": "make", "kind": "work", "next": "gate"},
+            {"id": "gate", "kind": "work", "prompt": "ok?", "on_pass": None, "on_fail": "make"},
+        ],
+    })
+    eng, calls = _engine({"make": "draft", "gate": "FAIL nope"})
+    eng.run(wf, "t")
+    gate_calls = [c for c in calls if c.node.id == "gate"]
+    # 1st gate visit: producer has 1 visit of 2 → a FAIL still loops (False).
+    # 2nd gate visit: producer consumed 2 of 2 → a FAIL would exhaust (True).
+    assert gate_calls[0].fail_would_exhaust is False
+    assert gate_calls[1].fail_would_exhaust is True
+
+
 def test_sequential_nodes_share_one_working_dir(tmp_path):
     # Every sequential node — looping or hand-off — reads and writes ONE shared per-run
     # folder, so files accumulate in one place and each stage sees the prior work. (Before,
@@ -659,3 +748,79 @@ def test_sequential_nodes_share_one_working_dir(tmp_path):
     assert len(seen["loop"]) == 3                    # the loop still looped three times
     assert len(set(all_dirs)) == 1                   # every node + iteration shares one dir
     assert all_dirs[0].endswith("/work")             # the run's shared working folder
+
+
+def test_needs_input_result_names_the_asking_node():
+    wf = parse_workflow({
+        "name": "d", "start": "gate",
+        "nodes": [{"id": "gate", "kind": "work", "prompt": "clarify?",
+                   "cases": {"OK": None, "NEED_INFO": "__needs_input__"}}],
+    })
+    eng, _ = _engine({"gate": "what env?\nNEED_INFO"})
+    result = eng.run(wf, "t")
+    assert result.status == "needs_input"
+    assert result.needs_input_node == "gate"
+
+
+def test_resume_reenters_at_the_asking_node_with_carried_visits(tmp_path):
+    from durin.workflow.engine import ResumeState
+    wf = parse_workflow({
+        "name": "d", "start": "plan",
+        "nodes": [
+            {"id": "plan", "kind": "work", "next": "gate"},
+            {"id": "gate", "kind": "work", "prompt": "clarify?",
+             "cases": {"OK": None, "NEED_INFO": "__needs_input__"}},
+        ],
+    })
+    eng, calls = _engine({"plan": "the plan", "gate": "OK"})
+    result = eng.run(wf, "answers text", resume=ResumeState(
+        run_id="fixed-run", start_at="gate",
+        visits={"plan": 1, "gate": 1}, upstream="User answers:\nprod env",
+    ))
+    assert result.status == "completed"
+    assert result.run_id == "fixed-run"
+    assert [c.node.id for c in calls] == ["gate"]        # plan NOT re-run
+    gate_call = calls[0]
+    assert gate_call.iteration == 2                       # continues the count
+    assert "prod env" in (gate_call.upstream_output or "")
+
+
+def test_terminal_binary_gate_contributes_its_output():
+    wf = parse_workflow({
+        "name": "d", "start": "make",
+        "nodes": [
+            {"id": "make", "kind": "work", "next": "gate"},
+            {"id": "gate", "kind": "work", "prompt": "ok?", "on_pass": None, "on_fail": "make"},
+        ],
+    })
+    eng, _ = _engine({"make": "the draft", "gate": "PASS\nVerified: tests green, docs updated."})
+    result = eng.run(wf, "t")
+    assert result.status == "completed"
+    assert result.final_output == "Verified: tests green, docs updated."
+
+
+def test_terminal_gate_with_bare_verdict_keeps_producer_output():
+    wf = parse_workflow({
+        "name": "d", "start": "make",
+        "nodes": [
+            {"id": "make", "kind": "work", "next": "gate"},
+            {"id": "gate", "kind": "work", "prompt": "ok?", "on_pass": None, "on_fail": "make"},
+        ],
+    })
+    eng, _ = _engine({"make": "the draft", "gate": "PASS"})
+    result = eng.run(wf, "t")
+    assert result.final_output == "the draft"      # bare verdict adds nothing
+
+
+def test_terminal_cases_node_contributes_its_output():
+    wf = parse_workflow({
+        "name": "d", "start": "synth",
+        "nodes": [
+            {"id": "synth", "kind": "work", "next": "gate"},
+            {"id": "gate", "kind": "work", "prompt": "grounded?",
+             "cases": {"GROUNDED": None, "MISSING": "synth"}},
+        ],
+    })
+    eng, _ = _engine({"synth": "draft answer", "gate": "Final answer: 42.\nGROUNDED"})
+    result = eng.run(wf, "t")
+    assert result.final_output == "Final answer: 42."

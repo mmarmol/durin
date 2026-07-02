@@ -55,6 +55,9 @@ def test_workflow_config_default_and_validation():
     assert WorkflowConfig().max_node_visits == 25
     with pytest.raises(Exception):
         WorkflowConfig(max_node_visits=0)
+    assert WorkflowConfig().keep_runs == 20
+    with pytest.raises(Exception):
+        WorkflowConfig(keep_runs=0)
 
 
 def test_root_config_has_workflow():

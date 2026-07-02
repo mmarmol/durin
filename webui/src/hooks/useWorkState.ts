@@ -18,6 +18,8 @@ function toWorkNodes(
     id: string;
     label?: string;
     status: string;
+    iteration?: number | null;
+    budget?: number | null;
     branches?: Array<{ id: string; label?: string; status: string }> | null;
   }> | null | undefined,
 ): WorkNode[] {
@@ -32,6 +34,8 @@ function toWorkNodes(
       id: n.id,
       ...(n.label ? { label: n.label } : {}),
       status: n.status as WorkNode["status"],
+      ...(n.iteration != null ? { iteration: n.iteration } : {}),
+      ...(n.budget != null ? { budget: n.budget } : {}),
       ...(branches && branches.length > 0 ? { branches } : {}),
     };
   });
@@ -54,6 +58,8 @@ function workItemFromWorkflowEvent(
       label?: string;
       status: "running" | "done" | "failed";
       route_label?: string | null;
+      iteration?: number | null;
+      budget?: number | null;
       branches?: Array<{ id: string; label?: string; status: "running" | "done" | "failed" }>;
     }>;
   };

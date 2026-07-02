@@ -63,6 +63,13 @@ class _CrossLoopTool(Tool):
 _VERDICT = ("\n\nAfter your assessment, end your reply with a single final line: "
             "'PASS' if the work meets the criteria, or 'FAIL' followed by what to fix.")
 
+_FINAL_REVIEW = (
+    "\n\nThis is the final review round: the producing step has no passes left, so a "
+    "FAIL ends the run with the work as-is — there will be no further revision. Give "
+    "your definitive verdict: PASS with explicitly noted caveats only if the work is "
+    "genuinely acceptable, or FAIL with a clear, final summary of what is missing."
+)
+
 
 class AgentNodeRunner:
     def __init__(
@@ -90,6 +97,42 @@ class AgentNodeRunner:
         self._live_tool_registry = live_tool_registry
         self._main_loop = main_loop
         self._app_config = app_config
+
+    @staticmethod
+    def _pass_note(req: NodeRunRequest) -> str:
+        """The loop-awareness note appended to the node's user turn. Empty on a first
+        pass (a node that never loops must not be primed to iterate); on a revisit it
+        states pass X of Y; on the last allowed pass it says so explicitly so the
+        model delivers a final, complete result instead of another increment."""
+        if req.budget is None or req.iteration <= 1:
+            return ""
+        remaining = req.budget - req.iteration
+        if remaining > 0:
+            return (
+                f"\n\n--- Pass {req.iteration} of {req.budget} ---\n"
+                f"This step already ran {req.iteration - 1} time(s); after this pass, "
+                f"{remaining} more remain(s)."
+            )
+        return (
+            f"\n\n--- FINAL PASS ({req.iteration} of {req.budget}) ---\n"
+            "This is this step's last allowed pass; there will be no further iteration. "
+            "Deliver your best complete, final result."
+        )
+
+    @staticmethod
+    def _is_persistent(req: NodeRunRequest) -> bool:
+        # Parallel units (worker fan-out / branch forks) always get per-unit fresh
+        # sessions; the parser also rejects persistent on them (defense in depth).
+        return (getattr(req.node, "session", "fresh") == "persistent"
+                and req.worker_index is None and req.workspace_override is None)
+
+    @classmethod
+    def _session_key(cls, req: NodeRunRequest) -> str:
+        if cls._is_persistent(req):
+            return f"workflow:{req.run_id}:{req.node.id}"
+        if req.worker_index is not None:
+            return f"workflow:{req.run_id}:{req.node.id}:{req.iteration}:{req.worker_index}"
+        return f"workflow:{req.run_id}:{req.node.id}:{req.iteration}"
 
     def _build_tools(self, node, workspace_override: str | None = None) -> ToolRegistry:
         """Build the node's tool registry: its built-in set ('none'→empty,
@@ -166,6 +209,8 @@ class AgentNodeRunner:
             system = f"{system}{suffix}" if system else suffix.lstrip()
         if getattr(req.node, "routes", False):
             system = f"{system}{_VERDICT}" if system else _VERDICT.lstrip()
+        if getattr(req, "fail_would_exhaust", False):
+            system = f"{system}{_FINAL_REVIEW}"
         messages: list[dict] = [{"role": "system", "content": system}]
         messages.extend(req.shared_context)
         user = req.task
@@ -178,7 +223,26 @@ class AgentNodeRunner:
                 "Earlier steps' files are here; create and edit files here so the steps "
                 "after you see them."
             )
-        messages.append({"role": "user", "content": user})
+        user = f"{user}{self._pass_note(req)}"
+        prior_messages: list[dict] | None = None
+        if self._is_persistent(req) and req.iteration > 1:
+            try:
+                existing = self.sessions.get_or_create(self._session_key(req))
+                prior_messages = list(existing.messages) or None
+            except Exception:  # noqa: BLE001 - a broken prior session degrades to fresh
+                logger.exception("persistent node session reload failed for {}", req.node.id)
+        if prior_messages:
+            # Resume the node's own conversation: don't rebuild system/task — append a
+            # revisit turn carrying only what is NEW (loop feedback + the pass counter).
+            revisit = "The flow has returned to this step."
+            if req.upstream_output:
+                revisit += f"\n\n--- New input for this pass ---\n{req.upstream_output}"
+            revisit += self._pass_note(req)
+            if getattr(req, "fail_would_exhaust", False):
+                revisit += _FINAL_REVIEW
+            messages = prior_messages + [{"role": "user", "content": revisit}]
+        else:
+            messages.append({"role": "user", "content": user})
 
         # Persona model when a persona is set, else the node's explicit model, else
         # the runner's default. The parser's persona-xor-model guard ensures at most
@@ -187,13 +251,21 @@ class AgentNodeRunner:
 
         node_max_turns = getattr(req.node, "max_turns", None)
         if node_max_turns is not None:
-            # Prepend a budget note so the model knows to be efficient.
+            # On a resumed persistent session, append the budget note to the latest
+            # revisit turn (the last message) to avoid stacking it on the original
+            # system turn which may be persisted and reloaded. On a fresh path,
+            # append it to messages[0] (the system turn).
             budget_note = (
                 f"\n\nYou have up to {node_max_turns} rounds of tool use. "
                 "Gather efficiently, then give your final answer."
             )
-            system_msg = messages[0]
-            messages[0] = {**system_msg, "content": system_msg["content"] + budget_note}
+            resumed = prior_messages is not None
+            if resumed:
+                last = messages[-1]
+                messages[-1] = {**last, "content": last["content"] + budget_note}
+            else:
+                system_msg = messages[0]
+                messages[0] = {**system_msg, "content": system_msg["content"] + budget_note}
             run_max_iterations = node_max_turns
         else:
             run_max_iterations = self.max_iterations
@@ -264,11 +336,18 @@ class AgentNodeRunner:
         elif getattr(req.node, "routes", False):
             route_label = self._derive_route_label(all_messages, ["PASS", "FAIL"], model)
 
+        # The node's OWN contribution: its user turn + everything generated after.
+        # The engine extends the shared buffer with this — returning the full
+        # conversation here would re-add the system prompt and the inherited
+        # shared context, duplicating the buffer on every shared node.
+        own_start = max(0, len(messages) - 1)
+        own_messages = all_messages[own_start:]
+
         session_key = self._persist(req, all_messages)
         return NodeRunResponse(
             output=final_output,
             session_key=session_key,
-            messages=all_messages,
+            messages=own_messages,
             # This runner always persists; a None key means the save raised, not that
             # the node had no session — surface that as a persist failure.
             persist_failed=session_key is None,
@@ -309,10 +388,7 @@ class AgentNodeRunner:
         return None
 
     def _persist(self, req: NodeRunRequest, messages: list[dict]) -> str | None:
-        if req.worker_index is not None:
-            key = f"workflow:{req.run_id}:{req.node.id}:{req.iteration}:{req.worker_index}"
-        else:
-            key = f"workflow:{req.run_id}:{req.node.id}:{req.iteration}"
+        key = self._session_key(req)
         try:
             # Headless runs (no calling session) would otherwise self-root each node
             # session at its own key, leaving them as orphans. Root them all under a

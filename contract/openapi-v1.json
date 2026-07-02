@@ -5549,6 +5549,11 @@
             "title": "Output Format",
             "type": "string"
           },
+          "resume_run_id": {
+            "default": "",
+            "title": "Resume Run Id",
+            "type": "string"
+          },
           "task": {
             "title": "Task",
             "type": "string"
@@ -5605,10 +5610,23 @@
             "title": "Final Output",
             "type": "string"
           },
+          "needs_input_node": {
+            "default": "",
+            "title": "Needs Input Node",
+            "type": "string"
+          },
           "output_dir": {
             "default": "",
             "title": "Output Dir",
             "type": "string"
+          },
+          "output_files": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Output Files",
+            "type": "array"
           },
           "run_id": {
             "title": "Run Id",
