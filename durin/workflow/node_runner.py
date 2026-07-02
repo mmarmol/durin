@@ -238,6 +238,8 @@ class AgentNodeRunner:
             if req.upstream_output:
                 revisit += f"\n\n--- New input for this pass ---\n{req.upstream_output}"
             revisit += self._pass_note(req)
+            if getattr(req, "fail_would_exhaust", False):
+                revisit += _FINAL_REVIEW
             messages = prior_messages + [{"role": "user", "content": revisit}]
         else:
             messages.append({"role": "user", "content": user})
@@ -249,16 +251,21 @@ class AgentNodeRunner:
 
         node_max_turns = getattr(req.node, "max_turns", None)
         if node_max_turns is not None:
-            # messages[0] is always the system turn — the fresh path's own, or (on a
-            # resumed persistent session) the original system turn from the first
-            # pass, which the budget note may still be appended to.
-            # Prepend a budget note so the model knows to be efficient.
+            # On a resumed persistent session, append the budget note to the latest
+            # revisit turn (the last message) to avoid stacking it on the original
+            # system turn which may be persisted and reloaded. On a fresh path,
+            # append it to messages[0] (the system turn).
             budget_note = (
                 f"\n\nYou have up to {node_max_turns} rounds of tool use. "
                 "Gather efficiently, then give your final answer."
             )
-            system_msg = messages[0]
-            messages[0] = {**system_msg, "content": system_msg["content"] + budget_note}
+            resumed = prior_messages is not None
+            if resumed:
+                last = messages[-1]
+                messages[-1] = {**last, "content": last["content"] + budget_note}
+            else:
+                system_msg = messages[0]
+                messages[0] = {**system_msg, "content": system_msg["content"] + budget_note}
             run_max_iterations = node_max_turns
         else:
             run_max_iterations = self.max_iterations

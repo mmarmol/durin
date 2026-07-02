@@ -698,3 +698,31 @@ def test_fresh_node_keeps_per_iteration_keys(tmp_path):
     nr = _faithful_runner(sessions)
     node = WorkNode(id="impl", prompt="Do it.", next=None)
     assert nr(_req(node, iteration=2)).session_key == "workflow:r1:impl:2"
+
+
+def test_persistent_routing_revisit_keeps_final_review_signal(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    node = WorkNode(id="gate", prompt="ok?", session="persistent",
+                    on_pass=None, on_fail="gate")
+    nr = _faithful_runner(sessions, reply="FAIL not yet")
+    nr(_req(node, iteration=1, budget=2))
+    nr2 = _faithful_runner(sessions, reply="PASS")
+    nr2(_req(node, iteration=2, budget=2, fail_would_exhaust=True))
+    spec = nr2.runner.run.call_args.args[0]
+    last_user = [m for m in spec.initial_messages if m["role"] == "user"][-1]["content"]
+    assert "final review round" in last_user.lower()
+
+
+def test_persistent_max_turns_budget_note_does_not_stack(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    node = WorkNode(id="impl", prompt="Do it.", session="persistent",
+                    next=None, max_turns=5)
+    nr = _faithful_runner(sessions, reply="v1")
+    nr(_req(node, iteration=1, budget=3))
+    nr2 = _faithful_runner(sessions, reply="v2")
+    nr2(_req(node, iteration=2, budget=3))
+    spec = nr2.runner.run.call_args.args[0]
+    system = spec.initial_messages[0]["content"]
+    assert system.count("rounds of tool use") == 1     # not re-appended to the reloaded system turn
+    last_user = [m for m in spec.initial_messages if m["role"] == "user"][-1]["content"]
+    assert "rounds of tool use" in last_user            # delivered in the revisit turn instead
