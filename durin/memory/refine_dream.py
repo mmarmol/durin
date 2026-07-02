@@ -283,6 +283,7 @@ def run_refine(
             continue
         _emit("memory.absorb.judged", canonical=ref_a, absorbed=ref_b,
               verdict=judged.verdict, confidence=judged.confidence,
+              entity_type=page_a.type,
               distance=cand.distance)
         decision = judged
         escalated = False
@@ -319,7 +320,7 @@ def run_refine(
             merged.append({"canonical": ref_a, "absorbed": ref_b,
                            "confidence": decision.confidence})
             _emit("memory.absorb.auto_merged", canonical=ref_a, absorbed=ref_b,
-                  confidence=decision.confidence)
+                  confidence=decision.confidence, entity_type=page_a.type)
         else:
             if escalated:
                 add_flagged(workspace, ref_a, ref_b,

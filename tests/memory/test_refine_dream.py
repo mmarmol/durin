@@ -379,3 +379,19 @@ def test_refine_capped_escalation_flags_pair(tmp_path, monkeypatch):
     flagged = read_flagged(tmp_path)
     assert len(flagged) == 1
     assert flagged[0]["reasoning"].startswith("escalation cap")
+
+
+def test_refine_absorb_events_carry_entity_type(tmp_path, monkeypatch):
+    """judged/auto_merged events must carry the entity type so per-class
+    duplicate churn (e.g. feedback/stance/practice) is measurable."""
+    import durin.agent.tools._telemetry as tel
+
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    _two_dupes(tmp_path)
+    run_refine(tmp_path, llm_invoke=_judge_stub("same", 96))
+    judged = [d for n, d in events if n == "memory.absorb.judged"]
+    merged = [d for n, d in events if n == "memory.absorb.auto_merged"]
+    assert judged and judged[0]["entity_type"] == "company"
+    assert merged and merged[0]["entity_type"] == "company"

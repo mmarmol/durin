@@ -738,6 +738,7 @@ class MemoryAbsorbJudgedEvent(TypedDict):
     verdict: str    # "same" | "different" | "unclear"
     confidence: int  # 0-100
     duration_ms: float
+    entity_type: NotRequired[str]  # both pages share the type (cross-type pairs are filtered)
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 
@@ -755,6 +756,7 @@ class MemoryAbsorbAutoMergedEvent(TypedDict):
     absorbed: str
     confidence: int
     sha: str  # empty when absorb returned None (idempotent no-op)
+    entity_type: NotRequired[str]  # both pages share the type (cross-type pairs are filtered)
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 

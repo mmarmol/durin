@@ -147,8 +147,8 @@ Additional dream events:
 
 These fire during the refine pass and via the manual `durin memory` commands:
 
-- **`memory.absorb.judged`** — a candidate pair reached the LLM judge. `verdict` is `same | different | unclear`; `confidence` is 0–100. Emitted for every pair that survived the cross-type filter and quarantine check.
-- **`memory.absorb.auto_merged`** — pair was auto-merged (`verdict == same` and `confidence >= threshold`). `sha` is the merge commit.
+- **`memory.absorb.judged`** — a candidate pair reached the LLM judge. `verdict` is `same | different | unclear`; `confidence` is 0–100. `entity_type` supports per-class duplicate-churn analysis (e.g. feedback/stance/practice). Emitted for every pair that survived the cross-type filter and quarantine check.
+- **`memory.absorb.auto_merged`** — pair was auto-merged (`verdict == same` and `confidence >= threshold`). `sha` is the merge commit. `entity_type` supports per-class duplicate-churn analysis (e.g. feedback/stance/practice).
 - **`memory.absorb.skipped`** — pair was not merged. `reason` is one of: `cross_type`, `quarantine`, `below_threshold`, `verdict_different`, `verdict_unclear`, `judge_failed`, `page_load_failed`, `judge_error`.
 - **`memory.absorb.reverted`** — a prior auto-merge was undone via `durin memory revert`. This is the regret-rate signal: a high revert count indicates the confidence threshold is too low.
 
