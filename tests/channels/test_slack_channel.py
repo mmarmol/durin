@@ -586,7 +586,9 @@ async def test_slack_slash_command_skips_thread_context() -> None:
 
 @pytest.mark.asyncio
 async def test_slack_file_share_downloads_media_and_reaches_agent() -> None:
-    channel = SlackChannel(SlackConfig(enabled=True, bot_token="xoxb-test"), MessageBus())
+    channel = SlackChannel(
+        SlackConfig(enabled=True, bot_token="xoxb-test", allow_from=["*"]), MessageBus()
+    )
     channel._bot_user_id = "UBOT"
     channel._web_client = _FakeAsyncWebClient()
     channel._handle_message = AsyncMock()  # type: ignore[method-assign]
@@ -651,7 +653,126 @@ def test_slack_download_failure_marker_is_actionable() -> None:
     assert "reinstall the Slack app" in marker
 
 
-def test_slack_channel_uses_channel_aware_allow_policy() -> None:
-    channel = SlackChannel(SlackConfig(enabled=True, allow_from=[]), MessageBus())
+def test_is_allowed_uses_central_allowlist_semantics() -> None:
+    """Slack inherits BaseChannel auth: star > allow_from > pairing store."""
+    bus = MessageBus()
+    assert SlackChannel(SlackConfig(allow_from=["*"]), bus).is_allowed("U1") is True
+    channel = SlackChannel(SlackConfig(allow_from=["U1"]), bus)
     assert channel.is_allowed("U1") is True
-    assert channel._is_allowed("U1", "C123", "channel") is True
+    assert channel.is_allowed("U2") is False
+    # Empty allowlist = pairing-only mode (nobody pre-approved).
+    assert SlackChannel(SlackConfig(), bus).is_allowed("U1") is False
+
+
+def _dm_request(*, envelope_id: str = "env-1", event_id: str | None = None, text: str = "hello"):
+    payload: dict[str, object] = {
+        "event": {
+            "type": "message",
+            "user": "U1",
+            "channel": "D123",
+            "channel_type": "im",
+            "text": text,
+            "ts": "1700000000.000100",
+        }
+    }
+    if event_id:
+        payload["event_id"] = event_id
+    return SimpleNamespace(type="events_api", envelope_id=envelope_id, payload=payload)
+
+
+@pytest.mark.asyncio
+async def test_unapproved_dm_publishes_for_central_gate_without_side_effects() -> None:
+    """Unapproved senders still publish (the bus gate denies + sends the pairing
+    code) but skip API-expensive pre-work: reactions and file downloads."""
+    channel = SlackChannel(SlackConfig(enabled=True, allow_from=["UOTHER"]), MessageBus())
+    channel._bot_user_id = "UBOT"
+    fake_web = _FakeAsyncWebClient()
+    channel._web_client = fake_web
+    channel._handle_message = AsyncMock()  # type: ignore[method-assign]
+    channel._download_slack_file = AsyncMock()  # type: ignore[method-assign]
+    client = SimpleNamespace(send_socket_mode_response=AsyncMock())
+    req = _dm_request()
+    req.payload["event"]["files"] = [{"id": "F1", "name": "x.pdf"}]
+
+    await channel._on_socket_request(client, req)
+
+    channel._handle_message.assert_awaited_once()
+    kwargs = channel._handle_message.await_args.kwargs
+    assert kwargs["content"] == "hello"
+    assert kwargs["is_dm"] is True
+    assert kwargs["media"] == []
+    channel._download_slack_file.assert_not_awaited()
+    assert fake_web.reactions_add_calls == []
+
+
+@pytest.mark.asyncio
+async def test_dm_disabled_drops_dm_messages() -> None:
+    channel = SlackChannel(
+        SlackConfig(enabled=True, allow_from=["*"], dm_enabled=False), MessageBus()
+    )
+    channel._bot_user_id = "UBOT"
+    channel._web_client = _FakeAsyncWebClient()
+    channel._handle_message = AsyncMock()  # type: ignore[method-assign]
+    client = SimpleNamespace(send_socket_mode_response=AsyncMock())
+
+    await channel._on_socket_request(client, _dm_request())
+
+    channel._handle_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_redelivered_event_is_processed_once() -> None:
+    channel = SlackChannel(SlackConfig(enabled=True, allow_from=["*"]), MessageBus())
+    channel._bot_user_id = "UBOT"
+    channel._web_client = _FakeAsyncWebClient()
+    channel._handle_message = AsyncMock()  # type: ignore[method-assign]
+    client = SimpleNamespace(send_socket_mode_response=AsyncMock())
+
+    await channel._on_socket_request(client, _dm_request(event_id="Ev123"))
+    await channel._on_socket_request(client, _dm_request(envelope_id="env-2", event_id="Ev123"))
+
+    channel._handle_message.assert_awaited_once()
+    # Distinct events keep flowing.
+    await channel._on_socket_request(client, _dm_request(envelope_id="env-3", event_id="Ev456"))
+    assert channel._handle_message.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_group_allowlist_policy_gates_by_channel() -> None:
+    channel = SlackChannel(
+        SlackConfig(
+            enabled=True,
+            allow_from=["*"],
+            group_policy="allowlist",
+            group_allow_from=["C_OK"],
+        ),
+        MessageBus(),
+    )
+    channel._bot_user_id = "UBOT"
+    channel._web_client = _FakeAsyncWebClient()
+    channel._handle_message = AsyncMock()  # type: ignore[method-assign]
+    client = SimpleNamespace(send_socket_mode_response=AsyncMock())
+
+    def group_request(chat_id: str, envelope_id: str):
+        return SimpleNamespace(
+            type="events_api",
+            envelope_id=envelope_id,
+            payload={
+                "event_id": f"Ev-{envelope_id}",
+                "event": {
+                    "type": "message",
+                    "user": "U1",
+                    "channel": chat_id,
+                    "channel_type": "channel",
+                    "text": "hello",
+                    "ts": "1700000000.000100",
+                },
+            },
+        )
+
+    await channel._on_socket_request(client, group_request("C_OK", "env-a"))
+    channel._handle_message.assert_awaited_once()
+    assert channel._handle_message.await_args.kwargs["is_dm"] is False
+
+    await channel._on_socket_request(client, group_request("C_DENIED", "env-b"))
+    assert channel._handle_message.await_count == 1

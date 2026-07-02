@@ -358,8 +358,10 @@ Channel-specific extensions:
 - **Telegram**: no additional permission fields beyond `allow_from`.
 - **Discord**: `allow_channels` — list of Discord channel IDs allowed to
   trigger the bot (empty means all).
-- **Slack**: `dm.enabled`, `dm.allow_from`, `group_allow_from` — separate
-  permission lists for DMs and group channels.
+- **Slack**: `dm_enabled` (routing toggle for DMs), `group_policy`
+  (`open`/`mention`/`allowlist`) and `group_allow_from` (channel IDs for the
+  allowlist policy). Sender authorization uses the standard `allow_from` +
+  pairing flow via the central ingress gate.
 - **Email**: `imap_host`, `imap_port`, `imap_username`, `imap_password`,
   `imap_mailbox`, `imap_use_ssl`, `smtp_host`, `smtp_port`, `smtp_username`,
   `smtp_password`, `smtp_use_tls`, `smtp_use_ssl`, `auto_reply_enabled`.
