@@ -738,6 +738,7 @@ class MemoryAbsorbJudgedEvent(TypedDict):
     verdict: str    # "same" | "different" | "unclear"
     confidence: int  # 0-100
     duration_ms: float
+    entity_type: NotRequired[str]  # both pages share the type (cross-type pairs are filtered)
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 
@@ -755,6 +756,7 @@ class MemoryAbsorbAutoMergedEvent(TypedDict):
     absorbed: str
     confidence: int
     sha: str  # empty when absorb returned None (idempotent no-op)
+    entity_type: NotRequired[str]  # both pages share the type (cross-type pairs are filtered)
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 
@@ -766,17 +768,22 @@ class MemoryAbsorbSkippedEvent(TypedDict):
 
     - ``"cross_type"``: candidate refs span different entity types
       (e.g. person:marcelo vs project:marcelo) — filtered before judge.
+    - ``"tombstoned"``: the user previously rejected this pair
+      (recorded in ``.refine_tombstones.json``).
+    - ``"load_failed"``: one or both entity pages could not be loaded from disk.
+    - ``"user_managed"``: either page is ``author == "user_authored"``.
     - ``"quarantine"``: at least one page was created at/after the run start
       (the run never merges its own fresh output).
-    - ``"below_threshold"``: judge said "same" but confidence < floor.
-    - ``"verdict_different"`` / ``"verdict_unclear"``: judge declined.
-    - ``"judge_failed"``: LLM call or parse failure after all retries.
-    - ``"page_load_failed"``: one of the two pages couldn't be loaded.
+    - ``"judge_error"``: the judge raised ``JudgeError`` (unparseable verdict
+      after all retries) and the pair was skipped for this run.
+
+    Declined verdicts ("different" / "unclear" / below-threshold "same") are
+    not skips — they show up in ``memory.absorb.judged`` instead.
     """
 
     canonical: str
     absorbed: str
-    confidence: int  # 0 if reason is cross_type / quarantine / judge_failed / page_load_failed
+    confidence: NotRequired[int]  # never emitted today — skips fire before a usable verdict
     reason: str
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
@@ -1243,13 +1250,32 @@ class MemoryDreamAlwaysOnEvent(TypedDict):
 
 class MemoryDreamFlaggedEvent(TypedDict):
     """The refine dream flagged a pair the Tier-2 agent investigated but did not
-    confirm as the same entity.  ``canonical`` and ``absorbed`` are the two refs
+    confirm as the same entity, or a borderline pair capped before Tier-2 ever
+    ran (see ``memory.absorb.escalation_capped``) and kept on the cheap
+    Tier-1 verdict instead.  ``canonical`` and ``absorbed`` are the two refs
     the judge examined; the pair is stored in ``.flagged_pairs.json`` for future
     review.  Fires inside ``add_flagged`` so it is always consistent with the
     on-disk record."""
 
     canonical: str
     absorbed: str
+
+
+class MemoryDreamParseFailureEvent(TypedDict):
+    """A dream-pass LLM response could not be parsed at all.
+
+    Distinct from a valid-but-empty response: this fires only when the
+    output is unloadable JSON or the wrong top-level type after fence
+    stripping and repair. Without it, "model returned garbage" is
+    indistinguishable from "nothing to extract" — the pass silently
+    yields nothing and the per-session cursor still advances.
+    """
+
+    stage: str  # "extract" | "discover" | "learnings" | "derived_from"
+    source: NotRequired[str | None]  # entity ref or session stem
+    raw_head: str  # first 200 chars of the raw response
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
 
 
 class MemoryUpsertEntityEvent(TypedDict):
@@ -1351,6 +1377,7 @@ EVENTS: dict[str, type] = {
     "memory.dream.throttled": MemoryDreamThrottledEvent,
     "memory.dream.always_on": MemoryDreamAlwaysOnEvent,
     "memory.dream.flagged": MemoryDreamFlaggedEvent,
+    "memory.dream.parse_failure": MemoryDreamParseFailureEvent,
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,

@@ -22,6 +22,7 @@ __all__ = [
     "aux_llm_invoke",
     "aux_llm_invoke_astream",
     "default_llm_invoke",
+    "emit_parse_failure",
     "judge_llm_invoke",
     "judge_llm_invoke_astream",
 ]
@@ -29,6 +30,23 @@ __all__ = [
 
 class DreamError(Exception):
     """Raised when an LLM invocation can't proceed (missing key, bad output, IO)."""
+
+
+def emit_parse_failure(stage: str, *, source: str | None = None, raw: str = "") -> None:
+    """Telemetry for an unparseable dream-pass LLM response.
+
+    Best-effort: telemetry must never break a dream pass. Callers keep
+    their empty-result behavior; this only makes the failure visible.
+    """
+    try:
+        from durin.agent.tools._telemetry import emit_tool_event
+        emit_tool_event("memory.dream.parse_failure", {
+            "stage": stage,
+            "source": source,
+            "raw_head": raw[:200],
+        })
+    except Exception:  # pragma: no cover — never break the dream
+        pass
 
 
 @dataclass

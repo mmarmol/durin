@@ -51,9 +51,9 @@ def test_parse_discoveries_validates_and_filters():
     ]
 
 
-def test_parse_discoveries_non_list_is_empty():
-    assert parse_discoveries('{"hq":"SF"}') == []
-    assert parse_discoveries("no json here") == []
+def test_parse_discoveries_non_list_is_none():
+    assert parse_discoveries('{"hq":"SF"}') is None
+    assert parse_discoveries("no json here") is None
 
 
 # --- discover_entities ------------------------------------------------------

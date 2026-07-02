@@ -299,7 +299,7 @@ Sections with zero hits are omitted entirely.
 | `memory.dream.always_on_token_budget` | `1500` | Hard token ceiling for always-on pinned guidance; `0` disables the pin |
 | `memory.dream.auto_absorb.enabled` | `true` | ON by default; the refine pass auto-merges judged duplicates (recoverable via git revert + tombstone). When false, duplicates must be merged manually via `durin memory absorb` |
 | `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM judge confidence floor (0–100) for an auto-merge |
-| `memory.dream.auto_absorb.semantic_distance_threshold` | `0.20` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.90; lower = stricter — the judge still decides the merge |
+| `memory.dream.auto_absorb.semantic_distance_threshold` | `0.30` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.85; lower = stricter — the judge still decides the merge |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for `ReactiveDreamGate`; `0` disables; daily cron is never throttled |
 | `memory.dream.max_seconds_per_run` | `600` | Wall-clock cap for the extract pass; it yields after the current session and the per-session cursor resumes on the next trigger |
 | `memory.search.cross_encoder.enabled` | `false` | Enables the cross-encoder reranker (displayed in onboarding as an opt-in) |
@@ -315,7 +315,7 @@ Sections with zero hits are omitted entirely.
 **Onboarding wizard defaults:**
 - Vector memory: ON (the semantic layer is the default experience)
 - Cross-encoder reranker: OFF (opt-in; no aggregate quality gain on dialogue-style stores)
-- Auto-absorb: OFF (a bad merge silently combines two distinct entities; recovery requires `git revert`)
+- Auto-absorb: ON (auto-merge is recoverable via git revert + tombstone; the wizard offers the toggle)
 - Memory model: same as agent (can be overridden via `aux_models.memory`)
 
 ---

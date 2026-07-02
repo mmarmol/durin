@@ -261,3 +261,86 @@ def test_discover_prompt_type_list_is_wired_from_suggested_types_ordered() -> No
     assert canonical == "person/place/project/topic/organization/event/artifact/stance/practice"
     prompt = build_discover_prompt("dummy turns")
     assert canonical in prompt
+
+
+def test_parse_attributes_none_on_unparseable():
+    assert parse_attributes("I could not produce JSON, sorry.") is None
+
+
+def test_parse_attributes_none_on_wrong_top_level():
+    assert parse_attributes("[1, 2, 3]") is None
+
+
+def test_parse_attributes_empty_dict_is_empty_not_none():
+    assert parse_attributes("{}") == {}
+
+
+def test_parse_discoveries_none_on_unparseable():
+    assert parse_discoveries("no json here") is None
+
+
+def test_parse_discoveries_empty_list_is_empty_not_none():
+    assert parse_discoveries("[]") == []
+
+
+def test_parse_learnings_none_on_unparseable():
+    from durin.memory.extract_dream import _parse_learnings
+    assert _parse_learnings("plain prose answer") is None
+
+
+def test_parse_learnings_empty_list_is_empty_not_none():
+    from durin.memory.extract_dream import _parse_learnings
+    assert _parse_learnings("[]") == []
+
+
+def test_extract_entity_emits_parse_failure(tmp_path, monkeypatch):
+    import durin.agent.tools._telemetry as tel
+    from durin.memory.extract_dream import extract_entity
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    extract_entity(tmp_path, "person:ana", "USER: hola",
+                   llm_invoke=lambda prompt, **kw: "sorry, no JSON today")
+    failures = [d for n, d in events if n == "memory.dream.parse_failure"]
+    assert failures
+    data = failures[0]
+    assert data["stage"] == "extract"
+    assert data["source"] == "person:ana"
+    assert data["raw_head"].startswith("sorry")
+
+
+def test_extract_entity_no_parse_failure_on_valid_empty(tmp_path, monkeypatch):
+    import durin.agent.tools._telemetry as tel
+    from durin.memory.extract_dream import extract_entity
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    extract_entity(tmp_path, "person:ana", "USER: hola",
+                   llm_invoke=lambda prompt, **kw: "{}")
+    assert "memory.dream.parse_failure" not in [n for n, _ in events]
+
+
+def test_discover_emits_parse_failure(tmp_path, monkeypatch):
+    import durin.agent.tools._telemetry as tel
+    from durin.memory.extract_dream import discover_entities
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    discover_entities(tmp_path, "USER: hola",
+                      llm_invoke=lambda prompt, **kw: "prose, not a JSON array",
+                      source_ref="[[sessions/s1.md#turn-3]]")
+    failures = [d for n, d in events if n == "memory.dream.parse_failure"]
+    assert failures and failures[0]["stage"] == "discover"
+
+
+def test_mine_learnings_emits_parse_failure(tmp_path, monkeypatch):
+    import durin.agent.tools._telemetry as tel
+    from durin.memory.extract_dream import mine_learnings
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    mine_learnings(tmp_path, "USER: hola",
+                   llm_invoke=lambda prompt, **kw: "prose, not a JSON array",
+                   source_ref="[[sessions/s1.md#turn-3]]")
+    failures = [d for n, d in events if n == "memory.dream.parse_failure"]
+    assert failures and failures[0]["stage"] == "learnings"
