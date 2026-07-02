@@ -309,10 +309,10 @@ The snapshot is bound by a cost contract:
   is open; a fresh client is hydrated on subscribe. Publishing tolerates a full
   bus (the frame is droppable — the next boundary re-publishes the latest state).
 
-Three webui surfaces consume it: a **Concurrency settings card** (live per-lane
-readouts + editable caps), an always-visible **saturation chip** in the sidebar,
-and a Shell-level **global Work panel** that reuses `WorkItemCard`. Editing a cap
-in the card writes the config key (`agents.defaults.max_concurrent_interactive`,
+A single **Concurrency settings card** consumes it — the live per-lane readouts
+and the editable caps. (A session's running sub-agents and workflows surface in
+the per-session Work panel, not here.) Editing a cap writes the config key
+(`agents.defaults.max_concurrent_interactive`,
 `concurrency_ceiling`, or `max_concurrent_subagents`); `ConfigService` fires
 `reload_app_config` for those keys, so the change applies to the running gateway
 without a restart (see [loop](loop.md)).
