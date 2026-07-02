@@ -11,6 +11,7 @@ def test_semantic_distance_signature_defaults_match_config():
     """The dream entry points must default to the config schema's value —
     a stale literal here means direct callers silently use an old threshold."""
     from inspect import signature
+
     from durin.config.schema import AutoAbsorbConfig
     from durin.memory import dream_passes, extract_dream, extract_runner, refine_dream
 

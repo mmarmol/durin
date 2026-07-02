@@ -145,9 +145,9 @@ def test_parse_links_empty_map_is_empty_not_none():
 
 
 def test_link_derived_from_emits_parse_failure(tmp_path: Path, monkeypatch) -> None:
-    import durin.agent.tools._telemetry as tel
     from datetime import datetime, timezone
 
+    import durin.agent.tools._telemetry as tel
     from durin.memory.field_patch import FieldPatch
     from durin.memory.memory_writer import write_entity
 
