@@ -22,6 +22,24 @@ def _runner(sessions, fake_result):
     return AgentNodeRunner(ar, sessions, default_model="test-model")
 
 
+def _faithful_runner(sessions, reply="ok"):
+    """A fake AgentRunner faithful to the real contract: result.messages is a
+    SUPERSET of spec.initial_messages (initial + new assistant turns)."""
+    provider = MagicMock(spec=LLMProvider)
+    provider.get_default_model.return_value = "test-model"
+    from durin.agent.runner import AgentRunner
+    ar = AgentRunner(provider)
+
+    async def fake_run(spec):
+        return AgentRunResult(
+            final_content=reply,
+            messages=list(spec.initial_messages) + [{"role": "assistant", "content": reply}],
+        )
+
+    ar.run = AsyncMock(side_effect=fake_run)
+    return AgentNodeRunner(ar, sessions, default_model="test-model")
+
+
 def test_runs_node_and_persists_session_with_lineage(tmp_path):
     sessions = SessionManager(workspace=tmp_path)
     sessions.save(Session(key="websocket:abc"))  # the invoking session (root)
@@ -573,3 +591,24 @@ def test_model_error_stop_reason_is_treated_as_a_node_failure(tmp_path):
     assert ei.value.node_id == "plan"
     assert ei.value.session_key   # the failed node's partial conversation was persisted
     SessionManager(workspace=tmp_path).get_or_create(ei.value.session_key)
+
+
+def test_response_messages_exclude_system_and_inherited_shared_context(tmp_path):
+    sessions = SessionManager(workspace=tmp_path)
+    nr = _faithful_runner(sessions, reply="out-b")
+    inherited = [{"role": "user", "content": "earlier shared turn"},
+                 {"role": "assistant", "content": "earlier shared reply"}]
+    req = NodeRunRequest(
+        node=WorkNode(id="b", prompt="Continue.", context="shared", next=None),
+        task="t", upstream_output=None, shared_context=inherited,
+        run_id="r1", iteration=1, root_session_key=None,
+    )
+    resp = nr(req)
+    roles = [m["role"] for m in resp.messages]
+    assert "system" not in roles                       # no system prompt leaked
+    contents = [m.get("content") for m in resp.messages]
+    assert "earlier shared turn" not in contents       # inherited buffer not re-emitted
+    assert contents == ["t", "out-b"] or contents[-1] == "out-b"
+    # exactly: the node's own user turn + its new assistant turn
+    assert resp.messages[0]["role"] == "user"
+    assert resp.messages[-1] == {"role": "assistant", "content": "out-b"}

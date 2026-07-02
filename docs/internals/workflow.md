@@ -313,7 +313,9 @@ survives if the forced tool call is ever unavailable.
 - **`shared`:** the node additionally receives a running buffer of all preceding
   `shared` nodes' conversation turns as extra context before its user message, and its
   own turns are appended to that buffer for subsequent `shared` nodes. The buffer is
-  capped to bound prompt growth on long shared chains.
+  capped to bound prompt growth on long shared chains. The buffer carries each shared
+  node's own turns only — never its system prompt nor the context it inherited — so a
+  chain of shared nodes cannot re-accumulate (duplicate) earlier context.
 
 **`shared` is sequential-only.** Parallel workers are always isolated (each gets its
 own session; there is no shared buffer across concurrent threads), and only their text

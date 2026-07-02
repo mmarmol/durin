@@ -264,11 +264,18 @@ class AgentNodeRunner:
         elif getattr(req.node, "routes", False):
             route_label = self._derive_route_label(all_messages, ["PASS", "FAIL"], model)
 
+        # The node's OWN contribution: its user turn + everything generated after.
+        # The engine extends the shared buffer with this — returning the full
+        # conversation here would re-add the system prompt and the inherited
+        # shared context, duplicating the buffer on every shared node.
+        own_start = max(0, len(messages) - 1)
+        own_messages = all_messages[own_start:]
+
         session_key = self._persist(req, all_messages)
         return NodeRunResponse(
             output=final_output,
             session_key=session_key,
-            messages=all_messages,
+            messages=own_messages,
             # This runner always persists; a None key means the save raised, not that
             # the node had no session — surface that as a persist failure.
             persist_failed=session_key is None,

@@ -155,6 +155,32 @@ def test_shared_buffer_accumulates_across_shared_nodes():
     assert b_call.shared_context == [{"role": "assistant", "content": "out-a"}]
 
 
+def test_shared_buffer_does_not_duplicate_across_three_shared_nodes():
+    wf = parse_workflow({
+        "name": "d", "start": "a",
+        "nodes": [
+            {"id": "a", "kind": "work", "context": "shared", "next": "b"},
+            {"id": "b", "kind": "work", "context": "shared", "next": "c"},
+            {"id": "c", "kind": "work", "context": "shared", "next": None},
+        ],
+    })
+    seen = {}
+
+    def runner(req):
+        seen[req.node.id] = list(req.shared_context)
+        # Faithful to the FIXED contract: only this node's own contribution.
+        return NodeRunResponse(output=f"out-{req.node.id}", messages=[
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": f"out-{req.node.id}"},
+        ])
+
+    WorkflowEngine(runner).run(wf, "t")
+    c_ctx = seen["c"]
+    assert len(c_ctx) == 4                                     # a's 2 + b's 2, no dupes
+    assert [m["role"] for m in c_ctx].count("system") == 0
+    assert [m["content"] for m in c_ctx].count("out-a") == 1   # each turn appears once
+
+
 def test_shared_buffer_is_capped_dropping_oldest(tmp_path):
     wf = parse_workflow({
         "name": "d", "start": "a",

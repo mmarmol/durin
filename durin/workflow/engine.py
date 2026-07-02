@@ -61,6 +61,9 @@ class NodeRunRequest:
 class NodeRunResponse:
     output: str
     session_key: str | None = None
+    # The node's OWN contribution to the conversation (its user turn + the turns it
+    # generated) — NOT the full prompt. The engine extends the shared-context buffer
+    # with exactly this, so inherited context and system prompts never re-enter it.
     messages: list[dict] = field(default_factory=list)
     # True when the node ran but persisting its session failed (the conversation is
     # lost). Lets the engine record a truthful 'persist_failed' status instead of a
