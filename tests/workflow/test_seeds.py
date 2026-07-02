@@ -99,7 +99,7 @@ def test_looping_seed_producers_use_persistent_sessions():
     # Nodes that loop back (self-loop or targeted by on_fail) must use persistent
     # sessions to maintain context across re-entries. This test verifies the looping
     # producers in seed workflows are configured correctly.
-    for name, nodes in [("execute-plan", ["implement"]), ("debug", ["diagnose"])]:
+    for name, nodes in [("execute-plan", ["implement"]), ("debug", ["diagnose", "fix"]), ("writing-plans", ["revise"])]:
         wf = _load_seed(name)
         for node_id in nodes:
             assert wf.nodes[node_id].session == "persistent", f"{name}:{node_id}"

@@ -52,6 +52,7 @@
       "kind": "work",
       "mode": "read",
       "tools": "none",
+      "session": "persistent",
       "prompt": "Revise the draft plan to address the review findings: fix gaps and ordering, add the missing checks so every step is verifiable, and cut speculative scope. Keep the bite-sized step structure, each step with its `verify:` line, and a final `## Verification` section. Produce the FULL revised plan, ready for approval — concrete and minimal.",
       "next": "verify"
     },

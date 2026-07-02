@@ -29,6 +29,7 @@
       "kind": "work",
       "mode": "build",
       "tools": "default",
+      "session": "persistent",
       "max_visits": 8,
       "prompt": "Apply the MINIMAL fix for the diagnosed root cause by editing the actual code in the working directory in place. Change only what the root cause requires — no refactoring, no unrelated cleanup. Keep the reproduction check intact. Summarize exactly what you changed and why it addresses the cause.",
       "next": "verify"

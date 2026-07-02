@@ -130,10 +130,10 @@ default (`"fresh"`) for a node whose job is a clean look each time (an
 independent reviewer, for instance — persistence would just accumulate its
 own bias).
 
-The `execute-plan` and `debug` seed workflows ship with persistent sessions
-on their looping steps: `implement` in `execute-plan` and `diagnose` in
-`debug` — both are real examples of nodes that benefit from carrying context
-across revisits.
+The `execute-plan`, `debug`, and `writing-plans` seed workflows ship with
+persistent sessions on their looping steps (`implement`, `diagnose`+`fix`, and
+`revise` respectively) — each carries context across iterations as the node
+refines its work in response to loop feedback.
 
 ## Passing work between steps
 
