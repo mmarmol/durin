@@ -325,6 +325,7 @@ background worker. `approve_code` moves an entry from pending to approved;
 | `handle_pairing_command` | `durin/pairing/store.py` | Pure function dispatching `/pairing list|approve|deny|revoke` subcommands. Used by both CLI and `CommandRouter`. |
 | `format_pairing_reply` | `durin/pairing/store.py` | Returns the user-facing string sent to an unapproved DM sender containing their pairing code. |
 | `TelegramChannel` | `durin/channels/telegram.py` | Telegram adapter using `python-telegram-bot`. Implements streaming via in-place message edits. |
+| `SlackChannel` | `durin/channels/slack.py` | Slack Socket Mode adapter. Implements streaming via in-place `chat.update` edits, thread-scoped sessions, quoted/forwarded-content extraction, and mentioned-thread auto-follow. |
 | `WebSocketChannel` | `durin/channels/websocket.py` | WebSocket server channel that also hosts the embedded webui SPA. Handles token issuance, `websocket_requires_token`, and session/cron integration. |
 | `EmailChannel` | `durin/channels/email.py` | IMAP+SMTP adapter. Polls for new messages and sends replies. |
 
@@ -359,9 +360,10 @@ Channel-specific extensions:
 - **Discord**: `allow_channels` — list of Discord channel IDs allowed to
   trigger the bot (empty means all).
 - **Slack**: `dm_enabled` (routing toggle for DMs), `group_policy`
-  (`open`/`mention`/`allowlist`) and `group_allow_from` (channel IDs for the
-  allowlist policy). Sender authorization uses the standard `allow_from` +
-  pairing flow via the central ingress gate.
+  (`open`/`mention`/`allowlist`), `group_allow_from` (channel IDs for the
+  allowlist policy), and `thread_auto_follow` (answer follow-ups in a
+  mentioned thread without re-mention). Sender authorization uses the
+  standard `allow_from` + pairing flow via the central ingress gate.
 - **Email**: `imap_host`, `imap_port`, `imap_username`, `imap_password`,
   `imap_mailbox`, `imap_use_ssl`, `smtp_host`, `smtp_port`, `smtp_username`,
   `smtp_password`, `smtp_use_tls`, `smtp_use_ssl`, `auto_reply_enabled`.

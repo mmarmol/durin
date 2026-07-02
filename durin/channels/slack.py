@@ -3,6 +3,7 @@
 import asyncio
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -49,9 +50,15 @@ class SlackConfig(Base):
     )
     reply_in_thread: bool = Field(default=True, json_schema_extra={"group": "behavior"})
     include_thread_context: bool = Field(default=True, json_schema_extra={"group": "behavior"})
+    streaming: bool = Field(default=True, json_schema_extra={"group": "behavior"})
+    # Once the bot is mentioned in a channel thread, keep answering follow-ups
+    # in that thread without requiring a re-mention on every message.
+    thread_auto_follow: bool = Field(default=True, json_schema_extra={"group": "behavior"})
     thread_context_limit: int = 20
     react_emoji: str = "eyes"
     done_emoji: str = "white_check_mark"
+    # chat.update is a Tier-3 API (~1 call/s sustained); keep edits below that.
+    stream_edit_interval: float = Field(default=1.2, ge=0.5)
 
 
 SLACK_MAX_MESSAGE_LEN = 39_000  # Slack API allows ~40k; leave margin
@@ -75,7 +82,18 @@ SLACK_FATAL_AUTH_ERRORS = frozenset(
 # event IDs for this long (seconds) and drop duplicates.
 SLACK_EVENT_DEDUP_TTL_S = 300.0
 SLACK_EVENT_DEDUP_MAX = 2000
+SLACK_FOLLOWED_THREADS_MAX = 5000
 _HTML_DOWNLOAD_PREFIXES = (b"<!doctype html", b"<html")
+
+
+@dataclass
+class _StreamBuf:
+    """Per-chat streaming accumulator for progressive message editing."""
+
+    text: str = ""
+    ts: str | None = None  # ts of the Slack message being edited
+    last_edit: float = 0.0
+    stream_id: str | None = None
 
 
 class SlackChannel(BaseChannel):
@@ -108,6 +126,8 @@ class SlackChannel(BaseChannel):
         self._target_cache: dict[str, str] = {}
         self._thread_context_attempted: set[str] = set()
         self._seen_events: dict[str, float] = {}  # event_id -> monotonic deadline
+        self._stream_bufs: dict[str, _StreamBuf] = {}  # chat_id -> streaming state
+        self._followed_threads: set[str] = set()  # "chat_id:thread_ts" the bot follows
 
     async def start(self) -> None:
         """Start the Slack Socket Mode client and keep it connected."""
@@ -276,6 +296,100 @@ class SlackChannel(BaseChannel):
         except Exception:
             self.logger.exception("Error sending message")
             raise
+
+    async def send_delta(self, chat_id: str, delta: str, metadata: dict[str, Any] | None = None) -> None:
+        """Progressive message editing: post on first delta, chat.update after.
+
+        Mid-stream previews are raw text; the final ``_stream_end`` edit applies
+        the full mrkdwn conversion and swaps the progress reaction, since the
+        complete response is suppressed by the manager once streamed.
+        """
+        if not self._web_client:
+            return
+        meta = metadata or {}
+        slack_meta = meta.get("slack", {}) or {}
+        thread_ts = slack_meta.get("thread_ts")
+        stream_id = meta.get("_stream_id")
+
+        if meta.get("_stream_end"):
+            buf = self._stream_bufs.get(chat_id)
+            if not buf or not buf.ts or not buf.text.strip():
+                return
+            if stream_id is not None and buf.stream_id is not None and buf.stream_id != stream_id:
+                return
+            mrkdwn = self._to_mrkdwn(buf.text)
+            chunks = split_message(mrkdwn, SLACK_MAX_MESSAGE_LEN)
+            try:
+                await self._web_client.chat_update(channel=chat_id, ts=buf.ts, text=chunks[0])
+            except Exception as e:
+                self.logger.warning("Final stream edit failed: {}", e)
+                raise  # Let ChannelManager handle retry
+            for chunk in chunks[1:]:
+                await self._web_client.chat_postMessage(
+                    channel=chat_id, text=chunk, thread_ts=thread_ts,
+                )
+            event = slack_meta.get("event", {}) or {}
+            await self._update_react_emoji(chat_id, event.get("ts"))
+            self._stream_bufs.pop(chat_id, None)
+            return
+
+        buf = self._stream_bufs.get(chat_id)
+        if buf is None or (stream_id is not None and buf.stream_id is not None and buf.stream_id != stream_id):
+            buf = _StreamBuf(stream_id=stream_id)
+            self._stream_bufs[chat_id] = buf
+        elif buf.stream_id is None:
+            buf.stream_id = stream_id
+        buf.text += delta
+
+        if not buf.text.strip():
+            return
+
+        now = time.monotonic()
+        if buf.ts is None:
+            try:
+                sent = await self._web_client.chat_postMessage(
+                    channel=chat_id, text=buf.text, thread_ts=thread_ts,
+                )
+                buf.ts = str(sent.get("ts") or "") or None
+                buf.last_edit = now
+            except Exception as e:
+                self.logger.warning("Stream initial send failed: {}", e)
+                raise  # Let ChannelManager handle retry
+        elif (now - buf.last_edit) >= self.config.stream_edit_interval:
+            if len(buf.text) > SLACK_MAX_MESSAGE_LEN:
+                await self._flush_stream_overflow(chat_id, buf, thread_ts)
+                buf.last_edit = now
+                return
+            try:
+                await self._web_client.chat_update(channel=chat_id, ts=buf.ts, text=buf.text)
+                buf.last_edit = now
+            except Exception as e:
+                self.logger.warning("Stream edit failed: {}", e)
+                raise  # Let ChannelManager handle retry
+
+    async def _flush_stream_overflow(
+        self, chat_id: str, buf: _StreamBuf, thread_ts: str | None
+    ) -> None:
+        """Split an oversized stream buffer mid-flight.
+
+        Edits the current stream message with the first chunk, posts any
+        intermediate chunks as standalone messages, then opens a new message
+        for the tail so subsequent deltas continue streaming into it.
+        """
+        chunks = split_message(buf.text, SLACK_MAX_MESSAGE_LEN)
+        if len(chunks) <= 1:
+            return
+        await self._web_client.chat_update(channel=chat_id, ts=buf.ts, text=chunks[0])
+        for chunk in chunks[1:-1]:
+            await self._web_client.chat_postMessage(
+                channel=chat_id, text=chunk, thread_ts=thread_ts,
+            )
+        tail = chunks[-1]
+        sent = await self._web_client.chat_postMessage(
+            channel=chat_id, text=tail, thread_ts=thread_ts,
+        )
+        buf.ts = str(sent.get("ts") or "") or None
+        buf.text = tail
 
     async def _resolve_target_chat_id(self, target: str) -> str:
         """Resolve human-friendly Slack targets to concrete IDs when needed."""
@@ -461,7 +575,9 @@ class SlackChannel(BaseChannel):
         if is_dm:
             if not self.config.dm_enabled:
                 return
-        elif not self._should_respond_in_channel(event_type, text, chat_id):
+        elif not self._should_respond_in_channel(
+            event_type, text, chat_id, event.get("thread_ts")
+        ):
             return
 
         # Cheap local pre-check to skip API-expensive work (reactions, thread
@@ -483,6 +599,16 @@ class SlackChannel(BaseChannel):
             and channel_type != "im"
         ):
             thread_ts = event_ts
+        # A mention pulls the bot into the (possibly new) channel thread: keep
+        # answering follow-ups there without requiring a re-mention each turn.
+        if (
+            not is_dm
+            and self.config.thread_auto_follow
+            and sender_allowed
+            and thread_ts
+            and event_type == "app_mention"
+        ):
+            self._follow_thread(f"{chat_id}:{thread_ts}")
         # Add :eyes: reaction to the triggering message (best-effort)
         try:
             if sender_allowed and self._web_client and event.get("ts"):
@@ -521,8 +647,10 @@ class SlackChannel(BaseChannel):
             raw_thread_ts=raw_thread_ts,
             current_ts=event_ts,
         )
-        if file_markers:
-            content = "\n".join(part for part in [content, *file_markers] if part)
+        context_lines = self._extract_quoted_context(event, text) if sender_allowed else []
+        extra_lines = [*context_lines, *file_markers]
+        if extra_lines:
+            content = "\n".join(part for part in [content, *extra_lines] if part)
         if not content and not media_paths:
             return
 
@@ -745,16 +873,78 @@ class SlackChannel(BaseChannel):
         self._seen_events[dedup_key] = now + SLACK_EVENT_DEDUP_TTL_S
         return False
 
-    def _should_respond_in_channel(self, event_type: str, text: str, chat_id: str) -> bool:
+    def _should_respond_in_channel(
+        self, event_type: str, text: str, chat_id: str, thread_root: str | None = None
+    ) -> bool:
         if self.config.group_policy == "open":
             return True
         if self.config.group_policy == "mention":
             if event_type == "app_mention":
                 return True
-            return self._bot_user_id is not None and f"<@{self._bot_user_id}>" in text
+            if self._bot_user_id is not None and f"<@{self._bot_user_id}>" in text:
+                return True
+            # Follow-up inside a thread the bot was already mentioned in.
+            return (
+                self.config.thread_auto_follow
+                and thread_root is not None
+                and f"{chat_id}:{thread_root}" in self._followed_threads
+            )
         if self.config.group_policy == "allowlist":
             return chat_id in self.config.group_allow_from
         return False
+
+    def _follow_thread(self, key: str) -> None:
+        if len(self._followed_threads) >= SLACK_FOLLOWED_THREADS_MAX:
+            self._followed_threads.clear()
+        self._followed_threads.add(key)
+
+    def _extract_quoted_context(self, event: dict[str, Any], text: str) -> list[str]:
+        """Surface quoted/forwarded content the plain ``text`` field omits.
+
+        Slack's WYSIWYG composer puts quotes in ``rich_text_quote`` blocks and
+        "Share message" forwards the original as an attachment; both can be
+        missing (or mangled) in ``text``, so the agent would never see them.
+        Lines already present in ``text`` are skipped.
+        """
+        lines: list[str] = []
+        for block in event.get("blocks") or []:
+            if not isinstance(block, dict) or block.get("type") != "rich_text":
+                continue
+            for element in block.get("elements") or []:
+                if not isinstance(element, dict) or element.get("type") != "rich_text_quote":
+                    continue
+                quote = self._render_rich_text_elements(element.get("elements") or []).strip()
+                quote_lines = [ln.strip() for ln in quote.splitlines() if ln.strip()]
+                if quote and not all(ln in text for ln in quote_lines):
+                    lines.append(f"[quoted] {quote[:500]}")
+        for att in event.get("attachments") or []:
+            if not isinstance(att, dict):
+                continue
+            parts = [str(att.get(key) or "").strip() for key in ("author_name", "title", "text")]
+            body = " — ".join(part for part in parts if part)
+            att_text = str(att.get("text") or "").strip()
+            if body and body not in text and (not att_text or att_text not in text):
+                lines.append(f"[shared] {body[:500]}")
+        return lines[:5]
+
+    @staticmethod
+    def _render_rich_text_elements(elements: list[Any]) -> str:
+        parts: list[str] = []
+        for el in elements:
+            if not isinstance(el, dict):
+                continue
+            el_type = el.get("type")
+            if el_type == "text":
+                parts.append(str(el.get("text") or ""))
+            elif el_type == "link":
+                parts.append(str(el.get("url") or ""))
+            elif el_type == "user":
+                parts.append(f"<@{el.get('user_id')}>")
+            elif el_type == "channel":
+                parts.append(f"<#{el.get('channel_id')}>")
+            elif el_type == "emoji":
+                parts.append(f":{el.get('name')}:")
+        return "".join(parts)
 
     @staticmethod
     def _infer_channel_type(chat_id: str) -> str:
