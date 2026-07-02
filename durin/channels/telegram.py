@@ -843,7 +843,7 @@ class TelegramChannel(BaseChannel):
         """Handle /help command."""
         if not update.message or not update.effective_user:
             return
-        await update.message.reply_text(build_help_text())
+        await update.message.reply_text(build_help_text("channels"))
 
     @staticmethod
     def _sender_id(user) -> str:

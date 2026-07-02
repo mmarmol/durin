@@ -1309,7 +1309,8 @@ def test_telegram_bus_slash_command_regex_matches_agent_loop_commands() -> None:
 
 
 @pytest.mark.asyncio
-async def test_on_help_includes_restart_command() -> None:
+async def test_on_help_lists_channel_commands_and_hides_admin() -> None:
+    """Telegram /help renders user-facing channel commands and excludes admin commands."""
     channel = TelegramChannel(
         TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
         MessageBus(),
@@ -1321,11 +1322,12 @@ async def test_on_help_includes_restart_command() -> None:
 
     update.message.reply_text.assert_awaited_once()
     help_text = update.message.reply_text.await_args.args[0]
-    assert "/restart" in help_text
+    # User-facing channel commands should be visible
     assert "/status" in help_text
-    assert "/goal" in help_text
-    assert "/model" in help_text
-    assert "/version" in help_text
+    assert "/history" in help_text
+    # Admin commands should be hidden from channel help
+    assert "/restart" not in help_text
+    assert "/version" not in help_text
 
 
 @pytest.mark.asyncio

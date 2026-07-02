@@ -2,10 +2,13 @@
 
 from durin.command.builtin import (
     BUILTIN_COMMAND_SPECS,
+    build_help_text,
     builtin_command_palette,
     channel_menu_commands,
+    register_builtin_commands,
     specs_for_surface,
 )
+from durin.command.router import CommandRouter
 
 
 def _spec(command: str):
@@ -47,10 +50,6 @@ def test_channel_menu_names_are_telegram_safe():
 def test_effort_has_a_spec():
     spec = _spec("/effort")
     assert spec.arg_hint
-
-
-from durin.command.builtin import build_help_text, register_builtin_commands
-from durin.command.router import CommandRouter
 
 
 def test_every_spec_command_has_a_registered_handler():
