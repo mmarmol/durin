@@ -641,6 +641,24 @@ def test_cases_visit_cap_still_bounds_loop():
     assert len(calls) == 2  # ran exactly max_visits times
 
 
+def test_exhausted_node_final_output_names_the_last_producer():
+    """When a routing node exhausts, final_output_node names the last non-routing
+    producer before exhaustion (whose output became final_output)."""
+    wf = parse_workflow({
+        "name": "w", "start": "produce", "max_visits": 3,
+        "nodes": [
+            {"id": "produce", "kind": "work", "next": "review"},
+            {"id": "review", "kind": "work", "cases": {"RETRY": "review", "DONE": None}, "max_visits": 2},
+        ],
+    })
+    eng, _ = _cases_engine({"produce": "the draft output", "review": "RETRY"})
+    res = eng.run(wf, "t")
+    assert res.status == "exhausted"
+    assert res.exhausted_node == "review"
+    assert res.final_output == "the draft output"
+    assert res.final_output_node == "produce"
+
+
 def test_cases_binary_routing_regression():
     """Binary on_pass/on_fail nodes still work exactly as before (regression guard)."""
     wf = parse_workflow({
@@ -796,6 +814,7 @@ def test_needs_input_result_names_the_asking_node():
     result = eng.run(wf, "t")
     assert result.status == "needs_input"
     assert result.needs_input_node == "gate"
+    assert result.final_output_node == "gate"
 
 
 def test_resume_reenters_at_the_asking_node_with_carried_visits(tmp_path):
@@ -879,3 +898,34 @@ def test_final_output_node_names_a_contributing_terminal_gate():
     eng, _ = _engine({"make": "draft", "gate": "PASS\nVerified."})
     r = eng.run(wf, "t")
     assert r.final_output == "Verified." and r.final_output_node == "gate"
+
+
+def test_cancelled_result_names_the_last_producer_node():
+    """When cancel_check returns True between nodes, the run ends with status='cancelled'
+    and final_output_node names the last node that ran (whose output became final_output)."""
+    wf = parse_workflow({
+        "name": "w", "start": "first",
+        "nodes": [
+            {"id": "first", "kind": "work", "next": "second"},
+            {"id": "second", "kind": "work", "next": None},
+        ],
+    })
+    # cancel_check returns True after the first node runs
+    cancel_on_second = [False]
+    def cancel_check():
+        if cancel_on_second[0]:
+            return True
+        cancel_on_second[0] = True
+        return False
+
+    eng = WorkflowEngine(
+        node_runner=lambda req: NodeRunResponse(
+            output=f"output-{req.node.id}", session_key=None, messages=[]
+        ),
+        run_id_factory=lambda: "r1",
+        cancel_check=cancel_check,
+    )
+    res = eng.run(wf, "t")
+    assert res.status == "cancelled"
+    assert res.final_output == "output-first"
+    assert res.final_output_node == "first"
