@@ -264,10 +264,17 @@ group_policy = "mention"  # "open", "mention", or "allowlist"
 | `done_emoji` | `"white_check_mark"` | Reaction added when done |
 | `include_thread_context` | `true` | Prepend thread history on first mention in a thread |
 | `thread_context_limit` | `20` | Max messages of thread context to include |
+| `streaming` | `true` | Stream replies by editing the message in place as the model writes |
+| `stream_edit_interval` | `1.2` | Min seconds between streaming edits (chat.update is rate-limited) |
+| `thread_auto_follow` | `true` | After a mention in a channel thread, answer follow-ups there without a re-mention |
 
 Sender authorization is enforced at durin's central inbound gate, the same as
 every other channel: approve a sender by adding their Slack user ID to
 `allow_from` or by completing the pairing exchange durin starts in the DM.
+
+Content quoted or forwarded with Slack's *Share message* — which Slack omits
+from the plain message text — is extracted from the rich-text blocks and
+attachments and passed to the agent as `[quoted]` / `[shared]` context lines.
 
 ---
 

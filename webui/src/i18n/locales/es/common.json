@@ -304,6 +304,8 @@
         "group_allow_from": "Canales permitidos",
         "reply_in_thread": "Responder en hilo",
         "include_thread_context": "Incluir contexto del hilo",
+        "streaming": "Respuestas en streaming",
+        "thread_auto_follow": "Seguir hilos mencionados",
         "imap_host": "Servidor IMAP",
         "imap_port": "Puerto",
         "imap_username": "Usuario",
