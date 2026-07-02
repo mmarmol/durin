@@ -5743,14 +5743,17 @@
       "WorkflowSessionRunsQuery": {
         "additionalProperties": false,
         "properties": {
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          },
           "session": {
+            "default": "",
             "title": "Session",
             "type": "string"
           }
         },
-        "required": [
-          "session"
-        ],
         "title": "WorkflowSessionRunsQuery",
         "type": "object"
       },
@@ -9178,7 +9181,7 @@
             "description": "Success"
           }
         },
-        "summary": "List the run manifests a session spawned (forward lineage), newest-first.",
+        "summary": "List a session's run manifests (forward lineage); without `session`, the global feed across every workflow, newest-first.",
         "x-required-scope": "workflows:read"
       }
     },
