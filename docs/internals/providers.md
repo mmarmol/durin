@@ -246,6 +246,11 @@ the models.dev list with a warning, while the daily refresh omits `nvidia` from 
 cache so the overlay falls through to the (already ground-truthed) vendored floor
 rather than resurrecting the drifted list.
 
+The vendored floor is also refreshed weekly by the `model-catalog` workflow, which
+runs the script with `--strict` (any source failing aborts before writing, so an
+unattended run can never commit a partial merge or drifted ids) and lands the result
+as an auto-PR for human review — never a direct push.
+
 ### 4.8 Auxiliary model resolution
 
 `resolve_aux_preset(config, purpose="memory"|"judge")` (`durin/memory/model_resolve.py`)

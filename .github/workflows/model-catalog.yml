@@ -1,0 +1,70 @@
+name: Model catalog
+
+# Weekly refresh of the vendored model-data snapshots
+# (durin/providers/data/model_capabilities.json + provider_models.json).
+# Unlike the MCP catalog (published as a release asset), these files ship
+# inside the wheel, so the refresh lands as a COMMIT — via an auto-PR, never
+# a direct push: a bad upstream day (a community source regressing entries)
+# must pass human eyes before it is baked into a release.
+#
+# The refresh runs --strict: any source failing (community sources or
+# NVIDIA's public /v1/models, the id ground truth for its catalog section)
+# fails the job instead of silently committing a partial or drifted merge.
+#
+# NOTE: PRs created with the default GITHUB_TOKEN do not trigger the
+# required `test`/`webui` checks (GitHub anti-recursion). Close and reopen
+# the PR to run them — a one-click step for the human already reviewing it.
+
+on:
+  schedule:
+    - cron: "30 6 * * 1" # Mondays 06:30 UTC, after the MCP catalog rebuild
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: model-catalog
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install durin (core)
+        run: |
+          python -m pip install --upgrade pip
+          DURIN_SKIP_WEBUI_BUILD=1 pip install -e .
+
+      - name: Refresh model data snapshots (strict)
+        run: PYTHONPATH=. python scripts/refresh_model_capabilities.py --strict
+
+      - name: Open or update the refresh PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git diff --quiet -- durin/providers/data/; then
+            echo "No catalog changes this week."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B bot/model-catalog-refresh
+          git add durin/providers/data/
+          git commit -m "data(models): weekly vendored catalog refresh"
+          git push --force origin bot/model-catalog-refresh
+          if ! gh pr list --head bot/model-catalog-refresh --state open --json number --jq length | grep -qx 0; then
+            echo "Refresh PR already open — branch updated."
+            exit 0
+          fi
+          gh pr create \
+            --title "data(models): weekly vendored catalog refresh" \
+            --body "Automated weekly refresh of the vendored model-data snapshots (community sources + NVIDIA /v1/models id ground truth, --strict). Review the per-provider diff before merging; close and reopen to trigger the required checks."
