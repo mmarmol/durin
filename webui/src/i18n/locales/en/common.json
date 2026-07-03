@@ -717,6 +717,36 @@
       "showLess": "Show less",
       "localHint": "Local server — no API key needed"
     },
+    "oauth": {
+      "browserOpened": "A browser window was opened to approve with {{provider}}.",
+      "didntOpen": "Didn't open?",
+      "openManually": "Open manually",
+      "waiting": "Waiting for authorization…",
+      "timeout": "Authorization timed out. Try connecting again.",
+      "disconnect": "Disconnect",
+      "cancel": "Cancel",
+      "openrouter": {
+        "connectedVia": "Connected via OpenRouter",
+        "description": "Get an API key by approving with your OpenRouter account — no copy-paste.",
+        "connect": "Connect with OpenRouter",
+        "confirmForget": "Forget the OpenRouter API key?",
+        "confirmForgetYes": "Yes, forget"
+      },
+      "codex": {
+        "connected": "Connected",
+        "notConnected": "Not connected",
+        "connect": "Connect with ChatGPT",
+        "stepOpen": "1. Open",
+        "stepCode": "2. Enter the code:",
+        "deviceCodeHint": "If you see a “device code authorization” error, enable it in your ChatGPT security settings and try again.",
+        "notWorking": "Not working?",
+        "useDeviceCode": "Use device code",
+        "notWorkingUseDeviceCode": "Not working? Use device code",
+        "confirmDisconnect": "Disconnect the account?",
+        "confirmDisconnectYes": "Yes, disconnect",
+        "authError": "authorization error"
+      }
+    },
     "mcp": {
       "description": "Connect Model Context Protocol (MCP) servers to give the agent extra tools. Status is read live from the running gateway.",
       "servers": "Servers",

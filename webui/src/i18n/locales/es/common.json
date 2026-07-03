@@ -716,6 +716,36 @@
       "showLess": "Mostrar menos",
       "localHint": "Servidor local — no se requiere clave API"
     },
+    "oauth": {
+      "browserOpened": "Se abrió una ventana del navegador para aprobar con {{provider}}.",
+      "didntOpen": "¿No se abrió?",
+      "openManually": "Abrir manualmente",
+      "waiting": "Esperando la autorización…",
+      "timeout": "La autorización expiró. Probá conectar de nuevo.",
+      "disconnect": "Desconectar",
+      "cancel": "Cancelar",
+      "openrouter": {
+        "connectedVia": "Conectado vía OpenRouter",
+        "description": "Obtené una API key aprobando con tu cuenta de OpenRouter — sin copiar y pegar.",
+        "connect": "Conectar con OpenRouter",
+        "confirmForget": "¿Olvidar la API key de OpenRouter?",
+        "confirmForgetYes": "Sí, olvidar"
+      },
+      "codex": {
+        "connected": "Conectado",
+        "notConnected": "No conectado",
+        "connect": "Conectar con ChatGPT",
+        "stepOpen": "1. Abrí",
+        "stepCode": "2. Ingresá el código:",
+        "deviceCodeHint": "Si ves un error de “autorización con código de dispositivo”, habilitala en los ajustes de seguridad de ChatGPT y volvé a intentar.",
+        "notWorking": "¿No funciona?",
+        "useDeviceCode": "Usar código de dispositivo",
+        "notWorkingUseDeviceCode": "¿No funciona? Usar código de dispositivo",
+        "confirmDisconnect": "¿Desconectar la cuenta?",
+        "confirmDisconnectYes": "Sí, desconectar",
+        "authError": "error de autorización"
+      }
+    },
     "mcp": {
       "description": "Conecta servidores Model Context Protocol (MCP) para darle herramientas extra al agente. El estado se lee en vivo del gateway en ejecución.",
       "servers": "Servidores",

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,7 @@ type Props = {
 };
 
 export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }: Props) {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<CodexStatus | null>(null);
   const [challenge, setChallenge] = useState<{
     user_code: string;
@@ -104,7 +106,7 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
             return;
           }
           if (res.status === "error") {
-            setError(res.error ?? "error de autorización");
+            setError(res.error ?? t("settings.oauth.codex.authError"));
             setChallenge(null);
             setBusy(false);
             return;
@@ -175,37 +177,38 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
             )}
           >
             {status?.connected
-              ? `Conectado${status.email ? ` · ${status.email}` : ""}`
-              : "No conectado"}
+              ? `${t("settings.oauth.codex.connected")}${status.email ? ` · ${status.email}` : ""}`
+              : t("settings.oauth.codex.notConnected")}
           </span>
         </div>
       )}
 
       {embedded && status?.connected ? (
         <p className="text-[13px] text-muted-foreground">
-          Conectado{status.email ? ` · ${status.email}` : ""}
+          {t("settings.oauth.codex.connected")}
+          {status.email ? ` · ${status.email}` : ""}
           {status.plan ? ` (${status.plan})` : ""}
         </p>
       ) : null}
 
       {loopbackUrl ? (
         <div className="space-y-2 rounded-[8px] border border-border/60 bg-muted/40 p-3 text-[13px]">
-          <p>Se abrió una ventana del navegador para aprobar con ChatGPT.</p>
+          <p>{t("settings.oauth.browserOpened", { provider: "ChatGPT" })}</p>
           <p className="text-muted-foreground">
-            ¿No se abrió?{" "}
+            {t("settings.oauth.didntOpen")}{" "}
             <a className="underline" href={loopbackUrl} target="_blank" rel="noreferrer">
-              Abrir manualmente
+              {t("settings.oauth.openManually")}
             </a>
           </p>
-          <p className="text-muted-foreground">Esperando la autorización…</p>
+          <p className="text-muted-foreground">{t("settings.oauth.waiting")}</p>
           <p className="text-[12px] text-muted-foreground">
-            ¿No funciona?{" "}
+            {t("settings.oauth.codex.notWorking")}{" "}
             <button
               type="button"
               className="underline hover:text-foreground"
               onClick={() => void switchToDeviceCode()}
             >
-              Usar código de dispositivo
+              {t("settings.oauth.codex.useDeviceCode")}
             </button>
           </p>
         </div>
@@ -214,7 +217,7 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
       {challenge ? (
         <div className="space-y-2 rounded-[8px] border border-border/60 bg-muted/40 p-3 text-[13px]">
           <p>
-            1. Abrí{" "}
+            {t("settings.oauth.codex.stepOpen")}{" "}
             <a
               className="underline"
               href={challenge.verification_uri}
@@ -225,13 +228,12 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
             </a>
           </p>
           <p>
-            2. Ingresá el código:{" "}
+            {t("settings.oauth.codex.stepCode")}{" "}
             <span className="font-mono font-semibold">{challenge.user_code}</span>
           </p>
-          <p className="text-muted-foreground">Esperando la autorización…</p>
+          <p className="text-muted-foreground">{t("settings.oauth.waiting")}</p>
           <p className="text-[12px] text-muted-foreground">
-            Si ves un error de “autorización con código de dispositivo”, habilitala en los
-            ajustes de seguridad de ChatGPT y volvé a intentar.
+            {t("settings.oauth.codex.deviceCodeHint")}
           </p>
         </div>
       ) : null}
@@ -246,19 +248,19 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
             disabled={busy}
             onClick={() => setConfirmDisconnect(true)}
           >
-            Desconectar
+            {t("settings.oauth.disconnect")}
           </Button>
         ) : null}
         {confirmDisconnect ? (
           <div className="flex items-center gap-2 rounded-[8px] border border-border/60 bg-muted/40 p-2">
-            <span className="text-[12px]">¿Desconectar la cuenta?</span>
+            <span className="text-[12px]">{t("settings.oauth.codex.confirmDisconnect")}</span>
             <Button
               size="sm"
               variant="destructive"
               disabled={busy}
               onClick={() => void doDisconnect()}
             >
-              Sí, desconectar
+              {t("settings.oauth.codex.confirmDisconnectYes")}
             </Button>
             <Button
               size="sm"
@@ -266,14 +268,14 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
               disabled={busy}
               onClick={() => setConfirmDisconnect(false)}
             >
-              Cancelar
+              {t("settings.oauth.cancel")}
             </Button>
           </div>
         ) : null}
         {!status?.connected && !challenge && !loopbackUrl ? (
           <div className="flex flex-col items-end gap-1.5">
             <Button size="sm" disabled={busy} onClick={() => void connect()}>
-              Conectar con ChatGPT
+              {t("settings.oauth.codex.connect")}
             </Button>
             {status?.can_loopback ? (
               <button
@@ -282,7 +284,7 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
                 disabled={busy}
                 onClick={() => void switchToDeviceCode()}
               >
-                ¿No funciona? Usar código de dispositivo
+                {t("settings.oauth.codex.notWorkingUseDeviceCode")}
               </button>
             ) : null}
           </div>
