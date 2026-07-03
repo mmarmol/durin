@@ -193,6 +193,77 @@ async def test_plain_websocket_message_does_not_mark_webui(bus: MagicMock) -> No
 
 
 @pytest.mark.asyncio
+async def test_steer_envelope_marks_metadata_and_client_msg_id(bus: MagicMock) -> None:
+    channel = _ch(bus)
+    conn = MagicMock()
+
+    await channel._dispatch_envelope(
+        conn,
+        "webui-client",
+        {
+            "type": "message", "chat_id": "chat-1", "content": "focus on tests",
+            "webui": True, "steer": True, "client_msg_id": "cm-42",
+        },
+    )
+
+    msg = bus.publish_inbound.await_args.args[0]
+    assert msg.metadata["steer"] is True
+    assert msg.metadata["client_msg_id"] == "cm-42"
+
+
+@pytest.mark.asyncio
+async def test_plain_message_has_no_steer_metadata(bus: MagicMock) -> None:
+    channel = _ch(bus)
+    conn = MagicMock()
+
+    await channel._dispatch_envelope(
+        conn,
+        "webui-client",
+        {"type": "message", "chat_id": "chat-1", "content": "hello", "webui": True},
+    )
+
+    msg = bus.publish_inbound.await_args.args[0]
+    assert "steer" not in msg.metadata
+
+
+@pytest.mark.asyncio
+async def test_send_message_queued_ack_frame() -> None:
+    bus = MagicMock()
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+    mock_ws = AsyncMock()
+    channel._attach(mock_ws, "chat-1")
+
+    await channel.send(OutboundMessage(
+        channel="websocket", chat_id="chat-1", content="",
+        metadata={"_message_queued": True, "client_msg_id": "cm-42"},
+    ))
+
+    payload = json.loads(mock_ws.send_text.call_args[0][0])
+    assert payload == {
+        "event": "message_queued", "chat_id": "chat-1", "client_msg_id": "cm-42",
+    }
+
+
+@pytest.mark.asyncio
+async def test_send_queued_consumed_ack_frame() -> None:
+    bus = MagicMock()
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+    mock_ws = AsyncMock()
+    channel._attach(mock_ws, "chat-1")
+
+    await channel.send(OutboundMessage(
+        channel="websocket", chat_id="chat-1", content="",
+        metadata={"_queued_consumed": True, "client_msg_ids": ["cm-1", "cm-2"]},
+    ))
+
+    payload = json.loads(mock_ws.send_text.call_args[0][0])
+    assert payload == {
+        "event": "queued_consumed", "chat_id": "chat-1",
+        "client_msg_ids": ["cm-1", "cm-2"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_send_delivers_json_message_with_media_and_reply() -> None:
     bus = MagicMock()
     channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
