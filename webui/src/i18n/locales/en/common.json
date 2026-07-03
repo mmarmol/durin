@@ -219,6 +219,8 @@
     "models": {
       "auxTitle": "Vision & audio models",
       "auxDescription": "durin uses these only when the main model can't handle images or audio itself.",
+      "subagentModel": "Subagent model",
+      "subagentModelHint": "Model used by spawned subagents (background tasks). Same as default when unset.",
       "vision": "Vision model",
       "visionHint": "Used by the interpret_image tool.",
       "audio": "Audio model",
