@@ -4383,6 +4383,13 @@ export interface components {
         SlackPairingListResult: {
             /** Approved */
             approved: string[];
+            /**
+             * Names
+             * @default {}
+             */
+            names: {
+                [key: string]: string;
+            };
             /** Pending */
             pending: {
                 [key: string]: unknown;
