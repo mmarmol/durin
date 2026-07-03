@@ -42,13 +42,13 @@ _WORKSPACE_BOUNDARY_NOTE = (
 
 class ExecToolConfig(Base):
     """Shell exec tool configuration."""
-    enable: bool = True
-    timeout: int = 60
-    path_append: str = ""
-    sandbox: str = ""
-    allowed_env_keys: list[str] = Field(default_factory=list)
-    allow_patterns: list[str] = Field(default_factory=list)
-    deny_patterns: list[str] = Field(default_factory=list)
+    enable: bool = Field(default=True, description="Enable the shell exec tool")
+    timeout: int = Field(default=60, description="Default command timeout in seconds")
+    path_append: str = Field(default="", description="Directories appended to PATH for executed commands")
+    sandbox: str = Field(default="", description="Optional sandbox wrapper command that executed commands run through; empty = no sandbox")
+    allowed_env_keys: list[str] = Field(default_factory=list, description="Env var names passed into the subprocess in addition to the safe defaults")
+    allow_patterns: list[str] = Field(default_factory=list, description="Command patterns allowed to run")
+    deny_patterns: list[str] = Field(default_factory=list, description="Command patterns refused; deny wins over allow")
 
 
 @tool_parameters(
