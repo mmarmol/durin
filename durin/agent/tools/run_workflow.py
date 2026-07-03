@@ -63,6 +63,11 @@ def _terminal_progress_payload(workflow: Any, run_id: str, result: Any) -> dict:
         payload["detail"] = str(result.final_output)[:500]
     return payload
 
+# Cap for the summary injected back when a background run finishes. Big
+# enough for any real answer; small enough that the delivery turn never
+# spills into truncated-tool-output archaeology.
+_MAX_INJECT_SUMMARY_CHARS = 8000
+
 _PARAMETERS = {
     "type": "object",
     "properties": {
@@ -253,13 +258,20 @@ class RunWorkflowTool(Tool, ContextAware):
             "id=...) to cancel it."
         )
 
-    async def _inject_result(self, summary: str, *, name: str, inject_target: dict) -> None:
+    async def _inject_result(
+        self, summary: str, *, name: str, run_id: str, inject_target: dict,
+    ) -> None:
         """Inject a finished background-workflow result back to the agent.
 
         Mirrors SubagentManager._announce_result: a system InboundMessage whose
         session_key_override routes it into the parent session's pending queue so
         the agent picks it up mid-turn (or as its next turn) and acts on it —
         including a needs_input result, which carries its own ask-and-re-run guidance.
+
+        The summary is capped: an unbounded final_output turns the delivery
+        turn into minutes of the agent re-reading its own spilled tool output.
+        The cap keeps the delivery one readable message; the pointer names the
+        structured path to the rest.
         """
         if self._bus is None:
             return
@@ -267,6 +279,13 @@ class RunWorkflowTool(Tool, ContextAware):
         channel = inject_target.get("channel") or "websocket"
         chat_id = inject_target.get("chat_id") or ""
         override = inject_target.get("session_key") or f"{channel}:{chat_id}"
+        if len(summary) > _MAX_INJECT_SUMMARY_CHARS:
+            summary = summary[:_MAX_INJECT_SUMMARY_CHARS].rstrip() + (
+                f"\n\n[Result truncated — this is the first "
+                f"{_MAX_INJECT_SUMMARY_CHARS} characters. The full output: "
+                f"tasks(action='status', id='{run_id}'); file-producing runs "
+                "also list their output folder above.]"
+            )
         content = (
             f"[Background workflow '{name}' finished]\n\n{summary}\n\n"
             "Summarize the outcome for the user. If it says the workflow needs more "
@@ -418,7 +437,9 @@ class RunWorkflowTool(Tool, ContextAware):
                 finally:
                     # Drop the cancel flag now the run is over (whether or not it was set).
                     _clear_cancel(run_id)
-                await self._inject_result(summary, name=name, inject_target=inject_target)
+                await self._inject_result(
+                    summary, name=name, run_id=run_id, inject_target=inject_target,
+                )
 
             task_handle = asyncio.create_task(_run_and_inject())
             # Keep a reference so the task isn't garbage-collected mid-flight.

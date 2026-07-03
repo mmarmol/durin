@@ -2073,6 +2073,17 @@ class AgentLoop:
             msg.chat_id.split(":", 1) if ":" in msg.chat_id else ("cli", msg.chat_id)
         )
         logger.info("Processing system message from {}", msg.sender_id)
+        # A background-workflow result starts a turn the user never asked for
+        # in this moment — without a breadcrumb the chat shows a live stop
+        # button and nothing else for however long the delivery takes.
+        if msg.metadata.get("injected_event") == "workflow_background_result":
+            wf_name = msg.metadata.get("workflow") or "workflow"
+            with suppress(Exception):
+                await self.bus.publish_outbound(OutboundMessage(
+                    channel=channel, chat_id=chat_id,
+                    content=f"Processing background workflow result ('{wf_name}')…",
+                    metadata={"_progress": True},
+                ))
         key = msg.session_key_override or f"{channel}:{chat_id}"
         session = self.sessions.get_or_create(key)
         if self._restore_runtime_checkpoint(session):
