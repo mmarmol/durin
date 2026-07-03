@@ -642,6 +642,10 @@ Read at runtime (mostly in the runner / loop):
   one-shot turn that mirrors `_dispatch`'s lease-and-reload semantics.
 - **Webui/API** drive the same loop through the `websocket` channel, which adds
   streaming segments, the `_turn_end` signal, and background title generation.
+  Generated titles are validated before persisting (reasoning models can leak
+  meta text instead of a title); invalid output retries once, then falls back
+  to the user's first message, and a stored implausible auto-title self-heals
+  on the next turn.
 
 ---
 
