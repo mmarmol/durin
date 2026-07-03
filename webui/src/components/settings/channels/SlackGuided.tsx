@@ -16,6 +16,7 @@ import {
   revokeSlackPairing,
   getSlackChannels,
   joinSlackChannel,
+  getChannelsRuntime,
   type ChannelInfo,
   type SlackChannelEntry,
   type SlackPairing,
@@ -379,6 +380,11 @@ function ConnectedPanel({
     | { state: "ok"; user: string | null; team: string | null }
     | { state: "error"; code: string }
   >({ state: "checking" });
+  // Tokens can be valid while the channel transport is down (e.g. it was
+  // enabled before credentials existed) — report both truths separately.
+  const [running, setRunning] = useState<boolean | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -399,6 +405,33 @@ function ConnectedPanel({
       cancelled = true;
     };
   }, [token]);
+
+  const fetchRuntime = useCallback(async () => {
+    try {
+      const data = await getChannelsRuntime(token);
+      setRunning(Boolean(data.running["slack"]));
+    } catch {
+      // leave unknown; retried on the next tick
+    }
+  }, [token]);
+
+  useEffect(() => {
+    void fetchRuntime();
+    const id = setInterval(() => void fetchRuntime(), 10000);
+    return () => clearInterval(id);
+  }, [fetchRuntime]);
+
+  const startNow = async () => {
+    setStarting(true);
+    setStartError(null);
+    try {
+      const res = await startChannel(token, "slack");
+      if (!res.ok) setStartError(res.error ?? "error");
+      await fetchRuntime();
+    } finally {
+      setStarting(false);
+    }
+  };
 
   return (
     <div className="mt-3">
@@ -437,6 +470,43 @@ function ConnectedPanel({
           {t("settings.channels.slack.replaceTokens")}
         </Button>
       </div>
+      {/* Transport status — separate from token validity on purpose */}
+      <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-xl border border-border/40 bg-muted/30 px-3 py-2 text-[13px]">
+        {running === null ? (
+          <>
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+            <span className="flex-1 text-muted-foreground">
+              {t("settings.channels.slack.runtimeChecking")}
+            </span>
+          </>
+        ) : running ? (
+          <>
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
+            <span className="flex-1">{t("settings.channels.slack.runtimeRunning")}</span>
+          </>
+        ) : (
+          <>
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />
+            <span className="flex-1 text-amber-600 dark:text-amber-400">
+              {t("settings.channels.slack.runtimeStopped")}
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={starting}
+              onClick={() => void startNow()}
+              className="h-7 rounded-full px-2.5 text-[12px]"
+            >
+              {starting
+                ? t("settings.channels.slack.runtimeStarting")
+                : t("settings.channels.slack.runtimeStart")}
+            </Button>
+          </>
+        )}
+      </div>
+      {startError ? (
+        <p className="mt-1 text-[12px] text-amber-600 dark:text-amber-400">{startError}</p>
+      ) : null}
       <p className="mt-1 text-[11px] text-muted-foreground">
         {t("settings.channels.slack.secretsStored")}
       </p>

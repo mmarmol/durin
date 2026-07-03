@@ -304,10 +304,15 @@
         "noChannels": "El bot aún no ve ningún canal.",
         "step4Title": "Guardar y activar",
         "step4Hint": "Guarda ambos tokens como secrets de durin y arranca el canal.",
-        "pairingTitle": "Mensajes directos",
+        "pairingTitle": "Vinculación de remitentes",
         "statusChecking": "Verificando los tokens guardados contra Slack…",
         "replaceTokens": "Reemplazar tokens",
-        "secretsStored": "Los tokens quedan guardados como los secrets SLACK_BOT_TOKEN y SLACK_APP_TOKEN — la config solo guarda referencias."
+        "secretsStored": "Los tokens quedan guardados como los secrets SLACK_BOT_TOKEN y SLACK_APP_TOKEN — la config solo guarda referencias.",
+        "runtimeChecking": "Verificando si el canal está corriendo…",
+        "runtimeRunning": "Canal corriendo — conectado a Slack vía Socket Mode.",
+        "runtimeStopped": "Canal detenido — los mensajes no van a llegar hasta que arranque.",
+        "runtimeStart": "Arrancar canal",
+        "runtimeStarting": "Arrancando…"
       },
       "desc": {
         "websocket": "Transporte del panel web y de clientes WebSocket externos. Siempre activo mientras el panel esté habilitado. El token es opcional, solo para clientes externos.",
@@ -350,6 +355,19 @@
         "max_attachment_size": "Tamaño máx. de adjunto",
         "max_attachments_per_email": "Máx. adjuntos por correo",
         "token": "Token"
+      },
+      "optionLabel": {
+        "group_policy": {
+          "open": "Responder a todos los mensajes",
+          "mention": "Solo cuando lo mencionan",
+          "allowlist": "Solo en canales permitidos"
+        }
+      },
+      "placeholder": {
+        "allow_from": "",
+        "email_allow_from": "a@b.com, c@d.com",
+        "slack_allow_from": "U0123ABCD, o * para todos",
+        "slack_group_allow_from": "C0123ABCD, C0456EFGH"
       }
     },
     "config": {

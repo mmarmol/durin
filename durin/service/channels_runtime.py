@@ -11,7 +11,16 @@ from typing import Any
 
 from durin.service.principal import Principal, Scope
 from durin.service.registry import route
-from durin.service.types import Command, Result
+from durin.service.types import Command, Query, Result
+
+
+class ChannelsRuntimeStatusQuery(Query):
+    pass
+
+
+class ChannelsRuntimeStatusResult(Result):
+    #: channel name -> whether its transport is actually alive right now
+    running: dict[str, bool]
 
 
 class ChannelStartCommand(Command):
@@ -37,6 +46,26 @@ class ChannelsRuntimeService:
 
     def __init__(self, *, channel_manager: Any | None = None) -> None:
         self._channel_manager = channel_manager
+
+    @route(
+        "GET",
+        "/api/v1/channels/runtime",
+        scope=Scope.CONFIG_READ.value,
+        request_model=ChannelsRuntimeStatusQuery,
+        response_model=ChannelsRuntimeStatusResult,
+        summary="Live per-channel running state (enabled in config ≠ actually running)",
+    )
+    async def runtime(
+        self, query: ChannelsRuntimeStatusQuery, principal: Principal
+    ) -> ChannelsRuntimeStatusResult:
+        """Report which channels are actually alive in the running gateway."""
+        principal.require(Scope.CONFIG_READ)
+        if self._channel_manager is None:
+            return ChannelsRuntimeStatusResult(running={})
+        status = self._channel_manager.get_status()
+        return ChannelsRuntimeStatusResult(
+            running={name: bool(info.get("running")) for name, info in status.items()}
+        )
 
     @route(
         "POST",

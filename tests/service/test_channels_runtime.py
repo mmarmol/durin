@@ -3,12 +3,11 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from durin.service.channels_runtime import (
+    ChannelsRuntimeService,
+    ChannelsRuntimeStatusQuery,
     ChannelStartCommand,
     ChannelStopCommand,
-    ChannelsRuntimeService,
 )
 from durin.service.principal import Principal
 
@@ -114,3 +113,22 @@ def test_parity_catalog_wiring():
     assert "channels_runtime" in wnames
     assert any(b.spec.path == "/api/v1/channels/start" for b in wiring.routes)
     assert any(b.spec.path == "/api/v1/channels/stop" for b in wiring.routes)
+
+
+async def test_runtime_status_reports_running_map():
+    class _FakeManager:
+        def get_status(self):
+            return {
+                "telegram": {"enabled": True, "running": True},
+                "slack": {"enabled": True, "running": False},
+            }
+
+    svc = ChannelsRuntimeService(channel_manager=_FakeManager())
+    res = await svc.runtime(ChannelsRuntimeStatusQuery(), Principal.local())
+    assert res.running == {"telegram": True, "slack": False}
+
+
+async def test_runtime_status_without_manager_is_empty():
+    svc = ChannelsRuntimeService(channel_manager=None)
+    res = await svc.runtime(ChannelsRuntimeStatusQuery(), Principal.local())
+    assert res.running == {}
