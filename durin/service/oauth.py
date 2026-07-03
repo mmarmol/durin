@@ -1,6 +1,11 @@
-"""OAuthService — Codex OAuth flow status and device-code / loopback endpoints.
+"""OAuthService — provider OAuth flows (Codex, OpenRouter).
 
-Wraps ``durin.providers.codex_device_auth`` functions.  Pure: no HTTP/WS
+Codex: status + device-code / loopback endpoints wrapping
+``durin.providers.codex_device_auth``. OpenRouter: status + loopback +
+disconnect wrapping ``durin.providers.openrouter_oauth`` — loopback only
+(OpenRouter has no device-code flow; remote gateways paste the key
+manually), and the outcome is a plain API key stored like a manual paste,
+so the webui polls status until ``connected`` flips. Pure: no HTTP/WS
 imports, no request object.
 
 Locality
@@ -136,6 +141,33 @@ class OAuthDisconnectCommand(Command):
 
 
 # Reuse OAuthStatusResult for the disconnect response (same shape, no can_loopback).
+
+
+# ---------------------------------------------------------------------------
+# DTOs — OpenRouter
+# ---------------------------------------------------------------------------
+
+
+class OpenRouterStatusQuery(Query):
+    """Query for ``GET /api/v1/oauth/openrouter/status``."""
+
+    is_local: bool = False
+
+
+class OpenRouterStatusResult(Result):
+    connected: bool
+    api_key_hint: str | None = None
+    can_loopback: bool = False
+
+
+class OpenRouterStartLoopbackCommand(Command):
+    """Command for ``POST /api/v1/oauth/openrouter/start-loopback``."""
+
+    is_local: bool = False
+
+
+class OpenRouterDisconnectCommand(Command):
+    """Command for ``DELETE /api/v1/oauth/openrouter``."""
 
 
 # ---------------------------------------------------------------------------
@@ -288,3 +320,73 @@ class OAuthService:
             source=payload.get("source"),
             can_loopback=False,
         )
+
+    # ------------------------------------------------------------------
+    # OpenRouter
+    # ------------------------------------------------------------------
+
+    def _openrouter_status(self, *, can_loopback: bool) -> OpenRouterStatusResult:
+        from durin.providers.openrouter_oauth import key_status
+
+        st = key_status()
+        return OpenRouterStatusResult(
+            connected=st.connected,
+            api_key_hint=st.api_key_hint,
+            can_loopback=can_loopback,
+        )
+
+    @route(
+        "GET",
+        "/api/v1/oauth/openrouter/status",
+        scope=Scope.SETTINGS_READ.value,
+        request_model=OpenRouterStatusQuery,
+        response_model=OpenRouterStatusResult,
+        summary="Return OpenRouter key status (manual or OAuth-obtained)",
+    )
+    async def openrouter_status(
+        self, query: OpenRouterStatusQuery, principal: Principal
+    ) -> OpenRouterStatusResult:
+        principal.require(Scope.SETTINGS_READ)
+        return self._openrouter_status(can_loopback=query.is_local)
+
+    @route(
+        "POST",
+        "/api/v1/oauth/openrouter/start-loopback",
+        scope=Scope.SETTINGS_WRITE.value,
+        request_model=OpenRouterStartLoopbackCommand,
+        response_model=OAuthStartLoopbackResult,
+        summary="Start the OpenRouter loopback PKCE login (localhost-only)",
+    )
+    async def openrouter_start_loopback(
+        self, cmd: OpenRouterStartLoopbackCommand, principal: Principal
+    ) -> OAuthStartLoopbackResult:
+        principal.require(Scope.SETTINGS_WRITE)
+        if not cmd.is_local:
+            raise ForbiddenError(
+                "loopback unavailable on a remote gateway; paste an API key instead"
+            )
+        try:
+            from durin.providers.openrouter_oauth import start_loopback_login
+
+            # Binds the callback server (blocking socket ops) — off the loop.
+            url = await asyncio.to_thread(start_loopback_login)
+        except Exception as exc:  # noqa: BLE001
+            raise UnavailableError(f"loopback login failed to start: {exc}") from exc
+        return OAuthStartLoopbackResult(authorize_url=url)
+
+    @route(
+        "DELETE",
+        "/api/v1/oauth/openrouter",
+        scope=Scope.SETTINGS_WRITE.value,
+        request_model=OpenRouterDisconnectCommand,
+        response_model=OpenRouterStatusResult,
+        summary="Forget the OpenRouter API key",
+    )
+    async def openrouter_disconnect(
+        self, cmd: OpenRouterDisconnectCommand, principal: Principal
+    ) -> OpenRouterStatusResult:
+        principal.require(Scope.SETTINGS_WRITE)
+        from durin.providers.openrouter_oauth import disconnect as or_disconnect
+
+        or_disconnect()
+        return self._openrouter_status(can_loopback=False)

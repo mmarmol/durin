@@ -1087,6 +1087,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/oauth/openrouter": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Forget the OpenRouter API key */
+        delete: operations["oauth_openrouter_disconnect"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/oauth/openrouter/start-loopback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start the OpenRouter loopback PKCE login (localhost-only) */
+        post: operations["oauth_openrouter_start_loopback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/oauth/openrouter/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Return OpenRouter key status (manual or OAuth-obtained) */
+        get: operations["oauth_openrouter_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/personas": {
         parameters: {
             query?: never;
@@ -3462,6 +3513,48 @@ export interface components {
              * @default null
              */
             source: string | null;
+        };
+        /**
+         * OpenRouterDisconnectCommand
+         * @description Command for ``DELETE /api/v1/oauth/openrouter``.
+         */
+        OpenRouterDisconnectCommand: Record<string, never>;
+        /**
+         * OpenRouterStartLoopbackCommand
+         * @description Command for ``POST /api/v1/oauth/openrouter/start-loopback``.
+         */
+        OpenRouterStartLoopbackCommand: {
+            /**
+             * Is Local
+             * @default false
+             */
+            is_local: boolean;
+        };
+        /**
+         * OpenRouterStatusQuery
+         * @description Query for ``GET /api/v1/oauth/openrouter/status``.
+         */
+        OpenRouterStatusQuery: {
+            /**
+             * Is Local
+             * @default false
+             */
+            is_local: boolean;
+        };
+        /** OpenRouterStatusResult */
+        OpenRouterStatusResult: {
+            /**
+             * Api Key Hint
+             * @default null
+             */
+            api_key_hint: string | null;
+            /**
+             * Can Loopback
+             * @default false
+             */
+            can_loopback: boolean;
+            /** Connected */
+            connected: boolean;
         };
         /** PairingApproveCommand */
         PairingApproveCommand: {
@@ -6562,6 +6655,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OAuthStatusResult"];
+                };
+            };
+        };
+    };
+    oauth_openrouter_disconnect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OpenRouterDisconnectCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenRouterStatusResult"];
+                };
+            };
+        };
+    };
+    oauth_openrouter_start_loopback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OpenRouterStartLoopbackCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthStartLoopbackResult"];
+                };
+            };
+        };
+    };
+    oauth_openrouter_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OpenRouterStatusQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenRouterStatusResult"];
                 };
             };
         };

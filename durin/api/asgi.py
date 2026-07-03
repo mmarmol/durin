@@ -223,6 +223,26 @@ def _result_response(result: Any) -> JSONResponse:
     return JSONResponse(result.model_dump())
 
 
+def _inject_peer_locality(
+    params: dict[str, Any], request_model: Any, request: Request
+) -> None:
+    """Server-derived ``is_local`` for request models that declare the field.
+
+    Locality is a fact about the transport peer, not a client claim: the
+    OAuth loopback flows gate on it, and a query/body-supplied value (either
+    spelling) is discarded in favor of whether the connection actually came
+    from loopback. ``request.client is None`` fails closed → not local.
+    """
+    if request_model is None or "is_local" not in getattr(
+        request_model, "model_fields", {}
+    ):
+        return
+    from durin.channels.websocket import _peer_is_loopback
+
+    params.pop("isLocal", None)
+    params["is_local"] = _peer_is_loopback(request.client)
+
+
 def _build_handler(
     bound: BoundRoute,
     *,
@@ -264,6 +284,7 @@ def _build_handler(
                     params[key] = [existing, values]
             # Path params always win (they come from the URL template).
             params.update(dict(request.path_params))
+            _inject_peer_locality(params, request_model, request)
 
             try:
                 model = request_model(**params)
@@ -328,6 +349,7 @@ def _build_write_handler(
                     pass
             # Path params always win over body fields.
             params.update(dict(request.path_params))
+            _inject_peer_locality(params, request_model, request)
 
             try:
                 model = request_model(**params)
