@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useClient } from "@/providers/ClientProvider";
+import { PersonaSelect } from "@/components/settings/channels/PersonaSelect";
 import {
   setConfigValue,
   startChannel,
@@ -269,12 +270,55 @@ function PairingPanel({ token }: { token: string }) {
 
 // ---------- channels panel ---------------------------------------------------
 
-function ChannelsPanel({ token }: { token: string }) {
+function ChannelsPanel({
+  token,
+  channelValues,
+  onChanged,
+}: {
+  token: string;
+  channelValues: Record<string, unknown>;
+  onChanged: () => void;
+}) {
   const { t } = useTranslation();
   const errorLabel = useTokenErrorLabel();
   const [channels, setChannels] = useState<SlackChannelEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [joining, setJoining] = useState<string | null>(null);
+  const [savingRow, setSavingRow] = useState<string | null>(null);
+
+  const openChannels: string[] = Array.isArray(channelValues["open_channels"])
+    ? (channelValues["open_channels"] as string[])
+    : [];
+  const chatPersonas: Record<string, string> =
+    channelValues["chat_personas"] && typeof channelValues["chat_personas"] === "object"
+      ? (channelValues["chat_personas"] as Record<string, string>)
+      : {};
+
+  const toggleOpen = async (chatId: string, open: boolean) => {
+    setSavingRow(chatId);
+    try {
+      const next = open
+        ? Array.from(new Set([...openChannels, chatId]))
+        : openChannels.filter((id) => id !== chatId);
+      await setConfigValue(token, "channels.slack.open_channels", next);
+      onChanged();
+    } finally {
+      setSavingRow(null);
+    }
+  };
+
+  const setChatPersona = async (chatId: string, persona: string) => {
+    setSavingRow(chatId);
+    try {
+      const next = { ...chatPersonas };
+      if (persona) next[chatId] = persona;
+      else delete next[chatId];
+      await setConfigValue(token, "channels.slack.chat_personas", next);
+      onChanged();
+    } finally {
+      setSavingRow(null);
+    }
+  };
 
   const fetchChannels = useCallback(async () => {
     try {
@@ -330,10 +374,28 @@ function ChannelsPanel({ token }: { token: string }) {
           )}
           <span className="flex-1 font-mono text-[12px]">{ch.name}</span>
           {ch.is_member ? (
-            <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
-              <Check className="h-3.5 w-3.5" />
-              {t("settings.channels.slack.joined")}
-            </span>
+            <>
+              <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={openChannels.includes(ch.id)}
+                  disabled={savingRow !== null}
+                  onChange={(e) => void toggleOpen(ch.id, e.target.checked)}
+                />
+                {t("settings.channels.slack.respondAll")}
+              </label>
+              <PersonaSelect
+                token={token}
+                value={chatPersonas[ch.id] ?? ""}
+                busy={savingRow !== null}
+                onChange={(v) => void setChatPersona(ch.id, v)}
+                compact
+              />
+              <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
+                <Check className="h-3.5 w-3.5" />
+                {t("settings.channels.slack.joined")}
+              </span>
+            </>
           ) : ch.is_private ? (
             <span className="text-[11px] text-muted-foreground">
               {t("settings.channels.slack.privateInviteHint")}
@@ -368,9 +430,13 @@ function ChannelsPanel({ token }: { token: string }) {
  *  auth check against Slack), then pairing + channel management. */
 function ConnectedPanel({
   token,
+  channelValues,
+  onChanged,
   onReplaceTokens,
 }: {
   token: string;
+  channelValues: Record<string, unknown>;
+  onChanged: () => void;
   onReplaceTokens: () => void;
 }) {
   const { t } = useTranslation();
@@ -512,7 +578,7 @@ function ConnectedPanel({
       </p>
 
       <PairingPanel token={token} />
-      <ChannelsPanel token={token} />
+      <ChannelsPanel token={token} channelValues={channelValues} onChanged={onChanged} />
     </div>
   );
 }
@@ -788,7 +854,12 @@ export function SlackGuided({
       {mode === "manual" ? (
         children
       ) : tokensConfigured && !replacingTokens ? (
-        <ConnectedPanel token={token} onReplaceTokens={() => setReplacingTokens(true)} />
+        <ConnectedPanel
+          token={token}
+          channelValues={channelValues}
+          onChanged={onChanged}
+          onReplaceTokens={() => setReplacingTokens(true)}
+        />
       ) : (
         <GuidedSetup
           channel={channel}

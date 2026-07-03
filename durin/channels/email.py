@@ -33,6 +33,8 @@ class EmailConfig(Base):
 
     enabled: bool = False
     consent_granted: bool = Field(default=False, json_schema_extra={"group": "access"})
+    # Default persona for sessions born on this channel (empty = global default).
+    persona: str = Field(default="", json_schema_extra={"group": "behavior"})
 
     imap_host: str = Field(default="", json_schema_extra={"group": "imap", "required": True})
     imap_port: int = Field(default=993, json_schema_extra={"group": "imap"})

@@ -1371,6 +1371,9 @@ class AgentLoop:
         self,
         session: Session | None,
         persona_override: str | None,
+        *,
+        channel: str | None = None,
+        chat_id: str | None = None,
     ) -> tuple[str | None, str | None]:
         """Resolve the active persona for a turn and return ``(soul_body, model_ref)``.
 
@@ -1379,10 +1382,11 @@ class AgentLoop:
         the default SOUL). ``model_ref`` is the persona's model picker ref
         (``None`` → caller uses the global default / explicit per-turn override).
 
-        ``persona_override`` is reserved for a future cron-job persona; it is
-        correct forward plumbing but no caller passes it yet. Today the
-        effective precedence is per-conversation (session.metadata["persona"])
-        > global default (agents.defaults.persona).
+        Precedence: ``persona_override`` (cron jobs) > per-conversation
+        (session.metadata["persona"], the webui/TUI pickers) > per-chat channel
+        config (``channels.<name>.chat_personas[chat_id]``) > per-channel
+        default (``channels.<name>.persona``) > global default
+        (agents.defaults.persona).
         """
         from durin.personas.resolve import resolve_active_persona_name
         from durin.workflow.persona_resolve import resolve_persona
@@ -1391,6 +1395,8 @@ class AgentLoop:
             self.app_config,
             session.metadata if session is not None else None,
             persona_override,
+            channel=channel,
+            chat_id=chat_id,
         )
         return resolve_persona(self.app_config, name, self.workspace)
 
@@ -2393,7 +2399,8 @@ class AgentLoop:
         # per-turn model-override path in _run_agent_loop. No persona configured
         # → both stay None → default SOUL + default model (unchanged behavior).
         ctx.active_persona_soul, ctx.persona_model_ref = self._active_persona(
-            ctx.session, ctx.persona_override
+            ctx.session, ctx.persona_override,
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
         )
         ctx.initial_messages = self._build_initial_messages(
             ctx.msg, ctx.session, ctx.history, ctx.pending_summary,

@@ -9,6 +9,7 @@ import { useClient } from "@/providers/ClientProvider";
 import { getConfig, listChannels, setConfigValue, startChannel, stopChannel, type ChannelField, type ChannelInfo } from "@/lib/api";
 import { TelegramGuided } from "@/components/settings/channels/TelegramGuided";
 import { SlackGuided } from "@/components/settings/channels/SlackGuided";
+import { PersonaSelect } from "@/components/settings/channels/PersonaSelect";
 
 // Groups that are always visible in the form.
 const ESSENTIAL_GROUPS = ["access", "imap", "smtp"] as const;
@@ -87,6 +88,16 @@ function FieldInput({
         token={token}
         onSet={(r) => onChange(r)}
         onClear={() => onChange("")}
+      />
+    );
+  }
+  if (field.name === "persona") {
+    return (
+      <PersonaSelect
+        token={token}
+        value={typeof value === "string" ? value : ""}
+        busy={busy}
+        onChange={(v) => onChange(v)}
       />
     );
   }

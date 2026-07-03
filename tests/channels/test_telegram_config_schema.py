@@ -17,7 +17,7 @@ def test_telegram_token_secret_and_allow_from_access():
 def test_telegram_schema_only_token_and_allow_from():
     from durin.service.config import _channel_field_schema
     names = {f["name"] for f in _channel_field_schema(TelegramConfig)}
-    assert names == {"token", "allow_from"}
+    assert names == {"token", "allow_from", "persona"}
 
 
 def test_bot_username_not_in_ui_schema():
