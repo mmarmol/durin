@@ -429,7 +429,12 @@ via a `cancel_check` callback at the top of its node walk. A cancel therefore
 takes effect **between** nodes — a node already executing finishes first
 (best-effort, the same contract as cancelling a sub-agent). The run ends with the
 terminal status `cancelled`, carrying the partial per-node trace, and its result
-is still injected back like any other completion.
+is still injected back like any other completion. A **foreground** run
+(`background=false`) is bridged to the same mechanism: if `/stop` cancels the
+turn awaiting it, `run_workflow` signals the run's cooperative flag — asyncio
+cancellation cannot reach the engine's worker thread — so the engine stops
+before its next node instead of running to completion unobserved, and the flag
+is dropped once the detached engine actually stops.
 
 **Live per-node and per-branch progress.** The engine emits a progress frame at
 the start of each node (status `running`) and another when the node finishes.
