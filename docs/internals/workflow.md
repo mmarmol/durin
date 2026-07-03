@@ -402,7 +402,11 @@ passes `background=false` only when it needs the result in the same turn. When
 the walk finishes, its result (or a `needs_input` status carrying the gate's
 questions) is injected back into the calling session via `session_key_override`,
 using the same announce path as a completing sub-agent, so the calling agent can
-act on the outcome without polling. The `background` flag applies only to
+act on the outcome without polling. The injected summary is capped (with a
+pointer to `tasks(action='status')` for the rest) so an unbounded final output
+cannot drown the delivery turn, and the delivery turn announces itself with a
+progress breadcrumb ("Processing background workflow result…") so the chat's
+stop button has visible context while the agent digests the result. The `background` flag applies only to
 `run_workflow` invocations from inside an agent turn; the HTTP
 `POST /api/v1/workflows/{name}/run` surface is always synchronous.
 

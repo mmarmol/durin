@@ -32,7 +32,7 @@ async def test_inject_result_builds_system_message_routed_to_parent_session():
     t = _tool(bus)
     await t._inject_result(
         "Workflow run r1: completed\nFinal output:\n42",
-        name="qa",
+        name="qa", run_id="r1",
         inject_target={"channel": "websocket", "chat_id": "chatA", "session_key": "websocket:chatA"},
     )
     assert len(bus.inbound) == 1
@@ -48,8 +48,86 @@ async def test_inject_result_builds_system_message_routed_to_parent_session():
 async def test_inject_result_is_best_effort_when_bus_missing():
     t = RunWorkflowTool(workspace="/tmp/x", sessions=object(), app_config=object(), bus=None)
     # Must not raise even though there is no bus.
-    await t._inject_result("x", name="qa",
+    await t._inject_result("x", name="qa", run_id="r1",
                            inject_target={"channel": "websocket", "chat_id": "chatA", "session_key": None})
+
+
+@pytest.mark.asyncio
+async def test_inject_result_caps_oversized_summaries():
+    """An unbounded final_output must not ride the injection whole — the
+    delivery turn drowns re-reading its own spilled output. The cap keeps one
+    readable message and points at tasks(action='status') for the rest."""
+    from durin.agent.tools.run_workflow import _MAX_INJECT_SUMMARY_CHARS
+
+    bus = _FakeBus()
+    t = _tool(bus)
+    huge = "Workflow run r9: completed\nFinal output:\n" + ("x" * 100_000)
+    await t._inject_result(
+        huge,
+        name="qa", run_id="r9deadbeef",
+        inject_target={"channel": "websocket", "chat_id": "chatA", "session_key": "websocket:chatA"},
+    )
+    msg = bus.inbound[0]
+    # Bounded: cap + framing/pointer text, nowhere near the raw 100k.
+    assert len(msg.content) < _MAX_INJECT_SUMMARY_CHARS + 1000
+    assert "tasks(action='status', id='r9deadbeef')" in msg.content
+    # Still delivers guidance and the head of the result.
+    assert "[Background workflow 'qa' finished]" in msg.content
+    assert "Workflow run r9: completed" in msg.content
+
+
+@pytest.mark.asyncio
+async def test_inject_result_short_summary_untouched():
+    bus = _FakeBus()
+    t = _tool(bus)
+    await t._inject_result(
+        "Workflow run r1: completed\nFinal output:\n42",
+        name="qa", run_id="r1",
+        inject_target={"channel": "websocket", "chat_id": "chatA", "session_key": "websocket:chatA"},
+    )
+    assert "truncated" not in bus.inbound[0].content.lower()
+
+
+@pytest.mark.asyncio
+async def test_delivery_turn_emits_progress_breadcrumb(tmp_path):
+    """The delivery turn starts without a user message — the chat shows a live
+    stop button and nothing else unless a breadcrumb says what is running."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from durin.agent.loop import AgentLoop
+    from durin.bus.events import InboundMessage
+    from durin.bus.queue import MessageBus
+    from durin.providers.base import LLMResponse
+
+    bus = MessageBus()
+    provider = MagicMock()
+    provider.get_default_model.return_value = "m"
+    provider.chat_with_retry = AsyncMock(
+        return_value=LLMResponse(content="summarized", tool_calls=[], usage={}),
+    )
+    loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="m")
+    loop.tools.get_definitions = MagicMock(return_value=[])
+
+    msg = InboundMessage(
+        channel="system",
+        sender_id="workflow_background",
+        chat_id="websocket:chatA",
+        content="[Background workflow 'qa' finished]\n\nWorkflow run r1: completed\nFinal output:\n42",
+        session_key_override="websocket:chatA",
+        metadata={"injected_event": "workflow_background_result", "workflow": "qa"},
+    )
+    await loop._process_message(msg)
+
+    outs = []
+    while not bus.outbound.empty():
+        outs.append(await bus.consume_outbound())
+    breadcrumbs = [
+        o for o in outs
+        if o.metadata.get("_progress") and "qa" in o.content
+    ]
+    assert breadcrumbs, f"no progress breadcrumb published; got: {[o.content[:60] for o in outs]}"
+    assert breadcrumbs[0].channel == "websocket"
+    assert breadcrumbs[0].chat_id == "chatA"
 
 
 def test_terminal_progress_payload_marks_workflow_done():
