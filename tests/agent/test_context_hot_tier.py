@@ -69,6 +69,41 @@ def test_working_set_memoized_against_usage_drift(tmp_path, monkeypatch):
     assert "rebase" in block_b          # and the original member stayed
 
 
+def test_working_set_recomputes_when_skill_installed(tmp_path, monkeypatch):
+    # The memo is keyed on the candidate name-set: a skill installed on disk
+    # between two builds on the SAME ContextBuilder (the gateway keeps one per
+    # process) must reach the catalog without a restart.
+    _seed_skills(tmp_path, ["deploy"])
+    _force_hot(monkeypatch, enabled=True, recent=1, frequent=1)  # budget 2
+    cb = ContextBuilder(tmp_path)
+    cb.build_system_prompt()
+    block_a = cb._last_layer_breakdown["stable"].get("skills_catalog", "")
+    assert "deploy" in block_a and "zzznew" not in block_a
+
+    _seed_skills(tmp_path, ["zzznew"])  # installed mid-process
+    cb.build_system_prompt()
+    block_b = cb._last_layer_breakdown["stable"].get("skills_catalog", "")
+    assert "zzznew" in block_b           # entered without a restart
+    assert "deploy" in block_b          # existing member kept its slot
+
+
+def test_working_set_recomputes_when_skill_removed(tmp_path, monkeypatch):
+    import shutil
+    _seed_skills(tmp_path, ["deploy", "rebase", "obscure"])
+    _force_hot(monkeypatch, enabled=True, recent=1, frequent=1)  # budget 2
+    _seed_usage(tmp_path, {"deploy": 10, "rebase": 8}, name="s1")
+    cb = ContextBuilder(tmp_path)
+    cb.build_system_prompt()
+    block_a = cb._last_layer_breakdown["stable"].get("skills_catalog", "")
+    assert "obscure" not in block_a
+
+    shutil.rmtree(tmp_path / "skills" / "rebase")  # removed mid-process
+    cb.build_system_prompt()
+    block_b = cb._last_layer_breakdown["stable"].get("skills_catalog", "")
+    assert "rebase" not in block_b      # gone from the catalog
+    assert "obscure" in block_b         # freed slot refilled
+
+
 def test_disabled_injects_full_catalog(tmp_path, monkeypatch):
     _seed_skills(tmp_path, ["deploy", "rebase", "obscure"])
     _force_hot(monkeypatch, enabled=False)

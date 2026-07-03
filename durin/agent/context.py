@@ -136,10 +136,15 @@ class ContextBuilder:
         # event data). Exposed so AgentLoop / footer / /status can read
         # the current breakdown without touching the JSONL log.
         self.last_composition: dict[str, Any] | None = None
-        # Hot working-set tier: computed once per instance (= per session)
-        # so the stable prefix stays byte-identical across turns.
+        # Hot working-set tier: the ranked set is memoized keyed on the
+        # candidate name-set, so the stable prefix stays byte-identical
+        # across turns yet a skill installed or removed mid-process (the
+        # loader reads disk each scan) refreshes the set on the next turn.
+        # The hot-tier config itself is resolved once per instance.
         self._skill_working_set: set[str] | None = None
-        self._skill_working_set_done = False
+        self._skill_working_set_key: frozenset[str] | None = None
+        self._skill_hot_tier: Any = None
+        self._skill_hot_tier_resolved = False
 
     def build_system_prompt(
         self,
@@ -288,24 +293,30 @@ class ContextBuilder:
 
     def _hot_tier_include(self, always_skills: list[str]) -> set[str] | None:
         """The working-set name filter for the skills_catalog block, or None
-        (full catalog) when the hot tier is disabled. Memoized per instance."""
-        if self._skill_working_set_done:
-            return self._skill_working_set
-        self._skill_working_set_done = True
-        try:
-            from durin.config.loader import load_config
-            ht = load_config().agents.defaults.skills_hot_tier
-        except Exception:  # noqa: BLE001 — unit/test workspaces without a config file
-            from durin.config.schema import SkillsHotTierConfig
-            ht = SkillsHotTierConfig()
+        (full catalog) when the hot tier is disabled. The ranked set is
+        memoized keyed on the candidate name-set: usage re-ranking never
+        churns the cache-stable prefix turn to turn, but installing or
+        removing a skill changes the key and recomputes, so a new skill
+        can enter the catalog without a process restart."""
+        if not self._skill_hot_tier_resolved:
+            self._skill_hot_tier_resolved = True
+            try:
+                from durin.config.loader import load_config
+                self._skill_hot_tier = load_config().agents.defaults.skills_hot_tier
+            except Exception:  # noqa: BLE001 — unit/test workspaces without a config file
+                from durin.config.schema import SkillsHotTierConfig
+                self._skill_hot_tier = SkillsHotTierConfig()
+        ht = self._skill_hot_tier
         if not ht.enabled:
-            self._skill_working_set = None
             return None
         always = set(always_skills)
         candidates = [
             e["name"] for e in self.skills.list_skills(filter_unavailable=False)
             if e["name"] not in always
         ]
+        cand_key = frozenset(candidates)
+        if self._skill_working_set is not None and cand_key == self._skill_working_set_key:
+            return self._skill_working_set
         names = compute_working_set(
             self.workspace, candidates,
             recent=ht.recent, frequent=ht.frequent,
@@ -313,6 +324,7 @@ class ContextBuilder:
             recent_window_hours=ht.recent_window_hours,
         )
         self._skill_working_set = set(names)
+        self._skill_working_set_key = cand_key
         return self._skill_working_set
 
     def _build_context_layer(self, *, agent_mode_name: str | None) -> str:
