@@ -51,7 +51,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if git diff --quiet -- durin/providers/data/; then
+          # -I: the generated_at stamp changes on every run; without ignoring
+          # it, a zero-data week would still open a churn PR.
+          if git diff --quiet -I '"generated_at":' -- durin/providers/data/; then
             echo "No catalog changes this week."
             exit 0
           fi
