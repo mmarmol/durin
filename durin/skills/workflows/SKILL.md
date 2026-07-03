@@ -86,8 +86,13 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   pasting file contents into `task`. Provided paths are validated before anything runs: a
   missing file or two files with the same name abort with a clear message, and a workflow
   that declares `input: {"file": true}` given no files pauses immediately asking for them.
-  It loads the named JSON, runs the graph, and returns a per-node trace plus the final text
-  output. **Getting files back:** when the workflow declares it outputs files
+  **By default the run goes to the background:** the call returns immediately with a run id,
+  you keep working, and the result — a per-node trace plus the final text output — is
+  delivered to you as a follow-up message when it finishes. Meanwhile
+  `tasks(action="status", id=<run id>)` observes it and `tasks(action="stop", ...)` cancels
+  it. Pass `background=false` ONLY when you need the result to keep reasoning in the same
+  turn (the call then blocks and returns the result directly).
+  **Getting files back:** when the workflow declares it outputs files
   (`output: {"file": true}`), the summary reports the run's working-folder path AND lists the
   produced files — read them there, and copy out anything that must outlive the run (working
   folders are pruned after `workflow.keep_runs` newer runs). **If the result says it needs
