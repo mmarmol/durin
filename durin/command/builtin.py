@@ -103,7 +103,7 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "Switch persona",
         "Show or switch the active persona for this conversation.",
         "user-round",
-        "[name|default]",
+        "[name|durin]",
     ),
     BuiltinCommandSpec(
         "/effort",
@@ -2046,15 +2046,17 @@ async def cmd_persona(ctx: CommandContext) -> OutboundMessage:
         current = (session.metadata.get("persona") if session and session.metadata else None)
         if not current and config is not None:
             current = config.agents.defaults.persona
+        if current in (None, "default"):
+            current = "durin"
         avail_lines = [_persona_line(n) for n in names] if names else ["- (none)"]
-        lines = ["## Persona", f"- Current: `{current or 'default'}`", "- Available:"] + avail_lines
+        lines = ["## Persona", f"- Current: `{current}`", "- Available:"] + avail_lines
         return _reply("\n".join(lines))
 
     name = args.split()[0]
-    if name in ("default", "none"):
+    if name in ("default", "none", "durin"):
         if session is not None:
             session.metadata.pop("persona", None)
-        return _reply("Switched to the default persona.")
+        return _reply("Switched to the durin base persona.")
 
     if name not in names:
         avail = ", ".join(f"`{n}`" for n in names) or "(none)"

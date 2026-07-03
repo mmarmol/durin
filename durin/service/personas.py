@@ -225,19 +225,23 @@ class PersonasService:
         # The implicit base — the default SOUL + the default model — listed LAST so it is
         # visible and selectable like any other persona. It is the fallback used when no
         # persona is active; it cannot be edited or deleted as a persona (edit the default
-        # SOUL via the SOUL library, the default model via agent settings).
-        if "default" not in cfg.personas:
+        # SOUL via the SOUL library, the default model via agent settings). Named "durin"
+        # since it IS durin's base voice, not an anonymous default.
+        if "durin" not in cfg.personas:
             items.append(
                 PersonaItem(
-                    name="default",
+                    name="durin",
                     soul="default",
                     model=None,
                     description="durin's base voice — the default SOUL with the default model.",
                     builtin=False,
                 )
             )
-        # When no persona is configured, the synthetic "default" is the active default.
-        return PersonaListResult(personas=items, default=cfg.agents.defaults.persona or "default")
+        # When no persona is configured, the synthetic "durin" is the active default. A
+        # legacy config with the old "default" name stored still displays as "durin".
+        configured = cfg.agents.defaults.persona
+        default = "durin" if configured in (None, "default") else configured
+        return PersonaListResult(personas=items, default=default)
 
     @route(
         "POST",
@@ -249,9 +253,9 @@ class PersonasService:
     )
     async def upsert_persona(self, cmd: PersonaUpsertCommand, principal: Principal) -> PersonaUpsertResult:
         principal.require(Scope.CONFIG_WRITE)
-        # "default"/"none" are reserved for the synthetic base entry — a user persona by
-        # those names would hijack the immutable default slot in the listing.
-        if cmd.name in ("default", "none"):
+        # "durin"/"default"/"none" are reserved for the synthetic base entry — a user
+        # persona by those names would hijack the immutable default slot in the listing.
+        if cmd.name in ("durin", "default", "none"):
             raise ValidationFailedError(f"{cmd.name!r} is a reserved persona name")
 
         def _m(cfg: object) -> None:
@@ -298,8 +302,9 @@ class PersonasService:
     )
     async def set_default(self, cmd: SetDefaultPersonaCommand, principal: Principal) -> SetDefaultPersonaResult:
         principal.require(Scope.CONFIG_WRITE)
-        # Selecting the synthetic "default" (or "none") clears the override → the base.
-        name = None if cmd.name in (None, "default", "none") else cmd.name
+        # Selecting the synthetic "durin" (or the legacy "default"/"none" aliases) clears
+        # the override → the base.
+        name = None if cmd.name in (None, "durin", "default", "none") else cmd.name
         if name is not None:
             cfg = load_config(get_config_path())
             if name not in cfg.persona_names():

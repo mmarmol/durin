@@ -109,7 +109,7 @@ function CronForm({
   useEffect(() => {
     listChannels(token).then((ch) => setChannels(ch.filter((c) => c.enabled))).catch(() => {});
     listPersonas(token)
-      .then((r) => setPersonas(r.personas.map((p) => p.name).filter((n) => n !== "default" && n !== "none")))
+      .then((r) => setPersonas(r.personas.map((p) => p.name).filter((n) => n !== "durin" && n !== "default" && n !== "none")))
       .catch(() => {});
   }, [token]);
 

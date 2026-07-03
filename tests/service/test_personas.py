@@ -59,7 +59,7 @@ def test_set_default_valid_null_and_invalid(tmp_path, monkeypatch):
     assert res.default == "mine"
     asyncio.run(svc.set_default(SetDefaultPersonaCommand(name=None), _principal()))
     res2 = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
-    assert res2.default == "default"  # cleared → the synthetic base default
+    assert res2.default == "durin"  # cleared → the synthetic base default
     with pytest.raises(DomainError):
         asyncio.run(svc.set_default(SetDefaultPersonaCommand(name="ghost"), _principal()))
 
@@ -72,27 +72,39 @@ def test_delete_clears_dangling_default(tmp_path, monkeypatch):
     assert res_before.default == "acme"
     asyncio.run(svc.delete_persona(PersonaDeleteCommand(name="acme"), _principal()))
     res_after = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
-    assert res_after.default == "default"  # default persona deleted → base default
+    assert res_after.default == "durin"  # default persona deleted → base default
     assert not any(p.name == "acme" for p in res_after.personas)
 
 
-def test_default_persona_listed_last(tmp_path, monkeypatch):
+def test_durin_persona_listed_last(tmp_path, monkeypatch):
     svc = _svc(tmp_path, monkeypatch)
     res = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
     last = res.personas[-1]
-    assert last.name == "default" and last.soul == "default" and last.model is None and last.builtin is False
-    assert sum(1 for p in res.personas if p.name == "default") == 1
-    assert res.default == "default"  # active default when nothing configured
+    assert last.name == "durin" and last.soul == "default" and last.model is None and last.builtin is False
+    assert sum(1 for p in res.personas if p.name == "durin") == 1
+    assert res.default == "durin"  # active default when nothing configured
 
 
-def test_set_default_to_default_clears_override(tmp_path, monkeypatch):
+def test_set_default_to_durin_clears_override(tmp_path, monkeypatch):
     svc = _svc(tmp_path, monkeypatch)
     asyncio.run(svc.upsert_persona(PersonaUpsertCommand(name="mine", soul="default"), _principal()))
     asyncio.run(svc.set_default(SetDefaultPersonaCommand(name="mine"), _principal()))
-    out = asyncio.run(svc.set_default(SetDefaultPersonaCommand(name="default"), _principal()))
-    assert out.default is None  # selecting the synthetic default clears the override
+    out = asyncio.run(svc.set_default(SetDefaultPersonaCommand(name="durin"), _principal()))
+    assert out.default is None  # selecting the synthetic base persona clears the override
     res = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
-    assert res.default == "default"
+    assert res.default == "durin"
+
+
+def test_legacy_configured_default_maps_to_durin(tmp_path, monkeypatch):
+    # A config written before the rename may have agents.defaults.persona == "default"
+    # stored literally (pre-rename installs). It must still resolve to "durin" in the
+    # listing rather than surfacing the old internal name.
+    from durin.config.loader import mutate_config
+
+    svc = _svc(tmp_path, monkeypatch)
+    mutate_config(lambda c: setattr(c.agents.defaults, "persona", "default"))
+    res = asyncio.run(svc.list_personas(PersonaListQuery(), _principal()))
+    assert res.default == "durin"
 
 
 def test_upsert_reserved_name_rejected(tmp_path, monkeypatch):
@@ -100,3 +112,5 @@ def test_upsert_reserved_name_rejected(tmp_path, monkeypatch):
     svc = _svc(tmp_path, monkeypatch)
     with pytest.raises(ValidationFailedError):
         asyncio.run(svc.upsert_persona(PersonaUpsertCommand(name="default", soul="default"), _principal()))
+    with pytest.raises(ValidationFailedError):
+        asyncio.run(svc.upsert_persona(PersonaUpsertCommand(name="durin", soul="default"), _principal()))

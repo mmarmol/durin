@@ -43,7 +43,7 @@ class PersonaPickerScreen(ModalScreen[str | None]):
     PersonaPickerScreen .hint { color: $text-muted; text-style: italic; }
     """
 
-    def __init__(self, rows: list[PersonaRow], active: str = "default") -> None:
+    def __init__(self, rows: list[PersonaRow], active: str = "durin") -> None:
         super().__init__()
         self._rows = rows
         self._active = active

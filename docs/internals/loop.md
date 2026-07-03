@@ -338,10 +338,11 @@ one keeps it removed across restarts (the marker prevents re-injection).
 returns `None` when it is unknown (the caller falls back to the default SOUL and
 default model). `Config.persona_names()` lists the configured personas. The
 persona listing (`GET /api/v1/personas` and the webui pane) additionally
-surfaces a synthetic `default` entry — the base SOUL plus the default model —
-last in the list, so the implicit fallback is visible and selectable; that
-synthetic entry alone is not editable or deletable (`default`/`none` are
-reserved persona names).
+surfaces a synthetic `durin` entry — the base SOUL plus the default model —
+last in the list, so the implicit fallback is visible and selectable under its
+real name instead of an anonymous "default"; that synthetic entry alone is not
+editable or deletable (`durin`/`default`/`none` are reserved persona names —
+the latter two remain accepted as reset keywords for compatibility).
 
 Example user config:
 
@@ -366,7 +367,8 @@ The active persona for a turn is resolved once in `_state_build` by
    `cron` tool; applies only to that job's run (mutually exclusive with the
    job's per-run model).
 2. **Per-conversation** — `session.metadata["persona"]`, set by `/persona
-   <name>` and cleared by `/persona default`.
+   <name>` and cleared by `/persona durin` (`default`/`none` also work as reset
+   keywords).
 3. **Global default** — `agents.defaults.persona` in config (applies to every
    new conversation until overridden).
 4. **No persona** — default `SOUL.md` and global default model, unchanged from
@@ -384,7 +386,8 @@ persona's model.
 Souls and personas are manageable through three surfaces:
 
 - **`/persona` slash command** — switches the active persona for the current
-  conversation; `/persona default` reverts.
+  conversation; `/persona durin` reverts to the base persona (`default`/`none`
+  are also accepted as reset keywords).
 - **`agents.defaults.persona` in `config.json`** — sets the global default persona
   applied to every new conversation.
 - **Webui Personas settings section** — a SOUL library editor (create, edit,
@@ -397,8 +400,8 @@ Souls and personas are manageable through three surfaces:
   Two additional behaviors in this surface:
 
   - **Live model + SOUL test** — the persona form *and each persona row* (so
-    any persona — including the seeded examples and the default — can be tested
-    straight from the list) carry a "Test" action (`POST /api/v1/personas/test`) that
+    any persona — including the seeded examples and the synthetic `durin` base
+    persona — can be tested straight from the list) carry a "Test" action (`POST /api/v1/personas/test`) that
     runs the selected soul and model against a fixed short prompt and returns
     the model's reply. If the provider or model reference is invalid, the
     response carries an `ok: false` error message instead of raising an HTTP
@@ -607,7 +610,7 @@ Read at runtime (mostly in the runner / loop):
   `/restart`, `/status`. Mode/model controls relevant to the loop include
   `/plan`, `/build`, `/mode`, `/model`, `/effort`, `/new`, `/compact`.
   `/persona [name]` switches the active persona for the current conversation;
-  `/persona default` reverts to the global default. Personas and souls are also
+  `/persona durin` reverts to the base persona (the global default). Personas and souls are also
   managed through the webui Personas settings section — see the Surfaces
   subsection in "Personas & SOULs" above.
 - **Bus** — any channel publishes/consumes through `MessageBus`; the loop is

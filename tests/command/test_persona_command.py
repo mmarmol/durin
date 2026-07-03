@@ -21,6 +21,13 @@ async def test_status_lists_available():
 
 
 @pytest.mark.asyncio
+async def test_status_shows_durin_when_unset():
+    session = Session(key="cli:direct")
+    out = await cmd_persona(_ctx("", session))
+    assert "Current: `durin`" in out.content
+
+
+@pytest.mark.asyncio
 async def test_set_known_persona_updates_session():
     session = Session(key="cli:direct")
     out = await cmd_persona(_ctx("mine", session))
@@ -34,6 +41,15 @@ async def test_default_clears_persona():
     session.metadata["persona"] = "mine"
     await cmd_persona(_ctx("default", session))
     assert "persona" not in session.metadata
+
+
+@pytest.mark.asyncio
+async def test_durin_clears_persona():
+    session = Session(key="cli:direct")
+    session.metadata["persona"] = "mine"
+    out = await cmd_persona(_ctx("durin", session))
+    assert "persona" not in session.metadata
+    assert "durin base persona" in out.content
 
 
 @pytest.mark.asyncio

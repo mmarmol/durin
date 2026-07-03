@@ -1082,9 +1082,11 @@ class DurinApp(App[None]):
             PersonaRow(name=name, soul=p.soul, model=p.model)
             for name, p in sorted(cfg.personas.items())
         ]
-        if not any(r.name == "default" for r in rows):
-            rows.insert(0, PersonaRow(name="default", soul="default", model=None))
-        active = cfg.agents.defaults.persona or "default"
+        if not any(r.name == "durin" for r in rows):
+            rows.insert(0, PersonaRow(name="durin", soul="default", model=None))
+        active = cfg.agents.defaults.persona
+        if active in (None, "default"):
+            active = "durin"
         if self._agent_loop is not None:
             session_key = f"{self._cli_channel}:{self._cli_chat_id}"
             session = self._agent_loop.sessions.get_or_create(session_key)
