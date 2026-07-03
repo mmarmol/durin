@@ -3288,6 +3288,69 @@
         "title": "OAuthStatusResult",
         "type": "object"
       },
+      "OpenRouterDisconnectCommand": {
+        "additionalProperties": false,
+        "description": "Command for ``DELETE /api/v1/oauth/openrouter``.",
+        "properties": {},
+        "title": "OpenRouterDisconnectCommand",
+        "type": "object"
+      },
+      "OpenRouterStartLoopbackCommand": {
+        "additionalProperties": false,
+        "description": "Command for ``POST /api/v1/oauth/openrouter/start-loopback``.",
+        "properties": {
+          "is_local": {
+            "default": false,
+            "title": "Is Local",
+            "type": "boolean"
+          }
+        },
+        "title": "OpenRouterStartLoopbackCommand",
+        "type": "object"
+      },
+      "OpenRouterStatusQuery": {
+        "additionalProperties": false,
+        "description": "Query for ``GET /api/v1/oauth/openrouter/status``.",
+        "properties": {
+          "is_local": {
+            "default": false,
+            "title": "Is Local",
+            "type": "boolean"
+          }
+        },
+        "title": "OpenRouterStatusQuery",
+        "type": "object"
+      },
+      "OpenRouterStatusResult": {
+        "properties": {
+          "api_key_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Api Key Hint"
+          },
+          "can_loopback": {
+            "default": false,
+            "title": "Can Loopback",
+            "type": "boolean"
+          },
+          "connected": {
+            "title": "Connected",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "connected"
+        ],
+        "title": "OpenRouterStatusResult",
+        "type": "object"
+      },
       "PairingApproveCommand": {
         "additionalProperties": false,
         "properties": {
@@ -8356,6 +8419,93 @@
           }
         },
         "summary": "Return Codex OAuth connection status",
+        "x-required-scope": "settings:read"
+      }
+    },
+    "/api/v1/oauth/openrouter": {
+      "delete": {
+        "operationId": "oauth_openrouter_disconnect",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenRouterDisconnectCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenRouterStatusResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Forget the OpenRouter API key",
+        "x-required-scope": "settings:write"
+      }
+    },
+    "/api/v1/oauth/openrouter/start-loopback": {
+      "post": {
+        "operationId": "oauth_openrouter_start_loopback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenRouterStartLoopbackCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthStartLoopbackResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Start the OpenRouter loopback PKCE login (localhost-only)",
+        "x-required-scope": "settings:write"
+      }
+    },
+    "/api/v1/oauth/openrouter/status": {
+      "get": {
+        "operationId": "oauth_openrouter_status",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenRouterStatusQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenRouterStatusResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Return OpenRouter key status (manual or OAuth-obtained)",
         "x-required-scope": "settings:read"
       }
     },

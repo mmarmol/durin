@@ -2068,10 +2068,11 @@ export async function startCodexLoopbackAuth(
   token: string,
   base: string = "",
 ): Promise<{ authorize_url: string }> {
+  // is_local is derived server-side from the transport peer.
   return post<{ authorize_url: string }>(
     `${base}/api/v1/oauth/codex/start-loopback`,
     token,
-    { isLocal: false },
+    {},
   );
 }
 
@@ -2095,6 +2096,41 @@ export async function disconnectCodex(
   base: string = "",
 ): Promise<CodexStatus> {
   return del<CodexStatus>(`${base}/api/v1/oauth/codex`, token, {});
+}
+
+// --- OpenRouter OAuth (PKCE → regular API key) -------------------------------
+
+export interface OpenRouterStatus {
+  connected: boolean;
+  api_key_hint?: string | null;
+  /** True when the webui was reached via localhost — the loopback connect works. */
+  can_loopback?: boolean;
+}
+
+export async function fetchOpenRouterStatus(
+  token: string,
+  base: string = "",
+): Promise<OpenRouterStatus> {
+  return request<OpenRouterStatus>(`${base}/api/v1/oauth/openrouter/status`, token);
+}
+
+export async function startOpenRouterLoopbackAuth(
+  token: string,
+  base: string = "",
+): Promise<{ authorize_url: string }> {
+  // is_local is derived server-side from the transport peer.
+  return post<{ authorize_url: string }>(
+    `${base}/api/v1/oauth/openrouter/start-loopback`,
+    token,
+    {},
+  );
+}
+
+export async function disconnectOpenRouter(
+  token: string,
+  base: string = "",
+): Promise<OpenRouterStatus> {
+  return del<OpenRouterStatus>(`${base}/api/v1/oauth/openrouter`, token, {});
 }
 
 // --- MCP server management -------------------------------------------------

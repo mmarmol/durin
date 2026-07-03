@@ -137,7 +137,19 @@ or the secret store instead.
 `openai_codex` and `github_copilot` are credentialed via OAuth, not static
 API keys. These providers are excluded from config serialization (they have
 `exclude=True` on their schema field) and cannot hold an `api_key`. Use
-`durin mcp login` to complete the OAuth flow for those providers.
+`durin oauth login <provider>` to complete the OAuth flow for those
+providers, or the connect card in the dashboard's Providers settings.
+
+### OpenRouter: connect without pasting a key
+
+`openrouter` remains a normal API-key provider, but the key can be obtained
+via OpenRouter's OAuth PKCE flow instead of copy-pasting: run
+`durin oauth login openrouter`, or click "Conectar con OpenRouter" in the
+dashboard's provider row. Approving in the browser hands durin a
+user-controlled API key, stored exactly like a manual paste (secret store +
+`${secret:}` reference in `providers.openrouter.api_key`). The flow is
+loopback-only — the browser and the gateway must be on the same host; on a
+remote gateway, paste a key manually instead.
 
 ## Model presets
 

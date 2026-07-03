@@ -268,3 +268,93 @@ async def test_disconnect_returns_disconnected_status(monkeypatch):
 async def test_disconnect_requires_write_scope(monkeypatch):
     with pytest.raises(ForbiddenError):
         await OAuthService().disconnect(OAuthDisconnectCommand(), _remote_read())
+
+
+# ---------------------------------------------------------------------------
+# OpenRouter
+# ---------------------------------------------------------------------------
+
+from durin.providers import openrouter_oauth as oro  # noqa: E402
+from durin.service.oauth import (  # noqa: E402
+    OpenRouterDisconnectCommand,
+    OpenRouterStartLoopbackCommand,
+    OpenRouterStatusQuery,
+)
+
+
+async def test_openrouter_status_connected(monkeypatch):
+    monkeypatch.setattr(
+        oro, "key_status",
+        lambda: oro.OpenRouterKeyStatus(connected=True, api_key_hint="sk-o…v1"),
+    )
+    result = await OAuthService().openrouter_status(
+        OpenRouterStatusQuery(is_local=True), _local()
+    )
+    assert result.connected is True
+    assert result.api_key_hint == "sk-o…v1"
+    assert result.can_loopback is True
+
+
+async def test_openrouter_status_disconnected_remote(monkeypatch):
+    monkeypatch.setattr(
+        oro, "key_status", lambda: oro.OpenRouterKeyStatus(connected=False)
+    )
+    result = await OAuthService().openrouter_status(
+        OpenRouterStatusQuery(is_local=False), _remote_read()
+    )
+    assert result.connected is False
+    assert result.can_loopback is False
+
+
+async def test_openrouter_status_requires_read_scope():
+    with pytest.raises(ForbiddenError):
+        await OAuthService().openrouter_status(OpenRouterStatusQuery(), _remote_none())
+
+
+async def test_openrouter_start_loopback_local_returns_url(monkeypatch):
+    monkeypatch.setattr(
+        oro, "start_loopback_login",
+        lambda **_kw: "https://openrouter.ai/auth?callback_url=x",
+    )
+    result = await OAuthService().openrouter_start_loopback(
+        OpenRouterStartLoopbackCommand(is_local=True), _local()
+    )
+    assert result.authorize_url.startswith("https://openrouter.ai/auth")
+
+
+async def test_openrouter_start_loopback_non_local_forbidden():
+    with pytest.raises(ForbiddenError, match="loopback unavailable"):
+        await OAuthService().openrouter_start_loopback(
+            OpenRouterStartLoopbackCommand(is_local=False), _local()
+        )
+
+
+async def test_openrouter_start_loopback_failure_unavailable(monkeypatch):
+    def _fail(**_kw):
+        raise RuntimeError("bind failed")
+
+    monkeypatch.setattr(oro, "start_loopback_login", _fail)
+    with pytest.raises(UnavailableError, match="loopback login failed"):
+        await OAuthService().openrouter_start_loopback(
+            OpenRouterStartLoopbackCommand(is_local=True), _local()
+        )
+
+
+async def test_openrouter_disconnect(monkeypatch):
+    calls = []
+    monkeypatch.setattr(oro, "disconnect", lambda: calls.append(True) or True)
+    monkeypatch.setattr(
+        oro, "key_status", lambda: oro.OpenRouterKeyStatus(connected=False)
+    )
+    result = await OAuthService().openrouter_disconnect(
+        OpenRouterDisconnectCommand(), _local()
+    )
+    assert result.connected is False
+    assert calls == [True]
+
+
+async def test_openrouter_disconnect_requires_write_scope():
+    with pytest.raises(ForbiddenError):
+        await OAuthService().openrouter_disconnect(
+            OpenRouterDisconnectCommand(), _remote_read()
+        )
