@@ -124,6 +124,8 @@ The durin-owned catalog lives in `durin/agent/data/mcp_catalog.json` (the vendor
 
 For install, `McpRegistryDescribeQuery` retrieves full `McpServerDetail` from a registry adapter. `build_server_config_from_detail` selects a local package (stdio via npx/uvx/docker) or a remote endpoint, pins the package version, and builds an `MCPServerConfig`. Secret environment variables are stored in durin's secret store under `${secret:NAME}` references — resolved to plaintext at spawn time, never persisted in config. For remote servers with no declared auth header, `autodetect_oauth` probes the endpoint with an unauthenticated MCP `initialize` request; a `401 Bearer` response sets `oauth=True` on the config so the SDK's sign-in flow takes over.
 
+Agent-side, this path is exposed through `mcp_search` (read-only) and `mcp_manage` (install/add/update gated by `tools.mcp_discovery.install_policy`); the `mcp` builtin skill (`durin/skills/mcp/SKILL.md`) carries the agent-facing guidance — trust decisions, the dry-run→confirm gate, human-owned credentials, and the OAuth hand-off.
+
 ### OAuth flow
 
 The `OAuthClientProvider` is built once per `MCPServerConnection` in `__init__`, so DCR state and refresh tokens persist across reconnects within the same process lifetime. `SecretsTokenStorage` backs the SDK's `TokenStorage` protocol: tokens and client registration are serialized as JSON into durin's secret store, keyed by a per-server hash of `(server_name, server_url)`.

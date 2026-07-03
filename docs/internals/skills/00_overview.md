@@ -324,7 +324,10 @@ chat command (`/skills remove <name>`).
    into `templates/agent/skills_section.md`; the agent loads full bodies on
    demand with the `skill_view` tool (`durin/agent/tools/skill_view.py`), which
    also returns the skill's bundled-file map and a readiness check, or a raw
-   `read_file`.
+   `read_file`. The computed set is memoized in `ContextBuilder` keyed on the
+   candidate name-set: usage re-ranking never churns the cache-stable prefix
+   turn to turn, but installing or removing a skill changes the key, so the
+   catalog reflects it on the next turn without a process restart.
 
 3. **Searchable.** `durin/memory/skill_page.py::SkillPage` is the memory class
    for skills: it wraps the SKILL.md frontmatter and body for FTS and vector

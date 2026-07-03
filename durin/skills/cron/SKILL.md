@@ -1,6 +1,6 @@
 ---
 name: cron
-description: Schedule work to run later or on a repeating cadence — either a reminder delivered to the user, or a task the agent runs and reports back. Use when the user says things like "remind me to…", "every morning", "every Monday at 9", "each hour", "once at <time>", or otherwise wants a one-off or recurring scheduled job.
+description: Schedule work to run later or on a repeating cadence — either a reminder delivered to the user, or a task the agent runs and reports back. Use when the user says things like "remind me to…", "every morning", "every Monday at 9", "each hour", "once at a given time", or otherwise wants a one-off or recurring scheduled job.
 ---
 
 # Cron
@@ -41,6 +41,14 @@ Run the job as a specific **model** *or* a **persona** — mutually exclusive, s
 
 Omit both to use the agent's default. (For `update`, providing one switches the job to it.)
 
+## Optional: name and silent delivery
+
+- `name` — short human-readable label for the job (defaults to the first 30 chars of the
+  message). On `update`, providing it renames the job.
+- `deliver` — default `true`: the job's result is delivered to the user's channel. Set
+  `false` for a silent background task (e.g. maintenance that only needs to run, not
+  report). On `update`, providing it toggles delivery.
+
 ## Examples
 
 Reminder (default mode):
@@ -73,5 +81,6 @@ cron(action="remove", job_id="abc123")
 ## Notes
 
 - `list` shows each job's recent run history (time, status, duration). System jobs (e.g.
-  the daily memory dream) are visible but cannot be removed — only enabled/disabled.
-- Jobs can also be created, edited, and run-on-demand from the web dashboard's Cron panel.
+  the daily memory dream) are visible but cannot be removed.
+- Enabling/disabling a job and running it on demand are web-dashboard actions (Cron
+  panel) — this tool does not expose them. The dashboard can also create and edit jobs.
