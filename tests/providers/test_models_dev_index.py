@@ -1,4 +1,4 @@
-from durin.providers.models_dev import build_provider_models
+from durin.providers.models_dev import apply_nvidia_live_ids, build_provider_models
 
 
 def test_build_maps_ids_extracts_caps_and_skips_unknown():
@@ -36,3 +36,53 @@ def test_exact_name_match_without_map_entry():
     out = build_provider_models(data, {"groq"})
     assert out["groq"][0]["id"] == "llama-3.3-70b"
     assert out["groq"][0]["supports_vision"] is False
+
+
+def _entry(mid: str, **over):
+    e = {
+        "id": mid,
+        "max_input_tokens": 128_000,
+        "max_output_tokens": 8_192,
+        "supports_vision": False,
+        "supports_audio_input": False,
+        "supports_pdf_input": False,
+        "supports_reasoning": False,
+        "supports_function_calling": True,
+    }
+    e.update(over)
+    return e
+
+
+def test_nvidia_live_ids_are_ground_truth():
+    # models.dev re-spells NVIDIA's separators (3_1↔3.1, v03↔v0.3): the live
+    # spelling must win while the models.dev caps carry over. Models absent
+    # from the live list are dropped; live models absent from models.dev
+    # appear with unknown caps.
+    entries = [
+        _entry("mistralai/mistral-7b-instruct-v03", supports_reasoning=True),
+        _entry("abacusai/dracarys-llama-3_1-70b-instruct", max_input_tokens=99),
+        _entry("z-ai/glm-5.1"),  # gone from the live list → dropped
+    ]
+    live = [
+        "mistralai/mistral-7b-instruct-v0.3",
+        "abacusai/dracarys-llama-3.1-70b-instruct",
+        "nvidia/nemotron-4-340b-instruct",  # live-only → bare entry
+    ]
+    out = apply_nvidia_live_ids(entries, live)
+
+    assert [e["id"] for e in out] == sorted(live)
+    by_id = {e["id"]: e for e in out}
+    assert by_id["mistralai/mistral-7b-instruct-v0.3"]["supports_reasoning"] is True
+    assert by_id["abacusai/dracarys-llama-3.1-70b-instruct"]["max_input_tokens"] == 99
+    bare = by_id["nvidia/nemotron-4-340b-instruct"]
+    assert bare["max_input_tokens"] is None
+    assert bare["supports_function_calling"] is False
+
+
+def test_nvidia_live_ids_dedupe_and_exact_match():
+    out = apply_nvidia_live_ids(
+        [_entry("meta/llama-3.1-8b-instruct", supports_vision=True)],
+        ["meta/llama-3.1-8b-instruct", "meta/llama-3.1-8b-instruct"],
+    )
+    assert len(out) == 1
+    assert out[0]["supports_vision"] is True
