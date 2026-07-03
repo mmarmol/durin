@@ -433,9 +433,13 @@ export function useDurinStream(
         setApiStatus(null);
         setMessages((prev) => {
           let finalized = prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
-          // Leftover queued flags are stale once the turn is over (deferred
-          // messages either entered the turn or were re-dispatched fresh).
-          finalized = finalized.map((m) => (m.queued ? { ...m, queued: false } : m));
+          // Queued/steer chips are live-turn state: once the turn is over the
+          // deferred messages entered it (or were re-dispatched fresh) and the
+          // steer was delivered — replay renders neither, so the live view
+          // drops both to match.
+          finalized = finalized.map((m) =>
+            m.queued || m.steer ? { ...m, queued: false, steer: false } : m,
+          );
           finalized = pruneReasoningOnlyPlaceholders(finalized);
           if (typeof ev.latency_ms === "number" && ev.latency_ms >= 0) {
             finalized = stampLastAssistantLatency(finalized, Math.round(ev.latency_ms));

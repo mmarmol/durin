@@ -1044,4 +1044,22 @@ describe("useDurinStream", () => {
     expect(result.current.messages.at(-1)!.queued).toBe(false);
   });
 
+  it("clears the steer chip on turn_end (matches replay, which renders no chips)", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(
+      () => useDurinStream("chat-s2", EMPTY_MESSAGES),
+      { wrapper: wrap(fake.client) },
+    );
+
+    act(() => {
+      result.current.send("adjust course", undefined, { steer: true });
+    });
+    expect(result.current.messages.at(-1)!.steer).toBe(true);
+
+    act(() => {
+      fake.emit("chat-s2", { event: "turn_end", chat_id: "chat-s2" });
+    });
+    expect(result.current.messages.at(-1)!.steer).toBe(false);
+  });
+
 });
