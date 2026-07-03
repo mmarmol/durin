@@ -24,6 +24,36 @@ from durin.providers.base import LLMProvider
 from durin.utils.prompt_templates import render_template
 
 
+def _resolve_subagent_provider(app_config: Any) -> tuple[LLMProvider, str] | None:
+    """Resolve ``agents.aux_models.subagents`` to a ``(provider, model)`` pair.
+
+    Mirrors the vision/audio/memory aux bridges (``AgentLoop._build_aux_providers``):
+    a preset reference wins over an inline ``model``/``provider`` pair. Returns
+    ``None`` when the aux model is unset or app_config is unavailable, so the
+    caller falls back to the inherited session provider — resolved fresh on
+    every spawn so a hot-reloaded config change takes effect without a restart.
+    """
+    if app_config is None:
+        return None
+    aux = getattr(getattr(app_config, "agents", None), "aux_models", None)
+    entry = getattr(aux, "subagents", None) if aux is not None else None
+    if entry is None:
+        return None
+
+    from durin.config.schema import ModelPresetConfig
+    from durin.providers.factory import make_provider
+
+    preset: ModelPresetConfig
+    if entry.preset:
+        preset = app_config.resolve_preset(entry.preset)
+    elif entry.model:
+        preset = ModelPresetConfig(model=entry.model, provider=entry.provider or "auto")
+    else:
+        return None
+    provider = make_provider(app_config, preset=preset)
+    return provider, preset.model
+
+
 @dataclass(slots=True)
 class SubagentStatus:
     """Real-time status of a running OR recently-completed subagent.
@@ -132,6 +162,7 @@ class SubagentManager:
         sessions: Any | None = None,
         ceiling: Any | None = None,
         on_concurrency_change: Callable[[], None] | None = None,
+        app_config_getter: Callable[[], Any] | None = None,
     ):
         defaults = AgentDefaults()
         self.provider = provider
@@ -144,6 +175,12 @@ class SubagentManager:
         # falls back to no gating.
         self._ceiling = ceiling
         self._on_concurrency_change = on_concurrency_change
+        # Getter (not a snapshot) for the loop's live ``app_config``, so a
+        # config hot-reload (``AgentLoop.reload_app_config``) is visible on
+        # the very next spawn without restarting anything. ``None`` in
+        # tests/callers that don't wire one — the aux subagent model is then
+        # simply never resolved and spawns keep the inherited provider.
+        self._app_config_getter = app_config_getter
         # Optional SessionManager — when provided, subagent inherits the
         # parent session's agent_mode. Without it, falls back to a static
         # EXPLORE_MODE (the safe-but-stricter default).
@@ -313,6 +350,24 @@ class SubagentManager:
             # the provider here makes this in-flight subagent turn immune to
             # that mutation, symmetric with the AgentLoop fix.
             subagent_provider = self.runner.provider
+            subagent_model = self.model
+            # Resolve the optional aux subagent model fresh on every spawn
+            # (not cached) so a hot-reloaded config change takes effect on
+            # the next spawn without a restart. A misconfigured aux model
+            # (bad preset, missing key) must never break spawning — fall
+            # back to the inherited session provider/model and just warn.
+            if self._app_config_getter is not None:
+                try:
+                    app_config = self._app_config_getter()
+                    resolved = _resolve_subagent_provider(app_config)
+                except Exception:
+                    logger.warning(
+                        "Subagent [{}] failed to resolve aux subagent model; "
+                        "falling back to the inherited session model", task_id,
+                    )
+                else:
+                    if resolved is not None:
+                        subagent_provider, subagent_model = resolved
             # Subagents are fire-and-forget background tasks (spawned via
             # asyncio.create_task, never awaited by the parent turn), so
             # acquiring the shared ceiling here cannot deadlock a parent that's
@@ -322,7 +377,7 @@ class SubagentManager:
                 result = await self.runner.run(AgentRunSpec(
                     initial_messages=messages,
                     tools=tools,
-                    model=self.model,
+                    model=subagent_model,
                     provider=subagent_provider,
                     max_iterations=self.max_iterations,
                     max_tool_result_chars=self.max_tool_result_chars,

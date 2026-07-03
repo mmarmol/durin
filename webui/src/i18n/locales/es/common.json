@@ -165,6 +165,8 @@
     "models": {
       "auxTitle": "Modelos de visión y audio",
       "auxDescription": "durin los usa solo cuando el modelo principal no puede manejar imágenes o audio por sí mismo.",
+      "subagentModel": "Modelo de subagentes",
+      "subagentModelHint": "Modelo usado por los subagentes generados (tareas en segundo plano). Igual al predeterminado si no está configurado.",
       "vision": "Modelo de visión",
       "visionHint": "Usado por la herramienta interpret_image.",
       "audio": "Modelo de audio",
