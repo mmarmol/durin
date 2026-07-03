@@ -56,7 +56,7 @@ function renderSettings() {
       <SettingsView
         theme="light"
         onToggleTheme={() => {}}
-        palette="violet"
+        palette="ithildin"
         onSelectPalette={() => {}}
         onBackToChat={() => {}}
         onModelNameChange={() => {}}
