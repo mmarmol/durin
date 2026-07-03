@@ -2887,7 +2887,7 @@ def _status_sections(
 # `config.providers` (the LLM provider list). This group is *only*
 # about OAuth-based providers (codex, copilot) — non-OAuth keys live in
 # `durin config set providers.<vendor>.api_key …`.
-oauth_app = typer.Typer(help="Sign in / out of OAuth-based providers (codex, copilot).")
+oauth_app = typer.Typer(help="Sign in / out of OAuth-capable providers (codex, copilot, openrouter).")
 app.add_typer(oauth_app, name="oauth")
 
 
@@ -2897,6 +2897,7 @@ _LOGOUT_HANDLERS: dict[str, Callable[[], None]] = {}
 _PROVIDER_DISPLAY: dict[str, str] = {
     "openai_codex": "OpenAI Codex",
     "github_copilot": "GitHub Copilot",
+    "openrouter": "OpenRouter",
 }
 
 
@@ -2918,13 +2919,21 @@ def _register_logout(name: str):
 
 
 def _resolve_oauth_provider(provider: str):
-    """Resolve and validate an OAuth provider configuration."""
+    """Resolve and validate an OAuth provider configuration.
+
+    Valid targets are token-based OAuth providers (``spec.is_oauth``) plus
+    api-key providers with a registered login handler — OpenRouter's OAuth
+    just *obtains* a regular API key, so its spec is not ``is_oauth``.
+    """
     from durin.providers.registry import PROVIDERS
 
+    def _supported(s) -> bool:
+        return s.is_oauth or s.name in _LOGIN_HANDLERS
+
     key = provider.replace("-", "_")
-    spec = next((s for s in PROVIDERS if s.name == key and s.is_oauth), None)
+    spec = next((s for s in PROVIDERS if s.name == key and _supported(s)), None)
     if not spec:
-        names = ", ".join(s.name.replace("_", "-") for s in PROVIDERS if s.is_oauth)
+        names = ", ".join(s.name.replace("_", "-") for s in PROVIDERS if _supported(s))
         console.print(f"[red]Unknown OAuth provider: {provider}[/red]  Supported: {names}")
         raise typer.Exit(1)
     return spec
@@ -3044,6 +3053,35 @@ def _logout_github_copilot() -> None:
         console.print(f"[green]✓ Logged out from {label}[/green]")
     else:
         console.print(f"[yellow]! No local OAuth credentials found for {label}[/yellow]")
+
+
+@_register_login("openrouter")
+def _login_openrouter() -> None:
+    """Loopback PKCE: the exchange yields a regular API key, stored like a
+    manual paste (secret store + ``${secret:}`` ref in config)."""
+    from durin.providers.openrouter_oauth import login_loopback_blocking
+
+    try:
+        login_loopback_blocking(print_fn=lambda s: console.print(s))
+        console.print(
+            "[green]✓ OpenRouter conectado[/green]  "
+            "[dim]key guardada en providers.openrouter.api_key[/dim]"
+        )
+    except Exception as e:
+        console.print(f"[red]Authentication error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+
+@_register_logout("openrouter")
+def _logout_openrouter() -> None:
+    """Forget the OpenRouter key (config ref + durin-managed secret)."""
+    from durin.providers.openrouter_oauth import disconnect
+
+    label = _PROVIDER_DISPLAY["openrouter"]
+    if disconnect():
+        console.print(f"[green]✓ Logged out from {label}[/green]")
+    else:
+        console.print(f"[yellow]! No stored key found for {label}[/yellow]")
 
 
 @_register_login("github_copilot")

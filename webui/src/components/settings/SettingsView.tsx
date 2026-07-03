@@ -45,6 +45,7 @@ import { useTranslation } from "react-i18next";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { Button } from "@/components/ui/button";
 import { CodexOAuthCard } from "@/components/settings/CodexOAuthCard";
+import { OpenRouterOAuthCard } from "@/components/settings/OpenRouterOAuthCard";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1722,6 +1723,9 @@ function ByokSettings({
 
         {expanded && !provider.oauth ? (
           <div className="space-y-3 bg-muted/18 px-4 py-4 sm:px-5">
+            {provider.name === "openrouter" ? (
+              <OpenRouterOAuthCard token={codexToken} onChanged={onRefreshSettings} />
+            ) : null}
             <label className="block space-y-1.5">
               <span className="text-[12px] font-medium text-muted-foreground">
                 {t("settings.byok.apiKey")}

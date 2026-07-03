@@ -425,6 +425,25 @@ agents:
 - **API `PATCH /api/v1/config`**: updates config fields; a preset switch takes effect
   on the next turn.
 
+### OAuth credential surfaces
+
+Two shapes of provider OAuth live behind `/api/v1/oauth/*` (`OAuthService`,
+`durin/service/oauth.py`) and `durin oauth login <provider>`:
+
+- **Token-based** (`openai_codex`, `github_copilot`): the flow yields an OAuth
+  token that the provider backend refreshes; no `api_key` exists. Codex offers
+  loopback PKCE and a device-code fallback for remote/headless gateways.
+- **Key-acquiring** (`openrouter`): OpenRouter's PKCE exchange returns a plain
+  user-controlled API key (`durin/providers/openrouter_oauth.py`), stored like
+  a manual paste — secret store + `${secret:}` reference in
+  `providers.openrouter.api_key` — so the spec stays a normal api-key provider.
+  Loopback-only (OpenRouter has no device-code flow); remote gateways paste
+  the key manually.
+
+Loopback eligibility (`is_local`) is derived **server-side** from the transport
+peer by the ASGI glue for any request model declaring the field — a client
+cannot claim locality, it only follows from actually connecting via loopback.
+
 ---
 
 ## 7. Curated rationale
