@@ -1291,6 +1291,12 @@ class DurinApp(App[None]):
         # turn is usually a provider backoff. Park the structured status
         # (attempt / delay / final) for the footer badge; it clears when
         # content flows again or the turn ends.
+        if meta.get("_message_queued"):
+            # A message typed mid-turn was deferred until the turn's final
+            # response — surface it as a toast, not a chat bubble.
+            self.notify(msg.content or "Queued — will be read when the current turn finishes.")
+            return
+
         if meta.get("_retry_wait"):
             status = meta.get("retry_status")
             self._retry_status = dict(status) if isinstance(status, dict) else None

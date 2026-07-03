@@ -802,7 +802,9 @@ describe("useDurinStream", () => {
     });
 
     expect(result.current.isStreaming).toBe(true);
-    expect(result.current.messages[0].isStreaming).toBe(true);
+    // The segment's row finalizes at stream_end (a later segment opens a new
+    // bubble); the GLOBAL streaming flag stays up until turn_end.
+    expect(result.current.messages[0].isStreaming).toBe(false);
 
     act(() => {
       fake.emit("chat-s", {
@@ -1042,6 +1044,28 @@ describe("useDurinStream", () => {
       fake.emit("chat-q2", { event: "turn_end", chat_id: "chat-q2" });
     });
     expect(result.current.messages.at(-1)!.queued).toBe(false);
+  });
+
+  it("renders post-stream_end segments as separate bubbles (deferred answers don't concatenate)", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(
+      () => useDurinStream("chat-seg", EMPTY_MESSAGES),
+      { wrapper: wrap(fake.client) },
+    );
+
+    act(() => {
+      fake.emit("chat-seg", { event: "delta", chat_id: "chat-seg", text: "TRABAJO TERMINADO" });
+      fake.emit("chat-seg", { event: "stream_end", chat_id: "chat-seg" });
+    });
+    // The answer to a message queued mid-turn streams as a NEW segment.
+    act(() => {
+      fake.emit("chat-seg", { event: "delta", chat_id: "chat-seg", text: "4" });
+      fake.emit("chat-seg", { event: "stream_end", chat_id: "chat-seg" });
+      fake.emit("chat-seg", { event: "turn_end", chat_id: "chat-seg" });
+    });
+
+    const assistants = result.current.messages.filter((m) => m.role === "assistant");
+    expect(assistants.map((m) => m.content)).toEqual(["TRABAJO TERMINADO", "4"]);
   });
 
   it("clears the steer chip on turn_end (matches replay, which renders no chips)", () => {

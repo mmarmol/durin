@@ -390,7 +390,8 @@ Selecting a persona publishes `/persona <name>` into the session.
 
 **Steer (Ctrl+G).** Sends the current input as a steer — injected into the
 running turn as mid-work guidance. A plain Enter send while the agent works is
-deferred until the turn finishes its response.
+deferred until the turn finishes its response, and a toast confirms it was
+queued.
 
 **Footer.** The footer displays the wall-clock duration of the last completed
 turn and the active agent mode.
