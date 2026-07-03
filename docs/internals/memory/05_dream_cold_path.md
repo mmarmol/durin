@@ -392,7 +392,7 @@ cross-process lock `SessionManager` uses for that session's sidecar.
 | `memory_writer.write_entity` / `write_files_cas` | `durin/memory/memory_writer.py` | Single / multi-file CAS write path with per-field author precedence. |
 | `FieldPatch` | `durin/memory/field_patch.py` | Immutable patch (kind, key, value, author, source_ref, at) applied by precedence. |
 | `EntityPage` | `durin/memory/entity_page.py` | Parsed entity page (frontmatter + body) with per-author provenance. |
-| `resolve_memory_model` | `durin/memory/model_resolve.py` | Resolve the dream model name across the precedence chain. |
+| `resolve_aux_preset` | `durin/memory/model_resolve.py` | Resolve the dream's full (provider, model) preset across the precedence chain — model and provider always travel together. |
 
 ## 6. Configuration & surfaces
 
@@ -410,7 +410,7 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.discover_enabled` | `true` | Enable Stage 2 mention-based entity discovery in the extract pass. |
 | `memory.dream.skill_signals_enabled` | `true` | Log skill corrections/gaps from extracted turns. |
 | `memory.dream.learnings_sweep_enabled` | `true` | Enable Stage 4 of the extract pass: mine each session's new turns for durable learnings and write them as `feedback`/`stance`/`practice` entities (`author="dream"`). Dedup is delegated to the refine pass. |
-| `memory.dream.model_override` | `null` | Override the dream model (resolved via `resolve_memory_model`). |
+| `memory.dream.model_override` | `null` | DEPRECATED — prefer `agents.aux_models.memory` (model + provider). A bare name here is placed by provider auto-detection from the name. |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for `ReactiveDreamGate`. 0 disables. The cron is never throttled. |
 | `memory.dream.max_seconds_per_run` | `600` | Hard wall-clock cap; the pass yields after the current session and the cursor resumes. 0 = run to completion. |
 | `memory.dream.always_on_token_budget` | `1500` | Token ceiling for the always-on pin. 0 disables the pin. |
@@ -419,10 +419,13 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 | `memory.dream.auto_absorb.semantic_distance_threshold` | `0.30` | Embedding L2² distance below which a same-type entity is a semantic dedup candidate (refine + discovery); ≈ cosine 0.85; lower = stricter — the judge still decides the merge. |
 | `memory.dream.auto_absorb.escalate_floor` | `0` | **Opt-in.** Confidence floor (0–100) below which the Tier 1 judge's borderline verdicts escalate to a bounded sub-agent for deeper investigation. `0` (the default) disables Tier 2 entirely. Set to e.g. `60` to escalate pairs the cheap judge rated same at 60–94 confidence or returned `unclear`. |
 
-The model every pass uses is resolved by
-`resolve_memory_model(config)` (`durin/memory/model_resolve.py`):
-`agents.aux_models.memory` (a preset or inline `model`) →
-`memory.dream.model_override` → `None` (the caller's bundled default).
+The (provider, model) preset every pass uses is resolved by
+`resolve_aux_preset(config, purpose="memory")` (`durin/memory/model_resolve.py`):
+`agents.aux_models.memory` (a preset ref or inline model + provider) →
+`memory.dream.model_override` (deprecated; bare name placed by provider
+auto-detection) → the user's default preset. A model name no configured
+provider serves falls back to the whole default preset — never a foreign name
+on the default provider (see `docs/internals/providers.md`).
 
 **Surfaces.**
 

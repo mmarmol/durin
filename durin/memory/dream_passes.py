@@ -491,13 +491,16 @@ async def _skill_extract_async(
 
     if provider is None or not model:
         from durin.config.loader import load_config
+        from durin.memory.model_resolve import resolve_aux_preset
+        from durin.providers.factory import make_provider
         config = load_config()
+        # Model and provider travel together: pairing the memory preset's model
+        # with the default preset's provider sent it to the wrong endpoint.
+        preset = resolve_aux_preset(config, purpose="memory")
         if not model:
-            from durin.memory.model_resolve import resolve_aux_preset
-            model = resolve_aux_preset(config, purpose="memory").model
+            model = preset.model
         if provider is None:
-            from durin.providers.factory import make_provider
-            provider = make_provider(config)
+            provider = make_provider(config, preset=preset)
 
     try:
         result = await AgentRunner(provider).run(AgentRunSpec(

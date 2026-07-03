@@ -763,6 +763,91 @@ def check_extras_drift() -> CheckResult:
     )
 
 
+def _specific_model_knobs(cfg) -> list[tuple[str, str, str]]:
+    """Every configured specific-model knob as ``(knob_path, model, provider)``.
+
+    ``provider == "<preset>"`` marks a preset ref that failed to resolve."""
+    out: list[tuple[str, str, str]] = []
+    judge = cfg.skills.security.llm_judge
+    if judge.model:
+        out.append(("skills.security.llm_judge", judge.model,
+                    getattr(judge, "provider", "auto") or "auto"))
+    override = cfg.memory.dream.model_override
+    if override:
+        out.append(("memory.dream.model_override", override, "auto"))
+    aux = cfg.agents.aux_models
+    for kind in ("vision", "audio", "memory", "subagents"):
+        entry = getattr(aux, kind, None)
+        if entry is None:
+            continue
+        preset_name = getattr(entry, "preset", None)
+        if preset_name:
+            try:
+                cfg.resolve_preset(preset_name)
+            except Exception:  # noqa: BLE001 - unresolvable ref is exactly what we report
+                out.append((f"agents.aux_models.{kind}.preset", preset_name, "<preset>"))
+            continue
+        model = getattr(entry, "model", None)
+        if model:
+            out.append((f"agents.aux_models.{kind}", model,
+                        getattr(entry, "provider", "auto") or "auto"))
+    return out
+
+
+def check_specific_models() -> CheckResult:
+    """Every specific-model knob must resolve to a servable (provider, model).
+
+    A model name only means something under its provider. A knob whose name no
+    configured provider serves runs failure-open in production (the judge or
+    dream silently degrades to the default preset) — this check is what makes
+    that visible."""
+    from durin.providers.registry import find_by_name
+
+    try:
+        cfg = load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult("specific models", "warn", "Could not load config.",
+                           category="models")
+    knobs = _specific_model_knobs(cfg)
+    if not knobs:
+        return CheckResult("specific models", "ok",
+                           "none configured — everything uses the default model",
+                           category="models")
+    problems: list[str] = []
+    for path, model, provider in knobs:
+        if provider == "<preset>":
+            problems.append(f"{path}: preset {model!r} does not resolve")
+            continue
+        if provider != "auto":
+            spec = find_by_name(provider)
+            pconf = getattr(cfg.providers, spec.name, None) if spec else None
+            configured = bool(pconf and (spec.is_oauth or spec.is_local
+                                         or spec.is_direct or pconf.api_key))
+            if not configured:
+                problems.append(
+                    f"{path}: provider {provider!r} is not configured — "
+                    f"model {model!r} cannot run there")
+            continue
+        try:
+            _pconf, spec_name = cfg.match_provider_by_name(model)
+        except Exception:  # noqa: BLE001
+            spec_name = None
+        if not spec_name:
+            problems.append(
+                f"{path}: no configured provider serves {model!r} — calls fall "
+                f"back to the default preset; set its provider or clear the knob")
+    if problems:
+        return CheckResult(
+            "specific models", "warn", "; ".join(problems),
+            fix="Pair each flagged knob with a configured provider (or clear it "
+                "to use the default model). Providers are configured under "
+                "`providers.<name>` in the config / Settings UI.",
+            category="models",
+        )
+    detail = ", ".join(f"{path} → {model}" for path, model, _ in knobs)
+    return CheckResult("specific models", "ok", detail, category="models")
+
+
 def check_embedding_model() -> CheckResult:
     """Validate ``config.memory.embedding.model`` against fastembed's catalog.
 
@@ -1374,6 +1459,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     except Exception:  # noqa: BLE001
         pass
     report.add(check_extras_drift())
+    report.add(check_specific_models())
     report.add(check_embedding_model())
     # Smoke-test the configured models actually load + work. Goes beyond
     # `check_embedding_model` which only validates the id against the catalog.

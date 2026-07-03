@@ -49,6 +49,25 @@ either a named preset reference or an inline `model + provider` pair. `resolve_a
 always returns a `ModelPresetConfig` — never `None` — degrading to the default preset
 when no purpose-specific override is set.
 
+**A model name only means something under its provider.** Every specific-model knob
+(`skills.security.llm_judge`, `memory.dream.model_override` — deprecated in favor of
+`aux_models.memory` — and inline aux entries with `provider: "auto"`) is *placed* by
+`Config.match_provider_by_name`: explicit prefix, then registry keywords, over
+CONFIGURED providers only — deliberately without `_match_provider`'s any-key-bearing
+last resort. A name no configured provider recognizably serves falls back to the WHOLE
+default preset (specific-or-default) with a loud log; pairing a foreign name with the
+default provider is never correct (it produced silent per-call 404s in production).
+Provider and model always travel together: consumers build their provider from the
+same resolved preset (`make_provider(cfg, preset=...)`), and a failed purpose invoke
+emits `aux.invoke_failure` naming the pair, because most aux consumers are
+failure-open and would otherwise degrade invisibly. `durin doctor`'s "specific models"
+check reports any configured knob that no longer resolves.
+
+Cron per-job models are picker refs (`"provider model"` pairs or preset names)
+resolved through the loop's override path and are pair-safe by construction. A
+workflow node's bare `model` runs on the node runner's provider — for a
+cross-provider node, use a `persona` (soul + model pair) instead.
+
 ---
 
 ## 3. Diagram
