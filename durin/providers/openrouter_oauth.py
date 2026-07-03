@@ -167,9 +167,9 @@ def _make_callback_handler(nonce_path: str, result: _CallbackResult):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             msg = (
-                "Conectado a durin. Ya podés cerrar esta pestaña."
+                "Connected to durin. You can close this tab now."
                 if code
-                else "No se pudo autorizar. Volvé a durin e intentá de nuevo."
+                else "Authorization failed. Go back to durin and try again."
             )
             self.wfile.write(
                 f"<!doctype html><meta charset=utf-8>"
@@ -253,13 +253,13 @@ def login_loopback_blocking(
     srv, callback_url = _start_callback_server(result)
     url = _build_authorize_url(callback_url, challenge)
     try:
-        print_fn(f"Abrí: {url}")
+        print_fn(f"Open: {url}")
         if open_browser:
             try:
                 webbrowser.open(url)
             except Exception:  # noqa: BLE001
                 pass
-        print_fn("Esperando la autorización en el navegador...")
+        print_fn("Waiting for authorization in the browser...")
         if not result.done.wait(timeout=max_wait_s) or not result.code:
             raise RuntimeError("loopback login timed out")
         store_key(exchange_code(result.code, verifier))

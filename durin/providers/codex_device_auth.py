@@ -365,9 +365,9 @@ def login_blocking(
     sleep_fn = sleep_fn or time.sleep
     now_fn = now_fn or time.monotonic
     challenge = request_device_code()
-    print_fn(f"Abrí: {challenge.verification_uri}")
-    print_fn(f"Ingresá el código: {challenge.user_code}")
-    print_fn("Esperando la autorización... (Ctrl+C para cancelar)")
+    print_fn(f"Open: {challenge.verification_uri}")
+    print_fn(f"Enter the code: {challenge.user_code}")
+    print_fn("Waiting for authorization... (Ctrl+C to cancel)")
     start = now_fn()
     while now_fn() - start < max_wait_s:
         sleep_fn(challenge.interval)
@@ -427,9 +427,9 @@ def _make_callback_handler(state: str, result: _CallbackResult):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             msg = (
-                "Conectado a durin. Ya podés cerrar esta pestaña."
+                "Connected to durin. You can close this tab now."
                 if ok
-                else "No se pudo autorizar. Volvé a durin e intentá de nuevo."
+                else "Authorization failed. Go back to durin and try again."
             )
             self.wfile.write(
                 f"<!doctype html><meta charset=utf-8>"
@@ -535,13 +535,13 @@ def login_loopback_blocking(
         raise RuntimeError(f"could not start loopback callback server on :{LOOPBACK_PORT}")
     url = _build_authorize_url(challenge, state)
     try:
-        print_fn(f"Abrí: {url}")
+        print_fn(f"Open: {url}")
         if open_browser:
             try:
                 webbrowser.open(url)
             except Exception:  # noqa: BLE001
                 pass
-        print_fn("Esperando la autorización en el navegador...")
+        print_fn("Waiting for authorization in the browser...")
         if not result.done.wait(timeout=max_wait_s) or not result.code:
             raise RuntimeError("loopback login timed out")
         return _exchange_and_store(result.code, verifier, redirect_uri=LOOPBACK_REDIRECT)
