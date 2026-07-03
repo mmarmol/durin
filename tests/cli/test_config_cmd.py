@@ -283,3 +283,37 @@ def test_cli_config_edit_noop_when_unchanged(temp_config: Path, monkeypatch: pyt
     result = runner.invoke(app, ["config", "edit"])
     assert result.exit_code == 0, result.output
     assert "No changes" in result.output
+
+
+# ---------------------------------------------------------------------------
+# `config schema` — key lookup and introspection output
+# ---------------------------------------------------------------------------
+
+
+def test_cli_config_schema_lists_top_level_sections() -> None:
+    result = runner.invoke(app, ["config", "schema"])
+    assert result.exit_code == 0, result.output
+    assert "agents" in result.output
+    assert "config schema <dotted.key>" in result.output
+
+
+def test_cli_config_schema_describes_known_key() -> None:
+    result = runner.invoke(app, ["config", "schema", "agents.defaults.max_tokens"])
+    assert result.exit_code == 0, result.output
+    assert "agents.defaults.max_tokens" in result.output
+    assert "type:" in result.output
+    assert "default:" in result.output
+    assert "description:" in result.output
+
+
+def test_cli_config_schema_describes_aliased_section() -> None:
+    """camelCase-aliased schema properties resolve from the dotted path."""
+    result = runner.invoke(app, ["config", "schema", "catalog_refresh"])
+    assert result.exit_code == 0, result.output
+    assert "type:" in result.output
+
+
+def test_cli_config_schema_rejects_unknown_key() -> None:
+    result = runner.invoke(app, ["config", "schema", "agents.defaults.no_such_key"])
+    assert result.exit_code == 1
+    assert "No such config key" in result.output
