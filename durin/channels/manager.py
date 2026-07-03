@@ -35,6 +35,9 @@ def _default_webui_dist() -> Path | None:
 
 # Retry delays for message sending (exponential backoff: 1s, 2s, 4s)
 _SEND_RETRY_DELAYS = (1, 2, 4)
+# How long hot-start waits for channel.start() to fail fast before parking it
+# as a background task (long-running start() loops, e.g. Slack's keepalive).
+_HOT_START_FAIL_FAST_WINDOW_S = 2.0
 
 _BOOL_CAMEL_ALIASES: dict[str, str] = {
     "send_progress": "sendProgress",
@@ -439,16 +442,24 @@ class ChannelManager:
     async def start_channel(self, name: str) -> None:
         """Hot-start a single channel without restarting the gateway.
 
-        If the channel is already running (present in ``self.channels``), this
-        is a no-op so callers can be idempotent.  Otherwise the config is
-        reloaded first so a just-enabled section is visible, the channel is
-        instantiated via ``_make_channel``, stored, and started.
+        If the channel is already alive this is a no-op so callers can be
+        idempotent.  Otherwise the config is reloaded first so a just-enabled
+        section is visible, the channel is instantiated via ``_make_channel``,
+        stored, and started.
 
         Raises on failure so the HTTP caller can surface the error.
         """
-        if name in self.channels:
-            logger.info("Channel {} already running, skipping start", name)
-            return
+        existing = self.channels.get(name)
+        if existing is not None:
+            if existing.is_running:
+                logger.info("Channel {} already running, skipping start", name)
+                return
+            # Registered but not alive: its start() bailed (e.g. the channel
+            # was enabled before credentials existed) or its task ended. A
+            # dict-presence check here made hot-start a permanent no-op for
+            # such channels — tear it down and rebuild with fresh config.
+            logger.info("Channel {} is registered but not running; restarting it", name)
+            await self.stop_channel(name)
         from durin.config.loader import load_config
         self.config = load_config()
         section = getattr(self.config.channels, name, None)
@@ -464,13 +475,30 @@ class ChannelManager:
         if channel is None:
             raise ValueError(f"Unknown or unconfigured channel: {name}")
         self.channels[name] = channel
-        try:
-            await channel.start()
-            logger.info("Hot-started channel {}", name)
-        except Exception:
-            del self.channels[name]
-            logger.exception("Failed to hot-start channel {}", name)
-            raise
+        # Some channels' start() returns once background machinery is up
+        # (Telegram); others run their keepalive loop inside start() forever
+        # (Slack). Awaiting the latter inline would hang the HTTP caller, so
+        # give start() a short window to fail fast, then park it.
+        task = asyncio.create_task(channel.start())
+        done, _pending = await asyncio.wait({task}, timeout=_HOT_START_FAIL_FAST_WINDOW_S)
+        if done:
+            exc = task.exception()
+            if exc is not None:
+                del self.channels[name]
+                logger.exception("Failed to hot-start channel {}", name)
+                raise exc
+            if not channel.is_running:
+                # start() returned immediately without coming up — e.g. it
+                # logged missing credentials and bailed. Surface that instead
+                # of reporting a phantom success.
+                del self.channels[name]
+                raise ValueError(
+                    f"Channel {name} did not start (check its credentials in the logs)"
+                )
+        else:
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+        logger.info("Hot-started channel {}", name)
 
     async def stop_channel(self, name: str) -> None:
         """Hot-stop a single channel without restarting the gateway.

@@ -57,6 +57,8 @@ async def test_slack_returns_typed_field_schema():
     assert by_name["allow_from"]["type"] == "string_list"
     assert by_name["dm_enabled"]["type"] == "bool"
     assert by_name["group_policy"]["group"] == "access"
+    assert by_name["group_policy"]["type"] == "select"
+    assert by_name["group_policy"]["options"] == ["open", "mention", "allowlist"]
     assert by_name["reply_in_thread"]["group"] == "behavior"
     # Emoji + thread_context_limit stay config-file-only (no group/secret marker).
     assert set(by_name) == {

@@ -215,6 +215,28 @@
         "title": "ChannelsListResult",
         "type": "object"
       },
+      "ChannelsRuntimeStatusQuery": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "ChannelsRuntimeStatusQuery",
+        "type": "object"
+      },
+      "ChannelsRuntimeStatusResult": {
+        "properties": {
+          "running": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "title": "Running",
+            "type": "object"
+          }
+        },
+        "required": [
+          "running"
+        ],
+        "title": "ChannelsRuntimeStatusResult",
+        "type": "object"
+      },
       "CommandsListQuery": {
         "additionalProperties": false,
         "description": "No inputs.",
@@ -6287,6 +6309,35 @@
           }
         },
         "summary": "Discovered channels with their enabled state and primary credential field",
+        "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/runtime": {
+      "get": {
+        "operationId": "channels_runtime_runtime",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelsRuntimeStatusQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelsRuntimeStatusResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Live per-channel running state (enabled in config \u2260 actually running)",
         "x-required-scope": "config:read"
       }
     },

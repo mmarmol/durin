@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import types
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -168,3 +168,81 @@ async def test_stop_channel_removes_even_on_stop_error():
     await m.stop_channel("fake")
 
     assert "fake" not in m.channels
+
+
+async def test_start_channel_restarts_dead_registered_channel(monkeypatch):
+    """A channel whose start() bailed at boot stays in `channels` with
+    is_running False; hot-start must rebuild it, not no-op forever."""
+    m = _make_manager()
+    m._background_tasks = set()
+    dead = _FakeChannel(None, None)
+    dead.is_running = False
+    m.channels["fake"] = dead
+    m.config.channels.fake = types.SimpleNamespace(enabled=True)
+
+    fresh = _FakeChannel(None, None)
+    monkeypatch.setattr(m, "_make_channel", lambda n: fresh)
+
+    fake_config = MagicMock()
+    fake_config.channels.fake = types.SimpleNamespace(enabled=True)
+    with patch("durin.config.loader.load_config", return_value=fake_config):
+        await m.start_channel("fake")
+
+    assert dead.stopped is True
+    assert m.channels["fake"] is fresh
+    assert fresh.started is True
+
+
+async def test_start_channel_surfaces_channel_that_bails_without_running(monkeypatch):
+    """start() returning immediately without coming up (e.g. missing tokens)
+    must be reported as a failure, not a phantom success."""
+    m = _make_manager()
+    m._background_tasks = set()
+    m.config.channels.fake = types.SimpleNamespace(enabled=True)
+
+    bailing = _FakeChannel(None, None)
+
+    async def _bail():
+        return  # logs-an-error-and-returns pattern; is_running stays False
+    bailing.start = _bail
+
+    monkeypatch.setattr(m, "_make_channel", lambda n: bailing)
+
+    fake_config = MagicMock()
+    fake_config.channels.fake = types.SimpleNamespace(enabled=True)
+    with patch("durin.config.loader.load_config", return_value=fake_config):
+        with pytest.raises(ValueError, match="did not start"):
+            await m.start_channel("fake")
+
+    assert "fake" not in m.channels
+
+
+async def test_start_channel_parks_long_running_start(monkeypatch):
+    """A start() that runs its keepalive loop inline (Slack) must not hang the
+    hot-start caller — it gets parked as a background task."""
+    import asyncio
+
+    monkeypatch.setattr(mgr, "_HOT_START_FAIL_FAST_WINDOW_S", 0.05)
+    m = _make_manager()
+    m._background_tasks = set()
+    m.config.channels.fake = types.SimpleNamespace(enabled=True)
+
+    release = asyncio.Event()
+    long_running = _FakeChannel(None, None)
+
+    async def _keepalive():
+        long_running.is_running = True
+        await release.wait()
+    long_running.start = _keepalive
+
+    monkeypatch.setattr(m, "_make_channel", lambda n: long_running)
+
+    fake_config = MagicMock()
+    fake_config.channels.fake = types.SimpleNamespace(enabled=True)
+    with patch("durin.config.loader.load_config", return_value=fake_config):
+        await m.start_channel("fake")  # must return promptly
+
+    assert m.channels["fake"] is long_running
+    assert len(m._background_tasks) == 1
+    release.set()
+    await asyncio.sleep(0)

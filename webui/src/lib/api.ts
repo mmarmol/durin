@@ -1372,11 +1372,12 @@ export async function testPersona(
 
 export interface ChannelField {
   name: string;
-  type: "string" | "int" | "bool" | "string_list" | "secret";
+  type: "string" | "int" | "bool" | "string_list" | "secret" | "select";
   secret: boolean;
   group: string;
   required: boolean;
   default: unknown;
+  options?: string[] | null;
 }
 
 export interface ChannelInfo {
@@ -2352,6 +2353,10 @@ export async function getSlackChannels(token: string, base = ""): Promise<SlackC
 }
 export async function joinSlackChannel(token: string, channelId: string, base = ""): Promise<{ ok: boolean; error?: string | null }> {
   return post(`${base}/api/v1/channels/slack/channels/join`, token, { channel_id: channelId });
+}
+
+export async function getChannelsRuntime(token: string, base = ""): Promise<{ running: Record<string, boolean> }> {
+  return request(`${base}/api/v1/channels/runtime`, token);
 }
 
 export async function startChannel(token: string, name: string, base = ""): Promise<{ ok: boolean; error?: string | null }> {
