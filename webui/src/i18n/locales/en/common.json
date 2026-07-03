@@ -358,10 +358,15 @@
         "noChannels": "No channels visible to the bot yet.",
         "step4Title": "Save and enable",
         "step4Hint": "Stores both tokens as durin secrets and starts the channel.",
-        "pairingTitle": "Direct messages",
+        "pairingTitle": "Sender pairing",
         "statusChecking": "Checking the stored tokens against Slack…",
         "replaceTokens": "Replace tokens",
-        "secretsStored": "Tokens are stored as the SLACK_BOT_TOKEN and SLACK_APP_TOKEN secrets — the config only holds references."
+        "secretsStored": "Tokens are stored as the SLACK_BOT_TOKEN and SLACK_APP_TOKEN secrets — the config only holds references.",
+        "runtimeChecking": "Checking whether the channel is running…",
+        "runtimeRunning": "Channel running — connected to Slack over Socket Mode.",
+        "runtimeStopped": "Channel stopped — messages will not arrive until it starts.",
+        "runtimeStart": "Start channel",
+        "runtimeStarting": "Starting…"
       },
       "desc": {
         "websocket": "Transport for the web dashboard and external WebSocket clients. Always on while the dashboard is enabled. The token is optional, only for external clients.",
@@ -404,6 +409,19 @@
         "max_attachment_size": "Max attachment size",
         "max_attachments_per_email": "Max attachments per email",
         "token": "Token"
+      },
+      "optionLabel": {
+        "group_policy": {
+          "open": "Reply to every message",
+          "mention": "Only when mentioned",
+          "allowlist": "Only in allowed channels"
+        }
+      },
+      "placeholder": {
+        "allow_from": "",
+        "email_allow_from": "a@b.com, c@d.com",
+        "slack_allow_from": "U0123ABCD, or * for everyone",
+        "slack_group_allow_from": "C0123ABCD, C0456EFGH"
       }
     },
     "memory": {

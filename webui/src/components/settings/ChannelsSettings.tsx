@@ -61,7 +61,7 @@ function ActivePill({ label }: { label: string }) {
 
 /** One typed field → the right input. `value` is the channel's current value. */
 function FieldInput({
-  channel, field, value, token, busy, onChange,
+  channel, field, value: rawValue, token, busy, onChange,
 }: {
   channel: ChannelInfo;
   field: ChannelField;
@@ -71,8 +71,12 @@ function FieldInput({
   onChange: (v: unknown) => void;
 }) {
   const { t } = useTranslation();
+  // A key the user never wrote is absent from config, but the EFFECTIVE value
+  // is the schema default. Rendering `undefined` showed every untouched bool
+  // as unchecked even though the channel actually runs with it on.
+  const value = rawValue === undefined ? field.default : rawValue;
   if (field.type === "secret") {
-    const ref = typeof value === "string" ? value : null;
+    const ref = typeof rawValue === "string" ? rawValue : null;
     const name = secretName(channel.name, field.name);
     return (
       <ChannelSecretField
@@ -84,6 +88,22 @@ function FieldInput({
         onSet={(r) => onChange(r)}
         onClear={() => onChange("")}
       />
+    );
+  }
+  if (field.type === "select" && field.options) {
+    return (
+      <select
+        value={String(value ?? "")}
+        disabled={busy}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-9 rounded-md border border-border/60 bg-background px-2 text-[13px]"
+      >
+        {field.options.map((opt) => (
+          <option key={opt} value={opt}>
+            {t(`settings.channels.optionLabel.${field.name}.${opt}`, opt)}
+          </option>
+        ))}
+      </select>
     );
   }
   if (field.type === "bool") {
@@ -136,7 +156,10 @@ function FieldInput({
           )
         }
         className="w-[280px]"
-        placeholder="a@b.com, c@d.com"
+        placeholder={t(
+          `settings.channels.placeholder.${channel.name}_${field.name}`,
+          t(`settings.channels.placeholder.${field.name}`, ""),
+        )}
       />
     );
   }

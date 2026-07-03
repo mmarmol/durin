@@ -292,14 +292,25 @@ def _channel_field_schema(model: type) -> list[dict[str, Any]]:
             default = finfo.get_default(call_default_factory=True)
             if isinstance(default, (set, frozenset)):
                 default = list(default)
+        import typing
+
+        options: list[str] | None = None
+        if typing.get_origin(finfo.annotation) is typing.Literal:
+            options = [str(v) for v in typing.get_args(finfo.annotation)]
+        field_type = (
+            "secret" if is_secret
+            else "select" if options
+            else _py_type_name(finfo.annotation)
+        )
         fields.append(
             {
                 "name": fname,
-                "type": "secret" if is_secret else _py_type_name(finfo.annotation),
+                "type": field_type,
                 "secret": is_secret,
                 "group": group,
                 "required": bool(extra.get("required", False)),
                 "default": default,
+                "options": options,
             }
         )
     return fields
