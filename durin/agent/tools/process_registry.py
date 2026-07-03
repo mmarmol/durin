@@ -25,6 +25,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 
 from loguru import logger
+from pydantic import Field
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.config.schema import Base
@@ -36,9 +37,9 @@ _IS_WINDOWS = sys.platform == "win32"
 class ProcessToolConfig(Base):
     """Background-process registry knobs (exec background=true / process tool)."""
 
-    max_running: int = 16            # concurrent background processes
-    max_output_chars: int = 200_000  # rolling tail buffer per process
-    finished_ttl_s: int = 1800       # keep finished entries this long (30 min)
+    max_running: int = Field(default=16, description="Cap on concurrent background processes")
+    max_output_chars: int = Field(default=200_000, description="Rolling tail buffer in characters kept per process")
+    finished_ttl_s: int = Field(default=1800, description="Seconds finished process entries are kept before eviction (default 30 min)")
 
 
 @dataclass

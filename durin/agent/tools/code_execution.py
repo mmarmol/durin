@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from pydantic import Field
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
@@ -128,11 +129,11 @@ def _generate_stub() -> str:
 class CodeExecutionConfig(Base):
     """execute_code tool configuration."""
 
-    enable: bool = True
-    timeout_s: int = 300
-    max_tool_calls: int = 50
-    max_stdout_bytes: int = 50_000
-    max_stderr_bytes: int = 10_000
+    enable: bool = Field(default=True, description="Enable the execute_code tool")
+    timeout_s: int = Field(default=300, description="Script execution timeout in seconds")
+    max_tool_calls: int = Field(default=50, description="Max durin tool calls a script may make")
+    max_stdout_bytes: int = Field(default=50_000, description="stdout truncation limit in bytes")
+    max_stderr_bytes: int = Field(default=10_000, description="stderr truncation limit in bytes")
 
 
 @tool_parameters(

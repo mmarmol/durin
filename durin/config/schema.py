@@ -35,23 +35,23 @@ class ChannelsConfig(Base):
 
     model_config = ConfigDict(extra="allow")
 
-    send_progress: bool = True  # stream agent's text progress to the channel
-    send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
-    show_reasoning: bool = True  # surface model reasoning when channel implements it
-    send_max_retries: int = Field(default=3, ge=0, le=10)  # Max delivery attempts (initial send included)
-    transcription_provider: str = "groq"  # Voice transcription backend: "groq" or "openai"
-    transcription_language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$")  # Optional ISO-639-1 hint for audio transcription
+    send_progress: bool = Field(default=True, description="Stream the agent's text progress to the channel")
+    send_tool_hints: bool = Field(default=False, description='Stream tool-call hints (e.g. read_file("…")) to the channel')
+    show_reasoning: bool = Field(default=True, description="Surface model reasoning when the channel implements it")
+    send_max_retries: int = Field(default=3, ge=0, le=10, description="Max delivery attempts per message (initial send included)")
+    transcription_provider: str = Field(default="groq", description='Voice transcription backend: "groq" or "openai"')
+    transcription_language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$", description="Optional ISO-639-1 language hint for audio transcription (e.g. 'en', 'es')")
 
 
 class InlineFallbackConfig(Base):
     """One inline fallback model configuration."""
 
-    model: str
-    provider: str
-    max_tokens: int | None = None
-    context_window_tokens: int | None = None
-    temperature: float | None = None
-    reasoning_effort: str | None = None
+    model: str = Field(description="Model identifier to fall back to")
+    provider: str = Field(description="Provider name for the fallback model")
+    max_tokens: int | None = Field(default=None, description="Max output tokens per turn; None inherits agents.defaults")
+    context_window_tokens: int | None = Field(default=None, description="Context window size hint in tokens; None inherits agents.defaults")
+    temperature: float | None = Field(default=None, description="Generation temperature; None inherits agents.defaults")
+    reasoning_effort: str | None = Field(default=None, description="LLM thinking effort (low/medium/high/adaptive/none); None preserves the provider default")
 
 
 FallbackCandidate = str | InlineFallbackConfig
@@ -66,32 +66,32 @@ class AuxModelConfig(Base):
     takes effect immediately without a restart.
     """
 
-    preset: str | None = None
-    model: str | None = None
-    provider: str = "auto"
+    preset: str | None = Field(default=None, description="Named model_presets entry to use for this bridge; alternative to inline model + provider")
+    model: str | None = Field(default=None, description="Inline model identifier for this bridge; alternative to preset")
+    provider: str = Field(default="auto", description='Provider name for the inline model; "auto" auto-detects from the model name')
 
 
 class TranscriptionLocalConfig(Base):
     """Local on-CPU ASR via sherpa-onnx (spec 2026-06-20)."""
 
-    engine: Literal["parakeet", "sensevoice"] = "parakeet"
-    model_dir: str | None = None   # None = auto-download to <durin_home>/models/stt/<engine>
-    num_threads: int | None = None  # None = provider default (2)
+    engine: Literal["parakeet", "sensevoice"] = Field(default="parakeet", description='Local ASR engine: "parakeet" or "sensevoice"')
+    model_dir: str | None = Field(default=None, description="Model directory; None auto-downloads to <durin_home>/models/stt/<engine>")
+    num_threads: int | None = Field(default=None, description="CPU threads for inference; None uses the provider default (2)")
 
 
 class TranscriptionHttpConfig(Base):
     """OpenAI-compatible HTTP server endpoint (whisper.cpp, mlx-qwen3-asr, vLLM)."""
 
-    base_url: str | None = None
-    api_key: str | None = None
-    model: str | None = None
+    base_url: str | None = Field(default=None, description="Endpoint base URL of the OpenAI-compatible transcription server")
+    api_key: str | None = Field(default=None, description="API key for the endpoint; None sends no auth")
+    model: str | None = Field(default=None, description="Model name to request from the endpoint")
 
 
 class TranscriptionProviderKeysConfig(Base):
     """Cloud API credentials for a named provider."""
 
-    api_key: str | None = None
-    api_base: str | None = None
+    api_key: str | None = Field(default=None, description="API key for the provider; prefer ${secret:NAME} references over plaintext")
+    api_base: str | None = Field(default=None, description="Optional base URL override for the provider API")
 
 
 class TranscriptionConfig(Base):
@@ -101,25 +101,25 @@ class TranscriptionConfig(Base):
     ``transcription_language`` override these per-channel.
     """
 
-    enabled: bool = True
-    mode: Literal["auto", "preview", "off"] = "auto"
-    provider: Literal["local", "openai", "groq", "http"] = "local"
-    language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$")
-    local: TranscriptionLocalConfig = Field(default_factory=TranscriptionLocalConfig)
-    http: TranscriptionHttpConfig = Field(default_factory=TranscriptionHttpConfig)
-    openai: TranscriptionProviderKeysConfig = Field(default_factory=TranscriptionProviderKeysConfig)
-    groq: TranscriptionProviderKeysConfig = Field(default_factory=TranscriptionProviderKeysConfig)
-    max_duration_s: int = Field(default=600, ge=1, le=86400)
-    cache_transcripts: bool = True
+    enabled: bool = Field(default=True, description="Master toggle for voice transcription")
+    mode: Literal["auto", "preview", "off"] = Field(default="auto", description='"auto" transcribes incoming audio, "preview" shows a transcript without acting on it, "off" disables')
+    provider: Literal["local", "openai", "groq", "http"] = Field(default="local", description='Transcription backend: "local" (sherpa-onnx), "openai", "groq", or "http" (OpenAI-compatible endpoint)')
+    language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$", description="Optional ISO-639-1 language hint for transcription")
+    local: TranscriptionLocalConfig = Field(default_factory=TranscriptionLocalConfig, description="Local on-CPU ASR engine settings (sherpa-onnx)")
+    http: TranscriptionHttpConfig = Field(default_factory=TranscriptionHttpConfig, description="OpenAI-compatible HTTP transcription endpoint settings")
+    openai: TranscriptionProviderKeysConfig = Field(default_factory=TranscriptionProviderKeysConfig, description="OpenAI cloud transcription credentials")
+    groq: TranscriptionProviderKeysConfig = Field(default_factory=TranscriptionProviderKeysConfig, description="Groq cloud transcription credentials")
+    max_duration_s: int = Field(default=600, ge=1, le=86400, description="Maximum audio clip duration in seconds; longer clips are rejected")
+    cache_transcripts: bool = Field(default=True, description="Cache transcript results to avoid re-transcribing the same audio")
 
 
 class TtsLocalConfig(Base):
     """Local on-CPU TTS via Supertonic (ONNX, self-downloading)."""
 
-    engine: Literal["supertonic"] = "supertonic"
-    voice: str = "F4"   # F1-F5 / M1-M5 (proven default F4)
-    model_dir: str | None = None   # None = supertonic auto-downloads (~260 MB)
-    quality: Literal["normal", "high"] = "normal"   # normal = 8 steps, high = 20
+    engine: Literal["supertonic"] = Field(default="supertonic", description="Local TTS engine identifier (only Supertonic)")
+    voice: str = Field(default="F4", description="Preset voice: F1-F5 (female) or M1-M5 (male)")
+    model_dir: str | None = Field(default=None, description="Model directory; None lets supertonic auto-download (~260 MB)")
+    quality: Literal["normal", "high"] = Field(default="normal", description='Synthesis quality: "normal" = 8 diffusion steps, "high" = 20')
 
 
 class TtsConfig(Base):
@@ -129,22 +129,23 @@ class TtsConfig(Base):
     pane, but the two stay separate flat config blocks (back-compat).
     """
 
-    enabled: bool = True
-    provider: Literal["local", "openai"] = "local"
-    language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$")
-    fallback: Literal["none", "openai"] = "none"   # net-new local→cloud fallback
-    local: TtsLocalConfig = Field(default_factory=TtsLocalConfig)
+    enabled: bool = Field(default=True, description="Master toggle for text-to-speech")
+    provider: Literal["local", "openai"] = Field(default="local", description='TTS backend: "local" (Supertonic) or "openai" (cloud)')
+    language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$", description="Optional ISO-639-1 language hint; None = auto")
+    fallback: Literal["none", "openai"] = Field(default="none", description='"openai" falls through to cloud TTS when local synthesis fails; "none" disables the fallback')
+    local: TtsLocalConfig = Field(default_factory=TtsLocalConfig, description="Local on-CPU TTS engine settings (Supertonic)")
     openai: TranscriptionProviderKeysConfig = Field(
-        default_factory=TranscriptionProviderKeysConfig
+        default_factory=TranscriptionProviderKeysConfig,
+        description="OpenAI cloud TTS credentials",
     )
 
 
 class SpokenRenderConfig(Base):
     """How long replies are rendered for speech (spoken != displayed)."""
 
-    mode: Literal["model_led", "verbatim"] = "model_led"
-    long_threshold_words: int = Field(default=60, ge=1)
-    pointer: str = "The full answer is on screen."
+    mode: Literal["model_led", "verbatim"] = Field(default="model_led", description='"model_led" speaks the opening and leaves the rest on screen; "verbatim" reads everything')
+    long_threshold_words: int = Field(default=60, ge=1, description="Replies at or under this many words are always read in full")
+    pointer: str = Field(default="The full answer is on screen.", description="Sentence appended after the opening in model_led mode")
 
     @model_validator(mode="before")
     @classmethod
@@ -160,12 +161,12 @@ class SpokenRenderConfig(Base):
 class VoiceConfig(Base):
     """Hands-free conversational voice mode (the gateway loop)."""
 
-    enabled: bool = True
-    barge_in: bool = True
-    vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0)   # browser VAD (relayed)
-    end_of_turn_silence_ms: int = Field(default=700, ge=100)    # browser VAD (relayed)
-    idle_timeout_s: int = Field(default=300, ge=0)              # 0 = no auto-exit
-    spoken_render: SpokenRenderConfig = Field(default_factory=SpokenRenderConfig)
+    enabled: bool = Field(default=True, description="Master toggle for conversational voice mode")
+    barge_in: bool = Field(default=True, description="Allow interrupting playback by speaking over it")
+    vad_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="Browser voice-activity-detection sensitivity, 0-1 (relayed to the browser VAD)")
+    end_of_turn_silence_ms: int = Field(default=700, ge=100, description="Silence in milliseconds that ends an utterance (relayed to the browser VAD)")
+    idle_timeout_s: int = Field(default=300, ge=0, description="Auto-exit voice mode after this many seconds of silence; 0 = never")
+    spoken_render: SpokenRenderConfig = Field(default_factory=SpokenRenderConfig, description="How long replies are rendered for speech (spoken text differs from displayed text)")
 
 
 class MemoryEmbeddingConfig(Base):
@@ -183,24 +184,27 @@ class MemoryEmbeddingConfig(Base):
     be turned on later if the data warrants it.
     """
 
-    provider: str = "fastembed"
+    provider: str = Field(default="fastembed", description='Embedding adapter; currently only "fastembed"')
     # Default model: multilingual-e5-small (registered as custom model
     # in durin/memory/embedding.py::_CUSTOM_MODELS). 117M params, 384-
     # dim, 100+ languages, MIT, retrieval-tuned. Replaced
     # paraphrase-multilingual-MiniLM-L12-v2; see `_EMBEDDING_CHOICES` in
     # the onboarding wizard for the rationale.
-    model: str = "intfloat/multilingual-e5-small"
+    model: str = Field(default="intfloat/multilingual-e5-small", description="Embedding model name; must exist in fastembed's catalog for the installed version")
     base_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("baseUrl", "base_url"),
+        description="HTTP embedding provider base URL (reserved for future adapters; fastembed ignores it)",
     )
     api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("apiKey", "api_key"),
+        description="HTTP embedding provider API key (reserved for future adapters; fastembed ignores it)",
     )
     lazy_eviction: bool = Field(
         default=False,
         validation_alias=AliasChoices("lazyEviction", "lazy_eviction"),
+        description="Reserved: evict the embedding model when idle; V1 keeps it resident for the life of the process",
     )
 
 
@@ -219,111 +223,86 @@ class MemoryDreamConfig(Base):
       timeout).
     """
 
-    # Master switch — false disables the cron + reactive triggers; manual
-    # ``durin memory dream`` still works.
-    enabled: bool = True
+    enabled: bool = Field(default=True, description="Master switch; false disables the cron + reactive triggers (manual `durin memory dream` still works)")
 
-    # Cron expression for the daily extract / refine / skill pass.
-    cron: str = "0 3 * * *"
+    cron: str = Field(default="0 3 * * *", description="Cron expression for the daily extract / refine / skill pass")
 
-    # Hook into the session compaction lifecycle.
-    post_compaction: bool = True
+    post_compaction: bool = Field(default=True, description="Run a dream pass after a session is compacted (the context is already in memory, so the cost is amortised)")
 
-    # Hook into session-close events.
-    on_session_close: bool = True
+    on_session_close: bool = Field(default=True, description="Run a dream pass when a session ends (/quit or idle timeout)")
 
-    # Mention-based entity discovery (extract dream stage 2). When ON, the
-    # extract pass also creates/updates entities from durable facts the agent
-    # mentioned but did NOT upsert — so the entity graph grows from conversation,
-    # not only from explicit memory_upsert_entity calls. ON by default: the
-    # failure mode is additive (a low-signal page, overridable + git-revertable),
-    # far milder than a destructive merge. Precision lives in the discovery
-    # prompt; `memory.dream.discover` telemetry measures it.
+    # ON by default: the failure mode is additive (a low-signal page,
+    # overridable + git-revertable), far milder than a destructive merge.
+    # Precision lives in the discovery prompt; `memory.dream.discover`
+    # telemetry measures it.
     discover_enabled: bool = Field(
         default=True,
         validation_alias=AliasChoices("discoverEnabled", "discover_enabled"),
+        description="Mention-based entity discovery (extract stage 2): also create/update entities from durable facts the agent mentioned but did not explicitly upsert",
     )
 
-    # Hindsight skill-signal extraction (extract dream stage 3). When ON, the
-    # extract pass detects skill corrections/gaps from a session's turns and logs
-    # them as observations for the daily curation pass — so the observation queue
-    # is fed without depending on the agent calling skill_observe at runtime. ON
-    # by default: detection only (curation decides); precision lives in the prompt
-    # and `memory.dream.skill_signals` telemetry measures it.
+    # ON by default: detection only (curation decides); precision lives in the
+    # prompt and `memory.dream.skill_signals` telemetry measures it.
     skill_signals_enabled: bool = Field(
         default=True,
         validation_alias=AliasChoices("skillSignalsEnabled", "skill_signals_enabled"),
+        description="Hindsight skill-signal extraction (extract stage 3): detect skill corrections/gaps from session turns and log them as observations for the daily curation pass",
     )
 
-    # Durable-learnings sweep (extract dream stage 4). When ON, the extract pass
-    # mines each session's new turns for feedback-style learnings (corrections,
-    # preferences, project facts) and writes them as feedback entities — so the
-    # memory captures what the agent learned without depending on an explicit
-    # memory_upsert_entity call. ON by default: additive only (writes feedback
-    # entities); `memory.dream.learnings` telemetry measures precision.
+    # ON by default: additive only (writes feedback entities);
+    # `memory.dream.learnings` telemetry measures precision.
     learnings_sweep_enabled: bool = Field(
         default=True,
         validation_alias=AliasChoices("learningsSweepEnabled", "learnings_sweep_enabled"),
+        description="Durable-learnings sweep (extract stage 4): mine each session's new turns for corrections, preferences, and project facts and write them as feedback entities",
     )
 
-    # Skill suggestions for MANUAL skills (curation that proposes, never applies).
-    # When ON, the daily curation also evaluates manual workspace skills and
-    # enqueues its actions as suggestions for user review in the dream bandeja
-    # (instead of discarding the analysis, as it did when manual skills were
-    # simply excluded). Auto skills are unaffected. ON by default: nothing is
-    # applied without explicit user acceptance.
+    # ON by default: nothing is applied without explicit user acceptance.
+    # Auto skills are unaffected by this toggle.
     skill_suggestions_enabled: bool = Field(
         default=True,
         validation_alias=AliasChoices(
             "skillSuggestionsEnabled", "skill_suggestions_enabled"),
+        description="Also evaluate MANUAL workspace skills in the daily curation and enqueue proposed edits as suggestions for user review (never auto-applied)",
     )
 
-    # Override the dream model (None → falls through to
-    # agents.defaults.model used by ``durin memory dream``).
     model_override: str | None = Field(
         default=None,
         validation_alias=AliasChoices("modelOverride", "model_override"),
+        description="Model for dream passes; None falls through to agents.aux_models.memory and then the default model",
     )
 
-    # Throttle for the reactive triggers (post_compaction + on_session_close).
-    # They fire on a daemon thread per event; a burst of session closes would
-    # otherwise spawn a burst of overlapping extract passes. The reactive
-    # gate skips a run when one happened within this window (the per-session
-    # cursor means the skipped turns are picked up by the next run / the cron).
-    # 0 disables the throttle. The daily cron is never throttled.
+    # The reactive triggers fire on a daemon thread per event; a burst of
+    # session closes would otherwise spawn overlapping extract passes. The
+    # per-session cursor means skipped turns are picked up by the next run.
     min_seconds_between_runs: int = Field(
         default=300,
         ge=0,
         validation_alias=AliasChoices("minSecondsBetweenRuns", "min_seconds_between_runs"),
+        description="Throttle window in seconds for the reactive triggers (post_compaction + on_session_close); 0 disables the throttle; the daily cron is never throttled",
     )
 
-    # Hard wall-clock cap per extract pass. The pass makes one LLM call per
-    # session with new turns; on a large workspace (or a bootstrap) that can
-    # run long. When the elapsed time crosses this cap the pass yields after
-    # the current session — the per-session cursor makes the remainder resume
-    # on the next trigger. 0 disables the cap (run to completion).
+    # The per-session cursor makes the remainder resume on the next trigger.
     max_seconds_per_run: int = Field(
         default=600,
         ge=0,
         validation_alias=AliasChoices("maxSecondsPerRun", "max_seconds_per_run"),
+        description="Wall-clock cap in seconds per extract pass; the pass yields after the current session when crossed; 0 = run to completion",
     )
 
-    # Token budget for the always-on guidance pin. The
-    # always_on distillation pass ranks feedback (stance/practice), drops
-    # contradictions, and keeps the highest-priority items that fit this many
-    # tokens — injected into EVERY prompt, so this is a per-turn cost. 0
-    # disables the pin (nothing kept always_on). Default 1500 ≈ 15-25 concise
-    # standing instructions.
+    # Injected into EVERY prompt, so this is a per-turn cost. Default 1500 ≈
+    # 15-25 concise standing instructions.
     always_on_token_budget: int = Field(
         default=1500,
         ge=0,
         validation_alias=AliasChoices("alwaysOnTokenBudget", "always_on_token_budget"),
+        description="Token budget for the always-on guidance pin distilled from feedback and injected into every prompt; 0 disables the pin",
     )
 
-    # Auto-absorb config nested under dream (the refine pass's dedup/merge).
     auto_absorb: "AutoAbsorbConfig" = Field(
         default_factory=lambda: AutoAbsorbConfig(),
         validation_alias=AliasChoices("autoAbsorb", "auto_absorb"),
+        description="Post-dream automatic entity deduplication (the refine pass's judged merge)",
     )
 
 
@@ -348,29 +327,26 @@ class AutoAbsorbConfig(Base):
     trailers). Recovery: ``cd memory && git revert <sha>``.
     """
 
-    # Master switch — ON by default. Prevent-at-source (lexical +
-    # semantic dedup) + the run-scoped quarantine + the judge (≥95)
-    # + the reversible archive now contain the blast radius that
-    # justified opt-in. A bad merge is recoverable: git revert the
-    # absorb commit in memory/ and add a tombstone.
-    enabled: bool = True
+    # ON by default: prevent-at-source (lexical + semantic dedup) + the
+    # run-scoped quarantine + the judge (≥95) + the reversible archive contain
+    # the blast radius that justified opt-in. A bad merge is recoverable: git
+    # revert the absorb commit in memory/ and add a tombstone.
+    enabled: bool = Field(default=True, description="Auto-merge judged entity duplicates after a dream pass; false requires manual `durin memory absorb`")
 
-    # LLM-judge confidence floor (0-100). Default 95 favours
-    # precision over recall: most pairs that warrant a merge will
-    # also warrant manual review at this threshold. Tune down with
+    # Default 95 favours precision over recall: most pairs that warrant a
+    # merge will also warrant manual review at this threshold. Tune down with
     # data from ``memory.absorb.judged`` telemetry.
     confidence_threshold: int = Field(
         default=95,
         ge=0,
         le=100,
         validation_alias=AliasChoices("confidenceThreshold", "confidence_threshold"),
+        description="LLM-judge confidence floor (0-100) required for an auto-merge",
     )
 
-    # Semantic candidate threshold: LanceDB L2² distance below which an
-    # embedding-near same-type entity is handed to the judge (in refine AND
-    # at discovery time). ~0.0–1.0; 0.30 ≈ cosine 0.85; the judge
-    # (confidence_threshold) decides the actual merge/reuse, so recall favours
-    # catching near-duplicate variant names over minimising judge calls.
+    # 0.30 ≈ cosine 0.85; the judge (confidence_threshold) decides the actual
+    # merge/reuse, so recall favours catching near-duplicate variant names
+    # over minimising judge calls.
     semantic_distance_threshold: float = Field(
         default=0.30,
         ge=0.0,
@@ -378,17 +354,15 @@ class AutoAbsorbConfig(Base):
         # nothing above it is a meaningful dedup candidate. Matches the webui input.
         validation_alias=AliasChoices(
             "semanticDistanceThreshold", "semantic_distance_threshold"),
+        description="LanceDB L2² distance below which an embedding-near same-type entity becomes a dedup candidate handed to the judge (refine + discovery)",
     )
 
-    # Pairs the cheap judge can't settle (verdict 'unclear', or 'same' with
-    # confidence in [escalate_floor, confidence_threshold)) go to a bounded
-    # sub-agent that investigates with the lineage/source tools.
-    # 0 disables escalation entirely (old behavior preserved).
     escalate_floor: int = Field(
         default=0,
         ge=0,
         le=100,
         validation_alias=AliasChoices("escalateFloor", "escalate_floor"),
+        description="Confidence floor above which pairs the cheap judge can't settle (verdict 'unclear', or 'same' below confidence_threshold) escalate to a bounded investigating sub-agent; 0 disables escalation",
     )
 
 
@@ -409,17 +383,16 @@ class CrossEncoderConfig(Base):
     load.
     """
 
-    enabled: bool = False
+    enabled: bool = Field(default=False, description="Enable the cross-encoder reranker; triggers a one-time multi-hundred-MB model download on first search")
     # Default model: BAAI/bge-reranker-base (MIT, ~100M params,
     # multilingual). Switched from jinaai/jina-reranker-v2-base-
     # multilingual on 2026-05-30 — see H30 note in
     # `durin/memory/cross_encoder.py`. Override to one of the curated
     # alternatives (bge-v2-m3 for heavy multilingual, others) if you
     # want a different trade-off.
-    model: str = "BAAI/bge-reranker-base"
-    batch_size: int = 32
-    # Top-N to keep after the rerank step.
-    top_n: int = 10
+    model: str = Field(default="BAAI/bge-reranker-base", description="Reranker model name (MIT, multilingual by default)")
+    batch_size: int = Field(default=32, description="Query-document pairs scored per inference batch")
+    top_n: int = Field(default=10, description="Top-N hits kept after the rerank step")
 
 
 class MemorySearchSectioningConfig(Base):
@@ -437,7 +410,7 @@ class MemorySearchSectioningConfig(Base):
     behaviour change.
     """
 
-    max_per_source: int = 3
+    max_per_source: int = Field(default=3, description="Max corpus hits sharing the same ingest_id that survive the sectioning step, so one chunked document can't monopolise the top-K")
 
 
 class MemorySearchConfig(Base):
@@ -445,9 +418,11 @@ class MemorySearchConfig(Base):
 
     cross_encoder: CrossEncoderConfig = Field(
         default_factory=CrossEncoderConfig,
+        description="Cross-encoder reranker step settings",
     )
     sectioning: MemorySearchSectioningConfig = Field(
         default_factory=MemorySearchSectioningConfig,
+        description="Sectioning step settings (per-source result caps)",
     )
 
 
@@ -467,7 +442,7 @@ class MemoryFileWatcherConfig(Base):
     re-index-on-write hooks (memory_store / memory_ingest / Dream).
     """
 
-    enabled: bool = True
+    enabled: bool = Field(default=True, description="Watch memory/*.md for manual edits and re-index changed files automatically; disable for one less background thread")
 
 
 class MemoryHealthCheckConfig(Base):
@@ -485,8 +460,8 @@ class MemoryHealthCheckConfig(Base):
     from a CLI command.
     """
 
-    enabled: bool = True
-    interval_seconds: int = Field(default=900, ge=60, le=86_400)
+    enabled: bool = Field(default=True, description="Run the periodic memory health probe; disable for one less background thread")
+    interval_seconds: int = Field(default=900, ge=60, le=86_400, description="Probe interval in seconds")
 
 
 class SkillsHotTierConfig(Base):
@@ -501,11 +476,11 @@ class SkillsHotTierConfig(Base):
     telemetry.
     """
 
-    enabled: bool = True
-    recent: int = 15
-    frequent: int = 30
-    frequent_window_hours: float = 168.0  # 7 days
-    recent_window_hours: float = 24.0
+    enabled: bool = Field(default=True, description="Inject only the usage-ranked working set of skills instead of the full catalog; false restores full-catalog injection")
+    recent: int = Field(default=15, description="Number of recently-used skills included in the working set")
+    frequent: int = Field(default=30, description="Number of frequently-used skills included in the working set")
+    frequent_window_hours: float = Field(default=168.0, description="Window in hours for the frequency ranking (default 7 days)")
+    recent_window_hours: float = Field(default=24.0, description="Window in hours for the recency ranking")
 
 
 class SkillJudgeConfig(Base):
@@ -521,9 +496,9 @@ class SkillJudgeConfig(Base):
     (default) lets it force a confirm but never block on its own — only the
     deterministic rules block. ``model`` names an aux model; empty → default."""
 
-    trigger: Literal["off", "uncertain", "always"] = "off"
-    max_severity: Literal["caution", "dangerous"] = "caution"
-    model: str = ""
+    trigger: Literal["off", "uncertain", "always"] = Field(default="off", description='When the LLM audit auto-runs on import: "off" = only on demand, "uncertain" = only when the deterministic gate is unsure, "always" = every import')
+    max_severity: Literal["caution", "dangerous"] = Field(default="caution", description='Cap on how high the judge may raise the verdict: "caution" can force a confirm but never block; only deterministic rules block')
+    model: str = Field(default="", description="Aux model name for the judge; empty = default aux model")
 
 
 # Skill-source prefixes trusted by default — verified first-party vendor orgs +
@@ -559,23 +534,23 @@ class SkillSecurityConfig(Base):
     anonymous. (Running a skill's declared dependency installs is governed by
     ``skills.install_policy`` — see P6 #1.)"""
 
-    allowlist: list[str] = Field(default_factory=lambda: list(DEFAULT_SKILL_ALLOWLIST))
-    github_token_secret: str = ""
-    max_files: int = 100
-    max_total_bytes: int = 3 * 1024 * 1024
-    max_file_bytes: int = 1024 * 1024
-    llm_judge: SkillJudgeConfig = Field(default_factory=SkillJudgeConfig)
+    allowlist: list[str] = Field(default_factory=lambda: list(DEFAULT_SKILL_ALLOWLIST), description="Trusted source-ref prefixes (e.g. 'github:anthropics/'); a match skips only the source confirmation, never the verdict/code gates")
+    github_token_secret: str = Field(default="", description="Durin secret name holding a GitHub API token (raises rate limits + enables private repos); empty = anonymous")
+    max_files: int = Field(default=100, description="Maximum file count in a fetched skill")
+    max_total_bytes: int = Field(default=3 * 1024 * 1024, description="Maximum total size in bytes of a fetched skill (3 MB)")
+    max_file_bytes: int = Field(default=1024 * 1024, description="Maximum size in bytes of a single skill file (1 MB)")
+    llm_judge: SkillJudgeConfig = Field(default_factory=SkillJudgeConfig, description="Optional LLM semantic-audit pass over imported skills")
 
 
 class SkillRegistryConfig(Base):
     """One search registry. ``kind`` selects the adapter; ``api_key_secret`` names
     a durin secret (empty → anonymous). ``taps`` is github-only (repos to search)."""
 
-    name: str
-    kind: Literal["skills.sh", "clawhub", "github", "well-known"]
-    enabled: bool = True
-    api_key_secret: str = ""
-    taps: list[str] = Field(default_factory=list)
+    name: str = Field(description="Registry display name")
+    kind: Literal["skills.sh", "clawhub", "github", "well-known"] = Field(description='Adapter for this registry: "skills.sh", "clawhub", "github", or "well-known"')
+    enabled: bool = Field(default=True, description="Include this registry in skill searches")
+    api_key_secret: str = Field(default="", description="Durin secret name holding the registry API key; empty = anonymous")
+    taps: list[str] = Field(default_factory=list, description="GitHub-only: repos to search for skills")
 
 
 class SkillsDiscoveryConfig(Base):
@@ -585,18 +560,20 @@ class SkillsDiscoveryConfig(Base):
         default_factory=lambda: [
             SkillRegistryConfig(name="skills.sh", kind="skills.sh"),
             SkillRegistryConfig(name="clawhub", kind="clawhub"),
-        ])
-    search_limit: int = 10
+        ],
+        description="Skill registries to search, in order",
+    )
+    search_limit: int = Field(default=10, description="Max results returned per skill search")
 
 
 class McpRegistryConfig(Base):
     """One MCP registry. ``kind`` selects the adapter; ``api_key_secret`` names a
     durin secret (unused for the no-auth official registry; reserved for future)."""
 
-    name: str
-    kind: Literal["official", "mpak"]
-    enabled: bool = True
-    api_key_secret: str = ""
+    name: str = Field(description="Registry display name")
+    kind: Literal["official", "mpak"] = Field(description='Adapter for this MCP registry: "official" or "mpak"')
+    enabled: bool = Field(default=True, description="Include this registry in MCP server searches")
+    api_key_secret: str = Field(default="", description="Durin secret name holding the registry API key; unused for the no-auth official registry (reserved)")
 
 
 class McpDiscoveryConfig(Base):
@@ -608,14 +585,13 @@ class McpDiscoveryConfig(Base):
     lives in a native endpoint, not the spec-compatible ``/v0.1/servers``)."""
 
     registries: list[McpRegistryConfig] = Field(
-        default_factory=lambda: [McpRegistryConfig(name="official", kind="official")])
-    search_limit: int = 10
-    install_policy: Literal["never", "approve", "auto"] = "approve"
-    quality: Literal["official", "all"] = "official"
-    """Default discovery view. 'official' applies the star/first-party gate;
-    'all' returns the full registry."""
-    min_stars: int = 100
-    """Star floor for the 'official' gate; user-configurable."""
+        default_factory=lambda: [McpRegistryConfig(name="official", kind="official")],
+        description="MCP registries to search, in order",
+    )
+    search_limit: int = Field(default=10, description="Max results returned per MCP server search")
+    install_policy: Literal["never", "approve", "auto"] = Field(default="approve", description='Gate on installing a discovered MCP server: "never", "approve" (per-install confirm), or "auto"')
+    quality: Literal["official", "all"] = Field(default="official", description="Default discovery view. 'official' applies the star/first-party gate; 'all' returns the full registry")
+    min_stars: int = Field(default=100, description="Star floor for the 'official' gate")
 
 
 class SkillsConfig(Base):
@@ -624,13 +600,12 @@ class SkillsConfig(Base):
     the memory-index toggle stays at ``memory.index_skills``.
     ``discovery`` (registries + search) is configured here."""
 
-    security: SkillSecurityConfig = Field(default_factory=SkillSecurityConfig)
-    discovery: SkillsDiscoveryConfig = Field(default_factory=SkillsDiscoveryConfig)
-    install_policy: Literal["never", "approve", "auto"] = "approve"
-    """How `skill_install_deps` runs a skill's declared install specs.
-    'never' = report only (never run, even with confirm); 'approve' = dry-run then
-    run on confirm (default); 'auto' = run without a per-call confirm. All policies
-    still execute through ExecTool's gate."""
+    security: SkillSecurityConfig = Field(default_factory=SkillSecurityConfig, description="Skill-import security floor: allowlist, size caps, LLM judge")
+    discovery: SkillsDiscoveryConfig = Field(default_factory=SkillsDiscoveryConfig, description="Skill discovery registries and search limits")
+    install_policy: Literal["never", "approve", "auto"] = Field(
+        default="approve",
+        description="How `skill_install_deps` runs a skill's declared install specs: 'never' = report only, 'approve' = dry-run then run on confirm, 'auto' = run without a per-call confirm; all policies still execute through ExecTool's gate",
+    )
 
 
 class MemoryConfig(Base):
@@ -657,22 +632,19 @@ class MemoryConfig(Base):
     the agent loop runs.
     """
 
-    enabled: bool = True
-    # Skills are authored + injected already; this gates making them
-    # searchable as a `skill` memory class (skill-memory-class indexing).
-    index_skills: bool = True
-    # The workspace owner entity ref (e.g. "person:marcelo"). Resolves the
-    # principal for the pinned context (channel → owner → person:anonymous).
-    # None defaults to anonymous until the user sets it.
-    owner: str | None = None
-    embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
-    dream: MemoryDreamConfig = Field(default_factory=MemoryDreamConfig)
-    search: MemorySearchConfig = Field(default_factory=MemorySearchConfig)
+    enabled: bool = Field(default=True, description="Enable vector retrieval; when false the memory tools still work over the markdown files (grep-level recall) but skip the vector index")
+    index_skills: bool = Field(default=True, description="Make skills searchable as a `skill` memory class (skills are authored + injected regardless)")
+    owner: str | None = Field(default=None, description='Workspace owner entity ref (e.g. "person:marcelo") used to resolve the principal for the pinned context; None defaults to anonymous')
+    embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig, description="Embedding model for the vector index")
+    dream: MemoryDreamConfig = Field(default_factory=MemoryDreamConfig, description="Dream passes (extract / refine / skill / always_on) and their cron + reactive triggers")
+    search: MemorySearchConfig = Field(default_factory=MemorySearchConfig, description="Search pipeline settings (cross-encoder reranker, sectioning)")
     file_watcher: MemoryFileWatcherConfig = Field(
         default_factory=MemoryFileWatcherConfig,
+        description="Background filesystem watcher that re-indexes manually edited memory/*.md files",
     )
     health_check: MemoryHealthCheckConfig = Field(
         default_factory=MemoryHealthCheckConfig,
+        description="Periodic memory subsystem health probe",
     )
 
 
@@ -693,48 +665,36 @@ class AuxModelsConfig(Base):
     can be used over rasterized pages.
     """
 
-    vision: AuxModelConfig | None = None
-    audio: AuxModelConfig | None = None
-    # Model used by memory subsystem operations — the entity-centric
-    # `memory_dream` passes. When unset, the dream falls back to its
-    # own `model_override` (if any) and then to the bundled default.
-    # Lets the user pick a cheaper/faster model for the long offline
-    # consolidation runs without changing the chat model.
-    memory: AuxModelConfig | None = None
-    # Model used by spawned subagents (`spawn`/`tasks` background runs).
-    # Lets the user run fire-and-forget subagent work on a cheaper/faster
-    # model without changing the interactive chat model. Resolved fresh
-    # at each spawn, so a hot-reloaded change takes effect immediately.
-    # Unset = the subagent inherits whatever model the parent session is
-    # currently using (existing behavior).
-    subagents: AuxModelConfig | None = None
+    vision: AuxModelConfig | None = Field(default=None, description="Aux model for vision inputs when the primary model lacks vision; unset disables the bridge")
+    audio: AuxModelConfig | None = Field(default=None, description="Aux model for audio inputs when the primary model lacks audio; unset disables the bridge")
+    memory: AuxModelConfig | None = Field(default=None, description="Model for the memory dream passes; overrides memory.dream.model_override; unset falls through to the dream's own resolution")
+    # Resolved fresh at each spawn, so a hot-reloaded change takes effect
+    # immediately.
+    subagents: AuxModelConfig | None = Field(default=None, description="Model for spawned subagents (background spawn/tasks runs); unset = the subagent inherits the parent session's model")
 
 
 class ModelPresetConfig(Base):
     """A named set of model + generation parameters for quick switching."""
 
-    model: str
-    provider: str = "auto"
-    max_tokens: int = 8192
-    context_window_tokens: int = 65_536
-    temperature: float = 0.1
-    reasoning_effort: str | None = None
-    request_timeout_s: float | None = None  # Per-model HTTP timeout; overrides DURIN_OPENAI_COMPAT_TIMEOUT_S
-    top_p: float | None = None  # Nucleus sampling (standard OpenAI param); None = don't send
-    top_k: int | None = None  # Top-k sampling; non-standard → sent via extra_body (ollama / LM Studio)
-    repeat_penalty: float | None = None  # Repetition penalty; non-standard → sent via extra_body
-    # Pre-emptive compaction trigger ratio: fraction of
-    # ``context_window_tokens`` above which the consolidator fires BEFORE
-    # the next LLM call instead of waiting for a context overflow 400.
+    model: str = Field(description="Model identifier")
+    provider: str = Field(default="auto", description='Provider name or "auto" for auto-detection')
+    max_tokens: int = Field(default=8192, description="Max output tokens per turn")
+    context_window_tokens: int = Field(default=65_536, description="Context window size hint in tokens")
+    temperature: float = Field(default=0.1, description="Generation temperature")
+    reasoning_effort: str | None = Field(default=None, description="LLM thinking effort (low/medium/high/adaptive/none); None preserves the provider default")
+    request_timeout_s: float | None = Field(default=None, description="Per-model HTTP timeout in seconds; overrides DURIN_OPENAI_COMPAT_TIMEOUT_S")
+    top_p: float | None = Field(default=None, description="Nucleus sampling (standard OpenAI param); None = don't send")
+    top_k: int | None = Field(default=None, description="Top-k sampling; non-standard, sent via extra_body (ollama / LM Studio)")
+    repeat_penalty: float | None = Field(default=None, description="Repetition penalty; non-standard, sent via extra_body")
     # Per-model because the right value depends on the window: 128K models
     # can sit at 0.5 (compact at 64K); 1M models want ~0.15 (compact at
     # 150K — you pay per token shipped, so waiting until 500K means
     # shipping a huge prompt every turn).
-    # ``None`` inherits from ``AgentDefaults.preemptive_compact_ratio``.
     preemptive_compact_ratio: float | None = Field(
         default=None,
         validation_alias=AliasChoices("preemptiveCompactRatio", "preemptive_compact_ratio"),
         serialization_alias="preemptiveCompactRatio",
+        description="Fraction of context_window_tokens above which compaction fires before the next LLM call instead of waiting for a context-overflow 400; None inherits agents.defaults.preemptive_compact_ratio",
     )
 
     def to_generation_settings(self) -> Any:
@@ -755,9 +715,9 @@ class PersonaConfig(Base):
     SOUL.md). ``model`` is a model picker ref (a preset name or a
     ``"provider model"`` pair); ``None`` means use the global default model."""
 
-    soul: str = "default"
-    model: str | None = None
-    description: str | None = None
+    soul: str = Field(default="default", description='SoulStore slug for the persona\'s SOUL; "default" = the workspace SOUL.md')
+    model: str | None = Field(default=None, description='Model picker ref (a preset name or a "provider model" pair); None uses the global default model')
+    description: str | None = Field(default=None, description="Human-readable description shown in the persona picker")
 
 
 class ModeConfig(Base):
@@ -771,11 +731,11 @@ class ModeConfig(Base):
     UI; the picker falls back to a generic glyph when it is unset.
     """
 
-    description: str = ""
-    allowed: list[str] | None = None
-    denied: list[str] = Field(default_factory=list)
-    prompt_suffix: str = ""
-    icon: str | None = None
+    description: str = Field(default="", description="Human-readable description shown in the mode picker")
+    allowed: list[str] | None = Field(default=None, description="Tool names allowed while the mode is active; None = full access (every tool) unless denied")
+    denied: list[str] = Field(default_factory=list, description="Tool names denied while the mode is active; denied always wins over allowed")
+    prompt_suffix: str = Field(default="", description="Text appended to the system prompt while the mode is active")
+    icon: str | None = Field(default=None, description="Optional glyph name for the UI; the picker falls back to a generic glyph when unset")
 
 
 class ModelCapabilityOverride(Base):
@@ -788,19 +748,19 @@ class ModelCapabilityOverride(Base):
     through to the underlying resolver.
     """
 
-    max_input_tokens: int | None = None
-    max_output_tokens: int | None = None
-    supports_vision: bool | None = None
-    supports_audio_input: bool | None = None
-    supports_pdf_input: bool | None = None
-    supports_video_input: bool | None = None
-    supports_audio_output: bool | None = None
-    supports_image_output: bool | None = None
-    supports_function_calling: bool | None = None
-    supports_streaming: bool | None = None
-    supports_reasoning: bool | None = None
-    supports_prompt_caching: bool | None = None
-    supports_response_schema: bool | None = None
+    max_input_tokens: int | None = Field(default=None, description="Override for the model's max input tokens; None falls through to the resolver")
+    max_output_tokens: int | None = Field(default=None, description="Override for the model's max output tokens; None falls through to the resolver")
+    supports_vision: bool | None = Field(default=None, description="Override: model accepts image inputs; None falls through to the resolver")
+    supports_audio_input: bool | None = Field(default=None, description="Override: model accepts audio inputs; None falls through to the resolver")
+    supports_pdf_input: bool | None = Field(default=None, description="Override: model accepts native PDF inputs; None falls through to the resolver")
+    supports_video_input: bool | None = Field(default=None, description="Override: model accepts video inputs; None falls through to the resolver")
+    supports_audio_output: bool | None = Field(default=None, description="Override: model can produce audio output; None falls through to the resolver")
+    supports_image_output: bool | None = Field(default=None, description="Override: model can produce image output; None falls through to the resolver")
+    supports_function_calling: bool | None = Field(default=None, description="Override: model supports tool/function calling; None falls through to the resolver")
+    supports_streaming: bool | None = Field(default=None, description="Override: model supports streamed responses; None falls through to the resolver")
+    supports_reasoning: bool | None = Field(default=None, description="Override: model supports reasoning/thinking; None falls through to the resolver")
+    supports_prompt_caching: bool | None = Field(default=None, description="Override: model supports prompt caching; None falls through to the resolver")
+    supports_response_schema: bool | None = Field(default=None, description="Override: model supports structured response schemas; None falls through to the resolver")
 
 
 class AgentDefaults(Base):
@@ -808,99 +768,88 @@ class AgentDefaults(Base):
 
     # Resolved at instance time so a fresh config under DURIN_HOME points at its
     # own workspace; an existing config keeps the value persisted on disk.
-    workspace: str = Field(default_factory=lambda: str(durin_home() / "workspace"))
-    model_preset: str | None = None  # Active preset name — takes precedence over fields below
-    persona: str | None = None  # default persona name for interactive chats
-    personas_seeded: bool = False  # set once the example personas are seeded into `personas`
-    model: str = "anthropic/claude-opus-4-5"
-    provider: str = (
-        "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
-    )
-    max_tokens: int = 8192
-    context_window_tokens: int = 65_536
-    context_block_limit: int | None = None
-    temperature: float = 0.4
-    fallback_models: list[FallbackCandidate] = Field(default_factory=list)
-    max_tool_iterations: int = 200
+    workspace: str = Field(default_factory=lambda: str(durin_home() / "workspace"), description="Working directory for file tools; defaults to <durin_home>/workspace")
+    model_preset: str | None = Field(default=None, description="Active model_presets entry name; takes precedence over the model/provider fields below")
+    persona: str | None = Field(default=None, description="Default persona name for interactive chats; None = the workspace SOUL + default model")
+    personas_seeded: bool = Field(default=False, description="Set once the example personas have been seeded into `personas` (managed by durin)")
+    model: str = Field(default="anthropic/claude-opus-4-5", description="Active model identifier (provider/name form)")
+    provider: str = Field(default="auto", description='Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection from the model name')
+    max_tokens: int = Field(default=8192, description="Max output tokens per turn")
+    context_window_tokens: int = Field(default=65_536, description="Context window size hint in tokens")
+    context_block_limit: int | None = Field(default=None, description="Hard limit on context blocks; overrides the token budget when set")
+    temperature: float = Field(default=0.4, description="Generation temperature")
+    fallback_models: list[FallbackCandidate] = Field(default_factory=list, description="Ordered list of preset names or inline model specs to try on provider failure")
+    max_tool_iterations: int = Field(default=200, description="Cap on tool-call iterations per turn")
     # Default 3 (not 1): the main agent can run a few independent subagents at
     # once — the common "fan out 2-3 research/explore tasks" pattern — while
-    # still bounding cost, since each subagent is a full LLM loop. Raise it for
-    # heavier parallel work; set 1 to force strictly serial subagents.
-    max_concurrent_subagents: int = Field(default=3, ge=1)
-    # Interactive-lane cap: how many human-facing turns run at once across all
-    # sessions. Env DURIN_MAX_CONCURRENT_REQUESTS still overrides this at runtime.
-    max_concurrent_interactive: int = Field(default=4, ge=1)
-    # Global ceiling: total in-flight turns + subagents across all lanes. Keep it
-    # >= the interactive cap; sized above the sum of typical lane usage.
-    concurrency_ceiling: int = Field(default=12, ge=1)
-    max_tool_result_chars: int = 16_000
-    provider_retry_mode: Literal["standard", "persistent"] = "standard"
+    # still bounding cost, since each subagent is a full LLM loop.
+    max_concurrent_subagents: int = Field(default=3, ge=1, description="Parallel subagent concurrency cap; 1 forces strictly serial subagents")
+    max_concurrent_interactive: int = Field(default=4, ge=1, description="Interactive-lane cap: human-facing turns running at once across all sessions; env DURIN_MAX_CONCURRENT_REQUESTS overrides at runtime")
+    concurrency_ceiling: int = Field(default=12, ge=1, description="Global ceiling on total in-flight turns + subagents across all lanes; keep it >= the interactive cap")
+    max_tool_result_chars: int = Field(default=16_000, description="Truncation limit in characters on individual tool results")
+    provider_retry_mode: Literal["standard", "persistent"] = Field(default="standard", description='Retry strategy on provider errors: "standard" or "persistent"')
     tool_hint_max_length: int = Field(
         default=40,
         ge=20,
         le=500,
         validation_alias=AliasChoices("toolHintMaxLength"),
         serialization_alias="toolHintMaxLength",
-    )  # Max characters for tool hint display (e.g. "$ cd …/project && npm test")
-    reasoning_effort: str | None = None  # low / medium / high / adaptive / none — LLM thinking effort; None preserves the provider default
-    timezone: str = "UTC"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
-    bot_name: str = "durin"  # Display name shown in CLI prompts (e.g. "{name} is thinking...")
-    bot_icon: str = "⚒️"  # Short icon (emoji or text) shown next to the bot name in CLI; "" to omit
-    unified_session: bool = False  # Share one session across all channels (single-user multi-device)
-    # Blocking ask_user (V2): the tool awaits the user's next message inside
-    # the same turn instead of yielding; on timeout it degrades to the V1
-    # yield semantics.
-    ask_user_blocking: bool = True
-    ask_user_answer_timeout_s: int = Field(default=300, ge=10, le=3600)
+        description='Max characters for tool-call hint display (e.g. "$ cd …/project && npm test")',
+    )
+    reasoning_effort: str | None = Field(default=None, description="LLM thinking effort: low / medium / high / adaptive / none; None preserves the provider default")
+    timezone: str = Field(default="UTC", description='IANA timezone for date-aware behavior, e.g. "Asia/Shanghai", "America/New_York"')
+    bot_name: str = Field(default="durin", description='Display name shown in CLI prompts (e.g. "{name} is thinking...")')
+    bot_icon: str = Field(default="⚒️", description='Short icon (emoji or text) shown next to the bot name in CLI; "" to omit')
+    unified_session: bool = Field(default=False, description="Share one session across all channels (single-user multi-device)")
+    ask_user_blocking: bool = Field(default=True, description="ask_user awaits the user's next message inside the same turn instead of yielding; on timeout it degrades to yield semantics")
+    ask_user_answer_timeout_s: int = Field(default=300, ge=10, le=3600, description="Seconds a blocking ask_user waits for an answer before degrading to yield")
     plan_stall_turns: int = Field(
-        default=8, ge=0
-    )  # Turns without todo progress while executing an approved plan before
-    # a "reassess" reminder is injected into Runtime Context (0 = disabled).
-    disabled_skills: list[str] = Field(default_factory=list)  # Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])
-    skills_hot_tier: SkillsHotTierConfig = Field(default_factory=SkillsHotTierConfig)
+        default=8, ge=0,
+        description='Turns without todo progress while executing an approved plan before a "reassess" reminder is injected into Runtime Context; 0 disables',
+    )
+    disabled_skills: list[str] = Field(default_factory=list, description='Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])')
+    skills_hot_tier: SkillsHotTierConfig = Field(default_factory=SkillsHotTierConfig, description="Hot working-set tier for skill injection (usage-ranked subset instead of the full catalog)")
     max_messages: int = Field(
         default=120,
         ge=0,
-    )  # Max messages to replay from session history (0 = use default 120, respects token budget)
+        description="Max messages replayed from session history (0 = use default 120); the token budget still applies",
+    )
     consolidation_ratio: float = Field(
         default=0.5,
         ge=0.1,
         le=0.95,
         validation_alias=AliasChoices("consolidationRatio"),
         serialization_alias="consolidationRatio",
-    )  # Consolidation target ratio (0.5 = 50% of budget retained after compression)
+        description="Consolidation target ratio: fraction of the context budget retained after compression (0.5 = 50%)",
+    )
     preemptive_compact_ratio: float = Field(
         default=0.5,
         ge=0.05,
         le=0.99,
         validation_alias=AliasChoices("preemptiveCompactRatio", "preemptive_compact_ratio"),
         serialization_alias="preemptiveCompactRatio",
-    )  # Default trigger ratio when preset doesn't override.
-    decision_log_enabled: bool = True  # Concern B task-state anchor: record key decisions/findings across compaction
-    compaction_learnings_enabled: bool = True  # Backstop: distil durable user learnings (preferences, corrections) at compaction
-    decision_log_max_entries: int = Field(default=10, ge=1, le=100)  # Cap on decision-log entries (re-injected every turn)
-    decision_log_max_chars: int = Field(default=1500, ge=100, le=20_000)  # Total chars cap on the decision log
+        description="Default fraction of the context window that triggers pre-emptive compaction when the active preset doesn't override it",
+    )
+    decision_log_enabled: bool = Field(default=True, description="Record key decisions/findings in a task-state anchor that survives compaction")
+    compaction_learnings_enabled: bool = Field(default=True, description="Distil durable user learnings (preferences, corrections) at compaction time")
+    decision_log_max_entries: int = Field(default=10, ge=1, le=100, description="Cap on decision-log entries (the log is re-injected every turn)")
+    decision_log_max_chars: int = Field(default=1500, ge=100, le=20_000, description="Total character cap on the decision log")
     parallel_tool_calls: dict[str, bool] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("parallelToolCalls", "parallel_tool_calls"),
         serialization_alias="parallelToolCalls",
-    )  # Per-model gating for the OpenAI ``parallel_tool_calls`` request flag.
-    # Key is a substring of the model name (case-insensitive); value is True/False.
-    # First match wins. Empty = preserve the provider default. Use to opt models
-    # OUT when they misbehave with parallel tool calls (e.g. {"glm-5.1": false}).
+        description='Per-model gating for the OpenAI parallel_tool_calls request flag: case-insensitive model-name substring -> bool, first match wins; empty preserves the provider default (e.g. {"glm-5.1": false})',
+    )
 
 
 class AgentsConfig(Base):
     """Agent configuration."""
 
-    defaults: AgentDefaults = Field(default_factory=AgentDefaults)
-    # Optional auxiliary models for capability bridges. The agent uses
-    # these only when the primary model is known to lack the relevant
-    # modality (e.g. GLM has no vision); leaving them unset disables
-    # the corresponding bridge tool.
+    defaults: AgentDefaults = Field(default_factory=AgentDefaults, description="Default parameters applied to every new agent session")
     aux_models: AuxModelsConfig = Field(
         default_factory=AuxModelsConfig,
         validation_alias=AliasChoices("auxModels", "aux_models"),
+        description="Optional auxiliary models for capability bridges, used only when the primary model lacks the relevant modality (e.g. vision); unset fields disable the bridge",
     )
 
 
@@ -909,114 +858,110 @@ class ModelEntry(Base):
     (``provider_models.json``), then to ``agents.defaults`` / the schema default.
     A configured model under its provider is what a ``model_preset`` used to be."""
 
-    max_tokens: int | None = None
-    context_window_tokens: int | None = None
-    temperature: float | None = None
-    reasoning_effort: str | None = None
-    request_timeout_s: float | None = None  # Per-model HTTP timeout; overrides DURIN_OPENAI_COMPAT_TIMEOUT_S
-    top_p: float | None = None  # Nucleus sampling (standard OpenAI param); None = don't send
-    top_k: int | None = None  # Top-k sampling; non-standard → sent via extra_body (ollama / LM Studio)
-    repeat_penalty: float | None = None  # Repetition penalty; non-standard → sent via extra_body
+    max_tokens: int | None = Field(default=None, description="Max output tokens per turn; None falls back to the catalog, then agents.defaults")
+    context_window_tokens: int | None = Field(default=None, description="Context window size hint in tokens; None falls back to the catalog, then agents.defaults")
+    temperature: float | None = Field(default=None, description="Generation temperature; None falls back to agents.defaults")
+    reasoning_effort: str | None = Field(default=None, description="LLM thinking effort (low/medium/high/adaptive/none); None preserves the provider default")
+    request_timeout_s: float | None = Field(default=None, description="Per-model HTTP timeout in seconds; overrides DURIN_OPENAI_COMPAT_TIMEOUT_S")
+    top_p: float | None = Field(default=None, description="Nucleus sampling (standard OpenAI param); None = don't send")
+    top_k: int | None = Field(default=None, description="Top-k sampling; non-standard, sent via extra_body (ollama / LM Studio)")
+    repeat_penalty: float | None = Field(default=None, description="Repetition penalty; non-standard, sent via extra_body")
 
 
 class ProviderConfig(Base):
     """LLM provider configuration."""
 
-    api_key: str | None = None
-    api_base: str | None = None
-    extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
-    extra_body: dict[str, Any] | None = None  # Extra fields merged into every request body
-    models: dict[str, ModelEntry] = Field(default_factory=dict)  # Configured models + param overrides
+    api_key: str | None = Field(default=None, description="API key; prefer ${secret:NAME} references over plaintext")
+    api_base: str | None = Field(default=None, description="Custom base URL (local models, proxies, corporate endpoints); None uses the provider default")
+    extra_headers: dict[str, str] | None = Field(default=None, description="Custom request headers (e.g. APP-Code for AiHubMix)")
+    extra_body: dict[str, Any] | None = Field(default=None, description="Extra fields merged into every request body")
+    models: dict[str, ModelEntry] = Field(default_factory=dict, description="Configured models under this provider, with per-model parameter overrides")
 
 
 class BedrockProviderConfig(ProviderConfig):
     """AWS Bedrock Runtime provider configuration."""
 
-    region: str | None = None  # AWS region, falls back to AWS_REGION/AWS_DEFAULT_REGION/profile
-    profile: str | None = None  # Optional AWS shared config profile
+    region: str | None = Field(default=None, description="AWS region; None falls back to AWS_REGION / AWS_DEFAULT_REGION / the profile")
+    profile: str | None = Field(default=None, description="Optional AWS shared-config profile name")
 
 
 class ProvidersConfig(Base):
     """Configuration for LLM providers."""
 
-    custom: ProviderConfig = Field(default_factory=ProviderConfig)  # Any OpenAI-compatible endpoint
-    azure_openai: ProviderConfig = Field(default_factory=ProviderConfig)  # Azure OpenAI (model = deployment name)
-    bedrock: BedrockProviderConfig = Field(default_factory=BedrockProviderConfig)  # AWS Bedrock Converse
-    anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
-    openai: ProviderConfig = Field(default_factory=ProviderConfig)
-    openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
-    huggingface: ProviderConfig = Field(default_factory=ProviderConfig)
-    deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
-    groq: ProviderConfig = Field(default_factory=ProviderConfig)
-    zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
-    zai_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # Z.ai Coding Plan (separate quota from zhipu)
-    dashscope: ProviderConfig = Field(default_factory=ProviderConfig)
-    vllm: ProviderConfig = Field(default_factory=ProviderConfig)
-    ollama: ProviderConfig = Field(default_factory=ProviderConfig)  # Ollama local models
-    lm_studio: ProviderConfig = Field(default_factory=ProviderConfig)  # LM Studio local models
-    atomic_chat: ProviderConfig = Field(default_factory=ProviderConfig)  # Atomic Chat local models
-    ovms: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenVINO Model Server (OVMS)
-    gemini: ProviderConfig = Field(default_factory=ProviderConfig)
-    moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
-    minimax: ProviderConfig = Field(default_factory=ProviderConfig)
-    minimax_anthropic: ProviderConfig = Field(default_factory=ProviderConfig)  # MiniMax Anthropic endpoint (thinking)
-    mistral: ProviderConfig = Field(default_factory=ProviderConfig)
-    stepfun: ProviderConfig = Field(default_factory=ProviderConfig)  # Step Fun (阶跃星辰)
-    xiaomi_mimo: ProviderConfig = Field(default_factory=ProviderConfig)  # Xiaomi MIMO (小米)
-    longcat: ProviderConfig = Field(default_factory=ProviderConfig)  # LongCat
-    aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
-    siliconflow: ProviderConfig = Field(default_factory=ProviderConfig)  # SiliconFlow (硅基流动)
-    volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine (火山引擎)
-    volcengine_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine Coding Plan
-    byteplus: ProviderConfig = Field(default_factory=ProviderConfig)  # BytePlus (VolcEngine international)
-    byteplus_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # BytePlus Coding Plan
-    openai_codex: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # OpenAI Codex (OAuth)
-    github_copilot: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # Github Copilot (OAuth)
-    qianfan: ProviderConfig = Field(default_factory=ProviderConfig)  # Qianfan (百度千帆)
-    nvidia: ProviderConfig = Field(default_factory=ProviderConfig)  # NVIDIA NIM (nvapi- keys)
+    custom: ProviderConfig = Field(default_factory=ProviderConfig, description="Any OpenAI-compatible endpoint")
+    azure_openai: ProviderConfig = Field(default_factory=ProviderConfig, description="Azure OpenAI (model = deployment name)")
+    bedrock: BedrockProviderConfig = Field(default_factory=BedrockProviderConfig, description="AWS Bedrock Converse")
+    anthropic: ProviderConfig = Field(default_factory=ProviderConfig, description="Anthropic")
+    openai: ProviderConfig = Field(default_factory=ProviderConfig, description="OpenAI")
+    openrouter: ProviderConfig = Field(default_factory=ProviderConfig, description="OpenRouter API gateway")
+    huggingface: ProviderConfig = Field(default_factory=ProviderConfig, description="Hugging Face inference")
+    deepseek: ProviderConfig = Field(default_factory=ProviderConfig, description="DeepSeek")
+    groq: ProviderConfig = Field(default_factory=ProviderConfig, description="Groq")
+    zhipu: ProviderConfig = Field(default_factory=ProviderConfig, description="Zhipu AI")
+    zai_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig, description="Z.ai Coding Plan (separate quota from zhipu)")
+    dashscope: ProviderConfig = Field(default_factory=ProviderConfig, description="Alibaba DashScope")
+    vllm: ProviderConfig = Field(default_factory=ProviderConfig, description="vLLM local server")
+    ollama: ProviderConfig = Field(default_factory=ProviderConfig, description="Ollama local models")
+    lm_studio: ProviderConfig = Field(default_factory=ProviderConfig, description="LM Studio local models")
+    atomic_chat: ProviderConfig = Field(default_factory=ProviderConfig, description="Atomic Chat local models")
+    ovms: ProviderConfig = Field(default_factory=ProviderConfig, description="OpenVINO Model Server (OVMS)")
+    gemini: ProviderConfig = Field(default_factory=ProviderConfig, description="Google Gemini")
+    moonshot: ProviderConfig = Field(default_factory=ProviderConfig, description="Moonshot AI")
+    minimax: ProviderConfig = Field(default_factory=ProviderConfig, description="MiniMax")
+    minimax_anthropic: ProviderConfig = Field(default_factory=ProviderConfig, description="MiniMax Anthropic-compatible endpoint (thinking)")
+    mistral: ProviderConfig = Field(default_factory=ProviderConfig, description="Mistral AI")
+    stepfun: ProviderConfig = Field(default_factory=ProviderConfig, description="Step Fun (阶跃星辰)")
+    xiaomi_mimo: ProviderConfig = Field(default_factory=ProviderConfig, description="Xiaomi MIMO (小米)")
+    longcat: ProviderConfig = Field(default_factory=ProviderConfig, description="LongCat")
+    aihubmix: ProviderConfig = Field(default_factory=ProviderConfig, description="AiHubMix API gateway")
+    siliconflow: ProviderConfig = Field(default_factory=ProviderConfig, description="SiliconFlow (硅基流动)")
+    volcengine: ProviderConfig = Field(default_factory=ProviderConfig, description="VolcEngine (火山引擎)")
+    volcengine_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig, description="VolcEngine Coding Plan")
+    byteplus: ProviderConfig = Field(default_factory=ProviderConfig, description="BytePlus (VolcEngine international)")
+    byteplus_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig, description="BytePlus Coding Plan")
+    openai_codex: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True, description="OpenAI Codex (OAuth; managed by `durin login`, not persisted)")
+    github_copilot: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True, description="GitHub Copilot (OAuth; managed by `durin login`, not persisted)")
+    qianfan: ProviderConfig = Field(default_factory=ProviderConfig, description="Baidu Qianfan (百度千帆)")
+    nvidia: ProviderConfig = Field(default_factory=ProviderConfig, description="NVIDIA NIM (nvapi- keys)")
 
 
 class ApiConfig(Base):
     """OpenAI-compatible API server configuration."""
 
-    host: str = "127.0.0.1"  # Safer default: local-only bind.
-    port: int = 8900
-    timeout: float = 120.0  # Per-request timeout in seconds.
+    host: str = Field(default="127.0.0.1", description="Bind address; local-only by default")
+    port: int = Field(default=8900, description="API server listen port")
+    timeout: float = Field(default=120.0, description="Per-request timeout in seconds")
 
 
 class CronConfig(Base):
     """Cron scheduler configuration."""
 
-    run_history_max: int = Field(default=50, ge=1, le=1000)
-    run_session_retention_hours: int = Field(default=48, ge=0, le=8760)
+    run_history_max: int = Field(default=50, ge=1, le=1000, description="Maximum run-history entries kept per cron job")
+    run_session_retention_hours: int = Field(default=48, ge=0, le=8760, description="Hours a cron run's session data is retained; 0 deletes immediately after the run")
 
 
 class WorkflowConfig(Base):
     """Workflow engine configuration."""
 
-    max_node_visits: int = Field(default=25, ge=1)
-    # How many recent runs' working folders (.workflow/<run_id>/) to keep on disk.
-    keep_runs: int = Field(default=20, ge=1)
+    max_node_visits: int = Field(default=25, ge=1, description="Cap on total node visits per workflow run, bounding loops")
+    keep_runs: int = Field(default=20, ge=1, description="How many recent runs' working folders (.workflow/<run_id>/) to keep on disk")
 
 
 class GatewayConfig(Base):
     """Gateway/server configuration."""
 
-    host: str = "127.0.0.1"  # Safer default: local-only bind.
-    port: int = 18790
-    # When True, `durin gateway` runs detached (PID file + log file) so
-    # the terminal isn't locked. Opt-in because the foreground mode is
-    # easier to debug on first install. Toggle via `durin config set
-    # gateway.daemon true` or the onboard wizard.
-    daemon: bool = False
-    # When True, the gateway auto-enables the websocket channel at
-    # runtime so the embedded webui is served. Defaults to True because
-    # most users running `durin gateway` want the dashboard — toggling
-    # this off skips the auto-enable without touching channels.websocket.
+    host: str = Field(default="127.0.0.1", description="Bind address; local-only by default")
+    port: int = Field(default=18790, description="Gateway listen port")
+    # Opt-in because the foreground mode is easier to debug on first install.
+    daemon: bool = Field(default=False, description="Run `durin gateway` detached (PID file + log file) so the terminal isn't locked")
+    # Defaults to True because most users running `durin gateway` want the
+    # dashboard — toggling this off skips the auto-enable without touching
+    # channels.websocket.
     webui_enabled: bool = Field(
         default=True,
         validation_alias=AliasChoices("webuiEnabled", "webui_enabled"),
         serialization_alias="webuiEnabled",
+        description="Auto-enable the websocket channel at runtime so the embedded web dashboard is served",
     )
 
 
@@ -1029,10 +974,10 @@ class MCPOAuthConfig(Base):
     override. ``scope`` is an optional requested-scope hint.
     """
 
-    scope: str | None = None
-    client_id: str | None = None  # static client registration (skips DCR)
-    client_secret: str | None = None
-    callback_port: int = 1456  # loopback callback port for `durin mcp login`
+    scope: str | None = Field(default=None, description="Optional requested-scope hint sent in the OAuth flow")
+    client_id: str | None = Field(default=None, description="Static client registration id (skips dynamic client registration)")
+    client_secret: str | None = Field(default=None, description="Static client registration secret; pairs with client_id")
+    callback_port: int = Field(default=1456, description="Loopback callback port for `durin mcp login`")
 
 
 class MCPSamplingConfig(Base):
@@ -1043,37 +988,37 @@ class MCPSamplingConfig(Base):
     in. All limits below bound what a server can do once enabled.
     """
 
-    enabled: bool = False
-    model: str | None = None
-    allowed_models: list[str] = Field(default_factory=list)
-    max_tokens_cap: int = 4096
-    requests_per_minute: int = 10
-    allow_tools: bool = True
-    max_tool_rounds: int = 4
+    enabled: bool = Field(default=False, description="Allow this MCP server to initiate LLM calls (sampling); off by default")
+    model: str | None = Field(default=None, description="Model used for sampling requests; None = the current default model")
+    allowed_models: list[str] = Field(default_factory=list, description="Allowlist of models the server may request; empty = no restriction")
+    max_tokens_cap: int = Field(default=4096, description="Hard cap on tokens per sampling request")
+    requests_per_minute: int = Field(default=10, description="Rate limit for sampling requests")
+    allow_tools: bool = Field(default=True, description="Allow tool use inside sampling responses")
+    max_tool_rounds: int = Field(default=4, description="Maximum tool-use rounds per sampling request")
 
 
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
 
-    enabled: bool = True  # server-level on/off; disabled servers are skipped at connect and toggled at runtime
-    type: Literal["stdio", "sse", "streamableHttp"] | None = None  # auto-detected if omitted
-    command: str = ""  # Stdio: command to run (e.g. "npx")
-    args: list[str] = Field(default_factory=list)  # Stdio: command arguments
-    env: dict[str, str] = Field(default_factory=dict)  # Stdio: extra env vars
-    url: str = ""  # HTTP/SSE: endpoint URL
-    headers: dict[str, str] = Field(default_factory=dict)  # HTTP/SSE: custom headers
-    tool_timeout: int = 30  # seconds before a tool call is cancelled
-    tool_timeouts: dict[str, int] = Field(default_factory=dict)  # per-tool read-timeout override (raw tool name -> seconds)
-    catalog_timeout: float = 1.5  # short tools/list timeout at connect so a hung server can't stall startup
-    keepalive_interval: float = 180.0  # seconds between idle keepalive heartbeats
-    enabled_tools: list[str] = Field(default_factory=lambda: ["*"])  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools; [] = no tools
-    oauth: bool | MCPOAuthConfig | None = None  # mark server as OAuth-requiring; True = DCR defaults
-    allow_private_url: bool = False  # opt this server out of the SSRF private-IP block (off = blocked)
-    spawn_egress_policy: Literal["warn", "refuse", "off"] = "warn"  # stdio: action on a shell-interpreter+egress-tool spawn shape
-    malware_check: bool = True  # stdio: query OSV API for MAL-* advisories before spawning; fail-open on network error
-    sampling: MCPSamplingConfig = Field(default_factory=MCPSamplingConfig)
-    version: str = ""  # pinned package version from the registry server.json ("" = unpinned)
-    source_ref: str = ""  # registry ref this server was installed from (drives the update check)
+    enabled: bool = Field(default=True, description="Server-level on/off; disabled servers are skipped at connect and can be toggled at runtime")
+    type: Literal["stdio", "sse", "streamableHttp"] | None = Field(default=None, description='Transport: "stdio", "sse", or "streamableHttp"; auto-detected when omitted')
+    command: str = Field(default="", description='Stdio: command to run (e.g. "npx")')
+    args: list[str] = Field(default_factory=list, description="Stdio: command arguments")
+    env: dict[str, str] = Field(default_factory=dict, description="Stdio: extra environment variables for the server process")
+    url: str = Field(default="", description="HTTP/SSE: endpoint URL")
+    headers: dict[str, str] = Field(default_factory=dict, description="HTTP/SSE: custom request headers")
+    tool_timeout: int = Field(default=30, description="Seconds before a tool call is cancelled")
+    tool_timeouts: dict[str, int] = Field(default_factory=dict, description="Per-tool read-timeout override (raw tool name -> seconds)")
+    catalog_timeout: float = Field(default=1.5, description="tools/list timeout in seconds at connect, so a hung server can't stall startup")
+    keepalive_interval: float = Field(default=180.0, description="Seconds between idle keepalive heartbeats")
+    enabled_tools: list[str] = Field(default_factory=lambda: ["*"], description='Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools, [] = no tools')
+    oauth: bool | MCPOAuthConfig | None = Field(default=None, description="Mark the server as OAuth-requiring; true = dynamic-client-registration defaults, or an object for static registration")
+    allow_private_url: bool = Field(default=False, description="Opt this server out of the SSRF private-IP block (false = private IPs blocked)")
+    spawn_egress_policy: Literal["warn", "refuse", "off"] = Field(default="warn", description='Stdio: action when the spawn command looks like a shell interpreter with an egress tool: "warn", "refuse", or "off"')
+    malware_check: bool = Field(default=True, description="Stdio: query the OSV API for MAL-* advisories before spawning; fail-open on network error")
+    sampling: MCPSamplingConfig = Field(default_factory=MCPSamplingConfig, description="Governance for server-initiated LLM sampling")
+    version: str = Field(default="", description='Pinned package version from the registry server.json; "" = unpinned')
+    source_ref: str = Field(default="", description="Registry ref this server was installed from (drives the update check)")
 
     def oauth_config(self) -> "MCPOAuthConfig | None":
         """Normalize the oauth field to MCPOAuthConfig | None."""
@@ -1095,8 +1040,8 @@ class MCPDeferralConfig(Base):
     discovery indirection.
     """
 
-    enabled: bool = True
-    threshold_tokens: int = 20_000  # ~10% of a 200k context window
+    enabled: bool = Field(default=True, description="Enable the MCP tool-deferral bridge when the aggregate tool-schema size crosses the threshold")
+    threshold_tokens: int = Field(default=20_000, description="Aggregate MCP tool-schema size in tokens above which definitions are deferred behind mcp_find_tools / mcp_invoke (~10% of a 200k context window)")
 
 
 def _lazy_default(module_path: str, class_name: str) -> Any:
@@ -1114,17 +1059,17 @@ class ToolsConfig(Base):
     Base from schema.py).
     """
 
-    web: WebToolsConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.web", "WebToolsConfig"))
-    exec: ExecToolConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.shell", "ExecToolConfig"))
-    my: MyToolConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.self", "MyToolConfig"))
-    post_edit_check: PostEditCheckConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.post_edit_check", "PostEditCheckConfig"))
-    code_execution: CodeExecutionConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.code_execution", "CodeExecutionConfig"))
-    process: ProcessToolConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.process_registry", "ProcessToolConfig"))
-    restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
-    mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
-    mcp_discovery: McpDiscoveryConfig = Field(default_factory=McpDiscoveryConfig)
-    mcp_deferral: MCPDeferralConfig = Field(default_factory=MCPDeferralConfig)
-    ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
+    web: WebToolsConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.web", "WebToolsConfig"), description="Web search and fetch tools")
+    exec: ExecToolConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.shell", "ExecToolConfig"), description="Shell execution tool")
+    my: MyToolConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.self", "MyToolConfig"), description="Self-inspection tool")
+    post_edit_check: PostEditCheckConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.post_edit_check", "PostEditCheckConfig"), description="Post-edit linter checks on written/edited files")
+    code_execution: CodeExecutionConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.code_execution", "CodeExecutionConfig"), description="execute_code sandboxed Python tool")
+    process: ProcessToolConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.process_registry", "ProcessToolConfig"), description="Background-process registry (exec background=true / process tool)")
+    restrict_to_workspace: bool = Field(default=False, description="Restrict all tool file access to the workspace directory")
+    mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict, description="MCP server connections, keyed by server name")
+    mcp_discovery: McpDiscoveryConfig = Field(default_factory=McpDiscoveryConfig, description="MCP server discovery: registries, result cap, install gate")
+    mcp_deferral: MCPDeferralConfig = Field(default_factory=MCPDeferralConfig, description="Defer MCP tool definitions behind a discovery bridge when their aggregate schema size is large")
+    ssrf_whitelist: list[str] = Field(default_factory=list, description='CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)')
 
 
 class InstallConfig(Base):
@@ -1137,7 +1082,7 @@ class InstallConfig(Base):
     flagged by `durin doctor` instead of silently forgotten.
     """
 
-    extras: list[str] = Field(default_factory=list)
+    extras: list[str] = Field(default_factory=list, description="Additive set of optional dependency extras ever detected as importable; never auto-removed, so `durin doctor` can flag a reinstall that dropped them")
     auto_install_extras: bool = Field(
         default=True,
         description=(
@@ -1155,8 +1100,8 @@ class AppearanceConfig(Base):
     terminal (``COLORFGBG``) or the browser's ``prefers-color-scheme``.
     """
 
-    palette: str = "ithildin"  # ithildin | forge | mithril
-    mode: str = "auto"  # auto | light | dark
+    palette: str = Field(default="ithildin", description="Colour identity: ithildin, forge, or mithril")
+    mode: str = Field(default="auto", description="Light/dark mode: auto (detect from terminal/browser), light, or dark")
 
 
 class TelemetryPushConfig(Base):
@@ -1178,15 +1123,16 @@ class TelemetryPushConfig(Base):
     in ``config.json``. Use ``durin secrets set <name> <token>``.
     """
 
-    enabled: bool = False
-    url: str | None = None
+    enabled: bool = Field(default=False, description="Enable HTTPS push of telemetry events; local JSONL persistence runs unchanged either way")
+    url: str | None = Field(default=None, description="Destination endpoint URL for the telemetry POSTs")
     token_secret_name: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
             "tokenSecretName", "token_secret_name",
         ),
+        description="Durin secret name holding the bearer token (use `durin secret set <name> <token>`; never put the token in config directly)",
     )
-    batch_size: int = Field(default=10, ge=1, le=1000)
+    batch_size: int = Field(default=10, ge=1, le=1000, description="Events per HTTP batch")
 
 
 class TelemetryConfig(Base):
@@ -1196,7 +1142,7 @@ class TelemetryConfig(Base):
     HTTPS endpoint via :class:`TelemetryPushConfig`.
     """
 
-    push: TelemetryPushConfig = Field(default_factory=TelemetryPushConfig)
+    push: TelemetryPushConfig = Field(default_factory=TelemetryPushConfig, description="Opt-in HTTPS fan-out of telemetry events to your own endpoint")
 
 
 class LoggingConfig(Base):
@@ -1212,12 +1158,14 @@ class LoggingConfig(Base):
         default=5, ge=1, le=1024,
         validation_alias=AliasChoices("maxFileMb", "max_file_mb"),
         serialization_alias="maxFileMb",
-    )  # Size at which gateway.log rotates to a new segment.
+        description="File size in MB at which gateway.log rotates to a new segment",
+    )
     retention_days: int = Field(
         default=7, ge=1, le=365,
         validation_alias=AliasChoices("retentionDays", "retention_days"),
         serialization_alias="retentionDays",
-    )  # Age at which rotated gateway segments are deleted.
+        description="Age in days at which rotated gateway log segments are deleted",
+    )
 
 
 class CatalogRefreshConfig(Base):
@@ -1228,11 +1176,12 @@ class CatalogRefreshConfig(Base):
     prune/iteration logic.
     """
 
-    enabled: bool = True
+    enabled: bool = Field(default=True, description="Enable the periodic models.dev catalog refresh")
     interval_hours: int = Field(
         default=24, ge=1,
         validation_alias=AliasChoices("intervalHours", "interval_hours"),
         serialization_alias="intervalHours",
+        description="Refresh interval in hours",
     )
 
 
@@ -1243,67 +1192,70 @@ class McpCatalogRefreshConfig(Base):
     ``CatalogRefreshConfig`` for the skills model catalog.
     """
 
-    enabled: bool = True
+    enabled: bool = Field(default=True, description="Enable the periodic MCP catalog refresh")
     # Published weekly as a release asset (see .github/workflows/mcp-catalog.yml) —
     # a release asset, not a committed file, so the weekly rebuild never bloats git history.
-    url: str = "https://github.com/mmarmol/durin/releases/download/catalog/mcp_catalog.json"
+    url: str = Field(
+        default="https://github.com/mmarmol/durin/releases/download/catalog/mcp_catalog.json",
+        description="Catalog download URL (a weekly-published release asset)",
+    )
     interval_hours: int = Field(
         default=168, ge=1,
         validation_alias=AliasChoices("intervalHours", "interval_hours"),
         serialization_alias="intervalHours",
+        description="Refresh interval in hours (default 7 days)",
     )
 
 
 class Config(BaseSettings):
     """Root configuration for durin."""
 
-    agents: AgentsConfig = Field(default_factory=AgentsConfig)
-    appearance: AppearanceConfig = Field(default_factory=AppearanceConfig)
-    channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
-    transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig)
-    tts: TtsConfig = Field(default_factory=TtsConfig)
-    voice: VoiceConfig = Field(default_factory=VoiceConfig)
-    memory: MemoryConfig = Field(default_factory=MemoryConfig)
-    cron: CronConfig = Field(default_factory=CronConfig)
-    workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
-    skills: SkillsConfig = Field(default_factory=SkillsConfig)
-    providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+    agents: AgentsConfig = Field(default_factory=AgentsConfig, description="Agent loop: active model, generation parameters, session behavior, concurrency caps, auxiliary models")
+    appearance: AppearanceConfig = Field(default_factory=AppearanceConfig, description="Visual theme (palette + light/dark mode) shared by the TUI and the web dashboard")
+    channels: ChannelsConfig = Field(default_factory=ChannelsConfig, description="Global chat-channel defaults; channel-specific config lives as extra keys under this section")
+    transcription: TranscriptionConfig = Field(default_factory=TranscriptionConfig, description="Global voice transcription settings; channel-level keys override per-channel")
+    tts: TtsConfig = Field(default_factory=TtsConfig, description="Text-to-speech for spoken replies in conversational voice mode")
+    voice: VoiceConfig = Field(default_factory=VoiceConfig, description="Hands-free conversational voice mode (the gateway loop)")
+    memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Memory subsystem: vector retrieval, dream passes, file watcher, health checks")
+    cron: CronConfig = Field(default_factory=CronConfig, description="Cron scheduler: run history and per-run session retention")
+    workflow: WorkflowConfig = Field(default_factory=WorkflowConfig, description="Workflow engine: node-visit caps and run-folder retention")
+    skills: SkillsConfig = Field(default_factory=SkillsConfig, description="Skill subsystem governance: import security, install policy, discovery registries")
+    providers: ProvidersConfig = Field(default_factory=ProvidersConfig, description="API credentials and per-model parameter overrides for every LLM provider")
     catalog_refresh: CatalogRefreshConfig = Field(
         default_factory=CatalogRefreshConfig,
         validation_alias=AliasChoices("catalogRefresh", "catalog_refresh"),
         serialization_alias="catalogRefresh",
+        description="Daily models.dev catalog refresh into a user-cache overlay",
     )
     mcp_catalog_refresh: McpCatalogRefreshConfig = Field(
         default_factory=McpCatalogRefreshConfig,
         validation_alias=AliasChoices("mcpCatalogRefresh", "mcp_catalog_refresh"),
         serialization_alias="mcpCatalogRefresh",
+        description="Periodic refresh of the durin-owned MCP catalog",
     )
-    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
-    logging: LoggingConfig = Field(default_factory=LoggingConfig)
-    api: ApiConfig = Field(default_factory=ApiConfig)
-    gateway: GatewayConfig = Field(default_factory=GatewayConfig)
-    tools: ToolsConfig = Field(default_factory=ToolsConfig)
-    install: InstallConfig = Field(default_factory=InstallConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig, description="Telemetry: local JSONL always on, optional HTTPS push fan-out")
+    logging: LoggingConfig = Field(default_factory=LoggingConfig, description="Gateway daemon log lifecycle: rotation size and retention age for gateway.log")
+    api: ApiConfig = Field(default_factory=ApiConfig, description="OpenAI-compatible API server: bind address, port, timeout")
+    gateway: GatewayConfig = Field(default_factory=GatewayConfig, description="Gateway/server: bind address, port, daemon mode, embedded web dashboard")
+    tools: ToolsConfig = Field(default_factory=ToolsConfig, description="Built-in agent tools and MCP server connections")
+    install: InstallConfig = Field(default_factory=InstallConfig, description="Persistent install-level state (managed by durin; rarely edited by hand)")
     model_presets: dict[str, ModelPresetConfig] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("modelPresets", "model_presets"),
+        description="Named sets of model + generation parameters for quick switching, keyed by preset name",
     )
-    personas: dict[str, PersonaConfig] = Field(default_factory=dict)
-    # User-defined agent modes, keyed by name. Registered into the agent-mode
-    # registry at startup alongside the built-ins (build/plan/explore). The
-    # built-ins are not stored here; they cannot be overridden by a config entry.
+    personas: dict[str, PersonaConfig] = Field(default_factory=dict, description="Named personas (a SOUL plus an optional model), keyed by persona name")
+    # The built-ins (build/plan/explore) are not stored here; they cannot be
+    # overridden by a config entry.
     agent_modes: dict[str, ModeConfig] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("agentModes", "agent_modes"),
+        description="User-defined agent modes, keyed by name, registered at startup alongside the built-ins",
     )
-    # Per-model capability overrides — keyed by either the bare model
-    # name (``glm-5-turbo``) or the provider-qualified form
-    # (``custom/glm-5-turbo``). Provider-qualified keys win over bare
-    # names when both match. Values override the vendored snapshot and
-    # the heuristic fallback for that model only.
     model_capabilities: dict[str, ModelCapabilityOverride] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("modelCapabilities", "model_capabilities"),
+        description='Per-model capability overrides keyed by bare model name ("glm-5-turbo") or provider-qualified form ("custom/glm-5-turbo"); provider-qualified keys win; values override the vendored snapshot for that model only',
     )
 
     @model_validator(mode="after")

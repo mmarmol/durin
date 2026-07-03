@@ -2738,21 +2738,25 @@ export interface components {
         MCPOAuthConfig: {
             /**
              * Callback Port
+             * @description Loopback callback port for `durin mcp login`
              * @default 1456
              */
             callback_port: number;
             /**
              * Client Id
+             * @description Static client registration id (skips dynamic client registration)
              * @default null
              */
             client_id: string | null;
             /**
              * Client Secret
+             * @description Static client registration secret; pairs with client_id
              * @default null
              */
             client_secret: string | null;
             /**
              * Scope
+             * @description Optional requested-scope hint sent in the OAuth flow
              * @default null
              */
             scope: string | null;
@@ -2768,33 +2772,42 @@ export interface components {
         MCPSamplingConfig: {
             /**
              * Allow Tools
+             * @description Allow tool use inside sampling responses
              * @default true
              */
             allow_tools: boolean;
-            /** Allowed Models */
+            /**
+             * Allowed Models
+             * @description Allowlist of models the server may request; empty = no restriction
+             */
             allowed_models?: string[];
             /**
              * Enabled
+             * @description Allow this MCP server to initiate LLM calls (sampling); off by default
              * @default false
              */
             enabled: boolean;
             /**
              * Max Tokens Cap
+             * @description Hard cap on tokens per sampling request
              * @default 4096
              */
             max_tokens_cap: number;
             /**
              * Max Tool Rounds
+             * @description Maximum tool-use rounds per sampling request
              * @default 4
              */
             max_tool_rounds: number;
             /**
              * Model
+             * @description Model used for sampling requests; None = the current default model
              * @default null
              */
             model: string | null;
             /**
              * Requests Per Minute
+             * @description Rate limit for sampling requests
              * @default 10
              */
             requests_per_minute: number;
@@ -2806,84 +2819,113 @@ export interface components {
         MCPServerConfig: {
             /**
              * Allow Private Url
+             * @description Opt this server out of the SSRF private-IP block (false = private IPs blocked)
              * @default false
              */
             allow_private_url: boolean;
-            /** Args */
+            /**
+             * Args
+             * @description Stdio: command arguments
+             */
             args?: string[];
             /**
              * Catalog Timeout
+             * @description tools/list timeout in seconds at connect, so a hung server can't stall startup
              * @default 1.5
              */
             catalog_timeout: number;
             /**
              * Command
+             * @description Stdio: command to run (e.g. "npx")
              * @default
              */
             command: string;
             /**
              * Enabled
+             * @description Server-level on/off; disabled servers are skipped at connect and can be toggled at runtime
              * @default true
              */
             enabled: boolean;
-            /** Enabled Tools */
+            /**
+             * Enabled Tools
+             * @description Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools, [] = no tools
+             */
             enabled_tools?: string[];
-            /** Env */
+            /**
+             * Env
+             * @description Stdio: extra environment variables for the server process
+             */
             env?: {
                 [key: string]: string;
             };
-            /** Headers */
+            /**
+             * Headers
+             * @description HTTP/SSE: custom request headers
+             */
             headers?: {
                 [key: string]: string;
             };
             /**
              * Keepalive Interval
+             * @description Seconds between idle keepalive heartbeats
              * @default 180
              */
             keepalive_interval: number;
             /**
              * Malware Check
+             * @description Stdio: query the OSV API for MAL-* advisories before spawning; fail-open on network error
              * @default true
              */
             malware_check: boolean;
             /**
              * Oauth
+             * @description Mark the server as OAuth-requiring; true = dynamic-client-registration defaults, or an object for static registration
              * @default null
              */
             oauth: boolean | components["schemas"]["MCPOAuthConfig"] | null;
+            /** @description Governance for server-initiated LLM sampling */
             sampling?: components["schemas"]["MCPSamplingConfig"];
             /**
              * Source Ref
+             * @description Registry ref this server was installed from (drives the update check)
              * @default
              */
             source_ref: string;
             /**
              * Spawn Egress Policy
+             * @description Stdio: action when the spawn command looks like a shell interpreter with an egress tool: "warn", "refuse", or "off"
              * @default warn
              * @enum {string}
              */
             spawn_egress_policy: "warn" | "refuse" | "off";
             /**
              * Tool Timeout
+             * @description Seconds before a tool call is cancelled
              * @default 30
              */
             tool_timeout: number;
-            /** Tool Timeouts */
+            /**
+             * Tool Timeouts
+             * @description Per-tool read-timeout override (raw tool name -> seconds)
+             */
             tool_timeouts?: {
                 [key: string]: number;
             };
             /**
              * Type
+             * @description Transport: "stdio", "sse", or "streamableHttp"; auto-detected when omitted
              * @default null
              */
             type: ("stdio" | "sse" | "streamableHttp") | null;
             /**
              * Url
+             * @description HTTP/SSE: endpoint URL
              * @default
              */
             url: string;
             /**
              * Version
+             * @description Pinned package version from the registry server.json; "" = unpinned
              * @default
              */
             version: string;

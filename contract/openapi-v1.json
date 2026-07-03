@@ -1670,6 +1670,7 @@
         "properties": {
           "callback_port": {
             "default": 1456,
+            "description": "Loopback callback port for `durin mcp login`",
             "title": "Callback Port",
             "type": "integer"
           },
@@ -1683,6 +1684,7 @@
               }
             ],
             "default": null,
+            "description": "Static client registration id (skips dynamic client registration)",
             "title": "Client Id"
           },
           "client_secret": {
@@ -1695,6 +1697,7 @@
               }
             ],
             "default": null,
+            "description": "Static client registration secret; pairs with client_id",
             "title": "Client Secret"
           },
           "scope": {
@@ -1707,6 +1710,7 @@
               }
             ],
             "default": null,
+            "description": "Optional requested-scope hint sent in the OAuth flow",
             "title": "Scope"
           }
         },
@@ -1718,10 +1722,12 @@
         "properties": {
           "allow_tools": {
             "default": true,
+            "description": "Allow tool use inside sampling responses",
             "title": "Allow Tools",
             "type": "boolean"
           },
           "allowed_models": {
+            "description": "Allowlist of models the server may request; empty = no restriction",
             "items": {
               "type": "string"
             },
@@ -1730,16 +1736,19 @@
           },
           "enabled": {
             "default": false,
+            "description": "Allow this MCP server to initiate LLM calls (sampling); off by default",
             "title": "Enabled",
             "type": "boolean"
           },
           "max_tokens_cap": {
             "default": 4096,
+            "description": "Hard cap on tokens per sampling request",
             "title": "Max Tokens Cap",
             "type": "integer"
           },
           "max_tool_rounds": {
             "default": 4,
+            "description": "Maximum tool-use rounds per sampling request",
             "title": "Max Tool Rounds",
             "type": "integer"
           },
@@ -1753,10 +1762,12 @@
               }
             ],
             "default": null,
+            "description": "Model used for sampling requests; None = the current default model",
             "title": "Model"
           },
           "requests_per_minute": {
             "default": 10,
+            "description": "Rate limit for sampling requests",
             "title": "Requests Per Minute",
             "type": "integer"
           }
@@ -1769,10 +1780,12 @@
         "properties": {
           "allow_private_url": {
             "default": false,
+            "description": "Opt this server out of the SSRF private-IP block (false = private IPs blocked)",
             "title": "Allow Private Url",
             "type": "boolean"
           },
           "args": {
+            "description": "Stdio: command arguments",
             "items": {
               "type": "string"
             },
@@ -1781,20 +1794,24 @@
           },
           "catalog_timeout": {
             "default": 1.5,
+            "description": "tools/list timeout in seconds at connect, so a hung server can't stall startup",
             "title": "Catalog Timeout",
             "type": "number"
           },
           "command": {
             "default": "",
+            "description": "Stdio: command to run (e.g. \"npx\")",
             "title": "Command",
             "type": "string"
           },
           "enabled": {
             "default": true,
+            "description": "Server-level on/off; disabled servers are skipped at connect and can be toggled at runtime",
             "title": "Enabled",
             "type": "boolean"
           },
           "enabled_tools": {
+            "description": "Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; [\"*\"] = all tools, [] = no tools",
             "items": {
               "type": "string"
             },
@@ -1805,6 +1822,7 @@
             "additionalProperties": {
               "type": "string"
             },
+            "description": "Stdio: extra environment variables for the server process",
             "title": "Env",
             "type": "object"
           },
@@ -1812,16 +1830,19 @@
             "additionalProperties": {
               "type": "string"
             },
+            "description": "HTTP/SSE: custom request headers",
             "title": "Headers",
             "type": "object"
           },
           "keepalive_interval": {
             "default": 180.0,
+            "description": "Seconds between idle keepalive heartbeats",
             "title": "Keepalive Interval",
             "type": "number"
           },
           "malware_check": {
             "default": true,
+            "description": "Stdio: query the OSV API for MAL-* advisories before spawning; fail-open on network error",
             "title": "Malware Check",
             "type": "boolean"
           },
@@ -1838,18 +1859,22 @@
               }
             ],
             "default": null,
+            "description": "Mark the server as OAuth-requiring; true = dynamic-client-registration defaults, or an object for static registration",
             "title": "Oauth"
           },
           "sampling": {
-            "$ref": "#/components/schemas/MCPSamplingConfig"
+            "$ref": "#/components/schemas/MCPSamplingConfig",
+            "description": "Governance for server-initiated LLM sampling"
           },
           "source_ref": {
             "default": "",
+            "description": "Registry ref this server was installed from (drives the update check)",
             "title": "Source Ref",
             "type": "string"
           },
           "spawn_egress_policy": {
             "default": "warn",
+            "description": "Stdio: action when the spawn command looks like a shell interpreter with an egress tool: \"warn\", \"refuse\", or \"off\"",
             "enum": [
               "warn",
               "refuse",
@@ -1860,6 +1885,7 @@
           },
           "tool_timeout": {
             "default": 30,
+            "description": "Seconds before a tool call is cancelled",
             "title": "Tool Timeout",
             "type": "integer"
           },
@@ -1867,6 +1893,7 @@
             "additionalProperties": {
               "type": "integer"
             },
+            "description": "Per-tool read-timeout override (raw tool name -> seconds)",
             "title": "Tool Timeouts",
             "type": "object"
           },
@@ -1885,15 +1912,18 @@
               }
             ],
             "default": null,
+            "description": "Transport: \"stdio\", \"sse\", or \"streamableHttp\"; auto-detected when omitted",
             "title": "Type"
           },
           "url": {
             "default": "",
+            "description": "HTTP/SSE: endpoint URL",
             "title": "Url",
             "type": "string"
           },
           "version": {
             "default": "",
+            "description": "Pinned package version from the registry server.json; \"\" = unpinned",
             "title": "Version",
             "type": "string"
           }
