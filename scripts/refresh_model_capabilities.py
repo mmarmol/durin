@@ -551,6 +551,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true", help="don't write the output file")
     parser.add_argument("--output", type=Path, default=OUTPUT_PATH, help="output JSON path")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="fail (before writing anything) if any source fetch fails — "
+        "community sources or NVIDIA's /v1/models. For unattended CI runs, "
+        "where a fallback warning goes unseen and a partial merge or drifted "
+        "ids would be committed silently.",
+    )
     args = parser.parse_args()
 
     sources: dict[str, Any] = {"litellm": None, "openrouter": None, "models.dev": None}
@@ -564,6 +572,31 @@ def main() -> int:
             sources[name] = _fetch_json(url)
         except Exception as exc:
             print(f"  ! {name} failed: {exc}", file=sys.stderr)
+
+    # NVIDIA's public /v1/models is the id ground truth for its catalog
+    # section (used further down); fetched here so --strict can gate on it
+    # before anything is written.
+    from durin.providers.models_dev import (
+        NVIDIA_MODELS_URL,
+        apply_nvidia_live_ids,
+        fetch_nvidia_model_ids,
+    )
+
+    print(f"  → GET {NVIDIA_MODELS_URL}", file=sys.stderr)
+    nvidia_ids = fetch_nvidia_model_ids()
+    if nvidia_ids is None:
+        print("  ! nvidia /v1/models failed", file=sys.stderr)
+
+    if args.strict:
+        failed = [k for k, v in sources.items() if v is None]
+        if nvidia_ids is None:
+            failed.append("nvidia /v1/models")
+        if failed:
+            print(
+                f"ERROR: --strict set and source(s) failed: {', '.join(failed)}",
+                file=sys.stderr,
+            )
+            return 1
 
     print("\nFetching vendor sources (when API keys are present)…", file=sys.stderr)
     vendor_streams, vendor_attempted, vendor_skipped = iter_vendor_streams(_canonical_key)
@@ -638,6 +671,22 @@ def main() -> int:
         from durin.providers.models_dev import build_provider_models
 
         index = build_provider_models(md_raw, set(ProvidersConfig.model_fields))
+        # NVIDIA: ids from the provider's own public /v1/models (ground truth,
+        # fetched above); models.dev only fills capability metadata.
+        if nvidia_ids:
+            index["nvidia"] = apply_nvidia_live_ids(
+                index.get("nvidia") or [], nvidia_ids
+            )
+            print(
+                f"NVIDIA live /v1/models: {len(nvidia_ids)} models (ids ground-truthed).",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "WARNING: NVIDIA /v1/models unreachable — keeping models.dev "
+                "nvidia list (known to drift).",
+                file=sys.stderr,
+            )
         payload2 = {
             "schema_version": 1,
             "generated_at": payload["generated_at"],

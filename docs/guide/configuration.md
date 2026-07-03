@@ -444,7 +444,10 @@ deployment name.
 
 ### `catalog_refresh`
 
-Daily models.dev catalog refresh (top-level config field, peer of `providers` and `tools`).
+Daily model-catalog refresh (top-level config field, peer of `providers` and `tools`).
+Re-fetches the per-provider model index from models.dev; NVIDIA's model ids come from
+its own public `/v1/models` endpoint instead (models.dev drifts for that provider),
+with models.dev filling in capability metadata.
 
 | Key | Default | Meaning |
 |---|---|---|

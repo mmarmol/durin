@@ -13,7 +13,12 @@ import threading
 import urllib.request
 from pathlib import Path
 
-from durin.providers.models_dev import MODELS_DEV_URL, build_provider_models
+from durin.providers.models_dev import (
+    MODELS_DEV_URL,
+    apply_nvidia_live_ids,
+    build_provider_models,
+    fetch_nvidia_model_ids,
+)
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 
@@ -32,6 +37,16 @@ def refresh_provider_models_cache(data_dir: Path) -> bool:
     index = build_provider_models(data, set(ProvidersConfig.model_fields))
     if not index:
         return False
+    # NVIDIA: ids come from the provider's own public /v1/models (models.dev
+    # drifts and re-spells them); models.dev only contributes capability
+    # metadata. If NVIDIA is unreachable, drop the provider from this cache so
+    # the overlay falls through to the vendored floor (already ground-truthed
+    # at build time) instead of resurrecting models.dev's drifted list.
+    live_ids = fetch_nvidia_model_ids()
+    if live_ids:
+        index["nvidia"] = apply_nvidia_live_ids(index.get("nvidia") or [], live_ids)
+    else:
+        index.pop("nvidia", None)
     cache_path = data_dir / "provider_models_cache.json"
     data_dir.mkdir(parents=True, exist_ok=True)
     with cross_process_lock(cache_path):
