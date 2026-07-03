@@ -61,3 +61,60 @@ def test_active_persona_returns_soul_and_model(tmp_path):
 
     assert body == soul_body
     assert model_ref == "test-preset"
+
+
+def _cfg(channels: dict, default: str | None = None):
+    from types import SimpleNamespace
+
+    class _Channels:
+        pass
+
+    ch = _Channels()
+    for name, section in channels.items():
+        setattr(ch, name, section)
+    return SimpleNamespace(
+        channels=ch,
+        agents=SimpleNamespace(defaults=SimpleNamespace(persona=default)),
+    )
+
+
+def test_channel_default_persona_applies_to_fresh_sessions():
+    cfg = _cfg({"slack": {"persona": "work"}}, default="home")
+    assert resolve_active_persona_name(cfg, None, None, channel="slack", chat_id="D1") == "work"
+
+
+def test_chat_persona_overrides_channel_default():
+    cfg = _cfg(
+        {"slack": {"persona": "work", "chat_personas": {"C_OPS": "ops"}}}, default="home"
+    )
+    assert (
+        resolve_active_persona_name(cfg, None, None, channel="slack", chat_id="C_OPS") == "ops"
+    )
+    assert (
+        resolve_active_persona_name(cfg, None, None, channel="slack", chat_id="C_OTHER")
+        == "work"
+    )
+
+
+def test_session_persona_beats_channel_config():
+    cfg = _cfg({"slack": {"persona": "work", "chat_personas": {"C1": "ops"}}}, default="home")
+    meta = {"persona": "picked"}
+    assert resolve_active_persona_name(cfg, meta, None, channel="slack", chat_id="C1") == "picked"
+
+
+def test_cron_override_beats_everything():
+    cfg = _cfg({"slack": {"persona": "work"}}, default="home")
+    assert (
+        resolve_active_persona_name(cfg, {"persona": "picked"}, "cronp", channel="slack")
+        == "cronp"
+    )
+
+
+def test_channel_without_persona_falls_back_to_global_default():
+    cfg = _cfg({"slack": {"enabled": True}}, default="home")
+    assert resolve_active_persona_name(cfg, None, None, channel="slack", chat_id="D1") == "home"
+
+
+def test_unknown_channel_falls_back_to_global_default():
+    cfg = _cfg({}, default="home")
+    assert resolve_active_persona_name(cfg, None, None, channel="ghost", chat_id="x") == "home"

@@ -61,6 +61,10 @@ async def test_slack_returns_typed_field_schema():
     assert by_name["group_policy"]["options"] == ["open", "mention", "allowlist"]
     assert by_name["reply_in_thread"]["group"] == "behavior"
     # Emoji + thread_context_limit stay config-file-only (no group/secret marker).
+    assert by_name["persona"]["group"] == "behavior"
+    assert by_name["open_channels"]["type"] == "string_list"
+    # chat_personas is managed from the guided channels panel, not the form.
+    assert "chat_personas" not in by_name
     assert set(by_name) == {
         "bot_token",
         "app_token",
@@ -68,8 +72,10 @@ async def test_slack_returns_typed_field_schema():
         "dm_enabled",
         "group_policy",
         "group_allow_from",
+        "open_channels",
         "reply_in_thread",
         "include_thread_context",
         "streaming",
         "thread_auto_follow",
+        "persona",
     }

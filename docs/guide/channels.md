@@ -64,6 +64,12 @@ a message to the agent.
 **`allow_from`** is a list of platform-specific sender IDs (Telegram numeric
 IDs, Slack user IDs, email addresses, etc.). Set `["*"]` to allow anyone.
 
+Channels can also carry their own identity: a `persona` key on any channel
+section makes sessions born there use that persona (and the model it pins)
+instead of the global default — e.g. a work persona on Slack and a personal
+one on Telegram. Precedence: cron-job override > persona picked in the
+conversation > per-chat mapping > channel default > global default.
+
 When `allow_from` is omitted or a sender is not on the list, durin enters
 **pairing mode**: the unknown sender receives a time-limited code (valid for
 10 minutes), and you approve or deny it from any active channel:
@@ -263,6 +269,9 @@ group_policy = "mention"  # "open", "mention", or "allowlist"
 | `dm_enabled` | `true` | Listen to direct messages at all |
 | `group_policy` | `"mention"` | `"open"`, `"mention"`, or `"allowlist"` |
 | `group_allow_from` | `[]` | Channel IDs allowed when `group_policy = "allowlist"` |
+| `open_channels` | `[]` | Channels where the bot replies to every message, regardless of `group_policy` — mix open rooms with mention-only rooms |
+| `persona` | `""` | Default persona for sessions born on this channel (empty = global default) |
+| `chat_personas` | `{}` | Per-conversation persona overrides (`{"C0123": "ops"}`); managed from the guided panel's channel list |
 | `reply_in_thread` | `true` | Reply in the originating thread |
 | `react_emoji` | `"eyes"` | Reaction added while processing |
 | `done_emoji` | `"white_check_mark"` | Reaction added when done |
@@ -275,6 +284,10 @@ group_policy = "mention"  # "open", "mention", or "allowlist"
 Sender authorization is enforced at durin's central inbound gate, the same as
 every other channel: approve a sender by adding their Slack user ID to
 `allow_from` or by completing the pairing exchange durin starts in the DM.
+
+Both routing and identity can be tuned per workspace channel from the guided
+panel's channel list: a *Reply to all* toggle (writes `open_channels`) and a
+persona dropdown (writes `chat_personas`).
 
 Content quoted or forwarded with Slack's *Share message* — which Slack omits
 from the plain message text — is extracted from the rich-text blocks and

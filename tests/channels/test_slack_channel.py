@@ -1008,3 +1008,41 @@ async def test_thread_auto_follow_can_be_disabled() -> None:
                        thread_ts="400.000", envelope_id="g2"),
     )
     assert channel._handle_message.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_open_channels_respond_without_mention_under_mention_policy() -> None:
+    channel = SlackChannel(
+        SlackConfig(
+            enabled=True, allow_from=["*"], group_policy="mention", open_channels=["C_OPEN"]
+        ),
+        MessageBus(),
+    )
+    channel._bot_user_id = "UBOT"
+    channel._web_client = _FakeAsyncWebClient()
+    channel._handle_message = AsyncMock()  # type: ignore[method-assign]
+    channel._with_thread_context = AsyncMock(side_effect=lambda text, **kw: text)  # type: ignore[method-assign]
+    client = SimpleNamespace(send_socket_mode_response=AsyncMock())
+
+    def message_in(chat_id: str, envelope_id: str):
+        return SimpleNamespace(
+            type="events_api",
+            envelope_id=envelope_id,
+            payload={
+                "event_id": f"Ev-{envelope_id}",
+                "event": {
+                    "type": "message",
+                    "user": "U1",
+                    "channel": chat_id,
+                    "channel_type": "channel",
+                    "text": "no mention here",
+                    "ts": "500.000",
+                },
+            },
+        )
+
+    await channel._on_socket_request(client, message_in("C_OPEN", "o1"))
+    assert channel._handle_message.await_count == 1
+
+    await channel._on_socket_request(client, message_in("C_GATED", "o2"))
+    assert channel._handle_message.await_count == 1

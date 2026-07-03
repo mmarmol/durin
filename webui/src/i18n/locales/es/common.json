@@ -312,7 +312,8 @@
         "runtimeRunning": "Canal corriendo — conectado a Slack vía Socket Mode.",
         "runtimeStopped": "Canal detenido — los mensajes no van a llegar hasta que arranque.",
         "runtimeStart": "Arrancar canal",
-        "runtimeStarting": "Arrancando…"
+        "runtimeStarting": "Arrancando…",
+        "respondAll": "Responder a todo"
       },
       "desc": {
         "websocket": "Transporte del panel web y de clientes WebSocket externos. Siempre activo mientras el panel esté habilitado. El token es opcional, solo para clientes externos.",
@@ -354,7 +355,9 @@
         "allowed_attachment_types": "Tipos de adjunto permitidos",
         "max_attachment_size": "Tamaño máx. de adjunto",
         "max_attachments_per_email": "Máx. adjuntos por correo",
-        "token": "Token"
+        "token": "Token",
+        "persona": "Persona",
+        "open_channels": "Canales abiertos"
       },
       "optionLabel": {
         "group_policy": {
@@ -367,8 +370,10 @@
         "allow_from": "",
         "email_allow_from": "a@b.com, c@d.com",
         "slack_allow_from": "U0123ABCD, o * para todos",
-        "slack_group_allow_from": "C0123ABCD, C0456EFGH"
-      }
+        "slack_group_allow_from": "C0123ABCD, C0456EFGH",
+        "slack_open_channels": "C0123ABCD, C0456EFGH"
+      },
+      "personaDefault": "Persona por defecto"
     },
     "config": {
       "description": "Cada configuración de durin, agrupada por sección. Editar un valor lo escribe directamente al config — igual que durin config set. Las listas y secrets gestionados son de solo lectura aquí.",

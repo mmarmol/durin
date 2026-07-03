@@ -361,9 +361,15 @@ Channel-specific extensions:
   trigger the bot (empty means all).
 - **Slack**: `dm_enabled` (routing toggle for DMs), `group_policy`
   (`open`/`mention`/`allowlist`), `group_allow_from` (channel IDs for the
-  allowlist policy), and `thread_auto_follow` (answer follow-ups in a
-  mentioned thread without re-mention). Sender authorization uses the
-  standard `allow_from` + pairing flow via the central ingress gate.
+  allowlist policy), `open_channels` (rooms that reply to every message under
+  any policy), and `thread_auto_follow` (answer follow-ups in a mentioned
+  thread without re-mention). Sender authorization uses the standard
+  `allow_from` + pairing flow via the central ingress gate.
+- **Persona per channel** (any adapter): a `persona` key on the channel
+  section sets the default persona for sessions born there; a
+  `chat_personas` map (chat id → persona name) refines it per conversation.
+  Resolution lives in `durin.personas.resolve` with precedence: cron
+  override > session pick > chat map > channel default > global default.
 - **Email**: `imap_host`, `imap_port`, `imap_username`, `imap_password`,
   `imap_mailbox`, `imap_use_ssl`, `smtp_host`, `smtp_port`, `smtp_username`,
   `smtp_password`, `smtp_use_tls`, `smtp_use_ssl`, `auto_reply_enabled`.
