@@ -1486,21 +1486,24 @@ class AgentLoop:
             logger.warning("Command '{}' matched but dispatch returned None", raw)
 
     async def _notify_queued(self, msg: InboundMessage) -> None:
-        """Tell a websocket client its message was deferred (queued) mid-turn.
+        """Tell the sender's surface its message was deferred (queued) mid-turn.
 
-        Best-effort UI signal only — non-websocket channels have no live
-        surface to show it on, so they are skipped.
+        Best-effort UI signal only. The websocket channel turns it into a
+        ``message_queued`` frame (the webui's queued chip); the CLI/TUI show
+        the content as a progress line / toast. Other channels have no live
+        surface for it, so they are skipped.
         """
-        if msg.channel != "websocket":
+        if msg.channel not in ("websocket", "cli"):
             return
-        metadata: dict[str, Any] = {"_message_queued": True}
+        metadata: dict[str, Any] = {"_message_queued": True, "_progress": True}
         client_msg_id = msg.metadata.get("client_msg_id")
         if client_msg_id:
             metadata["client_msg_id"] = client_msg_id
         with suppress(Exception):
             await self.bus.publish_outbound(OutboundMessage(
                 channel=msg.channel, chat_id=msg.chat_id,
-                content="", metadata=metadata,
+                content="Queued — will be read when the current turn finishes.",
+                metadata=metadata,
             ))
 
     async def _ack_queued_consumed(self, consumed: list[InboundMessage]) -> None:

@@ -358,3 +358,55 @@ async def test_consumer_emits_queued_ack_for_deferred_websocket_message(tmp_path
     assert len(acks) == 1
     assert acks[0].metadata.get("client_msg_id") == "cm-1"
     assert acks[0].chat_id == "c"
+    # The ack body doubles as the CLI progress line, so it must be readable.
+    assert "Queued" in acks[0].content
+    assert acks[0].metadata.get("_progress") is True
+
+
+async def _collect_queued_acks(tmp_path, msg):
+    """Route *msg* to the deferred queue and return any _message_queued acks."""
+    from durin.agent.loop import PendingQueues
+
+    loop = _make_loop(tmp_path)
+    loop._dispatch = AsyncMock()  # type: ignore[method-assign]
+    pending = PendingQueues.create()
+    loop._pending_queues[msg.session_key] = pending
+
+    run_task = asyncio.create_task(loop.run())
+    await loop.bus.publish_inbound(msg)
+    deadline = time.time() + 2
+    while pending.deferred.empty() and time.time() < deadline:
+        await asyncio.sleep(0.01)
+    loop.stop()
+    await asyncio.wait_for(run_task, timeout=2)
+
+    acks = []
+    while not loop.bus.outbound.empty():
+        out = await loop.bus.consume_outbound()
+        if out.metadata.get("_message_queued"):
+            acks.append(out)
+    return acks
+
+
+@pytest.mark.asyncio
+async def test_consumer_emits_queued_ack_for_cli_channel(tmp_path):
+    """The TUI/CLI surface gets the queued notice too (toast / progress line)."""
+    from durin.bus.events import InboundMessage
+
+    acks = await _collect_queued_acks(tmp_path, InboundMessage(
+        channel="cli", sender_id="user", chat_id="direct", content="follow-up",
+    ))
+    assert len(acks) == 1
+    assert acks[0].channel == "cli"
+    assert "Queued" in acks[0].content
+
+
+@pytest.mark.asyncio
+async def test_no_queued_ack_for_chat_channels(tmp_path):
+    """Channels without a live surface (telegram, slack, …) stay silent."""
+    from durin.bus.events import InboundMessage
+
+    acks = await _collect_queued_acks(tmp_path, InboundMessage(
+        channel="telegram", sender_id="u", chat_id="123", content="follow-up",
+    ))
+    assert acks == []

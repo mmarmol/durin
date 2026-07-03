@@ -169,8 +169,8 @@ model in the background. For each message it decides the routing in order:
   queues, the message is routed there instead of starting a new turn (or, if it
   is itself a non-priority command, dispatched inline). Steers and system
   results go to the inject queue; plain user messages go to the deferred queue,
-  and websocket clients get a `message_queued` ack so the UI can show the
-  message as queued.
+  and the sender's surface is told (a `message_queued` websocket ack drives the
+  webui chip; the CLI/TUI print or toast the notice).
 - **New turn.** Otherwise the loop registers fresh pending queues for the
   session and `create_task(self._dispatch(msg, pending))`. The task is tracked
   per session so `/stop` can find and cancel it.
