@@ -379,8 +379,10 @@ async def test_loop_injected_followup_preserves_image_media(tmp_path):
     loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
     loop.tools.get_definitions = MagicMock(return_value=[])
 
-    pending_queue = asyncio.Queue()
-    await pending_queue.put(InboundMessage(
+    from durin.agent.loop import PendingQueues
+
+    pending = PendingQueues.create()
+    await pending.deferred.put(InboundMessage(
         channel="cli",
         sender_id="u",
         chat_id="c",
@@ -392,7 +394,7 @@ async def test_loop_injected_followup_preserves_image_media(tmp_path):
         [{"role": "user", "content": "hello"}],
         channel="cli",
         chat_id="c",
-        pending_queue=pending_queue,
+        pending_queues=pending,
     )
 
     assert final_content == "second answer"
@@ -569,11 +571,13 @@ async def test_followup_routed_to_pending_queue(tmp_path):
     from durin.agent.loop import UNIFIED_SESSION_KEY
     from durin.bus.events import InboundMessage
 
+    from durin.agent.loop import PendingQueues
+
     loop = _make_loop(tmp_path)
     loop._unified_session = True
     loop._dispatch = AsyncMock()  # type: ignore[method-assign]
 
-    pending = asyncio.Queue(maxsize=20)
+    pending = PendingQueues.create()
     loop._pending_queues[UNIFIED_SESSION_KEY] = pending
 
     run_task = asyncio.create_task(loop.run())
@@ -581,15 +585,17 @@ async def test_followup_routed_to_pending_queue(tmp_path):
     await loop.bus.publish_inbound(msg)
 
     deadline = time.time() + 2
-    while pending.empty() and time.time() < deadline:
+    while pending.deferred.empty() and time.time() < deadline:
         await asyncio.sleep(0.01)
 
     loop.stop()
     await asyncio.wait_for(run_task, timeout=2)
 
     assert loop._dispatch.await_count == 0
-    assert not pending.empty()
-    queued_msg = pending.get_nowait()
+    # A plain user message defers; the inject queue stays empty.
+    assert pending.inject.empty()
+    assert not pending.deferred.empty()
+    queued_msg = pending.deferred.get_nowait()
     assert queued_msg.content == "follow-up"
     assert queued_msg.session_key == UNIFIED_SESSION_KEY
 
@@ -617,10 +623,12 @@ async def test_pending_queue_preserves_overflow_for_next_injection_cycle(tmp_pat
     loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
     loop.tools.get_definitions = MagicMock(return_value=[])
 
-    pending_queue = asyncio.Queue()
+    from durin.agent.loop import PendingQueues
+
+    pending = PendingQueues.create()
     total_followups = _MAX_INJECTIONS_PER_TURN + 2
     for idx in range(total_followups):
-        await pending_queue.put(InboundMessage(
+        await pending.deferred.put(InboundMessage(
             channel="cli",
             sender_id="u",
             chat_id="c",
@@ -631,7 +639,7 @@ async def test_pending_queue_preserves_overflow_for_next_injection_cycle(tmp_pat
         [{"role": "user", "content": "hello"}],
         channel="cli",
         chat_id="c",
-        pending_queue=pending_queue,
+        pending_queues=pending,
     )
 
     assert final_content == "answer-3"
@@ -644,7 +652,7 @@ async def test_pending_queue_preserves_overflow_for_next_injection_cycle(tmp_pat
     )
     for idx in range(total_followups):
         assert f"follow-up-{idx}" in flattened_user_content
-    assert pending_queue.empty()
+    assert pending.deferred.empty()
 
 
 @pytest.mark.asyncio
@@ -652,11 +660,13 @@ async def test_pending_queue_full_falls_back_to_queued_task(tmp_path):
     """QueueFull should preserve the message by dispatching a queued task."""
     from durin.bus.events import InboundMessage
 
+    from durin.agent.loop import PendingQueues
+
     loop = _make_loop(tmp_path)
     loop._dispatch = AsyncMock()  # type: ignore[method-assign]
 
-    pending = asyncio.Queue(maxsize=1)
-    pending.put_nowait(InboundMessage(channel="cli", sender_id="u", chat_id="c", content="already queued"))
+    pending = PendingQueues.create(maxsize=1)
+    pending.deferred.put_nowait(InboundMessage(channel="cli", sender_id="u", chat_id="c", content="already queued"))
     loop._pending_queues["cli:c"] = pending
 
     run_task = asyncio.create_task(loop.run())
@@ -673,7 +683,7 @@ async def test_pending_queue_full_falls_back_to_queued_task(tmp_path):
     assert loop._dispatch.await_count == 1
     dispatched_msg = loop._dispatch.await_args.args[0]
     assert dispatched_msg.content == "follow-up"
-    assert pending.qsize() == 1
+    assert pending.deferred.qsize() == 1
 
 
 @pytest.mark.asyncio
@@ -689,25 +699,28 @@ async def test_dispatch_republishes_leftover_queue_messages(tmp_path):
     loop = _make_loop(tmp_path)
     bus = loop.bus
 
-    # Simulate a completed dispatch by manually registering a queue
+    # Simulate a completed dispatch by manually registering queues
     # with leftover messages, then running the cleanup logic directly.
-    pending = asyncio.Queue(maxsize=20)
+    from durin.agent.loop import PendingQueues
+
+    pending = PendingQueues.create()
     session_key = "cli:c"
     loop._pending_queues[session_key] = pending
-    pending.put_nowait(InboundMessage(channel="cli", sender_id="u", chat_id="c", content="leftover-1"))
-    pending.put_nowait(InboundMessage(channel="cli", sender_id="u", chat_id="c", content="leftover-2"))
+    pending.inject.put_nowait(InboundMessage(channel="system", sender_id="subagent", chat_id="c", content="leftover-1"))
+    pending.deferred.put_nowait(InboundMessage(channel="cli", sender_id="u", chat_id="c", content="leftover-2"))
 
     # Execute the cleanup logic from the finally block
-    queue = loop._pending_queues.pop(session_key, None)
-    assert queue is not None
+    queues = loop._pending_queues.pop(session_key, None)
+    assert queues is not None
     leftover = 0
-    while True:
-        try:
-            item = queue.get_nowait()
-        except asyncio.QueueEmpty:
-            break
-        await bus.publish_inbound(item)
-        leftover += 1
+    for queue in (queues.inject, queues.deferred):
+        while True:
+            try:
+                item = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            await bus.publish_inbound(item)
+            leftover += 1
 
     assert leftover == 2
 

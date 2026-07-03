@@ -61,7 +61,13 @@ concurrently. This is enforced by two layers: an in-process `asyncio.Lock` per
 (`session_turn_lease`, a `.turn.lock` flock) that prevents the gateway and a TUI
 or cron run from executing the same session at once. While a turn is running,
 follow-up messages for that session do not spawn a competing task — they are
-routed to a per-session pending queue and injected mid-turn.
+routed to per-session pending queues. Routing is two-tier: explicit steers
+(`metadata["steer"]`, or a literal `[steer]` prefix normalized by the consumer)
+and system-origin results (subagent / background-workflow completions) go to an
+*inject* queue that enters the running turn at the next checkpoint; plain user
+messages go to a *deferred* queue and only enter the conversation after the
+turn's final response, so typing mid-turn queues instead of derailing the work
+in flight.
 
 **3. The message bus is the only channel contract.** Channels push
 `InboundMessage` to `bus.inbound` and read `OutboundMessage` from `bus.outbound`
@@ -104,7 +110,7 @@ flowchart LR
     Ch[Channels] -->|publish_inbound| Inb["bus.inbound<br/>(asyncio.Queue)"]
     Inb --> RunLoop["AgentLoop.run()<br/>consumer"]
     RunLoop -->|"is_priority?<br/>(/stop, /restart, /status)"| Prio["dispatch_priority<br/>(no lock)"]
-    RunLoop -->|"session has a<br/>pending queue?"| Inject["route to<br/>_pending_queues[key]"]
+    RunLoop -->|"session has<br/>pending queues?"| Inject["route to _pending_queues[key]<br/>(steer/system → inject,<br/>user → deferred)"]
     RunLoop -->|"new session turn"| NewTask["register _pending_queues[key]<br/>then create_task(_dispatch)"]
     NewTask --> Disp["_dispatch(msg, pending)"]
     Disp --> Lock["asyncio.Lock[session_key]<br/>+ interactive lane + ceiling<br/>(ResizableSemaphore x2)"]
@@ -117,7 +123,7 @@ flowchart LR
 
 `run()` is a single consumer. For each message it picks exactly one path:
 dispatch a priority command without any lock, route a follow-up into an existing
-session's pending queue, or spawn a new `_dispatch` task. The pending queue is
+session's pending queues, or spawn a new `_dispatch` task. The queues are
 registered *before* `create_task` so a same-session message that arrives in the
 gap cannot spawn a competing task.
 
@@ -159,10 +165,13 @@ model in the background. For each message it decides the routing in order:
   turn — it never queues behind the lock.
 - **Pending answer?** If a turn is blocked on `ask_user_question`, a plain-text
   reply is consumed as the answer (`_maybe_resolve_pending_answer`).
-- **Mid-turn follow-up?** If the effective session key already has a pending
-  queue, the message is routed there for injection (or, if it is itself a
-  non-priority command, dispatched inline) instead of starting a new turn.
-- **New turn.** Otherwise the loop registers a fresh pending queue for the
+- **Mid-turn follow-up?** If the effective session key already has pending
+  queues, the message is routed there instead of starting a new turn (or, if it
+  is itself a non-priority command, dispatched inline). Steers and system
+  results go to the inject queue; plain user messages go to the deferred queue,
+  and websocket clients get a `message_queued` ack so the UI can show the
+  message as queued.
+- **New turn.** Otherwise the loop registers fresh pending queues for the
   session and `create_task(self._dispatch(msg, pending))`. The task is tracked
   per session so `/stop` can find and cancel it.
 
@@ -292,11 +301,15 @@ recover does it abort *before* the LLM call with
 Two behaviors connect the runner back to the loop:
 
 - **Mid-turn injection.** The runner calls the loop's `_drain_pending` callback
-  between iterations. Drained follow-up messages (and completed sub-agent
-  results) are appended as user turns so the run continues without a new
-  dispatch. Injection is bounded — at most `_MAX_INJECTIONS_PER_TURN` messages
-  drained per cycle and `_MAX_INJECTION_CYCLES` cycles — so an injection chain
-  cannot run forever.
+  at two kinds of checkpoint. After each tool batch it drains with
+  `steer_only=True`: only the inject queue (steers, framed as mid-work
+  guidance, plus sub-agent / workflow results) enters the running turn. After
+  the final response it drains both queues — deferred user messages last, so
+  the model answers them with all results already in context — and websocket
+  clients get a `queued_consumed` ack. Drained messages are appended as user
+  turns so the run continues without a new dispatch. Injection is bounded — at
+  most `_MAX_INJECTIONS_PER_TURN` messages drained per cycle and
+  `_MAX_INJECTION_CYCLES` cycles — so an injection chain cannot run forever.
 - **Per-turn provider snapshot.** `AgentRunSpec.provider` carries the provider
   resolved for *this* turn. The gateway shares one runner, and a concurrent
   session's `/model` swap mutates `self.provider`; pinning the provider on the

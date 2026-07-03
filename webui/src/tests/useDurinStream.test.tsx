@@ -963,4 +963,85 @@ describe("useDurinStream", () => {
     expect(result.current.goalState).toEqual({ active: false });
   });
 
+  it("send passes steer + clientMsgId on the wire and flags the local row", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(
+      () => useDurinStream("chat-s", EMPTY_MESSAGES),
+      { wrapper: wrap(fake.client) },
+    );
+
+    act(() => {
+      result.current.send("focus on tests", undefined, { steer: true });
+    });
+
+    expect(fake.client.sendMessage).toHaveBeenCalledWith(
+      "chat-s",
+      "focus on tests",
+      undefined,
+      expect.objectContaining({ steer: true, clientMsgId: expect.any(String) }),
+    );
+    const row = result.current.messages.at(-1)!;
+    expect(row.steer).toBe(true);
+    // The wire clientMsgId is the row id, so queued acks can target it.
+    const opts = (fake.client.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][3];
+    expect(opts.clientMsgId).toBe(row.id);
+  });
+
+  it("marks a row queued on message_queued and clears it on queued_consumed", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(
+      () => useDurinStream("chat-q", EMPTY_MESSAGES),
+      { wrapper: wrap(fake.client) },
+    );
+
+    act(() => {
+      result.current.send("later question");
+    });
+    const rowId = result.current.messages.at(-1)!.id;
+
+    act(() => {
+      fake.emit("chat-q", {
+        event: "message_queued",
+        chat_id: "chat-q",
+        client_msg_id: rowId,
+      });
+    });
+    expect(result.current.messages.at(-1)!.queued).toBe(true);
+
+    act(() => {
+      fake.emit("chat-q", {
+        event: "queued_consumed",
+        chat_id: "chat-q",
+        client_msg_ids: [rowId],
+      });
+    });
+    expect(result.current.messages.at(-1)!.queued).toBe(false);
+  });
+
+  it("clears stale queued flags on turn_end", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(
+      () => useDurinStream("chat-q2", EMPTY_MESSAGES),
+      { wrapper: wrap(fake.client) },
+    );
+
+    act(() => {
+      result.current.send("will be re-dispatched");
+    });
+    const rowId = result.current.messages.at(-1)!.id;
+    act(() => {
+      fake.emit("chat-q2", {
+        event: "message_queued",
+        chat_id: "chat-q2",
+        client_msg_id: rowId,
+      });
+    });
+    expect(result.current.messages.at(-1)!.queued).toBe(true);
+
+    act(() => {
+      fake.emit("chat-q2", { event: "turn_end", chat_id: "chat-q2" });
+    });
+    expect(result.current.messages.at(-1)!.queued).toBe(false);
+  });
+
 });

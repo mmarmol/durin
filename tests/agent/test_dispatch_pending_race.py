@@ -66,13 +66,17 @@ async def test_second_same_session_message_routes_to_pending_not_a_second_task()
         # hang the test.
         for _ in range(200):
             await asyncio.sleep(0.005)
-            pending = sum(q.qsize() for q in loop._pending_queues.values())
+            pending = sum(
+                q.inject.qsize() + q.deferred.qsize()
+                for q in loop._pending_queues.values()
+            )
             if len(calls) + pending >= 2:
                 break
 
         assert len(calls) == 1, f"expected one dispatch task, got {len(calls)}"
         assert key in loop._pending_queues, "pending queue not registered synchronously"
-        assert loop._pending_queues[key].qsize() == 1, "second message not routed to pending queue"
+        queues = loop._pending_queues[key]
+        assert queues.deferred.qsize() == 1, "second message not routed to the deferred queue"
     finally:
         loop._running = False
         release.set()

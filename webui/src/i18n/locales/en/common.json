@@ -1555,7 +1555,9 @@
     },
     "workChip": {
       "openPanel": "Open work panel"
-    }
+    },
+    "queuedChip": "Queued — read when the current work finishes",
+    "steerChip": "Steer"
   },
   "lightbox": {
     "title": "Image preview",
