@@ -356,6 +356,14 @@ and agent:
   publishes `/effort <level>`. The current effort level (if any) is extracted from
   the active model preset's suffix (e.g. `default:high` → `high`).
 
+**Sending while the agent works.** A plain message sent mid-turn is deferred
+server-side: it enters the conversation when the current work finishes its
+response, and the message row shows a "queued" chip until then (driven by the
+`message_queued` / `queued_consumed` WebSocket acks). The composer's steer
+button (compass icon, visible while streaming) sends the text flagged as a
+steer instead: it injects into the running turn as mid-work guidance. Stop
+remains the hard interrupt.
+
 **Empty-state landing.** When a chat is first opened, a centered greeting is
 shown above the composer. There are no suggestion chips or canned prompts.
 
@@ -379,6 +387,10 @@ than the interactive CLI.
 **Persona picker.** The Ctrl+Shift+P modal lists all configured personas, showing
 each persona's name, soul, and model. The currently active persona is marked.
 Selecting a persona publishes `/persona <name>` into the session.
+
+**Steer (Ctrl+G).** Sends the current input as a steer — injected into the
+running turn as mid-work guidance. A plain Enter send while the agent works is
+deferred until the turn finishes its response.
 
 **Footer.** The footer displays the wall-clock duration of the last completed
 turn and the active agent mode.

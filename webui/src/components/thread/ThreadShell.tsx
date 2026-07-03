@@ -305,9 +305,9 @@ export function ThreadShell({
   );
 
   const handleThreadSend = useCallback(
-    (content: string, images?: SendImage[]) => {
+    (content: string, images?: SendImage[], opts?: { steer?: boolean }) => {
       setScrollToBottomSignal((value) => value + 1);
-      send(content, images);
+      send(content, images, opts);
     },
     [send],
   );

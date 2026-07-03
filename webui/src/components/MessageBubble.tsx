@@ -111,6 +111,16 @@ export function MessageBubble({
             {message.content}
           </p>
         ) : null}
+        {message.queued ? (
+          <span className="ml-auto inline-flex w-fit items-center gap-1 rounded-full border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500/80" aria-hidden />
+            {t("message.queuedChip")}
+          </span>
+        ) : message.steer ? (
+          <span className="ml-auto inline-flex w-fit items-center gap-1 rounded-full border border-border/60 px-2 py-0.5 text-[11px] text-muted-foreground">
+            {t("message.steerChip")}
+          </span>
+        ) : null}
         {onEdit ? (
           <button
             type="button"

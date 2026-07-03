@@ -164,6 +164,7 @@ describe("ThreadShell", () => {
         "chat-a",
         "persist me across tabs",
         undefined,
+        expect.objectContaining({ clientMsgId: expect.any(String) }),
       ),
     );
     expect(screen.getByText("persist me across tabs")).toBeInTheDocument();
@@ -228,6 +229,7 @@ describe("ThreadShell", () => {
         "chat-a",
         "delete me cleanly",
         undefined,
+        expect.objectContaining({ clientMsgId: expect.any(String) }),
       ),
     );
     expect(screen.getByText("delete me cleanly")).toBeInTheDocument();
@@ -331,6 +333,7 @@ describe("ThreadShell", () => {
         "chat-new",
         "first message should stay",
         undefined,
+        expect.objectContaining({ clientMsgId: expect.any(String) }),
       ),
     );
     await waitFor(() =>
@@ -428,6 +431,7 @@ describe("ThreadShell", () => {
         "chat-a",
         "only in chat a",
         undefined,
+        expect.objectContaining({ clientMsgId: expect.any(String) }),
       ),
     );
     expect(screen.getByText("only in chat a")).toBeInTheDocument();

@@ -370,6 +370,7 @@ export class DurinClient {
     chatId: string,
     content: string,
     media?: OutboundMedia[],
+    opts?: { steer?: boolean; clientMsgId?: string },
   ): void {
     this.knownChats.add(chatId);
     const frame: Outbound = {
@@ -378,6 +379,8 @@ export class DurinClient {
       content,
       ...(media && media.length > 0 ? { media } : {}),
       webui: true,
+      ...(opts?.steer ? { steer: true as const } : {}),
+      ...(opts?.clientMsgId ? { client_msg_id: opts.clientMsgId } : {}),
     };
     this.queueSend(frame);
   }

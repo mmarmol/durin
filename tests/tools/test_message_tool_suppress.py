@@ -111,13 +111,15 @@ class TestMessageToolSuppressLogic:
         if isinstance(mt, MessageTool):
             mt.set_send_callback(AsyncMock(side_effect=lambda m: sent.append(m)))
 
-        pending_queue = asyncio.Queue()
-        await pending_queue.put(
+        from durin.agent.loop import PendingQueues
+
+        pending = PendingQueues.create()
+        await pending.deferred.put(
             InboundMessage(channel="feishu", sender_id="user1", chat_id="chat123", content="follow-up")
         )
 
         msg = InboundMessage(channel="feishu", sender_id="user1", chat_id="chat123", content="Start")
-        result = await loop._process_message(msg, pending_queue=pending_queue)
+        result = await loop._process_message(msg, pending_queues=pending)
 
         assert len(sent) == 1
         assert sent[0].content == "Tool reply"
