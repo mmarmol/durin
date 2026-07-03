@@ -701,6 +701,13 @@ class AuxModelsConfig(Base):
     # Lets the user pick a cheaper/faster model for the long offline
     # consolidation runs without changing the chat model.
     memory: AuxModelConfig | None = None
+    # Model used by spawned subagents (`spawn`/`tasks` background runs).
+    # Lets the user run fire-and-forget subagent work on a cheaper/faster
+    # model without changing the interactive chat model. Resolved fresh
+    # at each spawn, so a hot-reloaded change takes effect immediately.
+    # Unset = the subagent inherits whatever model the parent session is
+    # currently using (existing behavior).
+    subagents: AuxModelConfig | None = None
 
 
 class ModelPresetConfig(Base):

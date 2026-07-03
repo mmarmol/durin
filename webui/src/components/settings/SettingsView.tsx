@@ -1309,6 +1309,20 @@ function ModelBlockRows({
   return (
     <>
       <SettingsRow
+        title={t("settings.models.subagentModel")}
+        description={t("settings.models.subagentModelHint")}
+      >
+        <AuxControl
+          current={readAux(config, "subagents")}
+          busy={busy === "subagents"}
+          onSave={(v) => void saveAux("subagents", v)}
+          onClear={() => void saveAux("subagents", null)}
+          configuredProviders={configuredProviders}
+          token={token}
+          capability="text"
+        />
+      </SettingsRow>
+      <SettingsRow
         title={t("settings.models.vision")}
         description={t("settings.models.visionHint")}
       >

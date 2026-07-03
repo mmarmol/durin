@@ -415,6 +415,7 @@ class AgentLoop:
             sessions=self.sessions,
             ceiling=self._ceiling,
             on_concurrency_change=self.mark_concurrency_dirty,
+            app_config_getter=lambda: self.app_config,
         )
         self._unified_session = unified_session
         self._max_messages = max_messages if max_messages > 0 else 120

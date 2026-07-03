@@ -198,6 +198,17 @@ re-reading `max_concurrent_subagents` — so a `ConfigService` write to a cap ke
 takes effect without a process restart. See [Concurrency](concurrency.md) for the
 full lock-ordering picture.
 
+By default a spawned subagent inherits the parent session's model/provider
+(the same pinning-at-spawn-time snapshot described above). Setting
+`agents.aux_models.subagents` (an aux-model handle — `preset` or inline
+`model`/`provider`, same shape as `aux_models.vision`/`audio`/`memory`) runs
+subagents on a different model instead, e.g. a cheaper one for fire-and-forget
+background work. `SubagentManager` resolves it fresh on every `spawn()` call
+via a live `app_config` getter from the loop, so a hot-reloaded change applies
+to the next spawn without a restart. Resolution failure (bad preset, missing
+key) logs a warning and falls back to the inherited session model — spawning
+must never break on a misconfigured aux model.
+
 It then runs `_process_message`, publishes the result, and in a `finally` block
 releases the lease and re-publishes any messages still sitting in the pending
 queue back onto `bus.inbound` so a late follow-up is processed as a fresh turn
