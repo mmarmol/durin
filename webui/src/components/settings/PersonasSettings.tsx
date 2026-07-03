@@ -682,7 +682,7 @@ export function PersonasSettings({ token }: { token: string }) {
                         <Star className="h-3.5 w-3.5" aria-hidden />
                       </Button>
                     ) : null}
-                    {persona.name === "default" ? null : (
+                    {persona.name === "durin" ? null : (
                       <Button
                         size="sm"
                         variant="ghost"
@@ -695,7 +695,7 @@ export function PersonasSettings({ token }: { token: string }) {
                         <Pencil className="h-3.5 w-3.5" aria-hidden />
                       </Button>
                     )}
-                    {persona.name === "default" ? null : (
+                    {persona.name === "durin" ? null : (
                       <InlineDelete
                         confirming={confirmPersona === persona.name}
                         busy={busy}
