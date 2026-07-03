@@ -366,7 +366,8 @@
         "runtimeRunning": "Channel running — connected to Slack over Socket Mode.",
         "runtimeStopped": "Channel stopped — messages will not arrive until it starts.",
         "runtimeStart": "Start channel",
-        "runtimeStarting": "Starting…"
+        "runtimeStarting": "Starting…",
+        "respondAll": "Reply to all"
       },
       "desc": {
         "websocket": "Transport for the web dashboard and external WebSocket clients. Always on while the dashboard is enabled. The token is optional, only for external clients.",
@@ -408,7 +409,9 @@
         "allowed_attachment_types": "Allowed attachment types",
         "max_attachment_size": "Max attachment size",
         "max_attachments_per_email": "Max attachments per email",
-        "token": "Token"
+        "token": "Token",
+        "persona": "Persona",
+        "open_channels": "Open channels"
       },
       "optionLabel": {
         "group_policy": {
@@ -421,8 +424,10 @@
         "allow_from": "",
         "email_allow_from": "a@b.com, c@d.com",
         "slack_allow_from": "U0123ABCD, or * for everyone",
-        "slack_group_allow_from": "C0123ABCD, C0456EFGH"
-      }
+        "slack_group_allow_from": "C0123ABCD, C0456EFGH",
+        "slack_open_channels": "C0123ABCD, C0456EFGH"
+      },
+      "personaDefault": "Default persona"
     },
     "memory": {
       "description": "Tune the memory subsystem — search reranking and dream auto-consolidation.",

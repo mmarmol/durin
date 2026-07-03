@@ -48,6 +48,11 @@ class SlackConfig(Base):
     group_allow_from: list[str] = Field(
         default_factory=list, json_schema_extra={"group": "access"}
     )
+    # Channels where the bot answers every message; everything else follows
+    # group_policy. Lets one workspace mix open rooms with mention-only rooms.
+    open_channels: list[str] = Field(
+        default_factory=list, json_schema_extra={"group": "access"}
+    )
     reply_in_thread: bool = Field(default=True, json_schema_extra={"group": "behavior"})
     include_thread_context: bool = Field(default=True, json_schema_extra={"group": "behavior"})
     streaming: bool = Field(default=True, json_schema_extra={"group": "behavior"})
@@ -57,6 +62,11 @@ class SlackConfig(Base):
     thread_context_limit: int = 20
     react_emoji: str = "eyes"
     done_emoji: str = "white_check_mark"
+    # Identity: default persona for sessions born on this channel, and an
+    # optional per-conversation refinement (Slack channel ID -> persona name).
+    # Resolved in durin.personas.resolve; empty = the global default persona.
+    persona: str = Field(default="", json_schema_extra={"group": "behavior"})
+    chat_personas: dict[str, str] = Field(default_factory=dict)
     # chat.update is a Tier-3 API (~1 call/s sustained); keep edits below that.
     stream_edit_interval: float = Field(default=1.2, ge=0.5)
 
@@ -876,6 +886,8 @@ class SlackChannel(BaseChannel):
     def _should_respond_in_channel(
         self, event_type: str, text: str, chat_id: str, thread_root: str | None = None
     ) -> bool:
+        if chat_id in self.config.open_channels:
+            return True
         if self.config.group_policy == "open":
             return True
         if self.config.group_policy == "mention":

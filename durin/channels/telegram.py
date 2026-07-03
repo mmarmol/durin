@@ -252,6 +252,8 @@ class TelegramConfig(Base):
     # Enable inline keyboard buttons in Telegram messages.
     inline_keyboards: bool = False
     stream_edit_interval: float = Field(default=_STREAM_EDIT_INTERVAL_DEFAULT, ge=0.1)
+    # Default persona for sessions born on this channel (empty = global default).
+    persona: str = Field(default="", json_schema_extra={"group": "behavior"})
 
 
 class TelegramChannel(BaseChannel):
