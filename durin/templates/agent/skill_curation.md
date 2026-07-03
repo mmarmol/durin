@@ -34,6 +34,27 @@ When unsure, do nothing. Prefer an empty action list over a speculative change.
   your `evolve`/`fuse` edits are versioned on top. The original is always
   recoverable/diffable — evolve toward a concrete improvement without fear of losing it.
 
+## Composition doctrine (norm, like English normalization)
+
+The catalog norm for HOW a skill may be built — the same contract every
+authoring path follows:
+
+{{ doctrine }}
+
+The workspace's workflows (what a skill can delegate to):
+
+{{ workflow_catalog }}
+
+When a skill under review is a prose-only narration of a procedure that one of
+these workflows automates (e.g. it walks through multi-source searching and
+synthesis that a research workflow already runs, gated and in parallel), emit an
+`evolve` that restructures it into a domain wrapper: keep the skill's domain
+knowledge (which sources matter, how to phrase the task, output shape, language
+handling) and replace the narrated procedure with a delegation step — run the
+workflow via `run_workflow` with a task built from that domain knowledge. This
+is a norm violation fix, not a style rewrite. Do NOT evolve judgment-heavy
+prose that no workflow covers; the doctrine reserves prose exactly for that.
+
 ## User edits — treat as intentional
 
 Some skills below were edited **by the user by hand** since you last curated them.

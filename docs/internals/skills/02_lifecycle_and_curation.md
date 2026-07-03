@@ -118,9 +118,10 @@ entirely) when both are empty:
    `LOGGED GAPS` block with its working name and issue text.
 
 The sub-agent (`ToolRegistry` built by `_build_skill_extract_tools`) carries
-`ReadFileTool`, `EditFileTool`, `SkillWriteTool`, `SkillSearchTool`, and
-`SkillAcquireSeedTool`, and runs with a bounded `max_iterations=8`. Its system
-prompt (`_SKILL_EXTRACT_PROMPT`) fixes a strict frontmatter and size contract
+`ReadFileTool`, `EditFileTool`, `SkillWriteTool`, `SkillSearchTool`,
+`SkillAcquireSeedTool`, `ListWorkflowsTool`, and `WorkflowWriteTool`, and runs
+with a bounded `max_iterations=8`. Its system prompt
+(`_SKILL_EXTRACT_PROMPT`) fixes a strict frontmatter and size contract
 before it ever writes: every skill it authors MUST carry `name` and
 `description` in YAML frontmatter, the description is described as the *only*
 text the agent later reads to decide when a skill applies, and the skill
@@ -132,6 +133,20 @@ working name **verbatim**, which is what lets gap-resolution match by name
 afterward. Authorship must always be in English, with descriptions stating that
 their triggers apply regardless of the conversation's language, even when the
 mined conversation was not in English.
+
+The prompt also embeds the **composition doctrine** and the workspace's
+**workflow catalog** (`durin/agent/skills_doctrine.py`). The doctrine is not a
+paraphrase: `composition_doctrine()` loads the "Before building: is a skill
+even the right tool?" section of the builtin `skill-creator` skill verbatim at
+assembly time, so every authoring surface reads the same single source. The
+instruction it carries: a step an existing workflow automates must be
+*delegated* (the skill contributes the domain layer and calls `run_workflow`);
+a recurring orchestration no workflow covers is authored with `workflow_write`
+and then delegated to; deterministic transformations become bundled scripts
+(`skill_write`'s `files`); only knowledge and judgment stay as prose. The
+extract sub-agent's `SkillWriteTool` runs the composition gate (below) in
+`hard` mode — an autonomous write of a narration-only body is rejected
+absolutely, with no override.
 
 After the sub-agent run, `_resolve_gap_observations` walks the OPEN `new:*`
 observations and marks a gap `APPLIED` when a skill now exists under its
@@ -145,6 +160,41 @@ unmatched gap stays OPEN and is offered again to the next pass.
 `run_skill_extract_pass` is a sync wrapper (`asyncio.run`) over the async
 `AgentRunner` flow so the cron loop, which calls dream passes from a thread,
 can invoke it without an event loop of its own.
+
+### skill_write: bundled files, the scan, and the composition gate
+
+`skill_write` accepts optional bundled `files` (path → content) next to
+SKILL.md — the authoring path for scripts the doctrine prefers over prose
+steps. Paths are confined to the skill directory (relative-only, no parent
+escapes), and any write that bundles code runs `scan_skill` — the same scanner
+imports pass through — **before the skill activates**: a `safe` verdict
+installs with the verdict stamped in provenance; `caution`/`dangerous`
+relocates the whole directory to the import quarantine with a `.scan.json`
+(`source: "authored:agent"`), where the existing approve/reject surfaces
+review it. Self-authored prose is trusted; self-authored *code* earns the same
+gate as third-party code.
+
+Prompts are guidance; the **composition gate** (`judge_composition`,
+`durin/agent/skills_doctrine.py`) is the enforced invariant — the same pattern
+as the plan-verification lint and the import scan gate. At create time
+(`dream_create_skill`), a judge model (the `judge` aux preset; injectable in
+tests) answers one question about the body: is it a prose-only narration of a
+workflow-shaped procedure — manual multi-source fan-out, gathering, synthesis
+or a verification loop — with nothing delegated and nothing bundled? A
+`NARRATION` verdict rejects the save and returns the judge's reason, so the
+author retries with feedback. The gate is deliberately narrow (it errs toward
+accepting judgment-heavy bodies) and **failure-open**: no judge configured, a
+judge error, or an unparseable reply all accept — infrastructure trouble must
+never cost a skill.
+
+Who may override differs by door. The in-session `SkillWriteTool` runs in
+`override` mode: after a rejection, the agent surfaces the reason, and if the
+user explicitly insists on prose, a retry with `override_composition=true`
+saves it — the system warns, the user's word wins (the import gate's trust
+model). The dream's instance runs in `hard` mode: the override parameter is
+ignored and an autonomous narration-only write cannot land. Curation `evolve`
+output is not re-gated: the curation judge itself carries the doctrine and the
+catalog in its prompt, so gating its output would re-judge the same judge.
 
 ### Skill signals: hindsight corrections and gaps
 
@@ -258,8 +308,12 @@ left for human review and never auto-incorporated.
 light usage context, the upstream drift bodies (if any), the OPEN observations
 scoped to the selected skills plus any `"all"` cross-cutting record, a compact
 DECLINED history (so the judge doesn't re-propose something already rejected),
-active principles, and — critically — **user hand-edits since the last
-curation**.
+active principles, the **composition doctrine and workflow catalog** (the same
+runtime-loaded `skill-creator` section the extract pass embeds — the judge is
+told a prose-only narration of a procedure an existing workflow automates is a
+norm violation, licensed to `evolve` into a delegating domain wrapper exactly
+like the English-normalization rule), and — critically — **user hand-edits
+since the last curation**.
 
 `user_edits_since_curation` (`durin/agent/skills_store.py`) walks the skill's
 git subtree log newest-first, stopping at the last `curated @` stamp, and

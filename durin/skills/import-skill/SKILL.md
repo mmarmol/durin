@@ -67,6 +67,15 @@ Drive everything through the `skill_import` tool. Never write to `skills/` yours
    for `memory_search` at install time and `skill_view` loads it on demand. Offer
    to exercise it right away.
 
+7. **Check composition.** The security gate says the skill is safe; it does not
+   say it is well built. Compare the installed body against `list_workflows`:
+   if it narrates by hand a procedure a local workflow automates (multi-source
+   fan-out, gather, synthesize, verify), or walks a deterministic transformation
+   that plainly wants a script, **propose** adapting it — keep its domain
+   knowledge, delegate the orchestration to the workflow (or bundle the steps as
+   a script) — and apply only if the user agrees. Never rewrite an import
+   silently; the user chose this skill as-is.
+
 ## Rules
 
 - The gate is enforced in code: a dangerous skill will not install without
