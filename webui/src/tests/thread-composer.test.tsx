@@ -228,6 +228,49 @@ describe("ThreadComposer", () => {
     expect(onStop).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
   });
+
+  it("steer button sends the raw text flagged as steer, no [steer] prefix", () => {
+    const onSend = vi.fn();
+    render(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming
+        placeholder="Type your message..."
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "focus on the tests" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Steer — inject guidance mid-turn" }),
+    );
+
+    expect(onSend).toHaveBeenCalledWith("focus on the tests", undefined, { steer: true });
+  });
+
+  it("plain submit while streaming sends without the steer flag (server defers it)", () => {
+    const onSend = vi.fn();
+    render(
+      <ThreadComposer
+        onSend={onSend}
+        onStop={vi.fn()}
+        isStreaming
+        placeholder="Type your message..."
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "also, another question" },
+    });
+    fireEvent.submit(screen.getByRole("textbox").closest("form")!);
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    const [content, , opts] = onSend.mock.calls[0];
+    expect(content).toBe("also, another question");
+    expect(opts?.steer).toBeUndefined();
+  });
 });
 
 describe("ThreadComposer — agent mode + pending question strip", () => {

@@ -1438,6 +1438,13 @@ class WebSocketChannel(BaseChannel):
             metadata: dict[str, Any] = {"remote": getattr(connection, "remote", None)}
             if envelope.get("webui") is True:
                 metadata["webui"] = True
+            # Mid-turn semantics: a steer injects into the running turn;
+            # a plain message defers until the turn's final response.
+            if envelope.get("steer") is True:
+                metadata["steer"] = True
+            client_msg_id = envelope.get("client_msg_id")
+            if isinstance(client_msg_id, str) and client_msg_id:
+                metadata["client_msg_id"] = client_msg_id[:64]
             await self._handle_message(
                 sender_id=client_id,
                 chat_id=cid,
@@ -1777,6 +1784,8 @@ class WebSocketChannel(BaseChannel):
                 or msg.metadata.get("_session_updated")
                 or msg.metadata.get("_goal_status")
                 or msg.metadata.get("_goal_state_sync")
+                or msg.metadata.get("_message_queued")
+                or msg.metadata.get("_queued_consumed")
             ):
                 self.logger.debug("no active subscribers for chat_id={}", msg.chat_id)
             else:
@@ -1795,6 +1804,17 @@ class WebSocketChannel(BaseChannel):
                     status,
                     started_at=float(started_raw) if isinstance(started_raw, int | float) else None,
                 )
+            return
+        if msg.metadata.get("_message_queued"):
+            await self.send_message_queued(
+                msg.chat_id, msg.metadata.get("client_msg_id"),
+            )
+            return
+        if msg.metadata.get("_queued_consumed"):
+            ids = msg.metadata.get("client_msg_ids")
+            await self.send_queued_consumed(
+                msg.chat_id, ids if isinstance(ids, list) else [],
+            )
             return
         # Signal that the agent has fully finished processing the current turn.
         if msg.metadata.get("_turn_end"):
@@ -1991,6 +2011,36 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" turn_end ")
+
+    async def send_message_queued(self, chat_id: str, client_msg_id: str | None) -> None:
+        """Tell clients a message sent mid-turn was deferred until turn end.
+
+        Ephemeral UI state (a "queued" chip on the message row) — not
+        persisted to the transcript.
+        """
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        body: dict[str, Any] = {"event": "message_queued", "chat_id": chat_id}
+        if client_msg_id:
+            body["client_msg_id"] = client_msg_id
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" message_queued ")
+
+    async def send_queued_consumed(self, chat_id: str, client_msg_ids: list[str]) -> None:
+        """Tell clients their queued messages entered the running turn."""
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        body: dict[str, Any] = {
+            "event": "queued_consumed",
+            "chat_id": chat_id,
+            "client_msg_ids": client_msg_ids,
+        }
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" queued_consumed ")
 
     async def send_goal_state(self, chat_id: str, blob: dict[str, Any]) -> None:
         """Push persisted goal-state snapshot for *chat_id* (multi-chat isolation)."""

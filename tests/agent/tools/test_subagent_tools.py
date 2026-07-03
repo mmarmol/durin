@@ -262,7 +262,9 @@ async def test_drain_pending_blocks_while_subagents_running(tmp_path):
 
     loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
 
-    pending_queue: asyncio.Queue[InboundMessage] = asyncio.Queue()
+    from durin.agent.loop import PendingQueues
+
+    pending = PendingQueues.create()
     session = Session(key="test:drain-block")
     injection_callback = None
 
@@ -301,25 +303,25 @@ async def test_drain_pending_blocks_while_subagents_running(tmp_path):
         session=session,
         channel="test",
         chat_id="c1",
-        pending_queue=pending_queue,
+        pending_queues=pending,
     )
 
     assert injection_callback is not None
 
     # Now test the callback directly
-    # With sub-agents running and an empty queue, it should block
+    # With sub-agents running and empty queues, it should block
     drain_task = asyncio.create_task(injection_callback())
 
     # Give it a moment to enter the blocking wait
     await asyncio.sleep(0.05)
 
-    # Should still be running (blocked on pending_queue.get())
+    # Should still be running (blocked waiting on the queues)
     assert not drain_task.done(), "drain should block while sub-agents are running"
 
-    # Now put a message in the queue (simulating sub-agent completion)
-    await pending_queue.put(InboundMessage(
+    # Now put a message in the inject queue (simulating sub-agent completion)
+    await pending.inject.put(InboundMessage(
         sender_id="subagent",
-        channel="test",
+        channel="system",
         chat_id="c1",
         content="Sub-agent result",
         media=None,
@@ -352,7 +354,9 @@ async def test_drain_pending_no_block_when_no_subagents(tmp_path):
 
     loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
 
-    pending_queue: asyncio.Queue = asyncio.Queue()
+    from durin.agent.loop import PendingQueues
+
+    pending = PendingQueues.create()
     injection_callback = None
 
     async def fake_runner_run(spec):
@@ -376,7 +380,7 @@ async def test_drain_pending_no_block_when_no_subagents(tmp_path):
         session=None,
         channel="test",
         chat_id="c1",
-        pending_queue=pending_queue,
+        pending_queues=pending,
     )
 
     assert injection_callback is not None
@@ -399,7 +403,9 @@ async def test_drain_pending_timeout(tmp_path):
 
     loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path, model="test-model")
 
-    pending_queue: asyncio.Queue = asyncio.Queue()
+    from durin.agent.loop import PendingQueues
+
+    pending = PendingQueues.create()
     session = Session(key="test:drain-timeout")
     injection_callback = None
 
@@ -432,21 +438,15 @@ async def test_drain_pending_timeout(tmp_path):
         session=session,
         channel="test",
         chat_id="c1",
-        pending_queue=pending_queue,
+        pending_queues=pending,
     )
 
     assert injection_callback is not None
 
-    # Simulate the injection wait timing out. Close the coroutine that
-    # production passes to `wait_for` (`pending_queue.get()`) before raising
-    # so it isn't garbage-collected un-awaited — that GC'd coroutine was the
-    # lone "coroutine 'Queue.get' was never awaited" suite warning (C1).
-    def _timeout(coro, *args, **kwargs):
-        if hasattr(coro, "close"):
-            coro.close()
-        raise asyncio.TimeoutError
-
-    with patch("durin.agent.loop.asyncio.wait_for", side_effect=_timeout):
+    # Simulate the injection wait timing out: shrink the wait window to
+    # near-zero so the real asyncio.wait path runs (and cancels its getter
+    # futures cleanly) without stalling the suite.
+    with patch("durin.agent.loop._SUBAGENT_WAIT_TIMEOUT", 0.01):
         results = await injection_callback()
         assert results == []
 

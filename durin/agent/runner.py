@@ -377,8 +377,13 @@ class AgentRunner:
         *,
         phase: str = "after error",
         iteration: int | None = None,
+        steer_only: bool = False,
     ) -> tuple[bool, int]:
         """Drain pending injections. Returns (should_continue, updated_cycles).
+
+        ``steer_only=True`` marks a mid-turn checkpoint: only explicit steers
+        and system-origin results are drained; plain user messages stay queued
+        until the turn's final response so they don't derail work in flight.
 
         If injections are found and we haven't exceeded _MAX_INJECTION_CYCLES,
         append them to *messages* (and emit a checkpoint if *assistant_message*
@@ -387,7 +392,7 @@ class AgentRunner:
         """
         if injection_cycles >= _MAX_INJECTION_CYCLES:
             return False, injection_cycles
-        injections = await self._drain_injections(spec)
+        injections = await self._drain_injections(spec, steer_only=steer_only)
         if not injections:
             return False, injection_cycles
         injection_cycles += 1
@@ -412,29 +417,34 @@ class AgentRunner:
         )
         return True, injection_cycles
 
-    async def _drain_injections(self, spec: AgentRunSpec) -> list[dict[str, Any]]:
+    async def _drain_injections(
+        self, spec: AgentRunSpec, *, steer_only: bool = False,
+    ) -> list[dict[str, Any]]:
         """Drain pending user messages via the injection callback.
 
         Returns normalized user messages (capped by
         ``_MAX_INJECTIONS_PER_TURN``), or an empty list when there is
         nothing to inject. Messages beyond the cap are logged so they
-        are not silently lost.
+        are not silently lost. ``steer_only`` is forwarded to callbacks
+        that support it (mid-turn checkpoints drain only steers and
+        system results; a callback without the parameter keeps the legacy
+        inject-everything behavior).
         """
         if spec.injection_callback is None:
             return []
         try:
             signature = inspect.signature(spec.injection_callback)
-            accepts_limit = (
-                "limit" in signature.parameters
-                or any(
-                    parameter.kind is inspect.Parameter.VAR_KEYWORD
-                    for parameter in signature.parameters.values()
-                )
+            parameters = signature.parameters
+            has_var_keyword = any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
             )
-            if accepts_limit:
-                items = await spec.injection_callback(limit=_MAX_INJECTIONS_PER_TURN)
-            else:
-                items = await spec.injection_callback()
+            kwargs: dict[str, Any] = {}
+            if "limit" in parameters or has_var_keyword:
+                kwargs["limit"] = _MAX_INJECTIONS_PER_TURN
+            if "steer_only" in parameters or has_var_keyword:
+                kwargs["steer_only"] = steer_only
+            items = await spec.injection_callback(**kwargs)
         except Exception:
             logger.exception("injection_callback failed")
             return []
@@ -926,10 +936,13 @@ class AgentRunner:
                 )
                 empty_content_retries = 0
                 length_recovery_count = 0
-                # Checkpoint 1: drain injections after tools, before next LLM call
+                # Checkpoint 1: drain injections after tools, before the next
+                # LLM call. Mid-turn, so steers and system results only —
+                # plain user messages stay queued until the final response.
                 _drained, injection_cycles = await self._try_drain_injections(
                     spec, messages, None, injection_cycles,
                     phase="after tool execution",
+                    steer_only=True,
                 )
                 if _drained:
                     had_injections = True

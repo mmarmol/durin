@@ -216,7 +216,7 @@ export function useDurinStream(
   runStartedAt: number | null;
   /** Latest sustained goal for this ``chatId`` (``goal_state`` WS events). */
   goalState: GoalStateWsPayload | undefined;
-  send: (content: string, images?: SendImage[]) => void;
+  send: (content: string, images?: SendImage[], opts?: { steer?: boolean }) => void;
   stop: () => void;
   /** Transcribe an audio attachment server-side (spec §5.4). Resolves with
    *  the transcript text, or rejects on timeout/error. */
@@ -396,6 +396,25 @@ export function useDurinStream(
         return;
       }
 
+      if (ev.event === "message_queued") {
+        // Server confirmed the message was deferred until the turn ends.
+        if (ev.client_msg_id) {
+          const id = ev.client_msg_id;
+          setMessages((prev) =>
+            prev.map((m) => (m.id === id ? { ...m, queued: true } : m)),
+          );
+        }
+        return;
+      }
+
+      if (ev.event === "queued_consumed") {
+        const ids = new Set(ev.client_msg_ids);
+        setMessages((prev) =>
+          prev.map((m) => (m.queued && ids.has(m.id) ? { ...m, queued: false } : m)),
+        );
+        return;
+      }
+
       if (ev.event === "turn_end") {
         if ("goal_state" in ev && ev.goal_state != null && typeof ev.goal_state === "object") {
           setGoalState(ev.goal_state);
@@ -414,6 +433,9 @@ export function useDurinStream(
         setApiStatus(null);
         setMessages((prev) => {
           let finalized = prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
+          // Leftover queued flags are stale once the turn is over (deferred
+          // messages either entered the turn or were re-dispatched fresh).
+          finalized = finalized.map((m) => (m.queued ? { ...m, queued: false } : m));
           finalized = pruneReasoningOnlyPlaceholders(finalized);
           if (typeof ev.latency_ms === "number" && ev.latency_ms >= 0) {
             finalized = stampLastAssistantLatency(finalized, Math.round(ev.latency_ms));
@@ -566,7 +588,7 @@ export function useDurinStream(
   }, [chatId, client, onTurnEnd]);
 
   const send = useCallback(
-    (content: string, images?: SendImage[]) => {
+    (content: string, images?: SendImage[], opts?: { steer?: boolean }) => {
       if (!chatId) return;
       const hasImages = !!images && images.length > 0;
       // Text is optional when images are attached — the agent will still see
@@ -574,21 +596,28 @@ export function useDurinStream(
       if (!hasImages && !content.trim()) return;
 
       const previews = hasImages ? images!.map((i) => i.preview) : undefined;
+      // The row id doubles as the wire ``client_msg_id`` so the server's
+      // ``message_queued`` / ``queued_consumed`` acks can flag this exact row.
+      const clientMsgId = crypto.randomUUID();
       setMessages((prev) => [
         ...pruneReasoningOnlyPlaceholders(prev),
         {
-          id: crypto.randomUUID(),
+          id: clientMsgId,
           role: "user",
           content,
           createdAt: Date.now(),
           ...(previews ? { images: previews } : {}),
+          ...(opts?.steer ? { steer: true } : {}),
         },
       ]);
       // Mark streaming immediately so the UI shows the loading indicator
       // right away, before the first delta arrives from the server.
       setIsStreaming(true);
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
-      client.sendMessage(chatId, content, wireMedia);
+      client.sendMessage(chatId, content, wireMedia, {
+        steer: opts?.steer,
+        clientMsgId,
+      });
     },
     [chatId, client],
   );

@@ -658,7 +658,9 @@ class DurinApp(App[None]):
         except Exception:  # noqa: BLE001
             pass
 
-    async def _publish_inbound(self, value: str, media: list[str]) -> None:
+    async def _publish_inbound(
+        self, value: str, media: list[str], *, steer: bool = False,
+    ) -> None:
         from durin.bus.events import InboundMessage
 
         # Transcribe dragged-in audio before the agent sees it.
@@ -683,6 +685,9 @@ class DurinApp(App[None]):
             except Exception:  # noqa: BLE001
                 pass
 
+        metadata: dict = {"_wants_stream": True}
+        if steer:
+            metadata["steer"] = True
         await self._agent_loop.bus.publish_inbound(
             InboundMessage(
                 channel=self._cli_channel,
@@ -690,7 +695,7 @@ class DurinApp(App[None]):
                 chat_id=self._cli_chat_id,
                 content=value,
                 media=media,
-                metadata={"_wants_stream": True},
+                metadata=metadata,
             )
         )
 
@@ -861,8 +866,9 @@ class DurinApp(App[None]):
     def action_steer(self) -> None:
         """Ctrl+G: send current input as a steer (mid-turn guidance).
 
-        Prefixes the message with [steer] so it's visually distinct.
-        If the agent isn't working, it's just a normal message.
+        A steer injects into the running turn; a plain message sent
+        mid-turn queues until the turn finishes its response. If the
+        agent isn't working, a steer is just a normal message.
         """
         try:
             input_area = self.query_one(InputArea)
@@ -873,7 +879,7 @@ class DurinApp(App[None]):
             self.notify("Type guidance first, then Ctrl+G.", severity="warning")
             return
         input_area.value = ""
-        task = asyncio.create_task(self._publish_inbound(f"[steer] {text}", []))
+        task = asyncio.create_task(self._publish_inbound(text, [], steer=True))
         _ = task
         self.notify("Steer sent.")
 

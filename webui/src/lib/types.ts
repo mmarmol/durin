@@ -53,6 +53,12 @@ export interface UIMessage {
   reasoningStreaming?: boolean;
   /** End-to-end wall time for this assistant turn (persisted ``latency_ms`` / ``turn_end``). */
   latencyMs?: number;
+  /** User turn sent mid-turn and deferred by the server: it enters the
+   * conversation when the current work finishes. Ephemeral — cleared by
+   * ``queued_consumed`` / ``turn_end``. */
+  queued?: boolean;
+  /** User turn sent as a steer: injected into the running turn as guidance. */
+  steer?: boolean;
   /** For trace rows: structured tool-call events merged by ``call_id``.
    * Carries name / arguments / result / error so the UI can render
    * rich blocks (code diffs, exec IN/OUT) instead of flat text traces.
@@ -374,6 +380,20 @@ export type InboundEvent =
     }
   | { event: "session_updated"; chat_id: string }
   | {
+      /** A message sent while a turn was running was deferred: it enters the
+       * conversation when the current work finishes. Ephemeral UI state
+       * (drives the "queued" chip) — never persisted to the transcript. */
+      event: "message_queued";
+      chat_id: string;
+      client_msg_id?: string;
+    }
+  | {
+      /** Previously deferred messages entered the running turn. */
+      event: "queued_consumed";
+      chat_id: string;
+      client_msg_ids: string[];
+    }
+  | {
       /** Live progress of a (manually triggered) memory-dream run, broadcast
        * to every connection. ``run_started`` / ``run_finished`` drive the Dream
        * view's "running" indicator; ``activity`` carries one digest item
@@ -467,6 +487,12 @@ export type Outbound =
       /** Marks messages sent by the embedded WebUI, without changing the
        * generic websocket protocol for other clients. */
       webui?: true;
+      /** Steer: inject into the running turn as mid-work guidance instead of
+       * deferring until the turn's final response. */
+      steer?: true;
+      /** Client-generated id echoed back on ``message_queued`` /
+       * ``queued_consumed`` so the UI can flag the exact message row. */
+      client_msg_id?: string;
     }
   | {
       /** Store a credential straight into durin's secret store. The

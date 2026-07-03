@@ -189,6 +189,47 @@ def _build_aux_providers(config: Any) -> dict[str, AuxProviderHandle]:
 
 
 @dataclass
+class PendingQueues:
+    """Per-session queues for messages that arrive while a turn is running.
+
+    ``inject`` holds messages delivered INTO the running turn at the next
+    injection checkpoint: explicit user steers (``metadata["steer"]``) and
+    system-origin results (subagent / background-workflow completions).
+    ``deferred`` holds plain user messages: they wait until the turn has
+    produced its final response and are drained then, as a continuation —
+    typing mid-turn queues instead of derailing the work in flight.
+    """
+
+    inject: asyncio.Queue
+    deferred: asyncio.Queue
+
+    @classmethod
+    def create(cls, maxsize: int = 20) -> "PendingQueues":
+        return cls(
+            inject=asyncio.Queue(maxsize=maxsize),
+            deferred=asyncio.Queue(maxsize=maxsize),
+        )
+
+
+_STEER_PREFIX = "[steer]"
+
+# How long the final injection drain stays alive waiting for running
+# sub-agents to deliver results before giving up (seconds).
+_SUBAGENT_WAIT_TIMEOUT = 300
+
+_STEER_FRAMING = (
+    "[Steer — the user sent this while you were working. Treat it as "
+    "guidance for the work in progress: adjust course if it changes the "
+    "task; otherwise finish the current work first, then address it.]"
+)
+
+
+def _is_injectable(msg: InboundMessage) -> bool:
+    """True when *msg* belongs in the running turn (steer or system result)."""
+    return msg.channel == "system" or msg.metadata.get("steer") is True
+
+
+@dataclass
 class TurnContext:
     msg: InboundMessage
     session_key: str
@@ -217,7 +258,7 @@ class TurnContext:
     on_stream_end: Callable[..., Awaitable[None]] | None = None
     on_retry_wait: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
 
-    pending_queue: asyncio.Queue | None = None
+    pending_queues: PendingQueues | None = None
     pending_summary: str | None = None
 
     model_preset_override: str | None = None
@@ -434,10 +475,11 @@ class AgentLoop:
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._background_tasks: list[asyncio.Task] = []
         self._session_locks: dict[str, asyncio.Lock] = {}
-        # Per-session pending queues for mid-turn message injection.
+        # Per-session pending queues for messages arriving mid-turn.
         # When a session has an active task, new messages for that session
-        # are routed here instead of creating a new task.
-        self._pending_queues: dict[str, asyncio.Queue] = {}
+        # are routed here instead of creating a new task: steers and system
+        # results into ``inject``, plain user messages into ``deferred``.
+        self._pending_queues: dict[str, PendingQueues] = {}
         # Coalesced background session reindex (regen .md + FTS off the loop).
         # A save marks the key dirty; one drainer per key runs reindex_session
         # via a worker thread until no longer dirty, collapsing rapid successive
@@ -1443,6 +1485,41 @@ class AgentLoop:
         else:
             logger.warning("Command '{}' matched but dispatch returned None", raw)
 
+    async def _notify_queued(self, msg: InboundMessage) -> None:
+        """Tell a websocket client its message was deferred (queued) mid-turn.
+
+        Best-effort UI signal only — non-websocket channels have no live
+        surface to show it on, so they are skipped.
+        """
+        if msg.channel != "websocket":
+            return
+        metadata: dict[str, Any] = {"_message_queued": True}
+        client_msg_id = msg.metadata.get("client_msg_id")
+        if client_msg_id:
+            metadata["client_msg_id"] = client_msg_id
+        with suppress(Exception):
+            await self.bus.publish_outbound(OutboundMessage(
+                channel=msg.channel, chat_id=msg.chat_id,
+                content="", metadata=metadata,
+            ))
+
+    async def _ack_queued_consumed(self, consumed: list[InboundMessage]) -> None:
+        """Tell websocket clients their queued messages entered the turn."""
+        ws_msgs = [
+            m for m in consumed
+            if m.channel == "websocket" and m.metadata.get("client_msg_id")
+        ]
+        if not ws_msgs:
+            return
+        with suppress(Exception):
+            await self.bus.publish_outbound(OutboundMessage(
+                channel="websocket", chat_id=ws_msgs[0].chat_id,
+                content="", metadata={
+                    "_queued_consumed": True,
+                    "client_msg_ids": [m.metadata["client_msg_id"] for m in ws_msgs],
+                },
+            ))
+
     async def _cancel_active_tasks(self, key: str) -> int:
         """Cancel and await all active tasks and subagents for *key*.
 
@@ -1499,7 +1576,7 @@ class AgentLoop:
         message_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         session_key: str | None = None,
-        pending_queue: asyncio.Queue | None = None,
+        pending_queues: PendingQueues | None = None,
         model_preset: str | None = None,
     ) -> tuple[str | None, list[str], list[dict], str, bool, list[dict[str, Any]]]:
         """Run the agent iteration loop.
@@ -1540,8 +1617,16 @@ class AgentLoop:
                 return
             self._set_runtime_checkpoint(session, payload)
 
-        async def _drain_pending(*, limit: int = _MAX_INJECTIONS_PER_TURN) -> list[dict[str, Any]]:
-            """Drain follow-up messages from the pending queue.
+        async def _drain_pending(
+            *, limit: int = _MAX_INJECTIONS_PER_TURN, steer_only: bool = False,
+        ) -> list[dict[str, Any]]:
+            """Drain follow-up messages from the pending queues.
+
+            ``steer_only=True`` is the mid-turn checkpoint: only the inject
+            queue (steers + system results) is drained — plain user messages
+            stay deferred so they don't derail work in flight.  The final
+            drain (``steer_only=False``) takes both queues, deferred last so
+            the model answers the user with all results already in context.
 
             When no messages are immediately available but sub-agents
             spawned in this dispatch are still running, blocks until at
@@ -1549,7 +1634,7 @@ class AgentLoop:
             loop alive so subsequent sub-agent completions are consumed
             in-order rather than dispatched separately.
             """
-            if pending_queue is None:
+            if pending_queues is None:
                 return []
 
             def _to_user_message(pending_msg: InboundMessage) -> dict[str, Any]:
@@ -1558,37 +1643,66 @@ class AgentLoop:
                 if media:
                     content, media = extract_documents(content, media)
                     media = media or None
+                if pending_msg.metadata.get("steer") is True:
+                    content = f"{_STEER_FRAMING}\n\n{content}"
                 user_content = self.context._build_user_content(content, media)
                 return {"role": "user", "content": user_content}
 
             items: list[dict[str, Any]] = []
-            while len(items) < limit:
-                try:
-                    items.append(_to_user_message(pending_queue.get_nowait()))
-                except asyncio.QueueEmpty:
-                    break
+            consumed: list[InboundMessage] = []
+
+            def _pull(queue: asyncio.Queue) -> None:
+                while len(items) < limit:
+                    try:
+                        pending_msg = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    consumed.append(pending_msg)
+                    items.append(_to_user_message(pending_msg))
+
+            _pull(pending_queues.inject)
+            if not steer_only:
+                _pull(pending_queues.deferred)
 
             # Block if nothing drained but sub-agents spawned in this dispatch
             # are still running.  Keeps the runner loop alive so subsequent
             # completions are injected in-order rather than dispatched separately.
+            # Mid-turn (steer_only) only the inject queue wakes the wait; the
+            # final drain also wakes on deferred user messages — with the final
+            # response already produced, attending the user immediately cannot
+            # derail any work.
             if (not items
                     and session is not None
                     and self.subagents.get_running_count_by_session(session.key) > 0):
-                try:
-                    msg = await asyncio.wait_for(pending_queue.get(), timeout=300)
-                except asyncio.TimeoutError:
+                getters = [asyncio.ensure_future(pending_queues.inject.get())]
+                if not steer_only:
+                    getters.append(asyncio.ensure_future(pending_queues.deferred.get()))
+                done, not_done = await asyncio.wait(
+                    getters, timeout=_SUBAGENT_WAIT_TIMEOUT,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for fut in not_done:
+                    fut.cancel()
+                # Harvest every getter that completed — including one that
+                # raced to completion before cancel() landed — so no message
+                # is silently dropped.
+                for fut in getters:
+                    if fut.done() and not fut.cancelled():
+                        pending_msg = fut.result()
+                        consumed.append(pending_msg)
+                        items.append(_to_user_message(pending_msg))
+                if not items:
                     logger.warning(
                         "Timeout waiting for sub-agent completion in session {}",
                         session.key,
                     )
+                    await self._ack_queued_consumed(consumed)
                     return items
-                items.append(_to_user_message(msg))
-                while len(items) < limit:
-                    try:
-                        items.append(_to_user_message(pending_queue.get_nowait()))
-                    except asyncio.QueueEmpty:
-                        break
+                _pull(pending_queues.inject)
+                if not steer_only:
+                    _pull(pending_queues.deferred)
 
+            await self._ack_queued_consumed(consumed)
             return items
 
         active_session_key = session.key if session else session_key
@@ -1766,9 +1880,20 @@ class AgentLoop:
             # to fall back to yield semantics and routes on.
             if self._maybe_resolve_pending_answer(msg, effective_key):
                 continue
+            # A literal "[steer]" prefix marks a steer (older TUI clients and
+            # users typing it by hand); normalize it into the metadata flag so
+            # routing and framing see one representation.
+            if raw.startswith(_STEER_PREFIX):
+                msg = dataclasses.replace(
+                    msg,
+                    content=raw[len(_STEER_PREFIX):].lstrip(),
+                    metadata={**msg.metadata, "steer": True},
+                )
+                raw = msg.content
             # If this session already has an active pending queue (i.e. a task
-            # is processing this session), route the message there for mid-turn
-            # injection instead of creating a competing task.
+            # is processing this session), route the message there instead of
+            # creating a competing task: steers and system results inject into
+            # the running turn; plain user messages defer to end-of-turn.
             if effective_key in self._pending_queues:
                 # Non-priority commands must not be queued for injection;
                 # dispatch them directly (same pattern as priority commands).
@@ -1784,26 +1909,33 @@ class AgentLoop:
                         msg,
                         session_key_override=effective_key,
                     )
+                queues = self._pending_queues[effective_key]
+                injectable = _is_injectable(pending_msg)
+                target = queues.inject if injectable else queues.deferred
                 try:
-                    self._pending_queues[effective_key].put_nowait(pending_msg)
+                    target.put_nowait(pending_msg)
                 except asyncio.QueueFull:
                     logger.warning(
-                        "Pending queue full for session {}, falling back to queued task",
+                        "Pending {} queue full for session {}, falling back to queued task",
+                        "inject" if injectable else "deferred",
                         effective_key,
                     )
                 else:
                     logger.info(
-                        "Routed follow-up message to pending queue for session {}",
+                        "Routed follow-up message to {} queue for session {}",
+                        "inject" if injectable else "deferred",
                         effective_key,
                     )
+                    if not injectable:
+                        await self._notify_queued(pending_msg)
                     continue
-            # Register the pending queue synchronously, *before* create_task,
+            # Register the pending queues synchronously, *before* create_task,
             # so a same-session message consumed before the dispatch task
             # starts is routed here (mid-turn injection) instead of spawning a
             # competing task (B3). `create_task` only schedules the coroutine —
             # it does not run it — so registering inside `_dispatch` left a
             # window the consumer could re-enter for the same session.
-            pending: asyncio.Queue = asyncio.Queue(maxsize=20)
+            pending = PendingQueues.create()
             self._pending_queues[effective_key] = pending
             # Compute the effective session key before dispatching
             # This ensures /stop command can find tasks correctly when unified session is enabled
@@ -1814,16 +1946,16 @@ class AgentLoop:
             )
 
     async def _dispatch(
-        self, msg: InboundMessage, pending: asyncio.Queue | None = None,
+        self, msg: InboundMessage, pending: PendingQueues | None = None,
     ) -> None:
         """Process a message: per-session serial, cross-session concurrent.
 
-        ``pending`` is the mid-turn injection queue the consumer registers for
+        ``pending`` holds the mid-turn queues the consumer registers for
         this session (under the same effective key) *before* spawning this
         task, so a follow-up is visible the instant it arrives (B3). When
         called directly without it (a unit test, or any non-consumer caller)
-        the task self-provisions and registers one. Either way this task owns
-        the queue's lifecycle — it drains and unregisters it in the ``finally``.
+        the task self-provisions and registers them. Either way this task owns
+        the queues' lifecycle — it drains and unregisters them in the ``finally``.
         """
         session_key = self._effective_session_key(msg)
         if session_key != msg.session_key:
@@ -1831,7 +1963,7 @@ class AgentLoop:
         lock = self._session_locks.setdefault(session_key, asyncio.Lock())
 
         if pending is None:
-            pending = asyncio.Queue(maxsize=20)
+            pending = PendingQueues.create()
             self._pending_queues[session_key] = pending
 
         session_path = self.sessions._get_session_path(session_key)
@@ -1883,7 +2015,7 @@ class AgentLoop:
 
                         response = await self._process_message(
                             msg, on_stream=on_stream, on_stream_end=on_stream_end,
-                            pending_queue=pending,
+                            pending_queues=pending,
                         )
                         if response is not None:
                             await self.bus.publish_outbound(response)
@@ -1964,19 +2096,21 @@ class AgentLoop:
                 finally:
                     await turn_lease_cm.__aexit__(None, None, None)
         finally:
-            # Drain any messages still in the pending queue and re-publish
+            # Drain any messages still in the pending queues and re-publish
             # them to the bus so they are processed as fresh inbound messages
-            # rather than silently lost.
-            queue = self._pending_queues.pop(session_key, None)
-            if queue is not None:
+            # rather than silently lost. System results first — they complete
+            # work the deferred user messages may ask about.
+            queues = self._pending_queues.pop(session_key, None)
+            if queues is not None:
                 leftover = 0
-                while True:
-                    try:
-                        item = queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
-                    await self.bus.publish_inbound(item)
-                    leftover += 1
+                for queue in (queues.inject, queues.deferred):
+                    while True:
+                        try:
+                            item = queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        await self.bus.publish_inbound(item)
+                        leftover += 1
                 if leftover:
                     logger.info(
                         "Re-published {} leftover message(s) to bus for session {}",
@@ -2066,7 +2200,7 @@ class AgentLoop:
         on_progress: Callable[..., Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
-        pending_queue: asyncio.Queue | None = None,
+        pending_queues: PendingQueues | None = None,
     ) -> OutboundMessage | None:
         """Process a system inbound message (e.g. subagent announce)."""
         channel, chat_id = (
@@ -2126,7 +2260,7 @@ class AgentLoop:
             message_id=msg.metadata.get("message_id"),
             metadata=msg.metadata,
             session_key=key,
-            pending_queue=pending_queue,
+            pending_queues=pending_queues,
         )
         wall_done = time.time()
         latency_ms = max(0, int((wall_done - t_wall) * 1000))
@@ -2166,7 +2300,7 @@ class AgentLoop:
         on_progress: Callable[..., Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
-        pending_queue: asyncio.Queue | None = None,
+        pending_queues: PendingQueues | None = None,
         model_preset: str | None = None,
         persona: str | None = None,
     ) -> OutboundMessage | None:
@@ -2180,7 +2314,7 @@ class AgentLoop:
                 on_progress=on_progress,
                 on_stream=on_stream,
                 on_stream_end=on_stream_end,
-                pending_queue=pending_queue,
+                pending_queues=pending_queues,
             )
 
         key = session_key or msg.session_key
@@ -2193,7 +2327,7 @@ class AgentLoop:
             on_progress=on_progress,
             on_stream=on_stream,
             on_stream_end=on_stream_end,
-            pending_queue=pending_queue,
+            pending_queues=pending_queues,
             model_preset_override=model_preset,
             persona_override=persona,
         )
@@ -2434,7 +2568,7 @@ class AgentLoop:
                 message_id=ctx.msg.metadata.get("message_id"),
                 metadata=ctx.msg.metadata,
                 session_key=ctx.session_key,
-                pending_queue=ctx.pending_queue,
+                pending_queues=ctx.pending_queues,
                 # Most specific wins: an explicit per-turn ref (cron per-job
                 # model or /model) overrides the active persona's model.
                 model_preset=ctx.model_preset_override or ctx.persona_model_ref,

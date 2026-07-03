@@ -72,7 +72,7 @@ function formatBytes(n: number): string {
 }
 
 interface ThreadComposerProps {
-  onSend: (content: string, images?: SendImage[]) => void;
+  onSend: (content: string, images?: SendImage[], opts?: { steer?: boolean }) => void;
   /** Transcribe an audio attachment server-side (spec §5.4). Receives a
    *  data-url + name and resolves with the transcript text. */
   onTranscribeAudio?: (
@@ -960,10 +960,8 @@ export function ThreadComposer({
   const steer = useCallback(() => {
     const trimmed = value.trim();
     if (!trimmed) return;
-    onSend(`[steer] ${trimmed}`);
+    onSend(trimmed, undefined, { steer: true });
     setValue("");
-    setQueuedFlash(true);
-    window.setTimeout(() => setQueuedFlash(false), 2500);
   }, [onSend, value]);
 
   return (

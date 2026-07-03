@@ -1398,7 +1398,9 @@
     },
     "workChip": {
       "openPanel": "Abrir panel de trabajo"
-    }
+    },
+    "queuedChip": "En cola — se leerá al terminar el trabajo actual",
+    "steerChip": "Guía"
   },
   "lightbox": {
     "title": "Vista previa de imagen",
