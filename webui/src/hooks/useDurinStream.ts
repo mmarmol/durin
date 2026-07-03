@@ -355,10 +355,21 @@ export function useDurinStream(
           return;
         }
         // stream_end only means the text segment finished — the model may
-        // still be executing tools.  Do NOT reset isStreaming here; the
-        // definitive "turn is complete" signal is ``turn_end``.
-        if (!buffer.current) return;
+        // still be executing tools.  Do NOT reset the global isStreaming
+        // here; the definitive "turn is complete" signal is ``turn_end``.
         buffer.current = null;
+        // Finalize the segment's row so a later segment (post-tool text, or
+        // the answer to a message queued mid-turn) opens a NEW bubble
+        // instead of concatenating onto this one. Matches the TUI, which
+        // closes its bubble per segment. Content-less rows are reasoning
+        // placeholders — they stay open so the answer text can adopt them.
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.role === "assistant" && m.isStreaming && m.kind !== "trace" && m.content.length > 0
+              ? { ...m, isStreaming: false }
+              : m,
+          ),
+        );
         return;
       }
 
