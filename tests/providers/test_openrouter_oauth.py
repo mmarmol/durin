@@ -93,11 +93,14 @@ def test_callback_server_accepts_only_nonce_path_and_captures_code():
             assert e.code == 404
         assert result.code is None
 
-        # Real redirect → 200, code captured, done set.
+        # Real redirect → 200, code captured, done set. The handler flips
+        # ``done`` in its own thread after writing the response, so the
+        # client can see status 200 a beat before the event is set — wait
+        # on the event instead of asserting instantly (CI-speed flake).
         with urllib.request.urlopen(f"{callback_url}?code=good-code", timeout=5) as resp:
             assert resp.status == 200
+        assert result.done.wait(timeout=5)
         assert result.code == "good-code"
-        assert result.done.is_set()
     finally:
         srv.shutdown()
 
