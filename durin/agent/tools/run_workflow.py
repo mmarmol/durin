@@ -378,6 +378,7 @@ class RunWorkflowTool(Tool, ContextAware):
         # the engine's cooperative cancel is keyed by it.
         from durin.workflow.cancellation import clear as _clear_cancel
         from durin.workflow.cancellation import is_cancelled as _is_cancelled
+        from durin.workflow.cancellation import request_cancel as _request_cancel
         run_id = resume.run_id if resume is not None else uuid.uuid4().hex[:12]
         engine = WorkflowEngine(
             node_runner=node_runner,
@@ -427,13 +428,32 @@ class RunWorkflowTool(Tool, ContextAware):
             return _background_launch_message(name, run_id)
 
         # The engine owns the run manifest (started→updated→finalized); no record write here.
-        result = await asyncio.to_thread(
+        engine_future = asyncio.ensure_future(asyncio.to_thread(
             engine.run, workflow, task,
             root_session_key=root_session_key,
             input_files=input_files or None,
             output_format=output_format or None,
             resume=resume,
-        )
+        ))
+        # Strong reference: if /stop cancels the awaiting turn, the detached
+        # engine task must not be garbage-collected while its thread runs out.
+        self._bg_tasks.add(engine_future)
+        engine_future.add_done_callback(self._bg_tasks.discard)
+        try:
+            # shield: cancelling the turn must NOT cancel the asyncio wrapper
+            # (the worker thread would keep running headless with no handle);
+            # instead the engine is stopped cooperatively below.
+            result = await asyncio.shield(engine_future)
+        except asyncio.CancelledError:
+            if not engine_future.done():
+                # /stop cancelled the turn. asyncio cancellation cannot reach
+                # the engine's worker thread, so signal the cooperative cancel
+                # flag — the engine stops before its next node instead of
+                # burning tokens to completion with nobody waiting for the
+                # result. The flag is dropped once the engine actually stops.
+                _request_cancel(run_id)
+                engine_future.add_done_callback(lambda _f: _clear_cancel(run_id))
+            raise
         if progress_emit is not None:
             progress_emit(_terminal_progress_payload(workflow, run_id, result))
         return _format_result(result, output_files=output_files)
