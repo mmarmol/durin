@@ -5344,6 +5344,14 @@
             "title": "Approved",
             "type": "array"
           },
+          "names": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Names",
+            "type": "object"
+          },
           "pending": {
             "items": {
               "additionalProperties": true,

@@ -194,8 +194,13 @@ function PairingPanel({ token }: { token: string }) {
               key={req.code}
               className="flex flex-wrap items-center gap-2 rounded-xl border border-border/40 bg-muted/30 px-3 py-2 text-[13px]"
             >
-              <span className="flex-1 font-mono text-[12px] text-foreground/70">
-                {req.sender_id}
+              <span className="flex-1 text-[13px]">
+                {pairing?.names?.[req.sender_id] ?? req.sender_id}
+                {pairing?.names?.[req.sender_id] ? (
+                  <span className="ml-2 font-mono text-[11px] text-muted-foreground">
+                    {req.sender_id}
+                  </span>
+                ) : null}
               </span>
               <span className="text-[11px] text-muted-foreground">
                 #{req.code}
@@ -240,7 +245,14 @@ function PairingPanel({ token }: { token: string }) {
               className="flex flex-wrap items-center gap-2 rounded-xl border border-border/40 bg-muted/30 px-3 py-2 text-[13px]"
             >
               <UserCheck className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
-              <span className="flex-1 font-mono text-[12px]">{senderId}</span>
+              <span className="flex-1 text-[13px]">
+                {pairing?.names?.[senderId] ?? senderId}
+                {pairing?.names?.[senderId] ? (
+                  <span className="ml-2 font-mono text-[11px] text-muted-foreground">
+                    {senderId}
+                  </span>
+                ) : null}
+              </span>
               <Button
                 size="sm"
                 variant="ghost"

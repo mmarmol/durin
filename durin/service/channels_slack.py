@@ -84,6 +84,8 @@ class SlackPairingListQuery(Query):
 class SlackPairingListResult(Result):
     pending: list[dict[str, Any]]
     approved: list[str]
+    #: best-effort Slack user id -> display name for every id above
+    names: dict[str, str] = {}
 
 
 class SlackPairingApproveCommand(Command):
@@ -334,7 +336,9 @@ class SlackService:
         principal.require(Scope.CONFIG_READ)
         pending = [p for p in pairing_store.list_pending() if p.get("channel") == "slack"]
         approved = pairing_store.get_approved("slack")
-        return SlackPairingListResult(pending=pending, approved=approved)
+        ids = {str(p.get("sender_id") or "") for p in pending} | set(approved)
+        names = await _display_names(ids)
+        return SlackPairingListResult(pending=pending, approved=approved, names=names)
 
     @route(
         "POST",
@@ -386,6 +390,48 @@ class SlackService:
         principal.require(Scope.CONFIG_WRITE)
         ok = pairing_store.revoke("slack", cmd.sender_id)
         return SlackPairingRevokeResult(ok=ok)
+
+
+# Display names change rarely; remember what we already resolved so the
+# 5s-polling pairing panel doesn't hammer users.info.
+_NAME_CACHE: dict[str, str] = {}
+_NAME_CACHE_MAX = 500
+
+
+async def _display_names(user_ids: set[str]) -> dict[str, str]:
+    """Best-effort Slack user id -> display name via users.info."""
+    wanted = {uid for uid in user_ids if uid}
+    names = {uid: _NAME_CACHE[uid] for uid in wanted if uid in _NAME_CACHE}
+    missing = wanted - set(names)
+    if not missing:
+        return names
+    bot_token = _configured_bot_token()
+    if not bot_token:
+        return names
+    try:
+        from slack_sdk.web.async_client import AsyncWebClient
+    except ImportError:
+        return names
+    client = AsyncWebClient(token=bot_token)
+    for uid in missing:
+        try:
+            info = await client.users_info(user=uid)
+            user = info.get("user") or {}
+            profile = user.get("profile") or {}
+            name = str(
+                profile.get("display_name")
+                or profile.get("real_name")
+                or user.get("name")
+                or ""
+            )
+        except Exception:  # noqa: BLE001 — leave unresolved ids as bare ids
+            continue
+        if name:
+            if len(_NAME_CACHE) >= _NAME_CACHE_MAX:
+                _NAME_CACHE.clear()
+            _NAME_CACHE[uid] = name
+            names[uid] = name
+    return names
 
 
 def _configured_slack_value(*keys: str) -> str | None:
