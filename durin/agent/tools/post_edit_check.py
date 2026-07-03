@@ -38,13 +38,13 @@ _DEFAULT_CHECKERS: dict[str, str] = {
 class PostEditCheckConfig(Base):
     """Configuration for post-edit linter checks."""
 
-    enable: bool = True
-    timeout_s: int = 10
-    max_lines: int = 20
-    # extension (no dot) → command template; "{file}" is replaced with the
-    # edited file's path. The command runs WITHOUT a shell.
+    enable: bool = Field(default=True, description="Run a linter check after write/edit operations")
+    timeout_s: int = Field(default=10, description="Linter timeout in seconds")
+    max_lines: int = Field(default=20, description="Max finding lines returned to the model")
+    # The command runs WITHOUT a shell.
     checkers: dict[str, str] = Field(
-        default_factory=lambda: dict(_DEFAULT_CHECKERS)
+        default_factory=lambda: dict(_DEFAULT_CHECKERS),
+        description='Extension (no dot) -> command template; "{file}" is replaced with the edited file\'s path',
     )
 
 

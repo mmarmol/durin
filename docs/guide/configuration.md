@@ -5,11 +5,13 @@ directory**. This guide covers where that file lives, how to inspect and edit it
 and what every top-level configuration section controls.
 
 > **This reference is schema-sourced.** The key names, defaults, and descriptions
-> below come directly from `durin/config/schema.py`. To regenerate the full key
-> list with live defaults at any time, run:
+> below come directly from `durin/config/schema.py`, where every field carries a
+> description. To introspect any key (type, default, constraints, description)
+> straight from the schema, run:
 >
 > ```
-> python -c "import json; from durin.config.schema import Config; print(json.dumps(Config.model_json_schema(), indent=2))"
+> durin config schema
+> durin config schema memory.dream.enabled
 > ```
 
 ---
@@ -72,6 +74,7 @@ disk.
 | `durin config show providers.anthropic` | Show one section |
 | `durin config show --raw` | Show config with secrets unmasked |
 | `durin config get agents.defaults.model` | Print one effective value (defaults applied) |
+| `durin config schema memory.owner` | Describe one key from the schema: type, default, constraints, description |
 | `durin config set gateway.port 19000` | Set one value (validated before write) |
 | `durin config edit` | Open config in `$EDITOR`; restore on validation failure |
 | `durin config import ~/.durin_backup` | Import a config and migrate plaintext secrets |

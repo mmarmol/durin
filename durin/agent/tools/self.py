@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from loguru import logger
+from pydantic import Field
 
 from durin.agent.subagent import SubagentStatus
 from durin.agent.tools.base import Tool
@@ -16,8 +17,8 @@ from durin.config.schema import Base
 
 class MyToolConfig(Base):
     """Self-inspection tool configuration."""
-    enable: bool = True
-    allow_set: bool = False
+    enable: bool = Field(default=True, description="Enable the `my` self-inspection tool")
+    allow_set: bool = Field(default=False, description="Allow the agent to modify its own runtime configuration, not just read it")
 
 
 def _has_real_attr(obj: Any, key: str) -> bool:

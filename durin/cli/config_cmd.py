@@ -234,6 +234,112 @@ def cmd_get(
         console.print(str(value))
 
 
+def _resolve_ref(node: dict[str, Any], defs: dict[str, Any]) -> dict[str, Any]:
+    """Follow a JSON-schema ``$ref`` chain into ``$defs``."""
+    while "$ref" in node:
+        node = defs[node["$ref"].split("/")[-1]]
+    return node
+
+
+def _child_schema(node: dict[str, Any], seg: str, defs: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the schema node for path segment *seg* inside object node *node*.
+
+    Properties are matched by snake_case or camelCase name (the schema
+    serializes aliases). For dict-valued fields (``additionalProperties``)
+    the segment is a user-chosen key, so the value schema is returned.
+    """
+    from pydantic.alias_generators import to_camel
+
+    resolved = _resolve_ref(node, defs)
+    candidates = [resolved] + [_resolve_ref(s, defs) for s in resolved.get("anyOf", [])]
+    for cand in candidates:
+        props = cand.get("properties", {})
+        for name in (seg, to_camel(seg)):
+            if name in props:
+                return props[name]
+        extra = cand.get("additionalProperties")
+        if isinstance(extra, dict):
+            return extra
+    return None
+
+
+def _type_str(node: dict[str, Any], defs: dict[str, Any]) -> str:
+    """Human-readable type for a schema node."""
+    if "$ref" in node:
+        return node["$ref"].split("/")[-1]
+    if "anyOf" in node:
+        return " | ".join(_type_str(s, defs) for s in node["anyOf"])
+    if "enum" in node:
+        return "enum"
+    t = node.get("type")
+    if isinstance(t, str):
+        return t
+    if "properties" in node or "additionalProperties" in node:
+        return "object"
+    return "any"
+
+
+def _schema_constraints(node: dict[str, Any]) -> dict[str, Any]:
+    """Collect display-worthy constraints from a node (and its anyOf branches)."""
+    keys = (
+        "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
+        "enum", "const", "pattern", "minLength", "maxLength",
+    )
+    out: dict[str, Any] = {}
+    for n in [node, *node.get("anyOf", [])]:
+        for k in keys:
+            if k in n:
+                out.setdefault(k, n[k])
+    return out
+
+
+@config_app.command("schema")
+def cmd_schema(
+    key: str | None = typer.Argument(
+        None, help="Dotted config path (e.g. memory.owner); omit to list top-level sections."
+    ),
+) -> None:
+    """Describe config keys from the schema: type, default, constraints, description."""
+    schema = Config.model_json_schema()
+    defs = schema.get("$defs", {})
+
+    if not key:
+        for name, prop in schema.get("properties", {}).items():
+            console.print(f"[cyan]{_normalize_dotted_path(name)}[/cyan]  {prop.get('description', '')}")
+        console.print("[dim]Use `durin config schema <dotted.key>` for one key.[/dim]")
+        return
+
+    normalized = _normalize_dotted_path(key)
+    node: dict[str, Any] = schema
+    for seg in normalized.split("."):
+        child = _child_schema(node, seg, defs)
+        if child is None:
+            console.print(f"[red]No such config key: {key}[/red]")
+            raise typer.Exit(1)
+        node = child
+
+    console.print(f"[bold]{normalized}[/bold]")
+    console.print(f"  type: {_type_str(node, defs)}")
+    try:
+        default = get_at(Config().model_dump(mode="json", by_alias=False), normalized)
+        console.print(f"  default: {json.dumps(default, ensure_ascii=False)}")
+    except KeyError:
+        if "default" in node:
+            console.print(f"  default: {json.dumps(node['default'], ensure_ascii=False)}")
+    for name, value in _schema_constraints(node).items():
+        console.print(f"  {name}: {json.dumps(value, ensure_ascii=False)}")
+    resolved = _resolve_ref(node, defs)
+    description = node.get("description") or resolved.get("description")
+    if description:
+        console.print(f"  description: {description}")
+    if resolved.get("properties"):
+        console.print("  keys:")
+        for name, prop in resolved["properties"].items():
+            console.print(
+                f"    [cyan]{_normalize_dotted_path(name)}[/cyan]  {prop.get('description', '')}"
+            )
+
+
 @config_app.command("set")
 def cmd_set(
     key: str = typer.Argument(..., help="Dotted path through the config."),
