@@ -1,16 +1,14 @@
 name: webui
 
 # Test + build the React webui. The backend CI (ci.yml) skips the webui bundle, so this
-# is the only thing that validates it. Path-filtered: it only runs when webui files (or
-# this workflow) change — non-webui PRs never spin up this job. (It is therefore NOT a
-# required status check: a path-filtered required check would sit "Expected" and block
-# every PR that doesn't touch the webui.)
+# is the only thing that validates it. The job always triggers so it can serve as a
+# required status check, but an in-job filter (same pattern as ci.yml's Python filter)
+# skips the heavy steps and reports success in seconds when the diff touches no webui
+# files — a path-filtered `on:` would instead leave the required check unreported and
+# block every PR that doesn't touch the webui.
 
 on:
   pull_request:
-    paths:
-      - "webui/**"
-      - ".github/workflows/webui.yml"
   push:
     branches:
       - main
@@ -35,15 +33,44 @@ jobs:
         working-directory: webui
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # The webui suite can only be affected by webui sources or this workflow
+      # itself. Skip install+test+typecheck+build for PRs that touch neither —
+      # the job still runs and reports success, so it keeps satisfying the
+      # required status check. Defaults to running whenever the diff can't be
+      # computed, so a "skip" never happens by accident.
+      - name: Detect webui-relevant changes
+        id: filter
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base="${{ github.event.pull_request.base.sha }}"
+          files=$(git diff --name-only "${base}...HEAD" 2>/dev/null) || files=""
+          if [ -z "$files" ]; then
+            echo "Diff unavailable/empty — running the suite to be safe."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif echo "$files" | grep -qE '^(webui/|\.github/workflows/webui\.yml$)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No webui-relevant changes — skipping the webui suite:"
+            echo "$files" | sed 's/^/  /'
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # oven-sh/setup-bun isn't on the repo's actions allowlist, so install bun via its
       # official script (no third-party action).
       - name: Install bun
+        if: steps.filter.outputs.run == 'true'
         run: |
           curl -fsSL https://bun.sh/install | bash
           echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
 
       - name: Cache bun packages
+        if: steps.filter.outputs.run == 'true'
         uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
@@ -52,15 +79,19 @@ jobs:
 
       # --frozen-lockfile also guards against package.json / bun.lock drift.
       - name: Install deps
+        if: steps.filter.outputs.run == 'true'
         run: bun install --frozen-lockfile
 
       - name: Test
+        if: steps.filter.outputs.run == 'true'
         run: bun run test
 
       # The build typechecks with tsconfig.build.json, which excludes src/tests/** —
       # this full-config pass is what keeps test files (and their fixtures) type-clean.
       - name: Typecheck (full, includes tests)
+        if: steps.filter.outputs.run == 'true'
         run: bunx tsc --noEmit
 
       - name: Build
+        if: steps.filter.outputs.run == 'true'
         run: bun run build
