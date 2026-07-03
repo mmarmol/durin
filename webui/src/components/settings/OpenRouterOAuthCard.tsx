@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -15,14 +16,19 @@ type Props = {
   onChanged?: () => void;
 };
 
+// The server-side loopback flow gives up at 180s; stop polling shortly after
+// so the card surfaces a retryable timeout instead of spinning forever.
+const POLL_TIMEOUT_MS = 190_000;
+
 /**
- * "Conectar con OpenRouter" — loopback PKCE that ends in a regular API key,
+ * "Connect with OpenRouter" — loopback PKCE that ends in a regular API key,
  * stored exactly like a manual paste. Rendered ABOVE the manual key form in
  * the provider row: both paths stay available (OpenRouter has no device-code
  * flow, so on a remote gateway only the manual paste works and the button is
  * not offered).
  */
 export function OpenRouterOAuthCard({ token, base = "", onChanged }: Props) {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<OpenRouterStatus | null>(null);
   const [loopbackUrl, setLoopbackUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -38,6 +44,7 @@ export function OpenRouterOAuthCard({ token, base = "", onChanged }: Props) {
   }, [token, base]);
 
   const pollStatusUntilConnected = () => {
+    const deadline = Date.now() + POLL_TIMEOUT_MS;
     const tick = async () => {
       try {
         const s = await fetchOpenRouterStatus(token, base);
@@ -46,6 +53,12 @@ export function OpenRouterOAuthCard({ token, base = "", onChanged }: Props) {
           setBusy(false);
           setStatus(s);
           onChanged?.();
+          return;
+        }
+        if (Date.now() >= deadline) {
+          setLoopbackUrl(null);
+          setBusy(false);
+          setError(t("settings.oauth.timeout"));
           return;
         }
         pollTimer.current = window.setTimeout(tick, 2000);
@@ -94,7 +107,7 @@ export function OpenRouterOAuthCard({ token, base = "", onChanged }: Props) {
         <p className="text-[13px]">
           {status.connected ? (
             <>
-              Conectado vía OpenRouter
+              {t("settings.oauth.openrouter.connectedVia")}
               {status.api_key_hint ? (
                 <span className="ml-1.5 font-mono text-[12px] text-muted-foreground">
                   {status.api_key_hint}
@@ -102,12 +115,12 @@ export function OpenRouterOAuthCard({ token, base = "", onChanged }: Props) {
               ) : null}
             </>
           ) : (
-            "Obtené una API key aprobando con tu cuenta de OpenRouter — sin copiar y pegar."
+            t("settings.oauth.openrouter.description")
           )}
         </p>
         {!status.connected && !loopbackUrl ? (
           <Button size="sm" disabled={busy} onClick={() => void connect()}>
-            Conectar con OpenRouter
+            {t("settings.oauth.openrouter.connect")}
           </Button>
         ) : null}
         {status.connected && !confirmDisconnect ? (
@@ -117,21 +130,21 @@ export function OpenRouterOAuthCard({ token, base = "", onChanged }: Props) {
             disabled={busy}
             onClick={() => setConfirmDisconnect(true)}
           >
-            Desconectar
+            {t("settings.oauth.disconnect")}
           </Button>
         ) : null}
       </div>
 
       {confirmDisconnect ? (
         <div className="flex items-center gap-2 rounded-[8px] border border-border/60 bg-muted/40 p-2">
-          <span className="text-[12px]">¿Olvidar la API key de OpenRouter?</span>
+          <span className="text-[12px]">{t("settings.oauth.openrouter.confirmForget")}</span>
           <Button
             size="sm"
             variant="destructive"
             disabled={busy}
             onClick={() => void doDisconnect()}
           >
-            Sí, olvidar
+            {t("settings.oauth.openrouter.confirmForgetYes")}
           </Button>
           <Button
             size="sm"
@@ -139,21 +152,21 @@ export function OpenRouterOAuthCard({ token, base = "", onChanged }: Props) {
             disabled={busy}
             onClick={() => setConfirmDisconnect(false)}
           >
-            Cancelar
+            {t("settings.oauth.cancel")}
           </Button>
         </div>
       ) : null}
 
       {loopbackUrl ? (
         <div className="space-y-1.5 text-[13px]">
-          <p>Se abrió una ventana del navegador para aprobar con OpenRouter.</p>
+          <p>{t("settings.oauth.browserOpened", { provider: "OpenRouter" })}</p>
           <p className="text-muted-foreground">
-            ¿No se abrió?{" "}
+            {t("settings.oauth.didntOpen")}{" "}
             <a className="underline" href={loopbackUrl} target="_blank" rel="noreferrer">
-              Abrir manualmente
+              {t("settings.oauth.openManually")}
             </a>
           </p>
-          <p className="text-muted-foreground">Esperando la autorización…</p>
+          <p className="text-muted-foreground">{t("settings.oauth.waiting")}</p>
         </div>
       ) : null}
 
