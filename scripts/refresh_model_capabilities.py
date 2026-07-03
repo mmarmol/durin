@@ -635,9 +635,30 @@ def main() -> int:
     md_raw = sources.get("models.dev") or {}
     if md_raw:
         from durin.config.schema import ProvidersConfig
-        from durin.providers.models_dev import build_provider_models
+        from durin.providers.models_dev import (
+            apply_nvidia_live_ids,
+            build_provider_models,
+            fetch_nvidia_model_ids,
+        )
 
         index = build_provider_models(md_raw, set(ProvidersConfig.model_fields))
+        # NVIDIA: ids from the provider's own public /v1/models (ground truth);
+        # models.dev only fills capability metadata. See models_dev docstring.
+        nvidia_ids = fetch_nvidia_model_ids()
+        if nvidia_ids:
+            index["nvidia"] = apply_nvidia_live_ids(
+                index.get("nvidia") or [], nvidia_ids
+            )
+            print(
+                f"NVIDIA live /v1/models: {len(nvidia_ids)} models (ids ground-truthed).",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "WARNING: NVIDIA /v1/models unreachable — keeping models.dev "
+                "nvidia list (known to drift).",
+                file=sys.stderr,
+            )
         payload2 = {
             "schema_version": 1,
             "generated_at": payload["generated_at"],
