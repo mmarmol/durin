@@ -208,7 +208,7 @@ def test_slack_routes_over_asgi(tmp_path):
 
     r = client.get("/api/v1/channels/slack/pairing", headers=headers)
     assert r.status_code == 200
-    assert set(r.json()) == {"pending", "approved"}
+    assert set(r.json()) == {"pending", "approved", "names"}
 
 
 def test_gateway_registry_registers_slack_like_the_catalog():
@@ -332,3 +332,42 @@ async def test_join_channel_public_ok_private_error(configured_channels_client):
 
 async def test_manifest_includes_channels_join_scope():
     assert "channels:join" in SLACK_BOT_SCOPES
+
+
+async def test_pairing_list_resolves_display_names(monkeypatch):
+    import durin.service.channels_slack as mod
+
+    class _FakeUsersClient:
+        def __init__(self, token: str = ""):
+            pass
+
+        async def users_info(self, *, user: str):
+            if user == "U_NAMED":
+                return {"user": {"profile": {"display_name": "Marcelo"}, "name": "mmarmol"}}
+            raise RuntimeError("user_not_found")
+
+    mod._NAME_CACHE.clear()
+    monkeypatch.setattr("slack_sdk.web.async_client.AsyncWebClient", _FakeUsersClient)
+    monkeypatch.setattr(
+        "durin.service.channels_slack._configured_bot_token", lambda: "xoxb-configured"
+    )
+    code = store.generate_code("slack", "U_NAMED")
+    store.approve_code(code)
+    store.generate_code("slack", "U_GHOST")
+
+    listed = await SlackService().pairing(SlackPairingListQuery(), Principal.local())
+    assert listed.names.get("U_NAMED") == "Marcelo"
+    # Unresolvable ids simply stay un-named; the UI falls back to the raw id.
+    assert "U_GHOST" not in listed.names
+
+
+async def test_pairing_list_without_token_returns_no_names(monkeypatch):
+    import durin.service.channels_slack as mod
+
+    mod._NAME_CACHE.clear()
+    monkeypatch.setattr(
+        "durin.service.channels_slack._configured_bot_token", lambda: None
+    )
+    store.generate_code("slack", "U_ANY")
+    listed = await SlackService().pairing(SlackPairingListQuery(), Principal.local())
+    assert listed.names == {}

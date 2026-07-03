@@ -2318,7 +2318,7 @@ export interface SlackTestResult {
   app_error: string | null;
 }
 export interface SlackManifestResult { manifest: Record<string, unknown>; }
-export interface SlackPairing { pending: PendingPairing[]; approved: string[]; }
+export interface SlackPairing { pending: PendingPairing[]; approved: string[]; names?: Record<string, string>; }
 
 export async function getSlackManifest(token: string, base = ""): Promise<SlackManifestResult> {
   return request<SlackManifestResult>(`${base}/api/v1/channels/slack/manifest`, token);
