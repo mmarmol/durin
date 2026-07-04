@@ -185,10 +185,11 @@ async def test_runner_does_not_apply_outer_wall_timeout_to_streaming_requests():
 
 
 @pytest.mark.asyncio
-async def test_runner_skips_wall_timeout_for_native_streaming_providers(monkeypatch):
-    """Hook-less calls on natively-streaming providers get no outer wall clock:
-    liveness is the provider's idle-stall watchdog, so a long healthy
-    generation (e.g. a workflow synthesize node) must not be killed."""
+async def test_runner_uses_generous_backstop_for_native_streaming_providers(monkeypatch):
+    """Hook-less calls on natively-streaming providers get a 30-min backstop,
+    not the tight 300s default: liveness is normally the idle-stall watchdog
+    (a long healthy generation must not be killed), but gateways that send
+    payload-less heartbeat chunks can defeat it, so a hard upper bound stays."""
     from durin.agent.runner import AgentRunner, AgentRunSpec
 
     monkeypatch.delenv("DURIN_LLM_TIMEOUT_S", raising=False)
@@ -201,9 +202,13 @@ async def test_runner_skips_wall_timeout_for_native_streaming_providers(monkeypa
     tools.get_definitions.return_value = []
 
     runner = AgentRunner(provider)
-    runner._await_with_compaction_grace = AsyncMock(
-        side_effect=AssertionError("outer wall clock must not apply"),
-    )
+    captured: dict[str, float] = {}
+
+    async def grace(coro, *, base_timeout, spec):
+        captured["base_timeout"] = base_timeout
+        return await coro
+
+    runner._await_with_compaction_grace = grace
     result = await runner.run(AgentRunSpec(
         initial_messages=[{"role": "user", "content": "hello"}],
         tools=tools,
@@ -213,7 +218,7 @@ async def test_runner_skips_wall_timeout_for_native_streaming_providers(monkeypa
     ))
 
     assert result.final_content == "done"
-    runner._await_with_compaction_grace.assert_not_awaited()
+    assert captured["base_timeout"] == 1800.0
 
 
 @pytest.mark.asyncio

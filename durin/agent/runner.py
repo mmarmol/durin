@@ -1569,12 +1569,16 @@ class AgentRunner:
         if timeout_s is None:
             # Wall-clock cap on the whole request. An explicit DURIN_LLM_TIMEOUT_S
             # always wins (0 disables). Otherwise: providers whose chat_stream()
-            # runs an idle-stall watchdog need no cap — a hung request is caught
-            # by stream silence, while an actively-generating call is alive no
-            # matter how long it runs (long syntheses died at the old 300s
-            # default mid-generation). Providers without that watchdog keep a
-            # finite default to avoid per-session lock starvation when a request
-            # hangs indefinitely (e.g. gateway/network stall).
+            # runs an idle-stall watchdog get a generous 30-min backstop — a hung
+            # request is normally caught by stream silence, while an
+            # actively-generating call stays alive as long as it needs (long
+            # syntheses died at the old 300s default mid-generation). The
+            # backstop is not redundant with the watchdog: some gateways send
+            # payload-less heartbeat chunks that keep resetting it, so a wedged
+            # backend behind such a gateway would otherwise hold the session
+            # lock forever — unacceptable for unattended runs (workflows,
+            # dream, cron). Providers without the watchdog keep the tighter
+            # finite default.
             raw = os.environ.get("DURIN_LLM_TIMEOUT_S", "").strip()
             if raw:
                 try:
@@ -1582,7 +1586,7 @@ class AgentRunner:
                 except (TypeError, ValueError):
                     timeout_s = 300.0
             elif getattr(_provider, "supports_native_streaming", False):
-                timeout_s = None
+                timeout_s = 1800.0
             else:
                 timeout_s = 300.0
         if timeout_s is not None and timeout_s <= 0:

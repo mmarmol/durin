@@ -220,11 +220,15 @@ Providers whose `chat_stream` runs that idle watchdog declare it with the
 subclasses, Bedrock; `FallbackProvider` reports its primary's flag). The agent
 runner reads the flag to decide liveness semantics per request: on a
 natively-streaming provider a hung request is detected by stream *silence*, so
-the runner applies no wall-clock cap and an actively-generating call may run as
-long as it needs (long workflow-synthesis and dream calls died at the old fixed
-cap mid-generation). On providers without the watchdog the runner keeps a finite
-wall-clock default. An explicit `DURIN_LLM_TIMEOUT_S` overrides the flag-based
-default everywhere; `0` disables the cap.
+the runner relaxes the wall clock to a generous 30-minute backstop and an
+actively-generating call may run as long as it needs (long workflow-synthesis
+and dream calls died at the old tight cap mid-generation). The backstop is kept
+rather than dropped because the watchdog counts chunks, not payload — a gateway
+that emits heartbeat chunks can keep resetting it while the backend is wedged,
+and unattended runs (workflows, dream, cron) need a hard upper bound. On
+providers without the watchdog the runner keeps the tighter finite default. An
+explicit `DURIN_LLM_TIMEOUT_S` overrides the flag-based default everywhere; `0`
+disables the cap.
 
 The idle watchdog itself has one exception: local endpoints (`is_local` specs,
 loopback/LAN addresses) disable it by default, because local backends emit
