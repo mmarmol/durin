@@ -82,7 +82,7 @@ Entity-page rows use their entity-ref URI directly (e.g. `person:deborah`); skil
 - `UNICODE61` and `TRIGRAM` paths use `ORDER BY rank` (BM25) — the clause is load-bearing; without it SQLite returns rowid order, not relevance order.
 - `LIKE_SUBSTRING` returns in table order (no scoring).
 
-Non-operator query tokens are double-quoted before FTS5 to escape special characters (`%`, `*`, `:`). Balanced double-quoted phrases in the query are preserved as FTS5 phrase tokens.
+Every query token is double-quoted before FTS5 to escape special characters (`%`, `*`, `:`) and to neutralise the FTS5 boolean keywords (`AND`/`OR`/`NOT`/`NEAR`) — the recall query is natural language, so a query beginning with a word like "not" must not reach the parser as a dangling operator. Balanced double-quoted phrases in the query are preserved as FTS5 phrase tokens.
 
 ### Step 2c — Grep fallback
 

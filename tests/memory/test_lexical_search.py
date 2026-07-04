@@ -146,3 +146,44 @@ def test_unmatched_quote_falls_back_to_token_search(tmp_path: Path) -> None:
         hits = lexical_search(idx, decision)
     # Should still find Marcelo's entry — degradation doesn't lose hits.
     assert any(h.uri == "person:marcelo" for h in hits)
+
+
+# ---------------------------------------------------------------------------
+# Regression: FTS5 boolean keywords in a natural-language query
+# ---------------------------------------------------------------------------
+#
+# `_quote_for_fts` used to pass AND/OR/NOT/NEAR through as FTS5
+# operators (case-insensitively). Since the recall query is natural
+# language — never a boolean expression — that hijacked the commonest
+# English function words. A query beginning with "not" left a bare
+# leading NOT operator with no left operand, raising
+# `fts5: syntax error near "NOT"`, which the pipeline swallowed as a
+# silent lexical-tier failure. Every token must now be quoted as
+# literal content.
+
+
+def test_leading_boolean_keyword_does_not_crash(tmp_path: Path) -> None:
+    """A query starting with the word "not" must match literally, not
+    parse as a dangling FTS5 NOT operator."""
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(
+            uri="topic:not_sure", path="memory/x/a.md",
+            type_="topic", entity_type=None,
+            text="not sure what to deploy next", mtime=1.0,
+        )
+        decision = decide_lexical_route("not sure what to deploy")
+        hits = lexical_search(idx, decision)
+    # Pre-fix this raised fts5 syntax error near "NOT"; now "not" is a
+    # literal token and the doc surfaces.
+    assert any(h.uri == "topic:not_sure" for h in hits)
+
+
+def test_boolean_keywords_are_quoted_as_literals() -> None:
+    """The lowercase/uppercase boolean keywords are quoted, never
+    emitted as bare FTS5 operators."""
+    from durin.memory.lexical_search import _quote_for_fts
+
+    assert _quote_for_fts("not sure") == '"not" "sure"'
+    assert _quote_for_fts("and then") == '"and" "then"'
+    assert _quote_for_fts("do NOT delete") == '"do" "NOT" "delete"'
+    assert _quote_for_fts("near the edge") == '"near" "the" "edge"'
