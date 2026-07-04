@@ -1278,6 +1278,23 @@ class MemoryDreamParseFailureEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class AuxInvokeFailureEvent(TypedDict):
+    """A purpose-resolved auxiliary LLM invoke raised.
+
+    The aux consumers (dream passes, skill security judge, composition gate)
+    are failure-open by design — a broken judge or dream model degrades
+    gracefully per call. This event is what keeps that degradation visible:
+    it names the (provider, model) pair that failed so a misconfigured
+    specific-model knob surfaces instead of failing silently forever
+    (pairs with `durin doctor`'s "specific models" check).
+    """
+
+    purpose: str  # "memory" | "judge"
+    provider: NotRequired[str | None]
+    model: NotRequired[str | None]
+    error_head: str  # first 200 chars of the raised error
+
+
 class MemoryDreamVectorUnavailableEvent(TypedDict):
     """A dream run started with vector memory enabled but no vector backend.
 
@@ -1450,6 +1467,7 @@ EVENTS: dict[str, type] = {
     "memory.dream.always_on": MemoryDreamAlwaysOnEvent,
     "memory.dream.flagged": MemoryDreamFlaggedEvent,
     "memory.dream.parse_failure": MemoryDreamParseFailureEvent,
+    "aux.invoke_failure": AuxInvokeFailureEvent,
     "memory.dream.vector_unavailable": MemoryDreamVectorUnavailableEvent,
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,

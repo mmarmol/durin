@@ -1374,14 +1374,17 @@ def _run_gateway(
                 run_refine_pass,
                 run_skill_extract_pass,
             )
-            from durin.memory.model_resolve import resolve_memory_model
+            from durin.memory.model_resolve import resolve_aux_preset
             from durin.workflow.workflow_improve_dream import run_workflow_improve_pass
 
             # The daily cron runs the extract pass (sessions → entity attributes),
             # the skill-extract pass (sessions → reusable procedures as skills),
             # then the refine pass (dedup). Writes go through memory_writer /
             # skill_write.
-            model = resolve_memory_model(config)
+            # One resolution for the whole dream run: the memory preset pairs the
+            # model WITH its provider; passing just the name keeps the passes'
+            # default_llm_invoke (which resolves the same preset) consistent.
+            model = resolve_aux_preset(config, purpose="memory").model
             _cron_max_s = config.memory.dream.max_seconds_per_run
             _absorb = config.memory.dream.auto_absorb
             _discover = config.memory.dream.discover_enabled
@@ -1473,12 +1476,10 @@ def _run_gateway(
                 from durin.agent.skill_curation import curate_catalog
                 from durin.memory.llm_invoke import default_llm_invoke
 
-                curation_model = resolve_memory_model(config)
-
                 def _judge(prompt: str) -> str:
-                    # ONE completion via the already-resolved memory model,
+                    # ONE completion via the memory preset (model + provider),
                     # using the same call shape the refine pass's absorb judge uses.
-                    return default_llm_invoke(prompt, model=curation_model).text
+                    return default_llm_invoke(prompt).text
 
                 from durin.agent.skill_drift import check_upstream_drift
                 from durin.agent.skill_usage import collect_recent_skill_calls
@@ -1508,10 +1509,8 @@ def _run_gateway(
                     from durin.agent.skill_curation import suggest_manual_skills
                     from durin.memory.llm_invoke import default_llm_invoke
 
-                    _sg_model = resolve_memory_model(config)
-
                     def _sg_judge(prompt: str) -> str:
-                        return default_llm_invoke(prompt, model=_sg_model).text
+                        return default_llm_invoke(prompt).text
 
                     from durin.agent.skill_usage import collect_recent_skill_calls
                     _sg_usage = collect_recent_skill_calls(workspace, within_hours=24)
@@ -1784,14 +1783,14 @@ def _run_gateway(
                     # (the frequent dream, event-driven; the per-session cursor
                     # makes it idempotent). Refine stays on the daily cron.
                     from durin.memory.dream_passes import dream_vector_index, run_extract_pass
-                    from durin.memory.model_resolve import resolve_memory_model
+                    from durin.memory.model_resolve import resolve_aux_preset
                     # Pass the vector index so source-side semantic dedup runs on
                     # the reactive path too (where most turns are processed first
                     # — the cron rarely re-sees them). Bounded cost: the reactive
                     # dream is throttled (min_seconds_between_runs) and the
                     # embedding model loads lazily.
                     out = run_extract_pass(
-                        ws, model=resolve_memory_model(config),
+                        ws, model=resolve_aux_preset(config, purpose="memory").model,
                         max_seconds=_dream_max_s,
                         discover=config.memory.dream.discover_enabled,
                         skill_signals=config.memory.dream.skill_signals_enabled,

@@ -28,7 +28,11 @@ def _resolve_provider_model() -> tuple[Any, str]:
     from durin.memory.model_resolve import resolve_aux_preset
     from durin.providers.factory import make_provider
     cfg = load_config()
-    return make_provider(cfg), resolve_aux_preset(cfg, purpose="judge").model
+    # Provider and model must come from the SAME resolved preset — building the
+    # provider from the default preset while taking the judge preset's model
+    # sent the judge's model name to the wrong endpoint.
+    preset = resolve_aux_preset(cfg, purpose="judge")
+    return make_provider(cfg, preset=preset), preset.model
 
 
 def _build_tools(workspace: Path) -> Any:
