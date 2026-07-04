@@ -99,6 +99,10 @@ class FallbackProvider(LLMProvider):
     def supports_progress_deltas(self) -> bool:
         return bool(getattr(self._primary, "supports_progress_deltas", False))
 
+    @property
+    def supports_native_streaming(self) -> bool:
+        return bool(getattr(self._primary, "supports_native_streaming", False))
+
     def _primary_available(self) -> bool:
         """Return True if the primary provider is not currently tripped."""
         if self._primary_tripped_at is None:

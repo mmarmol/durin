@@ -39,6 +39,7 @@ from durin.providers.base import (
     LLMResponse,
     ToolCallRequest,
     format_provider_error_content,
+    stream_idle_timeout_s,
 )
 from durin.providers.openai_responses import (
     consume_sdk_stream,
@@ -294,6 +295,8 @@ class OpenAICompatProvider(LLMProvider):
     Receives a resolved ``ProviderSpec`` from the caller — no internal
     registry lookups needed.
     """
+
+    supports_native_streaming = True
 
     def __init__(
         self,
@@ -1345,6 +1348,10 @@ class OpenAICompatProvider(LLMProvider):
         except Exception as e:
             return self._handle_error(e, spec=self._spec, api_base=self.api_base)
 
+    def _resolve_stream_idle_timeout(self) -> float | None:
+        """Idle-stall watchdog window; local endpoints default to disabled."""
+        return stream_idle_timeout_s(is_local=self._is_local)
+
     async def chat_stream(
         self,
         messages: list[dict[str, Any]],
@@ -1361,7 +1368,7 @@ class OpenAICompatProvider(LLMProvider):
         repeat_penalty: float | None = None,
         extra_body: dict[str, Any] | None = None,
     ) -> LLMResponse:
-        idle_timeout_s = int(os.environ.get("DURIN_STREAM_IDLE_TIMEOUT_S", "90"))
+        idle_timeout_s = self._resolve_stream_idle_timeout()
         try:
             if self._should_use_responses_api(model, reasoning_effort):
                 try:
@@ -1443,7 +1450,7 @@ class OpenAICompatProvider(LLMProvider):
             return LLMResponse(
                 content=(
                     f"Error calling LLM: stream stalled for more than "
-                    f"{idle_timeout_s} seconds"
+                    f"{idle_timeout_s:g} seconds"
                 ),
                 finish_reason="error",
                 error_kind="timeout",

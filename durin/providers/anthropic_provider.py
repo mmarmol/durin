@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 import secrets
 import string
@@ -17,6 +16,7 @@ from durin.providers.base import (
     LLMResponse,
     ToolCallRequest,
     format_provider_error_content,
+    stream_idle_timeout_s,
 )
 
 _ALNUM = string.ascii_letters + string.digits
@@ -32,6 +32,8 @@ class AnthropicProvider(LLMProvider):
     Handles message format conversion (OpenAI → Anthropic Messages API),
     prompt caching, extended thinking, tool calls, and streaming.
     """
+
+    supports_native_streaming = True
 
     def __init__(
         self,
@@ -609,36 +611,42 @@ class AnthropicProvider(LLMProvider):
             messages, tools, model, max_tokens, temperature,
             reasoning_effort, tool_choice,
         )
-        idle_timeout_s = int(os.environ.get("DURIN_STREAM_IDLE_TIMEOUT_S", "90"))
+        idle_timeout_s = stream_idle_timeout_s()
         try:
             async with self._client.messages.stream(**kwargs) as stream:
-                if on_content_delta or on_thinking_delta:
-                    # Idle timeout must track *any* SSE chunk (thinking_delta,
-                    # tool JSON deltas, etc.), not only text_stream tokens.
-                    # Otherwise extended thinking can stall text_stream for minutes
-                    # while the connection is healthy (e.g. MiniMax Anthropic).
-                    while True:
-                        try:
-                            chunk = await asyncio.wait_for(
-                                stream.__anext__(),
-                                timeout=idle_timeout_s,
-                            )
-                        except StopAsyncIteration:
-                            break
-                        if (
-                            chunk.type == "content_block_delta"
-                            and getattr(chunk.delta, "type", None) == "thinking_delta"
-                        ):
-                            piece = getattr(chunk.delta, "thinking", None) or ""
-                            if piece and on_thinking_delta:
-                                await on_thinking_delta(piece)
-                        elif (
-                            chunk.type == "content_block_delta"
-                            and getattr(chunk.delta, "type", None) == "text_delta"
-                        ):
-                            text = getattr(chunk.delta, "text", None) or ""
-                            if text and on_content_delta:
-                                await on_content_delta(text)
+                # Idle timeout must track *any* SSE chunk (thinking_delta,
+                # tool JSON deltas, etc.), not only text_stream tokens.
+                # Otherwise extended thinking can stall text_stream for minutes
+                # while the connection is healthy (e.g. MiniMax Anthropic).
+                # Drain chunk-by-chunk even with no delta callbacks: skipping
+                # straight to get_final_message() would turn the idle timeout
+                # into a wall clock on the whole generation, killing any
+                # callback-less call (chat_with_retry) that generates longer
+                # than the idle window.
+                while True:
+                    try:
+                        chunk = await asyncio.wait_for(
+                            stream.__anext__(),
+                            timeout=idle_timeout_s,
+                        )
+                    except StopAsyncIteration:
+                        break
+                    if (
+                        chunk.type == "content_block_delta"
+                        and getattr(chunk.delta, "type", None) == "thinking_delta"
+                    ):
+                        piece = getattr(chunk.delta, "thinking", None) or ""
+                        if piece and on_thinking_delta:
+                            await on_thinking_delta(piece)
+                    elif (
+                        chunk.type == "content_block_delta"
+                        and getattr(chunk.delta, "type", None) == "text_delta"
+                    ):
+                        text = getattr(chunk.delta, "text", None) or ""
+                        if text and on_content_delta:
+                            await on_content_delta(text)
+                # The stream is already exhausted here, so this resolves from
+                # buffered state; the timeout only guards SDK bookkeeping.
                 response = await asyncio.wait_for(
                     stream.get_final_message(),
                     timeout=idle_timeout_s,
@@ -648,7 +656,7 @@ class AnthropicProvider(LLMProvider):
             return LLMResponse(
                 content=(
                     f"Error calling LLM: stream stalled for more than "
-                    f"{idle_timeout_s} seconds"
+                    f"{idle_timeout_s:g} seconds"
                 ),
                 finish_reason="error",
                 error_kind="timeout",

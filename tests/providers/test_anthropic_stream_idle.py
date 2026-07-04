@@ -147,3 +147,77 @@ async def test_chat_stream_without_callback_still_finalizes() -> None:
     )
     assert res.content == "ok"
     fake.get_final_message.assert_awaited_once()
+
+
+class _SlowFakeAsyncStream(_FakeAsyncStream):
+    """Fake stream that pauses before yielding each chunk."""
+
+    def __init__(self, chunks: list[SimpleNamespace], gap_s: float) -> None:
+        super().__init__(chunks)
+        self._gap_s = gap_s
+
+    async def __anext__(self) -> SimpleNamespace:
+        import asyncio
+
+        await asyncio.sleep(self._gap_s)
+        return await super().__anext__()
+
+
+def _stream_cm(fake: _FakeAsyncStream) -> MagicMock:
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=fake)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    return cm
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_without_callbacks_survives_long_generation(monkeypatch) -> None:
+    """With no delta consumers the idle timeout must still be per-chunk gap:
+    a generation whose TOTAL time exceeds the idle window but keeps emitting
+    chunks is healthy and must complete (callback-less chat_with_retry path)."""
+    monkeypatch.setenv("DURIN_STREAM_IDLE_TIMEOUT_S", "1")
+    provider = AnthropicProvider(api_key="sk-test")
+    provider._client = MagicMock()
+
+    chunk = SimpleNamespace(
+        type="content_block_delta",
+        delta=SimpleNamespace(type="text_delta", text="x"),
+    )
+    # 4 chunks x 0.4s gap = 1.6s total generation > 1s idle window,
+    # but every individual gap stays under it.
+    fake = _SlowFakeAsyncStream([chunk] * 4, gap_s=0.4)
+    provider._client.messages.stream = MagicMock(return_value=_stream_cm(fake))
+
+    res = await provider.chat_stream(
+        messages=[{"role": "user", "content": "hello"}],
+        on_content_delta=None,
+        on_thinking_delta=None,
+    )
+
+    assert res.finish_reason != "error"
+    assert res.content == "Hi"
+    fake.get_final_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_without_callbacks_detects_stall(monkeypatch) -> None:
+    """A single inter-chunk gap larger than the idle window is a stall."""
+    monkeypatch.setenv("DURIN_STREAM_IDLE_TIMEOUT_S", "1")
+    provider = AnthropicProvider(api_key="sk-test")
+    provider._client = MagicMock()
+
+    chunk = SimpleNamespace(
+        type="content_block_delta",
+        delta=SimpleNamespace(type="text_delta", text="x"),
+    )
+    fake = _SlowFakeAsyncStream([chunk], gap_s=1.5)
+    provider._client.messages.stream = MagicMock(return_value=_stream_cm(fake))
+
+    res = await provider.chat_stream(
+        messages=[{"role": "user", "content": "hello"}],
+        on_content_delta=None,
+        on_thinking_delta=None,
+    )
+
+    assert res.finish_reason == "error"
+    assert "stalled" in (res.content or "")
