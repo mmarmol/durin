@@ -32,6 +32,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   ApiError,
   applyWorkflowRecommendation,
+  dismissWorkflowRecommendation,
   deleteWorkflow,
   duplicateWorkflow,
   getWorkflow,
@@ -1268,6 +1269,43 @@ export function WorkflowsView() {
     [selected, token, t],
   );
 
+  const onDismissRec = useCallback(
+    async (id: string) => {
+      if (!selected) return;
+      try {
+        await dismissWorkflowRecommendation(token, selected, id);
+        setRecs(await getWorkflowRecommendations(token, selected));
+      } catch (e) {
+        setError(errMsg(e));
+      }
+    },
+    [selected, token],
+  );
+
+  const onCopyStructural = useCallback(
+    async (r: WorkflowRecommendation) => {
+      // Copy-ready context so the user can open a chat and treat the idea with
+      // the agent: the workflow, the dream's proposal, why the autonomous scope
+      // refused it, and the run evidence.
+      const text = [
+        `Review a structural improvement idea for my workflow "${selected}".`,
+        `The dream proposed (out of its prompt-only scope, so it was NOT applied):`,
+        JSON.stringify(r.proposal ?? {}, null, 2),
+        `Why it was escalated: ${r.why_rejected ?? ""}`,
+        `Run evidence: ${r.diagnostic ?? ""}`,
+        `Reason given: ${r.reason}`,
+        `If it holds up, apply it with workflow_edit; otherwise tell me why not.`,
+      ].join("\n");
+      try {
+        await navigator.clipboard.writeText(text);
+        setNotice(t("workflows.recCopied"));
+      } catch {
+        setError(t("workflows.recCopyFailed"));
+      }
+    },
+    [selected, t],
+  );
+
   const nodeIds = def?.nodes.map((n) => n.id) ?? [];
   const selectedNode = def?.nodes.find((n) => n.id === selectedNodeId) ?? null;
   const selectedIo: "input" | "output" | null =
@@ -1402,17 +1440,41 @@ export function WorkflowsView() {
         <div className="flex h-full flex-1 flex-col">
           {recs.length > 0 && (
             <div className="flex flex-col gap-1 border-b bg-amber-500/10 px-3 py-2">
-              {recs.map((r) => (
-                <div key={r.id} className="flex items-center gap-2 text-sm">
-                  <Lightbulb className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
-                  <span className="flex-1 text-amber-700 dark:text-amber-300">
-                    <span className="font-medium">{r.target_id}.{r.field}</span> — {r.reason}
-                  </span>
-                  <Button size="sm" variant="outline" onClick={() => onApplyRec(r.id)}>
-                    apply
-                  </Button>
-                </div>
-              ))}
+              {recs.map((r) =>
+                r.kind === "structural" ? (
+                  <div key={r.id} className="flex items-start gap-2 text-sm">
+                    <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-purple-600" aria-hidden />
+                    <span className="flex-1 text-purple-700 dark:text-purple-300">
+                      <span className="mr-1 rounded-full bg-purple-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase">
+                        {t("workflows.recStructural")}
+                      </span>
+                      {r.reason || r.why_rejected}
+                      <span className="block text-[11px] text-muted-foreground">
+                        {t("workflows.recStructuralHint")} · {r.diagnostic}
+                      </span>
+                    </span>
+                    <Button size="sm" variant="outline" onClick={() => void onCopyStructural(r)}>
+                      {t("workflows.recCopy")}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => void onDismissRec(r.id)}>
+                      {t("workflows.recDismiss")}
+                    </Button>
+                  </div>
+                ) : (
+                  <div key={r.id} className="flex items-center gap-2 text-sm">
+                    <Lightbulb className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+                    <span className="flex-1 text-amber-700 dark:text-amber-300">
+                      <span className="font-medium">{r.target_id}.{r.field}</span> — {r.reason}
+                    </span>
+                    <Button size="sm" variant="outline" onClick={() => onApplyRec(r.id)}>
+                      apply
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => void onDismissRec(r.id)}>
+                      {t("workflows.recDismiss")}
+                    </Button>
+                  </div>
+                ),
+              )}
             </div>
           )}
           <div className="relative flex-1">

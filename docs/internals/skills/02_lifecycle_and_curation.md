@@ -192,7 +192,13 @@ Who may override differs by door. The in-session `SkillWriteTool` runs in
 user explicitly insists on prose, a retry with `override_composition=true`
 saves it — the system warns, the user's word wins (the import gate's trust
 model). The dream's instance runs in `hard` mode: the override parameter is
-ignored and an autonomous narration-only write cannot land. Curation `evolve`
+ignored and an autonomous narration-only write cannot land — but the bounce is
+never silently lost. The hard door queues the rejected body in the suggestions
+bandeja as a `create` card (`skill_suggestions.add_gate_bounce`): the full body
+as a diff, the gate's reason, and an accept action that IS the user's explicit
+override (`apply_suggestion` replays it with `composition_override=True`,
+actor=user). A later compliant landing of the same skill name clears the stale
+card (`clear_gate_bounces`), so only genuinely unresolved bounces await review. Curation `evolve`
 output is not re-gated: the curation judge itself carries the doctrine and the
 catalog in its prompt, so gating its output would re-judge the same judge.
 

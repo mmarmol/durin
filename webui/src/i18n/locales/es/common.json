@@ -1663,6 +1663,7 @@
       "suggestionError": "No se pudo aplicar la sugerencia — es posible que ya haya sido procesada. Recargá para ver el estado actual.",
       "action": {
         "evolve": "mejorar",
+        "create": "skill propuesta",
         "retire": "retirar",
         "fuse": "fusionar"
       }
@@ -1682,7 +1683,7 @@
     "improvementManual": "Manual",
     "improvementAuto": "Auto",
     "improvementHint_manual": "Manual: el dream propone mejoras (el prompt de un nodo o el criterio de un gate) para que las revises y apliques.",
-    "improvementHint_auto": "Auto: el dream aplica sus mejoras automáticamente (todavía no activo — el auto-apply de workflows está por venir).",
+    "improvementHint_auto": "Auto: el dream aplica solo mejoras de prompts (validadas, versionadas, y auto-revertidas si los próximos runs empeoran). Las ideas estructurales igual llegan a vos.",
     "selectPrompt": "Selecciona un workflow para ver su grafo.",
     "save": "Guardar",
     "saved": "Guardado.",
@@ -1691,6 +1692,12 @@
     "status": "Estado",
     "taskPlaceholder": "Tarea para ejecutar en este workflow…",
     "recApplied": "Recomendación aplicada.",
+    "recDismiss": "descartar",
+    "recCopy": "copiar para un chat",
+    "recCopied": "Contexto copiado — pegalo en un chat para trabajar la idea con el agente.",
+    "recCopyFailed": "No se pudo copiar al portapapeles.",
+    "recStructural": "estructural",
+    "recStructuralHint": "Fuera del alcance solo-prompts del dream — nunca se auto-aplica; tratalo en una sesión",
     "kind": {
       "work": "trabajo",
       "parallel": "paralelo",

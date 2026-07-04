@@ -382,11 +382,17 @@ export async function runWorkflow(
 
 export type WorkflowRecommendation = {
   id: string;
-  target_id: string;
-  field: string;
-  current: string;
-  proposed: string;
+  target_id?: string;
+  field?: string;
+  current?: string;
+  proposed?: string;
   reason: string;
+  // Structural suggestions: the dream's out-of-scope idea, escalated for the
+  // user instead of silently dropped. No auto-apply — treat it in a session.
+  kind?: "structural";
+  proposal?: Record<string, unknown>;
+  why_rejected?: string;
+  diagnostic?: string;
 };
 
 export async function getWorkflowRecommendations(
@@ -409,6 +415,19 @@ export async function applyWorkflowRecommendation(
 ): Promise<{ ok: boolean; detail: string }> {
   return post<{ ok: boolean; detail: string }>(
     `${base}/api/v1/workflows/${encodeURIComponent(name)}/recommendations/${encodeURIComponent(id)}/apply`,
+    token,
+    {},
+  );
+}
+
+export async function dismissWorkflowRecommendation(
+  token: string,
+  name: string,
+  id: string,
+  base: string = "",
+): Promise<{ ok: boolean; detail: string }> {
+  return post<{ ok: boolean; detail: string }>(
+    `${base}/api/v1/workflows/${encodeURIComponent(name)}/recommendations/${encodeURIComponent(id)}/dismiss`,
     token,
     {},
   );

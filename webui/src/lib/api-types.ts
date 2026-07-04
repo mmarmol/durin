@@ -1965,6 +1965,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/{name}/recommendations/{id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dismiss a recommendation (terminal; an identical repeat proposal stays pinned to it). */
+        post: operations["workflows_dismiss_recommendation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{name}/run": {
         parameters: {
             query?: never;
@@ -8166,6 +8183,30 @@ export interface operations {
         };
     };
     workflows_apply_recommendation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowRecApplyCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowRecApplyResult"];
+                };
+            };
+        };
+    };
+    workflows_dismiss_recommendation: {
         parameters: {
             query?: never;
             header?: never;

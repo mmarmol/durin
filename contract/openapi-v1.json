@@ -10228,6 +10228,35 @@
         "x-required-scope": "workflows:write"
       }
     },
+    "/api/v1/workflows/{name}/recommendations/{id}/dismiss": {
+      "post": {
+        "operationId": "workflows_dismiss_recommendation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowRecApplyCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRecApplyResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Dismiss a recommendation (terminal; an identical repeat proposal stays pinned to it).",
+        "x-required-scope": "workflows:write"
+      }
+    },
     "/api/v1/workflows/{name}/run": {
       "post": {
         "operationId": "workflows_run",
