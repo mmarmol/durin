@@ -475,6 +475,15 @@ class ToolWebFetchEvent(TypedDict):
     is_image: bool
 
 
+class ToolConvertToMarkdownEvent(TypedDict):
+    """``convert_to_markdown`` document conversion — source format and
+    output size, so we can see which formats get read and how large the
+    returned markdown is (the runner spills oversized results)."""
+    format: str
+    size_chars: int
+    outline_entries: int
+
+
 class ToolTodoWriteEvent(TypedDict):
     """``todo_write`` list-replace operation. Counts let us see whether
     the model is actually advancing through todos vs. accumulating
@@ -1473,6 +1482,7 @@ EVENTS: dict[str, type] = {
     "tool.list_dir": ToolListDirEvent,
     "tool.web_search": ToolWebSearchEvent,
     "tool.web_fetch": ToolWebFetchEvent,
+    "tool.convert_to_markdown": ToolConvertToMarkdownEvent,
     "tool.todo_write": ToolTodoWriteEvent,
     "tool.note_decision": ToolNoteDecisionEvent,
     "decision_log.capped": DecisionLogCappedEvent,
