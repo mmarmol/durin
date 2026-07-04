@@ -12,9 +12,15 @@ The three execution paths:
   - ``LIKE_SUBSTRING`` → ``SELECT … FROM memory_fts WHERE text LIKE %?%``
     (no scoring — returned in insertion / mtime order)
 
-FTS5 special characters in the query are escaped per Hermes-agent's
-pattern (`hermes_state.py:2207-2213`): each non-operator token is
-double-quoted; operators (``AND``/``OR``/``NOT``) pass through.
+Every query token is double-quoted before FTS5 so special characters
+(``%``, ``*``, ``:``) and — critically — the FTS5 boolean keywords
+(``AND``/``OR``/``NOT``/``NEAR``) are treated as literal content, not
+operators. The recall tool contract is natural language plus balanced
+double-quoted phrases (see ``memory_search``); it never exposes boolean
+syntax. Passing those keywords through as operators would hijack the
+commonest English function words — a query like "not sure what to do"
+starts with a bare ``NOT``, which is a leading binary operator with no
+left operand and raises ``fts5: syntax error near "NOT"``.
 
 Emits ``memory.recall.lexical`` per call with route + counts + duration.
 """
@@ -31,9 +37,6 @@ from durin.memory.query_router import LexicalRoute, RoutingDecision
 __all__ = ["lexical_search"]
 
 logger = logging.getLogger(__name__)
-
-
-_OPERATORS = frozenset({"AND", "OR", "NOT", "NEAR"})
 
 
 def lexical_search(
@@ -77,8 +80,11 @@ def lexical_search(
 
 
 def _quote_for_fts(query: str) -> str:
-    """Quote non-operator tokens so
-    special chars (``%``, ``*``, ``:``) don't confuse the parser.
+    """Quote every token so special chars (``%``, ``*``, ``:``) and the
+    FTS5 boolean keywords (``AND``/``OR``/``NOT``/``NEAR``) are treated
+    as literal content — the recall query is natural language, not a
+    boolean expression, so a bare leading ``NOT``/``AND`` must not reach
+    the parser as a dangling operator.
 
     Respects agent-supplied double-quoted phrases. A balanced
     ``"like this"`` substring in the query is
@@ -102,9 +108,6 @@ def _quote_for_fts(query: str) -> str:
         parts.append(f'"{safe_phrase}"')
     for token in loose:
         if not token:
-            continue
-        if token.upper() in _OPERATORS:
-            parts.append(token.upper())
             continue
         safe = token.replace('"', '""')
         parts.append(f'"{safe}"')

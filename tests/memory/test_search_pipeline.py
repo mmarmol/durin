@@ -45,6 +45,28 @@ def test_empty_workspace_returns_empty(tmp_path: Path) -> None:
     assert result.lexical_count == 0
 
 
+def test_leading_boolean_keyword_query_does_not_degrade(
+    tmp_path: Path,
+) -> None:
+    """A natural-language query beginning with "not" must not trip the
+    FTS5 boolean parser and silently drop the lexical tier (and the
+    grep-verify boost, which quotes the same target). Pre-fix this
+    raised `fts5: syntax error near "NOT"` inside both safe wrappers.
+    """
+    page = EntityPage(
+        type="topic", name="deploy-notes",
+        body="not sure which gateway to deploy next",
+    )
+    page.save(tmp_path / "memory" / "entities" / "topic" / "deploy.md")
+    rebuild_fts_index(tmp_path)
+    result = run_search_pipeline(
+        tmp_path, "not sure which gateway", keywords="not sure",
+    )
+    assert "lexical" not in result.recovered_from
+    assert result.lexical_count >= 1
+    assert any("deploy" in h.uri for h in result.hits)
+
+
 def test_limit_caps_results(tmp_path: Path) -> None:
     # Seed many episodic entries.
     from durin.memory.schema import MemoryEntry
