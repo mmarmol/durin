@@ -101,11 +101,13 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   `run_workflow` again with `resume_run_id=<that id>` and the answers as `task`. That resumes
   the SAME run — same working folder, node sessions, and loop counters — at the node that
   asked, instead of restarting from scratch.
-- **Author:** write the JSON under `<workspace>/workflows/<name>.json` (you can write a graph
-  on demand for a user's repeatable process), or use the web editor. Compose larger processes
-  from `subworkflow` nodes — but only where each stage genuinely needs the structure above.
-  **Before authoring, read the references below** so the JSON is complete and valid the first
-  time; do not write a graph from memory of this overview alone.
+- **Author:** call `workflow_write(name, definition, rationale)` — it validates the graph
+  before anything lands (schema errors come back verbatim), refuses to overwrite an existing
+  name, and records the change in the workflow version history. Use it instead of writing the
+  JSON file by hand; the web editor remains the human path. Compose larger processes from
+  `subworkflow` nodes — but only where each stage genuinely needs the structure above.
+  **Before authoring, read the references below** so the definition is complete and valid the
+  first time; do not write a graph from memory of this overview alone.
 
 ## Authoring references — read on demand
 

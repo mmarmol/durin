@@ -46,10 +46,20 @@ def _read_extras(cfg_path: Path) -> list[str]:
 
 
 def test_detect_installed_extras_returns_list() -> None:
-    """The detector must return a subset of the known extras list."""
+    """The detector must return probe-table extras only, and every probe-table
+    entry must be an extra pyproject actually declares — a hardcoded name list
+    here would itself drift from the probe table (it did: `tts`)."""
+    import tomllib
+
+    from durin.cli.doctor import _EXTRAS_IMPORT_PROBES
+
     found = detect_installed_extras()
-    known = {"memory", "mcp", "web", "oauth", "slack", "discord", "local"}
-    assert set(found).issubset(known)
+    assert set(found).issubset(_EXTRAS_IMPORT_PROBES)
+
+    pyproject = Path(__file__).parents[2] / "pyproject.toml"
+    declared = tomllib.loads(pyproject.read_text(encoding="utf-8"))[
+        "project"]["optional-dependencies"]
+    assert set(_EXTRAS_IMPORT_PROBES).issubset(declared)
 
 
 def test_update_extras_state_adds_new(temp_config: Path) -> None:
