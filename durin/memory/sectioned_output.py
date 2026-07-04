@@ -89,6 +89,9 @@ _SECTION_FOR_TYPE: dict[str, str] = {
     # the type prior can tell raw transcript from distilled content.
     "session": "session",
     "corpus": "ingested",
+    # Ingested reference documents (the Library). Chunks share the
+    # INGESTED section with legacy corpus chunks.
+    "reference": "ingested",
 }
 
 # Skills lead: a matching procedure is a "playbook" to execute, so it
@@ -132,24 +135,40 @@ def apply_per_source_cap(
     *,
     max_per_source: int = DEFAULT_MAX_PER_SOURCE,
 ) -> list[SectionedHit]:
-    """Drop corpus hits beyond the cap per ``ingest_id``.
+    """Drop ingested-document hits beyond the cap per source document.
 
-    Preserves order. Only ``type == "corpus"`` hits are subject to the
-    cap; everything else passes through untouched.
+    Preserves order. Only ingested chunks (``type`` ``"corpus"`` or
+    ``"reference"``) are subject to the cap, keyed by their source
+    document so one long document can't monopolise the results;
+    everything else passes through untouched.
     """
     seen_per_group: dict[str, int] = {}
     out: list[SectionedHit] = []
     for hit in hits:
-        if hit.type != "corpus":
+        if hit.type not in ("corpus", "reference"):
             out.append(hit)
             continue
-        key = hit.ingest_id or hit.uri
+        key = _source_group_key(hit)
         count = seen_per_group.get(key, 0)
         if count >= max_per_source:
             continue
         seen_per_group[key] = count + 1
         out.append(hit)
     return out
+
+
+def _source_group_key(hit: SectionedHit) -> str:
+    """Group key for the per-source cap: the source document, not the chunk.
+
+    Reference chunks address ``memory/reference/reference:<slug>#<idx>``;
+    strip the ``#<idx>`` so every chunk of one document shares a key. Corpus
+    hits carry an ``ingest_id`` that already groups them.
+    """
+    if hit.ingest_id:
+        return hit.ingest_id
+    if hit.type == "reference" and "#" in hit.uri:
+        return hit.uri.rsplit("#", 1)[0]
+    return hit.uri
 
 
 def render_sectioned(hits: Iterable[SectionedHit]) -> str:

@@ -172,8 +172,9 @@ The pipeline returns `SearchPipelineResult` with the capped `hits`, source count
 
 The pipeline is invoked by the `memory_search` tool (`04_agent_tools.md`). The tool wraps scope/level/limit logic around `run_search_pipeline`:
 
-- `scope=undreamed` passes `vector_index=None` (skips Step 2a) and restricts hits to session/corpus types.
-- `scope=dreamed` passes the vector index; grep fallback runs but the tool keeps all hit types.
+- **Library scope filter (`library_mode`).** Ingested reference material — reference documents, their chunks, legacy corpus, and raw ingested artifacts (matched by uri: `reference:…`, `memory/reference/…`, `memory/corpus/…`, `ingested/…`) — is kept out of the default recall pool. `scope=all/dreamed/undreamed` pass `library_mode="exclude"` (Library material dropped); `scope=library` passes `library_mode="only"` (Library material is the sole content) and gets the vector index. The filter runs on the fused list before the per-source cap and `limit`, so excluded material never consumes result slots.
+- `scope=undreamed` passes `vector_index=None` and restricts remaining hits to session types.
+- `scope=dreamed` / `all` pass the vector index; grep fallback runs but the tool keeps all non-Library hit types.
 - `level=cold` enriches each `SectionedHit` with the body read from disk after the pipeline returns.
 
 The web dashboard exposes a cross-encoder toggle and model picker under Memory → Search settings. The onboarding wizard asks explicitly about enabling reranking, stating the download and latency cost.
