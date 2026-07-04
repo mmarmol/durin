@@ -907,3 +907,50 @@ def cmd_forget(
         f"[green]Forgot[/green] {uri} "
         f"→ memory/archive/{class_name}/{entry_id}.md"
     )
+
+
+@memory_app.command("docs")
+def cmd_docs() -> None:
+    """List ingested reference documents (the Library catalog).
+
+    Reads the frontmatter of every ``memory/references/<slug>.md`` and prints
+    title, source, ingest time, and chunk count — the smallest surface for
+    seeing what durin has ingested.
+    """
+    import yaml
+
+    workspace = _workspace_root()
+    refs_dir = workspace / "memory" / "references"
+    rows: list[tuple[str, str, str, str]] = []
+    if refs_dir.is_dir():
+        for md_path in sorted(refs_dir.glob("*.md")):
+            fm: dict[str, Any] = {}
+            text = md_path.read_text(encoding="utf-8")
+            if text.startswith("---"):
+                _, _, rest = text.partition("---\n")
+                block, _, _ = rest.partition("\n---")
+                try:
+                    loaded = yaml.safe_load(block)
+                    if isinstance(loaded, dict):
+                        fm = loaded
+                except yaml.YAMLError:
+                    fm = {}
+            rows.append((
+                str(fm.get("title") or md_path.stem),
+                str(fm.get("source") or ""),
+                str(fm.get("ingested_at") or ""),
+                str(fm.get("chunk_count") if fm.get("chunk_count") is not None else ""),
+            ))
+
+    if not rows:
+        console.print("[yellow]No reference documents ingested yet.[/yellow]")
+        return
+
+    table = Table(title=f"Library — {len(rows)} document(s)")
+    table.add_column("Title", style="bold")
+    table.add_column("Source", overflow="fold")
+    table.add_column("Ingested")
+    table.add_column("Chunks", justify="right")
+    for title, source, ingested_at, chunks in rows:
+        table.add_row(title, source, ingested_at, chunks)
+    console.print(table)
