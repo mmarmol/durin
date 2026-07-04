@@ -151,4 +151,26 @@ class SkillWriteTool(Tool, ContextAware):
                    "reason, retry with override_composition=true."
                    if self._gate_mode == "override" else "")
             )
+            if self._gate_mode == "hard":
+                # The autonomous door has no override — the bounced body goes to
+                # the suggestions bandeja, annotated, so the captured procedure
+                # doesn't die with this subagent turn. A later compliant landing
+                # of the same name clears the stale card (below).
+                try:
+                    from durin.agent.skill_suggestions import add_gate_bounce
+                    add_gate_bounce(
+                        self._workspace,
+                        name=str(kwargs.get("name", "")),
+                        content=str(kwargs.get("content", "")),
+                        gate_reason=str(result.get("error", "")).removeprefix("composition gate: "),
+                    )
+                    result["note"] = "queued for the user's review in the suggestions bandeja"
+                except Exception:  # noqa: BLE001 - the bandeja must never break authoring
+                    logger.exception("failed to queue gate bounce for %s", kwargs.get("name"))
+        elif result.get("ok") and self._gate_mode == "hard":
+            try:
+                from durin.agent.skill_suggestions import clear_gate_bounces
+                clear_gate_bounces(self._workspace, str(result.get("name", "")))
+            except Exception:  # noqa: BLE001
+                logger.exception("failed to clear stale gate bounces for %s", result.get("name"))
         return json.dumps(result, ensure_ascii=False)

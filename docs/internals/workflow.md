@@ -521,8 +521,10 @@ End-to-end for a single `run_workflow` call:
 | `start_run`, `update_run`, `finalize_run`, `read_manifest`, `runs_for_session`, `reconcile_running`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
 | `NodeExecutionError` | `durin/workflow/engine.py` | Typed error raised by the node runner when an agent turn fails; carries `node_id`, `iteration`, and `session_key` so the engine can record an attributable `NodeRun` before aborting. |
 | `compute_diagnostics` | `durin/workflow/diagnostics.py` | Reduces run records to recurring per-node trouble (loop-backs, gate fails) → improvement candidates. |
-| `run_workflow_improve_pass` | `durin/workflow/workflow_improve_dream.py` | The dream pass: observes manual-mode workflows, proposes one scoped edit, records a recommendation. |
-| `log_recommendation`, `open_recommendations` | `durin/workflow/workflow_recommendations.py` | The per-workflow recommendation queue (manual mode). |
+| `run_workflow_improve_pass` | `durin/workflow/workflow_improve_dream.py` | The dream pass: observes all workflows' runs since its cursor, proposes one prompt-scoped edit; manual → recommend, auto → apply + hold pending validation (auto-revert on a worsened diagnostic), out-of-scope → structural escalation. |
+| `save_workflow_definition` | `durin/workflow/editing.py` | The single sanctioned write path for definitions: graph validation, atomic write under the editor's lock, version commit with actor. All doors funnel through it. |
+| `WorkflowEditTool` | `durin/agent/tools/workflow_edit.py` | The `workflow_edit` LLM tool (core scope): full-definition edit of an EXISTING workflow by the in-session agent; refuses a missing name. |
+| `log_recommendation`, `open_recommendations`, `apply_recommendation`, `dismiss_recommendation`, `log_structural_suggestion`, `mark_reverted` | `durin/workflow/workflow_recommendations.py` | The per-workflow recommendation queue: prompt edits (open → applied / dismissed / reverted) and annotated structural escalations. |
 
 ## 7. Configuration & surfaces
 
@@ -559,23 +561,43 @@ End-to-end for a single `run_workflow` call:
   same lock target the version store snapshots under, beside the dir, so a write and a
   snapshot never interleave); **run** (`…/{name}/run` — executes the workflow on a task and
   returns the per-node trace); and the **recommendations** queue (`…/recommendations`,
-  `…/recommendations/{id}/apply`). This is the surface the webui visual editor uses.
+  `…/recommendations/{id}/apply`, `…/recommendations/{id}/dismiss`). This is the surface
+  the webui visual editor uses.
 - **Lineage:** node sessions reuse the lineage metadata on the open session document
   (`durin/session/lineage.py`), so no schema migration is involved.
 - **Self-improvement** (per-workflow `improvement_mode`, two states like a skill's:
-  `manual` default / `auto`). Each run writes a diagnostic record (`run_log.py`, beside `workflows/`). A
-  dream pass (`run_workflow_improve_pass`, wired into the `memory_dream` cron) reduces
-  those to recurring trouble (a node that loops, a gate that keeps failing —
-  `diagnostics.py`), shows a model the definition + that diagnostic + the change history
-  (so it never re-proposes a reverted edit), and proposes one scoped edit (a node's
-  `prompt` — which doubles as a routing node's criteria; structural edits rejected). In **manual** mode the
-  proposal is recorded as a recommendation (`workflow_recommendations.py`); the user
-  reviews and applies it — from the webui Workflows pane (a recommendations banner with an
-  apply button) or the `durin workflow` CLI (`recommendations` lists open ones,
-  `apply <name> <id>`) — which writes the proposed text into the node, versions the edit
-  with its reason, and marks it applied; the anti-Goodhart anchor is the human.
-  **auto** mode (apply directly, gated by an external validation signal so it can't win
-  by loosening gates) is the next slice; the apply step + seam are in place.
+  `manual` default / `auto` — the same contract as skills: auto lets the dream act,
+  manual routes everything to the user). Each run writes a diagnostic record
+  (`run_log.py`, beside `workflows/`). A dream pass (`run_workflow_improve_pass`, wired
+  into the `memory_dream` cron) reduces the runs since its per-workflow cursor to
+  recurring trouble (a node that loops, a gate that keeps failing — `diagnostics.py`),
+  shows a model the definition + that diagnostic + the change history (so it never
+  re-proposes a reverted edit), and produces one scoped proposal (a node's `prompt` —
+  which doubles as a routing node's criteria). A proposal has three dispositions:
+  - **manual** → recorded as a recommendation (`workflow_recommendations.py`); the user
+    reviews it in the webui Workflows banner or the `durin workflow` CLI and applies or
+    dismisses; applying writes the text through the shared editing engine and versions
+    it. The anti-Goodhart anchor is the human.
+  - **auto** → the pass applies it itself through the SAME path
+    (`apply_recommendation(actor="dream")`: graph re-validated, atomic write, version
+    commit), then holds it **pending validation**: on the workflow's next terminal runs,
+    if the edited node's trouble rate (loop-backs + gate fails per run) worsened vs the
+    pre-edit baseline, the pass restores the previous prompt (a forward revert commit),
+    marks the recommendation `reverted` (its dedup id pins any identical re-proposal),
+    and emits `workflow.improve.reverted`. Validated-or-equal clears the marker.
+  - **structural** (out of the prompt-only scope — add/remove nodes, rewire, other
+    fields): never applied in ANY mode; recorded annotated (the model's full proposal,
+    why the scope refused it, the diagnostic evidence) as a `kind: structural`
+    recommendation. The webui renders it as an escalation card with a copy-for-chat
+    action so the user can treat it in a session; `apply` refuses it in code.
+
+  Every write lands through `durin/workflow/editing.py::save_workflow_definition` —
+  the single sanctioned path (`workflow_write` create / `workflow_edit` full-definition
+  edit by the in-session agent / recommendation applies): graph validation, atomic
+  write under the editor's lock, version-store commit with its actor. The dream never
+  gets the full-definition editor; its writes stay scoped to node prompts by the pass.
+  Telemetry: `workflow.improve.recommended` / `.applied` / `.reverted` / `.structural`
+  (catalogued in `durin/telemetry/schema.py`).
 - **Seeds.** Starter workflows ship bundled under `durin/templates/workflows/` and
   are copied into a fresh workspace's `workflows/` directory by
   `seed_workflows(workspace)` (called from `sync_workspace_templates`) — idempotent,

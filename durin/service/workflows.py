@@ -378,3 +378,15 @@ class WorkflowsService:
         from durin.workflow.workflow_recommendations import apply_recommendation as _apply
         res = _apply(self._workspace, cmd.name, cmd.id)
         return WorkflowRecApplyResult(ok=bool(res.get("ok")), detail=res.get("error", "") or res.get("field", ""))
+
+    @route(
+        "POST", "/api/v1/workflows/{name}/recommendations/{id}/dismiss",
+        scope=Scope.WORKFLOWS_WRITE.value,
+        request_model=WorkflowRecApplyCommand, response_model=WorkflowRecApplyResult,
+        summary="Dismiss a recommendation (terminal; an identical repeat proposal stays pinned to it).",
+    )
+    async def dismiss_recommendation(self, cmd: WorkflowRecApplyCommand, principal: Principal) -> WorkflowRecApplyResult:
+        principal.require(Scope.WORKFLOWS_WRITE)
+        from durin.workflow.workflow_recommendations import dismiss_recommendation as _dismiss
+        ok = _dismiss(self._workspace, cmd.name, cmd.id)
+        return WorkflowRecApplyResult(ok=ok, detail="" if ok else "no open recommendation with that id")

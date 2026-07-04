@@ -1375,6 +1375,58 @@ class SkillSuggestionResolvedEvent(TypedDict):
     resolution: str  # "accepted" | "rejected"
 
 
+class WorkflowImproveRecommendedEvent(TypedDict):
+    """The improve pass queued a prompt edit for a MANUAL-mode workflow."""
+
+    workflow: str
+    target_id: str
+    rec_id: str
+    reason: NotRequired[str]
+    runs: int  # terminal runs whose diagnostic motivated the proposal
+
+
+class WorkflowImproveAppliedEvent(TypedDict):
+    """The improve pass APPLIED a prompt edit to an AUTO-mode workflow.
+
+    The edit is versioned (actor=dream) and held pending validation: the
+    workflow's next terminal runs decide whether it sticks or auto-reverts.
+    """
+
+    workflow: str
+    target_id: str
+    rec_id: str
+    reason: NotRequired[str]
+    runs: int
+
+
+class WorkflowImproveRevertedEvent(TypedDict):
+    """An auto-applied edit worsened its node's diagnostic and was reverted.
+
+    Without this event an auto-revert is invisible — the definition silently
+    returns to its previous text and only git shows why.
+    """
+
+    workflow: str
+    target_id: str
+    rec_id: str
+    baseline_rate: float
+    new_rate: float
+
+
+class WorkflowImproveStructuralEvent(TypedDict):
+    """The model proposed an edit OUTSIDE the prompt-only scope.
+
+    Never applied in any mode — it lands annotated in the recommendations
+    queue for the user to treat deliberately. This event is the visibility
+    that a structural idea exists and awaits review.
+    """
+
+    workflow: str
+    rec_id: str
+    why_rejected: str
+    runs: int
+
+
 # ===========================================================================
 # Catalog — single source of truth
 # ===========================================================================
@@ -1492,6 +1544,10 @@ EVENTS: dict[str, type] = {
     "skill.used": SkillUsedEvent,
     "skill.observation_logged": SkillObservationLoggedEvent,
     "skill.curation_action": SkillCurationActionEvent,
+    "workflow.improve.recommended": WorkflowImproveRecommendedEvent,
+    "workflow.improve.applied": WorkflowImproveAppliedEvent,
+    "workflow.improve.reverted": WorkflowImproveRevertedEvent,
+    "workflow.improve.structural": WorkflowImproveStructuralEvent,
     "skill.curation_run": SkillCurationRunEvent,
     "skill.suggestion_resolved": SkillSuggestionResolvedEvent,
 }

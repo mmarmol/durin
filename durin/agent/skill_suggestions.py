@@ -62,6 +62,9 @@ def fingerprint(action: dict) -> str:
     elif t == "fuse":
         sig = "fuse|{}|{}".format(
             action.get("target"), "|".join(sorted(action.get("sources", []))))
+    elif t == "create":
+        sig = "create|{}|{}".format(
+            action.get("name"), _normalize(action.get("content", "")))
     else:
         sig = json.dumps(action, sort_keys=True, ensure_ascii=False)
     return _hash(sig)[:16]
@@ -78,9 +81,9 @@ def make_patch(action: dict) -> str | None:
             old, new, fromfile=f"a/{file}", tofile=f"b/{file}", lineterm="")
         body = "\n".join(diff)
         return body + "\n" if body else None
-    if t == "fuse":
+    if t in ("fuse", "create"):
         file = "SKILL.md"
-        target = action.get("target", "skill")
+        target = action.get("target") or action.get("name") or "skill"
         new = (action.get("content", "")).splitlines()
         diff = difflib.unified_diff(
             [], new, fromfile=f"a/{target}/{file}", tofile=f"b/{target}/{file}",
@@ -269,4 +272,42 @@ def apply_suggestion(workspace: Path, action: dict) -> dict:
             workspace, target=action["target"], content=action["content"],
             sources=action["sources"], rationale=action.get("rationale", "fuse"),
             attribution=ss.Attribution(actor="curation"))
+    if t == "create":
+        # A composition-gate bounce the user chose to accept anyway: their word
+        # wins (the same override contract the in-session door honors).
+        return ss.dream_create_skill(
+            workspace, action["name"], action["content"],
+            action.get("rationale", "user accepted a gate-bounced skill"),
+            attribution=ss.Attribution(actor="user"),
+            composition_override=True)
     return {"error": f"unknown action type: {t}"}
+
+
+def add_gate_bounce(workspace: Path, *, name: str, content: str, gate_reason: str) -> dict:
+    """Queue a composition-gate bounce as a `create` suggestion, annotated.
+
+    The autonomous door (the dream's hard gate) rejected this body and no
+    compliant rework landed — the captured procedure must not die silently
+    with the subagent turn. The card carries the full body, the gate's reason,
+    and applying it is the user's explicit override."""
+    return add_suggestion(workspace, {
+        "type": "create",
+        "name": name,
+        "content": content,
+        "rationale": (
+            f"The dream authored this skill but the composition gate rejected it: "
+            f"{gate_reason}. Review it — restructure it to delegate (a workflow / "
+            f"a script), or accept it as prose (your word overrides the gate)."),
+        "gate_reason": gate_reason,
+    })
+
+
+def clear_gate_bounces(workspace: Path, name: str) -> int:
+    """Drop pending `create` suggestions for `name` — a compliant version landed,
+    so the bounce card is stale. Returns how many were removed."""
+    removed = 0
+    for rec in read_suggestions(workspace):
+        if rec.get("type") == "create" and rec.get("skill") == name:
+            remove_suggestion(workspace, rec["id"])
+            removed += 1
+    return removed
