@@ -10,6 +10,7 @@ import type {
   OutboundMedia,
   GoalStateWsPayload,
   UIImage,
+  UIMediaAttachment,
   UIMessage,
 } from "@/lib/types";
 
@@ -193,15 +194,20 @@ function absorbCompleteAssistantMessage(
  * separately (e.g. via ``fetchWebuiThread``) since the server only replays
  * live events.
  */
-/** Payload passed to ``send`` when the user attaches one or more images.
+/** Payload passed to ``send`` for one attachment (image or document).
  *
- * ``media`` is handed to the wire client verbatim; ``preview`` powers the
- * optimistic user bubble (blob URLs so the preview appears before the server
- * acks the frame). Keeping the two separate lets the bubble re-use the local
- * blob URL even after the server persists the file under a different name. */
+ * ``media`` is handed to the wire client verbatim (the same ``{data_url,
+ * name}`` shape for both images and documents — the backend distinguishes them
+ * by the data-url MIME). Exactly one preview field powers the optimistic user
+ * bubble: ``preview`` (an image, rendered as a thumbnail from its data URL) or
+ * ``previewFile`` (a document, rendered as a filename chip — documents have no
+ * inline preview). Keeping preview separate from ``media`` lets the bubble
+ * re-use the local payload even after the server persists the file under a
+ * different name. */
 export interface SendImage {
   media: OutboundMedia;
-  preview: UIImage;
+  preview?: UIImage;
+  previewFile?: UIMediaAttachment;
 }
 
 export function useDurinStream(
@@ -610,7 +616,20 @@ export function useDurinStream(
       // the image blocks via ``media`` paths.
       if (!hasImages && !content.trim()) return;
 
-      const previews = hasImages ? images!.map((i) => i.preview) : undefined;
+      // Split optimistic previews by kind: images render as thumbnails
+      // (``message.images``); documents render as filename chips
+      // (``message.media`` with ``kind: "file"``). Both share the outbound
+      // ``media`` array on the wire.
+      const previews = hasImages
+        ? images!
+            .map((i) => i.preview)
+            .filter((p): p is UIImage => p !== undefined)
+        : [];
+      const filePreviews = hasImages
+        ? images!
+            .map((i) => i.previewFile)
+            .filter((p): p is UIMediaAttachment => p !== undefined)
+        : [];
       // The row id doubles as the wire ``client_msg_id`` so the server's
       // ``message_queued`` / ``queued_consumed`` acks can flag this exact row.
       const clientMsgId = crypto.randomUUID();
@@ -621,7 +640,8 @@ export function useDurinStream(
           role: "user",
           content,
           createdAt: Date.now(),
-          ...(previews ? { images: previews } : {}),
+          ...(previews.length > 0 ? { images: previews } : {}),
+          ...(filePreviews.length > 0 ? { media: filePreviews } : {}),
           ...(opts?.steer ? { steer: true } : {}),
         },
       ]);

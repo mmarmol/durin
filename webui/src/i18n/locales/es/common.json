@@ -1240,6 +1240,7 @@
       "queued": "En cola para el próximo turno",
       "steer": "Guiar — inyectar guía durante el turno",
       "attachImage": "Adjuntar imagen",
+      "attachDocument": "Adjuntar documento",
       "modelPicker": {
         "search": "Buscar modelos…",
         "suggested": "Sugeridos",
@@ -1281,6 +1282,7 @@
         "handsFree": "Voz manos libres"
       },
       "encoding": "Procesando…",
+      "reading": "Leyendo…",
       "remove": "Quitar adjunto",
       "normalizedSizeHint": "{{orig}} → {{current}} (auto)",
       "imageRejected": {
@@ -1289,6 +1291,12 @@
         "magic_mismatch": "El archivo no parece una imagen real",
         "decode_failed": "No se pudo decodificar esta imagen",
         "too_large": "Imagen demasiado grande — prueba una más pequeña",
+        "io": "No se pudo leer este archivo"
+      },
+      "documentRejected": {
+        "unsupported_type": "Tipo de documento no compatible",
+        "too_many": "Máximo {{max}} documentos por mensaje",
+        "too_large": "Documento demasiado grande — 25 MB máx.",
         "io": "No se pudo leer este archivo"
       },
       "slash": {

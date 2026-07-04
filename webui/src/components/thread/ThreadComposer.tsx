@@ -20,6 +20,7 @@ import {
   ChevronDown,
   ChevronUp,
   CircleHelp,
+  FileText,
   History,
   ImageIcon,
   Loader2,
@@ -44,6 +45,13 @@ import {
   MAX_IMAGES_PER_MESSAGE,
 } from "@/hooks/useAttachedImages";
 import { useAttachedAudio, type AttachedAudio } from "@/hooks/useAttachedAudio";
+import {
+  useAttachedDocuments,
+  isDocumentFile,
+  type AttachedDocument,
+  type DocumentAttachmentError,
+  MAX_DOCUMENTS_PER_MESSAGE,
+} from "@/hooks/useAttachedDocuments";
 import type { OrbState } from "@/components/voice/VoiceOrb";
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
 import { usePromptHistory } from "@/hooks/usePromptHistory";
@@ -60,10 +68,56 @@ import type { SlashCommand, GoalStateWsPayload, ApiRetryStatus } from "@/lib/typ
 import { resolveTitle } from "@/lib/api-retry-label";
 import { cn } from "@/lib/utils";
 
-/** ``<input accept>``: aligned with the server's MIME whitelist. SVG is
- * deliberately excluded to avoid an embedded-script XSS surface. */
-const ACCEPT_ATTR =
-  "image/png,image/jpeg,image/webp,image/gif,audio/mpeg,audio/ogg,audio/opus,audio/wav,audio/webm,audio/x-m4a,audio/aac,audio/flac";
+/** ``<input accept>``: aligned with the server's MIME whitelist. Both MIME
+ * types and file extensions are listed for documents because some browsers
+ * match ``accept`` by extension (and report a blank ``file.type`` for .epub /
+ * .md). SVG is deliberately excluded to avoid an embedded-script XSS surface. */
+const ACCEPT_ATTR = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/opus",
+  "audio/wav",
+  "audio/webm",
+  "audio/x-m4a",
+  "audio/aac",
+  "audio/flac",
+  // Documents (MIME + extension so both matching strategies work).
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/msword",
+  "application/vnd.ms-excel",
+  "application/vnd.ms-powerpoint",
+  "application/epub+zip",
+  "text/html",
+  "text/csv",
+  "text/plain",
+  "text/markdown",
+  "application/json",
+  "application/xml",
+  "text/xml",
+  ".pdf",
+  ".docx",
+  ".pptx",
+  ".xlsx",
+  ".doc",
+  ".xls",
+  ".ppt",
+  ".epub",
+  ".html",
+  ".htm",
+  ".csv",
+  ".txt",
+  ".md",
+  ".markdown",
+  ".json",
+  ".xml",
+].join(",");
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -538,6 +592,14 @@ export function ThreadComposer({
     clear: clearAudio,
   } = useAttachedAudio();
 
+  const {
+    documents,
+    enqueue: enqueueDocuments,
+    remove: removeDocument,
+    clear: clearDocuments,
+    full: documentsFull,
+  } = useAttachedDocuments();
+
   // Resize is declared later in the component; keep a ref so the audio
   // callbacks (declared earlier) can call it without a TDZ violation.
   const resizeTextareaRef = useRef<() => void>(() => {});
@@ -604,37 +666,61 @@ export function ThreadComposer({
     [t],
   );
 
+  const formatDocumentRejection = useCallback(
+    (reason: DocumentAttachmentError): string => {
+      const key = `thread.composer.documentRejected.${reason}`;
+      return t(key, { max: MAX_DOCUMENTS_PER_MESSAGE });
+    },
+    [t],
+  );
+
   const addFiles = useCallback(
     (files: File[]) => {
       if (files.length === 0) return;
-      // Route by MIME: images go through the image pipeline (chips +
-      // re-encode); audio goes through the transcription pipeline. The same
-      // Paperclip button and drag-drop now handle both — no separate audio
-      // button (Gap B: unified attachment affordance).
+      // Route by kind. Audio → transcription pipeline. Documents (matched by
+      // whitelisted MIME OR mapped extension, since browsers report a blank
+      // type for .epub / .md) → the document pipeline (chips + base64 data URL,
+      // no re-encode). Everything else → the image pipeline. Documents must be
+      // checked before the image fallback because e.g. text/plain / .txt would
+      // otherwise land in the image bucket. The same Paperclip button and
+      // drag-drop handle all three (unified attachment affordance).
       const images: File[] = [];
       const audio: File[] = [];
+      const docs: File[] = [];
       for (const f of files) {
         if (f.type.startsWith("audio/")) {
           audio.push(f);
+        } else if (isDocumentFile(f)) {
+          docs.push(f);
         } else {
           images.push(f);
         }
       }
-      let rejectedCount = 0;
+      let firstError: string | null = null;
       if (images.length > 0) {
         const { rejected } = enqueue(images);
-        rejectedCount += rejected.length;
+        if (rejected.length > 0 && firstError === null) {
+          firstError = formatRejection(rejected[0].reason);
+        }
+      }
+      if (docs.length > 0) {
+        const { rejected } = enqueueDocuments(docs);
+        if (rejected.length > 0 && firstError === null) {
+          firstError = formatDocumentRejection(rejected[0].reason);
+        }
       }
       for (const f of audio) {
         handleAudioFile(f); // handleAudioFile enqueues + transcribes
       }
-      if (rejectedCount > 0) {
-        setInlineError(formatRejection("unsupported_type"));
-      } else {
-        setInlineError(null);
-      }
+      setInlineError(firstError);
     },
-    [enqueue, formatRejection, handleAudioFile],
+    [
+      enqueue,
+      enqueueDocuments,
+      formatRejection,
+      formatDocumentRejection,
+      handleAudioFile,
+    ],
   );
 
   const {
@@ -660,13 +746,27 @@ export function ThreadComposer({
     ),
     [images],
   );
-  const hasErrors = images.some((img) => img.status === "error");
+  const readyDocuments = useMemo(
+    () =>
+      documents.filter(
+        (doc): doc is AttachedDocument & { dataUrl: string } =>
+          doc.status === "ready" && typeof doc.dataUrl === "string",
+      ),
+    [documents],
+  );
+  const documentsReading = documents.some((doc) => doc.status === "reading");
+  const hasErrors =
+    images.some((img) => img.status === "error") ||
+    documents.some((doc) => doc.status === "error");
 
   const canSend =
     !disabled
     && !encoding
+    && !documentsReading
     && !hasErrors
-    && (value.trim().length > 0 || readyImages.length > 0);
+    && (value.trim().length > 0
+      || readyImages.length > 0
+      || readyDocuments.length > 0);
 
   const slashQuery = useMemo(() => {
     if (disabled || slashMenuDismissed || !value.startsWith("/")) return null;
@@ -932,16 +1032,21 @@ export function ThreadComposer({
       resizeTextarea();
       return;
     }
+    // Images and documents share the outbound ``media`` array (each
+    // ``{data_url, name}``); the backend distinguishes them by the data-url
+    // MIME. Images carry a thumbnail preview; documents carry a filename-chip
+    // preview (``kind: "file"``) since they have no inline rendering.
+    const imageItems: SendImage[] = readyImages.map((img) => ({
+      media: { data_url: img.dataUrl, name: img.file.name },
+      preview: { url: img.dataUrl, name: img.file.name },
+    }));
+    const documentItems: SendImage[] = readyDocuments.map((doc) => ({
+      media: { data_url: doc.dataUrl, name: doc.name },
+      previewFile: { kind: "file", name: doc.name },
+    }));
+    const combined = [...imageItems, ...documentItems];
     const payload: SendImage[] | undefined =
-      readyImages.length > 0
-        ? readyImages.map((img) => ({
-            media: {
-              data_url: img.dataUrl,
-              name: img.file.name,
-            },
-            preview: { url: img.dataUrl, name: img.file.name },
-          }))
-        : undefined;
+      combined.length > 0 ? combined : undefined;
     onSend(trimmed, payload);
     promptHistory.addEntry(trimmed);
     promptHistory.reset();
@@ -949,13 +1054,14 @@ export function ThreadComposer({
     setInlineError(null);
     clear();
     clearAudio();
+    clearDocuments();
     setSlashMenuDismissed(false);
     resizeTextarea();
     if (isStreaming) {
       setQueuedFlash(true);
       window.setTimeout(() => setQueuedFlash(false), 2500);
     }
-  }, [canSend, clear, clearAudio, isStreaming, onModelPick, onSend, promptHistory, readyImages, resizeTextarea, value]);
+  }, [canSend, clear, clearAudio, clearDocuments, isStreaming, onModelPick, onSend, promptHistory, readyDocuments, readyImages, resizeTextarea, value]);
 
   const steer = useCallback(() => {
     const trimmed = value.trim();
@@ -1040,6 +1146,23 @@ export function ThreadComposer({
                 labelPending={t("audio.processing")}
                 labelRemove={t("thread.composer.remove")}
                 onRemove={() => removeAudio(a.id)}
+              />
+            ))}
+          </div>
+        ) : null}
+        {documents.length > 0 ? (
+          <div
+            className="flex flex-wrap gap-2 px-3 pt-3"
+            aria-label={t("thread.composer.attachDocument")}
+          >
+            {documents.map((doc) => (
+              <DocumentAttachmentChip
+                key={doc.id}
+                document={doc}
+                labelRemove={t("thread.composer.remove")}
+                labelReading={t("thread.composer.reading")}
+                formatError={formatDocumentRejection}
+                onRemove={() => removeDocument(doc.id)}
               />
             ))}
           </div>
@@ -1147,7 +1270,9 @@ export function ThreadComposer({
               onSlash={openSlash}
               onEquation={() => setEquationOpen(true)}
               disabled={disabled}
-              attachDisabled={full}
+              // The attach picker feeds images AND documents; only disable it
+              // when both buckets are full (audio has its own affordance).
+              attachDisabled={full && documentsFull}
               variant={isHero ? "hero" : "thread"}
             />
             <EquationEditorButton
@@ -1550,6 +1675,75 @@ function AudioAttachmentChip({
           ) : a.status === "ready" ? (
             <Check className="h-3.5 w-3.5" aria-hidden />
           ) : null}
+        </span>
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={labelRemove}
+        className={cn(
+          "ml-1 grid h-5 w-5 flex-none place-items-center rounded-full",
+          "text-muted-foreground/80 hover:bg-foreground/8 hover:text-foreground",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30",
+        )}
+      >
+        <X className="h-3.5 w-3.5" aria-hidden />
+      </button>
+    </div>
+  );
+}
+
+interface DocumentAttachmentChipProps {
+  document: AttachedDocument;
+  labelRemove: string;
+  labelReading: string;
+  formatError: (reason: DocumentAttachmentError) => string;
+  onRemove: () => void;
+}
+
+/** Filename chip for an attached document. No thumbnail (documents aren't
+ * inlined) — a paperclip-style file icon, the name, and its size or, on a
+ * read failure, a localized error. Mirrors ``AudioAttachmentChip``. */
+function DocumentAttachmentChip({
+  document: doc,
+  labelRemove,
+  labelReading,
+  formatError,
+  onRemove,
+}: DocumentAttachmentChipProps) {
+  const tone =
+    doc.status === "error"
+      ? "border-destructive/40 bg-destructive/5 text-destructive"
+      : "border-border/70 bg-muted/60";
+
+  return (
+    <div
+      className={cn(
+        "group relative flex items-center gap-2 rounded-[12px] border px-2 py-1.5",
+        "transition-colors motion-reduce:transition-none",
+        tone,
+      )}
+      data-testid="document-chip"
+    >
+      <div className="relative flex h-10 w-10 flex-none items-center justify-center overflow-hidden rounded-md bg-background">
+        <FileText className="h-4 w-4 text-muted-foreground" aria-hidden />
+        {doc.status === "reading" ? (
+          <div
+            className="absolute inset-0 flex items-center justify-center bg-background/60"
+            aria-label={labelReading}
+          >
+            <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden />
+          </div>
+        ) : null}
+      </div>
+      <div className="flex min-w-0 flex-col text-[11.5px] leading-4">
+        <span className="truncate max-w-[14rem] font-medium" title={doc.name}>
+          {doc.name}
+        </span>
+        <span className="truncate text-muted-foreground">
+          {doc.status === "error" && doc.error
+            ? formatError(doc.error)
+            : formatBytes(doc.file.size)}
         </span>
       </div>
       <button

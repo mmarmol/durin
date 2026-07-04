@@ -14,6 +14,9 @@ SUPPORTED_EXTENSIONS: set[str] = {
     ".docx",
     ".xlsx",
     ".pptx",
+    # Rich formats routed through the shared markitdown converter
+    ".epub",
+    ".ipynb",
     # Text formats
     ".txt",
     ".md",
@@ -68,6 +71,10 @@ def extract_text(path: Path) -> str | None:
         return _extract_xlsx(path)
     elif ext == ".pptx":
         return _extract_pptx(path)
+    elif ext in {".epub", ".ipynb"}:
+        # Formats the bespoke extractors above never covered — read them
+        # through the shared markitdown converter (durin/memory/doc_convert).
+        return _extract_via_markitdown(path)
     elif _is_text_extension(ext):
         return _extract_text_file(path)
     elif ext in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
@@ -182,6 +189,28 @@ def _collect_pptx_shape_text(shape, out: list[str]) -> None:
     text = getattr(shape, "text", "")
     if text:
         out.append(text)
+
+
+def _extract_via_markitdown(path: Path) -> str:
+    """Convert a rich document to markdown via the shared doc_convert helper.
+
+    Covers EPUB / notebooks the bespoke per-format extractors never did.
+    Returns a bracketed ``[error: …]`` string on an unsupported format or a
+    conversion failure, matching the text-extraction contract.
+    """
+    from durin.memory.doc_convert import (
+        DocConvertError,
+        convert_file_to_markdown,
+    )
+
+    try:
+        markdown = convert_file_to_markdown(path).markdown
+    except DocConvertError as e:
+        return f"[error: {e}]"
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Failed to extract {}", path)
+        return f"[error: failed to extract {path.suffix}: {e!s}]"
+    return _truncate(markdown, _MAX_TEXT_LENGTH)
 
 
 def _extract_text_file(path: Path) -> str:
