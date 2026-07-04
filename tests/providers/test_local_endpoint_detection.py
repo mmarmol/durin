@@ -116,3 +116,40 @@ class TestLocalKeepaliveConfig:
         pool = provider._client._client._transport._pool
         # Default httpx keepalive is 5.0s
         assert pool._keepalive_expiry == 5.0
+
+
+class TestStreamIdleTimeoutResolution:
+    """Local backends stall legitimately during prompt eval — no idle watchdog
+    by default; an explicit DURIN_STREAM_IDLE_TIMEOUT_S always wins."""
+
+    def _provider(self, *, is_local: bool) -> OpenAICompatProvider:
+        spec = _make_spec(is_local=is_local)
+        spec.env_key = ""
+        spec.default_api_base = (
+            "http://localhost:11434/v1" if is_local else "https://api.openai.com/v1"
+        )
+        return OpenAICompatProvider(
+            api_key="test",
+            api_base="http://localhost:11434/v1" if is_local else None,
+            spec=spec,
+        )
+
+    def test_cloud_defaults_to_90s(self, monkeypatch):
+        monkeypatch.delenv("DURIN_STREAM_IDLE_TIMEOUT_S", raising=False)
+        assert self._provider(is_local=False)._resolve_stream_idle_timeout() == 90.0
+
+    def test_local_defaults_to_disabled(self, monkeypatch):
+        monkeypatch.delenv("DURIN_STREAM_IDLE_TIMEOUT_S", raising=False)
+        assert self._provider(is_local=True)._resolve_stream_idle_timeout() is None
+
+    def test_explicit_env_wins_on_local(self, monkeypatch):
+        monkeypatch.setenv("DURIN_STREAM_IDLE_TIMEOUT_S", "45")
+        assert self._provider(is_local=True)._resolve_stream_idle_timeout() == 45.0
+
+    def test_env_zero_disables_on_cloud(self, monkeypatch):
+        monkeypatch.setenv("DURIN_STREAM_IDLE_TIMEOUT_S", "0")
+        assert self._provider(is_local=False)._resolve_stream_idle_timeout() is None
+
+    def test_garbage_env_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("DURIN_STREAM_IDLE_TIMEOUT_S", "not-a-number")
+        assert self._provider(is_local=False)._resolve_stream_idle_timeout() == 90.0

@@ -869,7 +869,8 @@ def test_openai_compat_defaults_missing_tool_arguments_to_empty_object() -> None
 
 @pytest.mark.asyncio
 async def test_openai_compat_stream_watchdog_returns_error_on_stall(monkeypatch) -> None:
-    monkeypatch.setenv("DURIN_STREAM_IDLE_TIMEOUT_S", "0")
+    # A tiny positive window: "0" now disables the watchdog entirely.
+    monkeypatch.setenv("DURIN_STREAM_IDLE_TIMEOUT_S", "0.01")
     mock_create = AsyncMock(return_value=_StalledStream())
     spec = find_by_name("openai")
 

@@ -1567,13 +1567,23 @@ class AgentRunner:
         _provider = provider if provider is not None else self.provider
         timeout_s: float | None = spec.llm_timeout_s
         if timeout_s is None:
-            # Default to a finite timeout to avoid per-session lock starvation when an LLM
-            # request hangs indefinitely (e.g. gateway/network stall).
-            # Set DURIN_LLM_TIMEOUT_S=0 to disable.
-            raw = os.environ.get("DURIN_LLM_TIMEOUT_S", "300").strip()
-            try:
-                timeout_s = float(raw)
-            except (TypeError, ValueError):
+            # Wall-clock cap on the whole request. An explicit DURIN_LLM_TIMEOUT_S
+            # always wins (0 disables). Otherwise: providers whose chat_stream()
+            # runs an idle-stall watchdog need no cap — a hung request is caught
+            # by stream silence, while an actively-generating call is alive no
+            # matter how long it runs (long syntheses died at the old 300s
+            # default mid-generation). Providers without that watchdog keep a
+            # finite default to avoid per-session lock starvation when a request
+            # hangs indefinitely (e.g. gateway/network stall).
+            raw = os.environ.get("DURIN_LLM_TIMEOUT_S", "").strip()
+            if raw:
+                try:
+                    timeout_s = float(raw)
+                except (TypeError, ValueError):
+                    timeout_s = 300.0
+            elif getattr(_provider, "supports_native_streaming", False):
+                timeout_s = None
+            else:
                 timeout_s = 300.0
         if timeout_s is not None and timeout_s <= 0:
             timeout_s = None
@@ -1646,7 +1656,9 @@ class AgentRunner:
         # Streaming requests already have provider-level idle timeouts
         # (DURIN_STREAM_IDLE_TIMEOUT_S). Do not also apply the outer wall-clock
         # LLM timeout here, or healthy long reasoning streams can be killed just
-        # because total elapsed time exceeded DURIN_LLM_TIMEOUT_S.
+        # because total elapsed time exceeded DURIN_LLM_TIMEOUT_S. Hook-less
+        # calls on natively-streaming providers already resolved timeout_s to
+        # None above for the same reason.
         outer_timeout_s = None if (wants_streaming or wants_progress_streaming) else timeout_s
         try:
             if outer_timeout_s is None:
