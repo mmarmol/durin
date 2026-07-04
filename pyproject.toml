@@ -54,6 +54,10 @@ dependencies = [
     # a synchronous re-index. Doc 02 §6.3. macOS uses FSEvents,
     # Linux uses inotify; both via this wrapper.
     "watchdog>=4.0,<7.0",
+    # Document → markdown conversion for the `convert_to_markdown` tool.
+    # The docx/pptx/xlsx/xls/pdf extras pull the per-format converters;
+    # html/csv/json/xml/epub/ipynb/zip work with the base install.
+    "markitdown[docx,pptx,xlsx,xls,pdf]>=0.1.6,<0.2.0",
 ]
 
 [project.optional-dependencies]

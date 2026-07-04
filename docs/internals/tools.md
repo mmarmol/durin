@@ -307,6 +307,7 @@ controls which MCP tools are registered.
 | Group | Tools |
 |---|---|
 | Filesystem | `read_file`, `write_file`, `edit_file`, `list_dir` |
+| Document reading | `convert_to_markdown` (local document → markdown via markitdown, returned into the current turn; transient — persists nothing) |
 | Search | `grep`, `repo_overview` |
 | Shell | `exec`, `process` |
 | Web | `web_search`, `web_fetch` |
