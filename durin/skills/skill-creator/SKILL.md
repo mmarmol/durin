@@ -52,9 +52,12 @@ authoring a skill — the default is **not** "a skill":
 
 Closed computation → code. Orchestration with fan-out / verification / determinism →
 workflow. Knowledge or judgment → skill. **These compose** — a skill may *bundle* a script
-or a workflow as its mechanism (ship the definition in the skill and install it on first
-use; see the `workflows` skill). What does not belong here is a prose-only skill that
-merely narrates a process a workflow should run.
+or a workflow as its mechanism. The concrete tools: pass scripts as `files` on
+`skill_write`; check `list_workflows` for a workflow to delegate to (the body says "run the
+`<name>` workflow via `run_workflow` with a task shaped like ...") and author a missing one
+with `workflow_write` (see the `workflows` skill). What does not belong here is a prose-only
+skill that merely narrates a process a workflow should run — a composition gate at save time
+rejects that shape with its reason.
 
 ## Core Principles
 

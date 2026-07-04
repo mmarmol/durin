@@ -300,6 +300,27 @@ applies — state what the skill does and its concrete trigger conditions in 1-4
 sentences. Keep the whole skill focused: prefer under ~150 lines; link or bundle
 reference material instead of inlining it.
 
+COMPOSITION DOCTRINE — how a skill must be built. This is the same contract the
+in-session skill author follows; apply it to every skill you write or adapt:
+
+{doctrine}
+
+Concretely, for each step of the procedure you captured:
+- A step that an EXISTING WORKFLOW below already automates → the skill's body \
+must DELEGATE that step ("run the `<name>` workflow via run_workflow with \
+<task shaped like this>"), contributing only the domain layer: how to phrase \
+the task, which angles matter, how to shape the output. Never re-describe the \
+workflow's procedure as manual steps.
+- A recurring orchestration (fan-out over items, producer-vs-checker \
+verification, deterministic multi-step) that NO existing workflow covers → \
+author the workflow with `workflow_write`, then have the skill delegate to it.
+- A deterministic transformation (fixed parsing, conversion, computation) → \
+bundle it as a script via `skill_write`'s `files` and have the body invoke it.
+- Only knowledge and runtime judgment stay as prose steps.
+
+EXISTING WORKFLOWS (delegate to these; check `list_workflows` for details):
+{workflow_catalog}
+
 EXISTING SKILLS: {existing}{principles}
 """
 
@@ -336,10 +357,14 @@ def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict]
     if sessions_text.strip():
         user_parts.append(sessions_text)
 
+    from durin.agent.skills_doctrine import composition_doctrine, workflow_catalog_text
+
     existing = _list_skills(workspace)
     return [
         {"role": "system",
          "content": _SKILL_EXTRACT_PROMPT.format(
+             doctrine=composition_doctrine() or "(doctrine unavailable)",
+             workflow_catalog=workflow_catalog_text(workspace),
              existing=", ".join(existing) or "(none)",
              principles=principles_block)},
         {"role": "user", "content": "\n\n".join(user_parts)},
@@ -431,10 +456,12 @@ def _build_skill_extract_tools(workspace: Path, fs: Any) -> Any:
     ``Dream`` phase-2; the daily ``memory_dream`` skill-extract pass is its new home.
     """
     from durin.agent.tools.filesystem import EditFileTool, ReadFileTool
+    from durin.agent.tools.list_workflows import ListWorkflowsTool
     from durin.agent.tools.registry import ToolRegistry
     from durin.agent.tools.skill_acquire_seed import SkillAcquireSeedTool
     from durin.agent.tools.skill_search import SkillSearchTool
     from durin.agent.tools.skill_write import SkillWriteTool
+    from durin.agent.tools.workflow_write import WorkflowWriteTool
 
     registries: list = []
     allowlist: list[str] = []
@@ -451,10 +478,17 @@ def _build_skill_extract_tools(workspace: Path, fs: Any) -> Any:
     tools = ToolRegistry()
     tools.register(ReadFileTool(workspace=workspace, allowed_dir=workspace, file_states=fs))
     tools.register(EditFileTool(workspace=workspace, allowed_dir=workspace, file_states=fs))
-    tools.register(SkillWriteTool(workspace=workspace))
+    # Autonomous authoring: the composition gate has no override here — a
+    # narration-only body is rejected absolutely and the subagent must
+    # restructure (delegate / bundle) before the skill can land.
+    tools.register(SkillWriteTool(workspace=workspace, gate_mode="hard"))
     tools.register(SkillSearchTool(workspace=workspace, registries=registries,
                                    allowlist=allowlist, limit=limit))
     tools.register(SkillAcquireSeedTool(workspace=workspace, allowlist=allowlist))
+    # Composition doctrine: the extractor can see the workflow catalog and author
+    # a new workflow for a skill to delegate to, instead of narrating it in prose.
+    tools.register(ListWorkflowsTool(workspace=workspace))
+    tools.register(WorkflowWriteTool(workspace=workspace))
     return tools
 
 

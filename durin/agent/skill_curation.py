@@ -171,7 +171,8 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
     }
 
     prompt = _build_prompt(catalog, usage or {}, upstream, obs_shown,
-                           declined_shown, principles, user_edits)
+                           declined_shown, principles, user_edits,
+                           workspace=workspace)
     raw = judge(prompt)
     parsed = _parse_judge_output(raw)
     if parsed is None:
@@ -336,9 +337,14 @@ def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None,
                   observations: list[dict] | None = None,
                   declined: list[dict] | None = None,
                   principles: list[dict] | None = None,
-                  user_edits: dict | None = None) -> str:
+                  user_edits: dict | None = None,
+                  workspace: Path | None = None) -> str:
+    from durin.agent.skills_doctrine import composition_doctrine, workflow_catalog_text
     from durin.utils.prompt_templates import render_template
     return render_template("agent/skill_curation.md", strip=True,
+                           doctrine=composition_doctrine() or "(doctrine unavailable)",
+                           workflow_catalog=(workflow_catalog_text(workspace)
+                                             if workspace else "(no workflows installed)"),
                            catalog_json=json.dumps(catalog, ensure_ascii=False),
                            usage_json=json.dumps(usage, ensure_ascii=False),
                            upstream_json=json.dumps(upstream or {}, ensure_ascii=False),
