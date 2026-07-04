@@ -48,8 +48,8 @@ follows `next` or **routes** on a verdict.
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `prompt` | string | `""` | The node's role/instructions. Empty = act on upstream context only. |
-| `model` | string \| null | engine default | A model id. **Mutually exclusive with `persona`.** |
-| `persona` | string \| null | none | A named persona (a SOUL + its model). **Mutually exclusive with `model`.** |
+| `model` | string \| null | engine default | A model id, served by the SAME provider the run's engine uses — a bare name never switches provider. For a model on another provider, use `persona`. **Mutually exclusive with `persona`.** |
+| `persona` | string \| null | none | A named persona (a SOUL + its model, provider-paired — the way to run a node on a different provider). **Mutually exclusive with `model`.** |
 | `mode` | string | `"build"` (`"explore"` if it routes) | AgentMode. Use **`build`** (may write files) or **`read`** (read-only) for nodes. `plan`/`explore` exist but carry interactive framing meant for the main loop and derail a node — avoid them; the seeds use `build`/`read`. A `read` node *cannot* write regardless of what the model attempts. |
 | `tools` | `"none"` \| `"default"` | `"none"` | `default` = the user's configured tool set; `none` = no tools. |
 | `context` | `"own"` \| `"shared"` | `"own"` | `own` = sees only the upstream edge output. `shared` = also sees a running buffer of preceding `shared` nodes' turns. **A routing node may not be `shared`.** |

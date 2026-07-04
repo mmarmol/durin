@@ -200,7 +200,7 @@ def cmd_dream(
         run_refine_pass,
         run_skill_extract_pass,
     )
-    from durin.memory.model_resolve import resolve_memory_model
+    from durin.memory.model_resolve import resolve_aux_preset
 
     if dry_run:
         console.print(
@@ -210,7 +210,7 @@ def cmd_dream(
         return
 
     cfg = load_config()
-    model = resolve_memory_model(cfg)
+    model = resolve_aux_preset(cfg, purpose="memory").model
     from datetime import datetime, timezone
     _run_started = datetime.now(timezone.utc)
     _vi = dream_vector_index(workspace, cfg)

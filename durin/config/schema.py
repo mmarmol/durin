@@ -269,7 +269,7 @@ class MemoryDreamConfig(Base):
     model_override: str | None = Field(
         default=None,
         validation_alias=AliasChoices("modelOverride", "model_override"),
-        description="Model for dream passes; None falls through to agents.aux_models.memory and then the default model",
+        description="DEPRECATED — prefer agents.aux_models.memory, which pairs the model with its provider. A bare name set here is placed by provider auto-detection from the name; None falls through to agents.aux_models.memory and then the default model",
     )
 
     # The reactive triggers fire on a daemon thread per event; a burst of
@@ -499,6 +499,7 @@ class SkillJudgeConfig(Base):
     trigger: Literal["off", "uncertain", "always"] = Field(default="off", description='When the LLM audit auto-runs on import: "off" = only on demand, "uncertain" = only when the deterministic gate is unsure, "always" = every import')
     max_severity: Literal["caution", "dangerous"] = Field(default="caution", description='Cap on how high the judge may raise the verdict: "caution" can force a confirm but never block; only deterministic rules block')
     model: str = Field(default="", description="Aux model name for the judge; empty = default aux model")
+    provider: str = Field(default="auto", description='Provider for the judge model; "auto" detects it from the model name among the configured providers (a bare model name is meaningless without its provider)')
 
 
 # Skill-source prefixes trusted by default — verified first-party vendor orgs +
@@ -1346,24 +1347,17 @@ class Config(BaseSettings):
         """Get expanded workspace path."""
         return Path(self.agents.defaults.workspace).expanduser()
 
-    def _match_provider(
-        self, model: str | None = None,
-        *,
-        preset: ModelPresetConfig | None = None,
+    def match_provider_by_name(
+        self, model: str,
     ) -> tuple["ProviderConfig | None", str | None]:
-        """Match provider config and its registry name. Returns (config, spec_name)."""
-        from durin.providers.registry import PROVIDERS, find_by_name
+        """Name-based provider detection ONLY: explicit provider prefix, then
+        registry keywords, over configured providers. No last-resort fallback —
+        a name nothing recognizably serves returns ``(None, None)``. This is the
+        placement check for specific-model knobs (aux/judge), where guessing a
+        provider sends the name to the wrong endpoint."""
+        from durin.providers.registry import PROVIDERS
 
-        resolved = preset or self.resolve_preset()
-        forced = resolved.provider
-        if forced != "auto":
-            spec = find_by_name(forced)
-            if spec:
-                p = getattr(self.providers, spec.name, None)
-                return (p, spec.name) if p else (None, None)
-            return None, None
-
-        model_lower = (model or resolved.model).lower()
+        model_lower = model.lower()
         model_normalized = model_lower.replace("-", "_")
         model_prefix = model_lower.split("/", 1)[0] if "/" in model_lower else ""
         normalized_prefix = model_prefix.replace("-", "_")
@@ -1385,6 +1379,28 @@ class Config(BaseSettings):
             if p and any(_kw_matches(kw) for kw in spec.keywords):
                 if spec.is_oauth or spec.is_local or spec.is_direct or p.api_key:
                     return p, spec.name
+        return None, None
+
+    def _match_provider(
+        self, model: str | None = None,
+        *,
+        preset: ModelPresetConfig | None = None,
+    ) -> tuple["ProviderConfig | None", str | None]:
+        """Match provider config and its registry name. Returns (config, spec_name)."""
+        from durin.providers.registry import PROVIDERS, find_by_name
+
+        resolved = preset or self.resolve_preset()
+        forced = resolved.provider
+        if forced != "auto":
+            spec = find_by_name(forced)
+            if spec:
+                p = getattr(self.providers, spec.name, None)
+                return (p, spec.name) if p else (None, None)
+            return None, None
+
+        by_name = self.match_provider_by_name(model or resolved.model)
+        if by_name[1]:
+            return by_name
 
         # Fallback: configured local providers can route models without
         # provider-specific keywords (for example plain "llama3.2" on Ollama).

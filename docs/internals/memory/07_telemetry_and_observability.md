@@ -143,6 +143,7 @@ Additional dream events:
 - **`memory.dream.throttled`** — a reactive trigger (`post_compaction` or `session_close`) was skipped by the in-process gate. `reason` is `locked` or `throttled`.
 - **`memory.dream.parse_failure`** — a pass's LLM response was unparseable (fence-strip + repair still failed, or wrong top-level type). `stage` is `extract | discover | learnings | derived_from | curation | suggestions` (the last two fire when the skill-curation judge returns unparseable output — that run stamps nothing and re-enters next time); `source` is the entity ref or session stem; `raw_head` carries the first 200 chars for diagnosis. Valid-but-empty responses do not fire this. Surfaces in the webui Dream feed as a `warning` item via the shared digest mapping.
 - **`memory.dream.vector_unavailable`** — the run started with `memory.enabled = true` but the vector backend was unavailable, so semantic dedup degraded to alias matching. Emitted once per run by `dream_vector_index`; silent when vector memory is deliberately disabled. Also surfaces as a Dream-feed `warning` item.
+- **`aux.invoke_failure`** — a purpose-resolved LLM invoke (`purpose` is `memory` or `judge`) raised: carries `provider`, `model`, and `error_head` (first 200 chars). This is the visibility layer for failure-open consumers — the dream passes and the skill/composition judges degrade gracefully when their model is unreachable, so this event (plus `durin doctor`'s "specific models" check) is how a misconfigured pair surfaces instead of failing silently forever.
 
 ### Absorb events
 

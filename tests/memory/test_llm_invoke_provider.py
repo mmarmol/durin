@@ -128,7 +128,8 @@ def test_default_llm_invoke_resolves_memory_preset(monkeypatch) -> None:
 
 
 def test_judge_llm_invoke_resolves_judge_model(monkeypatch) -> None:
-    """judge_llm_invoke (purpose=judge) honors the configured judge model."""
+    """judge_llm_invoke (purpose=judge) honors the configured judge model when
+    a configured provider serves it (here: name-autodetected onto zhipu)."""
     seen: dict = {}
 
     class _FakeProvider:
@@ -137,6 +138,7 @@ def test_judge_llm_invoke_resolves_judge_model(monkeypatch) -> None:
             return ProviderResponse(content="j-ok", usage={})
 
     c = _cfg()
+    c.providers.zhipu.api_key = "k-zhipu"       # makes glm-4.6 placeable
     c.skills.security.llm_judge.model = "glm-4.6"
     monkeypatch.setattr("durin.config.loader.load_config", lambda: c)
     monkeypatch.setattr(
@@ -145,6 +147,28 @@ def test_judge_llm_invoke_resolves_judge_model(monkeypatch) -> None:
     out = li.judge_llm_invoke("hi")
     assert out.text == "j-ok"
     assert seen["model"] == "glm-4.6"
+
+
+def test_judge_model_nobody_serves_falls_back_whole_default(monkeypatch) -> None:
+    """A judge model NO configured provider serves must not be paired with the
+    default provider (the silent-404 shape) — the whole default preset runs."""
+    seen: dict = {}
+
+    class _FakeProvider:
+        async def chat_with_retry(self, messages, tools=None, model=None, **kw):
+            seen["model"] = model
+            return ProviderResponse(content="j-ok", usage={})
+
+    c = _cfg(default_model="nemotron-3", default_provider="nvidia")
+    c.providers.nvidia.api_key = "k"
+    c.skills.security.llm_judge.model = "glm-4.6"   # zhipu NOT configured
+    monkeypatch.setattr("durin.config.loader.load_config", lambda: c)
+    monkeypatch.setattr(
+        "durin.providers.factory.make_provider", lambda cfg, *, preset: _FakeProvider()
+    )
+    out = li.judge_llm_invoke("hi")
+    assert out.text == "j-ok"
+    assert seen["model"] == "nemotron-3"
 
 
 def test_judge_llm_invoke_falls_back_to_default_when_unset(monkeypatch) -> None:

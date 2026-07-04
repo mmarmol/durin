@@ -155,6 +155,22 @@ async def aux_llm_invoke_astream(
     return getattr(resp, "content", None) or ""
 
 
+def _emit_invoke_failure(purpose: str, preset, exc: BaseException) -> None:
+    """Telemetry for a failed purpose invoke. Most consumers are failure-open
+    (a broken judge or dream model degrades silently), so the failure MUST
+    leave a visible trace naming the (provider, model) that failed."""
+    try:
+        from durin.agent.tools._telemetry import emit_tool_event
+        emit_tool_event("aux.invoke_failure", {
+            "purpose": purpose,
+            "provider": getattr(preset, "provider", None),
+            "model": getattr(preset, "model", None),
+            "error_head": str(exc)[:200],
+        })
+    except Exception:  # pragma: no cover — telemetry must never mask the real error
+        pass
+
+
 def _purpose_invoke(prompt, *, purpose: str, model=None, temperature: float = 0.1) -> LLMResponse:
     """Resolve the ``purpose`` preset (specific-or-default, never hardcoded) and run
     ``prompt`` through it. A truthy ``model`` overrides only the model name on the
@@ -166,7 +182,11 @@ def _purpose_invoke(prompt, *, purpose: str, model=None, temperature: float = 0.
     preset = resolve_aux_preset(config, purpose=purpose)
     if model:
         preset = preset.model_copy(update={"model": str(model)})
-    return aux_llm_invoke(prompt, preset=preset, config=config, temperature=temperature)
+    try:
+        return aux_llm_invoke(prompt, preset=preset, config=config, temperature=temperature)
+    except Exception as exc:
+        _emit_invoke_failure(purpose, preset, exc)
+        raise
 
 
 async def _purpose_astream(
@@ -179,14 +199,18 @@ async def _purpose_astream(
     preset = resolve_aux_preset(config, purpose=purpose)
     if model:
         preset = preset.model_copy(update={"model": str(model)})
-    return await aux_llm_invoke_astream(
-        prompt,
-        preset=preset,
-        config=config,
-        temperature=temperature,
-        on_reasoning=on_reasoning,
-        on_content=on_content,
-    )
+    try:
+        return await aux_llm_invoke_astream(
+            prompt,
+            preset=preset,
+            config=config,
+            temperature=temperature,
+            on_reasoning=on_reasoning,
+            on_content=on_content,
+        )
+    except Exception as exc:
+        _emit_invoke_failure(purpose, preset, exc)
+        raise
 
 
 def default_llm_invoke(prompt: str, *, model: str | None = None, temperature: float = 0.1) -> LLMResponse:
