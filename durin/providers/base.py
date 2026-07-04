@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
@@ -129,10 +130,39 @@ class GenerationSettings:
 _SYNTHETIC_USER_CONTENT = "(conversation continued)"
 
 
+def stream_idle_timeout_s(*, is_local: bool = False) -> float | None:
+    """Seconds of stream silence before a request is declared stalled.
+
+    ``None`` disables the watchdog. Local backends (Ollama, llama.cpp)
+    legitimately emit nothing for minutes while evaluating a large prompt, so
+    they default to disabled — a genuinely hung local server is still bounded
+    by the HTTP client timeout. An explicit ``DURIN_STREAM_IDLE_TIMEOUT_S``
+    always wins (``0`` disables).
+    """
+    raw = os.environ.get("DURIN_STREAM_IDLE_TIMEOUT_S", "").strip()
+    if raw:
+        try:
+            value = float(raw)
+        except ValueError:
+            return 90.0
+        return value if value > 0 else None
+    if is_local:
+        return None
+    return 90.0
+
+
 class LLMProvider(ABC):
     """Base class for LLM providers."""
 
     supports_progress_deltas = False
+
+    # True when this provider's chat_stream() consumes the wire chunk-by-chunk
+    # under an idle-stall watchdog (DURIN_STREAM_IDLE_TIMEOUT_S), so a hung
+    # request is detected by stream silence. Callers can then skip wall-clock
+    # caps on the whole call — an actively-generating stream is alive no matter
+    # how long it runs. Leave False when chat_stream() falls back to a blocking
+    # non-streaming call or streams without an idle watchdog.
+    supports_native_streaming = False
 
     # Standard-mode backoff. 6 retries (7 attempts total) with capped delays
     # — total worst-case wait ~60s. Covers transient blips (DNS, brief

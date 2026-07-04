@@ -617,8 +617,8 @@ Read at runtime (mostly in the runner / loop):
 | Variable | Default | Effect |
 |---|---|---|
 | `DURIN_MAX_CONCURRENT_REQUESTS` | unset | Overrides `max_concurrent_interactive` (the interactive lane's cap) when set; `0` or negative = unlimited. |
-| `DURIN_LLM_TIMEOUT_S` | `300` | Wall-clock outer timeout per LLM request. |
-| `DURIN_STREAM_IDLE_TIMEOUT_S` | — | Provider idle timeout for streaming (overrides wall-clock when set). |
+| `DURIN_LLM_TIMEOUT_S` | unset | Wall-clock outer timeout per LLM request; an explicit value applies everywhere, `0` disables. Unset: `1800` backstop on natively-streaming providers (the idle watchdog is the primary hang detector), `300` on the rest. |
+| `DURIN_STREAM_IDLE_TIMEOUT_S` | `90` | Provider idle-stall watchdog: seconds of stream silence before the request is declared stalled. `0` disables. Local endpoints default to disabled. |
 | `DURIN_COMPACTION_GRACE_S` | `30` | One-shot deadline extension when consolidation is in flight. |
 | `DURIN_MAX_CONSECUTIVE_IDLE_TIMEOUTS` | `1` | Idle-timeout circuit breaker (trips on the next timeout). |
 | `DURIN_MAX_UNKNOWN_TOOL_ATTEMPTS` | `2` | Unknown-tool breaker (trips on the third call to a bad name). |

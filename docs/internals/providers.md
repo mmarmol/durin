@@ -215,6 +215,27 @@ covers stalls mid-stream. Providers without native streaming inherit the base
 `chat_stream` fallback, which delegates to `chat()` and delivers the full content
 as a single delta — behaviorally identical for those backends.
 
+Providers whose `chat_stream` runs that idle watchdog declare it with the
+`supports_native_streaming` class flag (Anthropic, OpenAI-compat and its
+subclasses, Bedrock; `FallbackProvider` reports its primary's flag). The agent
+runner reads the flag to decide liveness semantics per request: on a
+natively-streaming provider a hung request is detected by stream *silence*, so
+the runner relaxes the wall clock to a generous 30-minute backstop and an
+actively-generating call may run as long as it needs (long workflow-synthesis
+and dream calls died at the old tight cap mid-generation). The backstop is kept
+rather than dropped because the watchdog counts chunks, not payload — a gateway
+that emits heartbeat chunks can keep resetting it while the backend is wedged,
+and unattended runs (workflows, dream, cron) need a hard upper bound. On
+providers without the watchdog the runner keeps the tighter finite default. An
+explicit `DURIN_LLM_TIMEOUT_S` overrides the flag-based default everywhere; `0`
+disables the cap.
+
+The idle watchdog itself has one exception: local endpoints (`is_local` specs,
+loopback/LAN addresses) disable it by default, because local backends emit
+nothing for minutes while evaluating a large prompt — stall detection would kill
+healthy requests. A genuinely hung local server is still bounded by the HTTP
+client timeout. An explicit `DURIN_STREAM_IDLE_TIMEOUT_S` re-enables it.
+
 ### 4.6 Capability lookup
 
 `get_model_capabilities(model, provider, overrides)` (`durin/providers/capabilities.py`)

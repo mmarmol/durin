@@ -17,6 +17,7 @@ from durin.providers.base import (
     LLMResponse,
     ToolCallRequest,
     format_provider_error_content,
+    stream_idle_timeout_s,
 )
 from durin.utils.tool_argument_repair import parse_tool_call_arguments
 
@@ -46,6 +47,8 @@ def _next_or_none(iterator: Iterator[dict[str, Any]]) -> dict[str, Any] | None:
 
 class BedrockProvider(LLMProvider):
     """LLM provider using AWS Bedrock Runtime's Converse APIs."""
+
+    supports_native_streaming = True
 
     def __init__(
         self,
@@ -722,7 +725,7 @@ class BedrockProvider(LLMProvider):
         extra_body: dict[str, Any] | None = None,
     ) -> LLMResponse:
         _ = on_thinking_delta
-        idle_timeout_s = int(os.environ.get("DURIN_STREAM_IDLE_TIMEOUT_S", "90"))
+        idle_timeout_s = stream_idle_timeout_s()
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         thinking_blocks: list[dict[str, Any]] = []
@@ -763,7 +766,7 @@ class BedrockProvider(LLMProvider):
             return LLMResponse(
                 content=(
                     f"Error calling LLM: stream stalled for more than "
-                    f"{idle_timeout_s} seconds"
+                    f"{idle_timeout_s:g} seconds"
                 ),
                 finish_reason="error",
                 error_kind="timeout",
