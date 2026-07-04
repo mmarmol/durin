@@ -54,10 +54,12 @@ _PARAMETERS = tool_parameters_schema(
         "not Q&A."
     ),
     scope=StringSchema(
-        "Where to search. 'all' (default) covers both undreamed sources and "
-        "dreamed memory entries. 'archive' walks `memory/archive/` on demand "
-        "for recovery / diagnostic queries against consolidated content.",
-        enum=["all", "dreamed", "undreamed", "archive"],
+        "Where to search. 'all' (default) covers dreamed memory entries and "
+        "undreamed sessions, but NOT ingested documents. 'library' searches "
+        "ingested reference documents (books, PDFs, exported pages) — use it "
+        "when the answer lives in a document the user loaded. 'archive' walks "
+        "`memory/archive/` on demand for recovery / diagnostic queries.",
+        enum=["all", "dreamed", "undreamed", "library", "archive"],
     ),
     level=StringSchema(
         "How much content to return per result. 'warm' (default) returns "
@@ -91,8 +93,10 @@ _PARAMETERS = tool_parameters_schema(
     description=(
         # Synchronisation enforced by `tests/memory/test_tool_description_sync.py`.
         "Search durin's memory for content relevant to your question. "
-        "Searches across canonical entity pages, recent observations, "
-        "session summaries, and ingested documents in one call.\n\n"
+        "Searches across canonical entity pages, recent observations, and "
+        "session summaries in one call. Ingested documents (books, PDFs, "
+        "pages the user loaded) are NOT in the default search — reach them "
+        "with `scope=\"library\"`.\n\n"
         "Usage:\n"
         "- For most queries, use a single call with a natural-language `query`.\n"
         "- For multi-part questions, issue 2-3 calls with different phrasings "
@@ -121,7 +125,7 @@ _PARAMETERS = tool_parameters_schema(
         "consolidated\n"
         "- `=== SESSION: <id> ===` — conversation summaries\n"
         "- `=== INGESTED: <id> ===` — chunks of documents the user has "
-        "loaded\n\n"
+        "loaded (only from `scope=\"library\"`)\n\n"
         "Each marker also carries a completeness qualifier:\n"
         "- `(complete)` — the body shown IS the full entry; do NOT call "
         "memory_drill on this uri, it returns the same text.\n"
@@ -364,7 +368,7 @@ class MemorySearchTool(Tool):
 
         if not query:
             return {"error": "query is required"}
-        if scope not in ("all", "dreamed", "undreamed", "archive"):
+        if scope not in ("all", "dreamed", "undreamed", "library", "archive"):
             return {"error": f"invalid scope {scope!r}"}
         if level not in ("warm", "cold"):
             return {"error": f"invalid level {level!r}"}
@@ -384,7 +388,20 @@ class MemorySearchTool(Tool):
         # rerank + grep fallback + sectioning + per-source cap.
         from durin.memory.search_pipeline import run_search_pipeline
 
-        vi = self._get_vector_index() if scope in ("dreamed", "all") else None
+        vi = (
+            self._get_vector_index()
+            if scope in ("dreamed", "all", "library") else None
+        )
+
+        # Library scope filter (contamination isolation): ingested reference
+        # documents are kept out of the default recall pool and are the sole
+        # content of an explicit `library` search.
+        if scope == "library":
+            library_mode: str | None = "only"
+        elif scope in ("all", "dreamed", "undreamed"):
+            library_mode = "exclude"
+        else:
+            library_mode = None
 
         # Cross-encoder rerank is opt-in via config. When
         # enabled, build a reranker lazily and pass it through. The
@@ -424,6 +441,7 @@ class MemorySearchTool(Tool):
             cross_encoder=cross_encoder,
             cross_encoder_top_n=ce_top_n,
             max_per_source=max_per_source,
+            library_mode=library_mode,
         )
         duration_ms = (time.monotonic() - t0) * 1000.0
 
@@ -454,15 +472,15 @@ class MemorySearchTool(Tool):
                 },
             )
 
-        # `scope=undreamed` mode is a v1 niche — the orchestrator's
-        # grep step covers sessions + ingested but mixes them with
-        # dreamed memory hits. When the caller wants ONLY undreamed,
-        # filter the result set down.
+        # `scope=undreamed` mode is a v1 niche — the orchestrator's grep step
+        # mixes sessions with dreamed memory hits. When the caller wants ONLY
+        # undreamed, filter down to raw session material (ingested Library
+        # content was already excluded by the pipeline's library filter).
         hits = pipeline_result.hits
         if scope == "undreamed":
             hits = [
                 h for h in hits
-                if h.type in ("session_summary", "corpus")
+                if h.type in ("session", "session_summary")
             ]
 
         # Read-side gate for `memory.index_skills=False`.
@@ -506,6 +524,7 @@ class MemorySearchTool(Tool):
             "entity_page": "entity",
             "episodic": "episodic", "stable": "stable",
             "corpus": "corpus", "session_summary": "session_summary",
+            "reference": "reference",
         }
         enriched_hits = [
             SectionedHit(

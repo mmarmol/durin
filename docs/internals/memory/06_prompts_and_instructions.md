@@ -27,7 +27,7 @@ The blocks below are the canonical LLM-facing tool descriptions, kept in sync wi
 ### 3.1 `memory_search`
 
 ```
-Search durin's memory for content relevant to your question. Searches across canonical entity pages, recent observations, session summaries, and ingested documents in one call.
+Search durin's memory for content relevant to your question. Searches across canonical entity pages, recent observations, and session summaries in one call. Ingested documents (books, PDFs, pages the user loaded) are NOT in the default search — reach them with `scope="library"`.
 
 Usage:
 - For most queries, use a single call with a natural-language `query`.
@@ -42,7 +42,7 @@ Results come pre-sectioned with structural markers:
 - `=== CANONICAL: <uri> ===` — consolidated entity pages (durable knowledge)
 - `=== FRAGMENT: <path> ===` — recent observations not yet consolidated
 - `=== SESSION: <id> ===` — conversation summaries
-- `=== INGESTED: <id> ===` — chunks of documents the user has loaded
+- `=== INGESTED: <id> ===` — chunks of documents the user has loaded (only from `scope="library"`)
 
 Each marker also carries a completeness qualifier:
 - `(complete)` — the body shown IS the full entry; do NOT call memory_drill on this uri, it returns the same text.
