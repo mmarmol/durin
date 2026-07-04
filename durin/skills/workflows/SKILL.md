@@ -108,6 +108,11 @@ If none of these apply, a prompt — or a skill — does it better, faster, and 
   `subworkflow` nodes — but only where each stage genuinely needs the structure above.
   **Before authoring, read the references below** so the definition is complete and valid the
   first time; do not write a graph from memory of this overview alone.
+- **Edit:** call `workflow_edit(name, definition, rationale)` for a user-requested change to
+  an EXISTING workflow — load the current JSON, apply the change, pass the FULL replacement
+  definition. Same validation and version history as authoring; it refuses a name that does
+  not exist yet. The rationale matters: the self-improvement pass reads the version history
+  to avoid re-proposing edits the user reverted.
 
 ## Authoring references — read on demand
 

@@ -33,6 +33,12 @@ def recommendations(
     for n in names:
         for r in wr.open_recommendations(workspace, n):
             found = True
+            if r.get("kind") == "structural":
+                typer.echo(f"[{r['id']}] {n}: STRUCTURAL — never auto-applied; treat it in a session  (seen ×{r.get('count', 1)})")
+                typer.echo(f"    reason    : {r.get('reason', '')}")
+                typer.echo(f"    rejected  : {r.get('why_rejected', '')}")
+                typer.echo(f"    evidence  : {r.get('diagnostic', '')}")
+                continue
             typer.echo(f"[{r['id']}] {n}: {r['target_id']}.{r['field']}  (seen ×{r.get('count', 1)})")
             typer.echo(f"    reason   : {r['reason']}")
             typer.echo(f"    proposed : {r['proposed'][:300]}")
@@ -53,4 +59,19 @@ def apply(
         typer.echo(f"Applied: {name} — {result['target_id']}.{result['field']} updated and versioned.")
     else:
         typer.echo(f"Error: {result.get('error')}")
+        raise typer.Exit(1)
+
+
+@workflow_app.command("dismiss")
+def dismiss(
+    name: str = typer.Argument(..., help="Workflow name."),
+    rec_id: str = typer.Argument(..., help="Recommendation id (from `recommendations`)."),
+) -> None:
+    """Dismiss a recommendation (terminal; an identical repeat proposal stays pinned to it)."""
+    from durin.workflow.workflow_recommendations import dismiss_recommendation
+
+    if dismiss_recommendation(_workspace(), name, rec_id):
+        typer.echo(f"Dismissed: {name} [{rec_id}]")
+    else:
+        typer.echo("Error: no open recommendation with that id")
         raise typer.Exit(1)
