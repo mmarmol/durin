@@ -226,14 +226,14 @@ async def test_message_rejected_on_oversize_payload(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_message_rejected_on_non_image_mime(tmp_path) -> None:
+async def test_message_rejected_on_unsupported_mime(tmp_path) -> None:
     channel = _make_channel()
     mock_conn = AsyncMock()
     envelope = {
         "type": "message",
         "chat_id": "abc123",
-        "content": "pdf?",
-        "media": [{"data_url": _data_url("application/pdf", b"%PDF-1.4")}],
+        "content": "binary?",
+        "media": [{"data_url": _data_url("application/octet-stream", b"\x00\x01")}],
     }
 
     with patch(
@@ -245,6 +245,32 @@ async def test_message_rejected_on_non_image_mime(tmp_path) -> None:
     err = json.loads(mock_conn.send_text.call_args[0][0])
     assert err["detail"] == "image_rejected"
     assert err["reason"] == "mime"
+
+
+@pytest.mark.asyncio
+async def test_message_with_document_forwards_saved_path(tmp_path) -> None:
+    """A document MIME is accepted (not inlined like an image): saved to disk
+    with its real extension and forwarded as a path for the agent's tools."""
+    channel = _make_channel()
+    mock_conn = AsyncMock()
+    envelope = {
+        "type": "message",
+        "chat_id": "abc123",
+        "content": "read this",
+        "media": [{"data_url": _data_url("application/pdf", b"%PDF-1.4"), "name": "spec.pdf"}],
+    }
+
+    with patch(
+        "durin.channels.websocket.get_media_dir", return_value=tmp_path
+    ):
+        await channel._dispatch_envelope(mock_conn, "client-1", envelope)
+
+    channel._handle_message.assert_awaited_once()
+    paths = channel._handle_message.call_args.kwargs["media"]
+    assert isinstance(paths, list) and len(paths) == 1
+    saved = Path(paths[0])
+    assert saved.exists()
+    assert saved.suffix == ".pdf"
 
 
 @pytest.mark.asyncio
@@ -367,7 +393,7 @@ async def test_failed_media_does_not_partially_persist(tmp_path) -> None:
         "content": "mixed",
         "media": [
             {"data_url": _tiny_png_data_url()},
-            {"data_url": _data_url("application/pdf", b"%PDF-1.4")},
+            {"data_url": _data_url("application/octet-stream", b"\x00\x01\x02")},
         ],
     }
 

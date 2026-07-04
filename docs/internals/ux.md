@@ -185,6 +185,14 @@ with point-and-click; confirming inserts a `$…$` delimited expression into the
 draft, and a live preview updates as the user types `$…$` or `$$…$$` markers
 directly in the composer.
 
+**Attachments.** The composer accepts image, audio, and document attachments
+(the accepted MIME set lives in `ThreadComposer` and mirrors the WebSocket
+channel's server-side whitelist). Images ride inline as base64 vision content;
+documents (PDF, Office, EPUB, …) are decoded to a file on the gateway — the
+original extension is preserved so extraction dispatches correctly — and their
+text is extracted and folded into the message by `extract_documents`
+(`durin/utils/document.py`) for the agent to read.
+
 **Rich fenced blocks.** Code blocks tagged `html`, `svg`, `mermaid`, or
 `vega-lite` render inline as a `RichBlock`. Each block shows a header strip with
 a code⇄preview toggle, an expand button, and a copy button. The

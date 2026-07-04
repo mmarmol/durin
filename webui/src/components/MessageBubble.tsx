@@ -101,6 +101,19 @@ export function MessageBubble({
         {!hasImages && hasMedia ? (
           <MessageMedia media={media} align="right" />
         ) : null}
+        {/* Optimistic mixed case: an image path populates ``images`` while a
+            document populates ``media`` (kind: "file"). Render the non-image
+            media alongside the thumbnails. Replay never hits this branch — it
+            only sets ``images`` when every media item is an image, so there is
+            nothing non-image to double-render. */}
+        {hasImages && hasMedia
+          ? (() => {
+              const nonImageMedia = media.filter((m) => m.kind !== "image");
+              return nonImageMedia.length > 0 ? (
+                <MessageMedia media={nonImageMedia} align="right" />
+              ) : null;
+            })()
+          : null}
         {hasText ? (
           <p
             className={cn(
