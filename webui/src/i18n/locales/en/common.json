@@ -1404,6 +1404,7 @@
       "queued": "Queued for next turn",
       "steer": "Steer — inject guidance mid-turn",
       "attachImage": "Attach image",
+      "attachDocument": "Attach document",
       "modelPicker": {
         "search": "Search models…",
         "suggested": "Suggested",
@@ -1508,6 +1509,7 @@
         }
       },
       "encoding": "Encoding…",
+      "reading": "Reading…",
       "remove": "Remove attachment",
       "normalizedSizeHint": "{{orig}} → {{current}} (auto)",
       "imageRejected": {
@@ -1516,6 +1518,12 @@
         "magic_mismatch": "File doesn't look like a real image",
         "decode_failed": "Couldn't decode this image",
         "too_large": "Image is too large — try a smaller one",
+        "io": "Couldn't read this file"
+      },
+      "documentRejected": {
+        "unsupported_type": "Unsupported document type",
+        "too_many": "Max {{max}} documents per message",
+        "too_large": "Document is too large — 25 MB max",
         "io": "Couldn't read this file"
       },
       "planMode": "Plan mode (read-only)",

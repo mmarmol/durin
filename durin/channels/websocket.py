@@ -307,6 +307,8 @@ _MAX_VIDEOS_PER_MESSAGE = 1
 _MAX_VIDEO_BYTES = 20 * 1024 * 1024
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024
 _MAX_AUDIO_PER_MESSAGE = 1
+_MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
+_MAX_DOCUMENTS_PER_MESSAGE = 3
 # Grace window before a disconnected voice session is torn down. Long enough to
 # ride out a wifi blip / backgrounded tab and let the browser reconnect onto the
 # same session; short enough that a truly closed tab frees it promptly.
@@ -340,7 +342,34 @@ _AUDIO_MIME_ALLOWED: frozenset[str] = frozenset({
     "audio/flac",
 })
 
-_UPLOAD_MIME_ALLOWED: frozenset[str] = _IMAGE_MIME_ALLOWED | _VIDEO_MIME_ALLOWED | _AUDIO_MIME_ALLOWED
+# Document MIME whitelist — attachments handed to the agent as a file path
+# (NOT inlined like images): the agent reads them with `convert_to_markdown`
+# or `memory_ingest`. Matches the webui composer `useAttachedDocuments`
+# whitelist and the formats `durin/memory/doc_convert.py` handles.
+_DOCUMENT_MIME_ALLOWED: frozenset[str] = frozenset({
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/msword",
+    "application/vnd.ms-excel",
+    "application/vnd.ms-powerpoint",
+    "application/epub+zip",
+    "text/html",
+    "text/csv",
+    "text/plain",
+    "text/markdown",
+    "application/json",
+    "application/xml",
+    "text/xml",
+})
+
+_UPLOAD_MIME_ALLOWED: frozenset[str] = (
+    _IMAGE_MIME_ALLOWED
+    | _VIDEO_MIME_ALLOWED
+    | _AUDIO_MIME_ALLOWED
+    | _DOCUMENT_MIME_ALLOWED
+)
 
 # Tolerate media-type parameters between the MIME and the ``;base64`` marker —
 # browser ``MediaRecorder`` emits ``data:audio/webm;codecs=opus;base64,...``.
@@ -1316,12 +1345,15 @@ class WebSocketChannel(BaseChannel):
         image_count = 0
         video_count = 0
         audio_count = 0
+        document_count = 0
         for item in media:
             mime = _extract_data_url_mime(item.get("data_url", "")) if isinstance(item, dict) else None
             if mime in _VIDEO_MIME_ALLOWED:
                 video_count += 1
             elif mime in _AUDIO_MIME_ALLOWED:
                 audio_count += 1
+            elif mime in _DOCUMENT_MIME_ALLOWED:
+                document_count += 1
             elif mime in _IMAGE_MIME_ALLOWED:
                 image_count += 1
         if image_count > _MAX_IMAGES_PER_MESSAGE:
@@ -1330,6 +1362,8 @@ class WebSocketChannel(BaseChannel):
             return [], "too_many_videos"
         if audio_count > _MAX_AUDIO_PER_MESSAGE:
             return [], "too_many_audios"
+        if document_count > _MAX_DOCUMENTS_PER_MESSAGE:
+            return [], "too_many_documents"
 
         media_dir = get_media_dir("websocket")
         paths: list[str] = []
@@ -1357,15 +1391,23 @@ class WebSocketChannel(BaseChannel):
                 return _abort("mime")
             is_video = mime in _VIDEO_MIME_ALLOWED
             is_audio = mime in _AUDIO_MIME_ALLOWED
+            is_document = mime in _DOCUMENT_MIME_ALLOWED
             if is_video:
                 max_bytes = _MAX_VIDEO_BYTES
             elif is_audio:
                 max_bytes = _MAX_AUDIO_BYTES
+            elif is_document:
+                max_bytes = _MAX_DOCUMENT_BYTES
             else:
                 max_bytes = _MAX_IMAGE_BYTES
+            # Documents dispatch on their suffix (convert_to_markdown /
+            # memory_ingest), so the saved file must keep the original
+            # extension — the client name supplies it.
+            name_hint = item.get("name") if is_document else None
             try:
                 saved = save_base64_data_url(
                     data_url, media_dir, max_bytes=max_bytes,
+                    filename_hint=name_hint,
                 )
             except FileSizeExceeded:
                 return _abort("size")
