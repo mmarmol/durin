@@ -8,7 +8,7 @@ The memory system stores two parallel tracks:
 
 - **Track 1 — entities**: synthesized, canonical knowledge (`memory/entities/`). Written through a single git-CAS write path under per-field authorship precedence.
 - **Track 2 — fragments**: raw, append-only observations (`memory/episodic/`, `memory/stable/`, `memory/session_summary/`). Surfaced by recency; never consolidated into entity pages.
-- **Track 2 — references**: ingested documents kept whole (`memory/references/<slug>.md`). Written by `memory_ingest`; token-aware chunk index stored as a `.chunks.jsonl` sidecar. Legacy `corpus/` entries are still walked and indexed for historical content but `memory_ingest` no longer writes there.
+- **Track 2 — references**: ingested documents kept whole (`memory/references/<slug>.md`). Written by `memory_ingest`; a structure-aware chunk index is stored as a `.chunks.jsonl` sidecar (heading-scoped, ~384-token chunks, each carrying a `breadcrumb` heading path). Supported document formats (PDF, Office, EPUB, HTML, …) are converted to markdown at ingest via `durin/memory/doc_convert.py` — the verbatim original stays at `ingested/<id>/source.<ext>` and the rendering at `ingested/<id>/source.md`. Legacy `corpus/` entries are still walked and indexed for historical content but `memory_ingest` no longer writes there.
 
 Markdown files are the source of truth. Indices (LanceDB vector + SQLite FTS5) are derived and can be fully rebuilt from the files at any time.
 
@@ -79,7 +79,7 @@ flowchart TD
     ├── episodic/<id>.md             raw atomic observations
     ├── stable/<id>.md               user-marked durable notes
     ├── references/<slug>.md         ingested documents kept whole
-    │   └── <slug>.chunks.jsonl      token-aware chunk index (vector units)
+    │   └── <slug>.chunks.jsonl      structure-aware chunk index (vector units, + breadcrumb)
     ├── corpus/<id>.md               legacy — still indexed, no longer written
     ├── pending/<id>.md              intake buffer (never indexed)
     ├── session_summary/<key>.md     compaction summaries (vector-indexed)

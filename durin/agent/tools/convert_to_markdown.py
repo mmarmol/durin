@@ -1,14 +1,13 @@
 """convert_to_markdown tool — read a local document as clean markdown.
 
-Converts a document (pdf, docx, pptx, xlsx, …) to markdown via the
-markitdown library and returns the full text into the current turn.
-LLMs reason far better over clean markdown than over raw PDF/HTML
-bytes, so this is the "just let me read it" primitive.
+Converts a document (pdf, docx, pptx, xlsx, …) to markdown via the shared
+``durin.memory.doc_convert`` helper and returns the full text into the current
+turn. LLMs reason far better over clean markdown than over raw PDF/HTML bytes,
+so this is the "just let me read it" primitive.
 
-Transient by design: the tool touches no memory and writes nothing
-durable. Oversized results are handled by the runner's standard
-truncate-and-spill path, not here. To persist a document, use
-``memory_ingest`` instead.
+Transient by design: the tool touches no memory and writes nothing durable.
+Oversized results are handled by the runner's standard truncate-and-spill
+path, not here. To persist a document, use ``memory_ingest`` instead.
 """
 
 from __future__ import annotations
@@ -16,26 +15,16 @@ from __future__ import annotations
 import asyncio
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
-
-_SUPPORTED_SUFFIXES = (
-    ".pdf",
-    ".docx",
-    ".pptx",
-    ".xlsx",
-    ".xls",
-    ".epub",
-    ".html",
-    ".htm",
-    ".csv",
-    ".json",
-    ".xml",
-    ".ipynb",
-    ".zip",
+from durin.memory.doc_convert import (
+    SUPPORTED_SUFFIXES,
+    ConvertedDoc,
+    DocConvertError,
+    convert_file_to_markdown,
 )
 
 _HEADING_RE = re.compile(r"^#{1,6} .+$", re.MULTILINE)
@@ -57,7 +46,6 @@ class ConvertToMarkdownTool(Tool):
 
     def __init__(self, workspace: str | Path) -> None:
         self._workspace = Path(workspace).expanduser()
-        self._converter: Optional[Any] = None
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -72,7 +60,7 @@ class ConvertToMarkdownTool(Tool):
         return (
             "Convert a local document to clean markdown and return the full "
             "text in this turn, so you can read and reason over it. Supported "
-            "formats: " + ", ".join(s.lstrip(".") for s in _SUPPORTED_SUFFIXES)
+            "formats: " + ", ".join(s.lstrip(".") for s in SUPPORTED_SUFFIXES)
             + ". Use this when the user points at a document they want read, "
             "summarized, or discussed NOW. It does NOT save anything to "
             "memory — for that, use `memory_ingest`."
@@ -93,61 +81,34 @@ class ConvertToMarkdownTool(Tool):
         if not source.is_file():
             return {"error": f"file not found: {source}"}
 
-        suffix = source.suffix.lower()
-        if suffix not in _SUPPORTED_SUFFIXES:
-            return {
-                "error": (
-                    f"unsupported format: {suffix or 'no extension'} — "
-                    f"supported formats are {', '.join(_SUPPORTED_SUFFIXES)}"
-                )
-            }
-
-        from markitdown import MarkItDownException
-
         try:
-            result = await asyncio.to_thread(
-                self._get_converter().convert, str(source)
+            converted: ConvertedDoc = await asyncio.to_thread(
+                convert_file_to_markdown, source
             )
-        except MarkItDownException as exc:
-            return {"error": f"conversion failed: {exc}"}
+        except DocConvertError as exc:
+            return {"error": str(exc)}
         except OSError as exc:
             return {"error": f"io error: {exc}"}
 
-        markdown = (result.text_content or "").strip()
-        if not markdown:
-            return {
-                "error": (
-                    f"{source.name} yielded no extractable text — scanned or "
-                    "image-only documents need OCR, which this converter "
-                    "does not do"
-                )
-            }
-
+        markdown = converted.markdown
         outline = _HEADING_RE.findall(markdown)[:_MAX_OUTLINE_ENTRIES]
 
         emit_tool_event(
             "tool.convert_to_markdown",
             {
-                "format": suffix,
+                "format": converted.suffix,
                 "size_chars": len(markdown),
                 "outline_entries": len(outline),
             },
         )
 
-        # Metadata first, `markdown` last: the runner head-truncates
-        # oversized results, so the summary fields must survive the head
-        # while the (spilled) full text absorbs the cut.
+        # Metadata first, `markdown` last: the runner head-truncates oversized
+        # results, so the summary fields must survive the head while the
+        # (spilled) full text absorbs the cut.
         return {
             "path": str(source),
-            "format": suffix,
+            "format": converted.suffix,
             "size_chars": len(markdown),
             "outline": outline,
             "markdown": markdown,
         }
-
-    def _get_converter(self) -> Any:
-        if self._converter is None:
-            from markitdown import MarkItDown
-
-            self._converter = MarkItDown()
-        return self._converter

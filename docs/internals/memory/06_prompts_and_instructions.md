@@ -74,11 +74,13 @@ If the user is restating something already known, do NOT call this tool — it c
 ### 3.3 `memory_ingest`
 
 ```
-Add a local document (markdown or plain text) to durin's memory as a REFERENCE — coherent source material the user wants kept whole: research notes, transcripts, technical specs, exported pages, markdown books, etc.
+Add a local document to durin's memory as a REFERENCE — coherent source material the user wants kept whole: research notes, transcripts, technical specs, exported pages, books, reports, etc.
 
-`path` is the absolute or workspace-relative path to the file. The original is preserved verbatim and the document is indexed for retrieval. Re-ingesting the same file is idempotent — the id is a hash of (filename + content). The result includes a `reference:<slug>`; when you then author an entity distilled from this document, pass that ref in `memory_upsert_entity(derived_from=[...])` so the entity links back to its source.
+Supported formats are converted to markdown on the way in: PDF, Word (docx), PowerPoint (pptx), Excel (xlsx/xls), EPUB, HTML, CSV, JSON, XML, Jupyter notebooks; markdown and plain text are stored as-is. The verbatim original is always preserved.
 
-For web content, use `web_fetch(url=...)` first to get clean markdown, then `memory_ingest` on the saved file. For a fact about a *thing* (a person, company, product, topic…), use `memory_upsert_entity` instead — `memory_ingest` is for whole documents, not individual facts.
+`path` is the absolute or workspace-relative path to the file. Re-ingesting the same file is idempotent. The result includes a `reference:<slug>`; when you then author an entity distilled from this document, pass that ref in `memory_upsert_entity(derived_from=[...])` so the entity links back to its source.
+
+For web content, use `web_fetch(url=...)` first, then `memory_ingest` on the saved file. For a fact about a *thing* (a person, company, product, topic…), use `memory_upsert_entity` instead — `memory_ingest` is for whole documents, not individual facts. To just READ a document in this turn without saving it, use `convert_to_markdown`.
 ```
 
 ### 3.4 `memory_drill`
