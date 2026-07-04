@@ -125,7 +125,7 @@ subagents (which have no hot layer in their prompt).
 | Param | Default | Description |
 |---|---|---|
 | `query` | required | Natural-language or exact-identifier query. Short topical phrase preferred. |
-| `scope` | `all` | `all` = dreamed + undreamed; `dreamed` = structured memory; `undreamed` = raw sessions + ingested grep; `archive` = on-demand recovery walk. |
+| `scope` | `all` | `all` = dreamed + undreamed sessions, **excluding ingested documents**; `dreamed` = structured memory; `undreamed` = raw sessions; `library` = ingested reference documents (the Library — kept out of default recall); `archive` = on-demand recovery walk. |
 | `level` | `warm` | `warm` = headline + summary; `cold` = full body (high token cost). |
 | `keywords` | — | Literal string for exact-match boost (email, UUID, path). Biases RRF toward lexical. |
 | `limit` | 10 | Final result count. Clamped to [1, 50] defensively even with schema bounds declared. |

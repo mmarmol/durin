@@ -49,6 +49,30 @@ __all__ = ["SearchPipelineResult", "run_search_pipeline"]
 
 logger = logging.getLogger(__name__)
 
+# Ingested Library material — reference documents, their chunks, legacy
+# corpus chunks, and raw ingested artifacts — addressed by these uri
+# prefixes. Keyed off the uri (not the hit type) because the grep fallback
+# mislabels some ingested rows. Both reference uri shapes are covered: the
+# FTS whole-doc id ``reference:<slug>`` and the vector chunk / grep path
+# ``memory/reference/<…>``.
+_LIBRARY_URI_PREFIXES = (
+    "reference:",
+    "memory/reference/",
+    "memory/corpus/",
+    "ingested/",
+)
+
+
+def _is_library_uri(uri: str) -> bool:
+    """True when ``uri`` addresses ingested Library material."""
+    return any(uri.startswith(p) for p in _LIBRARY_URI_PREFIXES)
+
+
+def _keep_for_library(uri: str, mode: str) -> bool:
+    """``mode='only'`` keeps Library uris; ``'exclude'`` drops them."""
+    lib = _is_library_uri(uri)
+    return lib if mode == "only" else not lib
+
 
 @dataclass(frozen=True)
 class SearchPipelineResult:
@@ -77,6 +101,7 @@ def run_search_pipeline(
     cross_encoder: Optional[Any] = None,
     cross_encoder_top_n: int = 10,
     max_per_source: int | None = None,
+    library_mode: Optional[str] = None,
 ) -> SearchPipelineResult:
     """Execute the v2 search pipeline.
 
@@ -180,6 +205,14 @@ def run_search_pipeline(
     # question's context perjudicated factual atemporal queries (the
     # LoCoMo conv-5-q20 chicken-vs-sushi case) and gave no win we
     # couldn't get from the LLM reading dates itself.
+
+    # Library scope filter. Ingested reference/corpus/artifact material is
+    # kept out of the default recall pool (``exclude``) and is the sole
+    # content of an explicit ``library`` search (``only``). Applied here,
+    # before the per-source cap and ``limit`` trim, so excluded material
+    # never consumes result slots.
+    if library_mode is not None:
+        fused = [f for f in fused if _keep_for_library(f.uri, library_mode)]
 
     # Build SectionedHit rows from the fused results, looking up
     # metadata from whichever source surfaced the uri.
