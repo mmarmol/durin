@@ -1,14 +1,16 @@
 """References — coherent ingested documents kept WHOLE.
 
 A reference is stored intact (never synthesized by dream) under
-``memory/references/<slug>.md`` with a REFERENCE marker. A token-aware chunk
-index (<=512 tokens each — the e5-small embedder's max_seq) is written
-alongside as a ``.chunks.jsonl`` sidecar, every chunk carrying a ``parent``
-pointer back to the reference so a fragment hit can pull the whole document.
+``memory/references/<slug>.md`` with a REFERENCE marker. A structure-aware
+chunk index is written alongside as a ``.chunks.jsonl`` sidecar: the document
+is split on markdown headings into sections, each section is size-capped to
+~384 tokens (leaving headroom under the e5-small embedder's 512 max_seq for
+the prepended breadcrumb), and every chunk carries a ``parent`` pointer back
+to the reference plus a ``breadcrumb`` (its ``Chapter › Section`` heading path)
+so an isolated chunk keeps its context and a fragment hit can pull the whole
+document.
 
 The whole doc is the FTS unit; the chunks are the vector unit.
-Wiring the chunks into the live FTS/vector index is a follow-on; this module
-owns the storage model + token-aware chunking.
 """
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ from durin.utils.helpers import estimate_text_tokens
 __all__ = [
     "ReferenceResult",
     "chunk_by_tokens",
+    "chunk_structured",
     "ingest_reference",
     "load_reference",
     "reference_chunks",
@@ -33,6 +36,10 @@ __all__ = [
 ]
 
 _MAX_CHUNK_TOKENS = 512
+# Structural chunks leave headroom under the 512 max_seq for the prepended
+# breadcrumb and the e5 ``passage:`` prefix.
+_STRUCTURAL_MAX_TOKENS = 384
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 
 
 def _slug(title: str) -> str:
@@ -93,6 +100,49 @@ def _char_windows(s: str, max_tokens: int) -> list[str]:
     return [s[i:i + budget] for i in range(0, len(s), budget)] or [s]
 
 
+def chunk_structured(
+    text: str, max_tokens: int = _STRUCTURAL_MAX_TOKENS
+) -> list[dict]:
+    """Heading-aware chunking.
+
+    Split the markdown on ``#``-``######`` headings into sections, size-cap
+    each section body with :func:`chunk_by_tokens`, and tag every chunk with
+    its ``breadcrumb`` — the ``Chapter › Section`` path from the heading stack.
+    A heading updates the stack (truncated to its level); the heading text
+    itself lives only in the breadcrumb, keeping chunk ``text`` raw. Text
+    before any heading, or a document with no headings at all, degrades to
+    plain size-capped chunks with an empty breadcrumb.
+
+    Returns records ``{"text", "breadcrumb"}`` in document order.
+    """
+    stack: list[str] = []
+    buf: list[str] = []
+    sections: list[tuple[str, str]] = []
+
+    def flush() -> None:
+        body = "\n".join(buf).strip()
+        if body:
+            sections.append((" › ".join(stack), body))
+        buf.clear()
+
+    for line in text.splitlines():
+        m = _HEADING_RE.match(line)
+        if m:
+            flush()
+            level = len(m.group(1))
+            stack[:] = stack[: level - 1]
+            stack.append(m.group(2).strip())
+        else:
+            buf.append(line)
+    flush()
+
+    records: list[dict] = []
+    for breadcrumb, body in sections:
+        for chunk in chunk_by_tokens(body, max_tokens):
+            records.append({"text": chunk, "breadcrumb": breadcrumb})
+    return records
+
+
 @dataclass
 class ReferenceResult:
     ref: str
@@ -108,7 +158,7 @@ def ingest_reference(workspace: Path, title: str, content: str,
     slug = _slug(title)
     ref = f"reference:{slug}"
     now = datetime.now(timezone.utc).isoformat()
-    chunks = chunk_by_tokens(content)
+    chunks = chunk_structured(content)
 
     fm = {
         "type": "reference", "title": title, "source": source or "",
@@ -118,7 +168,13 @@ def ingest_reference(workspace: Path, title: str, content: str,
     atomic_write_text(root / f"{slug}.md", doc)
 
     chunk_recs = [
-        {"idx": i, "parent": ref, "tokens": estimate_text_tokens(c), "text": c}
+        {
+            "idx": i,
+            "parent": ref,
+            "tokens": estimate_text_tokens(c["text"]),
+            "text": c["text"],
+            "breadcrumb": c["breadcrumb"],
+        }
         for i, c in enumerate(chunks)
     ]
     atomic_write_text(

@@ -287,24 +287,32 @@ class VectorIndex:
         idx: int,
         text: str,
         path: Any,
+        breadcrumb: str = "",
     ) -> None:
-        """Index one token-aware chunk of a reference document.
+        """Index one structure-aware chunk of a reference document.
 
         The whole reference doc is the FTS unit (``indexer._payload_for``); the
         chunks are the vector unit. The row ``id`` is ``<ref>#<idx>`` so a
         vector hit on a fragment resolves to its parent reference (strip
         ``#<idx>``); ``class_name`` is ``"reference"`` to match the FTS/grep
         reader side.
+
+        ``breadcrumb`` is the chunk's heading path (``Chapter › Section``); it
+        is prepended to the embedded passage so an isolated chunk carries its
+        section context, and it prefixes the display ``summary``. It is not a
+        separate column — the raw text lives in the ``.chunks.jsonl`` sidecar.
         """
-        [vec] = self._provider.embed_passages([text])
+        passage = f"{breadcrumb}\n\n{text}" if breadcrumb else text
+        [vec] = self._provider.embed_passages([passage])
         try:
             rel_path = Path(path).relative_to(self._workspace)
         except ValueError:
             rel_path = Path(path)
+        summary = f"[{breadcrumb}] {text}" if breadcrumb else text
         record: dict[str, Any] = {
             "id": f"{ref}#{idx}",
             "class_name": "reference",
-            "summary": text[:200],
+            "summary": summary[:200],
             "headline": ref,
             "body_length": len(text or ""),
             "vector": vec,
@@ -653,13 +661,17 @@ class VectorIndex:
         # (or the N5 model-change rebuild) silently drops reference semantic
         # search — only ingest-time indexing would survive.
         from durin.memory.reference import reference_chunks
-        ref_chunks: list[tuple[str, int, str, Path]] = []  # (ref, idx, text, md)
+        # (ref, idx, text, md, breadcrumb)
+        ref_chunks: list[tuple[str, int, str, Path, str]] = []
         refs_root = self._workspace / "memory" / "references"
         if refs_root.is_dir():
             for md_file in sorted(refs_root.glob("*.md")):
                 ref = f"reference:{md_file.stem}"
                 for rec in reference_chunks(self._workspace, ref):
-                    ref_chunks.append((ref, rec["idx"], rec["text"], md_file))
+                    ref_chunks.append((
+                        ref, rec["idx"], rec["text"], md_file,
+                        rec.get("breadcrumb", ""),
+                    ))
 
         if not entries and not entity_pages and not skills and not ref_chunks:
             self._drop_if_exists()
@@ -682,7 +694,10 @@ class VectorIndex:
         ]
         # Batch write — entries, entity pages, and skills are all
         # passages, so use embed_passages to apply E5 prefix uniformly.
-        ref_texts = [text for (_ref, _idx, text, _md) in ref_chunks]
+        ref_texts = [
+            f"{bc}\n\n{text}" if bc else text
+            for (_ref, _idx, text, _md, bc) in ref_chunks
+        ]
         all_texts = entry_texts + page_texts + skill_texts + ref_texts
         all_vectors = self._provider.embed_passages(all_texts) if all_texts else []
         n_e, n_p, n_s = len(entry_texts), len(page_texts), len(skill_texts)
@@ -706,15 +721,16 @@ class VectorIndex:
             for (sp, md_file), vec
             in zip(skills, skill_vectors)
         )
-        for (ref, idx, text, md_file), vec in zip(ref_chunks, ref_vectors):
+        for (ref, idx, text, md_file, bc), vec in zip(ref_chunks, ref_vectors):
             try:
                 rel_p = md_file.relative_to(self._workspace)
             except ValueError:
                 rel_p = md_file
+            summary = f"[{bc}] {text}" if bc else text
             records.append({
                 "id": f"{ref}#{idx}",
                 "class_name": "reference",
-                "summary": text[:200],
+                "summary": summary[:200],
                 "headline": ref,
                 "body_length": len(text or ""),
                 "vector": vec,

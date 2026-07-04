@@ -32,27 +32,28 @@ logger = logging.getLogger(__name__)
 
 _PARAMETERS = tool_parameters_schema(
     path=StringSchema(
-        "Absolute path (or workspace-relative path) to a markdown or "
-        "plain-text file the user wants the agent to remember."
+        "Absolute path (or workspace-relative path) to the document the user "
+        "wants the agent to remember."
     ),
     required=["path"],
     description=(
-        "Add a local document (markdown or plain text) to durin's memory as "
-        "a REFERENCE — coherent source material the user wants kept whole: "
-        "research notes, transcripts, technical specs, exported pages, "
-        "markdown books, etc.\n\n"
-        "`path` is the absolute or workspace-relative path to the file. The "
-        "original is preserved verbatim and the document is indexed for "
-        "retrieval. Re-ingesting the same file is idempotent — the id is a "
-        "hash of (filename + content). The result includes a "
+        "Add a local document to durin's memory as a REFERENCE — coherent "
+        "source material the user wants kept whole: research notes, "
+        "transcripts, technical specs, exported pages, books, reports, etc.\n\n"
+        "Supported formats are converted to markdown on the way in: PDF, Word "
+        "(docx), PowerPoint (pptx), Excel (xlsx/xls), EPUB, HTML, CSV, JSON, "
+        "XML, Jupyter notebooks; markdown and plain text are stored as-is. The "
+        "verbatim original is always preserved.\n\n"
+        "`path` is the absolute or workspace-relative path to the file. "
+        "Re-ingesting the same file is idempotent. The result includes a "
         "`reference:<slug>`; when you then author an entity distilled from this "
         "document, pass that ref in `memory_upsert_entity(derived_from=[...])` "
         "so the entity links back to its source.\n\n"
-        "For web content, use `web_fetch(url=...)` first to get clean "
-        "markdown, then `memory_ingest` on the saved file. For a fact about a "
-        "*thing* (a person, company, product, topic…), use "
-        "`memory_upsert_entity` instead — `memory_ingest` is for whole "
-        "documents, not individual facts."
+        "For web content, use `web_fetch(url=...)` first, then `memory_ingest` "
+        "on the saved file. For a fact about a *thing* (a person, company, "
+        "product, topic…), use `memory_upsert_entity` instead — `memory_ingest` "
+        "is for whole documents, not individual facts. To just READ a document "
+        "in this turn without saving it, use `convert_to_markdown`."
     ),
 )
 
@@ -199,6 +200,7 @@ class MemoryIngestTool(Tool):
                 try:
                     vi.upsert_reference_chunk(
                         ref=ref, idx=rec["idx"], text=rec["text"], path=ref_md,
+                        breadcrumb=rec.get("breadcrumb", ""),
                     )
                 except VectorIndexDimensionMismatchError as exc:
                     logger.warning("ingest reference vector upsert: %s", exc)

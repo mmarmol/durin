@@ -181,23 +181,30 @@ returned to the agent.
 
 **File:** `durin/agent/tools/memory_ingest.py`
 
-Ingests a local file (markdown or plain text) into memory as a reference. The
-storage model has three steps, all in a single call:
+Ingests a local document into memory as a reference. Supported document formats
+(PDF, Office, EPUB, HTML, CSV, JSON, XML, ipynb) are converted to markdown at
+ingest via `durin/memory/doc_convert.py`; markdown and plain text are stored
+as-is. The storage model has three steps, all in a single call:
 
-1. The verbatim file is copied to `ingested/<id>/source.*` + `meta.json`
-   (always; grep-able via `scope="undreamed"`).
-2. The whole document is written to `memory/references/<slug>.md` and
-   FTS-indexed as one lexical unit via `reindex_one_file`.
-3. The document is split into token-aware chunks (up to 512 tokens each, matching
-   the E5 embedder's `max_seq`) and each chunk is vector-indexed keyed
-   `<ref>#<idx>` via `upsert_reference_chunk`.
+1. The verbatim original is copied to `ingested/<id>/source.<ext>` + `meta.json`
+   (always; grep-able via `scope="undreamed"`). For a converted document the
+   markdown rendering is also written alongside as `ingested/<id>/source.md`.
+2. The document (its markdown rendering) is written to
+   `memory/references/<slug>.md` and FTS-indexed as one lexical unit via
+   `reindex_one_file`.
+3. The document is split into structure-aware chunks (heading-scoped, ~384
+   tokens each — headroom under the E5 embedder's `max_seq` for the prepended
+   breadcrumb) and each chunk is vector-indexed keyed `<ref>#<idx>` via
+   `upsert_reference_chunk`, with its `Chapter › Section` breadcrumb prepended
+   to the embedded passage.
 
 Steps 2 and 3 are best-effort: a failure does not roll back the verbatim copy.
 When memory is disabled (no embedding model), only step 1 runs.
 
-The `id` is `sha256(filename + "\0" + content)[:12]` — re-ingesting the same
-file with the same name is idempotent. Renaming the file before re-ingest
-produces a new id and a new entry.
+The `id` is a `sha256` of `filename + content` (raw original bytes for a
+converted document), truncated to 12 chars — re-ingesting the same file with
+the same name is idempotent. Renaming the file before re-ingest produces a new
+id and a new entry.
 
 `id` and `reference` are emitted first in the response so they survive the 16 KB
 agent-result head-truncation on large documents.
@@ -462,6 +469,7 @@ These are for human operators, not agent tools.
 | `durin memory absorb <canonical> <absorbed> [--reason/-r TEXT] [--yes/-y]` | Merge two entity pages: `canonical` survives, `absorbed` moves to archive. |
 | `durin memory absorb-suggest` | List candidate pairs that share at least one alias (merge hints). |
 | `durin memory stats [--days N] [--json]` | Aggregate memory telemetry and filesystem counts. |
+| `durin memory docs` | List ingested reference documents (title, source, ingest time, chunk count) — the Library catalog. |
 | `durin memory forget <uri>` | Archive an entry + drop its index rows (same helper as the agent tool). |
 | `durin memory history <entity>` | Git log for an entity's `.md` file. |
 | `durin memory show <entity> [--rev SHA]` | Print entity page content at a given revision. |
