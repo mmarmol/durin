@@ -271,3 +271,25 @@ def test_render_marks_complete_for_canonical_entity_pages() -> None:
     )
     out = render_sectioned([hit])
     assert "complete)" in out
+
+
+class TestSourcesLine:
+    """A canonical entity hit surfaces its ``derived_from`` as a Sources line so
+    the agent sees the source documents and can drill them."""
+
+    def test_canonical_hit_renders_sources_line(self) -> None:
+        hit = SectionedHit(
+            uri="patient:drako", type="entity",
+            path="memory/entities/patient/drako.md", score=1.0,
+            summary="A canine patient.",
+            derived_from=("reference:paper-a", "reference:paper-b"),
+        )
+        out = render_sectioned([hit])
+        assert "Sources: reference:paper-a, reference:paper-b." in out
+
+    def test_no_sources_line_without_derived_from(self) -> None:
+        hit = SectionedHit(
+            uri="topic:x", type="entity",
+            path="memory/entities/topic/x.md", score=1.0, summary="X",
+        )
+        assert "Sources:" not in render_sectioned([hit])

@@ -66,6 +66,34 @@ def _translate_skill_uri(path_part: str) -> str:
     return path_part
 
 
+def _translate_reference_uri(path_part: str) -> str:
+    """Map an ingested reference-document uri to its on-disk path.
+
+    A reference surfaces under several uri shapes that all address the same
+    file ``memory/references/<slug>.md``:
+
+    - ``reference:<slug>`` — the ref form stored in an entity's
+      ``derived_from`` and emitted by FTS library hits.
+    - ``memory/reference/[reference:]<slug>`` — the singular-directory form
+      emitted by the vector / grep ``scope="library"`` search.
+
+    Both are translated here so an agent can drill straight from a
+    ``derived_from`` pointer or a library search hit. The on-disk plural
+    ``memory/references/<slug>.md`` already resolves literally, and any other
+    string passes through unchanged."""
+    slug: str | None = None
+    if path_part.startswith("reference:"):
+        slug = path_part[len("reference:"):]
+    elif path_part.startswith("memory/reference/"):
+        rest = path_part[len("memory/reference/"):]
+        slug = rest[len("reference:"):] if rest.startswith("reference:") else rest
+    if slug is None:
+        return path_part
+    if slug.endswith(".md"):
+        slug = slug[:-3]
+    return f"memory/references/{slug}.md" if slug else path_part
+
+
 def drill(workspace: Path, uri: str) -> str:
     """Return the markdown section addressed by ``uri``.
 
@@ -84,6 +112,11 @@ def drill(workspace: Path, uri: str) -> str:
     - ``skills/<slug>/SKILL.md`` — a skill page as emitted by
       `memory_search` for the SKILL section. The internal index id
       ``skill/<slug>`` is also accepted and translated to this path.
+    - ``reference:<slug>`` — an ingested reference document. Both the ref
+      form stored in an entity's ``derived_from`` and the
+      ``memory/reference/<slug>`` form emitted by ``scope="library"`` search
+      resolve to ``memory/references/<slug>.md``. Append ``#<heading>`` to
+      pull one section of the document.
     - Any absolute or workspace-relative path with optional ``#anchor``.
 
     Returns the section text (or full file content when no anchor is
@@ -103,6 +136,7 @@ def drill(workspace: Path, uri: str) -> str:
     original_uri = uri
     path_part = _translate_entity_page_uri(path_part)
     path_part = _translate_skill_uri(path_part)
+    path_part = _translate_reference_uri(path_part)
 
     raw = Path(path_part).expanduser()
     full_path = raw if raw.is_absolute() else (workspace / raw)

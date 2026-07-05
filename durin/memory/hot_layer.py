@@ -276,6 +276,10 @@ def _render_canonical_block(
     if ident_line:
         lines.append(ident_line)
 
+    src_line = _render_sources_line(page.derived_from)
+    if src_line:
+        lines.append(src_line)
+
     body = (page.body or "").strip()
     if body:
         lines.append(body[:_CANONICAL_BODY_PER_PAGE])
@@ -290,6 +294,18 @@ def _render_name_line(page: EntityPage) -> str:
         aliases = ", ".join(page.aliases[:5])
         return f"{page.name} (aliases: {aliases})."
     return page.name
+
+
+def _render_sources_line(derived_from: list[str] | None) -> str:
+    """Prose form: ``Sources: reference:a, reference:b.``
+
+    The ingested documents this entity was distilled from or linked to (its
+    ``derived_from``). Surfacing it is what lets the agent notice the link and
+    drill back to the document — ``memory_drill`` on a ``reference:<slug>`` uri
+    resolves the whole document. Empty stays silent."""
+    if not derived_from:
+        return ""
+    return "Sources: " + ", ".join(derived_from[:8]) + "."
 
 
 def _render_attributes_line(attributes: dict[str, Any]) -> str:

@@ -283,6 +283,43 @@ class MemorySearchTool(Tool):
             return r
         return dataclasses.replace(r, body=entry.body)
 
+    def _attach_derived_from(self, hits: list) -> list:
+        """Populate ``derived_from`` on canonical (entity) hits from disk.
+
+        The pipeline builds hits from the vector / FTS indices, which don't
+        carry an entity's ``derived_from``. Read it from each entity page's
+        frontmatter so the renderer can surface a ``Sources:`` line — the link
+        the agent follows to ``memory_drill`` the source document. Bounded
+        (runs post-cap on the few surviving hits) and best-effort (a
+        missing / unreadable page just yields no sources)."""
+        import dataclasses
+
+        from durin.memory.entity_page import EntityPage
+
+        out = []
+        for h in hits:
+            if h.type != "entity":
+                out.append(h)
+                continue
+            ref = (
+                h.uri[len("memory/entity_page/"):]
+                if h.uri.startswith("memory/entity_page/")
+                else h.uri
+            )
+            type_, _, slug = ref.partition(":")
+            page_path = (
+                self._workspace / "memory" / "entities" / type_ / f"{slug}.md"
+            )
+            derived: tuple[str, ...] = ()
+            if type_ and slug and page_path.is_file():
+                try:
+                    page = EntityPage.from_file(page_path)
+                    derived = tuple(page.derived_from or ()) if page else ()
+                except Exception:  # noqa: BLE001
+                    derived = ()
+            out.append(dataclasses.replace(h, derived_from=derived))
+        return out
+
     @classmethod
     def create(cls, ctx: Any) -> Tool:
         # Vector retrieval is opt-in (memory.enabled); see memory_store.
@@ -557,6 +594,7 @@ class MemorySearchTool(Tool):
 
         kept_uris = {h.uri for h in capped_hits}
         results = [r for r in results if r.uri in kept_uris]
+        capped_hits = self._attach_derived_from(capped_hits)
         sectioned_rendered = render_sectioned(capped_hits)
         if in_context_hits:
             from durin.memory.context_dedup import (
