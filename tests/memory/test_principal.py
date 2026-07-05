@@ -148,3 +148,18 @@ def test_build_pinned_context_includes_principal_and_always_on(tmp_path):
     assert "Always-on guidance" in ctx
     assert "Always respond in Spanish." in ctx
     assert "<!--" not in ctx                       # provenance markers stripped
+
+
+def test_library_awareness_prefers_curated_topic_index(tmp_path):
+    import json as _json
+    ingest_reference(tmp_path, "A Book", "# a\n\nx.\n")
+    # a granular distilled subject the heuristic would otherwise surface
+    write_entity(tmp_path, "topic:granular-thing", [_derived("a-book")],
+                 create=True, name="Granular thing")
+    # curated index present → clean theme labels, shown even below the cap
+    (tmp_path / "memory" / "references" / "_topics.json").write_text(_json.dumps(
+        {"topics": [{"label": "Clean Theme", "docs": ["a-book"]}],
+         "signature": ["a-book:1"], "doc_count": 1}))
+    block = build_library_awareness(tmp_path)
+    assert "Covers: Clean Theme." in block
+    assert "Granular thing" not in block   # curated index wins over the heuristic
