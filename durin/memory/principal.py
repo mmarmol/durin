@@ -27,6 +27,11 @@ from durin.memory.memory_writer import write_entity
 # libraries is the scaling refinement.
 _MAX_LIBRARY_DOCS = 30
 _DESC_CHARS = 140
+# Cap on the "Covers:" subjects map — the bounded index of what the library is
+# about (from documents' distilled topics). Keeps the always-on block bounded
+# as the library grows: past the per-document cap, a document is still reachable
+# by searching its subject, which this line names.
+_MAX_LIBRARY_SUBJECTS = 14
 
 __all__ = [
     "ANONYMOUS",
@@ -147,6 +152,36 @@ def _doc_descriptor(workspace: Path, slug: str, md_path: Path) -> tuple[str, str
     return title, one
 
 
+def _library_subjects(workspace: Path, *, cap: int = _MAX_LIBRARY_SUBJECTS) -> list[str]:
+    """The subjects the library covers — its bounded "map".
+
+    Collects the display names of entities the dream distilled *from* a
+    reference (a ``derived_from`` link authored by ``dream``). Agent-linked
+    entities — a patient whose workup merely cited a paper — are excluded: the
+    document is not *about* them, and including them would group the library
+    under the wrong things. Ranked by how many documents share each subject
+    (broadest first), deduped, capped. Naming the subject-space is what keeps a
+    document reachable (search its subject) even past the per-document cap.
+    """
+    ents_dir = Path(workspace) / "memory" / "entities"
+    if not ents_dir.is_dir():
+        return []
+    by_subject: dict[str, set[str]] = {}
+    for md in sorted(ents_dir.rglob("*.md")):
+        page = EntityPage.from_file(md)
+        if page is None or not page.derived_from:
+            continue
+        prov = (page.provenance or {}).get("derived_from")
+        prov = prov if isinstance(prov, dict) else {}
+        for ref in page.derived_from:
+            if (prov.get(ref) or {}).get("author") != "dream":
+                continue  # only what a document is ABOUT, not agent-linked refs
+            slug = ref.split(":", 1)[1] if ":" in ref else ref
+            by_subject.setdefault(page.name, set()).add(slug)
+    ranked = sorted(by_subject.items(), key=lambda kv: (-len(kv[1]), kv[0].lower()))
+    return [name for name, _docs in ranked[:cap]]
+
+
 def build_library_awareness(workspace: Path, *, max_docs: int = _MAX_LIBRARY_DOCS) -> str:
     """A compact, always-on catalog of ingested documents (one line each).
 
@@ -168,17 +203,29 @@ def build_library_awareness(workspace: Path, *, max_docs: int = _MAX_LIBRARY_DOC
     lines = [f"- {t}" + (f" — {d}" if d else "") for t, d in shown]
     more = len(docs) - len(shown)
     if more > 0:
-        lines.append(f"- …and {more} more")
+        lines.append(f"- …and {more} more (search its subject to reach it)")
     header = (
         f"## Your document library ({len(docs)} "
         f"document{'s' if len(docs) != 1 else ''})"
     )
     note = (
-        "These ingested documents are NOT in default recall. When one is "
-        "relevant, search it with `memory_search(scope=\"library\")` or drill "
-        "into it; their distilled entities already surface in normal search."
+        "These ingested documents are NOT in default recall. Reach one by "
+        "searching its subject with `memory_search(scope=\"library\")`, then "
+        "drill a `reference:<slug>`; their distilled entities also surface in "
+        "normal search carrying a `Sources:` link back to the document."
     )
-    return f"{header}\n\n{note}\n\n" + "\n".join(lines)
+    # The bounded "subjects map" earns its keep only once documents fall past the
+    # per-document cap: it names the subject-space so a hidden document is still
+    # reachable by searching its subject. At that scale, ranking by how many
+    # documents share each subject also self-cleans — the broad themes lead,
+    # not the per-document granular topics. Below the cap the list already
+    # covers everything, so the map would be redundant noise.
+    covers = ""
+    if more > 0:
+        subjects = _library_subjects(workspace)
+        if subjects:
+            covers = f"Covers: {', '.join(subjects)}.\n\n"
+    return f"{header}\n\n{note}\n\n{covers}" + "\n".join(lines)
 
 
 def build_pinned_context(workspace: Path, principal_ref: str) -> str:
