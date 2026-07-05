@@ -1,17 +1,60 @@
 from datetime import datetime, timezone
 
+from durin.memory.distill_dream import outline_path_for
 from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import write_entity
 from durin.memory.principal import (
+    _MAX_LIBRARY_DOCS,
     ANONYMOUS,
+    build_library_awareness,
     build_pinned_context,
     ensure_owner,
     list_always_on,
     mark_always_on,
     resolve_principal,
 )
+from durin.memory.reference import ingest_reference
 
 NOW = datetime(2026, 6, 5, tzinfo=timezone.utc)
+
+
+def test_library_awareness_empty_workspace(tmp_path):
+    assert build_library_awareness(tmp_path) == ""
+
+
+def test_library_awareness_lists_docs_with_outline_abstract(tmp_path):
+    import json
+
+    ingest_reference(tmp_path, "The Durin Handbook", "# H\n\nbody.\n")
+    ingest_reference(tmp_path, "Thinking Fast and Slow", "# T\n\nbody.\n")
+    # distil one → its abstract becomes the one-liner
+    outline_path_for(tmp_path, "thinking-fast-and-slow").write_text(
+        json.dumps({"abstract": "Kahneman on two systems of thought.", "chunk_count": 1})
+    )
+
+    block = build_library_awareness(tmp_path)
+    assert "## Your document library (2 documents)" in block
+    assert 'scope="library"' in block
+    assert "- The Durin Handbook" in block            # title-only (not distilled)
+    assert "- Thinking Fast and Slow — Kahneman on two systems of thought." in block
+
+
+def test_library_awareness_caps_and_notes_overflow(tmp_path):
+    for i in range(_MAX_LIBRARY_DOCS + 5):
+        ingest_reference(tmp_path, f"Doc {i:03d}", f"# D{i}\n\nbody.\n")
+    block = build_library_awareness(tmp_path)
+    assert f"({_MAX_LIBRARY_DOCS + 5} documents)" in block
+    assert "- …and 5 more" in block
+    # exactly max_docs listed + the overflow note line
+    assert block.count("\n- ") == _MAX_LIBRARY_DOCS + 1
+
+
+def test_pinned_context_includes_library_awareness(tmp_path):
+    ensure_owner(tmp_path, "person:marcelo", name="Marcelo")
+    ingest_reference(tmp_path, "A Book", "# B\n\nbody.\n")
+    ctx = build_pinned_context(tmp_path, "person:marcelo")
+    assert "Your document library" in ctx
+    assert "A Book" in ctx
 
 
 def test_resolve_principal_channel_then_owner_then_anonymous():

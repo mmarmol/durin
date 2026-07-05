@@ -10,6 +10,8 @@ USER.md / MEMORY.md dissolve into this dynamic composition.
 """
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,12 +19,22 @@ from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import write_entity
 
+# Cap on the Library awareness catalog pinned every turn. One short line per
+# document keeps the agent aware of what it can reach without carrying content.
+# Kept conservative because this rides in EVERY prompt; beyond the cap the block
+# truncates with a "…and N more" note and the unlisted documents stay reachable
+# via `memory_search(scope="library")`. Ranking / topic rollup for large
+# libraries is the scaling refinement.
+_MAX_LIBRARY_DOCS = 30
+_DESC_CHARS = 140
+
 __all__ = [
     "ANONYMOUS",
     "resolve_principal",
     "ensure_owner",
     "mark_always_on",
     "list_always_on",
+    "build_library_awareness",
     "build_pinned_context",
 ]
 
@@ -109,8 +121,69 @@ def _render_pinned_block(page: EntityPage) -> str:
     return "\n".join(lines).strip()
 
 
+def _doc_descriptor(workspace: Path, slug: str, md_path: Path) -> tuple[str, str]:
+    """(title, one-line descriptor) for a reference document.
+
+    The descriptor is the distilled outline's abstract when the dream has run,
+    otherwise empty (the title alone still tells the agent the document exists).
+    """
+    try:
+        text = md_path.read_text(encoding="utf-8")
+    except OSError:
+        return slug, ""
+    tm = re.search(r"^title:\s*(.+)$", text, re.MULTILINE)
+    title = tm.group(1).strip().strip('"') if tm else slug
+    one = ""
+    outline = md_path.with_name(f"{slug}.outline.json")
+    if outline.exists():
+        try:
+            abstract = str(json.loads(outline.read_text(encoding="utf-8")).get("abstract") or "").strip()
+        except Exception:
+            abstract = ""
+        if len(abstract) > _DESC_CHARS:
+            one = abstract[:_DESC_CHARS].rsplit(" ", 1)[0] + "…"
+        else:
+            one = abstract
+    return title, one
+
+
+def build_library_awareness(workspace: Path, *, max_docs: int = _MAX_LIBRARY_DOCS) -> str:
+    """A compact, always-on catalog of ingested documents (one line each).
+
+    Gives the agent proactive awareness of what's in the Library without
+    carrying any content — the raw documents stay out of default recall, so
+    this line-per-document index is how the agent knows a document exists and
+    can decide to reach it with ``memory_search(scope="library")`` or a drill.
+    """
+    refs_dir = Path(workspace) / "memory" / "references"
+    if not refs_dir.is_dir():
+        return ""
+    docs = [
+        _doc_descriptor(workspace, md.stem, md)
+        for md in sorted(refs_dir.glob("*.md"))
+    ]
+    if not docs:
+        return ""
+    shown = docs[:max_docs]
+    lines = [f"- {t}" + (f" — {d}" if d else "") for t, d in shown]
+    more = len(docs) - len(shown)
+    if more > 0:
+        lines.append(f"- …and {more} more")
+    header = (
+        f"## Your document library ({len(docs)} "
+        f"document{'s' if len(docs) != 1 else ''})"
+    )
+    note = (
+        "These ingested documents are NOT in default recall. When one is "
+        "relevant, search it with `memory_search(scope=\"library\")` or drill "
+        "into it; their distilled entities already surface in normal search."
+    )
+    return f"{header}\n\n{note}\n\n" + "\n".join(lines)
+
+
 def build_pinned_context(workspace: Path, principal_ref: str) -> str:
-    """The always-injected layer: who the user is + always_on feedback."""
+    """The always-injected layer: who the user is + always_on feedback +
+    a one-line-per-document awareness catalog of the ingested Library."""
     parts: list[str] = []
     principal = _load(workspace, principal_ref)
     if principal:
@@ -124,4 +197,7 @@ def build_pinned_context(workspace: Path, principal_ref: str) -> str:
             pins.append(_render_pinned_block(page))
     if pins:
         parts.append("## Always-on guidance\n\n" + "\n\n".join(pins))
+    library = build_library_awareness(workspace)
+    if library:
+        parts.append(library)
     return "\n\n".join(parts)
