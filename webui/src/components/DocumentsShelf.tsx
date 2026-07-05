@@ -236,7 +236,7 @@ export function DocumentsShelf({
   );
 }
 
-type DetailTab = "outline" | "entities" | "content";
+type DetailTab = "document" | "entities";
 
 function DocumentDetailView({
   detail,
@@ -248,20 +248,23 @@ function DocumentDetailView({
   onOpenReference?: (ref: string) => void;
 }) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<DetailTab>("outline");
+  const [tab, setTab] = useState<DetailTab>("document");
   const isUrl = !!detail.source && /^https?:/i.test(detail.source);
   const distilled = detail.entities.filter((e) => e.relation === "distilled");
   const referenced = detail.entities.filter((e) => e.relation === "referenced");
+  // Only sections the dream actually summarised — skip a bare "preamble" with no
+  // text so a heading-less document doesn't render an almost-empty outline.
+  const outlineSections =
+    detail.outline?.sections.filter((s) => s.summary.trim()) ?? [];
 
   const tabs: Array<{ id: DetailTab; label: string; icon: LucideIcon; count?: number }> = [
-    { id: "outline", label: t("memoryGraph.documentOutline"), icon: Layers },
+    { id: "document", label: t("memoryGraph.documentTab"), icon: FileText },
     {
       id: "entities",
       label: t("memoryGraph.documentEntitiesShort"),
       icon: Sparkles,
       count: detail.entities.length,
     },
-    { id: "content", label: t("memoryGraph.documentContent"), icon: FileText },
   ];
 
   return (
@@ -335,34 +338,71 @@ function DocumentDetailView({
 
       {/* Tab content (scrolls) */}
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        {tab === "outline" ? (
-          detail.outline ? (
-            <div className="rounded-lg border border-border/40 bg-background/40 p-3">
-              {detail.outline.abstract ? (
-                <p className="mb-2 text-[13px] leading-relaxed">
+        {tab === "document" ? (
+          <div className="flex flex-col gap-4">
+            {detail.outline ? (
+              detail.outline.abstract ? (
+                <p className="text-[13px] leading-relaxed">
                   {detail.outline.abstract}
                 </p>
-              ) : null}
-              {detail.outline.sections.length > 0 ? (
+              ) : null
+            ) : (
+              <p className="rounded-lg border border-dashed border-border/40 px-3 py-2 text-[12px] text-muted-foreground">
+                {t("memoryGraph.documentNotDistilled")}
+              </p>
+            )}
+
+            {outlineSections.length > 0 ? (
+              <section>
+                <h3 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <Layers className="h-3.5 w-3.5" /> {t("memoryGraph.documentOutline")}
+                </h3>
                 <ul className="space-y-1.5">
-                  {detail.outline.sections.map((s, i) => (
+                  {outlineSections.map((s, i) => (
                     <li key={`${s.breadcrumb}-${i}`} className="text-[12.5px]">
                       <span className="font-medium">
                         {s.breadcrumb || t("memoryGraph.documentPreamble")}
                       </span>
-                      {s.summary ? (
-                        <span className="text-muted-foreground"> — {s.summary}</span>
-                      ) : null}
+                      <span className="text-muted-foreground"> — {s.summary}</span>
                     </li>
                   ))}
                 </ul>
-              ) : null}
-            </div>
-          ) : (
-            <p className="rounded-lg border border-dashed border-border/40 px-3 py-2 text-[12px] text-muted-foreground">
-              {t("memoryGraph.documentNotDistilled")}
-            </p>
-          )
+              </section>
+            ) : null}
+
+            {detail.chunks_preview.length > 0 ? (
+              <section>
+                <h3 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <FileText className="h-3.5 w-3.5" /> {t("memoryGraph.documentContent")}
+                </h3>
+                <ul className="space-y-2">
+                  {detail.chunks_preview.map((c) => (
+                    <li
+                      key={c.idx}
+                      className="rounded-lg border border-border/40 bg-background/40 p-2.5"
+                    >
+                      {c.breadcrumb ? (
+                        <div className="mb-1 font-mono text-[10.5px] text-muted-foreground">
+                          {c.breadcrumb}
+                        </div>
+                      ) : null}
+                      <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed">
+                        {c.text}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+                {detail.chunks_total > detail.chunks_preview.length ? (
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    {t("memoryGraph.documentChunksMore", {
+                      shown: detail.chunks_preview.length,
+                      total: detail.chunks_total,
+                    })}
+                  </p>
+                ) : null}
+              </section>
+            ) : null}
+          </div>
         ) : null}
 
         {tab === "entities" ? (
@@ -397,41 +437,6 @@ function DocumentDetailView({
           )
         ) : null}
 
-        {tab === "content" ? (
-          detail.chunks_preview.length > 0 ? (
-            <>
-              <ul className="space-y-2">
-                {detail.chunks_preview.map((c) => (
-                  <li
-                    key={c.idx}
-                    className="rounded-lg border border-border/40 bg-background/40 p-2.5"
-                  >
-                    {c.breadcrumb ? (
-                      <div className="mb-1 font-mono text-[10.5px] text-muted-foreground">
-                        {c.breadcrumb}
-                      </div>
-                    ) : null}
-                    <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed">
-                      {c.text}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-              {detail.chunks_total > detail.chunks_preview.length ? (
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                  {t("memoryGraph.documentChunksMore", {
-                    shown: detail.chunks_preview.length,
-                    total: detail.chunks_total,
-                  })}
-                </p>
-              ) : null}
-            </>
-          ) : (
-            <p className="text-[12px] text-muted-foreground">
-              {t("memoryGraph.noBody")}
-            </p>
-          )
-        ) : null}
       </div>
     </div>
   );
