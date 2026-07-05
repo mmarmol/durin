@@ -6,6 +6,7 @@ emits attribute patches (decision b). Apply records provenance per field.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
@@ -18,7 +19,21 @@ from durin.memory.field_provenance import (
     relation_prov_key,
 )
 
-__all__ = ["FieldPatch", "apply_field_patch"]
+__all__ = ["FieldPatch", "apply_field_patch", "normalize_relation_type"]
+
+_REL_TYPE_NONWORD = re.compile(r"[^a-z0-9]+")
+
+
+def normalize_relation_type(rtype: Any) -> str:
+    """Canonical surface form of a relation-type label.
+
+    Lowercase; any run of non-alphanumeric characters becomes a single
+    underscore; leading/trailing underscores trimmed. So ``occurs-in``,
+    ``Occurs In`` and ``occurs_in`` all become ``occurs_in``. This merges
+    spelling/format variants only — it never changes a relation's direction or
+    meaning (``treats`` and ``treated_by`` stay distinct). An empty / non-string
+    input yields ``""``, which the caller may keep as an untyped relation."""
+    return _REL_TYPE_NONWORD.sub("_", str(rtype or "").lower()).strip("_")
 
 PatchKind = Literal[
     "attribute", "relation", "alias", "body_append", "body_replace", "derived_from",
@@ -84,11 +99,16 @@ def apply_field_patch(page: EntityPage, patch: FieldPatch) -> bool:
 
     if patch.kind == "relation":
         to = patch.value.get("to")
-        rtype = patch.value.get("type")
+        # Canonicalise the label at the write choke point so spelling/format
+        # variants (``occurs-in`` / ``Occurs In`` / ``occurs_in``) collapse to
+        # one — every producer (dream, agent tool, extract) flows through here,
+        # so the graph never accrues duplicate edges that differ only in surface
+        # form. Direction and meaning are untouched.
+        rtype = normalize_relation_type(patch.value.get("type"))
         for r in page.relations:                      # dedup by (to, type)
             if r.get("to") == to and r.get("type") == rtype:
                 return False
-        page.relations.append(dict(patch.value))
+        page.relations.append({**patch.value, "type": rtype})
         # Q1: provenance keyed by (to, type), not positional index — merges
         # cleanly.
         rel_prov = coerce_relation_prov(prov.get("relations"))

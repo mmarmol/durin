@@ -1490,6 +1490,24 @@ def _run_gateway(
                     semantic_distance_threshold=_absorb.semantic_distance_threshold,
                     run_started_at=_run_started,
                     vector_index=_vi)
+                # Relation-vocabulary hygiene: canonicalise entity-relation type
+                # labels so graph edges line up, and report the vocabulary for
+                # supervision. Runs after refine (which merges entities and their
+                # relations).
+                from durin.memory.relation_hygiene import run_consolidate_relations_pass
+                rh = (
+                    await _asyncio.to_thread(
+                        run_consolidate_relations_pass, workspace,
+                        max_seconds=_cron_max_s)
+                    if config.memory.dream.consolidate_relations_enabled
+                    else {"types_before": 0, "types_after": 0,
+                          "pages_changed": 0, "merged_duplicates": 0, "duration_ms": 0}
+                )
+                logger.info(
+                    "memory_dream cron: relations(types {}→{} pages={} merged={} {}ms)",
+                    rh.get("types_before", 0), rh.get("types_after", 0),
+                    rh.get("pages_changed", 0), rh.get("merged_duplicates", 0),
+                    rh.get("duration_ms", 0))
                 ao = await _asyncio.to_thread(
                     run_always_on_pass, workspace, model=model,
                     token_budget=config.memory.dream.always_on_token_budget)
