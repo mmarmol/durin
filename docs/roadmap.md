@@ -11,7 +11,7 @@
 
 ---
 
-## Current state (2026-06-22)
+## Current state (2026-07-06)
 
 Durin is a Nanobot baseline + a full entity-centric memory system + daily-driver
 lifecycle + capability bridges (vision/audio) + secrets + an HTTP/WebSocket service
@@ -25,6 +25,11 @@ platform + web/TUI parity.
   `intfloat/multilingual-e5-small`. Dream consolidator + entity pages + auto-absorb
   (opt-in). Obsidian-compatible workspace. Skills are a searchable memory
   pseudo-class + hot working-set tier. LoCoMo ≈ 0.79.
+- **Document capture**: convert (MarkItDown) + ingest into a **Library** kept out
+  of default recall; the dream distils each document into an outline, seeds
+  entities linked back to it (`derived_from`), and curates a stable topic map;
+  reachable via `scope="library"` search + drill and a Documents shelf in the
+  webui memory page. See [guide/documents.md](guide/documents.md).
 - **API platform**: transport-agnostic service core (`durin/service/`) behind a
   unified Starlette + uvicorn ASGI front door (`durin/api/`), pydantic-derived
   OpenAPI contract, persisted auth. All mutations are POST/DELETE with JSON bodies

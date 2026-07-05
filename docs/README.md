@@ -8,7 +8,8 @@ multi-turn work. It is more than a memory store — it bundles four things into 
 runtime:
 
 - **Memory** — persistent, cross-session knowledge kept as markdown that the
-  agent can search without an LLM in the hot path.
+  agent can search without an LLM in the hot path, including a **Library** of
+  documents you ingest, kept apart from everyday recall.
 - **Context** — a layered system prompt (stable + per-session + volatile) that
   feeds the model the right history, skills, and pinned facts each turn.
 - **Adaptation** — runtime model/provider switching, permission-as-data agent
@@ -38,6 +39,8 @@ How to install, configure, and run durin.
   the other chat surfaces.
 - [Providers & models](guide/providers.md) — choosing LLM providers and models,
   API keys, and aux-model presets.
+- [Documents & your knowledge](guide/documents.md) — giving durin your documents
+  (PDF, Office, EPUB, web pages) to read now or remember into the Library.
 - [Workflows](guide/workflows.md) — defining and running multi-step flow
   graphs: nodes, routing, loops, and parallel branches.
 
