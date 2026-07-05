@@ -141,3 +141,42 @@ def test_rebuild_from_workspace_indexes_reference_chunks(tmp_path):
     hits = vi.search("how do I set the outbound mail relay port", top_k=10)
     assert any("reference" in str(h.get("class_name", "")) and "relay-doc" in str(h.get("id", ""))
                for h in hits), f"reference chunk missing from rebuild; got {[h.get('id') for h in hits]}"
+
+
+# --- strip_scraped_boilerplate ----------------------------------------------
+
+from durin.memory.reference import strip_scraped_boilerplate
+
+
+def test_strip_boilerplate_drops_scraped_header_keeps_title_and_content() -> None:
+    text = (
+        "# Uroabdomen: Approach and Management\n\n"
+        "**URL:** https://example.com/x\n"
+        "**Autora:** Sarah Marvel, DVM\n"
+        "**Fecha consulta:** 2026-06-07\n"
+        "---\n\n"
+        "## Resumen\n\n"
+        "Uroabdomen commonly results from blunt or vehicular trauma in dogs.\n"
+    )
+    out = strip_scraped_boilerplate(text)
+    assert out.startswith("# Uroabdomen: Approach and Management")  # title kept
+    assert "vehicular trauma" in out                                # content kept
+    assert "**URL:**" not in out and "Autora" not in out            # chrome dropped
+    assert "Fecha consulta" not in out and "---" not in out
+
+
+def test_strip_boilerplate_leaves_mid_content_bold_untouched() -> None:
+    text = (
+        "# Case\n\n"
+        "## Caso\n"
+        "- **Paciente**: Canino, Teckel.\n"          # a bold-key LIST item = content
+        "**Peso**: 8 kg near a real fact.\n"          # bold-key after prose starts
+    )
+    out = strip_scraped_boilerplate(text)
+    assert "**Paciente**: Canino" in out              # not stripped (starts with '- ')
+    assert "**Peso**: 8 kg" in out                    # not stripped (prose already began)
+
+
+def test_strip_boilerplate_no_header_is_noop() -> None:
+    text = "Just a plain paragraph with no scraped header at all.\n"
+    assert strip_scraped_boilerplate(text) == text.strip()

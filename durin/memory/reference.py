@@ -33,6 +33,7 @@ __all__ = [
     "load_reference",
     "reference_chunks",
     "reference_marker",
+    "strip_scraped_boilerplate",
 ]
 
 _MAX_CHUNK_TOKENS = 512
@@ -40,6 +41,35 @@ _MAX_CHUNK_TOKENS = 512
 # breadcrumb and the e5 ``passage:`` prefix.
 _STRUCTURAL_MAX_TOKENS = 384
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+
+# A leading scraped-metadata line: bold key-value (``**URL:**``, ``**Autora:**``,
+# ``**Fecha…:**``, ``**DOI:**``), a ``---`` rule, a bare link, or an image. These
+# head most scraped web/PDF conversions and, taken as a chunk's summary, bury the
+# substance under page chrome.
+_SCRAPED_META_RE = re.compile(r"^\s*(\*\*[^*]+:\*\*|-{3,}|https?://|!\[)")
+
+
+def strip_scraped_boilerplate(text: str) -> str:
+    """Drop a document's leading scraped-metadata block so a preview leads with
+    substance, not chrome.
+
+    Heading lines (the title) are kept; blank / ``**Key:** value`` / ``---`` /
+    bare-link / image lines are dropped **only while still in that leading
+    block** — the moment real prose starts, nothing further is stripped (so a
+    ``**bold**`` mid-sentence or a later metadata-looking line is untouched).
+    """
+    out: list[str] = []
+    in_lead = True
+    for line in text.splitlines():
+        stripped = line.strip()
+        if in_lead and (not stripped or stripped.startswith("#")
+                        or _SCRAPED_META_RE.match(stripped)):
+            if stripped.startswith("#"):
+                out.append(line)  # keep the title / section heading
+            continue
+        in_lead = False
+        out.append(line)
+    return "\n".join(out).strip()
 
 
 def _slug(title: str) -> str:
