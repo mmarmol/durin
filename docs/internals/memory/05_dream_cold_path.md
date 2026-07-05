@@ -229,6 +229,20 @@ outline records the `chunk_count` it was built from and a document is
 re-distilled only when it is re-ingested (its chunk count changes). Gated by
 `memory.dream.distill_references_enabled` (default on).
 
+### Pass 2c — seed entities: documents to the entity graph
+
+`run_seed_entities_pass` (same module) is the bridge that carries document
+knowledge into the entity graph. It reads each document's `outline.json`, asks
+one selective LLM call for the KEY entities the document is *about* (capped per
+document so a single book cannot flood the graph), and writes them as
+dream-authored entity pages stamped `derived_from` = the document (a
+`FieldPatch` of kind `derived_from`). Because distilled entities are first-class
+in default recall while raw chunks are not, this is what lets a normal query
+surface "durin knows this document is about X" and drill from there. Idempotent
+via an `entities_seeded_chunk_count` marker on the outline; the refine pass
+dedups the seeded entities against existing ones. Gated by
+`memory.dream.seed_entities_from_docs_enabled` (default on).
+
 ### Pass 3 — skill-extract: sessions to reusable procedures
 
 `run_skill_extract_pass(workspace, *, provider, model, max_sessions=3)` is the

@@ -146,3 +146,94 @@ def test_distill_no_references_is_noop(tmp_path: Path) -> None:
         "references": 0, "outlined": 0, "skipped": 0,
         "errors": [], "duration_ms": result["duration_ms"],
     }
+
+
+# --- run_seed_entities_pass --------------------------------------------------
+
+
+def _seed_stub(entities: list[dict]):
+    def invoke(prompt: str, *, model=None) -> LLMResponse:
+        return LLMResponse(text=json.dumps(entities), prompt_tokens=1, completion_tokens=1)
+
+    return invoke
+
+
+def _distilled(ws: Path) -> str:
+    """Ingest + distil (outline) so the seed pass has an outline to read."""
+    slug = _ingest(ws)
+    run_distill_reference_pass(ws, llm_invoke=_stub({
+        "Book": "i", "Book › Chapter One": "1", "Book › Chapter Two": "2"}))
+    return slug
+
+
+def test_seed_writes_entities_with_derived_from(tmp_path: Path) -> None:
+    from durin.memory.distill_dream import run_seed_entities_pass
+    from durin.memory.entity_page import EntityPage
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    slug = _distilled(ws)
+    stub = _seed_stub([
+        {"ref": "person:ada", "name": "Ada", "significance": "The author."},
+        {"ref": "concept:looms", "name": "Looms",
+         "relations": [{"to": "person:ada", "type": "studied_by"}]},
+    ])
+
+    result = run_seed_entities_pass(ws, llm_invoke=stub)
+    assert result["entities"] == 2
+    assert result["seeded_docs"] == 1
+    assert result["errors"] == []
+
+    page = EntityPage.from_file(ws / "memory" / "entities" / "person" / "ada.md")
+    assert page.name == "Ada"
+    assert page.derived_from == [f"reference:{slug}"]
+
+
+def test_seed_is_idempotent(tmp_path: Path) -> None:
+    from durin.memory.distill_dream import run_seed_entities_pass
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _distilled(ws)
+    stub = _seed_stub([{"ref": "person:ada", "name": "Ada"}])
+    first = run_seed_entities_pass(ws, llm_invoke=stub)
+    second = run_seed_entities_pass(ws, llm_invoke=stub)
+    assert first["entities"] == 1
+    assert second["entities"] == 0
+    assert second["skipped"] == 1
+
+
+def test_seed_caps_entities_per_document(tmp_path: Path) -> None:
+    from durin.memory.distill_dream import _MAX_ENTITIES_PER_DOC, run_seed_entities_pass
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _distilled(ws)
+    many = [{"ref": f"concept:c{i}", "name": f"C{i}"} for i in range(_MAX_ENTITIES_PER_DOC + 10)]
+    result = run_seed_entities_pass(ws, llm_invoke=_seed_stub(many))
+    assert result["entities"] == _MAX_ENTITIES_PER_DOC
+
+
+def test_seed_skips_when_not_distilled(tmp_path: Path) -> None:
+    from durin.memory.distill_dream import run_seed_entities_pass
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _ingest(ws)  # ingested but NOT distilled → no outline to seed from
+    result = run_seed_entities_pass(ws, llm_invoke=_seed_stub([{"ref": "x:y", "name": "Y"}]))
+    assert result["references"] == 0
+    assert result["entities"] == 0
+
+
+def test_seed_empty_proposals_marks_done_without_entities(tmp_path: Path) -> None:
+    from durin.memory.distill_dream import run_seed_entities_pass
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _distilled(ws)
+    result = run_seed_entities_pass(ws, llm_invoke=_seed_stub([]))
+    assert result["entities"] == 0
+    assert result["seeded_docs"] == 1
+    # marker set → a re-run skips
+    again = run_seed_entities_pass(ws, llm_invoke=_seed_stub([{"ref": "x:y", "name": "Y"}]))
+    assert again["skipped"] == 1 and again["entities"] == 0

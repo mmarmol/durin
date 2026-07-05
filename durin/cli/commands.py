@@ -1367,7 +1367,10 @@ def _run_gateway(
 
             workspace = config.workspace_path
             from durin.memory.always_on_dream import run_always_on_pass
-            from durin.memory.distill_dream import run_distill_reference_pass
+            from durin.memory.distill_dream import (
+                run_distill_reference_pass,
+                run_seed_entities_pass,
+            )
             from durin.memory.dream_passes import (
                 dream_vector_index,
                 run_derived_from_pass,
@@ -1391,6 +1394,7 @@ def _run_gateway(
             _discover = config.memory.dream.discover_enabled
             _skill_signals = config.memory.dream.skill_signals_enabled
             _distill_refs = config.memory.dream.distill_references_enabled
+            _seed_entities = config.memory.dream.seed_entities_from_docs_enabled
             _learnings = config.memory.dream.learnings_sweep_enabled
             _dream_error: Exception | None = None
             from datetime import datetime, timezone
@@ -1445,11 +1449,24 @@ def _run_gateway(
                     if _distill_refs
                     else {"references": 0, "outlined": 0, "skipped": 0, "duration_ms": 0}
                 )
+                # Seed candidate entities from each distilled document's outline
+                # (derived_from = the document). Reads outlines the distil step
+                # just wrote, so it follows it. The refine pass dedups later.
+                se = (
+                    await _asyncio.to_thread(
+                        run_seed_entities_pass, workspace, model=model,
+                        max_seconds=_cron_max_s)
+                    if _seed_entities
+                    else {"references": 0, "seeded_docs": 0, "entities": 0,
+                          "skipped": 0, "duration_ms": 0}
+                )
                 logger.info(
                     "memory_dream cron: distill(references={} outlined={} "
-                    "skipped={} {}ms)",
+                    "skipped={} {}ms) seed_entities(docs={} entities={} {}ms)",
                     di.get("references", 0), di.get("outlined", 0),
-                    di.get("skipped", 0), di.get("duration_ms", 0))
+                    di.get("skipped", 0), di.get("duration_ms", 0),
+                    se.get("seeded_docs", 0), se.get("entities", 0),
+                    se.get("duration_ms", 0))
                 sk = await _asyncio.to_thread(run_skill_extract_pass, workspace, model=model)
                 rf = await _asyncio.to_thread(
                     run_refine_pass, workspace, model=model,
