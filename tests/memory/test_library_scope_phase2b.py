@@ -96,3 +96,33 @@ async def test_tool_contamination_via_fts(tmp_path: Path) -> None:
         "zorptastic" in library["sectioned_rendered"]
         or "zorpmanual" in library["sectioned_rendered"]
     )
+
+
+@pytest.mark.asyncio
+async def test_library_hit_preview_leads_with_content_not_boilerplate(
+    tmp_path: Path,
+) -> None:
+    """A scraped doc leads with a metadata header; the library-search preview
+    the agent reads must surface the CONTENT (via _attach_reference_bodies),
+    not the URL/author boilerplate."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    md = (
+        "# Uroabdomen Guide\n\n"
+        "**URL:** https://example.com/uro\n"
+        "**Autora:** A. Vet, DVM\n"
+        "---\n\n"
+        "Uroabdomen commonly results from vehicular trauma in dogs.\n"
+    )
+    res = ingest_reference(ws, "uro-guide", md)
+    slug = res.ref.split(":", 1)[1]
+    reindex_one_file(ws, ws / "memory" / "references" / f"{slug}.md")
+
+    from durin.agent.tools.memory_search import MemorySearchTool
+
+    tool = MemorySearchTool(workspace=ws)  # FTS + grep
+    out = await tool.execute(query="vehicular trauma dogs", scope="library")
+    rendered = out["sectioned_rendered"]
+    assert "vehicular trauma" in rendered            # content surfaced
+    assert "**URL:**" not in rendered                # boilerplate stripped
+    assert "Autora" not in rendered
