@@ -34,7 +34,9 @@ __all__ = [
     "get_entity_detail",
     "get_entry_backlinks",
     "get_entry_detail",
+    "get_reference_detail",
     "get_session_detail",
+    "list_reference_documents",
     "search_memory_api",
 ]
 
@@ -946,4 +948,151 @@ def get_entry_backlinks(
         "uri": f"memory/{class_name}/{entry_id}",
         "backlinks": results[:limit],
         "truncated": truncated,
+    }
+
+
+# ---------------------------------------------------------------------------
+# reference documents — the Library "shelf" (list + per-document detail)
+# ---------------------------------------------------------------------------
+
+
+def list_reference_documents(workspace: Path) -> list[dict[str, Any]]:
+    """List ingested reference documents, newest first.
+
+    One row per ``memory/references/<slug>.md`` carrying its frontmatter
+    summary (title / source / ingested_at / chunk_count) plus ``distilled`` —
+    whether the dream has written an ``<slug>.outline.json`` for it yet.
+    Read-only; drives the webui Documents shelf.
+    """
+    refs_dir = Path(workspace) / "memory" / "references"
+    if not refs_dir.is_dir():
+        return []
+    rows: list[dict[str, Any]] = []
+    for md_path in sorted(refs_dir.glob("*.md")):
+        slug = md_path.stem
+        try:
+            fm, _ = _split_frontmatter(md_path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        rows.append({
+            "slug": slug,
+            "ref": f"reference:{slug}",
+            "title": str(fm.get("title") or slug),
+            "source": (str(fm.get("source") or "") or None),
+            "ingested_at": fm.get("ingested_at"),
+            "chunk_count": int(fm.get("chunk_count") or 0),
+            "distilled": (refs_dir / f"{slug}.outline.json").is_file(),
+        })
+    rows.sort(key=lambda r: str(r.get("ingested_at") or ""), reverse=True)
+    return rows
+
+
+def _clean_significance(body: str) -> str | None:
+    """A seeded entity's one-line significance = its body, sans provenance markers."""
+    lines = [
+        ln.strip()
+        for ln in (body or "").splitlines()
+        if ln.strip() and not ln.strip().startswith("<!--")
+    ]
+    text = " ".join(lines).strip()
+    return text[:200] or None
+
+
+def _entities_derived_from(memory_root: Path, ref: str) -> list[dict[str, Any]]:
+    """Entities the dream seeded from a reference — those whose ``derived_from``
+    lists ``ref``. This is the bridge the Library uses to surface a document's
+    distilled knowledge in the entity graph; the shelf lists it per-document."""
+    entities_dir = memory_root / "entities"
+    if not entities_dir.is_dir():
+        return []
+    out: list[dict[str, Any]] = []
+    for md in sorted(entities_dir.rglob("*.md")):
+        try:
+            page = EntityPage.from_file(md)
+        except Exception:  # noqa: BLE001
+            page = None
+        if page is None or ref not in (page.derived_from or []):
+            continue
+        out.append({
+            "ref": f"{md.parent.name}:{md.stem}",
+            "type": md.parent.name,
+            "name": page.name,
+            "significance": _clean_significance(page.body or ""),
+        })
+    out.sort(key=lambda e: str(e.get("name") or "").lower())
+    return out
+
+
+def get_reference_detail(
+    workspace: Path,
+    slug: str,
+    *,
+    chunk_preview_limit: int = 12,
+) -> dict[str, Any] | None:
+    """Full detail for one reference document, or ``None`` if it doesn't exist.
+
+    Metadata + the distilled outline (abstract + per-section summaries, when the
+    dream has run) + the entities seeded from it (``derived_from``) + a bounded
+    preview of its structure-aware chunks. Read-only; drives the Documents
+    shelf's per-document view. The whole raw document stays reachable via
+    :func:`get_entry_detail` (``reference:<slug>`` uri).
+    """
+    import json
+
+    refs_dir = Path(workspace) / "memory" / "references"
+    md_path = refs_dir / f"{slug}.md"
+    if not md_path.is_file():
+        return None
+    try:
+        fm, _ = _split_frontmatter(md_path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    ref = f"reference:{slug}"
+
+    outline: dict[str, Any] | None = None
+    outline_path = refs_dir / f"{slug}.outline.json"
+    if outline_path.is_file():
+        try:
+            raw = json.loads(outline_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            raw = None
+        if isinstance(raw, dict):
+            outline = {
+                "abstract": str(raw.get("abstract") or ""),
+                "sections": [
+                    {
+                        "breadcrumb": str(s.get("breadcrumb") or ""),
+                        "summary": str(s.get("summary") or ""),
+                        "chunk_indices": [
+                            int(i) for i in (s.get("chunk_indices") or [])
+                        ],
+                    }
+                    for s in (raw.get("sections") or [])
+                    if isinstance(s, dict)
+                ],
+            }
+
+    from durin.memory.reference import reference_chunks
+
+    chunks = reference_chunks(workspace, ref)
+    chunks_preview = [
+        {
+            "idx": int(c.get("idx", i)),
+            "breadcrumb": str(c.get("breadcrumb") or ""),
+            "text": str(c.get("text") or "")[:600],
+        }
+        for i, c in enumerate(chunks[:chunk_preview_limit])
+    ]
+
+    return {
+        "slug": slug,
+        "ref": ref,
+        "title": str(fm.get("title") or slug),
+        "source": (str(fm.get("source") or "") or None),
+        "ingested_at": fm.get("ingested_at"),
+        "chunk_count": int(fm.get("chunk_count") or len(chunks)),
+        "chunks_total": len(chunks),
+        "outline": outline,
+        "entities": _entities_derived_from(Path(workspace) / "memory", ref),
+        "chunks_preview": chunks_preview,
     }
