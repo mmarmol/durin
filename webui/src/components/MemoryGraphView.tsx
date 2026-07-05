@@ -179,10 +179,41 @@ function tickForces(
       e.target.vy -= fy;
     }
   }
+  // Position integration + boundary handling.
+  //
+  // A plain clamp pins a node to the wall but keeps its outward velocity, and
+  // every force above scales with `alpha` (which cools toward 0) — so a node
+  // flung into a corner during the initial high-energy layout would freeze
+  // there, unreachable by the (now ~0) centring force. Two corrections keep the
+  // periphery clean without touching the central layout: on contact, drop the
+  // outward velocity so the node stops pressing into the wall; and within a
+  // boundary band apply a small alpha-INDEPENDENT inward pull, so disconnected /
+  // low-degree nodes are always reclaimed toward the canvas rather than piling
+  // in the corners.
+  const margin = 20;
+  const band = 90;
+  const nudgeX = width > 2 * (margin + band);
+  const nudgeY = height > 2 * (margin + band);
   for (const n of nodes) {
     if (n.pinned) continue;
-    n.x = clamp(n.x + n.vx, 20, width - 20);
-    n.y = clamp(n.y + n.vy, 20, height - 20);
+    n.x += n.vx;
+    n.y += n.vy;
+    if (n.x < margin) { n.x = margin; if (n.vx < 0) n.vx = 0; }
+    else if (n.x > width - margin) { n.x = width - margin; if (n.vx > 0) n.vx = 0; }
+    if (n.y < margin) { n.y = margin; if (n.vy < 0) n.vy = 0; }
+    else if (n.y > height - margin) { n.y = height - margin; if (n.vy > 0) n.vy = 0; }
+    if (nudgeX) {
+      const lo = margin + band;
+      const hi = width - margin - band;
+      if (n.x < lo) n.x += (lo - n.x) * 0.05;
+      else if (n.x > hi) n.x -= (n.x - hi) * 0.05;
+    }
+    if (nudgeY) {
+      const lo = margin + band;
+      const hi = height - margin - band;
+      if (n.y < lo) n.y += (lo - n.y) * 0.05;
+      else if (n.y > hi) n.y -= (n.y - hi) * 0.05;
+    }
   }
 }
 
