@@ -182,6 +182,32 @@ def _library_subjects(workspace: Path, *, cap: int = _MAX_LIBRARY_SUBJECTS) -> l
     return [name for name, _docs in ranked[:cap]]
 
 
+def _library_topics(workspace: Path) -> list[str]:
+    """Curated topic labels from the dream's library topic index
+    (``memory/references/_topics.json``), in stored order (broadest first).
+
+    This is the clean, stable "map": the dream folds synonyms/translations and
+    rolls granular topics up into coherent themes, reusing prior labels so the
+    index does not drift. Empty when the dream has not built it yet — the caller
+    then falls back to the on-the-fly :func:`_library_subjects` heuristic.
+    """
+    tpath = Path(workspace) / "memory" / "references" / "_topics.json"
+    if not tpath.is_file():
+        return []
+    try:
+        data = json.loads(tpath.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    topics = data.get("topics") if isinstance(data, dict) else None
+    if not isinstance(topics, list):
+        return []
+    return [
+        str(t.get("label")).strip()
+        for t in topics
+        if isinstance(t, dict) and str(t.get("label") or "").strip()
+    ]
+
+
 def build_library_awareness(workspace: Path, *, max_docs: int = _MAX_LIBRARY_DOCS) -> str:
     """A compact, always-on catalog of ingested documents (one line each).
 
@@ -214,14 +240,17 @@ def build_library_awareness(workspace: Path, *, max_docs: int = _MAX_LIBRARY_DOC
         "drill a `reference:<slug>`; their distilled entities also surface in "
         "normal search carrying a `Sources:` link back to the document."
     )
-    # The bounded "subjects map" earns its keep only once documents fall past the
-    # per-document cap: it names the subject-space so a hidden document is still
-    # reachable by searching its subject. At that scale, ranking by how many
-    # documents share each subject also self-cleans — the broad themes lead,
-    # not the per-document granular topics. Below the cap the list already
-    # covers everything, so the map would be redundant noise.
+    # The bounded "subjects map". Preferred source: the dream's curated topic
+    # index — clean, stable theme labels — shown always because it is clean.
+    # Fallback while the dream has not curated it yet: the on-the-fly
+    # distilled-subjects heuristic (granular), shown only once documents fall
+    # past the cap, where naming the subject-space keeps a hidden document
+    # reachable; below the cap the per-document list already covers everything.
     covers = ""
-    if more > 0:
+    topics = _library_topics(workspace)
+    if topics:
+        covers = f"Covers: {', '.join(topics[:_MAX_LIBRARY_SUBJECTS])}.\n\n"
+    elif more > 0:
         subjects = _library_subjects(workspace)
         if subjects:
             covers = f"Covers: {', '.join(subjects)}.\n\n"

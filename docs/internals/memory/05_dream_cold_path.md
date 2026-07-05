@@ -243,6 +243,20 @@ via an `entities_seeded_chunk_count` marker on the outline; the refine pass
 dedups the seeded entities against existing ones. Gated by
 `memory.dream.seed_entities_from_docs_enabled` (default on).
 
+### Pass 2d — curate topics: the library's subject map
+
+`run_curate_topics_pass` (same module) maintains the library's topic index at
+`memory/references/_topics.json` — the clean, stable `Covers:` map the always-on
+Library awareness reads. One LLM call over the distilled abstracts produces
+coherent **theme** labels (folding synonyms/translations, rolling granular
+topics up) with the documents under each. The current index is fed back into the
+prompt so the LLM **reuses** existing labels rather than regenerating — curation,
+not drift. This is the quality tier over the on-the-fly `_library_subjects`
+heuristic (which stays as the cold-start fallback until the first curation).
+Idempotent: skipped when the set of distilled documents is unchanged (signature =
+each document's slug + chunk_count). Gated by `memory.dream.curate_topics_enabled`
+(default on).
+
 ### Pass 3 — skill-extract: sessions to reusable procedures
 
 `run_skill_extract_pass(workspace, *, provider, model, max_sessions=3)` is the
@@ -346,18 +360,21 @@ line-per-document index is how the agent knows a document exists and can decide
 to reach it with `memory_search(scope="library")` or a drill. It is capped
 (`principal._MAX_LIBRARY_DOCS`) and truncates with a "…and N more" note.
 
-Once documents fall past that cap, a truncated catalog would leave them
-awareness-dead. So when (and only when) the list is truncated, the block adds a
-bounded **subjects map** (`_library_subjects`): a `Covers: …` line of the
-distinct subjects the library is about — the display names of entities the dream
-distilled *from* a document (`derived_from` links authored by `dream`;
-agent-linked refs such as a patient that merely cited a paper are excluded, so
-the library isn't mapped under the wrong things). Subjects are ranked by how
-many documents share each (broadest first, capped by `_MAX_LIBRARY_SUBJECTS`),
-which self-cleans at scale: the recurring themes lead, not per-document granular
-topics. Naming the subject-space keeps a hidden document reachable — the agent
-searches its subject with `scope="library"`. Below the cap the per-document list
-already covers everything, so the map is omitted as redundant.
+The block also carries a bounded **subjects map** — a `Covers: …` line naming
+what the library is about, so a document stays reachable (search its subject)
+even past the per-document cap. There are two sources, preferred in order:
+
+- **Curated topic index** (`_library_topics`, from the dream's
+  `_topics.json` — see Pass 2d). Clean, stable theme labels; shown *always*
+  because it is clean.
+- **Heuristic fallback** (`_library_subjects`) while the dream has not curated
+  the index yet: the distinct display names of entities the dream distilled
+  *from* a document (`derived_from` links authored by `dream`; agent-linked refs
+  such as a patient that merely cited a paper are excluded, so the library isn't
+  mapped under the wrong things), ranked by how many documents share each. This
+  is granular, so it is shown *only* once documents fall past the cap — where
+  naming the subject-space prevents dead knowledge and breadth-ranking
+  self-cleans; below the cap the per-document list already covers everything.
 
 ### Writes, provenance, and git history
 

@@ -1368,6 +1368,7 @@ def _run_gateway(
             workspace = config.workspace_path
             from durin.memory.always_on_dream import run_always_on_pass
             from durin.memory.distill_dream import (
+                run_curate_topics_pass,
                 run_distill_reference_pass,
                 run_seed_entities_pass,
             )
@@ -1395,6 +1396,7 @@ def _run_gateway(
             _skill_signals = config.memory.dream.skill_signals_enabled
             _distill_refs = config.memory.dream.distill_references_enabled
             _seed_entities = config.memory.dream.seed_entities_from_docs_enabled
+            _curate_topics = config.memory.dream.curate_topics_enabled
             _learnings = config.memory.dream.learnings_sweep_enabled
             _dream_error: Exception | None = None
             from datetime import datetime, timezone
@@ -1460,13 +1462,25 @@ def _run_gateway(
                     else {"references": 0, "seeded_docs": 0, "entities": 0,
                           "skipped": 0, "duration_ms": 0}
                 )
+                # Curate the library's topic index from the distilled abstracts —
+                # the clean, stable "Covers:" map the always-on awareness reads.
+                # Reads the outlines the distil step wrote, so it follows it.
+                ct = (
+                    await _asyncio.to_thread(
+                        run_curate_topics_pass, workspace, model=model,
+                        max_seconds=_cron_max_s)
+                    if _curate_topics
+                    else {"topics": 0, "skipped": True, "duration_ms": 0}
+                )
                 logger.info(
                     "memory_dream cron: distill(references={} outlined={} "
-                    "skipped={} {}ms) seed_entities(docs={} entities={} {}ms)",
+                    "skipped={} {}ms) seed_entities(docs={} entities={} {}ms) "
+                    "topics(n={} {}ms)",
                     di.get("references", 0), di.get("outlined", 0),
                     di.get("skipped", 0), di.get("duration_ms", 0),
                     se.get("seeded_docs", 0), se.get("entities", 0),
-                    se.get("duration_ms", 0))
+                    se.get("duration_ms", 0),
+                    ct.get("topics", 0), ct.get("duration_ms", 0))
                 sk = await _asyncio.to_thread(run_skill_extract_pass, workspace, model=model)
                 rf = await _asyncio.to_thread(
                     run_refine_pass, workspace, model=model,
