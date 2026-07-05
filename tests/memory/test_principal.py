@@ -6,6 +6,7 @@ from durin.memory.memory_writer import write_entity
 from durin.memory.principal import (
     _MAX_LIBRARY_DOCS,
     ANONYMOUS,
+    _library_subjects,
     build_library_awareness,
     build_pinned_context,
     ensure_owner,
@@ -37,6 +38,55 @@ def test_library_awareness_lists_docs_with_outline_abstract(tmp_path):
     assert 'scope="library"' in block
     assert "- The Durin Handbook" in block            # title-only (not distilled)
     assert "- Thinking Fast and Slow — Kahneman on two systems of thought." in block
+
+
+def _derived(slug: str) -> FieldPatch:
+    return FieldPatch(kind="derived_from", value=f"reference:{slug}",
+                      author="dream", source_ref="s", at=NOW)
+
+
+def test_library_awareness_no_subjects_map_below_cap(tmp_path):
+    ingest_reference(tmp_path, "A Book", "# a\n\nx.\n")
+    ingest_reference(tmp_path, "B Book", "# b\n\ny.\n")
+    write_entity(tmp_path, "topic:x", [_derived("a-book")], create=True, name="X")
+    block = build_library_awareness(tmp_path)
+    # Nothing hidden past the cap → the subjects map is redundant, so omitted.
+    assert "Covers:" not in block
+
+
+def test_library_awareness_subjects_map_activates_when_capped(tmp_path):
+    for i in range(4):
+        ingest_reference(tmp_path, f"Doc {i}", f"# d{i}\n\nbody.\n")
+    # a dream-distilled subject shared across two documents
+    write_entity(tmp_path, "topic:paraprostatic-cysts",
+                 [_derived("doc-0"), _derived("doc-1")],
+                 create=True, name="Paraprostatic cysts")
+    block = build_library_awareness(tmp_path, max_docs=2)
+    assert "Covers: " in block
+    covers_line = block.split("Covers:")[1].splitlines()[0]
+    assert "Paraprostatic cysts" in covers_line
+    assert "…and 2 more" in block            # hidden docs reachable by subject
+
+
+def test_library_subjects_excludes_agent_linked_and_ranks_by_breadth(tmp_path):
+    for i in range(3):
+        ingest_reference(tmp_path, f"Doc {i}", f"# d{i}\n\nbody.\n")
+    # broad subject (2 docs, dream) → must rank first
+    write_entity(tmp_path, "topic:uroperitoneum",
+                 [_derived("doc-0"), _derived("doc-1")],
+                 create=True, name="Uroperitoneum")
+    # narrow subject (1 doc, dream)
+    write_entity(tmp_path, "topic:creatinine", [_derived("doc-2")],
+                 create=True, name="Creatinine")
+    # agent-linked patient (must be EXCLUDED — the doc isn't about it)
+    write_entity(tmp_path, "patient:rex",
+                 [FieldPatch(kind="derived_from", value="reference:doc-0",
+                             author="agent", source_ref="s", at=NOW)],
+                 create=True, name="Rex")
+    subjects = _library_subjects(tmp_path)
+    assert "Rex" not in subjects
+    assert subjects[0] == "Uroperitoneum"    # broadest first
+    assert "Creatinine" in subjects
 
 
 def test_library_awareness_caps_and_notes_overflow(tmp_path):

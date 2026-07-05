@@ -344,8 +344,20 @@ plus the distilled outline abstract when present). This is the always-on Tier-2
 awareness: ingested documents are kept out of default recall, so this
 line-per-document index is how the agent knows a document exists and can decide
 to reach it with `memory_search(scope="library")` or a drill. It is capped
-(`principal._MAX_LIBRARY_DOCS`) and truncates with a "…and N more" note; unlisted
-documents stay reachable via a Library-scoped search.
+(`principal._MAX_LIBRARY_DOCS`) and truncates with a "…and N more" note.
+
+Once documents fall past that cap, a truncated catalog would leave them
+awareness-dead. So when (and only when) the list is truncated, the block adds a
+bounded **subjects map** (`_library_subjects`): a `Covers: …` line of the
+distinct subjects the library is about — the display names of entities the dream
+distilled *from* a document (`derived_from` links authored by `dream`;
+agent-linked refs such as a patient that merely cited a paper are excluded, so
+the library isn't mapped under the wrong things). Subjects are ranked by how
+many documents share each (broadest first, capped by `_MAX_LIBRARY_SUBJECTS`),
+which self-cleans at scale: the recurring themes lead, not per-document granular
+topics. Naming the subject-space keeps a hidden document reachable — the agent
+searches its subject with `scope="library"`. Below the cap the per-document list
+already covers everything, so the map is omitted as redundant.
 
 ### Writes, provenance, and git history
 
