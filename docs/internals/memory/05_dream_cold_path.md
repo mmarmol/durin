@@ -44,10 +44,11 @@ Both tracks are searchable from write time (vector + lexical + grep — see
 does not gate recall of either. See `design_rationale.md` for why fragments stay
 raw.
 
-**2. Five sequential passes, three trigger paths.** Dream is five passes that
-run in a fixed order — **extract → derived_from → skill-extract → refine →
-always_on** — each reading sessions or entity pages and applying structured
-updates. They are reached three ways: the **daily cron** runs all five; the two
+**2. Sequential passes, three trigger paths.** Dream runs passes in a fixed
+order — **extract → derived_from → distill → skill-extract → refine →
+always_on** — each reading sessions, reference documents, or entity pages and
+applying structured updates. They are reached three ways: the **daily cron**
+runs the full sequence; the two
 **reactive hooks** (post-compaction / session-close) run the extract pass only,
 throttled; the **manual** `durin memory dream` runs all five on demand.
 
@@ -214,6 +215,19 @@ applied as `derived_from` `FieldPatch`es (author `dream`). It is idempotent and
 cheap: a session whose authored entities are already linked, or that ingested no
 references, is skipped with no LLM call. **This pass runs only on the cron and
 manual paths — never on the reactive hooks.**
+
+### Pass 2b — distill: reference documents to outlines
+
+`run_distill_reference_pass` (`durin/memory/distill_dream.py`) builds the "know
+the book" index. For each ingested reference document it groups the
+structure-aware chunks by breadcrumb (`Chapter › Section`), then a single LLM
+call produces a whole-document abstract plus a one-to-two-sentence summary per
+section. The result is written to a `memory/references/<slug>.outline.json`
+sidecar, each section carrying the chunk indices it summarizes so a reader can
+drill from a summary into the source chunks. Idempotent per document: the
+outline records the `chunk_count` it was built from and a document is
+re-distilled only when it is re-ingested (its chunk count changes). Gated by
+`memory.dream.distill_references_enabled` (default on).
 
 ### Pass 3 — skill-extract: sessions to reusable procedures
 

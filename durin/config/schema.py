@@ -241,6 +241,12 @@ class MemoryDreamConfig(Base):
         description="Mention-based entity discovery (extract stage 2): also create/update entities from durable facts the agent mentioned but did not explicitly upsert",
     )
 
+    distill_references_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("distillReferencesEnabled", "distill_references_enabled"),
+        description="Distil each ingested reference document into a <slug>.outline.json sidecar (abstract + per-section summaries) — the 'know the book' index. Idempotent per document.",
+    )
+
     # ON by default: detection only (curation decides); precision lives in the
     # prompt and `memory.dream.skill_signals` telemetry measures it.
     skill_signals_enabled: bool = Field(
