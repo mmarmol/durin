@@ -9,12 +9,12 @@ from durin.utils.helpers import detect_image_mime
 
 # Supported file extensions for text extraction
 SUPPORTED_EXTENSIONS: set[str] = {
-    # Document formats
+    # Document formats — converted to markdown via the shared markitdown
+    # converter (durin/memory/doc_convert)
     ".pdf",
     ".docx",
     ".xlsx",
     ".pptx",
-    # Rich formats routed through the shared markitdown converter
     ".epub",
     ".ipynb",
     # Text formats
@@ -60,143 +60,31 @@ def extract_text(path: Path) -> str | None:
 
     ext = path.suffix.lower()
 
-    # Document formats -- each branch lazily imports its parser so that
-    # startup does not pay the ~25 MB cost of loading openpyxl /
-    # python-docx / python-pptx / pypdf up front (see issue #3422).
-    if ext == ".pdf":
-        return _extract_pdf(path)
-    elif ext == ".docx":
-        return _extract_docx(path)
-    elif ext == ".xlsx":
-        return _extract_xlsx(path)
-    elif ext == ".pptx":
-        return _extract_pptx(path)
-    elif ext in {".epub", ".ipynb"}:
-        # Formats the bespoke extractors above never covered — read them
-        # through the shared markitdown converter (durin/memory/doc_convert).
-        return _extract_via_markitdown(path)
-    elif _is_text_extension(ext):
+    # Plain-text formats are read verbatim. Everything else markitdown can
+    # parse (PDF, Office, EPUB, notebooks, …) goes through the single shared
+    # converter (``durin/memory/doc_convert``) — one converter across durin,
+    # producing clean markdown (headings, tables); its PPTX path covers the
+    # grouped-shape / table cases the old bespoke per-format extractors did.
+    if _is_text_extension(ext):
         return _extract_text_file(path)
-    elif ext in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+
+    from durin.memory.doc_convert import is_convertible
+
+    if is_convertible(ext):
+        return _extract_via_markitdown(path)
+    if ext in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
         # Image files - for future OCR support
         return f"[image: {path.name}]"
-    else:
-        # Unsupported extension
-        return None
-
-
-def _extract_pdf(path: Path) -> str:
-    """Extract text from PDF using pypdf."""
-    try:
-        from pypdf import PdfReader
-    except ImportError:
-        return "[error: pypdf not installed]"
-    try:
-        reader = PdfReader(path)
-        pages: list[str] = []
-        for i, page in enumerate(reader.pages, 1):
-            text = page.extract_text() or ""
-            pages.append(f"--- Page {i} ---\n{text}")
-        return _truncate("\n\n".join(pages), _MAX_TEXT_LENGTH)
-    except Exception as e:
-        logger.exception("Failed to extract PDF {}", path)
-        return f"[error: failed to extract PDF: {e!s}]"
-
-
-def _extract_docx(path: Path) -> str:
-    """Extract text from DOCX using python-docx."""
-    try:
-        from docx import Document as DocxDocument
-    except ImportError:
-        return "[error: python-docx not installed]"
-    try:
-        doc = DocxDocument(path)
-        paragraphs: list[str] = [p.text for p in doc.paragraphs if p.text.strip()]
-        return _truncate("\n\n".join(paragraphs), _MAX_TEXT_LENGTH)
-    except Exception as e:
-        logger.exception("Failed to extract DOCX {}", path)
-        return f"[error: failed to extract DOCX: {e!s}]"
-
-
-def _extract_xlsx(path: Path) -> str:
-    """Extract text from XLSX using openpyxl."""
-    try:
-        from openpyxl import load_workbook
-    except ImportError:
-        return "[error: openpyxl not installed]"
-    try:
-        wb = load_workbook(path, read_only=True, data_only=True)
-        try:
-            sheets: list[str] = []
-            for sheet_name in wb.sheetnames:
-                ws = wb[sheet_name]
-                rows: list[str] = []
-                for row in ws.iter_rows(values_only=True):
-                    row_text = "\t".join(str(cell) if cell is not None else "" for cell in row)
-                    if row_text.strip():
-                        rows.append(row_text)
-                if rows:
-                    sheets.append(f"--- Sheet: {sheet_name} ---\n" + "\n".join(rows))
-            return _truncate("\n\n".join(sheets), _MAX_TEXT_LENGTH)
-        finally:
-            wb.close()
-    except Exception as e:
-        logger.exception("Failed to extract XLSX {}", path)
-        return f"[error: failed to extract XLSX: {e!s}]"
-
-
-def _extract_pptx(path: Path) -> str:
-    """Extract text from PPTX using python-pptx."""
-    try:
-        from pptx import Presentation as PptxPresentation
-    except ImportError:
-        return "[error: python-pptx not installed]"
-    try:
-        prs = PptxPresentation(path)
-        slides: list[str] = []
-        for i, slide in enumerate(prs.slides, 1):
-            slide_text: list[str] = []
-            for shape in slide.shapes:
-                _collect_pptx_shape_text(shape, slide_text)
-            if slide_text:
-                slides.append(f"--- Slide {i} ---\n" + "\n".join(slide_text))
-        return _truncate("\n\n".join(slides), _MAX_TEXT_LENGTH)
-    except Exception as e:
-        logger.exception("Failed to extract PPTX {}", path)
-        return f"[error: failed to extract PPTX: {e!s}]"
-
-
-def _collect_pptx_shape_text(shape, out: list[str]) -> None:
-    """Collect text from a PPTX shape, recursing into groups and tables.
-
-    Groups have ``has_text_frame=False`` and must be walked via ``.shapes``;
-    tables are GraphicFrame objects whose cell text lives under ``.table``.
-    """
-    sub_shapes = getattr(shape, "shapes", None)
-    if sub_shapes is not None:
-        for sub in sub_shapes:
-            _collect_pptx_shape_text(sub, out)
-        return
-
-    if getattr(shape, "has_table", False):
-        for row in shape.table.rows:
-            cells = [cell.text.strip() for cell in row.cells]
-            line = "\t".join(cell for cell in cells if cell)
-            if line:
-                out.append(line)
-        return
-
-    text = getattr(shape, "text", "")
-    if text:
-        out.append(text)
+    # Unsupported extension
+    return None
 
 
 def _extract_via_markitdown(path: Path) -> str:
-    """Convert a rich document to markdown via the shared doc_convert helper.
+    """Convert a document to markdown via the shared doc_convert helper.
 
-    Covers EPUB / notebooks the bespoke per-format extractors never did.
-    Returns a bracketed ``[error: …]`` string on an unsupported format or a
-    conversion failure, matching the text-extraction contract.
+    The single converter for every non-plain-text format (PDF, Office, EPUB,
+    notebooks, …). Returns a bracketed ``[error: …]`` string on an unsupported
+    format or a conversion failure, matching the text-extraction contract.
     """
     from durin.memory.doc_convert import (
         DocConvertError,
