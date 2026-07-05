@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import {
+  BookOpen,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -16,6 +17,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { DocumentsShelf } from "@/components/DocumentsShelf";
 import { useMemoryGraph } from "@/hooks/useMemoryGraph";
 import { useClient } from "@/providers/ClientProvider";
 import MarkdownTextRenderer from "@/components/MarkdownTextRenderer";
@@ -201,6 +203,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const { token } = useClient();
   const tokenRef = useRef(token);
   tokenRef.current = token;
+  // Two views under one memory page: the entity graph, and the Library shelf of
+  // ingested reference documents (list + per-document outline / entities / chunks).
+  const [mode, setMode] = useState<"graph" | "documents">("graph");
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -862,11 +867,71 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     return data.stats.types.map((t) => ({ type: t, color: colorForType(t) }));
   }, [data]);
 
+  // From the Documents shelf back into the graph: open a doc-derived entity's
+  // page (focus it if off-cap, then select), or the reference's raw document.
+  const handleOpenEntity = useCallback(
+    (ref: string) => {
+      setMode("graph");
+      setReferenceDetail(null);
+      if (!simNodesRef.current.some((n) => n.id === ref)) focusOnNode(ref);
+      const node =
+        simNodesRef.current.find((n) => n.id === ref) ?? {
+          id: ref,
+          type: ref.split(":")[0] || "unknown",
+          name: ref.replace(/^[a-z_]+:/, ""),
+          weight: 0,
+          aliases: [],
+          phantom: false,
+        };
+      setSelected(node);
+      setActiveTab(node.phantom ? "info" : "body");
+    },
+    [focusOnNode],
+  );
+
+  const handleOpenReference = useCallback((ref: string) => {
+    setMode("graph");
+    setSelected(null);
+    if (tokenRef.current) {
+      void fetchMemoryEntry(tokenRef.current, ref)
+        .then((d) => setReferenceDetail(d))
+        .catch(() => setReferenceDetail(null));
+    }
+  }, []);
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <header className="flex shrink-0 items-center gap-2 border-b border-border/40 px-3 py-2">
         <Network className="h-4 w-4 text-muted-foreground" aria-hidden />
         <h1 className="text-sm font-semibold">{t("memoryGraph.title")}</h1>
+        <div className="ml-3 flex items-center gap-0.5 rounded-md border border-border/50 p-0.5 text-[11px]">
+          <button
+            type="button"
+            onClick={() => setMode("graph")}
+            className={cn(
+              "flex items-center gap-1 rounded px-2 py-0.5 transition-colors",
+              mode === "graph"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/60",
+            )}
+          >
+            <Network className="h-3 w-3" /> {t("memoryGraph.viewGraph")}
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("documents")}
+            className={cn(
+              "flex items-center gap-1 rounded px-2 py-0.5 transition-colors",
+              mode === "documents"
+                ? "bg-muted font-medium"
+                : "text-muted-foreground hover:bg-muted/60",
+            )}
+          >
+            <BookOpen className="h-3 w-3" /> {t("memoryGraph.viewDocuments")}
+          </button>
+        </div>
+        {mode === "graph" ? (
+          <>
         {data && !compact ? (
           <span className="text-xs text-muted-foreground">
             {t("memoryGraph.stats", {
@@ -945,8 +1010,18 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
           </Button>
         </div>
+          </>
+        ) : null}
       </header>
 
+      {mode === "documents" ? (
+        <DocumentsShelf
+          token={token}
+          active={_props.active}
+          onOpenEntity={handleOpenEntity}
+          onOpenReference={handleOpenReference}
+        />
+      ) : (
       <div ref={wrapRef} className="relative min-h-0 flex-1">
         {error ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-destructive">
@@ -1772,6 +1847,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           </div>
         ) : null}
       </div>
+      )}
     </div>
   );
 }

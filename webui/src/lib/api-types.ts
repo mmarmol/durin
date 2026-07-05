@@ -744,6 +744,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/memory/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List ingested reference documents (the Library shelf) */
+        get: operations["memory_documents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/memory/documents/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Reference document detail: outline + derived entities + chunk preview */
+        get: operations["memory_document"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/memory/dream/digest": {
         parameters: {
             query?: never;
@@ -3235,6 +3269,16 @@ export interface components {
             /** Uri */
             uri: string;
         };
+        /** MemoryDocumentQuery */
+        MemoryDocumentQuery: {
+            /** Slug */
+            slug: string;
+        };
+        /**
+         * MemoryDocumentsQuery
+         * @description No inputs — lists all ingested reference documents (the Library shelf).
+         */
+        MemoryDocumentsQuery: Record<string, never>;
         /** MemoryEdgeQuery */
         MemoryEdgeQuery: {
             /** A */
@@ -6162,6 +6206,54 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CrossEncoderTestResult"];
+                };
+            };
+        };
+    };
+    memory_documents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryDocumentsQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryResult"];
+                };
+            };
+        };
+    };
+    memory_document: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryDocumentQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryResult"];
                 };
             };
         };

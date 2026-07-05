@@ -454,7 +454,11 @@ The web dashboard exposes three memory controls under **Settings → Memory**:
 - **Dream controls** — `memory.dream.enabled`, cron schedule,
   `memory.dream.post_compaction`, `memory.dream.on_session_close`.
 - **Read-only memory graph** — entity graph canvas view (nodes = entity pages,
-  edges = relations + co-mentions); up to 500 nodes / 2 000 edges.
+  edges = relations + co-mentions); up to 500 nodes / 2 000 edges. A **Documents**
+  toggle switches the same page to the Library shelf: a searchable list of
+  ingested reference documents, each opening to its distilled outline, the
+  entities seeded from it (`derived_from`, clickable back into the graph), and a
+  preview of its structure-aware chunks.
 
 Settings not exposed in the UI (advanced) are config-file-only.
 
@@ -479,7 +483,7 @@ These are for human operators, not agent tools.
 
 ### Read-only webui API (not agent-facing)
 
-Three HTTP endpoints are consumed by the webui for visualization. They are not
+These HTTP surfaces are consumed by the webui for visualization. They are not
 agent tools and never accept mutations.
 
 | Endpoint | Source | Purpose |
@@ -487,6 +491,8 @@ agent tools and never accept mutations.
 | `get_entity_detail(uri)` | `durin/memory/graph_api.py` | Full entity page content + git history + per-field provenance events. |
 | `get_edge_detail(from_uri, to_uri)` | `durin/memory/graph_api.py` | Co-mention evidence between two entities. |
 | `search_memory_api(query, …)` | `durin/memory/graph_api.py` | Webui equivalent of `memory_search` (paginated; different return shape). |
+| `list_reference_documents()` | `durin/memory/graph_api.py` | The Library shelf: ingested reference documents (title, source, ingest time, chunk count, `distilled`). |
+| `get_reference_detail(slug)` | `durin/memory/graph_api.py` | One document's distilled outline + entities seeded from it + a bounded chunk preview. |
 | Graph canvas data | `durin/memory/graph.py::build_memory_graph` | Builds `{nodes, edges}` for the entity canvas. Caps at 500 nodes / 2 000 edges. |
 
 ---

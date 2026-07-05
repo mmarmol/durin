@@ -16,6 +16,8 @@ import pytest
 
 from durin.service.memory import (
     ForgetResult,
+    MemoryDocumentQuery,
+    MemoryDocumentsQuery,
     MemoryEntityQuery,
     MemoryEntryQuery,
     MemoryForgetCommand,
@@ -166,6 +168,55 @@ async def test_entity_raises_not_found(tmp_path: Path) -> None:
     svc = _service(tmp_path)
     with pytest.raises(NotFoundError):
         await svc.entity(MemoryEntityQuery(ref="person:nobody"), Principal.local())
+
+
+# ---------------------------------------------------------------------------
+# Read: reference documents (the Library shelf) — list + detail + 404
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_documents_lists_ingested_references(tmp_path: Path) -> None:
+    from durin.memory.reference import ingest_reference
+
+    ingest_reference(tmp_path, "A Book", "# H\n\nbody.\n")
+    svc = _service(tmp_path)
+    result = await svc.documents(MemoryDocumentsQuery(), Principal.local())
+    assert isinstance(result, MemoryResult)
+    docs = result.data["documents"]
+    assert len(docs) == 1
+    assert docs[0]["title"] == "A Book"
+    assert docs[0]["ref"] == "reference:a-book"
+
+
+@pytest.mark.asyncio
+async def test_document_detail_returns_payload(tmp_path: Path) -> None:
+    from durin.memory.reference import ingest_reference
+
+    ingest_reference(tmp_path, "A Book", "# Intro\n\nHello.\n", source="disk:/a.pdf")
+    svc = _service(tmp_path)
+    result = await svc.document(MemoryDocumentQuery(slug="a-book"), Principal.local())
+    assert isinstance(result, MemoryResult)
+    assert result.data["title"] == "A Book"
+    assert result.data["source"] == "disk:/a.pdf"
+    assert result.data["outline"] is None  # not distilled
+    assert result.data["chunks_preview"]
+
+
+@pytest.mark.asyncio
+async def test_document_detail_raises_not_found(tmp_path: Path) -> None:
+    svc = _service(tmp_path)
+    with pytest.raises(NotFoundError) as exc_info:
+        await svc.document(MemoryDocumentQuery(slug="ghost"), Principal.local())
+    assert "ghost" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_documents_requires_memory_read(tmp_path: Path) -> None:
+    restricted = Principal.remote(subject="t1", scopes=frozenset())
+    svc = _service(tmp_path)
+    with pytest.raises(ForbiddenError):
+        await svc.documents(MemoryDocumentsQuery(), restricted)
 
 
 # ---------------------------------------------------------------------------
