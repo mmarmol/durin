@@ -1367,6 +1367,7 @@ def _run_gateway(
 
             workspace = config.workspace_path
             from durin.memory.always_on_dream import run_always_on_pass
+            from durin.memory.distill_dream import run_distill_reference_pass
             from durin.memory.dream_passes import (
                 dream_vector_index,
                 run_derived_from_pass,
@@ -1389,6 +1390,7 @@ def _run_gateway(
             _absorb = config.memory.dream.auto_absorb
             _discover = config.memory.dream.discover_enabled
             _skill_signals = config.memory.dream.skill_signals_enabled
+            _distill_refs = config.memory.dream.distill_references_enabled
             _learnings = config.memory.dream.learnings_sweep_enabled
             _dream_error: Exception | None = None
             from datetime import datetime, timezone
@@ -1433,6 +1435,21 @@ def _run_gateway(
                     vector_index=_vi)
                 df = await _asyncio.to_thread(
                     run_derived_from_pass, workspace, model=model, max_seconds=_cron_max_s)
+                # Distil ingested reference documents into outline sidecars —
+                # the "know the book" index. Independent of entity merges, so it
+                # slots right after the source-link pass.
+                di = (
+                    await _asyncio.to_thread(
+                        run_distill_reference_pass, workspace, model=model,
+                        max_seconds=_cron_max_s)
+                    if _distill_refs
+                    else {"references": 0, "outlined": 0, "skipped": 0, "duration_ms": 0}
+                )
+                logger.info(
+                    "memory_dream cron: distill(references={} outlined={} "
+                    "skipped={} {}ms)",
+                    di.get("references", 0), di.get("outlined", 0),
+                    di.get("skipped", 0), di.get("duration_ms", 0))
                 sk = await _asyncio.to_thread(run_skill_extract_pass, workspace, model=model)
                 rf = await _asyncio.to_thread(
                     run_refine_pass, workspace, model=model,
