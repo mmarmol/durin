@@ -28,8 +28,10 @@ MAX_BATCH_URIS: int = 10
 
 _URI_DESCRIPTION = (
     "Markdown URI such as 'sessions/<key>.md#turn-42', "
-    "'ingested/<id>/source.md#section-3', 'memory/<class>/<id>', or "
-    "'skills/<slug>/SKILL.md'."
+    "'ingested/<id>/source.md#section-3', 'memory/<class>/<id>', "
+    "'skills/<slug>/SKILL.md', or 'reference:<slug>' for an ingested "
+    "document (as seen in an entity's Sources / derived_from, or a "
+    "scope=\"library\" hit; append '#<heading>' for one section)."
 )
 
 _PARAMETERS = tool_parameters_schema(

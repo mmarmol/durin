@@ -124,3 +124,28 @@ def test_context_builder_omits_hot_layer_when_empty(tmp_path: Path) -> None:
     assert "## Memory: Key Points" not in stable
     assert "## Memory: Identity" not in stable
     assert "## Memory: Known Entities" not in stable
+
+
+def test_canonical_block_renders_sources_from_derived_from() -> None:
+    from durin.memory.entity_page import EntityPage
+    from durin.memory.hot_layer import _render_canonical_block
+
+    page = EntityPage(
+        type="patient", name="Drako",
+        derived_from=["reference:paper-a", "reference:paper-b"],
+    )
+    block = _render_canonical_block(
+        "patient:drako", page, consolidated_ts="2026-07-05",
+    )
+    assert "Sources: reference:paper-a, reference:paper-b." in block
+
+
+def test_canonical_block_omits_sources_when_no_derived_from() -> None:
+    from durin.memory.entity_page import EntityPage
+    from durin.memory.hot_layer import _render_canonical_block
+
+    page = EntityPage(type="topic", name="Uroperitoneum")
+    block = _render_canonical_block(
+        "topic:uroperitoneum", page, consolidated_ts="2026-07-05",
+    )
+    assert "Sources:" not in block

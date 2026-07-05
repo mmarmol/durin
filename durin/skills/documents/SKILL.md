@@ -38,18 +38,20 @@ Ingested documents are deliberately **kept out of default recall** — a normal
 `memory_search` will not return their raw chunks, so your everyday memory stays
 clean. Two things bridge them back:
 
-- **Distilled entities** from a document *do* surface in normal search, carrying
-  a `derived_from` pointer to their source. When you see one, you can drill into
-  the document behind it.
+- **Distilled entities** from a document *do* surface in normal search. When an
+  entity was distilled from (or references) a document, its block carries a
+  **`Sources: reference:<slug>, …`** line. That line is the thread back to the
+  source: drill any `reference:<slug>` to read the document behind the entity.
 - The **document library catalog** in your pinned context lists what has been
   ingested (one line each). It tells you a document exists.
 
-So when a question is about a specific document, or the catalog / a
-`derived_from` entity points at one, reach for it explicitly:
+So when a question is about a specific document, or a `Sources:` line / the
+catalog points at one, reach for it explicitly:
 
 - `memory_search(query, scope="library")` — searches only ingested documents.
-- `memory_drill(uri)` — pull the full text of a specific chunk or reference when
-  a search result is truncated.
+- `memory_drill("reference:<slug>")` — pull a whole ingested document (append
+  `#<heading>` for one section); also drills a truncated chunk from a
+  `scope="library"` hit.
 
 ## Provenance
 

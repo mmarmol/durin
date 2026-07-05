@@ -245,6 +245,8 @@ Up to `max_retries` (default 2) re-attempts are made on parse failure; each retr
 
 Canonical pages are wrapped in `=== CANONICAL: <uri> (consolidated <ts>) ===` markers; fragments in `=== FRAGMENT: <path> (ts <ts>) ===`. The intro sentence above the fragments section ("Reconcile with the canonical above using the timestamps.") cues the LLM to treat fragments as recent amendments rather than authoritative rewrites.
 
+A canonical block whose entity carries `derived_from` also renders a `Sources: reference:<slug>, …` line (in both the hot layer and `memory_search` results). This is the thread from an entity back to the documents it was distilled from or that were linked to it — the agent drills a `reference:<slug>` to read the source. Without it the link lives only in frontmatter and never reaches the model.
+
 ### 5.6 Structural markers
 
 Structural markers appear in both hot-layer output and `memory_search` results. They communicate class and URI; they do not communicate trust level or relevance rank — those the model reasons from content and timestamps.
