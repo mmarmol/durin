@@ -10,8 +10,11 @@ Idempotent per document: the outline records the ``chunk_count`` it was built
 from, so a document is distilled once and re-distilled only when it is
 re-ingested (its chunk count changes). No LLM is spent on the hot path.
 
-The complementary entity pass (seeding entity pages with ``derived_from``
-pointers) is a separate follow-on; this pass owns the outline artifact.
+A second pass, :func:`run_seed_entities_pass`, reads each document's outline
+and seeds candidate entity pages (with ``derived_from`` pointers back to the
+document) — the bridge that carries document knowledge into the entity graph
+and, distilled, into default recall. The refine pass dedups them against
+existing entities.
 """
 
 from __future__ import annotations
@@ -19,21 +22,33 @@ from __future__ import annotations
 import json
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from json_repair import repair_json
 
+from durin.memory.entities import SUGGESTED_TYPES_ORDERED
+from durin.memory.entity_manifest import build_entity_manifest
+from durin.memory.extract_dream import parse_discoveries
+from durin.memory.field_patch import FieldPatch
 from durin.memory.llm_invoke import LLMInvoke, default_llm_invoke
+from durin.memory.memory_writer import write_entity
 from durin.memory.reference import reference_chunks
 from durin.utils.atomic_write import atomic_write_text
 
 __all__ = [
     "build_outline_prompt",
+    "build_seed_prompt",
     "outline_path_for",
     "parse_outline",
     "run_distill_reference_pass",
+    "run_seed_entities_pass",
 ]
+
+# Max entities seeded per document — selective by design, so a single book does
+# not flood the entity graph with hundreds of incidental mentions.
+_MAX_ENTITIES_PER_DOC = 20
 
 # Total document text handed to one outline call. Mirrors the discover pass's
 # turn cap — keeps the prompt within a small model's context; a document larger
@@ -229,6 +244,171 @@ def run_distill_reference_pass(
     return {
         "references": total,
         "outlined": outlined,
+        "skipped": skipped,
+        "errors": errors,
+        "duration_ms": int((time.monotonic() - started) * 1000),
+    }
+
+
+_SEED_PROMPT = """You are durin's document knowledge pass. From the document below, \
+extract the KEY entities it is ABOUT — the people, organisations, concepts, works, \
+places, projects, or topics a reader would want durin to remember this document covers.
+
+Rules:
+- Be SELECTIVE: at most {cap} entities, the most CENTRAL ones. Skip incidental
+  mentions, examples, and generic terms.
+- Each entity is an object with:
+  - "ref": "<type>:<slug>" — lowercase ascii slug; type one of {types}
+  - "name": the display name
+  - "aliases": optional array of other names/spellings for this entity present in the document
+  - "relations": optional array of {{"to": "<type>:<slug>", "type": "<relation>"}} linking
+    this entity to ANOTHER entity the document is about
+  - "significance": ONE sentence on what this entity is and its role in the document
+  - "attributes": optional JSON object of scalar or short-list values — NO prose, NO nested objects
+- Only what the document states; do not invent or add outside knowledge.
+- Output ONLY a JSON array. If nothing central, output [].
+
+KNOWN ENTITIES — if the document is about one of these, reuse its EXACT ref:
+{existing}
+
+DOCUMENT: {title}
+ABSTRACT: {abstract}
+
+SECTIONS:
+{sections}
+
+JSON:"""
+
+
+def build_seed_prompt(
+    title: str,
+    abstract: str,
+    sections: list[tuple[str, str]],
+    *,
+    existing: str = "",
+    cap: int = _MAX_ENTITIES_PER_DOC,
+) -> str:
+    sec = "\n".join(
+        f"- {crumb or '(preamble)'}: {summary}" for crumb, summary in sections
+    )
+    return _SEED_PROMPT.format(
+        cap=cap,
+        types="/".join(SUGGESTED_TYPES_ORDERED),
+        existing=existing.strip() or "(none yet)",
+        title=title or "(untitled)",
+        abstract=abstract or "",
+        sections=sec[:8000],
+    )
+
+
+def run_seed_entities_pass(
+    workspace: Path,
+    *,
+    llm_invoke: LLMInvoke | None = None,
+    model: str | None = None,
+    max_seconds: int = 0,
+) -> dict[str, Any]:
+    """Seed candidate entity pages from each reference's distilled outline.
+
+    Reads the ``<slug>.outline.json`` written by :func:`run_distill_reference_pass`,
+    asks one selective LLM call for the KEY entities the document is about, and
+    writes them as dream-authored pages stamped ``derived_from`` = the document.
+    Idempotent per document via an ``entities_seeded_chunk_count`` marker on the
+    outline; the refine pass dedups against existing entities.
+    """
+    from durin.memory.deletion import is_deleted
+
+    invoke = llm_invoke or default_llm_invoke
+    refs_dir = Path(workspace) / "memory" / "references"
+    started = time.monotonic()
+    seeded_docs = 0
+    entities = 0
+    skipped = 0
+    errors: list[str] = []
+    total = 0
+
+    if refs_dir.is_dir():
+        for md_path in sorted(refs_dir.glob("*.md")):
+            slug = md_path.stem
+            out_path = outline_path_for(workspace, slug)
+            if not out_path.exists():
+                continue  # not distilled yet — nothing to seed from
+            total += 1
+            if max_seconds and (time.monotonic() - started) > max_seconds:
+                break
+            try:
+                outline = json.loads(out_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            chunk_count = int(outline.get("chunk_count") or 0)
+            if int(outline.get("entities_seeded_chunk_count") or -1) == chunk_count:
+                skipped += 1
+                continue
+
+            doc_ref = f"reference:{slug}"
+            sections = [
+                (str(s.get("breadcrumb") or ""), str(s.get("summary") or ""))
+                for s in outline.get("sections", [])
+            ]
+            abstract = str(outline.get("abstract") or "")
+            title = str(outline.get("title") or slug)
+            manifest = build_entity_manifest(
+                workspace, query=f"{title}\n{abstract}", limit=20)
+            prompt = build_seed_prompt(
+                title, abstract, sections, existing=manifest)
+            try:
+                resp = invoke(prompt, model=model)
+                raw = resp.text if hasattr(resp, "text") else str(resp)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{doc_ref}: {exc}")
+                continue
+            proposals = parse_discoveries(str(raw)) or []
+
+            now = datetime.now(timezone.utc)
+            src = f"[[references/{slug}.md]]"
+            for prop in proposals[:_MAX_ENTITIES_PER_DOC]:
+                ref = prop["ref"]
+                if is_deleted(workspace, ref):
+                    continue
+                patches = [
+                    FieldPatch(kind="attribute", key=k, value=v, author="dream",
+                               source_ref=src, at=now)
+                    for k, v in prop["attributes"].items()
+                ]
+                patches += [
+                    FieldPatch(kind="alias", value=al, author="dream",
+                               source_ref=src, at=now)
+                    for al in prop.get("aliases", [])
+                ]
+                patches += [
+                    FieldPatch(kind="relation", value=rel, author="dream",
+                               source_ref=src, at=now)
+                    for rel in prop.get("relations", [])
+                ]
+                sig = prop.get("significance")
+                if sig:
+                    patches.append(FieldPatch(kind="body_replace", value=sig,
+                                              author="dream", source_ref=src, at=now))
+                patches.append(FieldPatch(kind="derived_from", value=doc_ref,
+                                          author="dream", source_ref=src, at=now))
+                try:
+                    write_entity(workspace, ref, patches, create=True,
+                                 name=prop["name"])
+                    entities += 1
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"{ref}: write failed: {exc}")
+
+            outline["entities_seeded_chunk_count"] = chunk_count
+            try:
+                atomic_write_text(out_path, json.dumps(outline, indent=2))
+                seeded_docs += 1
+            except OSError as exc:
+                errors.append(f"{doc_ref}: marker write failed: {exc}")
+
+    return {
+        "references": total,
+        "seeded_docs": seeded_docs,
+        "entities": entities,
         "skipped": skipped,
         "errors": errors,
         "duration_ms": int((time.monotonic() - started) * 1000),

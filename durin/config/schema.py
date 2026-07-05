@@ -247,6 +247,12 @@ class MemoryDreamConfig(Base):
         description="Distil each ingested reference document into a <slug>.outline.json sidecar (abstract + per-section summaries) — the 'know the book' index. Idempotent per document.",
     )
 
+    seed_entities_from_docs_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("seedEntitiesFromDocsEnabled", "seed_entities_from_docs_enabled"),
+        description="Seed candidate entity pages from each distilled document's outline, stamped derived_from the document — the bridge that carries document knowledge into the entity graph. The refine pass dedups them.",
+    )
+
     # ON by default: detection only (curation decides); precision lives in the
     # prompt and `memory.dream.skill_signals` telemetry measures it.
     skill_signals_enabled: bool = Field(
