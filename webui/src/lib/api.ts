@@ -1778,6 +1778,10 @@ export interface ReferenceDocumentDetail {
     ref: string;
     type: string;
     name: string;
+    // How the entity relates to the document: "distilled" = the nightly dream
+    // extracted it from this document (the doc is about it); "referenced" = an
+    // entity that cited this document as a source (the doc isn't about it).
+    relation: "distilled" | "referenced";
     significance: string | null;
   }>;
   chunks_preview: Array<{ idx: number; breadcrumb: string; text: string }>;
