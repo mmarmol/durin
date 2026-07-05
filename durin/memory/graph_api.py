@@ -999,9 +999,20 @@ def _clean_significance(body: str) -> str | None:
 
 
 def _entities_derived_from(memory_root: Path, ref: str) -> list[dict[str, Any]]:
-    """Entities the dream seeded from a reference — those whose ``derived_from``
-    lists ``ref``. This is the bridge the Library uses to surface a document's
-    distilled knowledge in the entity graph; the shelf lists it per-document."""
+    """Entities linked to a reference via ``derived_from`` — with the KIND of link.
+
+    ``derived_from`` is written by two producers with different meaning, and the
+    per-link provenance author tells them apart:
+
+    - ``author == "dream"`` → ``relation="distilled"``: the nightly pass extracted
+      this entity FROM the document's content (the document is about it).
+    - otherwise (``"agent"`` / unknown) → ``relation="referenced"``: an entity
+      linked to the document as a *source it consulted* during a conversation —
+      the document does not necessarily describe it (e.g. a patient whose workup
+      cited a paper).
+
+    Distilled entities sort first, then by name.
+    """
     entities_dir = memory_root / "entities"
     if not entities_dir.is_dir():
         return []
@@ -1013,13 +1024,17 @@ def _entities_derived_from(memory_root: Path, ref: str) -> list[dict[str, Any]]:
             page = None
         if page is None or ref not in (page.derived_from or []):
             continue
+        prov_df = (page.provenance or {}).get("derived_from")
+        link = prov_df.get(ref) if isinstance(prov_df, dict) else None
+        author = link.get("author") if isinstance(link, dict) else None
         out.append({
             "ref": f"{md.parent.name}:{md.stem}",
             "type": md.parent.name,
             "name": page.name,
+            "relation": "distilled" if author == "dream" else "referenced",
             "significance": _clean_significance(page.body or ""),
         })
-    out.sort(key=lambda e: str(e.get("name") or "").lower())
+    out.sort(key=lambda e: (e["relation"] != "distilled", str(e.get("name") or "").lower()))
     return out
 
 
