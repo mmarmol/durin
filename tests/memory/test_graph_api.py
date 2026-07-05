@@ -585,14 +585,53 @@ def test_get_reference_detail_full_payload(tmp_path: Path) -> None:
     assert d["outline"]["abstract"].startswith("A handbook")
     crumbs = [s["breadcrumb"] for s in d["outline"]["sections"]]
     assert crumbs == ["Intro", "Intro › Setup"]
-    # derived entity surfaces with its cleaned significance
+    # derived entity surfaces with its cleaned significance; dream-authored
+    # derived_from → relation="distilled" (the document is about it).
     assert d["entities"] == [{
         "ref": "project:durin", "type": "project", "name": "durin",
+        "relation": "distilled",
         "significance": "The local-first agent the handbook documents.",
     }]
     # chunk preview carries breadcrumb + text
     assert d["chunks_preview"][0]["breadcrumb"] == "Intro"
     assert "Durin is a local agent." in d["chunks_preview"][0]["text"]
+
+
+def test_get_reference_detail_distinguishes_referenced_from_distilled(
+    tmp_path: Path,
+) -> None:
+    """An agent-authored derived_from (an entity that CITED the doc as a source)
+    is relation='referenced', not 'distilled' — the doc isn't about it."""
+    from datetime import timezone
+
+    from durin.memory.field_patch import FieldPatch
+    from durin.memory.memory_writer import write_entity
+    from durin.memory.reference import ingest_reference
+
+    ingest_reference(tmp_path, "Uroperitoneum Paper", "# Study\n\nRatios.\n")
+    ref = "reference:uroperitoneum-paper"
+    now = datetime.datetime(2026, 6, 7, tzinfo=timezone.utc)
+    src = "[[sessions/websocket_x.md#turn-4]]"
+    # A patient the agent linked to the paper as a consulted source.
+    write_entity(
+        tmp_path, "patient:drako",
+        [FieldPatch(kind="derived_from", value=ref, author="agent",
+                    source_ref=src, at=now)],
+        create=True, name="Drako",
+    )
+    # A concept the dream distilled from the paper.
+    write_entity(
+        tmp_path, "topic:uroperitoneum",
+        [FieldPatch(kind="derived_from", value=ref, author="dream",
+                    source_ref="[[references/uroperitoneum-paper.md]]", at=now)],
+        create=True, name="Uroperitoneum",
+    )
+    d = get_reference_detail(tmp_path, "uroperitoneum-paper")
+    assert d is not None
+    rel = {e["ref"]: e["relation"] for e in d["entities"]}
+    assert rel == {"patient:drako": "referenced", "topic:uroperitoneum": "distilled"}
+    # distilled sorts first.
+    assert d["entities"][0]["ref"] == "topic:uroperitoneum"
 
 
 def test_get_reference_detail_undistilled_has_null_outline(tmp_path: Path) -> None:
