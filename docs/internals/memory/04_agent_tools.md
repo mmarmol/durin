@@ -242,9 +242,10 @@ The batch form runs drills concurrently via `asyncio.gather` +
 `asyncio.to_thread`. Individual failures in a batch return an `error` field on
 the failing record without aborting the rest.
 
-**When to call:** only when a `memory_search` result block is marked
-`(preview N/M)` — N chars shown, M chars exist. When the block is marked
-`(complete)`, drill returns the same text and wastes a round-trip.
+**When to call:** when a `memory_search` result block is marked `(preview N/M)`
+— N chars shown, M chars exist (a `(complete)` block returns the same text and
+wastes a round-trip) — **or** to pull a document a `Sources:` line / a
+`derived_from` pointer names (`reference:<slug>`).
 
 **URI shapes accepted** (routed by `durin/memory/drill.py`):
 
@@ -253,6 +254,7 @@ the failing record without aborting the rest.
 | `memory/<class>/<id>` | Memory entries (episodic, stable, corpus, reference). `.md` appended automatically. |
 | `memory/entity_page/<type>:<slug>` | Entity page URI shape that `memory_search` emits. Translated to `memory/entities/<type>/<slug>.md`. |
 | `memory/entities/<type>/<slug>.md` | Direct on-disk entity page path. |
+| `reference:<slug>` (optionally `#<heading>`) | An ingested document — the `derived_from` / `Sources:` form and the `memory/reference/<slug>` form that `scope="library"` emits both resolve to `memory/references/<slug>.md`. |
 | `memory/archive/<class>/<id>.md` | Archived content from `scope='archive'` searches. |
 | `sessions/<key>.md` (optionally `#turn-N`) | Session transcript, optionally a specific turn. |
 | `ingested/<id>/source.md` (optionally `#anchor`) | Verbatim ingested document, optionally a markdown section. |

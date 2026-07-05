@@ -72,6 +72,11 @@ class SectionedHit:
     # unknown (lexical-only hits, legacy callers) — the renderer
     # then omits the signal entirely (backward-compat marker shape).
     body_length: int = 0
+    # Source documents this (canonical entity) hit was distilled from or
+    # linked to — its ``derived_from``. Rendered as a ``Sources:`` line so the
+    # agent sees the link and can ``memory_drill`` the ``reference:<slug>``.
+    # Populated by the caller for entity hits; empty for everything else.
+    derived_from: tuple[str, ...] = ()
 
 
 # Map each source class to a section bucket. Stable entries surface as
@@ -226,6 +231,10 @@ def _render_block(section: str, hit: SectionedHit) -> str:
     parts = [marker]
     if rendered_body:
         parts.append(rendered_body)
+    # Source documents behind a canonical entity — lets the agent see the link
+    # and drill the reference. Mirrors the hot layer's ``Sources:`` line.
+    if section == "canonical" and hit.derived_from:
+        parts.append("Sources: " + ", ".join(hit.derived_from[:8]) + ".")
     if section not in ("canonical", "skill") and hit.entities:
         parts.append(f"Entities: {', '.join(hit.entities)}")
     from durin.memory.section_markers import end_marker

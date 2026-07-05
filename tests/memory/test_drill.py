@@ -272,3 +272,39 @@ def test_description_documents_both_shapes() -> None:
     desc = MemoryDrillTool(workspace=Path("/tmp")).description
     assert "uri" in desc and "uris" in desc
     assert "preview" in desc.lower()
+
+
+# ---------------------------------------------------------------------------
+# reference documents — every uri shape the agent might hold resolves
+# ---------------------------------------------------------------------------
+
+
+def test_drill_resolves_all_reference_uri_forms(tmp_path: Path) -> None:
+    """The ``derived_from`` / library-search / on-disk forms all resolve to the
+    same document, so an agent can drill straight from any of them."""
+    from durin.memory.reference import ingest_reference
+
+    ingest_reference(tmp_path, "The Handbook", "# Intro\n\nHello world.\n")
+    slug = "the-handbook"
+    forms = [
+        f"reference:{slug}",                     # entity derived_from / FTS
+        f"memory/reference/reference:{slug}",    # scope=library vector/grep hit
+        f"memory/references/{slug}.md",          # on-disk path
+    ]
+    outs = [drill(tmp_path, f) for f in forms]
+    assert all("Hello world." in o for o in outs)
+    assert outs[0] == outs[1] == outs[2]
+
+
+def test_drill_reference_with_section_anchor(tmp_path: Path) -> None:
+    from durin.memory.reference import ingest_reference
+
+    ingest_reference(tmp_path, "Doc", "# Intro\n\nA.\n\n## Setup\n\nRun it.\n")
+    out = drill(tmp_path, "reference:doc#Setup")
+    assert "Run it." in out and "## Setup" in out
+    assert "Intro" not in out
+
+
+def test_drill_missing_reference_raises(tmp_path: Path) -> None:
+    with pytest.raises(DrillError):
+        drill(tmp_path, "reference:ghost-doc")
