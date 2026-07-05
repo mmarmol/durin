@@ -253,6 +253,12 @@ class MemoryDreamConfig(Base):
         description="Seed candidate entity pages from each distilled document's outline, stamped derived_from the document — the bridge that carries document knowledge into the entity graph. The refine pass dedups them.",
     )
 
+    curate_topics_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("curateTopicsEnabled", "curate_topics_enabled"),
+        description="Curate the library's topic index (memory/references/_topics.json) from the distilled abstracts — clean, stable theme labels the always-on Library awareness reads as its 'Covers:' map. Reuses prior labels so the index does not drift; idempotent when the document set is unchanged.",
+    )
+
     # ON by default: detection only (curation decides); precision lives in the
     # prompt and `memory.dream.skill_signals` telemetry measures it.
     skill_signals_enabled: bool = Field(

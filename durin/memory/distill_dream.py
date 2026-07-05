@@ -40,11 +40,19 @@ from durin.utils.atomic_write import atomic_write_text
 __all__ = [
     "build_outline_prompt",
     "build_seed_prompt",
+    "build_topics_prompt",
     "outline_path_for",
     "parse_outline",
+    "parse_topics",
+    "run_curate_topics_pass",
     "run_distill_reference_pass",
     "run_seed_entities_pass",
+    "topics_path_for",
 ]
+
+# Cap on the curated library topic index — coherent themes, not per-document
+# granular topics, so the always-on "Covers:" map stays bounded and scannable.
+_MAX_TOPICS = 24
 
 # Max entities seeded per document — selective by design, so a single book does
 # not flood the entity graph with hundreds of incidental mentions.
@@ -413,3 +421,178 @@ def run_seed_entities_pass(
         "errors": errors,
         "duration_ms": int((time.monotonic() - started) * 1000),
     }
+
+
+_TOPICS_PROMPT = """You are durin's library topic-index pass. Curate a clean, \
+STABLE index of the subjects the user's document library covers — the short map a \
+reader scans to know what is in the library.
+
+You are given every document (title + abstract) and the CURRENT index. Return the \
+updated index.
+
+Rules:
+- Use coherent THEME labels, not granular sub-topics. Fold synonyms and \
+translations into ONE label (e.g. "Paraprostatic cysts" and "Quistes \
+paraprostaticos" are the same theme), and roll specific procedures or findings up \
+under the theme they belong to.
+- REUSE the current index's labels wherever they still fit — do NOT rename them or \
+coin near-duplicates. Add a topic only for a genuinely new theme; drop a topic \
+whose documents are all gone. Stability matters: the index must not drift run to run.
+- Assign each document to 1-3 topics by its EXACT slug.
+- Order topics broadest-first (most central to the library first).
+
+Return ONLY JSON: {{"topics": [{{"label": "<theme>", "docs": ["<slug>", ...]}}]}}
+
+CURRENT INDEX:
+{current}
+
+DOCUMENTS:
+{documents}
+
+JSON:"""
+
+
+def topics_path_for(workspace: Path) -> Path:
+    return Path(workspace) / "memory" / "references" / "_topics.json"
+
+
+def build_topics_prompt(
+    documents: list[tuple[str, str, str]],
+    current: list[dict[str, Any]],
+) -> str:
+    """``documents`` = [(slug, title, abstract), ...]; ``current`` = the stored
+    ``topics`` list, fed back so the LLM reuses labels instead of drifting."""
+    docs_block = "\n".join(
+        f"- {slug}: {title} — {abstract}" for slug, title, abstract in documents
+    )
+    cur_block = "\n".join(
+        f"- {t.get('label')}: {', '.join(t.get('docs') or [])}" for t in current
+    ) or "(none yet)"
+    return _TOPICS_PROMPT.format(
+        current=cur_block[:4000], documents=docs_block[:_MAX_PROMPT_CHARS],
+    )
+
+
+def parse_topics(
+    raw: str, valid_slugs: set[str]
+) -> Optional[list[dict[str, Any]]]:
+    """Tolerant parse of the topic-index JSON.
+
+    Returns ``[{"label": str, "docs": [slug, ...]}, ...]`` — deduped by label,
+    docs filtered to ``valid_slugs``, topics with no valid doc dropped, capped at
+    :data:`_MAX_TOPICS`. Returns ``None`` only when the output is unparseable or
+    the wrong shape (an empty list is a valid result for an empty library)."""
+    s = raw.strip()
+    m = re.search(r"```(?:json)?\s*(.*?)```", s, re.DOTALL)
+    if m:
+        s = m.group(1).strip()
+    try:
+        obj = json.loads(repair_json(s))
+    except Exception:
+        return None
+    topics_raw = obj.get("topics") if isinstance(obj, dict) else obj
+    if not isinstance(topics_raw, list):
+        return None
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for t in topics_raw:
+        if not isinstance(t, dict):
+            continue
+        label = str(t.get("label") or "").strip()
+        if not label or label.lower() in seen:
+            continue
+        docs = [str(d) for d in (t.get("docs") or []) if str(d) in valid_slugs]
+        if not docs:
+            continue
+        seen.add(label.lower())
+        out.append({"label": label, "docs": docs})
+        if len(out) >= _MAX_TOPICS:
+            break
+    return out
+
+
+def run_curate_topics_pass(
+    workspace: Path,
+    *,
+    llm_invoke: LLMInvoke | None = None,
+    model: str | None = None,
+    max_seconds: int = 0,
+) -> dict[str, Any]:
+    """Curate the library's topic index (``memory/references/_topics.json``).
+
+    One LLM call over the distilled documents' abstracts produces a clean, stable
+    set of theme labels with the documents under each — the "map" the always-on
+    Library awareness reads (:func:`principal.build_library_awareness`). The
+    current index is fed back so the LLM reuses labels instead of regenerating
+    (curation, not drift). Idempotent: skipped when the set of distilled
+    documents is unchanged (signature = each doc's slug + chunk_count).
+    """
+    invoke = llm_invoke or default_llm_invoke
+    refs_dir = Path(workspace) / "memory" / "references"
+    started = time.monotonic()
+
+    def _elapsed() -> int:
+        return int((time.monotonic() - started) * 1000)
+
+    if not refs_dir.is_dir():
+        return {"topics": 0, "skipped": True, "duration_ms": _elapsed()}
+
+    documents: list[tuple[str, str, str]] = []
+    signature: list[str] = []
+    for md_path in sorted(refs_dir.glob("*.md")):
+        slug = md_path.stem
+        out_path = outline_path_for(workspace, slug)
+        if not out_path.exists():
+            continue  # only distilled documents carry an abstract to theme
+        try:
+            outline = json.loads(out_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        documents.append(
+            (slug, str(outline.get("title") or slug),
+             str(outline.get("abstract") or "")))
+        signature.append(f"{slug}:{int(outline.get('chunk_count') or 0)}")
+
+    if not documents:
+        return {"topics": 0, "skipped": True, "duration_ms": _elapsed()}
+
+    tpath = topics_path_for(workspace)
+    current: list[dict[str, Any]] = []
+    if tpath.exists():
+        try:
+            prev = json.loads(tpath.read_text(encoding="utf-8"))
+            if prev.get("signature") == signature:
+                return {"topics": len(prev.get("topics", [])),
+                        "skipped": True, "duration_ms": _elapsed()}
+            current = prev.get("topics", []) or []
+        except Exception:
+            pass  # unreadable/stale index → re-curate from scratch
+
+    if max_seconds and _elapsed() > max_seconds * 1000:
+        return {"topics": 0, "skipped": True, "duration_ms": _elapsed()}
+
+    valid = {slug for slug, _t, _a in documents}
+    prompt = build_topics_prompt(documents, current)
+    try:
+        resp = invoke(prompt, model=model)
+        raw = resp.text if hasattr(resp, "text") else str(resp)
+    except Exception as exc:  # noqa: BLE001
+        return {"topics": 0, "errors": [str(exc)], "duration_ms": _elapsed()}
+
+    topics = parse_topics(str(raw), valid)
+    if topics is None:
+        return {"topics": 0, "errors": ["unparseable topics"],
+                "duration_ms": _elapsed()}
+
+    payload: dict[str, Any] = {
+        "topics": topics, "signature": signature, "doc_count": len(documents),
+    }
+    if model:
+        payload["model"] = model
+    try:
+        atomic_write_text(tpath, json.dumps(payload, indent=2))
+    except OSError as exc:
+        return {"topics": 0, "errors": [f"write failed: {exc}"],
+                "duration_ms": _elapsed()}
+    return {"topics": len(topics), "documents": len(documents),
+            "skipped": False, "duration_ms": _elapsed()}

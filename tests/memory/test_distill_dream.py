@@ -9,7 +9,10 @@ from durin.memory.distill_dream import (
     _sections_from_chunks,
     outline_path_for,
     parse_outline,
+    parse_topics,
+    run_curate_topics_pass,
     run_distill_reference_pass,
+    topics_path_for,
 )
 from durin.memory.llm_invoke import LLMResponse
 from durin.memory.reference import ingest_reference, reference_chunks
@@ -237,3 +240,74 @@ def test_seed_empty_proposals_marks_done_without_entities(tmp_path: Path) -> Non
     # marker set → a re-run skips
     again = run_seed_entities_pass(ws, llm_invoke=_seed_stub([{"ref": "x:y", "name": "Y"}]))
     assert again["skipped"] == 1 and again["entities"] == 0
+
+
+# --- topic curation (run_curate_topics_pass) ---------------------------------
+
+
+def _topics_stub(topics: list[dict], captured: list | None = None):
+    def invoke(prompt: str, *, model=None) -> LLMResponse:
+        if captured is not None:
+            captured.append(prompt)
+        return LLMResponse(text=json.dumps({"topics": topics}),
+                           prompt_tokens=1, completion_tokens=1)
+    return invoke
+
+
+def _ingest_with_outline(ws: Path, title: str, abstract: str) -> str:
+    r = ingest_reference(ws, title, f"# {title}\n\nbody.\n")
+    slug = r.ref.split(":", 1)[1]
+    outline_path_for(ws, slug).write_text(
+        json.dumps({"title": title, "abstract": abstract, "chunk_count": 1}))
+    return slug
+
+
+def test_parse_topics_filters_unknown_slugs_and_dedups() -> None:
+    out = parse_topics(
+        '{"topics":[{"label":"A","docs":["x","ghost"]},'
+        '{"label":"a","docs":["y"]},{"label":"B","docs":["ghost"]}]}',
+        {"x", "y"})
+    # "a" dedups against "A"; "B" drops (no valid docs); "ghost" filtered out.
+    assert out == [{"label": "A", "docs": ["x"]}]
+
+
+def test_parse_topics_garbage_is_none() -> None:
+    assert parse_topics("not json at all", {"x"}) is None
+
+
+def test_curate_topics_writes_index(tmp_path: Path) -> None:
+    _ingest_with_outline(tmp_path, "Uro A", "About uroperitoneum.")
+    _ingest_with_outline(tmp_path, "Uro B", "More uroperitoneum.")
+    stub = _topics_stub([{"label": "Uroperitoneum", "docs": ["uro-a", "uro-b"]}])
+    r = run_curate_topics_pass(tmp_path, llm_invoke=stub)
+    assert r["topics"] == 1 and not r.get("skipped")
+    idx = json.loads(topics_path_for(tmp_path).read_text())
+    assert idx["topics"] == [{"label": "Uroperitoneum", "docs": ["uro-a", "uro-b"]}]
+
+
+def test_curate_topics_idempotent_on_unchanged_docs(tmp_path: Path) -> None:
+    _ingest_with_outline(tmp_path, "Doc", "abstract.")
+    stub = _topics_stub([{"label": "T", "docs": ["doc"]}])
+    run_curate_topics_pass(tmp_path, llm_invoke=stub)
+    assert run_curate_topics_pass(tmp_path, llm_invoke=stub)["skipped"] is True
+
+
+def test_curate_topics_feeds_current_labels_for_reuse(tmp_path: Path) -> None:
+    _ingest_with_outline(tmp_path, "Doc A", "a.")
+    run_curate_topics_pass(
+        tmp_path,
+        llm_invoke=_topics_stub([{"label": "Existing Theme", "docs": ["doc-a"]}]))
+    # a new document changes the signature → re-runs; the prompt must carry the
+    # current index so the LLM reuses labels instead of drifting.
+    _ingest_with_outline(tmp_path, "Doc B", "b.")
+    captured: list[str] = []
+    run_curate_topics_pass(tmp_path, llm_invoke=_topics_stub(
+        [{"label": "Existing Theme", "docs": ["doc-a", "doc-b"]}], captured))
+    assert captured and "Existing Theme" in captured[0]
+
+
+def test_curate_topics_no_distilled_docs_is_noop(tmp_path: Path) -> None:
+    ingest_reference(tmp_path, "Raw", "# r\n\nbody.\n")  # no outline
+    r = run_curate_topics_pass(
+        tmp_path, llm_invoke=_topics_stub([{"label": "X", "docs": ["raw"]}]))
+    assert r["skipped"] is True and r["topics"] == 0
