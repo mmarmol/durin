@@ -2635,6 +2635,27 @@
         "title": "MemoryBacklinksQuery",
         "type": "object"
       },
+      "MemoryDocumentQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug"
+        ],
+        "title": "MemoryDocumentQuery",
+        "type": "object"
+      },
+      "MemoryDocumentsQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 lists all ingested reference documents (the Library shelf).",
+        "properties": {},
+        "title": "MemoryDocumentsQuery",
+        "type": "object"
+      },
       "MemoryEdgeQuery": {
         "additionalProperties": false,
         "properties": {
@@ -7789,6 +7810,64 @@
         },
         "summary": "Load and probe a cross-encoder model id (off-thread, may be slow)",
         "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/memory/documents": {
+      "get": {
+        "operationId": "memory_documents",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryDocumentsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List ingested reference documents (the Library shelf)",
+        "x-required-scope": "memory:read"
+      }
+    },
+    "/api/v1/memory/documents/{slug}": {
+      "get": {
+        "operationId": "memory_document",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryDocumentQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Reference document detail: outline + derived entities + chunk preview",
+        "x-required-scope": "memory:read"
       }
     },
     "/api/v1/memory/dream/digest": {

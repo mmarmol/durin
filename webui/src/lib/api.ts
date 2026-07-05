@@ -1747,6 +1747,69 @@ export async function fetchMemoryEntity(
   return (envelope.data ?? envelope) as MemoryEntityDetail;
 }
 
+// Ingested reference documents (the "Library" shelf). Raw chunks live outside
+// default recall; these read-only surfaces let the memory page browse them.
+export interface ReferenceDocumentSummary {
+  slug: string;
+  ref: string;
+  title: string;
+  source: string | null;
+  ingested_at: string | null;
+  chunk_count: number;
+  distilled: boolean; // the dream has written an outline for it
+}
+
+export interface ReferenceOutlineSection {
+  breadcrumb: string;
+  summary: string;
+  chunk_indices: number[];
+}
+
+export interface ReferenceDocumentDetail {
+  slug: string;
+  ref: string;
+  title: string;
+  source: string | null;
+  ingested_at: string | null;
+  chunk_count: number;
+  chunks_total: number;
+  outline: { abstract: string; sections: ReferenceOutlineSection[] } | null;
+  entities: Array<{
+    ref: string;
+    type: string;
+    name: string;
+    significance: string | null;
+  }>;
+  chunks_preview: Array<{ idx: number; breadcrumb: string; text: string }>;
+}
+
+export async function fetchMemoryDocuments(
+  token: string,
+  base: string = "",
+): Promise<ReferenceDocumentSummary[]> {
+  const url = `${base}/api/v1/memory/documents`;
+  const res = await fetchWithReauth(url, token);
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+  const envelope = await res.json();
+  const data = (envelope.data ?? envelope) as {
+    documents?: ReferenceDocumentSummary[];
+  };
+  return data.documents ?? [];
+}
+
+export async function fetchMemoryDocument(
+  token: string,
+  slug: string,
+  base: string = "",
+): Promise<ReferenceDocumentDetail | null> {
+  const url = `${base}/api/v1/memory/documents/${encodeURIComponent(slug)}`;
+  const res = await fetchWithReauth(url, token);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+  const envelope = await res.json();
+  return (envelope.data ?? envelope) as ReferenceDocumentDetail;
+}
+
 export interface MemorySearchResult {
   source: string;
   uri: string;

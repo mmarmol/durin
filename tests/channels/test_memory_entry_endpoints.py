@@ -195,3 +195,40 @@ def test_memory_backlinks_endpoint(
     assert len(body["backlinks"]) == 1
     assert body["backlinks"][0]["uri"] == "memory/episodic/ref"
     assert body["truncated"] is False
+
+
+def test_memory_documents_routes_require_bearer(client: TestClient) -> None:
+    assert client.get("/api/v1/memory/documents").status_code == 401
+    assert client.get("/api/v1/memory/documents/some-doc").status_code == 401
+
+
+def test_memory_documents_endpoints_return_payloads(
+    tmp_path: Path, client: TestClient,
+) -> None:
+    from durin.memory.reference import ingest_reference
+
+    ingest_reference(
+        tmp_path, "The Handbook", "# Intro\n\nHello world.\n", source="disk:/h.pdf",
+    )
+    auth = {"Authorization": f"Bearer {_token(client)}"}
+
+    # List: one document.
+    r = client.get("/api/v1/memory/documents", headers=auth)
+    assert r.status_code == 200
+    docs = r.json()["data"]["documents"]
+    assert len(docs) == 1
+    assert docs[0]["title"] == "The Handbook"
+    assert docs[0]["ref"] == "reference:the-handbook"
+
+    # Detail: outline null (undistilled), chunks previewed. Path-param decoded.
+    rd = client.get("/api/v1/memory/documents/the-handbook", headers=auth)
+    assert rd.status_code == 200
+    detail = rd.json()["data"]
+    assert detail["source"] == "disk:/h.pdf"
+    assert detail["outline"] is None
+    assert detail["chunks_preview"]
+
+    # 404 for an unknown slug.
+    assert client.get(
+        "/api/v1/memory/documents/ghost", headers=auth,
+    ).status_code == 404

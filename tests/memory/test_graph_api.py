@@ -13,6 +13,8 @@ from durin.memory.entity_page import EntityPage
 from durin.memory.graph_api import (
     get_edge_detail,
     get_entity_detail,
+    get_reference_detail,
+    list_reference_documents,
     search_memory_api,
 )
 from durin.memory.store import store_memory
@@ -489,3 +491,116 @@ def test_session_detail_meta_tags_separate_from_source_refs(tmp_path: Path) -> N
     assert d is not None
     assert d["entities_tagged"]["from_meta"] == ["topic:autocompact"]
     assert d["entities_tagged"]["from_source_refs"] == []
+
+
+# ---------------------------------------------------------------------------
+# reference documents — the Library shelf (list + detail)
+# ---------------------------------------------------------------------------
+
+
+def _seed_reference_with_outline_and_entity(tmp_path: Path) -> str:
+    """Ingest a doc, write an outline sidecar + a derived entity; return slug."""
+    import json
+
+    from durin.memory.distill_dream import outline_path_for
+    from durin.memory.field_patch import FieldPatch
+    from durin.memory.memory_writer import write_entity
+    from durin.memory.reference import ingest_reference
+
+    r = ingest_reference(
+        tmp_path,
+        "The Durin Handbook",
+        "# Intro\n\nDurin is a local agent.\n\n## Setup\n\nRun the gateway.\n",
+        source="https://example.com/handbook.pdf",
+    )
+    outline_path_for(tmp_path, "the-durin-handbook").write_text(
+        json.dumps({
+            "ref": r.ref, "title": "The Durin Handbook", "chunk_count": r.chunk_count,
+            "abstract": "A handbook about the durin local agent.",
+            "sections": [
+                {"breadcrumb": "Intro", "summary": "What durin is.", "chunk_indices": [0]},
+                {"breadcrumb": "Intro › Setup", "summary": "How to run it.",
+                 "chunk_indices": [1]},
+            ],
+        })
+    )
+    now = datetime.datetime(2026, 6, 5, tzinfo=datetime.timezone.utc)
+    src = "[[references/the-durin-handbook.md]]"
+    write_entity(
+        tmp_path, "project:durin",
+        [
+            FieldPatch(kind="body_replace",
+                       value="The local-first agent the handbook documents.",
+                       author="dream", source_ref=src, at=now),
+            FieldPatch(kind="derived_from", value=r.ref,
+                       author="dream", source_ref=src, at=now),
+        ],
+        create=True, name="durin",
+    )
+    return "the-durin-handbook"
+
+
+def test_list_reference_documents_empty(tmp_path: Path) -> None:
+    assert list_reference_documents(tmp_path) == []
+
+
+def test_list_reference_documents_newest_first(tmp_path: Path) -> None:
+    from durin.memory.reference import ingest_reference
+
+    ingest_reference(tmp_path, "Older", "# A\n\nbody.\n")
+    # Force a later ingested_at on the second by editing its frontmatter.
+    ingest_reference(tmp_path, "Newer", "# B\n\nbody.\n")
+    rows = list_reference_documents(tmp_path)
+    assert {r["title"] for r in rows} == {"Older", "Newer"}
+    # Sorted by ingested_at descending — both are ISO strings, newest first.
+    assert rows == sorted(rows, key=lambda r: r["ingested_at"], reverse=True)
+    for r in rows:
+        assert r["chunk_count"] >= 1
+        assert r["distilled"] is False  # no outline written
+
+
+def test_list_reference_documents_flags_distilled(tmp_path: Path) -> None:
+    slug = _seed_reference_with_outline_and_entity(tmp_path)
+    rows = list_reference_documents(tmp_path)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["slug"] == slug
+    assert row["ref"] == f"reference:{slug}"
+    assert row["source"] == "https://example.com/handbook.pdf"
+    assert row["distilled"] is True
+
+
+def test_get_reference_detail_missing_returns_none(tmp_path: Path) -> None:
+    assert get_reference_detail(tmp_path, "ghost") is None
+
+
+def test_get_reference_detail_full_payload(tmp_path: Path) -> None:
+    slug = _seed_reference_with_outline_and_entity(tmp_path)
+    d = get_reference_detail(tmp_path, slug)
+    assert d is not None
+    assert d["title"] == "The Durin Handbook"
+    assert d["source"] == "https://example.com/handbook.pdf"
+    assert d["chunks_total"] == 2
+    # outline (on-disk list form with chunk_indices)
+    assert d["outline"]["abstract"].startswith("A handbook")
+    crumbs = [s["breadcrumb"] for s in d["outline"]["sections"]]
+    assert crumbs == ["Intro", "Intro › Setup"]
+    # derived entity surfaces with its cleaned significance
+    assert d["entities"] == [{
+        "ref": "project:durin", "type": "project", "name": "durin",
+        "significance": "The local-first agent the handbook documents.",
+    }]
+    # chunk preview carries breadcrumb + text
+    assert d["chunks_preview"][0]["breadcrumb"] == "Intro"
+    assert "Durin is a local agent." in d["chunks_preview"][0]["text"]
+
+
+def test_get_reference_detail_undistilled_has_null_outline(tmp_path: Path) -> None:
+    from durin.memory.reference import ingest_reference
+
+    ingest_reference(tmp_path, "Raw Doc", "# H\n\nbody.\n")
+    d = get_reference_detail(tmp_path, "raw-doc")
+    assert d is not None
+    assert d["outline"] is None
+    assert d["entities"] == []
+    assert d["chunks_preview"]  # chunks still previewed

@@ -164,6 +164,14 @@ class MemorySearchQuery(Query):
     kinds: str = "all"
 
 
+class MemoryDocumentsQuery(Query):
+    """No inputs — lists all ingested reference documents (the Library shelf)."""
+
+
+class MemoryDocumentQuery(Query):
+    slug: str  # URL-decoded reference slug e.g. "the-durin-handbook"
+
+
 # ---------------------------------------------------------------------------
 # Write DTOs
 # ---------------------------------------------------------------------------
@@ -419,6 +427,44 @@ class MemoryService:
         payload = get_entry_detail(ws, query.uri)
         if payload is None:
             raise NotFoundError(f"entry not found: {query.uri}")
+        return MemoryResult(data=payload)
+
+    @route(
+        "GET",
+        "/api/v1/memory/documents",
+        scope=Scope.MEMORY_READ.value,
+        request_model=MemoryDocumentsQuery,
+        response_model=MemoryResult,
+        summary="List ingested reference documents (the Library shelf)",
+    )
+    async def documents(
+        self, query: MemoryDocumentsQuery, principal: Principal
+    ) -> MemoryResult:
+        principal.require(Scope.MEMORY_READ)
+        from durin.memory.graph_api import list_reference_documents
+
+        ws = self._workspace_resolver()
+        return MemoryResult(data={"documents": list_reference_documents(ws)})
+
+    @route(
+        "GET",
+        "/api/v1/memory/documents/{slug}",
+        scope=Scope.MEMORY_READ.value,
+        request_model=MemoryDocumentQuery,
+        response_model=MemoryResult,
+        summary="Reference document detail: outline + derived entities + chunk preview",
+    )
+    async def document(
+        self, query: MemoryDocumentQuery, principal: Principal
+    ) -> MemoryResult:
+        principal.require(Scope.MEMORY_READ)
+        from durin.memory.graph_api import get_reference_detail
+        from durin.service.types import NotFoundError
+
+        ws = self._workspace_resolver()
+        payload = get_reference_detail(ws, query.slug)
+        if payload is None:
+            raise NotFoundError(f"reference not found: {query.slug}")
         return MemoryResult(data=payload)
 
     @route(
