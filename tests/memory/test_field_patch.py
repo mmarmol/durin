@@ -158,3 +158,31 @@ def test_apply_requires_resolved_author():
     with pytest.raises(ValueError):
         apply_field_patch(p, FieldPatch(kind="attribute", key="hq", value="SF",
                                         author=None, source_ref="a", at=NOW))
+
+
+# --- relation-type normalization (write-time prevention) ---------------------
+
+from durin.memory.field_patch import normalize_relation_type
+
+
+def test_normalize_relation_type_collapses_surface_variants():
+    assert normalize_relation_type("occurs-in") == "occurs_in"
+    assert normalize_relation_type("Occurs In") == "occurs_in"
+    assert normalize_relation_type("occurs_in") == "occurs_in"
+    assert normalize_relation_type("  Diagnosed--By ") == "diagnosed_by"
+    # inverses are NOT touched (different direction/meaning)
+    assert normalize_relation_type("treats") != normalize_relation_type("treated_by")
+    assert normalize_relation_type("") == ""
+
+
+def test_relation_patch_normalizes_type_and_dedups():
+    p = _page()
+    apply_field_patch(p, FieldPatch(kind="relation", value={"to": "x:y", "type": "occurs-in"},
+                                    author="agent", source_ref="a", at=NOW))
+    # a second write with a surface variant of the same edge is a no-op (deduped)
+    changed = apply_field_patch(p, FieldPatch(kind="relation", value={"to": "x:y", "type": "Occurs_In"},
+                                              author="agent", source_ref="b", at=NOW))
+    assert changed is False
+    assert len(p.relations) == 1
+    assert p.relations[0]["type"] == "occurs_in"          # stored canonical
+    assert "x:y\x1foccurs_in" in p.provenance["relations"]  # provenance keyed on canonical

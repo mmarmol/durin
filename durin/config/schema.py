@@ -259,6 +259,12 @@ class MemoryDreamConfig(Base):
         description="Curate the library's topic index (memory/references/_topics.json) from the distilled abstracts — clean, stable theme labels the always-on Library awareness reads as its 'Covers:' map. Reuses prior labels so the index does not drift; idempotent when the document set is unchanged.",
     )
 
+    consolidate_relations_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("consolidateRelationsEnabled", "consolidate_relations_enabled"),
+        description="Nightly relation-vocabulary hygiene: canonicalise entity-relation type labels to one surface form (occurs-in → occurs_in) so graph edges line up, and report the vocabulary (distinct types before/after, merges) for supervision. Deterministic — never merges opposite-direction pairs (treats / treated_by).",
+    )
+
     # ON by default: detection only (curation decides); precision lives in the
     # prompt and `memory.dream.skill_signals` telemetry measures it.
     skill_signals_enabled: bool = Field(

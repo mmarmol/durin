@@ -337,6 +337,25 @@ archived copy written to `memory/archive/entities/<type>/<slug>.md` with an
 (drop the absorbed row, re-upsert the canonical with the merged body). The
 operation is idempotent — an already-archived absorbed page is a no-op.
 
+### Pass 4b — relations: keep the graph's edge vocabulary tidy
+
+`run_consolidate_relations_pass` (`durin/memory/relation_hygiene.py`) canonicalises
+entity-relation type labels so the same edge written different ways (`occurs-in`
+vs `occurs_in`) collapses to one and graph edges line up. New writes are already
+normalised at the choke point (`field_patch.normalize_relation_type` — every
+producer, dream and agent tool, flows through it); this pass fixes relations that
+predate that, re-keys their `(to, type)` provenance, and drops the duplicate an
+edge-rename exposes. **Deterministic and direction-preserving:** it only merges
+surface-form variants — inverse pairs (`treats` / `treated_by`) are the same fact
+from both ends and are kept distinct (merging them would flip facts). Runs after
+refine (which merges entities and their relations). It reports the relation
+vocabulary each run (`types_before` → `types_after`, pages changed, duplicates
+merged) to the cron log — **supervision**: a widening gap, or many merges,
+signals that relations are being created sloppily upstream and the extraction
+prompts need tightening. Gated by `memory.dream.consolidate_relations_enabled`
+(default on). Folding genuine same-direction *synonyms* (an LLM job) is
+deliberately left out until the vocabulary is large enough to warrant it.
+
 ### Pass 5 — always_on: curate the pinned guidance
 
 `run_always_on_pass(workspace, *, token_budget, types, llm_invoke, model)`
