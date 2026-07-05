@@ -320,6 +320,60 @@ class MemorySearchTool(Tool):
             out.append(dataclasses.replace(h, derived_from=derived))
         return out
 
+    def _attach_reference_bodies(self, hits: list) -> list:
+        """Give reference (library) hits a content preview from disk.
+
+        A reference chunk's indexed ``summary`` is the head of its raw text,
+        which for scraped web/PDF docs is the metadata header (title, URL,
+        author, date) — so the agent's preview, and any reranker input, sees
+        page chrome, not substance. Read the actual chunk from the
+        ``.chunks.jsonl`` sidecar and strip that leading boilerplate so the
+        preview leads with content; ``body_length`` stays the raw length so the
+        block still shows ``preview N/M`` and the agent knows to drill for the
+        rest. Best-effort and bounded (post-cap)."""
+        import dataclasses
+
+        from durin.memory.reference import (
+            reference_chunks,
+            strip_scraped_boilerplate,
+        )
+
+        out = []
+        for h in hits:
+            if h.type != "reference":
+                out.append(h)
+                continue
+            raw = h.uri
+            idx: int | None = None
+            if "#" in raw:
+                raw, frag = raw.rsplit("#", 1)
+                if frag.isdigit():
+                    idx = int(frag)
+            for prefix in ("memory/references/", "memory/reference/", "reference:"):
+                if raw.startswith(prefix):
+                    raw = raw[len(prefix):]
+            if raw.startswith("reference:"):  # tolerate a doubled prefix
+                raw = raw[len("reference:"):]
+            slug = raw.strip("/")
+            if slug.endswith(".md"):
+                slug = slug[:-3]
+            chunks = reference_chunks(self._workspace, f"reference:{slug}")
+            if not chunks:
+                out.append(h)
+                continue
+            rec = None
+            if idx is not None:
+                rec = next((c for c in chunks if int(c.get("idx", -1)) == idx), None)
+            rec = rec or chunks[0]
+            full = str(rec.get("text") or "")
+            preview = strip_scraped_boilerplate(full)[:600]
+            if preview:
+                out.append(dataclasses.replace(
+                    h, summary=preview, body="", body_length=len(full)))
+            else:
+                out.append(h)
+        return out
+
     @classmethod
     def create(cls, ctx: Any) -> Tool:
         # Vector retrieval is opt-in (memory.enabled); see memory_store.
@@ -595,6 +649,7 @@ class MemorySearchTool(Tool):
         kept_uris = {h.uri for h in capped_hits}
         results = [r for r in results if r.uri in kept_uris]
         capped_hits = self._attach_derived_from(capped_hits)
+        capped_hits = self._attach_reference_bodies(capped_hits)
         sectioned_rendered = render_sectioned(capped_hits)
         if in_context_hits:
             from durin.memory.context_dedup import (
