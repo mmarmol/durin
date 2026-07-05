@@ -1737,6 +1737,7 @@
     "documentDistilled": "Distilled by the nightly dream",
     "documentIngested": "Ingested",
     "documentOpenFull": "Full text",
+    "documentTab": "Document",
     "documentOutline": "Outline",
     "documentPreamble": "Preamble",
     "documentNotDistilled": "Not distilled yet — the nightly dream will summarise this and seed entities.",
