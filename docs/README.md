@@ -33,6 +33,8 @@ How to install, configure, and run durin.
 
 - [Installation](guide/install.md) — install, the onboarding wizard, optional
   extras (memory, local models, audio), and running the gateway.
+- [CLI & in-session commands](guide/cli.md) — the command cheatsheet: lifecycle,
+  day-to-day, and the in-TUI commands.
 - [Configuration](guide/configuration.md) — every config key, its default, and
   what it does.
 - [Channels](guide/channels.md) — connecting Telegram, Slack, Discord, email, and
@@ -59,12 +61,6 @@ Direct jumps to the most-read component docs:
 - [Channels & message bus](internals/channels.md) — how surfaces reach the loop.
 - [Cron](internals/cron.md) — scheduled work (reminders and agent tasks).
 - [Workflow engine](internals/workflow.md) — user-defined flow graphs the agent runs.
-
-### Project
-
-- [Contributing](contributing.md) — dev setup, running tests, and the PR workflow.
-- [Releasing](releasing.md) — how releases are cut.
-- [Roadmap](roadmap.md) — direction, and what durin is deliberately not doing.
 
 ## Mental model
 

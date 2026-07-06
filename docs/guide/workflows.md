@@ -277,6 +277,4 @@ versions the change, so you can see exactly what changed and why.
 
 [Workflow engine internals](../internals/workflow.md) covers the
 architecture — the graph model, the manifest, session lineage, and how the
-engine drives each node. [Roadmap](../roadmap.md) has the direction for
-what's not built yet (auto-mode self-improvement, auto-merge of
-conflicting parallel writes).
+engine drives each node.
