@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://pypi.org/project/durin-agent/"><img alt="PyPI" src="https://img.shields.io/pypi/v/durin-agent?color=57b6e6&label=pypi"></a>
-  <img alt="Python" src="https://img.shields.io/pypi/pyversions/durin-agent?color=57b6e6">
+  <img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-57b6e6">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-57b6e6"></a>
 </p>
 
