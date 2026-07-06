@@ -14,11 +14,13 @@ compact block for the same prompts, so an authoring pass can see what already
 exists and delegate to it instead of re-describing it in prose.
 
 `judge_composition` is the enforcement half: prompts are guidance, this is the
-invariant. At skill-creation time it asks a judge model whether the body is a
-prose-only narration of a workflow-shaped procedure; the store rejects that
-body with the judge's reason so the author retries with feedback. The judge is
-injectable (unit tests run without a provider) and failure-open: no judge, or
-a judge error, accepts — the gate must never block authoring on infrastructure.
+invariant. At skill-creation time it asks a judge model whether the body
+violates the doctrine in either of two ways — a prose-only narration of a
+workflow-shaped procedure, or deterministic code inlined as prose instead of
+bundled as a script — and the store rejects that body with the judge's reason so
+the author retries with feedback. The judge is injectable (unit tests run
+without a provider) and failure-open: no judge, or a judge error, accepts — the
+gate must never block authoring on infrastructure.
 """
 from __future__ import annotations
 
@@ -97,12 +99,23 @@ Workflows available in this workspace:
 
 {catalog}
 
-The ONLY failure you may flag: the body is a PROSE-ONLY NARRATION of a \
-workflow-shaped procedure — it walks the reader through multi-source fan-out \
-(run several searches / process many items), gathering, and synthesis or a \
-verification loop as manual steps, without delegating any of it to a workflow \
-(via run_workflow) and without bundling a script. That narration belongs in a \
-workflow; the skill should keep only the domain layer and delegate.
+There are exactly TWO failures you may flag:
+
+1. NARRATION — the body is a PROSE-ONLY NARRATION of a workflow-shaped \
+procedure: it walks the reader through multi-source fan-out (run several \
+searches / process many items), gathering, and synthesis or a verification loop \
+as manual steps, without delegating any of it to a workflow (via run_workflow) \
+and without bundling a script. That narration belongs in a workflow; the skill \
+should keep only the domain layer and delegate.
+
+2. INLINE_CODE — the body inlines a DETERMINISTIC transformation (a fixed \
+parse, conversion, decode, or computation) as a code block the agent must copy \
+to a temp file and run, or as prose steps that reimplement such logic, instead \
+of bundling it as a script the body invokes. Deterministic code belongs in a \
+bundled script (a `files` entry), invoked by path. A short prerequisite/install \
+command (e.g. `brew install x`, `pip install y`) or a single illustrative \
+one-liner is NOT this failure — flag it only when real transformation logic is \
+inlined that should be a bundled, reusable, testable script.
 
 Err toward ACCEPTING. Accept bodies that are knowledge, conventions, judgment \
 guidance, or decision procedures; accept bodies that delegate to a workflow or \
@@ -119,6 +132,8 @@ line:
 COMPLIANT — the body respects the doctrine (or is ambiguous).
 NARRATION — the body manually narrates a workflow-shaped procedure. Name which \
 steps should delegate (and to which workflow, if one above fits).
+INLINE_CODE — the body inlines deterministic code that should be a bundled \
+script. Name what the script should be.
 """
 
 
@@ -149,9 +164,13 @@ def judge_composition(
     if not lines:
         return True, ""
     last = lines[-1]
-    if last.upper().startswith("NARRATION"):
-        reason = last[len("NARRATION"):].strip(" —:-") or "narrates a workflow-shaped procedure"
-        return False, reason
+    for label, default in (
+        ("NARRATION", "narrates a workflow-shaped procedure"),
+        ("INLINE_CODE", "inlines deterministic code that should be a bundled script"),
+    ):
+        if last.upper().startswith(label):
+            reason = last[len(label):].strip(" —:-") or default
+            return False, reason
     if last.upper().startswith("COMPLIANT"):
         return True, ""
     logger.warning("composition gate: unparseable judge reply; accepting (head: %r)", raw[:120])

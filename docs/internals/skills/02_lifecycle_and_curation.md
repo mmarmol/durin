@@ -83,7 +83,7 @@ flowchart TD
     subgraph Curation["curate_catalog (daily cron, final step)"]
         BACKFILL["backfill_surface_frontmatter\n(deterministic, pre-judge)"]
         DELTA["delta = needs_curation OR open-observation OR backfilled"]
-        JUDGE["LLM judge:\nevolve / fuse / retire /\nprinciple / retire_principle"]
+        JUDGE["LLM judge:\nevolve / restructure / fuse / retire /\nprinciple / retire_principle"]
         DRIFT["check_upstream_drift\n(re-fetch + re-scan)"]
     end
     SKILLS --> BACKFILL --> DELTA
@@ -315,11 +315,14 @@ light usage context, the upstream drift bodies (if any), the OPEN observations
 scoped to the selected skills plus any `"all"` cross-cutting record, a compact
 DECLINED history (so the judge doesn't re-propose something already rejected),
 active principles, the **composition doctrine and workflow catalog** (the same
-runtime-loaded `skill-creator` section the extract pass embeds — the judge is
-told a prose-only narration of a procedure an existing workflow automates is a
-norm violation, licensed to `evolve` into a delegating domain wrapper exactly
-like the English-normalization rule), and — critically — **user hand-edits
-since the last curation**.
+runtime-loaded `skill-creator` section the extract pass embeds). The judge is
+told the two doctrine violations it may repair, exactly like the
+English-normalization rule: a prose narration of a workflow-shaped procedure
+(licensed to `evolve` into a delegating wrapper when a workflow exists, or to
+`restructure` — authoring the workflow first — when none does), and inline
+deterministic code that should be a bundled script (licensed to `restructure`,
+lifting the code into a `scripts/…` file the body invokes). And — critically —
+**user hand-edits since the last curation**.
 
 `user_edits_since_curation` (`durin/agent/skills_store.py`) walks the skill's
 git subtree log newest-first, stopping at the last `curated @` stamp, and
@@ -339,15 +342,20 @@ before it is applied:
 | Action | Effect | Guard |
 |---|---|---|
 | `evolve` | `apply_skill_edit` — bounded find/replace on the skill body | target must be in `selected` |
-| `fuse` | `dream_fuse_skills` — merge multiple skills into a new one | every source must be in `selected`; `dream_fuse_skills` itself refuses any `manual` source |
+| `restructure` | `dream_restructure_skill` — rewrite the whole body, optionally bundling `files` (scripts) and/or authoring a `workflow` the body delegates to | target must be in `selected`; a carried `workflow` is authored via `save_workflow_definition` **first** and the skill is left untouched if that fails; the new body + bundled code pass the composition gate + security scan |
+| `fuse` | `dream_fuse_skills` — merge multiple skills into a new one, preserving source bundled scripts | every source must be in `selected`; `dream_fuse_skills` itself refuses any `manual` source and runs the composition gate + scan on the merged result |
 | `retire` | `remove_skill` — delete outright (git-recoverable) | target must be in `selected` |
 | `principle` | `add_principle` | capped at `PRINCIPLES_CAP` |
 | `retire_principle` | `retire_principle` | id must reference an active principle |
 
-`retire` exists as a distinct action from `evolve` because an `evolve`-only
-model can only push a fully-obsolete skill toward an empty body, leaving dead
-clutter; `remove_skill` is the same git-recoverable delete used by the manual
-admin removal path.
+`restructure` exists as a distinct action from `evolve` because a text
+find/replace cannot add bundled files or author a workflow — the two moves the
+composition doctrine requires to lift inline code into a script or convert a
+narration into a delegating wrapper when no workflow yet exists. `retire`
+exists as a distinct action from `evolve` because an `evolve`-only model can only
+push a fully-obsolete skill toward an empty body, leaving dead clutter;
+`remove_skill` is the same git-recoverable delete used by the manual admin
+removal path.
 
 **Step 7 — resolve observation dispositions.** The judge's response also
 carries a per-observation verdict (`applied` / `declined` / `keep`) for each

@@ -33,7 +33,11 @@ logger = logging.getLogger(__name__)
 # back through the curation gate once per rules update cycle.
 # v3: composition doctrine — narration-only skills evolve into workflow-delegating
 # wrappers.
-CURATION_RULES_VERSION = 3
+# v4: full composition repair — inline deterministic code is lifted into a
+# bundled script, and a missing workflow is authored so the skill can delegate
+# (curation `restructure` action; pre-doctrine skills re-enter the delta to be
+# repaired now that the vocabulary can express it).
+CURATION_RULES_VERSION = 4
 
 
 @dataclass
@@ -786,8 +790,82 @@ def dream_create_skill(workspace: Path, name: str, content: str,
     return {"ok": True, "name": name, "commit": sha}
 
 
+def dream_restructure_skill(workspace: Path, name: str, *, content: str,
+                            rationale: str, files: dict[str, str] | None = None,
+                            attribution: "Attribution | None" = None,
+                            composition_judge=None,
+                            composition_override: bool = False) -> dict:
+    """Rewrite an EXISTING `auto` skill's SKILL.md body and (re)write bundled
+    `files`, applying the SAME composition gate + security scan as
+    `dream_create_skill`. This is the repair path the doctrine needs: it turns a
+    prose-narrated procedure into a workflow-delegating body, or lifts an inlined
+    deterministic snippet into a bundled script — mutations `apply_skill_edit`
+    (bounded text replace, no new bundled files) and `dream_fuse_skills` cannot
+    express. Refuses `manual` skills (the user owns those) and missing skills.
+
+    On a `caution`/`dangerous` scan of the new bundled code the whole skill is
+    relocated to the import quarantine (inactive, pending review) rather than
+    activating risky code — the same posture as create."""
+    if not _safe_name(name):
+        return {"error": "invalid skill name"}
+    if not rationale or not rationale.strip():
+        return {"error": "rationale is required"}
+    files = files or {}
+    if not all(_safe_bundle_path(p) for p in files):
+        return {"error": "invalid bundled file path (must be relative, inside the skill)"}
+    loader = _loader(workspace)
+    if loader.load_skill(name) is None:
+        return {"error": f"skill not found: {name}"}
+    if read_mode(workspace, name, loader) == "manual":
+        return {"error": f"skill is manual, refusing: {name}"}
+    if not (content.strip() and (_frontmatter_description(content) or _derive_description(content))):
+        return {"error": "skill body has no derivable description"}
+    if composition_judge is not None and not composition_override:
+        from durin.agent.skills_doctrine import judge_composition
+        ok, reason = judge_composition(content, workspace, composition_judge)
+        if not ok:
+            return {"error": f"composition gate: {reason}", "composition_rejected": True}
+    store = _store_init(workspace)  # ensure git repo exists before mutating files
+    dest = fork_on_write(workspace, name, loader)
+    md = dest / "SKILL.md"
+    md.write_text(content, encoding="utf-8")
+    for rel, body in files.items():
+        target = (dest / rel).resolve()
+        if not target.is_relative_to(dest.resolve()):
+            return {"error": "file escapes skill directory"}
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(str(body), encoding="utf-8")
+    _ensure_surface_frontmatter(md, name)
+
+    scan_verdict = None
+    if files:
+        from durin.security.skill_scan import scan_skill
+        rep = scan_skill(dest)
+        if rep.verdict != "safe":
+            _unsync_index(workspace, name)
+            return _quarantine_authored_skill(workspace, dest, rep)
+        scan_verdict = rep.verdict
+
+    if scan_verdict is not None:
+        def _stamp(data: dict) -> None:
+            durin = ensure_durin(data)
+            prov = durin.get("provenance")
+            if not isinstance(prov, dict):
+                prov = {"source": "unknown", "created_at": _today()}
+            prov["scan_verdict"] = scan_verdict
+            durin["provenance"] = prov
+        _update_md(md, _stamp)
+
+    sha = store.auto_commit(f"skill({name}): {rationale.strip()} [dream]",
+                            trailers=attribution_to_trailers(attribution))
+    _sync_index(workspace, name)
+    return {"ok": True, "name": name, "commit": sha}
+
+
 def dream_fuse_skills(workspace: Path, *, target: str, content: str,
                       sources: list[str], rationale: str,
+                      files: dict[str, str] | None = None,
+                      composition_judge=None,
                       attribution: "Attribution | None" = None) -> dict:
     """Fuse `sources` into a new `target` skill. Refuses any `manual` source.
     Writes target (source=dream, mode=auto), removes workspace sources /
@@ -796,22 +874,64 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
         return {"error": "invalid skill name"}
     if not rationale.strip():
         return {"error": "rationale is required"}
+    files = files or {}
+    if not all(_safe_bundle_path(p) for p in files):
+        return {"error": "invalid bundled file path (must be relative, inside the skill)"}
     for s in sources:
         if read_mode(workspace, s) == "manual":
             return {"error": f"source is manual, refusing: {s}"}
     if _skill_md(workspace, target).exists():
         return {"error": f"target already exists: {target}"}
+    if composition_judge is not None:
+        from durin.agent.skills_doctrine import judge_composition
+        ok, reason = judge_composition(content, workspace, composition_judge)
+        if not ok:
+            return {"error": f"composition gate: {reason}", "composition_rejected": True}
+    # Preserve source bundled files (scripts): gather them BEFORE the sources are
+    # removed. Explicit `files` win on a path conflict; SKILL.md is never carried
+    # (the merged body is authoritative). A fuse used to drop these silently.
+    merged_files: dict[str, str] = {}
+    for s in sources:
+        sdir = _skills_dir(workspace) / s
+        if not sdir.is_dir():
+            continue
+        for f in sorted(sdir.rglob("*")):
+            if not f.is_file() or f.name == "SKILL.md":
+                continue
+            rel = f.relative_to(sdir).as_posix()
+            if _safe_bundle_path(rel):
+                merged_files.setdefault(rel, f.read_text(encoding="utf-8"))
+    merged_files.update(files)
+
     store = _store_init(workspace)
     md = _skill_md(workspace, target)
     md.parent.mkdir(parents=True, exist_ok=True)
     md.write_text(content, encoding="utf-8")
+    for rel, body in merged_files.items():
+        t = (md.parent / rel).resolve()
+        if not t.is_relative_to(md.parent.resolve()):
+            return {"error": "file escapes skill directory"}
+        t.parent.mkdir(parents=True, exist_ok=True)
+        t.write_text(str(body), encoding="utf-8")
     _ensure_surface_frontmatter(md, target)
+
+    scan_verdict = None
+    if merged_files:
+        from durin.security.skill_scan import scan_skill
+        rep = scan_skill(md.parent)
+        if rep.verdict != "safe":
+            # Risky merged code: quarantine the target, leave the sources intact
+            # (the fuse is aborted for review rather than deleting working skills).
+            return _quarantine_authored_skill(workspace, md.parent, rep)
+        scan_verdict = rep.verdict
 
     def _stamp(data: dict) -> None:
         durin = ensure_durin(data)
         durin["mode"] = "auto"
         durin["provenance"] = {"source": "dream", "created_at": _today(),
                                "fused_from": list(sources)}
+        if scan_verdict is not None:
+            durin["provenance"]["scan_verdict"] = scan_verdict
 
     _update_md(md, _stamp)
     for s in sources:

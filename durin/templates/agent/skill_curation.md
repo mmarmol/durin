@@ -45,15 +45,31 @@ The workspace's workflows (what a skill can delegate to):
 
 {{ workflow_catalog }}
 
-When a skill under review is a prose-only narration of a procedure that one of
-these workflows automates (e.g. it walks through multi-source searching and
-synthesis that a research workflow already runs, gated and in parallel), emit an
-`evolve` that restructures it into a domain wrapper: keep the skill's domain
-knowledge (which sources matter, how to phrase the task, output shape, language
-handling) and replace the narrated procedure with a delegation step — run the
-workflow via `run_workflow` with a task built from that domain knowledge. This
-is a norm violation fix, not a style rewrite. Do NOT evolve judgment-heavy
-prose that no workflow covers; the doctrine reserves prose exactly for that.
+A skill violates the doctrine in one of two ways, each with a concrete repair:
+
+1. **Prose narrates a workflow-shaped procedure** (multi-source fan-out,
+   process-many-items, gather-and-synthesize, verification loop):
+   - If one of the workflows above already automates it → emit an `evolve` (or a
+     `restructure` when the body needs a fuller rewrite) that keeps the domain
+     knowledge (which sources matter, how to phrase the task, output shape,
+     language handling) and replaces the narrated steps with a delegation step —
+     run the workflow via `run_workflow` with a task built from that knowledge.
+   - If NO existing workflow covers it → emit a `restructure` that carries a
+     `workflow` (name + full JSON definition of the graph) AND the rewritten body
+     that delegates to it. The workflow is authored first; the skill then
+     delegates. Author a workflow only for genuinely workflow-shaped
+     orchestration, not for a single linear lookup.
+
+2. **Inline deterministic code** — the body embeds a fixed parse/convert/decode/
+   compute snippet the agent must copy to a temp file and run (a hardcoded
+   `/tmp/x.py`, a placeholder path edited each run). Emit a `restructure` that
+   carries `files` (the code as a bundled `scripts/…` file taking its input as an
+   argument) and a rewritten body that invokes it by path. A prerequisite install
+   command (`brew install`, `pip install`) is NOT this violation.
+
+These are norm violation fixes, not style rewrites. Do NOT touch judgment-heavy
+prose that no workflow covers and inlines no deterministic code; the doctrine
+reserves prose exactly for that.
 
 ## User edits — treat as intentional
 
@@ -174,6 +190,7 @@ carries one disposition per open observation shown above:
 {"actions": [
   {"type": "fuse", "target": "<new-name>", "sources": ["a","b"], "content": "<full merged SKILL.md body>", "rationale": "<why>"},
   {"type": "evolve", "name": "<skill>", "old": "<exact text to replace>", "new": "<replacement>", "rationale": "<why>"},
+  {"type": "restructure", "name": "<skill>", "content": "<full new SKILL.md body>", "files": {"scripts/foo.py": "<script content>"}, "workflow": {"name": "<wf-name>", "definition": {"...full workflow JSON..."}}, "rationale": "<why>"},
   {"type": "retire", "name": "<skill>", "rationale": "<why this skill should no longer exist>"}
 ],
  "observations": [
@@ -185,6 +202,12 @@ carries one disposition per open observation shown above:
 For a `fuse`, `content` must be the full merged SKILL.md body of the new skill, and
 `sources` lists the names of the skills it replaces. For an `evolve`, `old` must be
 the exact text to replace within that skill's content, and `new` is the replacement.
+For a `restructure`, `content` is the full new SKILL.md body (replacing the whole
+body); `files` (optional) is an object mapping bundled paths to their content — use
+it to lift inline code into `scripts/…`; `workflow` (optional) is `{name,
+definition}` to author a new workflow the body then delegates to. Reach for
+`restructure` (not `evolve`) whenever the fix adds a bundled script or authors a
+workflow — `evolve` can only replace text and cannot create files or workflows.
 
 When nothing should change, return empty lists:
 
