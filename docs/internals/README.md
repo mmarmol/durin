@@ -22,8 +22,8 @@ Every component doc follows the same shape so they stay scannable:
 
 Each doc is the source of truth for its own scope; facts are not duplicated
 across docs, only cross-linked by relative path. These docs describe the system
-as it is built, not its history — for direction and discarded approaches, see
-[roadmap.md](../roadmap.md).
+as it is built, not its history — direction and discarded approaches live in the
+project's `git log`.
 
 ## 2. Mental model
 

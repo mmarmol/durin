@@ -2,10 +2,12 @@
 
 ## Working / process docs go in `.workdocs/`, never in tracked `docs/`
 
-`docs/` holds **published, maintained** documentation only: a `README.md` overview,
-`guide/` (user docs: install, configuration, channels, providers), `internals/`
-(how-it-works architecture, per subsystem), plus `roadmap.md`, `releasing.md`, and
-`contributing.md`. Do not commit working or process artifacts there.
+`docs/` holds **published, maintained, public** documentation only: a `README.md`
+overview, `guide/` (user docs: install, configuration, channels, providers), and
+`internals/` (how-it-works architecture, per subsystem). Do not commit working or
+process artifacts there. Maintainer-only docs that are **not for public
+consumption** — the roadmap, the release manual, and the contributor guide — live
+under `.workdocs/maintainers/` (gitignored), never in `docs/`.
 
 Write working/process artifacts under the gitignored `.workdocs/` directory:
 
