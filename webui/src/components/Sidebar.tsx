@@ -72,7 +72,7 @@ export function Sidebar(props: SidebarProps) {
       className="flex h-full w-full min-w-0 flex-col border-r border-sidebar-border/60 bg-sidebar text-sidebar-foreground"
     >
       <div className="flex items-center justify-between px-3 pb-2.5 pt-3">
-        {/* Wordmark: durin shield logo + lowercase name. Logo asset is
+        {/* Wordmark: durin anvil-and-flame logo + lowercase name. Logo asset is
             shipped under /brand/durin-logo.png (see webui/public/brand). */}
         <span
           className="flex select-none items-center gap-2 text-base font-semibold tracking-tight"
@@ -82,7 +82,13 @@ export function Sidebar(props: SidebarProps) {
             src="/brand/durin-logo-64.png"
             alt=""
             aria-hidden="true"
-            className="h-6 w-auto"
+            className="h-6 w-auto dark:hidden"
+          />
+          <img
+            src="/brand/durin-logo-64-dark.png"
+            alt=""
+            aria-hidden="true"
+            className="hidden h-6 w-auto dark:block"
           />
           <span className="lowercase">durin</span>
         </span>
