@@ -65,6 +65,20 @@ def _parse_judge_output(raw: object) -> dict | None:
     return obj if isinstance(obj, dict) else None
 
 
+def _normalize_files(raw: object) -> dict[str, str]:
+    """Accept the judge's bundled-file spec as either a {path: content} object or
+    a [{path, content}] array, returning a {path: content} dict. Malformed
+    entries are skipped."""
+    if isinstance(raw, dict):
+        return {str(k): str(v) for k, v in raw.items()}
+    out: dict[str, str] = {}
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict) and item.get("path"):
+                out[str(item["path"])] = str(item.get("content", ""))
+    return out
+
+
 def _emit_curation_parse_failure(stage: str, raw: object) -> None:
     """Surface an unparseable judge response the same way dream-pass parse
     failures surface (telemetry + Dream-feed warning). Best-effort."""
@@ -204,10 +218,44 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                 continue
             r = ss.dream_fuse_skills(workspace, target=a["target"], content=a["content"],
                                      sources=a["sources"], rationale=a.get("rationale", "fuse"),
+                                     files=_normalize_files(a.get("files")) or None,
+                                     composition_judge=judge,
                                      attribution=ss.Attribution(actor="curation"))
             ok = bool(r.get("ok"))
             applied += 1 if ok else 0
             _emit("skill.curation_action", action="fuse", skill=a["target"], applied=ok)
+        elif t == "restructure":
+            # The doctrine-repair verb: rewrite a stranded skill's body to
+            # delegate/invoke, lifting inline code into a bundled script and, when
+            # no workflow yet covers a workflow-shaped procedure, authoring one
+            # first so the body can delegate to it. evolve (text replace) and fuse
+            # cannot add bundled files or author a workflow.
+            if a.get("name") not in selected:
+                logger.warning("curation: skipping restructure of out-of-scope skill %s", a.get("name"))
+                _emit("skill.curation_action", action="restructure", skill=a.get("name"), applied=False)
+                continue
+            wf = a.get("workflow")
+            if wf:
+                from durin.workflow.editing import save_workflow_definition
+                wr = save_workflow_definition(
+                    workspace, str(wf.get("name") or ""), wf.get("definition") or {},
+                    reason=a.get("rationale", "author workflow for skill"),
+                    actor="curation", must_exist=False)
+                if not wr.get("ok"):
+                    # Never rewrite the skill to delegate to a workflow that
+                    # failed to land — that would leave a dangling reference.
+                    logger.warning("curation: restructure aborted for %s; workflow author failed: %s",
+                                   a.get("name"), wr.get("error"))
+                    _emit("skill.curation_action", action="restructure", skill=a.get("name"), applied=False)
+                    continue
+            r = ss.dream_restructure_skill(
+                workspace, a["name"], content=a["content"],
+                files=_normalize_files(a.get("files")) or None,
+                rationale=a.get("rationale", "restructure"),
+                attribution=ss.Attribution(actor="curation"), composition_judge=judge)
+            ok = bool(r.get("ok"))
+            applied += 1 if ok else 0
+            _emit("skill.curation_action", action="restructure", skill=a["name"], applied=ok)
         elif t == "evolve":
             if a.get("name") not in selected:
                 logger.warning("curation: skipping evolve of out-of-scope skill %s", a.get("name"))
