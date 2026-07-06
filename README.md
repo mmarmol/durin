@@ -1,110 +1,81 @@
-# ⚒️ durin
+<p align="center">
+  <img src="docs/assets/durin-banner.svg" alt="durin" width="820">
+</p>
 
-Personal AI assistant with graph-based memory and a daily-driver CLI.
+<p align="center">
+  <a href="https://pypi.org/project/durin-agent/"><img alt="PyPI" src="https://img.shields.io/pypi/v/durin-agent?color=e0843f&label=pypi"></a>
+  <img alt="Python" src="https://img.shields.io/pypi/pyversions/durin-agent?color=e0843f">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-e0843f"></a>
+</p>
 
-durin runs locally, stores its state under `~/.durin/`, and talks to any LLM
-backend you wire up (Z.AI, Anthropic, OpenAI, Gemini, OpenRouter, local
-llama.cpp, …). The default surface is a Textual TUI; an OpenAI-compatible API
-server and a browser dashboard (`durin gateway`) plus channel plugins
-(Telegram, Slack, WhatsApp, Discord) ship in the same package.
+**durin is a local-first AI agent that lives on your machine, remembers across
+sessions, and gets sharper the more you use it.** One agent loop answers you
+everywhere — terminal, TUI, browser dashboard, Telegram, Slack, Discord, email —
+all funnelling through the same memory and the same brain. Bring any LLM (Claude,
+GLM, OpenAI, Gemini, OpenRouter, or a local llama.cpp model); durin keeps its
+state under `~/.durin/` and never phones home.
 
-> durin is named for Tolkien's dwarf-king of Khazad-dûm — the ⚒️ mark is
-> the dwarven hammer-and-pick, not a logo to be mistaken for anything else.
+> durin is named for Tolkien's dwarf-king of Khazad-dûm — the ⚒️ mark is the
+> dwarven hammer-and-pick.
+
+## Why durin
+
+- **One loop, every surface.** Every message — from the terminal, the TUI, the web
+  dashboard, or any chat channel — arrives on the same internal bus and runs
+  through the same agent loop. Channels differ only in their I/O; the agent
+  behaves identically no matter where you talk to it.
+- **A memory that persists — and searches without an LLM in the hot path.**
+  Cross-session knowledge is kept as plain markdown over an FTS + vector index, so
+  recall is fast and offline. Documents you hand it (PDF, Office, EPUB, web pages)
+  land in a **Library** kept apart from everyday recall.
+- **It learns while you sleep.** A cold-path *dream* consolidates your
+  conversations into an entity graph and curates reusable skills; *cron* runs
+  scheduled work. durin builds a deepening model of what you care about over time.
+- **Local-first, any model.** It runs as a daemon on your own machine. Markdown is
+  the source of truth; the search indexes are derived and rebuildable. Switch
+  provider or model at runtime.
+- **A real daily-driver runtime.** A gateway daemon serving a browser dashboard,
+  an OpenAI-compatible API, MCP servers connected on demand, permission-as-data
+  agent modes (plan / build / explore), skills, and multi-step workflows.
 
 ## Quick start
 
 ```bash
-# Install (no git checkout required)
-pipx install --pre durin-agent          # PyPI, recommended
-
-durin onboard                           # interactive setup wizard
-durin doctor                            # confirm setup is healthy
-durin agent --tui                       # launches the TUI
+pipx install --pre durin-agent   # PyPI
+durin onboard                    # interactive setup wizard
+durin doctor                     # confirm setup is healthy
+durin agent                      # launch the TUI
 ```
 
-For development you can still install from a checkout:
+Run the gateway for the browser dashboard plus chat channels:
 
 ```bash
-git clone git@github.com:mmarmol/durin.git
-cd durin
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
+durin gateway start              # dashboard at http://127.0.0.1:8765
 ```
 
-See [docs/guide/install.md](docs/guide/install.md) for prerequisites, optional extras,
-and platform notes. Maintainers cutting a release: [docs/releasing.md](docs/releasing.md).
+<!--
+  SCREENSHOT PLACEHOLDER — drop a TUI or webui capture from a CLEAN demo
+  workspace here (not a personal home), then uncomment:
 
-## Lifecycle commands
+  <p align="center">
+    <img src="docs/assets/screenshot.png" alt="durin in action" width="820">
+  </p>
+-->
 
-| Need | Command |
-|---|---|
-| First-time setup | `durin onboard` (re-runnable — keeps what's configured) |
-| Snapshot of what's configured | `durin status` |
-| Diagnose what's wrong | `durin doctor` (`--fix` safe auto-fixes, `--ping-model` real round-trip) |
-| Show config | `durin config show` |
-| Change one key | `durin config set agents.defaults.model glm-5.1` |
-| Edit config in `$EDITOR` | `durin config edit` |
-| Pull the latest build | `durin upgrade` |
-| Remove durin + data | `durin uninstall --purge` |
-
-`status` = a factual snapshot; `doctor` = health checks with fixes.
-
-## Day-to-day
-
-```bash
-durin agent              # rich TUI (default)
-durin agent -m "hola"    # one-shot
-durin gateway start      # background daemon: webui dashboard + channels + cron
-durin gateway status     # is it running? where's the dashboard?
-durin gateway stop
-durin serve              # OpenAI-compatible API on :8900
-```
-
-The browser dashboard is served by `durin gateway` when
-`config.gateway.webui_enabled` is true (default). `durin gateway status`
-prints the URL.
-
-Inside the TUI:
-
-- `/sessions` — modal picker over saved sessions (Esc to cancel)
-- `/model` or `Ctrl+L` — modal picker over configured presets
-- `/memory list|show|search|drill` — inspect the agent's memory
-- `/remember <fact>` / `/forget <id>` — author memory directly
-- `/compact [hint]` / `/copy` / `/name <name>` — session ergonomics
-- Drag-and-drop a file path into the input to attach it
-- Attach or record audio — transcribed to text locally before reaching the
-  agent (`[stt]`/`[voice]` extras; see [docs/guide/install.md](docs/guide/install.md)).
-  Default engine: Parakeet TDT v3 (~30× real-time on CPU, 25 European
-  languages). Use `sensevoice` for Chinese/Japanese/Korean, or configure a
-  cloud provider (Groq/OpenAI). In the TUI: drag an audio file or `/voice`
-  to record. In the webui: attach a clip or use the 🎙 mic button.
-- `@<prefix>` — fuzzy-complete a workspace file
-- `!cmd` / `!!cmd` — shell shortcut (publishes / silent)
-- `Alt+Enter` — newline; `Enter` — submit; `Esc` — cancel turn
-
-## Where state lives
-
-| Path | What |
-|---|---|
-| `~/.durin/config.json` | Main config |
-| `~/.durin/workspace/` | Default workspace |
-| `~/.durin/sessions/` | Legacy global sessions |
-| `~/.durin/history/cli_history` | Shell-style input history |
-| `~/.durin/cron/` | Scheduled jobs |
-| `~/.durin/media/` | Channel-attached media |
-| `~/.durin/bridge/` | WhatsApp bridge install |
-| `~/.cache/durin/telemetry/` | JSONL telemetry per session |
-| `~/.cache/durin/models/` | Downloaded local-model weights |
-| `~/.cache/durin/archive/` | Archived session payloads |
-| `<workspace>/.durin/{plans,spills,tool-results}/` | Per-workspace agent scratch |
-
-`durin uninstall` enumerates these before deleting anything.
+See the [install guide](docs/guide/install.md) for prerequisites, optional extras
+(memory, local models, audio), and platform notes. For everyday and in-session
+commands, see the [CLI reference](docs/guide/cli.md).
 
 ## Documentation
 
-- [docs/guide/install.md](docs/guide/install.md) — prerequisites, optional extras
-- [docs/internals/README.md](docs/internals/README.md) — system layout
-- [docs/roadmap.md](docs/roadmap.md) — direction
+- [Install · configure · uninstall](docs/guide/install.md)
+- [CLI & in-session commands](docs/guide/cli.md)
+- [Configuration reference](docs/guide/configuration.md)
+- [Providers & models](docs/guide/providers.md)
+- [Channels](docs/guide/channels.md) — Telegram, Slack, Discord, email, and more
+- [Documents & your knowledge](docs/guide/documents.md)
+- [Workflows](docs/guide/workflows.md)
+- [How it works (internals)](docs/internals/README.md)
 
 ## License
 

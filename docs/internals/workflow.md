@@ -668,9 +668,9 @@ End-to-end for a single `run_workflow` call:
   picker (model or persona), body/mode/context/routing config (including the session
   fresh/persistent choice, shown only for `context: "own"`), static and dynamic fan-out
   authoring with a concurrency cap, a subflow target picker that excludes cycle-creating
-  workflows, and a recommendations banner. Not yet built — see
-  [roadmap.md](../roadmap.md) for direction — auto-mode self-improvement (apply +
-  validation anchor) and auto-merge of conflicting parallel writes.
+  workflows, and a recommendations banner. Not yet built — auto-mode
+  self-improvement (apply + validation anchor) and auto-merge of conflicting
+  parallel writes.
 - **Security.** Definitions are local files the user authored, so running their
   commands and tools is equivalent to the user running them directly; importing remote
   or third-party definitions is not supported in this scope (see [security.md](security.md)).

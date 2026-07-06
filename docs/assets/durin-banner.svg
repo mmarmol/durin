@@ -1,0 +1,47 @@
+<svg width="1200" height="340" viewBox="0 0 1200 340" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="durin — local-first AI agent">
+  <defs>
+    <linearGradient id="ember" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#efab74"/>
+      <stop offset="0.55" stop-color="#e0843f"/>
+      <stop offset="1" stop-color="#c26a2a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#e0843f" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#e0843f" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="hairline" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#e0843f" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#e0843f" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#e0843f" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- forge near-black field -->
+  <rect x="0" y="0" width="1200" height="340" rx="24" fill="#14110e"/>
+  <!-- ember glow behind the mark -->
+  <ellipse cx="180" cy="170" rx="240" ry="200" fill="url(#glow)"/>
+  <!-- top hairline of ember light -->
+  <rect x="120" y="46" width="960" height="2" fill="url(#hairline)"/>
+
+  <!-- badge -->
+  <rect x="86" y="86" width="168" height="168" rx="34" fill="#1d1916" stroke="#e0843f" stroke-opacity="0.85" stroke-width="2"/>
+
+  <!-- crossed hammer-and-pick, drawn (not emoji) -->
+  <g transform="translate(170 170)">
+    <!-- pick: curved double-pointed head + shaft, lower-left to upper-right -->
+    <g stroke="url(#ember)" stroke-width="12" stroke-linecap="round" fill="none">
+      <path d="M -46 46 L 40 -40"/>
+      <path d="M 8 -58 Q 40 -40 58 -8" stroke-width="11"/>
+    </g>
+    <!-- hammer: handle upper-left to lower-right + head block -->
+    <g fill="url(#ember)">
+      <rect x="-8" y="-6" width="14" height="86" rx="7" transform="rotate(-45)"/>
+      <rect x="-58" y="-40" width="52" height="30" rx="8" transform="rotate(-45)"/>
+    </g>
+  </g>
+
+  <!-- wordmark -->
+  <text x="300" y="192" font-family="'Trebuchet MS', 'Segoe UI', system-ui, sans-serif" font-size="140" font-weight="700" letter-spacing="1" fill="#f0ebe3">durin</text>
+  <!-- tagline -->
+  <text x="304" y="250" font-family="'Trebuchet MS', 'Segoe UI', system-ui, sans-serif" font-size="25" font-weight="400" letter-spacing="0.3" fill="#95897b">Local-first AI agent · one loop, every surface · memory that learns</text>
+</svg>
