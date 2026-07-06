@@ -15,8 +15,8 @@ all funnelling through the same memory and the same brain. Bring any LLM (Claude
 GLM, OpenAI, Gemini, OpenRouter, or a local llama.cpp model); durin keeps its
 state under `~/.durin/` and never phones home.
 
-> durin is named for Tolkien's dwarf-king of Khazad-dûm — the ⚒️ mark is the
-> dwarven hammer-and-pick.
+> durin is named for Tolkien's dwarf-king of Khazad-dûm; the mark is a dwarven
+> anvil lit by a forge flame.
 
 ## Why durin
 
