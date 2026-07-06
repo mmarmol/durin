@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "generated_at": "2026-07-03T11:06:10+00:00",
+  "generated_at": "2026-07-06T12:21:13+00:00",
   "sources": {
     "litellm": {
       "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
@@ -295,12 +295,7 @@
       "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
-        "litellm:claude-3-7-sonnet-20250219",
-        "models.dev:anthropic/claude-3-7-sonnet-20250219"
-      ],
-      "_conflicts": [
-        "supports_prompt_caching(litellm:claude-3-7-sonnet-20250219=True, models.dev:anthropic/claude-3-7-sonnet-20250219=False)",
-        "supports_response_schema(litellm:claude-3-7-sonnet-20250219=True, models.dev:anthropic/claude-3-7-sonnet-20250219=False)"
+        "litellm:claude-3-7-sonnet-20250219"
       ],
       "_authority": "merge"
     },
@@ -319,13 +314,7 @@
       "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
-        "litellm:claude-3-haiku-20240307",
-        "models.dev:anthropic/claude-3-haiku-20240307"
-      ],
-      "_conflicts": [
-        "supports_pdf_input(litellm:claude-3-haiku-20240307=False, models.dev:anthropic/claude-3-haiku-20240307=True)",
-        "supports_prompt_caching(litellm:claude-3-haiku-20240307=True, models.dev:anthropic/claude-3-haiku-20240307=False)",
-        "supports_response_schema(litellm:claude-3-haiku-20240307=True, models.dev:anthropic/claude-3-haiku-20240307=False)"
+        "litellm:claude-3-haiku-20240307"
       ],
       "_authority": "merge"
     },
@@ -344,13 +333,7 @@
       "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
-        "litellm:claude-3-opus-20240229",
-        "models.dev:anthropic/claude-3-opus-20240229"
-      ],
-      "_conflicts": [
-        "supports_pdf_input(litellm:claude-3-opus-20240229=False, models.dev:anthropic/claude-3-opus-20240229=True)",
-        "supports_prompt_caching(litellm:claude-3-opus-20240229=True, models.dev:anthropic/claude-3-opus-20240229=False)",
-        "supports_response_schema(litellm:claude-3-opus-20240229=True, models.dev:anthropic/claude-3-opus-20240229=False)"
+        "litellm:claude-3-opus-20240229"
       ],
       "_authority": "merge"
     },
@@ -393,7 +376,7 @@
       "_authority": "merge"
     },
     "claude-sonnet-4-5": {
-      "max_input_tokens": 200000,
+      "max_input_tokens": 600000,
       "max_output_tokens": 64000,
       "mode": "chat",
       "supports_vision": true,
@@ -416,12 +399,13 @@
         "supports_pdf_input(litellm:claude-sonnet-4-5=True, litellm:perplexity/anthropic/claude-sonnet-4-5=False, models.dev:anthropic/claude-sonnet-4-5=True)",
         "supports_reasoning(litellm:claude-sonnet-4-5=True, litellm:perplexity/anthropic/claude-sonnet-4-5=False, models.dev:anthropic/claude-sonnet-4-5=True)",
         "supports_prompt_caching(litellm:claude-sonnet-4-5=True, litellm:perplexity/anthropic/claude-sonnet-4-5=False, models.dev:anthropic/claude-sonnet-4-5=False)",
-        "supports_response_schema(litellm:claude-sonnet-4-5=True, litellm:perplexity/anthropic/claude-sonnet-4-5=False, models.dev:anthropic/claude-sonnet-4-5=False)"
+        "supports_response_schema(litellm:claude-sonnet-4-5=True, litellm:perplexity/anthropic/claude-sonnet-4-5=False, models.dev:anthropic/claude-sonnet-4-5=False)",
+        "max_input_tokens(litellm:claude-sonnet-4-5=200000, models.dev:anthropic/claude-sonnet-4-5=1000000)"
       ],
       "_authority": "merge"
     },
     "claude-sonnet-4-5-20250929": {
-      "max_input_tokens": 200000,
+      "max_input_tokens": 600000,
       "max_output_tokens": 64000,
       "mode": "chat",
       "supports_vision": true,
@@ -440,7 +424,8 @@
       ],
       "_conflicts": [
         "supports_prompt_caching(litellm:claude-sonnet-4-5-20250929=True, models.dev:anthropic/claude-sonnet-4-5-20250929=False)",
-        "supports_response_schema(litellm:claude-sonnet-4-5-20250929=True, models.dev:anthropic/claude-sonnet-4-5-20250929=False)"
+        "supports_response_schema(litellm:claude-sonnet-4-5-20250929=True, models.dev:anthropic/claude-sonnet-4-5-20250929=False)",
+        "max_input_tokens(litellm:claude-sonnet-4-5-20250929=200000, models.dev:anthropic/claude-sonnet-4-5-20250929=1000000)"
       ],
       "_authority": "merge"
     },
@@ -471,7 +456,7 @@
     },
     "claude-sonnet-4-6": {
       "max_input_tokens": 1000000,
-      "max_output_tokens": 64000,
+      "max_output_tokens": 96000,
       "mode": "chat",
       "supports_vision": true,
       "supports_audio_input": false,
@@ -556,12 +541,7 @@
       "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
-        "litellm:claude-opus-4-20250514",
-        "models.dev:anthropic/claude-opus-4-20250514"
-      ],
-      "_conflicts": [
-        "supports_prompt_caching(litellm:claude-opus-4-20250514=True, models.dev:anthropic/claude-opus-4-20250514=False)",
-        "supports_response_schema(litellm:claude-opus-4-20250514=True, models.dev:anthropic/claude-opus-4-20250514=False)"
+        "litellm:claude-opus-4-20250514"
       ],
       "_authority": "merge"
     },
@@ -761,7 +741,7 @@
       "_authority": "merge"
     },
     "claude-sonnet-4-20250514": {
-      "max_input_tokens": 600000,
+      "max_input_tokens": 1000000,
       "max_output_tokens": 64000,
       "mode": "chat",
       "supports_vision": true,
@@ -775,13 +755,7 @@
       "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
-        "litellm:claude-sonnet-4-20250514",
-        "models.dev:anthropic/claude-sonnet-4-20250514"
-      ],
-      "_conflicts": [
-        "supports_prompt_caching(litellm:claude-sonnet-4-20250514=True, models.dev:anthropic/claude-sonnet-4-20250514=False)",
-        "supports_response_schema(litellm:claude-sonnet-4-20250514=True, models.dev:anthropic/claude-sonnet-4-20250514=False)",
-        "max_input_tokens(litellm:claude-sonnet-4-20250514=1000000, models.dev:anthropic/claude-sonnet-4-20250514=200000)"
+        "litellm:claude-sonnet-4-20250514"
       ],
       "_authority": "merge"
     },
@@ -6643,7 +6617,6 @@
         "models.dev:mistral/mistral-medium-latest"
       ],
       "_conflicts": [
-        "supports_reasoning(litellm:mistral/mistral-medium-latest=True, models.dev:mistral/mistral-medium-latest=False)",
         "supports_response_schema(litellm:mistral/mistral-medium-latest=True, models.dev:mistral/mistral-medium-latest=False)"
       ],
       "_authority": "merge"
@@ -9858,7 +9831,7 @@
     },
     "glm-5.1": {
       "max_input_tokens": 200000,
-      "max_output_tokens": 131072,
+      "max_output_tokens": 129536,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -9874,12 +9847,11 @@
         "litellm:zai/glm-5.1",
         "openrouter:z-ai/glm-5.1",
         "models.dev:zhipuai/glm-5.1",
-        "models.dev:zai/glm-5.1",
-        "models.dev:nvidia/z-ai/glm-5.1"
+        "models.dev:zai/glm-5.1"
       ],
       "_conflicts": [
-        "supports_prompt_caching(litellm:zai/glm-5.1=True, openrouter:z-ai/glm-5.1=False, models.dev:zhipuai/glm-5.1=False, models.dev:zai/glm-5.1=False, models.dev:nvidia/z-ai/glm-5.1=False)",
-        "supports_response_schema(litellm:zai/glm-5.1=False, openrouter:z-ai/glm-5.1=True, models.dev:zhipuai/glm-5.1=False, models.dev:zai/glm-5.1=False, models.dev:nvidia/z-ai/glm-5.1=False)"
+        "supports_prompt_caching(litellm:zai/glm-5.1=True, openrouter:z-ai/glm-5.1=False, models.dev:zhipuai/glm-5.1=False, models.dev:zai/glm-5.1=False)",
+        "supports_response_schema(litellm:zai/glm-5.1=False, openrouter:z-ai/glm-5.1=True, models.dev:zhipuai/glm-5.1=False, models.dev:zai/glm-5.1=False)"
       ],
       "_authority": "merge"
     },
@@ -10707,11 +10679,11 @@
       "_sources": [
         "openrouter:z-ai/glm-5.2",
         "models.dev:zhipuai/glm-5.2",
-        "models.dev:zai/glm-5.2"
+        "models.dev:zai/glm-5.2",
+        "models.dev:nvidia/z-ai/glm-5.2"
       ],
       "_conflicts": [
-        "supports_response_schema(openrouter:z-ai/glm-5.2=True, models.dev:zhipuai/glm-5.2=False, models.dev:zai/glm-5.2=False)",
-        "max_output_tokens(openrouter:z-ai/glm-5.2=32768, models.dev:zhipuai/glm-5.2=131072, models.dev:zai/glm-5.2=131072)"
+        "supports_response_schema(openrouter:z-ai/glm-5.2=True, models.dev:zhipuai/glm-5.2=False, models.dev:zai/glm-5.2=False, models.dev:nvidia/z-ai/glm-5.2=False)"
       ],
       "_authority": "merge"
     },
@@ -11325,7 +11297,7 @@
     },
     "nemotron-3-super-120b-a12b": {
       "max_input_tokens": 631072,
-      "max_output_tokens": 139264,
+      "max_output_tokens": 262144,
       "mode": "chat",
       "supports_vision": false,
       "supports_audio_input": false,
@@ -11343,8 +11315,7 @@
       ],
       "_conflicts": [
         "supports_response_schema(openrouter:nvidia/nemotron-3-super-120b-a12b=True, models.dev:nvidia/nvidia/nemotron-3-super-120b-a12b=False)",
-        "max_input_tokens(openrouter:nvidia/nemotron-3-super-120b-a12b=1000000, models.dev:nvidia/nvidia/nemotron-3-super-120b-a12b=262144)",
-        "max_output_tokens(openrouter:nvidia/nemotron-3-super-120b-a12b=16384, models.dev:nvidia/nvidia/nemotron-3-super-120b-a12b=262144)"
+        "max_input_tokens(openrouter:nvidia/nemotron-3-super-120b-a12b=1000000, models.dev:nvidia/nvidia/nemotron-3-super-120b-a12b=262144)"
       ],
       "_authority": "merge"
     },
@@ -15044,101 +15015,6 @@
       "supports_response_schema": false,
       "_sources": [
         "models.dev:nvidia/black-forest-labs/flux_2-klein-4b"
-      ],
-      "_authority": "merge"
-    },
-    "claude-opus-4-0": {
-      "max_input_tokens": 200000,
-      "max_output_tokens": 32000,
-      "mode": "chat",
-      "supports_vision": true,
-      "supports_audio_input": false,
-      "supports_pdf_input": true,
-      "supports_video_input": false,
-      "supports_audio_output": false,
-      "supports_image_output": false,
-      "supports_function_calling": true,
-      "supports_reasoning": true,
-      "supports_prompt_caching": false,
-      "supports_response_schema": false,
-      "_sources": [
-        "models.dev:anthropic/claude-opus-4-0"
-      ],
-      "_authority": "merge"
-    },
-    "claude-3-5-sonnet-20241022": {
-      "max_input_tokens": 200000,
-      "max_output_tokens": 8192,
-      "mode": "chat",
-      "supports_vision": true,
-      "supports_audio_input": false,
-      "supports_pdf_input": true,
-      "supports_video_input": false,
-      "supports_audio_output": false,
-      "supports_image_output": false,
-      "supports_function_calling": true,
-      "supports_reasoning": false,
-      "supports_prompt_caching": false,
-      "supports_response_schema": false,
-      "_sources": [
-        "models.dev:anthropic/claude-3-5-sonnet-20241022"
-      ],
-      "_authority": "merge"
-    },
-    "claude-3-5-sonnet-20240620": {
-      "max_input_tokens": 200000,
-      "max_output_tokens": 8192,
-      "mode": "chat",
-      "supports_vision": true,
-      "supports_audio_input": false,
-      "supports_pdf_input": true,
-      "supports_video_input": false,
-      "supports_audio_output": false,
-      "supports_image_output": false,
-      "supports_function_calling": true,
-      "supports_reasoning": false,
-      "supports_prompt_caching": false,
-      "supports_response_schema": false,
-      "_sources": [
-        "models.dev:anthropic/claude-3-5-sonnet-20240620"
-      ],
-      "_authority": "merge"
-    },
-    "claude-sonnet-4-0": {
-      "max_input_tokens": 200000,
-      "max_output_tokens": 64000,
-      "mode": "chat",
-      "supports_vision": true,
-      "supports_audio_input": false,
-      "supports_pdf_input": true,
-      "supports_video_input": false,
-      "supports_audio_output": false,
-      "supports_image_output": false,
-      "supports_function_calling": true,
-      "supports_reasoning": true,
-      "supports_prompt_caching": false,
-      "supports_response_schema": false,
-      "_sources": [
-        "models.dev:anthropic/claude-sonnet-4-0"
-      ],
-      "_authority": "merge"
-    },
-    "claude-3-sonnet-20240229": {
-      "max_input_tokens": 200000,
-      "max_output_tokens": 4096,
-      "mode": "chat",
-      "supports_vision": true,
-      "supports_audio_input": false,
-      "supports_pdf_input": true,
-      "supports_video_input": false,
-      "supports_audio_output": false,
-      "supports_image_output": false,
-      "supports_function_calling": true,
-      "supports_reasoning": false,
-      "supports_prompt_caching": false,
-      "supports_response_schema": false,
-      "_sources": [
-        "models.dev:anthropic/claude-3-sonnet-20240229"
       ],
       "_authority": "merge"
     },
