@@ -1,0 +1,77 @@
+<svg width="1120" height="560" viewBox="0 0 1120 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="durin memory graph mockup" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+<rect width="1120" height="560" rx="20" fill="#0e1113"/>
+<rect x="16" y="16" width="1088" height="528" rx="16" fill="#14171b" stroke="#2b3037"/>
+<circle cx="46" cy="52" r="6" fill="#44c8e6"/>
+<text x="62" y="57" font-size="16" font-weight="700" fill="#e7e9ec">Memory · entity graph</text>
+<text x="1080" y="57" font-size="12.5" text-anchor="end" fill="#8b9096">248 entities · 611 relations · built from your chats</text>
+<line x1="30" y1="80" x2="1090" y2="80" stroke="#2b3037"/>
+<line x1="190" y1="300" x2="190" y2="150" stroke="#2b3037" stroke-width="1.6"/>
+<rect x="153.0" y="216.0" width="74.0" height="17" rx="8.5" fill="#14171b" stroke="#2b3037"/>
+<text x="190.0" y="228.5" font-size="10.5" text-anchor="middle" fill="#8b9096">founder of</text>
+<line x1="190" y1="300" x2="470" y2="300" stroke="#2b3037" stroke-width="1.6"/>
+<rect x="305.4" y="291.0" width="49.2" height="17" rx="8.5" fill="#14171b" stroke="#2b3037"/>
+<text x="330.0" y="303.5" font-size="10.5" text-anchor="middle" fill="#8b9096">builds</text>
+<line x1="470" y1="300" x2="720" y2="185" stroke="#2b3037" stroke-width="1.6"/>
+<rect x="576.6" y="233.5" width="36.8" height="17" rx="8.5" fill="#14171b" stroke="#2b3037"/>
+<text x="595.0" y="246.0" font-size="10.5" text-anchor="middle" fill="#8b9096">uses</text>
+<line x1="470" y1="300" x2="700" y2="430" stroke="#2b3037" stroke-width="1.6"/>
+<rect x="569.7" y="356.0" width="30.6" height="17" rx="8.5" fill="#14171b" stroke="#2b3037"/>
+<text x="585.0" y="368.5" font-size="10.5" text-anchor="middle" fill="#8b9096">has</text>
+<line x1="720" y1="185" x2="955" y2="110" stroke="#2b3037" stroke-width="1.6"/>
+<rect x="797.4" y="138.5" width="80.2" height="17" rx="8.5" fill="#14171b" stroke="#2b3037"/>
+<text x="837.5" y="151.0" font-size="10.5" text-anchor="middle" fill="#8b9096">measured by</text>
+<line x1="720" y1="185" x2="965" y2="250" stroke="#2b3037" stroke-width="1.6"/>
+<rect x="805.5" y="208.5" width="74.0" height="17" rx="8.5" fill="#14171b" stroke="#2b3037"/>
+<text x="842.5" y="221.0" font-size="10.5" text-anchor="middle" fill="#8b9096">indexed by</text>
+<line x1="940" y1="410" x2="965" y2="250" stroke="#2b3037" stroke-width="1.6"/>
+<rect x="921.7" y="321.0" width="61.6" height="17" rx="8.5" fill="#14171b" stroke="#2b3037"/>
+<text x="952.5" y="333.5" font-size="10.5" text-anchor="middle" fill="#8b9096">mentions</text>
+<line x1="940" y1="410" x2="720" y2="185" stroke="#2b3037" stroke-width="1.6"/>
+<rect x="786.8" y="288.5" width="86.4" height="17" rx="8.5" fill="#14171b" stroke="#2b3037"/>
+<text x="830.0" y="301.0" font-size="10.5" text-anchor="middle" fill="#8b9096">derived_from</text>
+<rect x="155.0" y="280.0" width="70.0" height="40" rx="20" fill="#1b1f24" stroke="#57b6e6" stroke-width="2"/>
+<circle cx="173.0" cy="300" r="5.5" fill="#57b6e6"/>
+<text x="187.0" y="299" font-size="13.5" font-weight="600" fill="#e7e9ec">You</text>
+<text x="187.0" y="313" font-size="10" fill="#8b9096">person</text>
+<rect x="427.0" y="280.0" width="86.0" height="40" rx="20" fill="#1b1f24" stroke="#e0843f" stroke-width="2"/>
+<circle cx="445.0" cy="300" r="5.5" fill="#e0843f"/>
+<text x="459.0" y="299" font-size="13.5" font-weight="600" fill="#e7e9ec">durin</text>
+<text x="459.0" y="313" font-size="10" fill="#8b9096">project</text>
+<rect x="143.0" y="130.0" width="94.0" height="40" rx="20" fill="#1b1f24" stroke="#d9a441" stroke-width="1.3"/>
+<circle cx="161.0" cy="150" r="5.5" fill="#d9a441"/>
+<text x="175.0" y="149" font-size="13.5" font-weight="600" fill="#e7e9ec">mxHero</text>
+<text x="175.0" y="163" font-size="10" fill="#8b9096">company</text>
+<rect x="649.0" y="165.0" width="142.0" height="40" rx="20" fill="#1b1f24" stroke="#5ec88a" stroke-width="1.3"/>
+<circle cx="667.0" cy="185" r="5.5" fill="#5ec88a"/>
+<text x="681.0" y="184" font-size="13.5" font-weight="600" fill="#e7e9ec">graph memory</text>
+<text x="681.0" y="198" font-size="10" fill="#8b9096">concept</text>
+<rect x="641.0" y="410.0" width="118.0" height="40" rx="20" fill="#1b1f24" stroke="#5ec88a" stroke-width="1.3"/>
+<circle cx="659.0" cy="430" r="5.5" fill="#5ec88a"/>
+<text x="673.0" y="429" font-size="13.5" font-weight="600" fill="#e7e9ec">Workflows</text>
+<text x="673.0" y="443" font-size="10" fill="#8b9096">concept</text>
+<rect x="888.0" y="90.0" width="134.0" height="40" rx="20" fill="#1b1f24" stroke="#5ec88a" stroke-width="1.3"/>
+<circle cx="906.0" cy="110" r="5.5" fill="#5ec88a"/>
+<text x="920.0" y="109" font-size="13.5" font-weight="600" fill="#e7e9ec">LoCoMo 0.79</text>
+<text x="920.0" y="123" font-size="10" fill="#8b9096">concept</text>
+<rect x="914.0" y="230.0" width="102.0" height="40" rx="20" fill="#1b1f24" stroke="#8b9096" stroke-width="1.3"/>
+<circle cx="932.0" cy="250" r="5.5" fill="#8b9096"/>
+<text x="946.0" y="249" font-size="13.5" font-weight="600" fill="#e7e9ec">LanceDB</text>
+<text x="946.0" y="263" font-size="10" fill="#8b9096">tool</text>
+<rect x="841.0" y="390.0" width="198.0" height="40" rx="20" fill="#1b1f24" stroke="#b58cf0" stroke-width="1.3"/>
+<circle cx="859.0" cy="410" r="5.5" fill="#b58cf0"/>
+<text x="873.0" y="409" font-size="13.5" font-weight="600" fill="#e7e9ec">vector-db-notes.pdf</text>
+<text x="873.0" y="423" font-size="10" fill="#8b9096">document</text>
+<text x="44" y="524" font-size="11" fill="#8b9096">entity type:</text>
+<circle cx="132" cy="520" r="5" fill="#57b6e6"/>
+<text x="142" y="524" font-size="11" fill="#8b9096">person</text>
+<circle cx="202" cy="520" r="5" fill="#e0843f"/>
+<text x="212" y="524" font-size="11" fill="#8b9096">project</text>
+<circle cx="279" cy="520" r="5" fill="#d9a441"/>
+<text x="289" y="524" font-size="11" fill="#8b9096">company</text>
+<circle cx="356" cy="520" r="5" fill="#5ec88a"/>
+<text x="366" y="524" font-size="11" fill="#8b9096">concept</text>
+<circle cx="433" cy="520" r="5" fill="#8b9096"/>
+<text x="443" y="524" font-size="11" fill="#8b9096">tool</text>
+<circle cx="489" cy="520" r="5" fill="#b58cf0"/>
+<text x="499" y="524" font-size="11" fill="#8b9096">document</text>
+</svg>
