@@ -11,16 +11,16 @@
     />
     <meta name="theme-color" content="#fafaf9" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#161618" media="(prefers-color-scheme: dark)" />
-    <!-- durin logo favicon: anvil lit by a blue forge flame. Source SVGs in
-         docs/assets/ (durin-icon.svg = dark anvil for light UI; durin-icon-on-dark.svg
-         = lightened anvil for dark UI), rendered to webui/public/brand/ via the dev
-         workflow. Two variants per size so the mark stays legible in either theme —
-         the browser tab follows the OS color scheme. -->
-    <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png" media="(prefers-color-scheme: light)" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32-dark.png" media="(prefers-color-scheme: dark)" />
-    <link rel="icon" type="image/png" sizes="256x256" href="/brand/durin-logo.png" media="(prefers-color-scheme: light)" />
-    <link rel="icon" type="image/png" sizes="256x256" href="/brand/durin-logo-dark.png" media="(prefers-color-scheme: dark)" />
-    <link rel="apple-touch-icon" href="/brand/durin-logo-dark.png" />
+    <!-- durin favicon: anvil lit by a blue forge flame. Primary is an SVG that
+         recolours the anvil for the OS colour scheme via an internal @media rule
+         (durin-favicon.svg). A real favicon.ico and PNG variants are fallbacks for
+         browsers without SVG-favicon support; the ?v query busts the old cached
+         shield favicon. Source SVGs live in docs/assets/. -->
+    <link rel="icon" type="image/svg+xml" href="/brand/durin-favicon.svg" />
+    <link rel="icon" type="image/x-icon" sizes="any" href="/favicon.ico?v=b1" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png?v=b1" media="(prefers-color-scheme: light)" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32-dark.png?v=b1" media="(prefers-color-scheme: dark)" />
+    <link rel="apple-touch-icon" href="/brand/durin-logo-dark.png?v=b1" />
     <style>
       html,
       body,
