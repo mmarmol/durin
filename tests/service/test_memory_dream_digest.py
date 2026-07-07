@@ -315,23 +315,26 @@ async def test_dream_digest_maps_flagged(tmp_path: Path, monkeypatch):
 async def test_dream_digest_extracts_last_run_and_excludes_it_from_feed(
     tmp_path: Path, monkeypatch
 ):
+    from durin.memory.dream_runs import record_dream_run
     tel_dir = tmp_path / "telemetry"
     ts_old = 1_700_000_000.0
     ts_new = 1_700_001_000.0
+    # Run summaries are the DURABLE store's job now (not telemetry); the activity
+    # item still comes from telemetry.
     lines = [
         _jsonl_line("memory.absorb.auto_merged", {
             "canonical": "person:a", "absorbed": "person:a2",
         }, ts=ts_old),
-        _jsonl_line("memory.dream.run_summary", {
-            "sessions": 2, "entities": 1, "merged": 1,
-            "skills_created": 2, "skills_improved": 1,
-        }, ts=ts_old + 1),
-        _jsonl_line("memory.dream.run_summary", {
-            "sessions": 0, "entities": 0, "merged": 0,
-            "skills_created": 0, "skills_improved": 0,
-        }, ts=ts_new),
     ]
     _seed_telemetry(tel_dir, lines)
+    record_dream_run(tmp_path, {
+        "sessions": 2, "entities": 1, "merged": 1,
+        "skills_created": 2, "skills_improved": 1,
+        "at_ms": int((ts_old + 1) * 1000)})
+    record_dream_run(tmp_path, {
+        "sessions": 0, "entities": 0, "merged": 0,
+        "skills_created": 0, "skills_improved": 0,
+        "at_ms": int(ts_new * 1000)})
     monkeypatch.setattr("durin.service.memory._telemetry_dir", lambda: tel_dir)
 
     result = await _service(tmp_path).dream_digest(DreamDigestQuery(), LOCAL)

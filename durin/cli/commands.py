@@ -1610,13 +1610,18 @@ def _run_gateway(
             # updating only the last-run time. Persisted via the still-bound
             # logger and teed live by the DreamProgressSink.
             from durin.agent.tools._telemetry import emit_tool_event
-            emit_tool_event("memory.dream.run_summary", {
+            _run_summary = {
                 "sessions": ex.get("sessions", 0) if isinstance(ex, dict) else 0,
                 "entities": ex.get("entities", 0) if isinstance(ex, dict) else 0,
                 "merged": len(rf.get("merged", [])) if isinstance(rf, dict) else 0,
                 "skills_created": sk.get("skills_touched", 0) if isinstance(sk, dict) else 0,
                 "skills_improved": _skills_improved,
-            })
+            }
+            emit_tool_event("memory.dream.run_summary", _run_summary)
+            # Durable record so the "last run" card + history survive the telemetry
+            # window / retention (telemetry is the live feed; this is the truth).
+            from durin.memory.dream_runs import record_dream_run
+            record_dream_run(workspace, _run_summary)
 
             # Unbind telemetry and tell the webui the run is over (success or
             # not) so its "running" pulse always stops. Runs before the error
@@ -1879,13 +1884,16 @@ def _run_gateway(
                     # Record a run summary so reactive runs also surface in the
                     # Dream feed / "última corrida" card. The reactive path is
                     # extract-only (refine/skills are cron-only), so those are 0.
-                    emit_tool_event("memory.dream.run_summary", {
+                    _reactive_summary = {
                         "sessions": out.get("sessions", 0),
                         "entities": out.get("entities", 0),
                         "merged": 0,
                         "skills_created": 0,
                         "skills_improved": 0,
-                    })
+                    }
+                    emit_tool_event("memory.dream.run_summary", _reactive_summary)
+                    from durin.memory.dream_runs import record_dream_run
+                    record_dream_run(workspace, _reactive_summary)
                 except Exception:
                     logger.exception("{} dream failed ({})", trigger, session_key)
                 finally:

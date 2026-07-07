@@ -124,7 +124,7 @@ def test_bound_logger_persists_dream_events_for_digest(
         reset_telemetry(tok)
 
     monkeypatch.setattr("durin.service.memory._telemetry_dir", lambda: tel_dir)
-    digest = _build_dream_digest(30)
+    digest = _build_dream_digest(tmp_path, 30)
 
     assert len(digest.events) == 1
     assert digest.events[0].kind == "merged"
@@ -143,7 +143,7 @@ def test_no_bound_logger_persists_nothing(tmp_path: Path, monkeypatch) -> None:
         "canonical": "place:torrent", "absorbed": "place:torrent-valencia",
     })
     monkeypatch.setattr("durin.service.memory._telemetry_dir", lambda: tel_dir)
-    assert _build_dream_digest(30).events == []
+    assert _build_dream_digest(tmp_path, 30).events == []
 
 
 def test_logger_sink_tee_fires_alongside_persistence(tmp_path: Path) -> None:

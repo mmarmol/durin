@@ -556,10 +556,14 @@ on the default provider (see `docs/internals/providers.md`).
   emits: activity items stream into the feed as the dream produces them, and
   `run_finished` clears the indicator and reconciles against a fresh digest
   fetch. The digest is served by `GET /api/v1/memory/dream/digest`
-  (`MemoryService.dream_digest`, `durin/service/memory.py`): it scans the local
-  telemetry JSONL files for `memory.dream.*` events and returns a `last_run`
-  headline (the newest run's counts) plus a newest-first `DreamEvent` feed,
-  capped at the requested limit.
+  (`MemoryService.dream_digest`, `durin/service/memory.py`): the `last_run`
+  headline and the per-run history come from the **durable run store**
+  (`durin/memory/dream_runs.py` — a `record_dream_run` per run), so they survive
+  the telemetry window and retention; the per-item activity feed (merges,
+  discoveries, and each applied skill-curation action, naming the skill and the
+  verb) is mapped from the telemetry JSONL. The run summaries used to be
+  re-derived from telemetry, where a busy refine pass flooded the read window and
+  the "última corrida" card silently vanished.
 
   **Bandeja tab** (inbox) — surfaces two categories of items that need human
   attention, with a badge on the tab when items are present.
