@@ -63,6 +63,16 @@ catalog points at one, reach for it explicitly:
   `#<heading>` for one section); also drills a truncated chunk from a
   `scope="library"` hit.
 
+## Forgetting a document
+
+When the user wants an ingested document gone — "forget that", "remove that
+document", "that was a mistake" — call `memory_forget("reference:<slug>")` with
+the document's ref. It archives the whole document (reversible) and drops its
+search-index rows, so it stops surfacing entirely. Do **not** `rm` files under
+`memory/references/` by shell: that orphans the document's index rows. This
+forgets the *source document*, not entities distilled from it — an entity the
+dream already extracted stays until forgotten on its own.
+
 ## Provenance
 
 Knowledge distilled from a document is stamped `derived_from` the document, and
@@ -76,5 +86,6 @@ a document claims — if they conflict, trust the user and say so.
 | "What does this PDF say?" / one-off | `convert_to_markdown(path)` |
 | "Remember / keep / learn this doc" | `memory_ingest(path)` |
 | Question about a doc you ingested before | `memory_search(scope="library")`, then drill |
+| "Forget / remove that document" | `memory_forget("reference:<slug>")` |
 | A fact about a person/project | `memory_upsert_entity` (never the document tools) |
 | A web page | `web_fetch(url)` first, then decide read vs remember |

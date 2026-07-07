@@ -2635,6 +2635,20 @@
         "title": "MemoryBacklinksQuery",
         "type": "object"
       },
+      "MemoryDocumentForgetCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug"
+        ],
+        "title": "MemoryDocumentForgetCommand",
+        "type": "object"
+      },
       "MemoryDocumentQuery": {
         "additionalProperties": false,
         "properties": {
@@ -7842,6 +7856,33 @@
       }
     },
     "/api/v1/memory/documents/{slug}": {
+      "delete": {
+        "operationId": "memory_forget_document",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryDocumentForgetCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForgetResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Forget an ingested reference document (archive + drop index rows)",
+        "x-required-scope": "memory:write"
+      },
       "get": {
         "operationId": "memory_document",
         "requestBody": {
