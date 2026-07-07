@@ -559,9 +559,14 @@ class SkillsService:
         self, cmd: SkillsImportCommand, principal: Principal
     ) -> SkillsResult:
         principal.require(Scope.SKILLS_WRITE)
+        import asyncio
+
         from durin.agent import skills_store as ss
 
-        status, payload = ss.web_import_fetch(self._workspace, cmd.source, replace=cmd.replace)
+        # Off the event loop: fetches a candidate from a registry (network) +
+        # scans it — blocking work that would stall the loop inline.
+        status, payload = await asyncio.to_thread(
+            ss.web_import_fetch, self._workspace, cmd.source, replace=cmd.replace)
         return _skills_result(status, payload)
 
     @route(

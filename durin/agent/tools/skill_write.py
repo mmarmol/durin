@@ -131,7 +131,13 @@ class SkillWriteTool(Tool, ContextAware):
         override = bool(kwargs.get("override_composition")) and self._gate_mode == "override"
 
         attribution = Attribution(actor="agent", session=self._session.get(), agent=self._model.get())
-        result = dream_create_skill(
+        # Off the event loop: dream_create_skill runs the composition gate through
+        # the SYNC llm_invoke (_run_blocking), which would otherwise freeze the
+        # gateway loop for the whole judge round-trip. On the worker thread
+        # _run_blocking sees no running loop and takes its clean asyncio.run branch.
+        import asyncio
+        result = await asyncio.to_thread(
+            dream_create_skill,
             self._workspace,
             str(kwargs.get("name", "")),
             str(kwargs.get("content", "")),

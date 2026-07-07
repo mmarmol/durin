@@ -125,7 +125,11 @@ class MemoryIngestTool(Tool):
             source = (self._workspace / source).resolve()
 
         try:
-            result = ingest_artifact(self._workspace, source)
+            # Off-loop: ingest converts the document (MarkItDown: PDF/Office
+            # parsing) — multi-second blocking work that would freeze the gateway
+            # loop for large docs.
+            import asyncio
+            result = await asyncio.to_thread(ingest_artifact, self._workspace, source)
         except IngestError as exc:
             return {"error": str(exc)}
         except OSError as exc:
@@ -144,7 +148,10 @@ class MemoryIngestTool(Tool):
         # doc + vector-index its token-aware chunks. Replaces the legacy
         # chunked `corpus/` model. Best-effort: a failure here does not
         # roll back the verbatim ingest above.
-        ref = self._create_reference(source_path=source, content=result["content"])
+        # Off-loop: reference creation FTS-indexes the whole doc + vector-indexes
+        # its chunks (embedding) — blocking, must not run on the gateway loop.
+        ref = await asyncio.to_thread(
+            self._create_reference, source_path=source, content=result["content"])
 
         # C1: emit `id` + `reference` FIRST so they survive the 16 KB head
         # truncation on large docs — the agent (and the dream) read the

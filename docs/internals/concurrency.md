@@ -43,6 +43,20 @@ drops the cache and re-reads from disk; the turn body runs; `save()` then writes
 the result back under the session save lock. Reading fresh and writing under a
 lock is what prevents a stale in-memory view from clobbering a peer's write.
 
+**The gateway event loop is never blocked by synchronous work.** The gateway is
+one ASGI app on one asyncio event loop; chat turns, subagents, background tasks,
+and workflows fan out as concurrent tasks on it and overlap in wall-clock only
+because each yields at every `await`. So any synchronous, blocking step — an LLM
+round-trip, an embedding + vector search, a document conversion, a network fetch,
+a `flock()` — must hop to a worker thread via `asyncio.to_thread`; run inline on
+the loop it would freeze *every* concurrent session/subagent/workflow for its
+duration. Tool `execute()` bodies that do such work wrap it accordingly. The
+sync LLM helper (`durin/memory/llm_invoke.py::_run_blocking`) enforces this: if
+it is reached on a thread that already has a running loop it **raises** rather
+than blocking — turning a silent gateway freeze into a clean error that names the
+offending caller. (Cold-path dream passes and curation likewise run under
+`asyncio.to_thread`, so their LLM work never touches the gateway loop.)
+
 ## 3. Diagram
 
 The lock domains and how the three processes use them. Each domain is an

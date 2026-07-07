@@ -472,7 +472,9 @@ class MemorySearchTool(Tool):
         # queries. No re-ranking, no entity-aware — substring match over
         # headline + summary + body of each archived `.md`.
         if scope == "archive":
-            return self._run_archive_scope(query, limit=limit)
+            import asyncio
+            # Off-loop: walks + reads every archived .md (blocking file I/O).
+            return await asyncio.to_thread(self._run_archive_scope, query, limit=limit)
 
         # Delegate the whole search to `run_search_pipeline` — query
         # router + lexical FTS + vector + cross-source RRF + entity-aware
@@ -523,7 +525,12 @@ class MemorySearchTool(Tool):
                 max_per_source = None
 
         t0 = time.monotonic()
-        pipeline_result = run_search_pipeline(
+        # Off the event loop: the pipeline runs CPU/GIL-bound work (ONNX query
+        # embedding + Lance vector search) with no await, which would freeze the
+        # gateway loop on every recall — the highest-frequency tool path.
+        import asyncio
+        pipeline_result = await asyncio.to_thread(
+            run_search_pipeline,
             self._workspace,
             query,
             keywords=keywords,

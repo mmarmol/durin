@@ -43,9 +43,12 @@ def test_aux_invoke_empty_content_is_safe(monkeypatch) -> None:
     assert out.text == ""
 
 
-def test_aux_invoke_safe_inside_running_loop(monkeypatch) -> None:
-    """The skill-audit tool calls the SYNC invoke from inside the async agent loop.
-    A bare asyncio.run would raise; the thread fallback must keep it working."""
+def test_sync_invoke_raises_on_loop_works_off_loop(monkeypatch) -> None:
+    """The invariant: the SYNC invoke must never run on the event loop thread
+    (it would block the loop for the whole round-trip). Reached on a running loop
+    it fails loud; off the loop (a worker thread / CLI) it works. On-loop callers
+    hop through asyncio.to_thread (where it then sees no running loop)."""
+    import pytest
 
     class _FakeProvider:
         async def chat_with_retry(self, messages, tools=None, model=None, **kw):
@@ -55,14 +58,24 @@ def test_aux_invoke_safe_inside_running_loop(monkeypatch) -> None:
         "durin.providers.factory.make_provider", lambda cfg, *, preset: _FakeProvider()
     )
 
-    async def driver():
-        # call the synchronous helper from within a running event loop
+    def _call():
         return li.aux_llm_invoke(
             "hi", preset=ModelPresetConfig(model="m", provider="p"), config=Config()
         )
 
-    out = asyncio.run(driver())
-    assert out.text == "ok"
+    # Off the loop (ordinary sync context): works.
+    assert _call().text == "ok"
+
+    # On the loop: fails loud instead of freezing the gateway.
+    async def driver():
+        return _call()
+    with pytest.raises(RuntimeError, match="event loop thread"):
+        asyncio.run(driver())
+
+    # The correct on-loop usage — hop to a worker thread — works.
+    async def via_thread():
+        return await asyncio.to_thread(_call)
+    assert asyncio.run(via_thread()).text == "ok"
 
 
 def test_aux_astream_forwards_reasoning_and_assembles(monkeypatch) -> None:
