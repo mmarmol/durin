@@ -293,6 +293,22 @@ def _lint_script(relpath: str, content: str) -> dict | None:
     return None
 
 
+def _skill_md_integrity(content: str) -> str | None:
+    """Tier-1 integrity floor for a whole SKILL.md body: reject a structurally
+    broken / truncated body so no author — a webui full-save, an import, or a
+    dream authoring pass — can persist an unusable skill. Returns an error
+    string, or None when the body is sound.
+
+    Scoped to WHOLE-body writes: a bounded ``apply_skill_edit`` (single-occurrence
+    old→new replace on an already-valid file) does NOT pass through here, because
+    it cannot turn a valid SKILL.md into a broken one."""
+    if not content.strip():
+        return "SKILL.md body is empty"
+    if not (_frontmatter_description(content) or _derive_description(content)):
+        return "SKILL.md has no derivable description (truncated or malformed body)"
+    return None
+
+
 def save_skill_file(workspace: Path, name: str, relpath: str, content: str, *,
                     rationale: str = "edit via web",
                     attribution: "Attribution | None" = None) -> dict:
@@ -309,6 +325,10 @@ def save_skill_file(workspace: Path, name: str, relpath: str, content: str, *,
     lint = _lint_script(relpath, content)
     if lint is not None:
         return lint  # blocked - nothing written
+    if relpath == "SKILL.md":
+        bad = _skill_md_integrity(content)
+        if bad is not None:
+            return {"error": bad}  # integrity floor - nothing written
     store = _store_init(workspace)
     dest = fork_on_write(workspace, name)
     target = _safe_target(dest, relpath)
@@ -877,6 +897,9 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
     files = files or {}
     if not all(_safe_bundle_path(p) for p in files):
         return {"error": "invalid bundled file path (must be relative, inside the skill)"}
+    bad = _skill_md_integrity(content)
+    if bad is not None:
+        return {"error": bad}
     for s in sources:
         if read_mode(workspace, s) == "manual":
             return {"error": f"source is manual, refusing: {s}"}

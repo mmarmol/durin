@@ -282,7 +282,8 @@ KNOWN ENTITIES — if the document is about one of these, reuse its EXACT ref:
 DOCUMENT: {title}
 ABSTRACT: {abstract}
 
-SECTIONS:
+DOCUMENT SECTIONS (the document's actual text — extract entities and their
+in-text aliases/spellings from this):
 {sections}
 
 JSON:"""
@@ -354,10 +355,22 @@ def run_seed_entities_pass(
                 continue
 
             doc_ref = f"reference:{slug}"
-            sections = [
-                (str(s.get("breadcrumb") or ""), str(s.get("summary") or ""))
-                for s in outline.get("sections", [])
-            ]
+            # Seed from the document's ACTUAL section text (what distill read),
+            # not the outline's 1-2 sentence summaries: the prompt asks for the
+            # entities the document is ABOUT plus their in-text aliases/spellings,
+            # which a summary-of-a-summary cannot supply. Per-section capped so
+            # several sections survive the prompt budget, not just the head.
+            _chunks = reference_chunks(workspace, doc_ref)
+            if _chunks:
+                sections = [
+                    (crumb, text[:_PER_SECTION_CHARS])
+                    for crumb, _idxs, text in _sections_from_chunks(_chunks)
+                ]
+            else:  # defensive: no chunks on disk → fall back to outline summaries
+                sections = [
+                    (str(s.get("breadcrumb") or ""), str(s.get("summary") or ""))
+                    for s in outline.get("sections", [])
+                ]
             abstract = str(outline.get("abstract") or "")
             title = str(outline.get("title") or slug)
             manifest = build_entity_manifest(

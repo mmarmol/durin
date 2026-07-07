@@ -101,8 +101,13 @@ class SkillAuditTool(Tool):
                 model, max_sev = str(j.model or ""), str(j.max_severity or "caution")
             except Exception:  # noqa: BLE001
                 model, max_sev = "", "caution"
-            scan = audit_skill(target, judge_enabled=True, judge_model=model,
-                               judge_max_severity=max_sev)
+            # Off-loop: the deep audit runs the SYNC llm_invoke judge
+            # (_run_blocking), which would freeze the gateway loop for the whole
+            # judge round-trip if run inline on it.
+            import asyncio
+            scan = await asyncio.to_thread(
+                audit_skill, target, judge_enabled=True, judge_model=model,
+                judge_max_severity=max_sev)
         else:
             scan = scan_skill(target)
         return {

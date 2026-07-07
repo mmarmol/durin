@@ -32,6 +32,15 @@ def _line(ref: str, page: EntityPage) -> str:
     return f"- {ref} — {page.name}: {desc}" if desc else f"- {ref} — {page.name}"
 
 
+def _full_entry(ref: str, page: EntityPage) -> str:
+    """Ref + name + the entity's FULL body — for a caller that may REPLACE that
+    body in place (learnings), so it refines the existing text instead of
+    overwriting content it never saw."""
+    body = (page.body or "").strip()
+    head = f"- {ref} — {page.name}"
+    return f"{head}:\n{body}" if body else head
+
+
 def build_entity_manifest(
     workspace: Path,
     *,
@@ -39,6 +48,7 @@ def build_entity_manifest(
     query: str | None = None,
     limit: int = 20,
     vector_index: object | None = None,
+    full_body: bool = False,
 ) -> str:
     """Return a compact manifest of existing entities for prompt seeding.
 
@@ -67,7 +77,8 @@ def build_entity_manifest(
             for md in sorted(tdir.glob("*.md")):
                 page = EntityPage.from_file(md)
                 if page is not None:
-                    lines.append(_line(f"{type_}:{md.stem}", page))
+                    ref = f"{type_}:{md.stem}"
+                    lines.append(_full_entry(ref, page) if full_body else _line(ref, page))
         return "\n".join(lines[:limit])
 
     if query and query.strip():

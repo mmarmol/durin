@@ -342,7 +342,7 @@ before it is applied:
 | Action | Effect | Guard |
 |---|---|---|
 | `evolve` | `apply_skill_edit` — bounded find/replace on the skill body | target must be in `selected` |
-| `restructure` | `dream_restructure_skill` — rewrite the whole body, optionally bundling `files` (scripts) and/or authoring a `workflow` the body delegates to | target must be in `selected`; a carried `workflow` is authored via `save_workflow_definition` **first** and the skill is left untouched if that fails; the new body + bundled code pass the composition gate + security scan |
+| `restructure` | `restructure_skill_agentic` — the judge supplies only an `intent`; an agentic sub-agent authors the fix (bundle a script, author a workflow to delegate to) in an **isolated staging copy** using real tools, the result is validated (integrity floor + composition gate + security scan), and only a validated, complete skill is applied to live via the locked commit — else discarded, live untouched | target must be in `selected`; requires a non-empty `intent`; the judge never emits whole artifacts inline (that shape corrupted a skill when a completion truncated) |
 | `fuse` | `dream_fuse_skills` — merge multiple skills into a new one, preserving source bundled scripts | every source must be in `selected`; `dream_fuse_skills` itself refuses any `manual` source and runs the composition gate + scan on the merged result |
 | `retire` | `remove_skill` — delete outright (git-recoverable) | target must be in `selected` |
 | `principle` | `add_principle` | capped at `PRINCIPLES_CAP` |
@@ -351,7 +351,11 @@ before it is applied:
 `restructure` exists as a distinct action from `evolve` because a text
 find/replace cannot add bundled files or author a workflow — the two moves the
 composition doctrine requires to lift inline code into a script or convert a
-narration into a delegating wrapper when no workflow yet exists. `retire`
+narration into a delegating wrapper when no workflow yet exists. Unlike `evolve`,
+`restructure` is executed by an agentic sub-agent with tools (read the skill's
+files, write a script, author a workflow) working in isolation and validated
+before it touches live — the judge decides the intent, it does not hand-write the
+artifacts. `retire`
 exists as a distinct action from `evolve` because an `evolve`-only model can only
 push a fully-obsolete skill toward an empty body, leaving dead clutter;
 `remove_skill` is the same git-recoverable delete used by the manual admin
