@@ -93,6 +93,18 @@ def test_drain_pending_path_preserves_document_text(tmp_path: Path) -> None:
     assert "summarize" in result
 
 
+def test_extract_documents_marker_carries_ondisk_path(tmp_path: Path) -> None:
+    """The inlined document marker must include the saved on-disk path, so the
+    agent can `memory_ingest` an attached document instead of wrongly concluding
+    the file isn't on disk and asking the user for a path."""
+    p = tmp_path / "report.txt"
+    p.write_text("Quarterly revenue is $5M", encoding="utf-8")
+    new_content, _images = extract_documents("summarize", [str(p)])
+    assert f"saved on disk at {p}" in new_content   # the path is available
+    assert "[File: report.txt" in new_content
+    assert "Quarterly revenue" in new_content
+
+
 def test_drain_pending_path_without_extract_loses_document(tmp_path: Path) -> None:
     """Demonstrates the BUG: if _drain_pending calls _build_user_content
     directly without extract_documents, document content is lost."""

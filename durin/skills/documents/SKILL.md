@@ -23,6 +23,16 @@ It has two homes and you pick based on what the user wants.
 When it is ambiguous, prefer reading now and offer to remember it:
 "I've read it — want me to keep it in your library so you can ask about it later?"
 
+## An attached file already carries its path — never ask for one
+
+When the user **attaches** a document in chat, you receive its extracted text
+inlined **and** its on-disk path in the marker:
+`[File: <name> — saved on disk at <path>]`. So you have already read it. If the
+user then asks to **remember / keep / save** it, call `memory_ingest("<path>")`
+with that exact path — you have it. Do **not** tell the user the file "isn't on
+disk" or ask them for a path; the attachment is persisted and the path is right
+there in the marker.
+
 ## The one rule: never shovel a document into memory as a fact
 
 Do **not** paste a document's text into `memory_upsert_entity` (or ask to
