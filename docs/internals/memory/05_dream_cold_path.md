@@ -232,9 +232,12 @@ re-distilled only when it is re-ingested (its chunk count changes). Gated by
 ### Pass 2c — seed entities: documents to the entity graph
 
 `run_seed_entities_pass` (same module) is the bridge that carries document
-knowledge into the entity graph. It reads each document's `outline.json`, asks
-one selective LLM call for the KEY entities the document is *about* (capped per
-document so a single book cannot flood the graph), and writes them as
+knowledge into the entity graph. It asks one selective LLM call for the KEY
+entities the document is *about* (capped per document so a single book cannot
+flood the graph) over the document's **actual section text** (the same chunks the
+distil pass read) — not the outline's one-line summaries, so in-text aliases and
+central entities are visible; the `outline.json` supplies the abstract and the
+idempotency marker. It writes the entities as
 dream-authored entity pages stamped `derived_from` = the document (a
 `FieldPatch` of kind `derived_from`). Because distilled entities are first-class
 in default recall while raw chunks are not, this is what lets a normal query
