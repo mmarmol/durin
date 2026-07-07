@@ -1814,6 +1814,22 @@ export async function fetchMemoryDocument(
   return (envelope.data ?? envelope) as ReferenceDocumentDetail;
 }
 
+/** DELETE /api/v1/memory/documents/{slug} — forget an ingested document: archive
+ *  it + drop its FTS + vector rows. A 2xx is ``{result: "archived"}``; a 404 is
+ *  ``{result: "not_found"}``. Only network / 5xx errors throw. */
+export async function forgetMemoryDocument(
+  token: string,
+  slug: string,
+  base: string = "",
+): Promise<{ result: string; detail?: string }> {
+  const url = `${base}/api/v1/memory/documents/${encodeURIComponent(slug)}`;
+  const res = await fetchWithReauth(url, token, { method: "DELETE" });
+  if (res.status >= 500) throw new ApiError(res.status, `HTTP ${res.status}`);
+  const body = await res.json();
+  if (res.ok) return { result: body.result };
+  return { result: body.details?.result ?? "invalid", detail: body.detail };
+}
+
 export interface MemorySearchResult {
   source: string;
   uri: string;

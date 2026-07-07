@@ -28,7 +28,8 @@ the primary read surface. The two write tools split by target:
 `memory_upsert_entity` for facts about a *thing* (a person, company, product,
 topic, place), `memory_ingest` for whole documents. `memory_drill` fetches a
 full body by URI when the search result was truncated. `memory_forget` archives
-an entry and drops its index rows — the only correct in-band deletion path. The
+an entry **or an ingested document** (a `reference:<slug>`) and drops its index
+rows — the only correct in-band deletion path. The
 three inspection tools (`memory_read_entity`, `memory_entity_lineage`,
 `memory_source_session`) are general read-only capabilities for examining entity
 pages and their provenance; they never modify state.
@@ -74,7 +75,8 @@ flowchart TD
     DR -->|file read| BODY[full markdown body]
 
     MF -->|forget_entry| FE[durin/memory/forget.py]
-    FE -->|move + index drop| ARC["memory/archive/<class>/<id>.md"]
+    MF -->|reference:slug\nforget_reference| FE
+    FE -->|move + index drop| ARC["memory/archive/<class-or-references>/<id>.md"]
 
     MRE -->|EntityPage.to_markdown| ENT
     MEL -->|dulwich git walker| ENT

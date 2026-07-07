@@ -69,6 +69,19 @@ To **browse** everything, open the web dashboard's **Memory** page and switch to
 the **Documents** tab: a searchable shelf of everything you have ingested, and
 per document its outline, the things it taught durin, and its content.
 
+## Forgetting a document
+
+Ingested the wrong file, or done with one? Remove it either way:
+
+- **Just ask** — "forget that document", "remove the handbook from your library".
+- **In the dashboard** — open the document on the **Documents** tab and click the
+  trash icon in its header.
+
+Either way the document is archived (not hard-deleted) and dropped from search,
+so durin stops surfacing it. Ingest it again anytime to bring it back. Note this
+forgets the *source document*; a fact durin already distilled from it into your
+memory is removed separately.
+
 ## A note on trust
 
 Knowledge durin distils from a document is marked as coming *from* that document,

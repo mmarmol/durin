@@ -181,6 +181,10 @@ class MemoryForgetCommand(Command):
     uri: str
 
 
+class MemoryDocumentForgetCommand(Command):
+    slug: str  # reference slug from the path, e.g. "the-durin-handbook"
+
+
 # ---------------------------------------------------------------------------
 # Flagged-pairs DTOs (Dream Bandeja)
 # ---------------------------------------------------------------------------
@@ -466,6 +470,30 @@ class MemoryService:
         if payload is None:
             raise NotFoundError(f"reference not found: {query.slug}")
         return MemoryResult(data=payload)
+
+    @route(
+        "DELETE",
+        "/api/v1/memory/documents/{slug}",
+        scope=Scope.MEMORY_WRITE.value,
+        request_model=MemoryDocumentForgetCommand,
+        response_model=ForgetResult,
+        summary="Forget an ingested reference document (archive + drop index rows)",
+    )
+    async def forget_document(
+        self, cmd: MemoryDocumentForgetCommand, principal: Principal
+    ) -> ForgetResult:
+        principal.require(Scope.MEMORY_WRITE)
+        from durin.memory.graph_api import forget_reference
+        from durin.service.types import NotFoundError, ValidationFailedError
+
+        ws = self._workspace_resolver()
+        result = forget_reference(ws, cmd.slug).get("result", "error")
+        if result == "archived":
+            return ForgetResult(result=result)
+        details = {"result": result, "slug": cmd.slug}
+        if result == "not_found":
+            raise NotFoundError("reference document not found", details=details)
+        raise ValidationFailedError("could not forget document", details=details)
 
     @route(
         "GET",
