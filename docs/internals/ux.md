@@ -191,7 +191,11 @@ channel's server-side whitelist). Images ride inline as base64 vision content;
 documents (PDF, Office, EPUB, …) are decoded to a file on the gateway — the
 original extension is preserved so extraction dispatches correctly — and their
 text is extracted and folded into the message by `extract_documents`
-(`durin/utils/document.py`) for the agent to read.
+(`durin/utils/document.py`) for the agent to read. The marker carries the file's
+**saved on-disk path** (`[File: <name> — saved on disk at <path>]`), not just the
+name, so when the user asks to *remember* an attached document the agent can
+`memory_ingest("<path>")` it directly instead of asking for a path it doesn't
+have.
 
 **Rich fenced blocks.** Code blocks tagged `html`, `svg`, `mermaid`, or
 `vega-lite` render inline as a `RichBlock`. Each block shows a header strip with

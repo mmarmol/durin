@@ -191,7 +191,13 @@ def extract_documents(
         else:
             extracted = extract_text(p)
             if extracted and not extracted.startswith("[error:"):
-                doc_texts.append(f"[File: {p.name}]\n{extracted}")
+                # Surface the on-disk path, not just the name: the file IS
+                # persisted, and the agent needs the path to `memory_ingest` it
+                # when the user asks to remember an attached document. Without it
+                # the agent only has the inlined text and wrongly concludes the
+                # file "isn't on disk", then asks the user for a path they don't
+                # have (they attached it in chat).
+                doc_texts.append(f"[File: {p.name} — saved on disk at {p}]\n{extracted}")
 
     if doc_texts:
         text = text + "\n\n" + "\n\n".join(doc_texts)
