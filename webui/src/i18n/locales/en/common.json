@@ -225,8 +225,8 @@
       "visionHint": "Used by the interpret_image tool.",
       "audio": "Audio model",
       "audioHint": "Used by the interpret_audio tool.",
-      "memory": "Memory model",
-      "memoryHint": "Used by memory_search query rewriting. Falls back to the main model when unset.",
+      "memory": "Dream model",
+      "memoryHint": "Used by the memory dream — the background pass that consolidates and curates stored memories. Falls back to the main model when unset.",
       "judge": "Judge model",
       "judgeHint": "Model and provider used by the skill security LLM judge (and the skill composition gate). They travel as a pair; when unset, the default model runs.",
       "modelPlaceholder": "model id",
@@ -502,7 +502,7 @@
       "help": {
         "judgeTrigger": "Off: only on-demand (the 'Audit with LLM' button per skill). Uncertain: auto-run only when the gate is already unsure (code / caution / out-of-allowlist). Always: every import. Degrades silently when no model is available.",
         "judgeMaxSeverity": "How high the judge may raise a verdict. 'Caution' forces a confirm but never blocks on its own; 'Dangerous' lets it block (override required).",
-        "judgeModel": "Model name for the judge. Empty uses the default memory model.",
+        "judgeModel": "Model name for the judge. Empty uses the default (main) model.",
         "tokenSecret": "The durin secret holding your GitHub token. 'None' = anonymous requests (lower rate limit, no private repos)."
       },
       "severity": {

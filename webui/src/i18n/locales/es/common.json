@@ -171,8 +171,8 @@
       "visionHint": "Usado por la herramienta interpret_image.",
       "audio": "Modelo de audio",
       "audioHint": "Usado por la herramienta interpret_audio.",
-      "memory": "Modelo de memoria",
-      "memoryHint": "Usado por la reescritura de queries de memory_search. Cae al modelo principal si no está configurado.",
+      "memory": "Modelo del dream",
+      "memoryHint": "Usado por el dream de memoria — el pase en background que consolida y cura los recuerdos guardados. Cae al modelo principal si no está configurado.",
       "judge": "Modelo del juez",
       "judgeHint": "Modelo y proveedor usados por el juez LLM de seguridad de skills (y el gate de composición). Viajan como par; si no está configurado, corre el modelo por defecto.",
       "modelPlaceholder": "id del modelo",
@@ -468,7 +468,7 @@
       "help": {
         "judgeTrigger": "Desactivado: solo bajo demanda (el botón 'Revisar con IA' por skill). Cuando hay duda: corre automático solo si el gate ya está indeciso (código / precaución / fuera de la lista de confianza). Siempre: en cada importación. Degrada en silencio si no hay modelo disponible.",
         "judgeMaxSeverity": "Hasta dónde puede subir el verdict. 'Precaución' fuerza un confirm pero nunca bloquea solo; 'Peligrosa' le permite bloquear (requiere override).",
-        "judgeModel": "Nombre del modelo del juez. Vacío usa el modelo de memoria por default.",
+        "judgeModel": "Nombre del modelo del juez. Vacío usa el modelo principal por default.",
         "tokenSecret": "El secret de durin que contiene tu token de GitHub. 'Ninguno' = peticiones anónimas (rate limit más bajo, sin repos privados)."
       },
       "severity": {

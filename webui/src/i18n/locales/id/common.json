@@ -164,8 +164,8 @@
       "visionHint": "Digunakan oleh tool interpret_image.",
       "audio": "Model audio",
       "audioHint": "Digunakan oleh tool interpret_audio.",
-      "memory": "Model memori",
-      "memoryHint": "Digunakan untuk penulisan ulang query memory_search. Jatuh ke model utama jika tidak diset.",
+      "memory": "Model dream",
+      "memoryHint": "Digunakan oleh dream memori — proses latar belakang yang mengonsolidasikan dan mengkurasi memori tersimpan. Jatuh ke model utama jika tidak diset.",
       "modelPlaceholder": "id model",
       "providerPlaceholder": "penyedia",
       "save": "Simpan",
@@ -305,7 +305,7 @@
       "help": {
         "judgeTrigger": "Mati: hanya sesuai permintaan (tombol 'Audit dengan LLM' per skill). Tidak pasti: jalankan otomatis hanya saat gate sudah ragu (code / hati-hati / di luar allowlist). Selalu: setiap impor. Berkurang diam-diam saat tidak ada model tersedia.",
         "judgeMaxSeverity": "Seberapa tinggi juri boleh menaikkan vonis. 'Hati-hati' memaksa konfirmasi tetapi tidak pernah memblokir sendiri; 'Berbahaya' memungkinkannya memblokir (perlu override).",
-        "judgeModel": "Nama model untuk juri. Kosong menggunakan model memori default.",
+        "judgeModel": "Nama model untuk juri. Kosong menggunakan model utama default.",
         "tokenSecret": "Secret durin yang menyimpan token GitHub Anda. 'Tidak ada' = permintaan anonim (batas rate lebih rendah, tanpa repo privat)."
       },
       "severity": {
