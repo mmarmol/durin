@@ -532,7 +532,11 @@ def mine_learnings(
     llm_invoke = llm_invoke or default_llm_invoke
     if not text.strip():
         return []
-    existing = build_entity_manifest(workspace, types=list(_LEARNING_TYPES), limit=40)
+    # full_body: the learnings write is a body_replace on the matched ref, so the
+    # LLM must see each existing learning's FULL body to refine it rather than
+    # overwrite content it never saw (a one-line manifest lost nuance).
+    existing = build_entity_manifest(
+        workspace, types=list(_LEARNING_TYPES), limit=40, full_body=True)
     prompt = (render_template("agent/consolidator_learnings.md",
                               existing=existing or "(none yet)")
               + "\n\nCONVERSATION SPAN:\n" + text[:12000])

@@ -418,6 +418,23 @@ def write_files_cas(
     """
     if not changes:
         return None
+    # Tier-1 integrity floor: the single-page path validates via
+    # EntityPage.to_markdown()/_validate, but this raw-bytes multi-file path does
+    # not. Enforce the same invariant here so no caller can commit a
+    # structurally-broken entity page (round-trip must parse). A None (delete) or
+    # a non-entity path is skipped. Deterministic callers never trip this; it
+    # keeps the "write primitive rejects a broken artifact" invariant uniform.
+    from durin.memory.entity_page import EntityPage
+    for rel_path, content in changes.items():
+        if content is None:
+            continue
+        parts = Path(rel_path).parts
+        if parts and parts[0] == "entities" and rel_path.endswith(".md"):
+            text = content.decode("utf-8") if isinstance(content, bytes) else str(content)
+            if EntityPage.from_text(text) is None:
+                raise ValueError(
+                    f"write_files_cas: refusing to commit a structurally-invalid "
+                    f"entity page: {rel_path}")
     root = Path(workspace) / "memory"
     _ensure_repo(root)
     msg = message.encode("utf-8") if isinstance(message, str) else message

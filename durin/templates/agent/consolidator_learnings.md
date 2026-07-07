@@ -2,10 +2,13 @@ Extract DURABLE LEARNINGS about how to work with the user — preferences, corre
 standing constraints, and stable personal facts — from this conversation span.
 
 KNOWN LEARNINGS — reuse, do not duplicate:
-If a learning below already exists in this list, output its EXACT ref so it is
-updated in place. Only mint a new ref for a genuinely new learning.
+Each existing learning is shown below with its EXACT ref and its FULL current body.
+If a learning you find already exists here, output its EXACT ref — its body will be
+REPLACED by what you return, so return a REFINED body that PRESERVES the still-valid
+content of the current one and folds in the new nuance. Do NOT drop what the current
+body already says. Only mint a new ref for a genuinely new learning.
 
-EXISTING:
+EXISTING (ref — name, then full body):
 {{ existing }}
 
 Include only:

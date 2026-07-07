@@ -45,26 +45,10 @@ metadata:
 3. Synthesize a cited summary.
 """
 
-WF_DEF = {
-    "name": "synth", "description": "fan out searches and synthesize",
-    "start": "only",
-    "nodes": [{"id": "only", "title": "t", "kind": "work",
-               "mode": "read", "tools": "none", "prompt": "p"}],
-}
-
-
 def _mk(ws, name, body):
     d = ws / "skills" / name
     d.mkdir(parents=True)
     (d / "SKILL.md").write_text(body, encoding="utf-8")
-
-
-def _gate_or(prompt, curation_json):
-    """A judge double: answer the composition GATE prompt COMPLIANT, and the
-    curation prompt with the given action JSON."""
-    if "before it is saved" in prompt:      # unique to the gate prompt
-        return "COMPLIANT"
-    return curation_json
 
 
 # ---- gate broadening -------------------------------------------------------
@@ -138,53 +122,109 @@ def test_restructure_risky_code_quarantined(tmp_path):
 
 # ---- curation restructure dispatch ----------------------------------------
 
-def test_curation_restructure_lifts_inline_code(tmp_path):
+def test_curation_restructure_dispatches_intent_to_agentic_executor(tmp_path, monkeypatch):
+    # The judge emits only an INTENT; the dispatch calls the agentic executor
+    # (not an inline content write). Monkeypatch the executor to capture the call.
     ws = tmp_path / "ws"
     _mk(ws, "qr", INLINE_BODY)
+    seen = {}
+    import durin.agent.skill_restructure as sr
+
+    def fake_exec(workspace, name, *, intent, provider=None, model=None):
+        seen["name"] = name
+        seen["intent"] = intent
+        return {"applied": True}
+    monkeypatch.setattr(sr, "restructure_skill_agentic", fake_exec)
+
     action = {"type": "restructure", "name": "qr",
-              "content": ("---\nname: qr\ndescription: Decode a QR from an image.\n---\n"
-                          "# QR\n\nRun `python3 scripts/decode.py <image>`.\n"),
-              "files": {"scripts/decode.py": "import sys\nprint(sys.argv[1])\n"},
-              "rationale": "lift inline code"}
+              "intent": "lift the decode snippet into scripts/decode.py and invoke by path",
+              "rationale": "inline code"}
     payload = json.dumps({"actions": [action], "observations": []})
-    res = curate_catalog(ws, judge=lambda p: _gate_or(p, payload))
+    res = curate_catalog(ws, judge=lambda p: payload)
     assert res["applied"] == 1
-    assert (ws / "skills" / "qr" / "scripts" / "decode.py").exists()
+    assert seen["name"] == "qr"
+    assert "scripts/decode.py" in seen["intent"]
 
 
-def test_curation_restructure_authors_workflow_then_delegates(tmp_path):
+def test_curation_restructure_skipped_without_intent(tmp_path, monkeypatch):
     ws = tmp_path / "ws"
-    _mk(ws, "research", NARRATION_BODY)
-    action = {"type": "restructure", "name": "research",
-              "content": ("---\nname: research\ndescription: Research a topic.\n---\n"
-                          "# Research\n\nrun_workflow `synth` with the topic.\n"),
-              "workflow": {"name": "synth", "definition": WF_DEF},
-              "rationale": "delegate to authored workflow"}
+    _mk(ws, "qr", INLINE_BODY)
+    import durin.agent.skill_restructure as sr
+    called = {"n": 0}
+    monkeypatch.setattr(sr, "restructure_skill_agentic",
+                        lambda *a, **k: called.__setitem__("n", called["n"] + 1) or {"applied": True})
+    action = {"type": "restructure", "name": "qr", "rationale": ""}  # no intent, blank rationale
     payload = json.dumps({"actions": [action], "observations": []})
-    res = curate_catalog(ws, judge=lambda p: _gate_or(p, payload))
-    assert res["applied"] == 1
-    from durin.workflow.loader import load_workflow
-    assert load_workflow(ws, "synth") is not None
-    assert "run_workflow" in (ws / "skills" / "research" / "SKILL.md").read_text()
-
-
-def test_curation_restructure_aborts_on_invalid_workflow(tmp_path):
-    ws = tmp_path / "ws"
-    _mk(ws, "research", NARRATION_BODY)
-    action = {"type": "restructure", "name": "research",
-              "content": "---\nname: research\ndescription: d\n---\n# R\ndelegates via run_workflow\n",
-              "workflow": {"name": "bad", "definition": {"not": "a valid graph"}},
-              "rationale": "x"}
-    payload = json.dumps({"actions": [action], "observations": []})
-    res = curate_catalog(ws, judge=lambda p: _gate_or(p, payload))
+    res = curate_catalog(ws, judge=lambda p: payload)
     assert res["applied"] == 0
-    # body is NOT rewritten to point at a workflow that failed to land, and the
-    # invalid workflow never landed (only the curation stamp is added to frontmatter)
-    body = (ws / "skills" / "research" / "SKILL.md").read_text()
-    assert "Run 3-6 web searches" in body        # original narration preserved
-    assert "delegates via run_workflow" not in body
-    from durin.workflow.loader import workflows_dir
-    assert not (workflows_dir(ws) / "bad.json").exists()
+    assert called["n"] == 0  # executor never invoked without an intent
+
+
+class _FakeResp:
+    def __init__(self, content):
+        self.content = content
+        self.usage = {}
+
+
+class _FakeProvider:
+    """Minimal provider: chat_with_retry returns a fixed completion (the gate)."""
+    def __init__(self, content="COMPLIANT"):
+        self._content = content
+
+    async def chat_with_retry(self, **kwargs):
+        return _FakeResp(self._content)
+
+
+def _fake_runner_writing(staged_writes):
+    """Return an AgentRunner.run stub that simulates the sub-agent by writing the
+    given files into the staging skill dir (spec.workspace/skills/qr/)."""
+    async def _run(self, spec):
+        skill_dir = spec.workspace / "skills" / "qr"
+        for rel, content in staged_writes.items():
+            p = skill_dir / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+        class _R:
+            tool_events = []
+            text = ""
+        return _R()
+    return _run
+
+
+def test_executor_applies_validated_result(tmp_path, monkeypatch):
+    # Transaction happy path: the sub-agent stages a valid restructured skill →
+    # gate COMPLIANT → applied to live (script bundled, inline gone).
+    from durin.agent import skill_restructure as sr
+    from durin.agent.runner import AgentRunner
+    ws = tmp_path / "ws"
+    _mk(ws, "qr", INLINE_BODY)
+    good_md = ("---\nname: qr\ndescription: Decode a QR from an image.\n---\n"
+               "# QR\n\nRun `python3 scripts/decode.py <image>`.\n")
+    monkeypatch.setattr(AgentRunner, "run", _fake_runner_writing({
+        "SKILL.md": good_md,
+        "scripts/decode.py": "import sys\nprint(sys.argv[1])\n"}))
+    r = sr.restructure_skill_agentic(ws, "qr", intent="lift inline code to a script",
+                                     provider=_FakeProvider("COMPLIANT"), model="x")
+    assert r.get("applied") is True
+    assert (ws / "skills" / "qr" / "scripts" / "decode.py").exists()
+    assert "/tmp/decode" not in (ws / "skills" / "qr" / "SKILL.md").read_text()
+
+
+def test_executor_discards_truncated_result_live_untouched(tmp_path, monkeypatch):
+    # Transaction guarantee: a truncated author (the qr-code-reader failure mode)
+    # fails validation in staging → NOT applied → the live skill is unchanged.
+    from durin.agent import skill_restructure as sr
+    from durin.agent.runner import AgentRunner
+    ws = tmp_path / "ws"
+    _mk(ws, "qr", INLINE_BODY)
+    before = (ws / "skills" / "qr" / "SKILL.md").read_text()
+    # Simulate a truncated completion: frontmatter with no description + stub body.
+    monkeypatch.setattr(AgentRunner, "run", _fake_runner_writing({
+        "SKILL.md": "---\nname: qr\n---\n# QR\n\n## Prereq\nverify zbar. If not:"}))
+    r = sr.restructure_skill_agentic(ws, "qr", intent="lift inline code",
+                                     provider=_FakeProvider("COMPLIANT"), model="x")
+    assert r.get("applied") is False
+    assert (ws / "skills" / "qr" / "SKILL.md").read_text() == before  # live untouched
 
 
 # ---- fuse preserves bundled scripts ---------------------------------------

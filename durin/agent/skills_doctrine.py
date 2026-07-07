@@ -160,7 +160,21 @@ def judge_composition(
     except Exception as exc:  # noqa: BLE001 - failure-open: never block authoring on infra
         logger.warning("composition gate judge failed; accepting: %s", exc)
         return True, ""
-    lines = [ln.strip() for ln in raw.strip().splitlines() if ln.strip()]
+    return _parse_gate_reply(raw)
+
+
+def _gate_prompt(body: str, workspace: str | Path) -> str:
+    return _COMPOSITION_GATE_PROMPT.format(
+        doctrine=composition_doctrine() or "(doctrine unavailable)",
+        catalog=workflow_catalog_text(workspace),
+        body=body,
+    )
+
+
+def _parse_gate_reply(raw: str) -> tuple[bool, str]:
+    """Parse the gate's labelled reply into ``(ok, reason)``. Failure-open: an
+    empty or unparseable reply accepts."""
+    lines = [ln.strip() for ln in str(raw or "").strip().splitlines() if ln.strip()]
     if not lines:
         return True, ""
     last = lines[-1]
@@ -173,5 +187,24 @@ def judge_composition(
             return False, reason
     if last.upper().startswith("COMPLIANT"):
         return True, ""
-    logger.warning("composition gate: unparseable judge reply; accepting (head: %r)", raw[:120])
+    logger.warning("composition gate: unparseable judge reply; accepting (head: %r)", str(raw)[:120])
     return True, ""
+
+
+async def judge_composition_async(
+    body: str, workspace: str | Path, *, provider, model: str,
+) -> tuple[bool, str]:
+    """Async composition gate for on-loop / agentic callers: issues ONE provider
+    completion (no sync ``_run_blocking``, so it never blocks the event loop) and
+    parses the same labelled reply as :func:`judge_composition`. Failure-open on
+    any provider error."""
+    prompt = _gate_prompt(body, workspace)
+    try:
+        resp = await provider.chat_with_retry(
+            messages=[{"role": "user", "content": prompt}],
+            tools=None, model=model, temperature=0.1)
+        raw = getattr(resp, "content", None) or ""
+    except Exception as exc:  # noqa: BLE001 - failure-open: never block on infra
+        logger.warning("async composition gate failed; accepting: %s", exc)
+        return True, ""
+    return _parse_gate_reply(raw)

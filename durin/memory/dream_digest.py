@@ -30,6 +30,7 @@ DREAM_ACTIVITY_TYPES = frozenset({
     "memory.dream.parse_failure",
     "memory.dream.vector_unavailable",
     "memory.dream.run_summary",
+    "skill.curation_action",
 })
 
 # Run-boundary markers (not activity items — they set the digest's last-run time).
@@ -114,6 +115,26 @@ def map_dream_event(event_type: str, data: dict[str, Any], at_ms: int) -> list[d
             "summary": f"Created {touched} new skill(s) from session patterns",
             "ref": None,
             "ref_kind": "skill",
+            "at_ms": at_ms,
+        }]
+
+    if event_type == "skill.curation_action":
+        # What the curation pass DID to an existing skill — which skill and how.
+        # Only applied actions are feed-worthy (skips/failures are noise). This is
+        # what tells the operator that "1 skill improved" means "restructured
+        # qr-code-reader", and is the surface that would have shown a bad change.
+        if not data.get("applied"):
+            return []
+        action = str(data.get("action") or "")
+        skill = str(data.get("skill") or "")
+        verb = {"restructure": "Restructured", "evolve": "Improved",
+                "fuse": "Fused into", "retire": "Retired",
+                "backfill": "Repaired frontmatter of"}.get(action, "Curated")
+        return [{
+            "kind": "retired" if action == "retire" else "improved",
+            "summary": f"{verb} skill `{skill}`" if skill else f"{verb} a skill",
+            "ref": skill or None,
+            "ref_kind": "skill" if skill else None,
             "at_ms": at_ms,
         }]
 

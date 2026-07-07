@@ -1551,8 +1551,13 @@ def _run_gateway(
                 from durin.agent.skill_usage import collect_recent_skill_calls
                 _allowlist = list(config.skills.security.allowlist)
                 _usage = collect_recent_skill_calls(workspace, within_hours=24)
-                summary = curate_catalog(workspace, judge=_judge, usage=_usage,
-                                         drift_check=check_upstream_drift, allowlist=_allowlist)
+                # Off the event loop: curation's sync judge (and the agentic
+                # restructure executor's asyncio.run) must run in a worker thread,
+                # not on the gateway's loop, or they block HTTP serving / raise
+                # "asyncio.run from a running loop".
+                summary = await _asyncio.to_thread(
+                    curate_catalog, workspace, judge=_judge, usage=_usage,
+                    drift_check=check_upstream_drift, allowlist=_allowlist)
                 _skills_improved = summary.get("applied", 0)
                 _obs = summary.get("observations", {})
                 logger.info(
@@ -1580,8 +1585,8 @@ def _run_gateway(
 
                     from durin.agent.skill_usage import collect_recent_skill_calls
                     _sg_usage = collect_recent_skill_calls(workspace, within_hours=24)
-                    _sg = suggest_manual_skills(
-                        workspace, judge=_sg_judge, usage=_sg_usage)
+                    _sg = await _asyncio.to_thread(
+                        suggest_manual_skills, workspace, judge=_sg_judge, usage=_sg_usage)
                     logger.info(
                         "skill suggestions: reviewed={} suggested={} suppressed={}",
                         _sg["reviewed"], _sg["suggested"], _sg["suppressed"])
@@ -1605,13 +1610,18 @@ def _run_gateway(
             # updating only the last-run time. Persisted via the still-bound
             # logger and teed live by the DreamProgressSink.
             from durin.agent.tools._telemetry import emit_tool_event
-            emit_tool_event("memory.dream.run_summary", {
+            _run_summary = {
                 "sessions": ex.get("sessions", 0) if isinstance(ex, dict) else 0,
                 "entities": ex.get("entities", 0) if isinstance(ex, dict) else 0,
                 "merged": len(rf.get("merged", [])) if isinstance(rf, dict) else 0,
                 "skills_created": sk.get("skills_touched", 0) if isinstance(sk, dict) else 0,
                 "skills_improved": _skills_improved,
-            })
+            }
+            emit_tool_event("memory.dream.run_summary", _run_summary)
+            # Durable record so the "last run" card + history survive the telemetry
+            # window / retention (telemetry is the live feed; this is the truth).
+            from durin.memory.dream_runs import record_dream_run
+            record_dream_run(workspace, _run_summary)
 
             # Unbind telemetry and tell the webui the run is over (success or
             # not) so its "running" pulse always stops. Runs before the error
@@ -1874,13 +1884,16 @@ def _run_gateway(
                     # Record a run summary so reactive runs also surface in the
                     # Dream feed / "última corrida" card. The reactive path is
                     # extract-only (refine/skills are cron-only), so those are 0.
-                    emit_tool_event("memory.dream.run_summary", {
+                    _reactive_summary = {
                         "sessions": out.get("sessions", 0),
                         "entities": out.get("entities", 0),
                         "merged": 0,
                         "skills_created": 0,
                         "skills_improved": 0,
-                    })
+                    }
+                    emit_tool_event("memory.dream.run_summary", _reactive_summary)
+                    from durin.memory.dream_runs import record_dream_run
+                    record_dream_run(workspace, _reactive_summary)
                 except Exception:
                     logger.exception("{} dream failed ({})", trigger, session_key)
                 finally:

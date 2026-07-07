@@ -53,8 +53,11 @@ def test_curate_fuses_when_judge_says_overlap(tmp_path):
     _mk(ws, "git-b", "git rebase steps too")
 
     def fake_judge(prompt):
+        # The merged body carries a derivable description (frontmatter) — the
+        # integrity floor rejects a bodyless/description-less SKILL.md.
         return ('{"actions": [{"type": "fuse", "target": "git-flow", '
-                '"sources": ["git-a", "git-b"], "content": "# Git flow\\nmerged\\n", '
+                '"sources": ["git-a", "git-b"], '
+                '"content": "---\\nname: git-flow\\ndescription: Merged git flow skill.\\n---\\n# Git flow\\n\\nmerged\\n", '
                 '"rationale": "same steps"}]}')
 
     res = curate_catalog(ws, judge=fake_judge)

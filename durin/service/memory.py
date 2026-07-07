@@ -235,17 +235,15 @@ class ResolveResult(Result):
 # ---------------------------------------------------------------------------
 
 
-def _build_dream_digest(limit: int) -> DreamDigest:
-    """Scan telemetry JSONL files and map dream events to DreamEvent objects.
+def _build_dream_digest(workspace: Path, limit: int) -> DreamDigest:
+    """Assemble the dream digest: the run summaries (the "última corrida" card +
+    run history) come from the DURABLE run store, and the fine-grained activity
+    feed (merges, discoveries, skill-curation actions) from telemetry.
 
-    Reads from ``_telemetry_dir()`` using the same ``LogQuery`` / ``read_page``
-    path the logs endpoint uses — no separate parsing logic.  Events are
-    filtered by type, expanded (one raw event may produce multiple DreamEvents,
-    e.g. ``dream.discover`` with several refs), and sorted newest-first before
-    being capped at *limit*.
-
-    ``last_run_at_ms`` uses the most recent ``memory.dream.end`` / ``dream.start``
-    timestamp if present; falls back to the timestamp of the newest event.
+    Run summaries used to be re-derived from telemetry, which is capped and
+    retention-deleted — a busy refine pass flooded the window and the summary
+    silently vanished. The durable ``read_dream_runs`` store fixes that; telemetry
+    remains the source for the recent per-item activity only.
     """
     from durin.logs.reader import LogQuery, read_page
     from durin.memory.dream_digest import (
@@ -253,6 +251,9 @@ def _build_dream_digest(limit: int) -> DreamDigest:
         RUN_MARKER_TYPES,
         map_dream_event,
     )
+    from durin.memory.dream_runs import read_dream_runs
+
+    runs = read_dream_runs(workspace, limit=max(limit, 20))
 
     directory = _telemetry_dir()
     # Request enough raw events to fill *limit* after expansion; dream.discover
@@ -270,9 +271,26 @@ def _build_dream_digest(limit: int) -> DreamDigest:
 
     events: list[DreamEvent] = []
     last_run_at_ms: int | None = None
+    # The "última corrida" card + run history come from the durable store.
     last_run: DreamLastRun | None = None
+    if runs:
+        r0 = runs[0]
+        last_run = DreamLastRun(
+            at_ms=int(r0.get("at_ms", 0)),
+            sessions=int(r0.get("sessions", 0)),
+            entities=int(r0.get("entities", 0)),
+            merged=int(r0.get("merged", 0)),
+            skills_created=int(r0.get("skills_created", 0)),
+            skills_improved=int(r0.get("skills_improved", 0)),
+        )
+        # Older runs become "run" history entries in the feed (durable, never
+        # window-truncated), rendered by the same mapping the live tee uses.
+        for r in runs[1:]:
+            for d in map_dream_event("memory.dream.run_summary", r, int(r.get("at_ms", 0))):
+                events.append(DreamEvent(**d))
 
-    # page.lines is newest-first (read_page reverses per-file)
+    # page.lines is newest-first (read_page reverses per-file). Telemetry supplies
+    # the per-item ACTIVITY only; run summaries are owned by the durable store above.
     for line_dict in page.lines:
         raw = line_dict.get("raw", {})
         event_type: str = raw.get("type", "")
@@ -287,20 +305,8 @@ def _build_dream_digest(limit: int) -> DreamDigest:
                 last_run_at_ms = ts_ms
             continue
 
-        # The newest run_summary becomes the headline "última corrida" card and
-        # is NOT duplicated in the feed; older run_summaries fall through to the
-        # feed as "run" history entries. page.lines is newest-first, so the first
-        # run_summary we see is the newest.
-        if event_type == "memory.dream.run_summary" and last_run is None:
-            last_run = DreamLastRun(
-                at_ms=ts_ms,
-                sessions=int(data.get("sessions", 0)),
-                entities=int(data.get("entities", 0)),
-                merged=int(data.get("merged", 0)),
-                skills_created=int(data.get("skills_created", 0)),
-                skills_improved=int(data.get("skills_improved", 0)),
-            )
-            continue
+        if event_type == "memory.dream.run_summary":
+            continue  # durable store owns run summaries
 
         new_events = [DreamEvent(**d) for d in map_dream_event(event_type, data, ts_ms)]
         events.extend(new_events)
@@ -576,7 +582,7 @@ class MemoryService:
         self, query: DreamDigestQuery, principal: Principal
     ) -> DreamDigest:
         principal.require(Scope.MEMORY_READ)
-        return _build_dream_digest(query.limit)
+        return _build_dream_digest(self._workspace_resolver(), query.limit)
 
     @route(
         "GET",

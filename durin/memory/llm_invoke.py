@@ -65,14 +65,20 @@ class LLMInvoke(Protocol):
 
 
 def _run_blocking(make_coro):
-    """Run a coroutine to completion from sync code, whether or not THIS thread
-    already drives an event loop.
+    """Run a coroutine to completion from SYNC code. Off-loop only.
 
-    The skill-audit tool calls the judge from inside the async agent loop, while
-    the service path runs the same sync helper via ``asyncio.to_thread``. A bare
-    ``asyncio.run`` would raise "cannot be called from a running event loop" in
-    the former; falling back to a one-shot worker thread keeps both safe.
-    ``make_coro`` is a zero-arg factory so exactly one coroutine is created.
+    The invariant: no synchronous LLM invoke may run on the event loop thread.
+    Blocking the loop to await an LLM round-trip freezes every session, subagent,
+    and in-flight workflow that shares the single gateway loop. So when this is
+    reached with a loop already running on THIS thread it RAISES — the on-loop
+    caller must hop through ``asyncio.to_thread(...)`` (where this then sees no
+    running loop and takes the ``asyncio.run`` branch) or use the async invoke
+    path (``await``). Failing loud turns a silent gateway freeze into a clean,
+    immediately-visible error that surfaces the offending caller in dev/tests.
+
+    Off the loop (a worker thread / the CLI) it runs the coroutine on this
+    thread's own loop. ``make_coro`` is a zero-arg factory so a coroutine is
+    created only on the path that awaits it (no "never awaited" warning).
     """
     import asyncio
 
@@ -81,10 +87,11 @@ def _run_blocking(make_coro):
     except RuntimeError:
         return asyncio.run(make_coro())
 
-    import concurrent.futures
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-        return ex.submit(lambda: asyncio.run(make_coro())).result()
+    raise RuntimeError(
+        "sync LLM invoke called on the event loop thread — this would freeze the "
+        "gateway loop for the whole round-trip. Call it via asyncio.to_thread(...), "
+        "or use the async invoke path."
+    )
 
 
 def _retry_mode(config) -> str:
