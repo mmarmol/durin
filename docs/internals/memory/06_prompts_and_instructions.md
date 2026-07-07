@@ -106,11 +106,11 @@ Author or update an entity (a person, company, product, topic, place, etc.) you 
 ### 3.6 `memory_forget`
 
 ```
-Remove a memory entry you no longer want surfaced. Archives it to memory/archive/<class>/<id>.md (reversible) and removes its search index rows so it stops appearing in memory_search.
+Remove something you no longer want surfaced — a memory entry OR an ingested Library document. Archives it (reversible) and removes its search index rows so it stops appearing in memory_search.
 
-This is the ONLY correct way to delete a memory entry — never rm or move files under memory/ via shell, which leaves the search indices pointing at a missing file.
+This is the ONLY correct way to delete memory — never rm or move files under memory/ via shell, which leaves the search indices pointing at a missing file (orphan rows).
 
-Pass `uri` exactly as memory_search returned it. Refuses entity pages (memory/entities/...): those have their own absorb/revert lifecycle.
+Pass `uri` exactly as it was returned: a 'memory/<class>/<id>' entry, or a 'reference:<slug>' to forget an ingested document (the whole doc: its chunks and index rows go too). Refuses entity pages (memory/entities/...): those have their own absorb/revert lifecycle.
 ```
 
 ### 3.7 `memory_read_entity`

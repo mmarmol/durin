@@ -10,14 +10,26 @@ import {
   RefreshCw,
   Search as SearchIcon,
   Sparkles,
+  Trash2,
   type LucideIcon,
 } from "lucide-react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   ApiError,
   fetchMemoryDocument,
   fetchMemoryDocuments,
+  forgetMemoryDocument,
   type ReferenceDocumentDetail,
   type ReferenceDocumentSummary,
 } from "@/lib/api";
@@ -66,6 +78,8 @@ export function DocumentsShelf({
   const [detail, setDetail] = useState<ReferenceDocumentDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  // Which document a delete has been requested for (drives the confirm dialog).
+  const [confirmDeleteSlug, setConfirmDeleteSlug] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!token) return;
@@ -127,7 +141,33 @@ export function DocumentsShelf({
     );
   }, [docs, query]);
 
+  // Forget an ingested document: archive it + drop its index rows, then drop the
+  // row from the list and clear the detail if it was showing.
+  const performDelete = useCallback(async () => {
+    if (!token || !confirmDeleteSlug) return;
+    const slug = confirmDeleteSlug;
+    try {
+      const out = await forgetMemoryDocument(token, slug);
+      if (out.result === "archived" || out.result === "not_found") {
+        setDocs((prev) => prev?.filter((d) => d.slug !== slug) ?? null);
+        setSelectedSlug((cur) => (cur === slug ? null : cur));
+      } else {
+        setDetailError(out.detail || out.result);
+      }
+    } catch (e) {
+      setDetailError(
+        e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message,
+      );
+    } finally {
+      setConfirmDeleteSlug(null);
+    }
+  }, [token, confirmDeleteSlug]);
+
+  const confirmTitle =
+    docs?.find((d) => d.slug === confirmDeleteSlug)?.title ?? "";
+
   return (
+    <>
     <div className="flex min-h-0 flex-1">
       {/* Left: searchable list */}
       <div className="flex w-72 shrink-0 flex-col border-r border-border/40">
@@ -229,10 +269,39 @@ export function DocumentsShelf({
             detail={detail}
             onOpenEntity={onOpenEntity}
             onOpenReference={onOpenReference}
+            onRequestDelete={setConfirmDeleteSlug}
           />
         ) : null}
       </div>
     </div>
+
+      <AlertDialog
+        open={confirmDeleteSlug !== null}
+        onOpenChange={(o) => (!o ? setConfirmDeleteSlug(null) : undefined)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t("memoryGraph.documentForgetTitle", { title: confirmTitle })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("memoryGraph.documentForgetBody")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setConfirmDeleteSlug(null)}>
+              {t("memoryGraph.documentForgetCancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => void performDelete()}
+            >
+              {t("memoryGraph.documentForgetConfirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
@@ -242,10 +311,12 @@ function DocumentDetailView({
   detail,
   onOpenEntity,
   onOpenReference,
+  onRequestDelete,
 }: {
   detail: ReferenceDocumentDetail;
   onOpenEntity?: (ref: string) => void;
   onOpenReference?: (ref: string) => void;
+  onRequestDelete: (slug: string) => void;
 }) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<DetailTab>("document");
@@ -309,6 +380,16 @@ function DocumentDetailView({
             <FileText className="h-3 w-3" /> {t("memoryGraph.documentOpenFull")}
           </Button>
         ) : null}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+          aria-label={t("memoryGraph.documentForget")}
+          title={t("memoryGraph.documentForget")}
+          onClick={() => onRequestDelete(detail.slug)}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
       </div>
 
       {/* Tab bar */}

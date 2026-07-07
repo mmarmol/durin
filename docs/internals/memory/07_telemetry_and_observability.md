@@ -115,7 +115,7 @@ Each `memory_search` call emits:
 - **`memory.store`** — one per successful `memory_store` call. Fields: `entry_id`, `class_name`, `author`, `headline`.
 - **`memory.store.blocked_near_duplicate`** — emitted when the pre-persist dedup check refuses a write. The model can retry with `force=True`. Fields: `candidate_class_name`, `existing_id`, `distance`, `threshold`.
 - **`memory.ingest`** — one per `memory_ingest` call. Fields: `entry_id`, `size_bytes`, `suffix`.
-- **`memory.forget`** — one per `memory_forget` call. Fields: `uri`, `class_name`, `reason`.
+- **`memory.forget`** — one per `memory_forget` call (entry or ingested document). Fields: `uri`, `class_name` (the entry class, or `reference` for an ingested document), `reason`.
 - **`memory.upsert_entity`** — one per `memory_upsert_entity` tool write. Fields: `ref`, `committed`, `retries`.
 - **`memory.index.write`** — one per FTS row written. `trigger` is `watcher` (file-watcher steady state), `dream_apply` (post-dream re-index), or `drift_repair` (health-check repair).
 

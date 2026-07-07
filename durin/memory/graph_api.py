@@ -878,6 +878,31 @@ def forget_entry(workspace: Path, uri: str) -> dict[str, Any]:
     return {"result": "archived"}
 
 
+def forget_reference(workspace: Path, slug: str) -> dict[str, Any]:
+    """Forget an ingested Library document on behalf of the webui / agent tool.
+
+    ``slug`` is the bare reference slug (``the-durin-handbook``) or a full
+    ``reference:<slug>``. Archives the document + its chunk sidecar and drops
+    its FTS + vector rows via :func:`durin.memory.forget.forget_reference`.
+
+    Returns ``{"result": "archived" | "not_found" | "error"}``. Unlike
+    entities, references have no absorb/revert lifecycle, so there is no
+    ``protected`` outcome.
+    """
+    slug = slug.split(":", 1)[1] if slug.startswith("reference:") else slug
+    ref = f"reference:{slug}"
+    try:
+        from durin.memory.forget import forget_reference as _forget_reference
+
+        dest = _forget_reference(workspace, ref, reason="user_forget")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("forget_reference failed for %s", ref)
+        return {"result": "error", "detail": str(exc)}
+    if dest is None:
+        return {"result": "not_found"}
+    return {"result": "archived"}
+
+
 def get_entry_backlinks(
     workspace: Path,
     uri: str,

@@ -772,7 +772,8 @@ export interface paths {
         get: operations["memory_document"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Forget an ingested reference document (archive + drop index rows) */
+        delete: operations["memory_forget_document"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3268,6 +3269,11 @@ export interface components {
         MemoryBacklinksQuery: {
             /** Uri */
             uri: string;
+        };
+        /** MemoryDocumentForgetCommand */
+        MemoryDocumentForgetCommand: {
+            /** Slug */
+            slug: string;
         };
         /** MemoryDocumentQuery */
         MemoryDocumentQuery: {
@@ -6254,6 +6260,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemoryResult"];
+                };
+            };
+        };
+    };
+    memory_forget_document: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryDocumentForgetCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ForgetResult"];
                 };
             };
         };

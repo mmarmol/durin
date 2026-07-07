@@ -122,3 +122,73 @@ def _drop_index_rows(
             idx.delete_by_uri(uri)
     except Exception as exc:  # noqa: BLE001
         logger.warning("forget: FTS cleanup skipped for %s: %s", uri, exc)
+
+
+def forget_reference(
+    workspace: Path,
+    ref: str,
+    *,
+    reason: str = "user_forget",
+) -> Path | None:
+    """Archive an ingested Library document and drop its index rows.
+
+    The Library counterpart to :func:`forget_entry`. An ingested document is a
+    ``reference:<slug>`` (its own archive + tombstone lifecycle, distinct from
+    the ``memory/<class>/<id>`` entries above), so it is NOT a
+    ``FORGETTABLE_CLASSES`` uri and does not flow through ``forget_entry``.
+
+    Archives ``memory/references/<slug>.md`` (+ its ``.chunks.jsonl`` sidecar)
+    and tombstones the ref via :func:`durin.memory.deletion.delete_reference`,
+    then removes both index units the ingest wrote: the whole-doc FTS row
+    (keyed ``reference:<slug>``) and every per-chunk vector row (keyed
+    ``reference:<slug>#<idx>``). The tombstone only stops the dream from
+    re-distilling — it does NOT filter search — so without this index cleanup
+    the archived document keeps surfacing in ``memory_search`` and drilling it
+    404s.
+
+    Returns the archive destination, or ``None`` if no such reference exists.
+    Index cleanup is best-effort (logged, never raised); the archive move +
+    tombstone are the authoritative actions.
+    """
+    workspace = Path(workspace)
+    slug = ref.split(":", 1)[1] if ":" in ref else ref
+    ref = f"reference:{slug}"
+
+    # Capture the chunk count BEFORE archiving moves the sidecar away: the
+    # vector rows are keyed <ref>#<idx> for idx in range(chunk_count), and
+    # the count is authoritative in the .chunks.jsonl the ingest wrote.
+    from durin.memory.reference import reference_chunks
+
+    chunk_count = len(reference_chunks(workspace, ref))
+
+    from durin.memory.deletion import delete_reference
+
+    dest = delete_reference(workspace, ref, reason=reason)
+    if dest is None:
+        return None
+
+    _drop_reference_index_rows(workspace, ref=ref, chunk_count=chunk_count)
+    return dest
+
+
+def _drop_reference_index_rows(
+    workspace: Path, *, ref: str, chunk_count: int,
+) -> None:
+    """Best-effort removal of a reference's FTS + vector rows. Never raises."""
+    # FTS: the whole reference doc is a single row keyed by the ref uri.
+    try:
+        from durin.memory.fts_index import FTSIndex
+
+        with FTSIndex.open(workspace) as idx:
+            idx.delete_by_uri(ref)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("forget: FTS cleanup skipped for %s: %s", ref, exc)
+
+    # Vector: one row per chunk, keyed <ref>#<idx>. Model-free id delete.
+    if chunk_count > 0:
+        try:
+            from durin.memory.vector_index import delete_ids
+
+            delete_ids(workspace, [f"{ref}#{i}" for i in range(chunk_count)])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("forget: vector cleanup skipped for %s: %s", ref, exc)
