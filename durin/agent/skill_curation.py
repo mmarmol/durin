@@ -225,36 +225,29 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             applied += 1 if ok else 0
             _emit("skill.curation_action", action="fuse", skill=a["target"], applied=ok)
         elif t == "restructure":
-            # The doctrine-repair verb: rewrite a stranded skill's body to
-            # delegate/invoke, lifting inline code into a bundled script and, when
-            # no workflow yet covers a workflow-shaped procedure, authoring one
-            # first so the body can delegate to it. evolve (text replace) and fuse
-            # cannot add bundled files or author a workflow.
+            # The doctrine-repair verb. The judge only DECIDES ("restructure X
+            # toward this intent"); an agentic sub-agent EXECUTES it in an isolated
+            # staging copy using real tools (read the skill's files, bundle a
+            # script, author a workflow to delegate to), the result is validated,
+            # and only a validated, complete skill is applied to live — else it is
+            # discarded, live untouched. The judge never emits whole artifacts
+            # inline (that shape corrupted a skill when a completion truncated).
             if a.get("name") not in selected:
                 logger.warning("curation: skipping restructure of out-of-scope skill %s", a.get("name"))
                 _emit("skill.curation_action", action="restructure", skill=a.get("name"), applied=False)
                 continue
-            wf = a.get("workflow")
-            if wf:
-                from durin.workflow.editing import save_workflow_definition
-                wr = save_workflow_definition(
-                    workspace, str(wf.get("name") or ""), wf.get("definition") or {},
-                    reason=a.get("rationale", "author workflow for skill"),
-                    actor="curation", must_exist=False)
-                if not wr.get("ok"):
-                    # Never rewrite the skill to delegate to a workflow that
-                    # failed to land — that would leave a dangling reference.
-                    logger.warning("curation: restructure aborted for %s; workflow author failed: %s",
-                                   a.get("name"), wr.get("error"))
-                    _emit("skill.curation_action", action="restructure", skill=a.get("name"), applied=False)
-                    continue
-            r = ss.dream_restructure_skill(
-                workspace, a["name"], content=a["content"],
-                files=_normalize_files(a.get("files")) or None,
-                rationale=a.get("rationale", "restructure"),
-                attribution=ss.Attribution(actor="curation"), composition_judge=judge)
-            ok = bool(r.get("ok"))
+            intent = str(a.get("intent") or a.get("rationale") or "").strip()
+            if not intent:
+                logger.warning("curation: skipping restructure of %s — no intent given", a.get("name"))
+                _emit("skill.curation_action", action="restructure", skill=a.get("name"), applied=False)
+                continue
+            from durin.agent.skill_restructure import restructure_skill_agentic
+            r = restructure_skill_agentic(workspace, a["name"], intent=intent)
+            ok = bool(r.get("applied"))
             applied += 1 if ok else 0
+            if not ok:
+                logger.info("curation: restructure of %s not applied: %s",
+                            a["name"], r.get("error"))
             _emit("skill.curation_action", action="restructure", skill=a["name"], applied=ok)
         elif t == "evolve":
             if a.get("name") not in selected:

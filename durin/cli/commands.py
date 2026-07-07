@@ -1551,8 +1551,13 @@ def _run_gateway(
                 from durin.agent.skill_usage import collect_recent_skill_calls
                 _allowlist = list(config.skills.security.allowlist)
                 _usage = collect_recent_skill_calls(workspace, within_hours=24)
-                summary = curate_catalog(workspace, judge=_judge, usage=_usage,
-                                         drift_check=check_upstream_drift, allowlist=_allowlist)
+                # Off the event loop: curation's sync judge (and the agentic
+                # restructure executor's asyncio.run) must run in a worker thread,
+                # not on the gateway's loop, or they block HTTP serving / raise
+                # "asyncio.run from a running loop".
+                summary = await _asyncio.to_thread(
+                    curate_catalog, workspace, judge=_judge, usage=_usage,
+                    drift_check=check_upstream_drift, allowlist=_allowlist)
                 _skills_improved = summary.get("applied", 0)
                 _obs = summary.get("observations", {})
                 logger.info(
@@ -1580,8 +1585,8 @@ def _run_gateway(
 
                     from durin.agent.skill_usage import collect_recent_skill_calls
                     _sg_usage = collect_recent_skill_calls(workspace, within_hours=24)
-                    _sg = suggest_manual_skills(
-                        workspace, judge=_sg_judge, usage=_sg_usage)
+                    _sg = await _asyncio.to_thread(
+                        suggest_manual_skills, workspace, judge=_sg_judge, usage=_sg_usage)
                     logger.info(
                         "skill suggestions: reviewed={} suggested={} suppressed={}",
                         _sg["reviewed"], _sg["suggested"], _sg["suppressed"])
