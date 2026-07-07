@@ -59,11 +59,61 @@ _ALNUM = string.ascii_letters + string.digits
 
 _STANDARD_TC_KEYS = frozenset({"id", "type", "index", "function"})
 _STANDARD_FN_KEYS = frozenset({"name", "arguments"})
+# OpenRouter attribution. HTTP-Referer + X-Title are the headers OpenRouter
+# documents for app attribution (X-Title, NOT a vendor-prefixed variant).
 _DEFAULT_OPENROUTER_HEADERS = {
     "HTTP-Referer": "https://github.com/HKUDS/durin",
-    "X-OpenRouter-Title": "durin",
+    "X-Title": "durin",
     "X-OpenRouter-Categories": "cli-agent,personal-agent",
 }
+
+
+def _durin_user_agent() -> str:
+    """Return durin's own ``durin/<version>`` User-Agent for the LLM wire.
+
+    Replaces the raw ``AsyncOpenAI/Python`` SDK default so durin identifies
+    itself honestly (and isn't lumped in with anonymous SDK traffic).
+    """
+    try:
+        from durin import __version__ as _ver
+        return f"durin/{_ver}"
+    except Exception:
+        return "durin"
+
+
+def _host_of(api_base: str | None) -> str:
+    raw = (api_base or "").strip().lower()
+    if not raw:
+        return ""
+    parsed = urlparse(raw if "://" in raw else f"//{raw}")
+    try:
+        return (parsed.hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _build_default_headers(
+    spec: "ProviderSpec | None", api_base: str | None
+) -> dict[str, str]:
+    """Assemble the per-provider default headers for the OpenAI-compatible client.
+
+    Every endpoint gets durin's own ``durin/<ver>`` User-Agent plus a random
+    session-affinity marker, with OpenRouter attribution / NVIDIA NIM billing
+    headers layered on by host.
+    """
+    headers = {
+        "User-Agent": _durin_user_agent(),
+        "x-session-affinity": uuid.uuid4().hex,
+    }
+    if _uses_openrouter_attribution(spec, api_base):
+        headers.update(_DEFAULT_OPENROUTER_HEADERS)
+    if _host_of(api_base) == "integrate.api.nvidia.com":
+        # NVIDIA NIM cloud billing attribution (host-gated: on-prem NIM
+        # endpoints via a custom base URL must not carry this).
+        headers["X-BILLING-INVOKE-ORIGIN"] = "durin"
+    return headers
+
+
 _KIMI_THINKING_MODELS: frozenset[str] = frozenset({
     "kimi-k2.5",
     "kimi-k2.6",
@@ -336,9 +386,7 @@ class OpenAICompatProvider(LLMProvider):
 
         effective_base = api_base or (spec.default_api_base if spec else None) or None
         self._effective_base = effective_base
-        default_headers = {"x-session-affinity": uuid.uuid4().hex}
-        if _uses_openrouter_attribution(spec, effective_base):
-            default_headers.update(_DEFAULT_OPENROUTER_HEADERS)
+        default_headers = _build_default_headers(spec, effective_base)
         if extra_headers:
             default_headers.update(extra_headers)
 

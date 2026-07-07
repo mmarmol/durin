@@ -252,9 +252,10 @@ def test_openrouter_sets_default_attribution_headers() -> None:
 
     headers = provider._client_kwargs["default_headers"]
     assert headers["HTTP-Referer"] == "https://github.com/HKUDS/durin"
-    assert headers["X-OpenRouter-Title"] == "durin"
+    assert headers["X-Title"] == "durin"
     assert headers["X-OpenRouter-Categories"] == "cli-agent,personal-agent"
     assert "x-session-affinity" in headers
+    assert headers["User-Agent"].startswith("durin/")
 
 
 def test_openrouter_user_headers_override_default_attribution() -> None:
@@ -265,7 +266,7 @@ def test_openrouter_user_headers_override_default_attribution() -> None:
         default_model="anthropic/claude-sonnet-4-5",
         extra_headers={
             "HTTP-Referer": "https://durin.ai",
-            "X-OpenRouter-Title": "Durin Pro",
+            "X-Title": "Durin Pro",
             "X-Custom-App": "enabled",
         },
         spec=spec,
@@ -273,7 +274,7 @@ def test_openrouter_user_headers_override_default_attribution() -> None:
 
     headers = provider._client_kwargs["default_headers"]
     assert headers["HTTP-Referer"] == "https://durin.ai"
-    assert headers["X-OpenRouter-Title"] == "Durin Pro"
+    assert headers["X-Title"] == "Durin Pro"
     assert headers["X-OpenRouter-Categories"] == "cli-agent,personal-agent"
     assert headers["X-Custom-App"] == "enabled"
 
@@ -1268,3 +1269,27 @@ def test_deepseek_no_backfill_when_reasoning_effort_none_string() -> None:
     )
     assistant = kw["messages"][1]
     assert "reasoning_content" not in assistant
+
+
+def test_default_user_agent_is_durin_branded() -> None:
+    """Non-coding-plan endpoints identify as durin/<ver>, not the raw SDK UA."""
+    spec = find_by_name("zhipu")
+    provider = OpenAICompatProvider(
+        api_key="k", default_model="glm-4.6", spec=spec,
+        api_base="https://open.bigmodel.cn/api/paas/v4",
+    )
+    headers = provider._client_kwargs["default_headers"]
+    assert headers["User-Agent"].startswith("durin/")
+    assert "x-session-affinity" in headers
+
+
+def test_nvidia_nim_cloud_billing_header() -> None:
+    """build.nvidia.com traffic carries the NIM cloud billing attribution header."""
+    spec = find_by_name("nvidia")
+    provider = OpenAICompatProvider(
+        api_key="k", default_model="nemotron", spec=spec,
+        api_base="https://integrate.api.nvidia.com/v1",
+    )
+    headers = provider._client_kwargs["default_headers"]
+    assert headers["X-BILLING-INVOKE-ORIGIN"] == "durin"
+    assert headers["User-Agent"].startswith("durin/")
