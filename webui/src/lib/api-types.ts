@@ -1132,7 +1132,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Disconnect GitHub (forget the shared token) */
+        /** Forget durin's stored GitHub token, then re-probe (gh/env may remain) */
         delete: operations["oauth_github_disconnect"];
         options?: never;
         head?: never;
@@ -2841,6 +2841,11 @@ export interface components {
              * @default null
              */
             scopes: string | null;
+            /**
+             * Source
+             * @default null
+             */
+            source: string | null;
         };
         /** GithubTokenTestQuery */
         GithubTokenTestQuery: {

@@ -208,6 +208,7 @@ GetJson = Callable[[str, str], "tuple[int, dict, dict]"]
 class Status:
     connected: bool  # a token is configured (gh / env / shared secret)
     reachable: bool  # GitHub answered 200 to that token
+    source: str = ""  # gh | env | secret | "" — so the UI is honest about ownership
     login: str = ""
     scopes: str = ""
     rate_remaining: int | None = None
@@ -241,18 +242,18 @@ def _default_get(url: str, token: str) -> tuple[int, dict, dict]:
 
 
 def github_status(
-    *, resolver: Callable[[], str] | None = None, get: GetJson | None = None
+    *, resolver: Callable[[], "tuple[str, str]"] | None = None, get: GetJson | None = None
 ) -> Status:
-    """Is a token configured, does GitHub accept it, and who + rate budget."""
-    from durin.security.github_auth import resolve_github_token
+    """Is a token configured, where from, does GitHub accept it, who + rate budget."""
+    from durin.security.github_auth import resolve_github_token_with_source
 
-    resolver = resolver or resolve_github_token
-    token = resolver()
+    resolver = resolver or resolve_github_token_with_source
+    token, source = resolver()
     if not token:
-        return Status(connected=False, reachable=False)
+        return Status(connected=False, reachable=False, source=source)
     status, body, headers = (get or _default_get)(USER_URL, token)
     if status != 200:
-        return Status(connected=True, reachable=False)
+        return Status(connected=True, reachable=False, source=source)
 
     def hget(key: str) -> object:
         return headers.get(key) or headers.get(key.lower())
@@ -260,6 +261,7 @@ def github_status(
     return Status(
         connected=True,
         reachable=True,
+        source=source,
         login=str(body.get("login") or ""),
         scopes=str(hget("X-OAuth-Scopes") or ""),
         rate_remaining=_int_or_none(hget("X-RateLimit-Remaining")),
