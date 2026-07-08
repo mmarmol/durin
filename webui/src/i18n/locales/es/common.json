@@ -715,6 +715,24 @@
       "showLess": "Mostrar menos",
       "localHint": "Servidor local — no se requiere clave API"
     },
+    "github": {
+      "title": "GitHub",
+      "usedBy": "Lo usan skills, discovery de MCP y el proveedor",
+      "connect": "Conectar",
+      "reachable": "Alcanzable",
+      "rateLeft": "{{remaining}} / {{limit}} solicitudes restantes",
+      "test": "Probar",
+      "reconnect": "Reconectar",
+      "disconnect": "Desconectar",
+      "rejected": "Token rechazado — reconectá",
+      "forgetConfirm": "¿Olvidar GitHub? Skills y MCP pierden acceso.",
+      "forget": "Olvidar",
+      "cancel": "Cancelar",
+      "enterCode": "pegá este código en",
+      "waiting": "Esperando autorización…",
+      "timeout": "Se agotó el tiempo. Probá conectar de nuevo.",
+      "flowEnded": "No se completó el ingreso. Probá de nuevo."
+    },
     "oauth": {
       "browserOpened": "Se abrió una ventana del navegador para aprobar con {{provider}}.",
       "didntOpen": "¿No se abrió?",

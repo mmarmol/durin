@@ -171,6 +171,61 @@ class OpenRouterDisconnectCommand(Command):
 
 
 # ---------------------------------------------------------------------------
+# DTOs — GitHub (device flow; one shared credential for skills + MCP)
+# ---------------------------------------------------------------------------
+
+
+class GithubStatusQuery(Query):
+    """Query for ``GET /api/v1/oauth/github/status`` (live probe)."""
+
+
+class GithubStatusResult(Result):
+    connected: bool  # a token is configured (gh / env / shared secret)
+    reachable: bool = False  # GitHub answered 200
+    login: str | None = None
+    scopes: str | None = None
+    rate_remaining: int | None = None
+    rate_limit: int | None = None
+
+
+class GithubStartCommand(Command):
+    """Command for ``POST /api/v1/oauth/github/start``.
+
+    ``private`` escalates the requested scope to private-repo access (``repo``);
+    the default is minimal (``read:user``)."""
+
+    private: bool = False
+
+
+class GithubStartResult(Result):
+    flow_id: str
+    user_code: str
+    verification_uri: str
+    verification_uri_complete: str
+    interval: int
+    expires_in: int
+
+
+class GithubPollQuery(Query):
+    """Query for ``GET /api/v1/oauth/github/poll``."""
+
+    flow_id: str
+
+
+class GithubPollResult(Result):
+    """``status``: pending | slow_down | authorized | expired | denied | error."""
+
+    status: str
+    error: str | None = None
+    connected: bool | None = None
+    login: str | None = None
+
+
+class GithubDisconnectCommand(Command):
+    """Command for ``DELETE /api/v1/oauth/github``."""
+
+
+# ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
 
@@ -390,3 +445,107 @@ class OAuthService:
 
         or_disconnect()
         return self._openrouter_status(can_loopback=False)
+
+    # ------------------------------------------------------------------
+    # GitHub (device flow) — one shared credential for skills + MCP
+    # ------------------------------------------------------------------
+
+    def _github_status(self) -> GithubStatusResult:
+        from durin.security.github_device_auth import github_status as _probe
+
+        st = _probe()
+        return GithubStatusResult(
+            connected=st.connected,
+            reachable=st.reachable,
+            login=st.login or None,
+            scopes=st.scopes or None,
+            rate_remaining=st.rate_remaining,
+            rate_limit=st.rate_limit,
+        )
+
+    @route(
+        "GET",
+        "/api/v1/oauth/github/status",
+        scope=Scope.SETTINGS_READ.value,
+        request_model=GithubStatusQuery,
+        response_model=GithubStatusResult,
+        summary="Return GitHub connection status (live probe: login + rate budget)",
+    )
+    async def github_status(
+        self, query: GithubStatusQuery, principal: Principal
+    ) -> GithubStatusResult:
+        principal.require(Scope.SETTINGS_READ)
+        # gh subprocess + GitHub HTTP GET -> off the single gateway loop.
+        return await asyncio.to_thread(self._github_status)
+
+    @route(
+        "POST",
+        "/api/v1/oauth/github/start",
+        scope=Scope.SETTINGS_WRITE.value,
+        request_model=GithubStartCommand,
+        response_model=GithubStartResult,
+        summary="Start the GitHub device-flow connect (returns the user code + URL)",
+    )
+    async def github_start(
+        self, cmd: GithubStartCommand, principal: Principal
+    ) -> GithubStartResult:
+        principal.require(Scope.SETTINGS_WRITE)
+        from durin.security.github_device_auth import (
+            DEFAULT_SCOPE,
+            PRIVATE_REPO_SCOPE,
+            request_device_code,
+        )
+
+        scope = PRIVATE_REPO_SCOPE if cmd.private else DEFAULT_SCOPE
+        try:
+            ch = await asyncio.to_thread(request_device_code, scope=scope)
+        except Exception as exc:  # noqa: BLE001
+            raise UnavailableError(f"device code request failed: {exc}") from exc
+        return GithubStartResult(
+            flow_id=ch.flow_id,
+            user_code=ch.user_code,
+            verification_uri=ch.verification_uri,
+            verification_uri_complete=ch.verification_uri_complete,
+            interval=ch.interval,
+            expires_in=ch.expires_in,
+        )
+
+    @route(
+        "GET",
+        "/api/v1/oauth/github/poll",
+        scope=Scope.SETTINGS_READ.value,
+        request_model=GithubPollQuery,
+        response_model=GithubPollResult,
+        summary="Poll the GitHub device flow for completion",
+    )
+    async def github_poll(
+        self, query: GithubPollQuery, principal: Principal
+    ) -> GithubPollResult:
+        principal.require(Scope.SETTINGS_READ)
+        flow_id = query.flow_id.strip()
+        if not flow_id:
+            raise ValidationFailedError("flow_id is required")
+        from durin.security.github_device_auth import poll_flow
+
+        res = await asyncio.to_thread(poll_flow, flow_id)
+        if res.status == "authorized":
+            st = await asyncio.to_thread(self._github_status)
+            return GithubPollResult(status="authorized", connected=st.connected, login=st.login)
+        return GithubPollResult(status=res.status, error=res.error or None)
+
+    @route(
+        "DELETE",
+        "/api/v1/oauth/github",
+        scope=Scope.SETTINGS_WRITE.value,
+        request_model=GithubDisconnectCommand,
+        response_model=GithubStatusResult,
+        summary="Disconnect GitHub (forget the shared token)",
+    )
+    async def github_disconnect(
+        self, cmd: GithubDisconnectCommand, principal: Principal
+    ) -> GithubStatusResult:
+        principal.require(Scope.SETTINGS_WRITE)
+        from durin.security.github_device_auth import forget_github_token
+
+        await asyncio.to_thread(forget_github_token)
+        return GithubStatusResult(connected=False, reachable=False)

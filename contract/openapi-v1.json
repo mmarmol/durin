@@ -1438,6 +1438,202 @@
         "title": "ForgetResult",
         "type": "object"
       },
+      "GithubDisconnectCommand": {
+        "additionalProperties": false,
+        "description": "Command for ``DELETE /api/v1/oauth/github``.",
+        "properties": {},
+        "title": "GithubDisconnectCommand",
+        "type": "object"
+      },
+      "GithubPollQuery": {
+        "additionalProperties": false,
+        "description": "Query for ``GET /api/v1/oauth/github/poll``.",
+        "properties": {
+          "flow_id": {
+            "title": "Flow Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "flow_id"
+        ],
+        "title": "GithubPollQuery",
+        "type": "object"
+      },
+      "GithubPollResult": {
+        "description": "``status``: pending | slow_down | authorized | expired | denied | error.",
+        "properties": {
+          "connected": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Connected"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "login": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Login"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "GithubPollResult",
+        "type": "object"
+      },
+      "GithubStartCommand": {
+        "additionalProperties": false,
+        "description": "Command for ``POST /api/v1/oauth/github/start``.\n\n``private`` escalates the requested scope to private-repo access (``repo``);\nthe default is minimal (``read:user``).",
+        "properties": {
+          "private": {
+            "default": false,
+            "title": "Private",
+            "type": "boolean"
+          }
+        },
+        "title": "GithubStartCommand",
+        "type": "object"
+      },
+      "GithubStartResult": {
+        "properties": {
+          "expires_in": {
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "flow_id": {
+            "title": "Flow Id",
+            "type": "string"
+          },
+          "interval": {
+            "title": "Interval",
+            "type": "integer"
+          },
+          "user_code": {
+            "title": "User Code",
+            "type": "string"
+          },
+          "verification_uri": {
+            "title": "Verification Uri",
+            "type": "string"
+          },
+          "verification_uri_complete": {
+            "title": "Verification Uri Complete",
+            "type": "string"
+          }
+        },
+        "required": [
+          "flow_id",
+          "user_code",
+          "verification_uri",
+          "verification_uri_complete",
+          "interval",
+          "expires_in"
+        ],
+        "title": "GithubStartResult",
+        "type": "object"
+      },
+      "GithubStatusQuery": {
+        "additionalProperties": false,
+        "description": "Query for ``GET /api/v1/oauth/github/status`` (live probe).",
+        "properties": {},
+        "title": "GithubStatusQuery",
+        "type": "object"
+      },
+      "GithubStatusResult": {
+        "properties": {
+          "connected": {
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "login": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Login"
+          },
+          "rate_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rate Limit"
+          },
+          "rate_remaining": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rate Remaining"
+          },
+          "reachable": {
+            "default": false,
+            "title": "Reachable",
+            "type": "boolean"
+          },
+          "scopes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scopes"
+          }
+        },
+        "required": [
+          "connected"
+        ],
+        "title": "GithubStatusResult",
+        "type": "object"
+      },
       "GithubTokenTestQuery": {
         "additionalProperties": false,
         "properties": {
@@ -8569,6 +8765,122 @@
           }
         },
         "summary": "Return Codex OAuth connection status",
+        "x-required-scope": "settings:read"
+      }
+    },
+    "/api/v1/oauth/github": {
+      "delete": {
+        "operationId": "oauth_github_disconnect",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubDisconnectCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubStatusResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Disconnect GitHub (forget the shared token)",
+        "x-required-scope": "settings:write"
+      }
+    },
+    "/api/v1/oauth/github/poll": {
+      "get": {
+        "operationId": "oauth_github_poll",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubPollQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubPollResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Poll the GitHub device flow for completion",
+        "x-required-scope": "settings:read"
+      }
+    },
+    "/api/v1/oauth/github/start": {
+      "post": {
+        "operationId": "oauth_github_start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubStartCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubStartResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Start the GitHub device-flow connect (returns the user code + URL)",
+        "x-required-scope": "settings:write"
+      }
+    },
+    "/api/v1/oauth/github/status": {
+      "get": {
+        "operationId": "oauth_github_status",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GithubStatusQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GithubStatusResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Return GitHub connection status (live probe: login + rate budget)",
         "x-required-scope": "settings:read"
       }
     },

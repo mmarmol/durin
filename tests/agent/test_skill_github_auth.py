@@ -1,7 +1,18 @@
 """A6 — GitHub token via durin secrets, attached ONLY to GitHub hosts."""
 from types import SimpleNamespace
 
+import pytest
+
 import durin.agent.skill_resolve as R
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_github(monkeypatch):
+    """`_github_token` now resolves gh CLI -> env -> secret; pin the ambient
+    sources off so these tests exercise the secret path hermetically."""
+    monkeypatch.setattr("durin.security.github_auth._default_gh_runner", lambda: None)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("DURIN_GITHUB_TOKEN", raising=False)
 
 
 def test_is_github_url_guard():

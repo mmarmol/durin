@@ -73,18 +73,16 @@ def _is_github_url(url: str) -> bool:
 
 
 def _github_token() -> str:
-    """Resolve the configured GitHub token via durin secrets, or "" (anonymous).
-    `skills.security.github_token_secret` holds a secret NAME; missing/empty
-    degrades to anonymous (never raises)."""
+    """Resolve the GitHub token via the shared resolver: gh CLI -> env -> the shared
+    GITHUB_OAUTH secret -> the legacy `skills.security.github_token_secret`.
+    "" = anonymous; never raises."""
     from durin.config.loader import load_config
-    from durin.security.secrets import resolve_secret
+    from durin.security.github_auth import resolve_github_token
     try:
-        name = (load_config().skills.security.github_token_secret or "").strip()
-        if not name:
-            return ""
-        return str(resolve_secret(f"${{secret:{name}}}") or "")
-    except Exception:  # noqa: BLE001 — missing secret / store issue → anonymous
-        return ""
+        legacy = (load_config().skills.security.github_token_secret or "").strip()
+    except Exception:  # noqa: BLE001 — config issue → no legacy secret name
+        legacy = ""
+    return resolve_github_token(legacy_secret_names=[legacy] if legacy else [])
 
 
 def _gh_headers(url: str, accept: str | None = None) -> dict:

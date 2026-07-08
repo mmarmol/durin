@@ -6,9 +6,7 @@ no-op and the quality gate is disabled (see mcp_catalog_store / search).
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
 import time
 from dataclasses import dataclass, field
 
@@ -28,43 +26,23 @@ def parse_repo_url(url: str) -> tuple[str, str] | None:
     return owner, name
 
 
-def _default_gh_runner() -> str | None:
-    try:
-        out = subprocess.run(
-            ["gh", "auth", "token"], capture_output=True, text=True, timeout=5
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    tok = (out.stdout or "").strip()
-    return tok or None
-
-
-def _default_secret_getter(name: str) -> str | None:
-    """Resolve a durin secret by NAME — copies skill_resolve._github_token's logic."""
-    from durin.security.secrets import resolve_secret
-
-    try:
-        return str(resolve_secret(f"${{secret:{name}}}") or "") or None
-    except Exception:  # noqa: BLE001 — missing secret / store issue → anonymous
-        return None
-
-
 def resolve_token(
     *, env: dict | None = None, gh_runner=None, secret_getter=None, secret_name: str = ""
 ) -> str | None:
-    """Resolve a GitHub token: gh CLI → env → durin secret. None if unavailable."""
-    env = os.environ if env is None else env
-    gh_runner = _default_gh_runner if gh_runner is None else gh_runner
-    secret_getter = _default_secret_getter if secret_getter is None else secret_getter
-    if tok := (gh_runner() or None):
-        return tok
-    for key in ("GITHUB_TOKEN", "DURIN_GITHUB_TOKEN"):
-        if env.get(key):
-            return env[key]
-    if secret_getter and secret_name:
-        if tok := secret_getter(secret_name):
-            return tok
-    return None
+    """Resolve a GitHub token via the shared resolver: gh CLI -> env -> the shared
+    GITHUB_OAUTH secret -> the given per-feature secret. None if unavailable.
+
+    Thin back-compat shim over ``durin.security.github_auth.resolve_github_token``
+    so MCP discovery reads the same one credential as skills."""
+    from durin.security.github_auth import resolve_github_token
+
+    tok = resolve_github_token(
+        env=env,
+        gh_runner=gh_runner,
+        secret_getter=secret_getter,
+        legacy_secret_names=[secret_name] if secret_name else [],
+    )
+    return tok or None
 
 
 _GQL = "https://api.github.com/graphql"
