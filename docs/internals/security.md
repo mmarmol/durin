@@ -153,9 +153,12 @@ browser never holds the `device_code`); `poll_flow` exchanges it and, on success
 writes the raw token to the `GITHUB_OAUTH` secret. Default scope is minimal
 (`read:user`); `repo` is requested only when private-repo access is needed. The
 `OAuthService` exposes start / poll / status / disconnect (see [api.md](api.md)) —
-status is a live probe that reports the login, granted scopes, and rate budget. The
-GitHub MCP server still takes its token via the standard MCP install form;
-auto-filling it from this shared credential is a follow-up.
+status is a live probe that reports **where the token came from** (`gh` / env /
+secret), the login, granted scopes, and rate budget, so the dashboard only offers a
+"disconnect" for durin's own stored secret (a `gh`/env token is ambient, not durin's
+to forget). The GitHub MCP server rides the same credential: at launch a
+declared-but-empty GitHub-token env var (e.g. `GITHUB_PERSONAL_ACCESS_TOKEN`) is
+filled from the resolver, and never added to a server that did not declare one.
 
 ### Skill import gate
 

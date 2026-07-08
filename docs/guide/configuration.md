@@ -716,6 +716,23 @@ durin secret set anthropic_key sk-ant-...
 durin config set providers.anthropic.api_key '${secret:anthropic_key}'
 ```
 
+### Connect GitHub
+
+durin uses a single GitHub credential for everything that touches GitHub — importing
+skills from repositories, MCP server discovery, and the GitHub MCP server. It is
+resolved in this order, so the common case needs no setup:
+
+1. the `gh` CLI (`gh auth token`) if you are logged in — run `gh auth login` and you
+   are done;
+2. a `GITHUB_TOKEN` (or `DURIN_GITHUB_TOKEN`) environment variable;
+3. a token durin stores itself, connected from **Settings → General → GitHub** in the
+   web dashboard via GitHub's device flow (minimal `read:user` scope by default).
+
+The dashboard row shows where the active token comes from and its rate budget. Only a
+durin-stored token has a **Disconnect** button — a `gh`/env token is managed outside
+durin (`gh auth logout` to drop a gh one). With none of these, GitHub access falls back
+to anonymous: a lower rate limit and public repositories only.
+
 ### Turn memory dream on or off
 
 ```
