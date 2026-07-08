@@ -66,6 +66,35 @@ function stripFrontmatter(md: string): string {
   return m ? md.slice(m[0].length) : md;
 }
 
+/** Map a skill file's extension to a Prism language for syntax highlighting.
+ * Every value here is bundled in react-syntax-highlighter's full Prism build,
+ * so no extra registration is needed; unknown extensions fall back to plain text. */
+const LANGUAGE_BY_EXT: Record<string, string> = {
+  py: "python",
+  sh: "bash",
+  bash: "bash",
+  js: "javascript",
+  jsx: "jsx",
+  mjs: "javascript",
+  cjs: "javascript",
+  ts: "typescript",
+  tsx: "tsx",
+  json: "json",
+  yaml: "yaml",
+  yml: "yaml",
+  toml: "toml",
+  css: "css",
+  html: "markup",
+  xml: "markup",
+  sql: "sql",
+};
+
+function languageForFile(name: string): string {
+  const dot = name.lastIndexOf(".");
+  const ext = dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
+  return LANGUAGE_BY_EXT[ext] ?? "text";
+}
+
 /** Which pane fills the right side. The left column is navigation only; every
  * piece of work — reading/editing a skill, triaging a pending import, or
  * acquiring a new one — happens here with room to breathe. */
@@ -1691,13 +1720,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                       </div>
                     ) : (
                       <CodeBlock
-                        language={
-                          selFile.endsWith(".py")
-                            ? "python"
-                            : selFile.endsWith(".sh")
-                              ? "bash"
-                              : "text"
-                        }
+                        language={languageForFile(selFile)}
                         code={fileBody}
                       />
                     )
