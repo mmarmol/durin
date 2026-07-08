@@ -719,6 +719,8 @@
     "github": {
       "title": "GitHub",
       "usedBy": "Used by skills, MCP discovery, and the provider",
+      "viaGh": "via gh CLI",
+      "viaEnv": "via environment",
       "connect": "Connect",
       "reachable": "Reachable",
       "rateLeft": "{{remaining}} / {{limit}} requests left",

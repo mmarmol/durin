@@ -1,6 +1,10 @@
 """Precedence + safety of the shared GitHub token resolver."""
 
-from durin.security.github_auth import SHARED_SECRET_NAME, resolve_github_token
+from durin.security.github_auth import (
+    SHARED_SECRET_NAME,
+    resolve_github_token,
+    resolve_github_token_with_source,
+)
 
 
 def test_prefers_gh_cli_over_everything():
@@ -79,3 +83,39 @@ def test_unreadable_secret_store_degrades_to_anonymous():
         raise RuntimeError("store locked")
 
     assert resolve_github_token(env={}, gh_runner=lambda: None, secret_getter=boom) == ""
+
+
+# --- source reporting (so the UI can be honest about who owns the token) ------
+
+
+def test_source_is_gh_when_gh_wins():
+    _tok, src = resolve_github_token_with_source(
+        env={"GITHUB_TOKEN": "e"}, gh_runner=lambda: "g", secret_getter=lambda n: "s"
+    )
+    assert src == "gh"
+
+
+def test_source_is_env():
+    tok, src = resolve_github_token_with_source(
+        env={"GITHUB_TOKEN": "e"}, gh_runner=lambda: None, secret_getter=lambda n: None
+    )
+    assert (tok, src) == ("e", "env")
+
+
+def test_source_is_secret_for_shared_and_legacy():
+    tok, src = resolve_github_token_with_source(
+        env={}, gh_runner=lambda: None,
+        secret_getter=lambda n: "s" if n == SHARED_SECRET_NAME else None,
+    )
+    assert (tok, src) == ("s", "secret")
+    tok, src = resolve_github_token_with_source(
+        env={}, gh_runner=lambda: None,
+        secret_getter=lambda n: "L" if n == "OLD" else None, legacy_secret_names=["OLD"],
+    )
+    assert (tok, src) == ("L", "secret")
+
+
+def test_source_is_empty_when_anonymous():
+    assert resolve_github_token_with_source(
+        env={}, gh_runner=lambda: None, secret_getter=lambda n: None
+    ) == ("", "")

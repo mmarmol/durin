@@ -151,12 +151,13 @@ def test_poll_flow_past_deadline_is_expired():
 
 
 def test_github_status_no_token():
-    st = gda.github_status(resolver=lambda: "", get=lambda u, t: (200, {}, {}))
+    st = gda.github_status(resolver=lambda: ("", ""), get=lambda u, t: (200, {}, {}))
     assert st.connected is False
     assert st.reachable is False
+    assert st.source == ""
 
 
-def test_github_status_reachable_reports_login_scopes_rate():
+def test_github_status_reachable_reports_source_login_scopes_rate():
     def get(url, token):
         assert token == "gho_X"
         return (
@@ -169,15 +170,19 @@ def test_github_status_reachable_reports_login_scopes_rate():
             },
         )
 
-    st = gda.github_status(resolver=lambda: "gho_X", get=get)
+    st = gda.github_status(resolver=lambda: ("gho_X", "secret"), get=get)
     assert st.connected and st.reachable
+    assert st.source == "secret"
     assert st.login == "marcelo"
     assert st.scopes == "read:user, repo"
     assert st.rate_remaining == 4982
     assert st.rate_limit == 5000
 
 
-def test_github_status_token_rejected_is_connected_but_unreachable():
-    st = gda.github_status(resolver=lambda: "bad", get=lambda u, t: (401, {"message": "Bad"}, {}))
+def test_github_status_carries_source_even_when_unreachable():
+    st = gda.github_status(
+        resolver=lambda: ("gho_gh", "gh"), get=lambda u, t: (401, {"message": "Bad"}, {})
+    )
     assert st.connected is True
     assert st.reachable is False
+    assert st.source == "gh"  # so the UI can say "via gh CLI" even if the token is stale

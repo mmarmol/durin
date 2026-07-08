@@ -29,12 +29,13 @@ def _remote_none() -> Principal:
 
 async def test_github_status_maps_live_probe(monkeypatch):
     st = gda.Status(
-        connected=True, reachable=True, login="marcelo",
+        connected=True, reachable=True, source="secret", login="marcelo",
         scopes="read:user", rate_remaining=4982, rate_limit=5000,
     )
     monkeypatch.setattr(gda, "github_status", lambda: st)
     res = await OAuthService().github_status(GithubStatusQuery(), _local())
     assert res.connected and res.reachable
+    assert res.source == "secret"
     assert res.login == "marcelo" and res.scopes == "read:user"
     assert res.rate_remaining == 4982 and res.rate_limit == 5000
 
@@ -129,9 +130,24 @@ async def test_github_poll_empty_flow_id_is_validation_error():
 # --- disconnect --------------------------------------------------------------
 
 
-async def test_github_disconnect_forgets_and_reports_disconnected(monkeypatch):
+async def test_github_disconnect_forgets_then_reprobes_disconnected(monkeypatch):
     called = {}
     monkeypatch.setattr(gda, "forget_github_token", lambda: called.setdefault("forgot", True))
+    # nothing else provides a token -> the re-probe shows disconnected
+    monkeypatch.setattr(gda, "github_status", lambda: gda.Status(connected=False, reachable=False))
     res = await OAuthService().github_disconnect(GithubDisconnectCommand(), _local())
-    assert res.connected is False
     assert called.get("forgot") is True
+    assert res.connected is False
+
+
+async def test_github_disconnect_stays_connected_when_gh_remains(monkeypatch):
+    # forgetting durin's secret does NOT log you out of gh -> honest re-probe says so
+    monkeypatch.setattr(gda, "forget_github_token", lambda: True)
+    monkeypatch.setattr(
+        gda,
+        "github_status",
+        lambda: gda.Status(connected=True, reachable=True, source="gh", login="marcelo"),
+    )
+    res = await OAuthService().github_disconnect(GithubDisconnectCommand(), _local())
+    assert res.connected is True
+    assert res.source == "gh"

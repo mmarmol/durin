@@ -91,6 +91,34 @@ def _resolve_secret_map(values: dict[str, str] | None) -> dict[str, str] | None:
     return {k: resolve_secret(v) for k, v in values.items()}
 
 
+# Env var names a GitHub MCP server reads its token from. We only ever fill one the
+# server ITSELF declared (present as a key) but left empty — never add a token to a
+# server that didn't ask for it (no credential leak).
+_GITHUB_TOKEN_ENV_KEYS = (
+    "GITHUB_PERSONAL_ACCESS_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_API_TOKEN",
+)
+
+
+def _inject_shared_github_token(env: dict[str, str] | None) -> dict[str, str] | None:
+    """Fill a declared-but-empty GitHub-token env var from durin's shared GitHub
+    credential, so the GitHub MCP server rides the one connection (gh / env /
+    device-flow secret) instead of a separate per-server token."""
+    if not env:
+        return env
+    empty = [k for k in _GITHUB_TOKEN_ENV_KEYS if k in env and not (env[k] or "").strip()]
+    if not empty:
+        return env
+    from durin.security.github_auth import resolve_github_token
+
+    tok = resolve_github_token()
+    if not tok:
+        return env
+    return {**env, **{k: tok for k in empty}}
+
+
 def _is_session_expired_error(exc: BaseException) -> bool:
     if isinstance(exc, InterruptedError):
         return False
@@ -369,7 +397,8 @@ class MCPServerConnection:
                     f"MCP server '{self.name}': {finding}"
                 )
         command, args, env = _normalize_windows_stdio_command(
-            cfg.command, cfg.args, _resolve_secret_map(cfg.env) or None
+            cfg.command, cfg.args,
+            _inject_shared_github_token(_resolve_secret_map(cfg.env)) or None,
         )
         params = StdioServerParameters(command=command, args=args, env=env)
         errlog = _mcp_stderr_log()
