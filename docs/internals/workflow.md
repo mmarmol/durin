@@ -659,7 +659,7 @@ End-to-end for a single `run_workflow` call:
   `workflow.keep_runs` (default 20) bounds how many runs' working folders and terminal
   manifests are retained, so the run summary tells the caller to copy out anything that
   must outlive that window;
-  **dream-driven self-improvement in manual mode** (recommendations from
+  **dream-driven self-improvement** (recommendations from
   recurring run diagnostics); a **webui Workflows pane** (React Flow) with an editor that
   has clickable Input/Output canvas objects (toggle text and/or files plus a free-text
   description; file input is supplied as paths in the run bar), a palette that adds
@@ -668,9 +668,10 @@ End-to-end for a single `run_workflow` call:
   picker (model or persona), body/mode/context/routing config (including the session
   fresh/persistent choice, shown only for `context: "own"`), static and dynamic fan-out
   authoring with a concurrency cap, a subflow target picker that excludes cycle-creating
-  workflows, and a recommendations banner. Not yet built — auto-mode
-  self-improvement (apply + validation anchor) and auto-merge of conflicting
-  parallel writes.
+  workflows, and a recommendations banner. Self-improvement applies directly in
+  `auto` mode behind an external auto-revert anchor (`manual` mode leaves
+  recommendations for review). Not yet built — auto-merge of conflicting parallel
+  writes.
 - **Security.** Definitions are local files the user authored, so running their
   commands and tools is equivalent to the user running them directly; importing remote
   or third-party definitions is not supported in this scope (see [security.md](security.md)).
