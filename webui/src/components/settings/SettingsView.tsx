@@ -90,6 +90,7 @@ import { McpSettings } from "./McpSettings";
 import { PersonasSettings } from "./PersonasSettings";
 import { ModesSettings } from "./ModesSettings";
 import { ProvidersSettings } from "./ProvidersSettings";
+import { GitHubConnectionRow } from "./GitHubConnectionCard";
 
 type SettingsSectionKey =
   | "general"
@@ -720,6 +721,7 @@ function GeneralSettings({
         <section>
           <SettingsSectionTitle>{t("settings.sections.system")}</SettingsSectionTitle>
           <SettingsGroup>
+            <GitHubConnectionRow token={token} />
             <SettingsRow
               title={t("settings.rows.restart")}
               description={t("app.system.restartHint")}

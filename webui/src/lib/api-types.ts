@@ -1121,6 +1121,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/oauth/github": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Disconnect GitHub (forget the shared token) */
+        delete: operations["oauth_github_disconnect"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/oauth/github/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Poll the GitHub device flow for completion */
+        get: operations["oauth_github_poll"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/oauth/github/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start the GitHub device-flow connect (returns the user code + URL) */
+        post: operations["oauth_github_start"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/oauth/github/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Return GitHub connection status (live probe: login + rate budget) */
+        get: operations["oauth_github_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/oauth/openrouter": {
         parameters: {
             query?: never;
@@ -2672,6 +2740,106 @@ export interface components {
         ForgetResult: {
             /** Result */
             result: string;
+        };
+        /**
+         * GithubDisconnectCommand
+         * @description Command for ``DELETE /api/v1/oauth/github``.
+         */
+        GithubDisconnectCommand: Record<string, never>;
+        /**
+         * GithubPollQuery
+         * @description Query for ``GET /api/v1/oauth/github/poll``.
+         */
+        GithubPollQuery: {
+            /** Flow Id */
+            flow_id: string;
+        };
+        /**
+         * GithubPollResult
+         * @description ``status``: pending | slow_down | authorized | expired | denied | error.
+         */
+        GithubPollResult: {
+            /**
+             * Connected
+             * @default null
+             */
+            connected: boolean | null;
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /**
+             * Login
+             * @default null
+             */
+            login: string | null;
+            /** Status */
+            status: string;
+        };
+        /**
+         * GithubStartCommand
+         * @description Command for ``POST /api/v1/oauth/github/start``.
+         *
+         *     ``private`` escalates the requested scope to private-repo access (``repo``);
+         *     the default is minimal (``read:user``).
+         */
+        GithubStartCommand: {
+            /**
+             * Private
+             * @default false
+             */
+            private: boolean;
+        };
+        /** GithubStartResult */
+        GithubStartResult: {
+            /** Expires In */
+            expires_in: number;
+            /** Flow Id */
+            flow_id: string;
+            /** Interval */
+            interval: number;
+            /** User Code */
+            user_code: string;
+            /** Verification Uri */
+            verification_uri: string;
+            /** Verification Uri Complete */
+            verification_uri_complete: string;
+        };
+        /**
+         * GithubStatusQuery
+         * @description Query for ``GET /api/v1/oauth/github/status`` (live probe).
+         */
+        GithubStatusQuery: Record<string, never>;
+        /** GithubStatusResult */
+        GithubStatusResult: {
+            /** Connected */
+            connected: boolean;
+            /**
+             * Login
+             * @default null
+             */
+            login: string | null;
+            /**
+             * Rate Limit
+             * @default null
+             */
+            rate_limit: number | null;
+            /**
+             * Rate Remaining
+             * @default null
+             */
+            rate_remaining: number | null;
+            /**
+             * Reachable
+             * @default false
+             */
+            reachable: boolean;
+            /**
+             * Scopes
+             * @default null
+             */
+            scopes: string | null;
         };
         /** GithubTokenTestQuery */
         GithubTokenTestQuery: {
@@ -6806,6 +6974,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OAuthStatusResult"];
+                };
+            };
+        };
+    };
+    oauth_github_disconnect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GithubDisconnectCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GithubStatusResult"];
+                };
+            };
+        };
+    };
+    oauth_github_poll: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GithubPollQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GithubPollResult"];
+                };
+            };
+        };
+    };
+    oauth_github_start: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GithubStartCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GithubStartResult"];
+                };
+            };
+        };
+    };
+    oauth_github_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GithubStatusQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GithubStatusResult"];
                 };
             };
         };
