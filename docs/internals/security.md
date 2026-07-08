@@ -134,6 +134,29 @@ credential-shaped strings by format — vendor prefixes (`sk-`, `ghp_`, `AKIA…
 PEM blocks, `Authorization: Bearer` headers, env-style key-value assignments, and
 JSON credential fields — regardless of whether the value is in the store.
 
+### Shared GitHub credential
+
+GitHub access — raising the API rate limit and reaching private repos — is one
+credential shared by every general consumer, not a token configured per feature.
+`resolve_github_token()` (`durin/security/github_auth.py`) is the single resolver:
+it tries the `gh` CLI (`gh auth token`), then the environment (`GITHUB_TOKEN` /
+`DURIN_GITHUB_TOKEN`), then the shared `GITHUB_OAUTH` secret written by the connect
+flow, then any legacy per-feature secret name passed for migration. It returns `""`
+(anonymous) and never raises, so GitHub access degrades rather than breaking. Skills
+(`skill_resolve`) and MCP discovery (`mcp_github`) both read through it.
+
+The connect flow is GitHub's OAuth **device flow** against durin's own OAuth App
+(`durin/security/github_device_auth.py`): a public client id, no client secret — so
+it is safe in this repo and works on a remote gateway. `request_device_code` starts
+the flow and stashes the poll secret server-side behind an opaque `flow_id` (the
+browser never holds the `device_code`); `poll_flow` exchanges it and, on success,
+writes the raw token to the `GITHUB_OAUTH` secret. Default scope is minimal
+(`read:user`); `repo` is requested only when private-repo access is needed. The
+`OAuthService` exposes start / poll / status / disconnect (see [api.md](api.md)) —
+status is a live probe that reports the login, granted scopes, and rate budget. The
+GitHub MCP server still takes its token via the standard MCP install form;
+auto-filling it from this shared credential is a follow-up.
+
 ### Skill import gate
 
 Skill imports flow through two independent scan stages before installation.
