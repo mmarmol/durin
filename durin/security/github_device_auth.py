@@ -13,11 +13,15 @@ from the browser instead of blocking the server on a long-lived request.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from secrets import token_urlsafe
 
 from durin.security.github_auth import DURIN_GITHUB_CLIENT_ID as CLIENT_ID
 from durin.security.github_auth import SHARED_SECRET_NAME
+
+USER_URL = "https://api.github.com/user"
 
 DEVICE_CODE_URL = "https://github.com/login/device/code"
 ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
@@ -128,3 +132,136 @@ def forget_github_token() -> bool:
         store.save()
         get_secret_store(reload=True)
     return removed
+
+
+# --- device-flow orchestration for the web UI --------------------------------
+# The raw device_code is the poll secret; keep it server-side and hand the
+# browser only an opaque flow_id (mirrors how the Codex flow hides its handle).
+
+# flow_id -> (device_code, deadline_epoch)
+_PENDING: dict[str, tuple[str, float]] = {}
+
+
+@dataclass
+class Challenge:
+    flow_id: str
+    user_code: str
+    verification_uri: str
+    verification_uri_complete: str
+    interval: int
+    expires_in: int
+
+
+def _prune(now_epoch: float) -> None:
+    for fid in [f for f, (_dc, dl) in _PENDING.items() if dl < now_epoch]:
+        _PENDING.pop(fid, None)
+
+
+def request_device_code(
+    *, scope: str = DEFAULT_SCOPE, poster: Poster | None = None,
+    now: Callable[[], float] | None = None,
+) -> Challenge:
+    """Start the flow and stash the device_code under an opaque flow_id."""
+    clock = now or time.time
+    dc = start_device_flow(scope=scope, poster=poster)
+    flow_id = token_urlsafe(16)
+    _prune(clock())
+    _PENDING[flow_id] = (dc.device_code, clock() + dc.expires_in)
+    return Challenge(
+        flow_id=flow_id,
+        user_code=dc.user_code,
+        verification_uri=dc.verification_uri,
+        verification_uri_complete=dc.verification_uri_complete,
+        interval=dc.interval,
+        expires_in=dc.expires_in,
+    )
+
+
+def poll_flow(
+    flow_id: str, *, poster: Poster | None = None, now: Callable[[], float] | None = None
+) -> Exchange:
+    """One poll of a stashed flow. On authorization, stores the shared secret."""
+    clock = now or time.time
+    entry = _PENDING.get(flow_id)
+    if not entry:
+        return Exchange(status="expired", error="unknown or expired flow")
+    device_code, deadline = entry
+    if clock() > deadline:
+        _PENDING.pop(flow_id, None)
+        return Exchange(status="expired", error="device code expired")
+    res = exchange_device_code(device_code, poster=poster)
+    if res.status == "authorized":
+        store_github_token(res.access_token)
+        _PENDING.pop(flow_id, None)
+    elif res.status in ("expired", "denied"):
+        _PENDING.pop(flow_id, None)
+    return res
+
+
+# --- live status / test ------------------------------------------------------
+
+# (url, token) -> (status_code, json_body, headers)
+GetJson = Callable[[str, str], "tuple[int, dict, dict]"]
+
+
+@dataclass
+class Status:
+    connected: bool  # a token is configured (gh / env / shared secret)
+    reachable: bool  # GitHub answered 200 to that token
+    login: str = ""
+    scopes: str = ""
+    rate_remaining: int | None = None
+    rate_limit: int | None = None
+
+
+def _int_or_none(v: object) -> int | None:
+    try:
+        return int(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _default_get(url: str, token: str) -> tuple[int, dict, dict]:
+    import httpx
+
+    with httpx.Client(timeout=httpx.Timeout(15.0, connect=15.0), trust_env=True) as client:
+        resp = client.get(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "User-Agent": _USER_AGENT,
+            },
+        )
+        try:
+            body = resp.json()
+        except Exception:  # noqa: BLE001 - non-JSON error body -> empty
+            body = {}
+        return resp.status_code, body, dict(resp.headers)
+
+
+def github_status(
+    *, resolver: Callable[[], str] | None = None, get: GetJson | None = None
+) -> Status:
+    """Is a token configured, does GitHub accept it, and who + rate budget."""
+    from durin.security.github_auth import resolve_github_token
+
+    resolver = resolver or resolve_github_token
+    token = resolver()
+    if not token:
+        return Status(connected=False, reachable=False)
+    status, body, headers = (get or _default_get)(USER_URL, token)
+    if status != 200:
+        return Status(connected=True, reachable=False)
+
+    def hget(key: str) -> object:
+        return headers.get(key) or headers.get(key.lower())
+
+    return Status(
+        connected=True,
+        reachable=True,
+        login=str(body.get("login") or ""),
+        scopes=str(hget("X-OAuth-Scopes") or ""),
+        rate_remaining=_int_or_none(hget("X-RateLimit-Remaining")),
+        rate_limit=_int_or_none(hget("X-RateLimit-Limit")),
+    )
