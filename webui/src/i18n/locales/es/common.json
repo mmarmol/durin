@@ -718,6 +718,8 @@
     "github": {
       "title": "GitHub",
       "usedBy": "Lo usan skills, discovery de MCP y el proveedor",
+      "viaGh": "vía gh CLI",
+      "viaEnv": "vía variable de entorno",
       "connect": "Conectar",
       "reachable": "Alcanzable",
       "rateLeft": "{{remaining}} / {{limit}} solicitudes restantes",

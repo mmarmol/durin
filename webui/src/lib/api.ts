@@ -2242,6 +2242,8 @@ export interface GithubStatus {
   connected: boolean;
   /** GitHub answered 200 to that token. */
   reachable?: boolean;
+  /** Where the token came from: "gh" | "env" | "secret". Only "secret" is durin's to disconnect. */
+  source?: string | null;
   login?: string | null;
   scopes?: string | null;
   rate_remaining?: number | null;

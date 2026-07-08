@@ -182,6 +182,7 @@ class GithubStatusQuery(Query):
 class GithubStatusResult(Result):
     connected: bool  # a token is configured (gh / env / shared secret)
     reachable: bool = False  # GitHub answered 200
+    source: str | None = None  # gh | env | secret — which source provided the token
     login: str | None = None
     scopes: str | None = None
     rate_remaining: int | None = None
@@ -457,6 +458,7 @@ class OAuthService:
         return GithubStatusResult(
             connected=st.connected,
             reachable=st.reachable,
+            source=st.source or None,
             login=st.login or None,
             scopes=st.scopes or None,
             rate_remaining=st.rate_remaining,
@@ -539,7 +541,7 @@ class OAuthService:
         scope=Scope.SETTINGS_WRITE.value,
         request_model=GithubDisconnectCommand,
         response_model=GithubStatusResult,
-        summary="Disconnect GitHub (forget the shared token)",
+        summary="Forget durin's stored GitHub token, then re-probe (gh/env may remain)",
     )
     async def github_disconnect(
         self, cmd: GithubDisconnectCommand, principal: Principal
@@ -547,5 +549,8 @@ class OAuthService:
         principal.require(Scope.SETTINGS_WRITE)
         from durin.security.github_device_auth import forget_github_token
 
+        # Forget durin's stored token, then re-probe: an ambient `gh`/env token can
+        # still provide access, so the honest post-disconnect state may be "still
+        # connected via gh", not a blanket disconnected.
         await asyncio.to_thread(forget_github_token)
-        return GithubStatusResult(connected=False, reachable=False)
+        return await asyncio.to_thread(self._github_status)

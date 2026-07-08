@@ -104,6 +104,16 @@ export function GitHubConnectionRow({ token, base = "" }: { token: string; base?
 
   const connected = !!status?.connected;
   const reachable = !!status?.reachable;
+  const source = status?.source || "";
+  // Only durin's own stored secret is durin's to disconnect; a gh/env token is
+  // ambient — durin reads it but doesn't own it, so no misleading "Disconnect".
+  const durinManaged = source === "secret";
+  const sourceHint =
+    source === "gh"
+      ? t("settings.github.viaGh")
+      : source === "env"
+        ? t("settings.github.viaEnv")
+        : "";
 
   const title = (
     <span className="flex flex-wrap items-center gap-2">
@@ -150,11 +160,15 @@ export function GitHubConnectionRow({ token, base = "" }: { token: string; base?
               limit: status.rate_limit.toLocaleString(),
             })}`
           : ""}
+        {sourceHint ? ` · ${sourceHint}` : ""}
       </span>
     );
   } else if (connected && !reachable) {
     description = (
-      <span className="text-destructive">{t("settings.github.rejected")}</span>
+      <span className="text-destructive">
+        {t("settings.github.rejected")}
+        {sourceHint ? ` · ${sourceHint}` : ""}
+      </span>
     );
   } else {
     description = t("settings.github.usedBy");
@@ -200,7 +214,7 @@ export function GitHubConnectionRow({ token, base = "" }: { token: string; base?
     );
   } else if (connected) {
     action = (
-      <div className="flex gap-2">
+      <div className="flex items-center gap-2">
         <Button
           size="sm"
           variant="outline"
@@ -209,17 +223,19 @@ export function GitHubConnectionRow({ token, base = "" }: { token: string; base?
           onClick={refresh}
         >
           <RefreshCw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-          {reachable ? t("settings.github.test") : t("settings.github.reconnect")}
+          {t("settings.github.test")}
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="rounded-full"
-          disabled={busy}
-          onClick={() => setConfirmForget(true)}
-        >
-          {t("settings.github.disconnect")}
-        </Button>
+        {durinManaged ? (
+          <Button
+            size="sm"
+            variant="outline"
+            className="rounded-full"
+            disabled={busy}
+            onClick={() => setConfirmForget(true)}
+          >
+            {t("settings.github.disconnect")}
+          </Button>
+        ) : null}
       </div>
     );
   } else {

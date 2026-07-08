@@ -1626,6 +1626,18 @@
             ],
             "default": null,
             "title": "Scopes"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source"
           }
         },
         "required": [
@@ -8793,7 +8805,7 @@
             "description": "Success"
           }
         },
-        "summary": "Disconnect GitHub (forget the shared token)",
+        "summary": "Forget durin's stored GitHub token, then re-probe (gh/env may remain)",
         "x-required-scope": "settings:write"
       }
     },
