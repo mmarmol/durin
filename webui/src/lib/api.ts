@@ -2235,6 +2235,65 @@ export async function disconnectOpenRouter(
   return del<OpenRouterStatus>(`${base}/api/v1/oauth/openrouter`, token, {});
 }
 
+// --- GitHub OAuth (device flow → shared credential) --------------------------
+
+export interface GithubStatus {
+  /** A token is configured (gh CLI / env / shared secret). */
+  connected: boolean;
+  /** GitHub answered 200 to that token. */
+  reachable?: boolean;
+  login?: string | null;
+  scopes?: string | null;
+  rate_remaining?: number | null;
+  rate_limit?: number | null;
+}
+
+export interface GithubChallenge {
+  flow_id: string;
+  user_code: string;
+  verification_uri: string;
+  verification_uri_complete: string;
+  interval: number;
+  expires_in: number;
+}
+
+export interface GithubPoll {
+  /** pending | slow_down | authorized | expired | denied | error */
+  status: string;
+  error?: string | null;
+  connected?: boolean | null;
+  login?: string | null;
+}
+
+export async function fetchGithubStatus(token: string, base: string = ""): Promise<GithubStatus> {
+  return request<GithubStatus>(`${base}/api/v1/oauth/github/status`, token);
+}
+
+export async function startGithubDeviceFlow(
+  token: string,
+  opts: { private?: boolean } = {},
+  base: string = "",
+): Promise<GithubChallenge> {
+  return post<GithubChallenge>(`${base}/api/v1/oauth/github/start`, token, {
+    private: !!opts.private,
+  });
+}
+
+export async function pollGithubDeviceFlow(
+  token: string,
+  flowId: string,
+  base: string = "",
+): Promise<GithubPoll> {
+  return request<GithubPoll>(
+    `${base}/api/v1/oauth/github/poll?flow_id=${encodeURIComponent(flowId)}`,
+    token,
+  );
+}
+
+export async function disconnectGithub(token: string, base: string = ""): Promise<GithubStatus> {
+  return del<GithubStatus>(`${base}/api/v1/oauth/github`, token, {});
+}
+
 // --- MCP server management -------------------------------------------------
 
 function mcpPath(name: string, suffix = ""): string {
