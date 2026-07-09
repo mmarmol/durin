@@ -637,13 +637,19 @@ async def test_on_message_marks_failed_attachment_download(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_send_warns_when_client_not_ready() -> None:
-    # Sending without a running/ready client should be a safe no-op.
+async def test_send_raises_when_client_not_ready() -> None:
     channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    channel._client = None
+    with pytest.raises(RuntimeError):
+        await channel.send(OutboundMessage(channel="discord", chat_id="1", content="hi"))
 
-    await channel.send(OutboundMessage(channel="discord", chat_id="123", content="hello"))
 
-    assert channel._typing_tasks == {}
+@pytest.mark.asyncio
+async def test_send_delta_raises_when_client_not_ready() -> None:
+    channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    channel._client = None
+    with pytest.raises(RuntimeError):
+        await channel.send_delta("1", "chunk", {"_stream_id": "s1"})
 
 
 @pytest.mark.asyncio

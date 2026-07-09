@@ -460,8 +460,9 @@ class DiscordChannel(BaseChannel):
         """Send a message through Discord using discord.py."""
         client = self._client
         if client is None or not client.is_ready():
-            self.logger.warning("client not ready; dropping outbound message")
-            return
+            # Raise so the manager's retry policy covers reconnect windows;
+            # a silent return here loses the message permanently.
+            raise RuntimeError("discord client not ready")
 
         is_progress = bool((msg.metadata or {}).get("_progress"))
 
@@ -481,8 +482,9 @@ class DiscordChannel(BaseChannel):
         """Progressive Discord delivery: send once, then edit until the stream ends."""
         client = self._client
         if client is None or not client.is_ready():
-            self.logger.warning("client not ready; dropping stream delta")
-            return
+            # Raise so the manager's retry policy covers reconnect windows;
+            # a silent return here loses the message permanently.
+            raise RuntimeError("discord client not ready")
 
         meta = metadata or {}
         stream_id = meta.get("_stream_id")
