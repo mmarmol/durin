@@ -220,6 +220,19 @@ attachment rather than a fence), with the download link preserved as a caption.
 The attachment's display kind is inferred from the filename on both paths: in
 the client for live frames, and in the transcript replay builder for reloads.
 
+**Render stability.** Rich blocks must never remount while the user watches —
+a remount reloads the sandboxed iframe (visible flash) and resets an open
+code⇄preview toggle. Three contracts uphold this: replay-minted message ids
+are deterministic (two replays of the same transcript produce identical ids,
+so the post-turn canonical refetch reconciles by React key instead of
+re-keying rows); a streamed reply keeps its first render identity via a
+client-only `renderKey` when the consolidated final frame and the canonical
+replay row later re-identify it (the final frame merges into the streamed row
+rather than appending a duplicate); and the markdown renderer's
+component-override map is memoized, because each entry's function identity is
+the React element type for every fence — a fresh map per render would remount
+every rich block in the message on any re-render.
+
 ### Work-visibility surfaces (WebUI)
 
 Three surfaces make background work visible inside a chat without navigating

@@ -1086,4 +1086,49 @@ describe("useDurinStream", () => {
     expect(result.current.messages.at(-1)!.steer).toBe(false);
   });
 
+  it("keeps the streamed placeholder's render identity when the final message adopts a server id", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(
+      () => useDurinStream("chat-rk", EMPTY_MESSAGES, false, undefined),
+      { wrapper: wrap(fake.client) },
+    );
+
+    act(() => {
+      fake.emit("chat-rk", { event: "delta", chat_id: "chat-rk", text: "partial…" });
+    });
+    const placeholderId = result.current.messages.find((m) => m.role === "assistant")?.id;
+    expect(placeholderId).toBeTruthy();
+
+    act(() => {
+      fake.emit("chat-rk", {
+        event: "message",
+        chat_id: "chat-rk",
+        text: "final reply",
+        id: "msg-final-1",
+      });
+    });
+    const finals = result.current.messages.filter((m) => m.role === "assistant");
+    expect(finals).toHaveLength(1);
+    expect(finals[0].id).toBe("msg-final-1");
+    expect(finals[0].renderKey).toBe(placeholderId);
+  });
+
+  it("merges the consolidated final frame into the streamed row (one row, stable render identity)", () => {
+    const fake = fakeClient();
+    const { result } = renderHook(
+      () => useDurinStream("chat-seq", EMPTY_MESSAGES, false, undefined),
+      { wrapper: wrap(fake.client) },
+    );
+    act(() => { fake.emit("chat-seq", { event: "reasoning_delta", chat_id: "chat-seq", text: "hmm" }); });
+    act(() => { fake.emit("chat-seq", { event: "delta", chat_id: "chat-seq", text: "```svg\n<svg/>\n```" }); });
+    const streamedId = result.current.messages.find((m) => m.role === "assistant")!.id;
+    act(() => { fake.emit("chat-seq", { event: "stream_end", chat_id: "chat-seq" }); });
+    act(() => { fake.emit("chat-seq", { event: "message", chat_id: "chat-seq", text: "```svg\n<svg/>\n```", id: "msg-real-9" }); });
+    act(() => { fake.emit("chat-seq", { event: "turn_end", chat_id: "chat-seq" }); });
+    const rows = result.current.messages.filter((m) => m.role === "assistant");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe("msg-real-9");
+    expect(rows[0].renderKey ?? rows[0].id).toBe(streamedId);
+    expect(rows[0].reasoning).toBe("hmm");
+  });
 });

@@ -81,7 +81,7 @@ export function RichBlock({ language, code }: { language: string; code: string }
         {mode === "preview" ? (
           preview
         ) : (
-          <CodeBlock language={language} code={code} className={cn("rounded-none border-0")} />
+          <CodeBlock language={language} code={code} bare className={cn("rounded-none border-0")} />
         )}
       </div>
       <Dialog.Portal>

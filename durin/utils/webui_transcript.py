@@ -6,7 +6,6 @@ import json
 import mimetypes
 import os
 import time
-import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -180,7 +179,11 @@ def replay_transcript_to_ui_messages(
     _ts_base = int(time.time() * 1000)
 
     def _new_id(prefix: str, idx: int) -> str:
-        return f"{prefix}-{idx}-{uuid.uuid4().hex[:8]}"
+        # Deterministic per (prefix, line index): two replays of the same JSONL
+        # must mint identical ids, or every canonical refetch re-keys these rows
+        # and the webui remounts their DOM (iframes reload, open toggles reset).
+        # ``idx`` is unique per transcript line, so ids never collide in-thread.
+        return f"{prefix}-{idx}"
 
     def attach_reasoning_chunk(prev: list[dict[str, Any]], chunk: str, idx: int) -> None:
         for i in range(len(prev) - 1, -1, -1):

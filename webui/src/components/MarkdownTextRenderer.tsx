@@ -1,5 +1,5 @@
-import { Children, isValidElement } from "react";
-import ReactMarkdown from "react-markdown";
+import { Children, isValidElement, useMemo } from "react";
+import ReactMarkdown, { type Components, type Options } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -58,38 +58,28 @@ const WIKILINK_PLUGIN_OPTIONS = {
     `${WIKILINK_HREF_PREFIX}${opts.filePath}${opts.heading ? `#${opts.heading}` : ""}`,
 };
 
+// Plugin arrays are hoisted so their identity is stable across renders —
+// inline literals would make ReactMarkdown rebuild its processor every render.
+const REMARK_PLUGINS: Options["remarkPlugins"] = [
+  remarkGfm,
+  remarkMath,
+  [wikiLinkPlugin, WIKILINK_PLUGIN_OPTIONS],
+];
+const REHYPE_PLUGINS: Options["rehypePlugins"] = [rehypeKatex];
+
 export default function MarkdownTextRenderer({
   children,
   className,
   onWikiLinkClick,
 }: MarkdownTextRendererProps) {
-  return (
-    <div
-      className={cn(
-        "markdown-content prose max-w-none dark:prose-invert",
-        "prose-headings:mt-4 prose-headings:mb-2 prose-headings:font-semibold prose-headings:tracking-tight",
-        "prose-h1:text-lg prose-h2:text-base prose-h3:text-sm prose-h4:text-[13px]",
-        "prose-p:my-2",
-        "prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5",
-        "prose-blockquote:my-3 prose-blockquote:border-l-2 prose-blockquote:font-normal",
-        "prose-blockquote:not-italic prose-blockquote:text-foreground/80",
-        "prose-a:text-primary prose-a:underline-offset-2 hover:prose-a:opacity-80",
-        "prose-hr:my-6",
-        "prose-pre:my-0 prose-pre:bg-transparent prose-pre:p-0",
-        "prose-code:before:content-none prose-code:after:content-none prose-code:font-normal",
-        "prose-table:my-3 prose-th:text-left prose-th:font-medium",
-        className,
-      )}
-      style={{ lineHeight: "var(--cjk-line-height)" }}
-    >
-      <ReactMarkdown
-        remarkPlugins={[
-          remarkGfm,
-          remarkMath,
-          [wikiLinkPlugin, WIKILINK_PLUGIN_OPTIONS],
-        ]}
-        rehypePlugins={[rehypeKatex]}
-        components={{
+  // The component-override map MUST be referentially stable across renders:
+  // each entry's function identity is the React element *type* for every
+  // code/pre/span/a node, so a fresh map per render makes React unmount and
+  // remount all of them — rich-block iframes reload and open code/preview
+  // toggles reset on every re-render of the message (streaming deltas,
+  // canonical refetch). Only a changed wikilink handler may rebuild it.
+  const components = useMemo<Components>(
+    () => ({
           code({ className: cls, children: kids, ...props }) {
             const match = /language-(\w[\w-]*)/.exec(cls || "");
             if (match) {
@@ -210,7 +200,33 @@ export default function MarkdownTextRenderer({
               </a>
             );
           },
-        }}
+    }),
+    [onWikiLinkClick],
+  );
+
+  return (
+    <div
+      className={cn(
+        "markdown-content prose max-w-none dark:prose-invert",
+        "prose-headings:mt-4 prose-headings:mb-2 prose-headings:font-semibold prose-headings:tracking-tight",
+        "prose-h1:text-lg prose-h2:text-base prose-h3:text-sm prose-h4:text-[13px]",
+        "prose-p:my-2",
+        "prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5",
+        "prose-blockquote:my-3 prose-blockquote:border-l-2 prose-blockquote:font-normal",
+        "prose-blockquote:not-italic prose-blockquote:text-foreground/80",
+        "prose-a:text-primary prose-a:underline-offset-2 hover:prose-a:opacity-80",
+        "prose-hr:my-6",
+        "prose-pre:my-0 prose-pre:bg-transparent prose-pre:p-0",
+        "prose-code:before:content-none prose-code:after:content-none prose-code:font-normal",
+        "prose-table:my-3 prose-th:text-left prose-th:font-medium",
+        className,
+      )}
+      style={{ lineHeight: "var(--cjk-line-height)" }}
+    >
+      <ReactMarkdown
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={REHYPE_PLUGINS}
+        components={components}
       >
         {children}
       </ReactMarkdown>
