@@ -390,6 +390,8 @@ class DiscordChannel(BaseChannel):
         self._working_emoji_tasks: dict[str, asyncio.Task[None]] = {}
         self._stream_bufs: dict[str, _StreamBuf] = {}
         self._known_channels: dict[str, Any] = {}
+        self._stop_requested = False
+        self._liveness_failed = False
 
     def _remember_channel(self, channel: Any) -> None:
         self._known_channels[self._channel_key(channel)] = channel
@@ -448,6 +450,8 @@ class DiscordChannel(BaseChannel):
             self._running = False
             return
 
+        self._stop_requested = False
+        self._liveness_failed = False
         self._running = True
         self.logger.info("Starting client via discord.py...")
 
@@ -455,14 +459,31 @@ class DiscordChannel(BaseChannel):
             await self._client.start(self.config.token)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            self.logger.exception("client startup failed")
+        except discord.LoginFailure:
+            # Fatal config error: restarting cannot help and hammers the API.
+            self.logger.error(
+                "Discord rejected the bot token; fix channels.discord.token and restart"
+            )
+        except discord.PrivilegedIntentsRequired:
+            self.logger.error(
+                "Privileged intents are not enabled for this bot. Enable "
+                "'Message Content Intent' (and any other configured privileged "
+                "intents) in the Discord Developer Portal, or lower "
+                "channels.discord.intents"
+            )
         finally:
             self._running = False
             await self._reset_runtime_state(close_client=True)
 
+        if self._liveness_failed and not self._stop_requested:
+            self._liveness_failed = False
+            # Zombie socket was force-closed by the liveness probe; surface it
+            # as a crash so the manager supervisor reconnects us.
+            raise RuntimeError("discord connection liveness lost")
+
     async def stop(self) -> None:
         """Stop the Discord channel."""
+        self._stop_requested = True
         self._running = False
         await self._reset_runtime_state(close_client=True)
 

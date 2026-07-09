@@ -1135,20 +1135,31 @@ async def test_stop_all_cancels_dispatcher_and_stops_channels():
 
 
 @pytest.mark.asyncio
-async def test_start_channel_logs_error_on_failure():
-    """_start_channel should log error when channel start fails."""
+async def test_start_channel_logs_error_on_failure(monkeypatch):
+    """_start_channel should log the crash and restart the channel under supervision."""
     class _FailingChannel(BaseChannel):
         name = "failing"
         display_name = "Failing"
 
+        def __init__(self, config, bus) -> None:
+            super().__init__(config, bus)
+            self.attempts = 0
+
         async def start(self) -> None:
-            raise RuntimeError("connection failed")
+            self.attempts += 1
+            if self.attempts == 1:
+                raise RuntimeError("connection failed")
 
         async def stop(self) -> None:
             pass
 
         async def send(self, msg: OutboundMessage) -> None:
             pass
+
+    async def fake_sleep(delay: float) -> None:
+        pass
+
+    monkeypatch.setattr("durin.channels.manager.asyncio.sleep", fake_sleep)
 
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(),
@@ -1163,8 +1174,9 @@ async def test_start_channel_logs_error_on_failure():
 
     ch = _FailingChannel(fake_config, mgr.bus)
 
-    # Should not raise, just log error
+    # Should not raise: the crash is logged and the channel is restarted.
     await mgr._start_channel("failing", ch)
+    assert ch.attempts == 2
 
 
 @pytest.mark.asyncio

@@ -291,7 +291,9 @@ async def test_start_handles_client_construction_failure(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_start_handles_client_start_failure(monkeypatch) -> None:
-    # If client.start fails, the partially created client should be closed and detached.
+    # If client.start fails, the exception propagates (so the manager supervisor
+    # restarts the channel) but the partially created client is still closed
+    # and detached via the finally block first.
     channel = DiscordChannel(
         DiscordConfig(enabled=True, token="token", allow_from=["*"]),
         MessageBus(),
@@ -301,7 +303,8 @@ async def test_start_handles_client_start_failure(monkeypatch) -> None:
     _FakeDiscordClient.start_error = RuntimeError("connect failed")
     monkeypatch.setattr("durin.channels.discord.DiscordBotClient", _FakeDiscordClient)
 
-    await channel.start()
+    with pytest.raises(RuntimeError, match="connect failed"):
+        await channel.start()
 
     assert channel.is_running is False
     assert channel._client is None
@@ -309,6 +312,50 @@ async def test_start_handles_client_start_failure(monkeypatch) -> None:
     assert _FakeDiscordClient.instances[0].closed is True
 
     _FakeDiscordClient.start_error = None
+
+
+@pytest.mark.asyncio
+async def test_start_reraises_unexpected_crash(monkeypatch) -> None:
+    channel = _make_channel()
+
+    class _CrashingClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def start(self, token):
+            raise RuntimeError("gateway exploded")
+
+        def is_closed(self):
+            return True
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("durin.channels.discord.DiscordBotClient", _CrashingClient)
+    with pytest.raises(RuntimeError):
+        await channel.start()
+
+
+@pytest.mark.asyncio
+async def test_start_returns_cleanly_on_login_failure(monkeypatch) -> None:
+    channel = _make_channel()
+
+    class _BadTokenClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def start(self, token):
+            raise discord.LoginFailure("bad token")
+
+        def is_closed(self):
+            return True
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("durin.channels.discord.DiscordBotClient", _BadTokenClient)
+    await channel.start()  # must NOT raise: fatal config error, no restart loop
+    assert channel.is_running is False
 
 
 @pytest.mark.asyncio
@@ -671,7 +718,7 @@ async def test_on_message_marks_failed_attachment_download(tmp_path, monkeypatch
 
 
 def _make_channel() -> DiscordChannel:
-    return DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    return DiscordChannel(DiscordConfig(enabled=True, token="token", allow_from=["*"]), MessageBus())
 
 
 class _FakeTranscription:

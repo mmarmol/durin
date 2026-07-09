@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
@@ -38,6 +39,10 @@ _SEND_RETRY_DELAYS = (1, 2, 4)
 # How long hot-start waits for channel.start() to fail fast before parking it
 # as a background task (long-running start() loops, e.g. Slack's keepalive).
 _HOT_START_FAIL_FAST_WINDOW_S = 2.0
+# Crash-supervision backoff for _start_channel: exponential doubling capped at
+# this delay, reset once a channel has stayed up for _CHANNEL_STABLE_UPTIME_S.
+_CHANNEL_RESTART_MAX_DELAY_S = 60.0
+_CHANNEL_STABLE_UPTIME_S = 300.0
 
 _BOOL_CAMEL_ALIASES: dict[str, str] = {
     "send_progress": "sendProgress",
@@ -328,11 +333,30 @@ class ChannelManager:
         return value if isinstance(value, bool) else default
 
     async def _start_channel(self, name: str, channel: BaseChannel) -> None:
-        """Start a channel and log any exceptions."""
-        try:
-            await channel.start()
-        except Exception:
-            logger.exception("Failed to start channel {}", name)
+        """Run a channel under crash supervision.
+
+        A clean return from ``channel.start()`` ends supervision — that is the
+        channel's signal for a deliberate stop or a fatal configuration error
+        (bad token, missing privileged intents) where a restart loop would
+        just hammer the platform. Any exception is treated as a transient
+        crash: restart with exponential backoff, reset after stable uptime.
+        """
+        attempt = 0
+        while True:
+            started_at = time.monotonic()
+            try:
+                await channel.start()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Channel {} crashed", name)
+            if time.monotonic() - started_at >= _CHANNEL_STABLE_UPTIME_S:
+                attempt = 0
+            delay = min(_CHANNEL_RESTART_MAX_DELAY_S, float(2**attempt))
+            attempt += 1
+            logger.info("Restarting channel {} in {}s", name, delay)
+            await asyncio.sleep(delay)
 
     async def start_all(self) -> None:
         """Start all channels and the outbound dispatcher."""
