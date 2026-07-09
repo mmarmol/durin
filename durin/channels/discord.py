@@ -41,6 +41,8 @@ LIVENESS_TIMEOUT_S = 15.0
 LIVENESS_MAX_FAILURES = 3
 _DEDUP_TTL_S = 300.0
 _DEDUP_MAX_IDS = 5000
+_SPLIT_SUSPECT_LEN = 1900
+_SPLIT_FLUSH_DELAY_S = 2.0
 
 
 @dataclass
@@ -51,6 +53,15 @@ class _StreamBuf:
     message: Any | None = None
     last_edit: float = 0.0
     stream_id: str | None = None
+
+
+@dataclass
+class _SplitBuf:
+    """Reassembly buffer for messages the Discord client split at 2000 chars."""
+
+    message: Any
+    parts: list[str]
+    task: asyncio.Task[None] | None = None
 
 
 class DiscordConfig(Base):
@@ -424,6 +435,7 @@ class DiscordChannel(BaseChannel):
         self._pending_reactions: dict[str, Any] = {}  # chat_id -> message object
         self._working_emoji_tasks: dict[str, asyncio.Task[None]] = {}
         self._stream_bufs: dict[str, _StreamBuf] = {}
+        self._pending_splits: dict[tuple[str, str], _SplitBuf] = {}
         self._known_channels: dict[str, Any] = {}
         self._stop_requested = False
         self._liveness_failed = False
@@ -642,6 +654,46 @@ class DiscordChannel(BaseChannel):
 
         if not self._should_accept_inbound(message, content):
             return
+
+        key = (channel_id, sender_id)
+        buf = self._pending_splits.get(key)
+        if buf is not None and not message.attachments:
+            buf.parts.append(content)
+            if len(content) >= _SPLIT_SUSPECT_LEN:
+                self._reschedule_split_flush(key, buf)
+                return
+            await self._flush_split(key)
+            return
+        if len(content) >= _SPLIT_SUSPECT_LEN and not message.attachments:
+            # Looks like the first piece of a client-side 2000-char split:
+            # hold briefly for its continuation so the agent gets one turn.
+            buf = _SplitBuf(message=message, parts=[content])
+            self._pending_splits[key] = buf
+            self._reschedule_split_flush(key, buf)
+            return
+        await self._dispatch_inbound(message, content)
+
+    def _reschedule_split_flush(self, key: tuple[str, str], buf: _SplitBuf) -> None:
+        if buf.task is not None and not buf.task.done():
+            buf.task.cancel()
+
+        async def _flush_later() -> None:
+            await asyncio.sleep(_SPLIT_FLUSH_DELAY_S)
+            await self._flush_split(key)
+
+        buf.task = asyncio.create_task(_flush_later())
+
+    async def _flush_split(self, key: tuple[str, str]) -> None:
+        buf = self._pending_splits.pop(key, None)
+        if buf is None:
+            return
+        if buf.task is not None and not buf.task.done():
+            buf.task.cancel()
+        await self._dispatch_inbound(buf.message, "\n".join(buf.parts))
+
+    async def _dispatch_inbound(self, message: discord.Message, content: str) -> None:
+        sender_id = str(message.author.id)
+        channel_id = self._channel_key(message.channel)
 
         authorized = self.is_allowed(sender_id)
 
@@ -955,6 +1007,10 @@ class DiscordChannel(BaseChannel):
         self._stop_liveness_probe()
         await self._cancel_all_typing()
         self._stream_bufs.clear()
+        for buf in self._pending_splits.values():
+            if buf.task is not None and not buf.task.done():
+                buf.task.cancel()
+        self._pending_splits.clear()
         self._known_channels.clear()
         if close_client and self._client is not None and not self._client.is_closed():
             try:

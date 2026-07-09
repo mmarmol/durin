@@ -245,6 +245,7 @@ def _make_dm_message(
     author_id: str = "1",
     content: str = "hello",
     attachments: list[object] | None = None,
+    message_id: str | int | None = None,
 ):
     # Factory for incoming direct-message doubles: no guild, records add_reaction
     # calls so tests can assert cosmetic feedback (typing/reactions) was skipped.
@@ -252,7 +253,7 @@ def _make_dm_message(
         author_id=int(author_id),
         content=content,
         attachments=attachments,
-        message_id=next(_dm_message_ids),
+        message_id=message_id if message_id is not None else next(_dm_message_ids),
     )
     message.reactions_added = []
 
@@ -1674,6 +1675,43 @@ async def test_duplicate_inbound_message_is_processed_once() -> None:
     assert first.content == "hello"
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(bus.consume_inbound(), timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_client_side_split_is_reassembled() -> None:
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+    part1 = _make_dm_message(author_id="777", content="x" * 1950, message_id="1")
+    part2 = _make_dm_message(author_id="777", content="tail", message_id="2")
+    await channel._handle_discord_message(part1)
+    await channel._handle_discord_message(part2)
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.content == "x" * 1950 + "\ntail"
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(bus.consume_inbound(), timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_split_buffer_flushes_on_timer_without_continuation(monkeypatch) -> None:
+    monkeypatch.setattr("durin.channels.discord._SPLIT_FLUSH_DELAY_S", 0.05)
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+    part1 = _make_dm_message(author_id="777", content="x" * 1950, message_id="1")
+    await channel._handle_discord_message(part1)
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.content == "x" * 1950
+
+
+@pytest.mark.asyncio
+async def test_short_message_is_not_delayed() -> None:
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+    await channel._handle_discord_message(_make_dm_message(author_id="777", content="hi"))
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.content == "hi"
 
 
 @pytest.mark.asyncio
