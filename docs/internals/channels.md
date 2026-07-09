@@ -187,10 +187,10 @@ stably for a while. A clean return from `channel.start()`, by contrast, ends
 supervision for that channel — it signals either a deliberate stop or a fatal
 configuration error that a restart loop cannot fix and would only hammer the
 platform with reconnect attempts. Fatal-configuration examples include a
-rejected bot token, missing privileged intents, or (Discord-specific) another
-process already holding a lock on the same bot token — Discord enforces a
-single active connection per token and refuses the second one cleanly rather
-than raising.
+rejected bot token, missing privileged intents, or another local process
+already holding durin's per-token advisory lock — an advisory file lock that
+prevents two gateways from double-replying on the same bot token; the second
+starter refuses cleanly rather than raising.
 
 **Liveness.** Discord also runs a REST-based liveness probe alongside the
 gateway connection; when the probe detects a zombie socket the heartbeat
