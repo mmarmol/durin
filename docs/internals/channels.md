@@ -177,7 +177,25 @@ overrides (`send_progress`, `send_tool_hints`, `show_reasoning`). Per-channel
 values in config can override the global defaults.
 
 Once `start_all` is called, a dedicated asyncio task is created for
-`_dispatch_outbound`, and one task per channel calls `channel.start()`.
+`_dispatch_outbound`, and one task per channel runs under a supervision loop
+(`ChannelManager._start_channel`) that calls `channel.start()`.
+
+**Channel crash supervision.** An exception raised out of `channel.start()` is
+treated as a transient crash: the supervisor restarts the channel with a
+capped exponential backoff, and the backoff resets once the channel has run
+stably for a while. A clean return from `channel.start()`, by contrast, ends
+supervision for that channel — it signals either a deliberate stop or a fatal
+configuration error that a restart loop cannot fix and would only hammer the
+platform with reconnect attempts. Fatal-configuration examples include a
+rejected bot token, missing privileged intents, or another local process
+already holding durin's per-token advisory lock — an advisory file lock that
+prevents two gateways from double-replying on the same bot token; the second
+starter refuses cleanly rather than raising.
+
+**Liveness.** Discord also runs a REST-based liveness probe alongside the
+gateway connection; when the probe detects a zombie socket the heartbeat
+cannot see, it force-closes the connection so the crash supervisor above
+reconnects it.
 
 ### Inbound path
 
@@ -199,12 +217,23 @@ be bypassed once a message is published.
 
 The channel contract is to be **pure transport**: publish unconditionally with
 `is_dm` set and let the gate authorize — a channel should NOT re-implement
-`is_allowed`/pairing in its handlers. **Telegram and Slack are the reference
-implementations of this contract.** Several other channels still pre-filter
-with their own `is_allowed` check and early-`return` in their handlers (legacy
-behaviour, unchanged here — those messages never reach the gate); migrating
-them to pure transport so they route through the central gate is a follow-up.
-New channels should follow the Telegram/Slack model.
+`is_allowed`/pairing in its handlers. **Telegram, Slack, and Discord are the
+reference implementations of this contract.** Several other channels still
+pre-filter with their own `is_allowed` check and early-`return` in their
+handlers (legacy behaviour, unchanged here — those messages never reach the
+gate); migrating them to pure transport so they route through the central
+gate is a follow-up. New channels should follow the Telegram/Slack/Discord
+model.
+
+Pure transport applies to *sender authorization* only — the gate owns who is
+allowed to talk to the bot. Channel-policy filters that decide *which
+messages within an already-authorized conversation* get a response, such as
+mention gating in group chats or an allowed-channels list, are unrelated to
+authorization and stay channel-local. On top of the shared contract, Discord's
+adapter applies two inbound normalizations of its own: it deduplicates
+messages replayed by the gateway on reconnect, and it reassembles a long
+message the Discord client split client-side before re-publishing it as one
+`InboundMessage`.
 
 The agent loop (`AgentLoop.run()`) consumes from `bus.inbound`. The
 `InboundMessage.session_key` property returns `session_key_override` when set,
@@ -261,6 +290,11 @@ Every channel is a subclass of `BaseChannel` with three abstract methods:
 - `send(msg: OutboundMessage)` — deliver a final response; raise on failure so
   the manager retries.
 
+Adapters may transform content before delivery. Discord's `send` converts GFM
+tables to bullet lists before chunking, since Discord's client does not render
+markdown tables, and posts to forum and media channels as a new thread instead
+of a plain message, since those channel types reject plain sends.
+
 Two optional streaming methods default to no-ops: `send_delta(chat_id, delta,
 metadata)` and `send_reasoning_delta(chat_id, delta, metadata)`. The
 `supports_streaming` property returns `True` only when both `config.streaming`
@@ -293,10 +327,10 @@ separate audio file it should open, so it narrates that it cannot access the
 audio; the bare text reads as what the user said.
 
 WhatsApp is the reference implementation of this contract. Channels that
-transcribe locally (currently Telegram, Matrix, Feishu, and Weixin) apply the
-same idiom: on transcription success, return an empty `media` list and a
-`[transcription: …]` content part; on failure, return the audio path so the
-`interpret_audio` tool remains a usable fallback.
+transcribe locally (currently Telegram, Discord, Matrix, Feishu, and Weixin)
+apply the same idiom: on transcription success, return an empty `media` list
+and the transcript as the bare user message text; on failure, return the audio
+path so the `interpret_audio` tool remains a usable fallback.
 
 ### Pairing store
 
@@ -358,7 +392,8 @@ Channel-specific extensions:
 
 - **Telegram**: no additional permission fields beyond `allow_from`.
 - **Discord**: `allow_channels` — list of Discord channel IDs allowed to
-  trigger the bot (empty means all).
+  trigger the bot (empty means all). Sender authorization uses the standard
+  `allow_from` + pairing flow via the central ingress gate.
 - **Slack**: `dm_enabled` (routing toggle for DMs), `group_policy`
   (`open`/`mention`/`allowlist`), `group_allow_from` (channel IDs for the
   allowlist policy), `open_channels` (rooms that reply to every message under
@@ -461,7 +496,7 @@ detection wrong, and the pairing logic lives in one place instead of being
 re-implemented per channel. (A channel that still pre-filters with its own
 `is_allowed` and early-returns short-circuits before publishing, so it never
 reaches the gate; that is the legacy pattern the pure-transport migration
-removes — Telegram first.)
+removes — Telegram first, then Slack and Discord.)
 
 **Why does stream coalescing key on `_stream_id` and not just `(channel,
 chat_id)`?** Channels like Telegram forum topics or Discord threads can have

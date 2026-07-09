@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -62,12 +63,19 @@ class _FakeDiscordClient:
 class _FakeAttachment:
     # Attachment double that can simulate successful or failing save() calls.
     def __init__(
-        self, attachment_id: int, filename: str, *, size: int = 1, fail: bool = False
+        self,
+        attachment_id: int = 1,
+        filename: str = "file.bin",
+        *,
+        size: int = 1,
+        fail: bool = False,
+        content_type: str | None = None,
     ) -> None:
         self.id = attachment_id
         self.filename = filename
         self.size = size
         self._fail = fail
+        self.content_type = content_type
 
     async def save(self, path: str | Path) -> None:
         if self._fail:
@@ -136,6 +144,24 @@ class _FakeChannel:
                 return False
 
         return _TypingContext()
+
+
+class _FakeForumChannel:
+    # Forum/media channel double: rejects plain sends, only accepts thread creation.
+    type = discord.ChannelType.forum
+
+    def __init__(self):
+        self.threads_created = []
+        self.created_threads: list[_FakeChannel] = []
+        self.id = 555
+
+    async def create_thread(self, *, name, content=None, **kwargs):
+        # Capture kwargs as-passed (not defaulted) so tests can assert on
+        # presence/absence of optional keys like "files".
+        thread = _FakeChannel()
+        self.threads_created.append({"name": name, "content": content, **kwargs})
+        self.created_threads.append(thread)
+        return SimpleNamespace(thread=thread, message=None)
 
 
 class _FakeInteractionResponse:
@@ -211,6 +237,33 @@ def _make_message(
     )
 
 
+_dm_message_ids = itertools.count(1)
+
+
+def _make_dm_message(
+    *,
+    author_id: str = "1",
+    content: str = "hello",
+    attachments: list[object] | None = None,
+    message_id: str | int | None = None,
+):
+    # Factory for incoming direct-message doubles: no guild, records add_reaction
+    # calls so tests can assert cosmetic feedback (typing/reactions) was skipped.
+    message = _make_message(
+        author_id=int(author_id),
+        content=content,
+        attachments=attachments,
+        message_id=message_id if message_id is not None else next(_dm_message_ids),
+    )
+    message.reactions_added = []
+
+    async def add_reaction(emoji):
+        message.reactions_added.append(emoji)
+
+    message.add_reaction = add_reaction
+    return message
+
+
 @pytest.mark.asyncio
 async def test_start_returns_when_token_missing() -> None:
     # If no token is configured, startup should no-op and leave channel stopped.
@@ -257,7 +310,9 @@ async def test_start_handles_client_construction_failure(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_start_handles_client_start_failure(monkeypatch) -> None:
-    # If client.start fails, the partially created client should be closed and detached.
+    # If client.start fails, the exception propagates (so the manager supervisor
+    # restarts the channel) but the partially created client is still closed
+    # and detached via the finally block first.
     channel = DiscordChannel(
         DiscordConfig(enabled=True, token="token", allow_from=["*"]),
         MessageBus(),
@@ -267,7 +322,8 @@ async def test_start_handles_client_start_failure(monkeypatch) -> None:
     _FakeDiscordClient.start_error = RuntimeError("connect failed")
     monkeypatch.setattr("durin.channels.discord.DiscordBotClient", _FakeDiscordClient)
 
-    await channel.start()
+    with pytest.raises(RuntimeError, match="connect failed"):
+        await channel.start()
 
     assert channel.is_running is False
     assert channel._client is None
@@ -275,6 +331,50 @@ async def test_start_handles_client_start_failure(monkeypatch) -> None:
     assert _FakeDiscordClient.instances[0].closed is True
 
     _FakeDiscordClient.start_error = None
+
+
+@pytest.mark.asyncio
+async def test_start_reraises_unexpected_crash(monkeypatch) -> None:
+    channel = _make_channel()
+
+    class _CrashingClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def start(self, token):
+            raise RuntimeError("gateway exploded")
+
+        def is_closed(self):
+            return True
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("durin.channels.discord.DiscordBotClient", _CrashingClient)
+    with pytest.raises(RuntimeError):
+        await channel.start()
+
+
+@pytest.mark.asyncio
+async def test_start_returns_cleanly_on_login_failure(monkeypatch) -> None:
+    channel = _make_channel()
+
+    class _BadTokenClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def start(self, token):
+            raise discord.LoginFailure("bad token")
+
+        def is_closed(self):
+            return True
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr("durin.channels.discord.DiscordBotClient", _BadTokenClient)
+    await channel.start()  # must NOT raise: fatal config error, no restart loop
+    assert channel.is_running is False
 
 
 @pytest.mark.asyncio
@@ -636,14 +736,65 @@ async def test_on_message_marks_failed_attachment_download(tmp_path, monkeypatch
     assert handled[0]["content"] == "[attachment: photo.png - download failed]"
 
 
+def _make_channel() -> DiscordChannel:
+    return DiscordChannel(DiscordConfig(enabled=True, token="token", allow_from=["*"]), MessageBus())
+
+
+class _FakeTranscription:
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    async def transcribe_and_cache(self, file_path):
+        return SimpleNamespace(text=self._text)
+
+
 @pytest.mark.asyncio
-async def test_send_warns_when_client_not_ready() -> None:
-    # Sending without a running/ready client should be a safe no-op.
+async def test_audio_attachment_is_transcribed_to_bare_text(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("durin.channels.discord.get_media_dir", lambda _c: tmp_path)
+    channel = _make_channel()
+    channel.transcription = _FakeTranscription("hola desde el audio")
+    att = _FakeAttachment(filename="note.ogg", content_type="audio/ogg")
+    media, markers = await channel._download_attachments([att])
+    assert media == []
+    assert markers == ["hola desde el audio"]
+
+
+@pytest.mark.asyncio
+async def test_audio_attachment_falls_back_to_marker_when_transcription_empty(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("durin.channels.discord.get_media_dir", lambda _c: tmp_path)
+    channel = _make_channel()
+    channel.transcription = _FakeTranscription("")
+    att = _FakeAttachment(filename="note.ogg", content_type="audio/ogg")
+    media, markers = await channel._download_attachments([att])
+    assert len(media) == 1 and media[0].endswith("note.ogg")
+    assert markers[0].startswith("[attachment:")
+
+
+def test_audio_detection_by_extension_without_content_type() -> None:
+    channel = _make_channel()
+    # Test detection by file extension when content_type is None.
+    att_audio = _FakeAttachment(filename="note.ogg", content_type=None)
+    assert DiscordChannel._is_audio_attachment(att_audio) is True
+
+    # Test that non-audio files are rejected.
+    att_non_audio = _FakeAttachment(filename="doc.pdf", content_type=None)
+    assert DiscordChannel._is_audio_attachment(att_non_audio) is False
+
+
+@pytest.mark.asyncio
+async def test_send_raises_when_client_not_ready() -> None:
     channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    channel._client = None
+    with pytest.raises(RuntimeError):
+        await channel.send(OutboundMessage(channel="discord", chat_id="1", content="hi"))
 
-    await channel.send(OutboundMessage(channel="discord", chat_id="123", content="hello"))
 
-    assert channel._typing_tasks == {}
+@pytest.mark.asyncio
+async def test_send_delta_raises_when_client_not_ready() -> None:
+    channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    channel._client = None
+    with pytest.raises(RuntimeError):
+        await channel.send_delta("1", "chunk", {"_stream_id": "s1"})
 
 
 @pytest.mark.asyncio
@@ -697,6 +848,136 @@ async def test_send_uses_seen_thread_channel_when_client_cannot_resolve_it() -> 
     await client.send_outbound(OutboundMessage(channel="discord", chat_id="777", content="hello"))
 
     assert target.sent_payloads == [{"content": "hello"}]
+
+
+@pytest.mark.asyncio
+async def test_send_to_forum_channel_creates_thread_post() -> None:
+    # Forum/media channels reject plain message sends; outbound must create a thread post.
+    owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    client = DiscordBotClient(owner, intents=discord.Intents.none())
+    forum = _FakeForumChannel()
+    owner._known_channels["555"] = forum
+
+    await client.send_outbound(
+        OutboundMessage(channel="discord", chat_id="555", content="Title line\nbody")
+    )
+
+    assert forum.threads_created
+    assert forum.threads_created[0]["name"] == "Title line"
+
+
+@pytest.mark.asyncio
+async def test_send_to_forum_channel_splits_oversized_content_across_thread_sends() -> None:
+    # Content over the Discord message limit must be posted as the thread's
+    # initial content plus follow-up thread.send() calls, in order.
+    owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    client = DiscordBotClient(owner, intents=discord.Intents.none())
+    forum = _FakeForumChannel()
+    owner._known_channels["555"] = forum
+
+    long_content = " ".join("word" for _ in range(500))  # well over MAX_MESSAGE_LEN
+    expected_chunks = DiscordBotClient._build_chunks(long_content, [], False)
+    assert len(expected_chunks) > 1
+
+    await client.send_outbound(
+        OutboundMessage(channel="discord", chat_id="555", content=long_content)
+    )
+
+    assert forum.threads_created[0]["content"] == expected_chunks[0]
+    thread = forum.created_threads[0]
+    assert [p["content"] for p in thread.sent_payloads] == expected_chunks[1:]
+
+
+def test_build_chunks_converts_tables() -> None:
+    content = "| H |\n| - |\n| v |"
+    chunks = DiscordBotClient._build_chunks(content, [], False)
+    assert chunks and "|" not in chunks[0]
+
+
+@pytest.mark.asyncio
+async def test_send_to_forum_channel_attaches_files_when_media_present(tmp_path) -> None:
+    owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    client = DiscordBotClient(owner, intents=discord.Intents.none())
+    forum = _FakeForumChannel()
+    owner._known_channels["555"] = forum
+
+    file_path = tmp_path / "image.png"
+    file_path.write_bytes(b"fake-image-bytes")
+
+    await client.send_outbound(
+        OutboundMessage(
+            channel="discord", chat_id="555", content="hello", media=[str(file_path)]
+        )
+    )
+
+    files = forum.threads_created[0]["files"]
+    assert files
+    assert all(isinstance(f, discord.File) for f in files)
+
+
+@pytest.mark.asyncio
+async def test_send_to_forum_channel_reports_missing_media(tmp_path) -> None:
+    # A missing/unreadable attachment must surface a failure marker in the
+    # posted content, matching the regular (non-forum) send path's convention.
+    owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    client = DiscordBotClient(owner, intents=discord.Intents.none())
+    forum = _FakeForumChannel()
+    owner._known_channels["555"] = forum
+
+    missing_file = tmp_path / "missing.png"
+
+    await client.send_outbound(
+        OutboundMessage(
+            channel="discord", chat_id="555", content="", media=[str(missing_file)]
+        )
+    )
+
+    assert "files" not in forum.threads_created[0]
+    assert forum.threads_created[0]["content"] == "[attachment: missing.png - send failed]"
+
+
+@pytest.mark.asyncio
+async def test_send_to_forum_channel_omits_files_kwarg_when_no_media() -> None:
+    owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    client = DiscordBotClient(owner, intents=discord.Intents.none())
+    forum = _FakeForumChannel()
+    owner._known_channels["555"] = forum
+
+    await client.send_outbound(
+        OutboundMessage(channel="discord", chat_id="555", content="hello")
+    )
+
+    assert "files" not in forum.threads_created[0]
+
+
+@pytest.mark.asyncio
+async def test_send_to_forum_channel_falls_back_on_empty_content() -> None:
+    owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    client = DiscordBotClient(owner, intents=discord.Intents.none())
+    forum = _FakeForumChannel()
+    owner._known_channels["555"] = forum
+
+    await client.send_outbound(OutboundMessage(channel="discord", chat_id="555", content=""))
+
+    assert forum.threads_created[0]["name"] == "durin"
+    assert forum.threads_created[0]["content"] == "…"
+    thread = forum.created_threads[0]
+    assert thread.sent_payloads == []
+
+
+@pytest.mark.asyncio
+async def test_send_to_forum_channel_caches_created_thread() -> None:
+    owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    client = DiscordBotClient(owner, intents=discord.Intents.none())
+    forum = _FakeForumChannel()
+    owner._known_channels["555"] = forum
+
+    await client.send_outbound(
+        OutboundMessage(channel="discord", chat_id="555", content="hello")
+    )
+
+    thread = forum.created_threads[0]
+    assert owner._known_channels[DiscordChannel._channel_key(thread)] is thread
 
 
 def test_supports_streaming_enabled_by_default() -> None:
@@ -1325,3 +1606,260 @@ async def test_send_succeeds_normally() -> None:
     assert len(sent_messages) == 1
     assert sent_messages[0].content == "hello world"
     assert sent_messages[0].chat_id == "123"
+
+
+@pytest.mark.asyncio
+async def test_client_denies_mass_mentions_by_default() -> None:
+    channel = DiscordChannel(DiscordConfig(enabled=True, token="t"), MessageBus())
+    client = DiscordBotClient(channel, intents=discord.Intents.none())
+    assert client.allowed_mentions is not None
+    assert client.allowed_mentions.everyone is False
+    assert client.allowed_mentions.roles is False
+    assert client.allowed_mentions.users is True
+    assert client.allowed_mentions.replied_user is False
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_dm_is_published_for_central_pairing_gate() -> None:
+    """The channel must not pre-filter senders: the bus-ingress gate owns
+    authorization and issues pairing codes for unknown DM senders."""
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["42"]}, bus)
+    channel._bot_user_id = "999"
+    msg = _make_dm_message(author_id="777", content="hello")  # build like existing DM tests
+    await channel._handle_discord_message(msg)
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.sender_id == "777"
+    assert inbound.is_dm is True
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_sender_gets_no_typing_or_reactions() -> None:
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["42"]}, bus)
+    channel._bot_user_id = "999"
+    msg = _make_dm_message(author_id="777", content="hello")
+    await channel._handle_discord_message(msg)
+    assert msg.reactions_added == []          # extend the fake message to record add_reaction calls
+    assert channel._typing_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_sender_attachments_not_downloaded(tmp_path, monkeypatch) -> None:
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["42"]}, bus)
+    channel._bot_user_id = "999"
+    msg = _make_dm_message(author_id="777", content="hi", attachments=[_FakeAttachment()])
+    await channel._handle_discord_message(msg)
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.media == []
+
+
+@pytest.mark.asyncio
+async def test_liveness_probe_closes_client_after_consecutive_failures(monkeypatch) -> None:
+    channel = _make_channel()
+    channel._running = True
+    closed = []
+
+    class _ZombieClient:
+        user = SimpleNamespace(id=999)
+
+        def is_ready(self):
+            return True
+
+        async def fetch_user(self, uid):
+            raise OSError("socket wedged")
+
+        async def close(self):
+            closed.append(True)
+
+    channel._client = _ZombieClient()
+
+    async def instant_sleep(_delay):
+        return None
+
+    monkeypatch.setattr("durin.channels.discord.asyncio.sleep", instant_sleep)
+    await channel._liveness_loop()
+    assert channel._liveness_failed is True
+    assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_inbound_message_is_processed_once() -> None:
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+    msg = _make_dm_message(author_id="777", content="hello")   # same message id
+    await channel._handle_discord_message(msg)
+    await channel._handle_discord_message(msg)
+    first = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert first.content == "hello"
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(bus.consume_inbound(), timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_client_side_split_is_reassembled() -> None:
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+    part1 = _make_dm_message(author_id="777", content="x" * 1950, message_id="1")
+    part2 = _make_dm_message(author_id="777", content="tail", message_id="2")
+    await channel._handle_discord_message(part1)
+    await channel._handle_discord_message(part2)
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.content == "x" * 1950 + "\ntail"
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(bus.consume_inbound(), timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_split_buffer_flushes_on_timer_without_continuation(monkeypatch) -> None:
+    monkeypatch.setattr("durin.channels.discord._SPLIT_FLUSH_DELAY_S", 0.05)
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+    part1 = _make_dm_message(author_id="777", content="x" * 1950, message_id="1")
+    await channel._handle_discord_message(part1)
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.content == "x" * 1950
+
+
+@pytest.mark.asyncio
+async def test_timer_flush_survives_real_suspension_points(monkeypatch) -> None:
+    """Regression: _flush_later runs _flush_split from inside buf.task itself.
+    If _flush_split cancels buf.task unconditionally, asyncio marks that
+    self-cancellation and raises CancelledError at the task's next real
+    suspension point — silently dropping the buffered message before it
+    reaches the bus. The fakes in the timer test above never actually
+    suspend, so this needs a real await inside the dispatch path to catch it."""
+    monkeypatch.setattr("durin.channels.discord._SPLIT_FLUSH_DELAY_S", 0.05)
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+
+    original_handle_message = channel._handle_message
+
+    async def _delayed_handle_message(**kwargs):
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await original_handle_message(**kwargs)
+
+    channel._handle_message = _delayed_handle_message  # type: ignore[method-assign]
+
+    part1 = _make_dm_message(author_id="777", content="x" * 1950, message_id="1")
+    await channel._handle_discord_message(part1)
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.content == "x" * 1950
+
+
+@pytest.mark.asyncio
+async def test_reset_runtime_state_flushes_pending_split_buffer() -> None:
+    """Teardown must not silently drop a buffered split part: dedup already
+    marked the underlying message seen, so cancelling and dropping it here
+    (instead of flushing) would lose it permanently."""
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+    part1 = _make_dm_message(author_id="777", content="x" * 1950, message_id="1")
+    await channel._handle_discord_message(part1)
+    assert channel._pending_splits  # buffer open, awaiting continuation/timer
+
+    await channel._reset_runtime_state(close_client=False)
+
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.content == "x" * 1950
+    assert channel._pending_splits == {}
+
+
+@pytest.mark.asyncio
+async def test_attachment_message_dispatches_independently_while_buffer_open() -> None:
+    """An attachment message arriving while a split buffer is open for the same
+    sender must dispatch on its own, not get swallowed into the pending join."""
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+    part1 = _make_dm_message(author_id="777", content="x" * 1950, message_id="1")
+    await channel._handle_discord_message(part1)
+
+    att_msg = _make_dm_message(
+        author_id="777", content="photo", attachments=[_FakeAttachment(12, "photo.png")], message_id="2"
+    )
+    await channel._handle_discord_message(att_msg)
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.content.startswith("photo")
+
+    assert channel._pending_splits  # the split buffer is still open, untouched
+
+    for buf in channel._pending_splits.values():
+        if buf.task is not None:
+            buf.task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_three_part_split_joins_in_order() -> None:
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+    part1 = _make_dm_message(author_id="777", content="x" * 1950, message_id="1")
+    part2 = _make_dm_message(author_id="777", content="y" * 1950, message_id="2")
+    part3 = _make_dm_message(author_id="777", content="tail", message_id="3")
+    await channel._handle_discord_message(part1)
+    await channel._handle_discord_message(part2)
+    await channel._handle_discord_message(part3)
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.content == "x" * 1950 + "\n" + "y" * 1950 + "\ntail"
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(bus.consume_inbound(), timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_short_message_is_not_delayed() -> None:
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+    await channel._handle_discord_message(_make_dm_message(author_id="777", content="hi"))
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.content == "hi"
+
+
+@pytest.mark.asyncio
+async def test_on_ready_syncs_commands_only_once() -> None:
+    channel = _make_channel()
+    sync_calls = []
+
+    class _FakeTree:
+        async def sync(self):
+            sync_calls.append(True)
+            return []
+
+    fake_client = SimpleNamespace(
+        _channel=channel,
+        user=SimpleNamespace(id=999),
+        tree=_FakeTree(),
+    )
+    channel._start_liveness_probe = lambda: None  # not under test here
+    await DiscordBotClient.on_ready(fake_client)
+    await DiscordBotClient.on_ready(fake_client)
+    assert len(sync_calls) == 1
+
+
+def test_token_lock_rejects_second_holder(monkeypatch, tmp_path) -> None:
+    # Isolate the advisory lock file to a per-test tmp dir: the lock path is
+    # derived only from the (shared, hardcoded) token, so two concurrent test
+    # runs on the same host would otherwise collide on the same lock file in
+    # the real system tempdir and deadlock the second assertion below.
+    monkeypatch.setattr("durin.channels.discord.tempfile.gettempdir", lambda: str(tmp_path))
+    channel_a = _make_channel()
+    channel_b = _make_channel()
+    try:
+        assert channel_a._acquire_token_lock() is True
+        assert channel_b._acquire_token_lock() is False
+    finally:
+        channel_a._release_token_lock()
+        channel_b._release_token_lock()
+    # Released: can be re-acquired.
+    try:
+        assert channel_b._acquire_token_lock() is True
+    finally:
+        channel_b._release_token_lock()
