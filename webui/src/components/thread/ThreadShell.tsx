@@ -167,7 +167,31 @@ export function ThreadShell({
       if (hasNewCanonicalHistory && historical.length > 0) {
         pendingCanonicalHydrateRef.current.delete(chatId);
         appliedHistoryVersionRef.current.set(chatId, historyVersion);
-        const normalized = projectWebuiThreadMessages(historical);
+        // Canonical rows arrive without the client-only ``renderKey``; inherit
+        // it so React keeps the DOM subtree mounted (no iframe reload / toggle
+        // reset) across the hydration swap. Two lookups: by id for rows the
+        // server stamped, then by role+content for streamed replies — those
+        // live under a placeholder uuid that canonical replay never reuses.
+        const rawNormalized = projectWebuiThreadMessages(historical);
+        const prevProjected = projectWebuiThreadMessages(prev);
+        const prevRenderKeys = new Map(
+          prevProjected.filter((m) => m.renderKey).map((m) => [m.id, m.renderKey as string]),
+        );
+        const rawCanonicalIds = new Set(rawNormalized.map((m) => m.id));
+        // Pool of live rows about to be dropped by this swap — each may donate
+        // its render identity to exactly one canonical row (consume-once, so
+        // duplicate contents can't mint duplicate React keys).
+        const donorPool = prevProjected.filter((m) => !rawCanonicalIds.has(m.id));
+        const normalized = rawNormalized.map((m) => {
+          const byId = prevRenderKeys.get(m.id);
+          if (byId) return { ...m, renderKey: byId };
+          const donorIdx = donorPool.findIndex(
+            (d) => d.role === m.role && d.kind === m.kind && d.content === m.content,
+          );
+          if (donorIdx === -1) return m;
+          const donor = donorPool.splice(donorIdx, 1)[0];
+          return { ...m, renderKey: donor.renderKey ?? donor.id };
+        });
         // Canonical replay is authoritative. The only live row it can legitimately
         // be missing is a server-stamped command output (id ``msg-…``) whose
         // persistence the refetch raced ahead of — command turns emit no

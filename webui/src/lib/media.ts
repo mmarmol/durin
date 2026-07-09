@@ -22,6 +22,8 @@ const VIDEO_EXTENSIONS = new Set([
   ".3gp",
 ]);
 
+const HTML_EXTENSIONS = new Set([".html", ".htm"]);
+
 function cleanPath(value: string): string {
   return value.split(/[?#]/, 1)[0]?.toLowerCase() ?? "";
 }
@@ -42,6 +44,7 @@ export function inferMediaKind(media: { url?: string; name?: string }): UIMediaK
   const ext = extensionOf(media.name) || extensionOf(url);
   if (IMAGE_EXTENSIONS.has(ext)) return "image";
   if (VIDEO_EXTENSIONS.has(ext)) return "video";
+  if (HTML_EXTENSIONS.has(ext)) return "html";
   return "file";
 }
 

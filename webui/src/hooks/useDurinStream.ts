@@ -165,7 +165,18 @@ function absorbCompleteAssistantMessage(
   // it. Fall back to a random id only when the server didn't stamp one.
   const id = message.id ?? crypto.randomUUID();
   const last = prev[prev.length - 1];
-  if (!last || !isReasoningOnlyPlaceholder(last)) {
+  // A streamed reply reaches here twice: the deltas already built a finished
+  // text row, then the server re-delivers the same content as one
+  // consolidated ``message`` frame. Merge into that row — appending would
+  // render the reply twice until the canonical refetch, and the refetch's
+  // row swap remounts the DOM (rich-block iframes reload, open toggles
+  // reset). Merging also keeps the streamed row's render identity.
+  const isSameStreamedText =
+    last != null &&
+    last.role === "assistant" &&
+    last.kind === undefined &&
+    last.content.trimEnd() === message.content.trimEnd();
+  if (!last || (!isReasoningOnlyPlaceholder(last) && !isSameStreamedText)) {
     return [
       ...prev,
       {
@@ -182,6 +193,7 @@ function absorbCompleteAssistantMessage(
       ...last,
       ...message,
       id,
+      renderKey: message.renderKey ?? last.renderKey ?? last.id,
       isStreaming: false,
       reasoningStreaming: false,
     },
@@ -568,6 +580,10 @@ export function useDurinStream(
         // Do NOT reset isStreaming here — only ``turn_end`` signals that
         // the full turn (all tool calls + final text) is complete.
         setMessages((prev) => {
+          // The final row replaces the streamed placeholder under a new id;
+          // inherit the placeholder's render identity so the row's DOM subtree
+          // (rich-block iframes, open toggles) survives the swap.
+          const dropped = activeId ? prev.find((m) => m.id === activeId) : undefined;
           const filtered = activeId ? prev.filter((m) => m.id !== activeId) : prev;
           const content = ev.text;
           const lat =
@@ -583,6 +599,11 @@ export function useDurinStream(
           return absorbCompleteAssistantMessage(filtered, {
             content,
             ...(ev.id ? { id: ev.id } : {}),
+            ...(dropped ? { renderKey: dropped.renderKey ?? dropped.id } : {}),
+            // Carry the streamed reasoning onto the final row: losing it both
+            // hides the reasoning bubble the user just watched and shifts the
+            // markdown body's sibling position (remounting rich blocks).
+            ...(dropped?.reasoning ? { reasoning: dropped.reasoning } : {}),
             ...(hasMedia ? { media } : {}),
             ...(lat !== undefined ? { latencyMs: lat } : {}),
             ...(renderAs ? { renderAs } : {}),
