@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import time
+from collections import OrderedDict
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,8 @@ TYPING_INTERVAL_S = 8
 LIVENESS_INTERVAL_S = 60.0
 LIVENESS_TIMEOUT_S = 15.0
 LIVENESS_MAX_FAILURES = 3
+_DEDUP_TTL_S = 300.0
+_DEDUP_MAX_IDS = 5000
 
 
 @dataclass
@@ -397,6 +400,7 @@ class DiscordChannel(BaseChannel):
         self._stop_requested = False
         self._liveness_failed = False
         self._liveness_task: asyncio.Task[None] | None = None
+        self._seen_message_ids: OrderedDict[str, float] = OrderedDict()
 
     def _remember_channel(self, channel: Any) -> None:
         self._known_channels[self._channel_key(channel)] = channel
@@ -572,6 +576,20 @@ class DiscordChannel(BaseChannel):
             self.logger.warning("stream edit failed: {}", e)
             raise
 
+    def _is_duplicate(self, message_id: str) -> bool:
+        """TTL'd replay guard: gateway RESUME re-delivers recent events."""
+        now = time.monotonic()
+        while self._seen_message_ids:
+            oldest_id, seen_at = next(iter(self._seen_message_ids.items()))
+            if now - seen_at > _DEDUP_TTL_S or len(self._seen_message_ids) >= _DEDUP_MAX_IDS:
+                self._seen_message_ids.pop(oldest_id, None)
+            else:
+                break
+        if message_id in self._seen_message_ids:
+            return True
+        self._seen_message_ids[message_id] = now
+        return False
+
     async def _handle_discord_message(self, message: discord.Message) -> None:
         """Handle incoming Discord messages from discord.py.
 
@@ -584,6 +602,8 @@ class DiscordChannel(BaseChannel):
         if self._bot_user_id is not None and str(message.author.id) == self._bot_user_id:
             return
         if self._is_system_message(message):
+            return
+        if self._is_duplicate(str(message.id)):
             return
 
         sender_id = str(message.author.id)

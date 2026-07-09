@@ -1533,3 +1533,17 @@ async def test_liveness_probe_closes_client_after_consecutive_failures(monkeypat
     await channel._liveness_loop()
     assert channel._liveness_failed is True
     assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_inbound_message_is_processed_once() -> None:
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+    msg = _make_dm_message(author_id="777", content="hello")   # same message id
+    await channel._handle_discord_message(msg)
+    await channel._handle_discord_message(msg)
+    first = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert first.content == "hello"
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(bus.consume_inbound(), timeout=0.2)
