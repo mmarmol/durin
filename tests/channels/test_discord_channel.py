@@ -1547,3 +1547,24 @@ async def test_duplicate_inbound_message_is_processed_once() -> None:
     assert first.content == "hello"
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(bus.consume_inbound(), timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_on_ready_syncs_commands_only_once() -> None:
+    channel = _make_channel()
+    sync_calls = []
+
+    class _FakeTree:
+        async def sync(self):
+            sync_calls.append(True)
+            return []
+
+    fake_client = SimpleNamespace(
+        _channel=channel,
+        user=SimpleNamespace(id=999),
+        tree=_FakeTree(),
+    )
+    channel._start_liveness_probe = lambda: None  # not under test here
+    await DiscordBotClient.on_ready(fake_client)
+    await DiscordBotClient.on_ready(fake_client)
+    assert len(sync_calls) == 1

@@ -103,11 +103,16 @@ if DISCORD_AVAILABLE:
             self._channel._bot_user_id = str(self.user.id) if self.user else None
             self._channel.logger.info("bot connected as user {}", self._channel._bot_user_id)
             self._channel._start_liveness_probe()
-            try:
-                synced = await self.tree.sync()
-                self._channel.logger.info("app commands synced: {}", len(synced))
-            except Exception as e:
-                self._channel.logger.warning("app command sync failed: {}", e)
+            if not self._channel._commands_synced:
+                # Global command sync is daily-rate-limited; on_ready re-fires
+                # after re-identify and the channel restarts under supervision,
+                # so sync exactly once per gateway process.
+                try:
+                    synced = await self.tree.sync()
+                    self._channel._commands_synced = True
+                    self._channel.logger.info("app commands synced: {}", len(synced))
+                except Exception as e:
+                    self._channel.logger.warning("app command sync failed: {}", e)
 
         async def on_message(self, message: discord.Message) -> None:
             await self._channel._handle_discord_message(message)
@@ -401,6 +406,7 @@ class DiscordChannel(BaseChannel):
         self._liveness_failed = False
         self._liveness_task: asyncio.Task[None] | None = None
         self._seen_message_ids: OrderedDict[str, float] = OrderedDict()
+        self._commands_synced = False
 
     def _remember_channel(self, channel: Any) -> None:
         self._known_channels[self._channel_key(channel)] = channel
