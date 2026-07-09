@@ -368,6 +368,16 @@ class DiscordChannel(BaseChannel):
             return cls._channel_key(parent)
         return None
 
+    _AUDIO_EXTENSIONS = {".ogg", ".oga", ".opus", ".mp3", ".m4a", ".wav", ".flac"}
+
+    @classmethod
+    def _is_audio_attachment(cls, attachment: discord.Attachment) -> bool:
+        content_type = (getattr(attachment, "content_type", None) or "").lower()
+        if content_type.startswith("audio/"):
+            return True
+        suffix = Path(getattr(attachment, "filename", "") or "").suffix.lower()
+        return suffix in cls._AUDIO_EXTENSIONS
+
     def __init__(self, config: Any, bus: MessageBus):
         if isinstance(config, dict):
             config = DiscordConfig.model_validate(config)
@@ -689,6 +699,14 @@ class DiscordChannel(BaseChannel):
                 safe_name = safe_filename(filename)
                 file_path = media_dir / f"{attachment.id}_{safe_name}"
                 await attachment.save(file_path)
+                if self._is_audio_attachment(attachment):
+                    transcription = await self.transcribe_audio(file_path)
+                    if transcription:
+                        # Bare transcript, no marker and no audio path: the agent
+                        # should read it as what the user said, not as a file it
+                        # must open (matches the Telegram voice path).
+                        markers.append(transcription)
+                        continue
                 media_paths.append(str(file_path))
                 markers.append(f"[attachment: {file_path.name}]")
             except Exception as e:

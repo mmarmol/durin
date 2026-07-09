@@ -63,12 +63,19 @@ class _FakeDiscordClient:
 class _FakeAttachment:
     # Attachment double that can simulate successful or failing save() calls.
     def __init__(
-        self, attachment_id: int = 1, filename: str = "file.bin", *, size: int = 1, fail: bool = False
+        self,
+        attachment_id: int = 1,
+        filename: str = "file.bin",
+        *,
+        size: int = 1,
+        fail: bool = False,
+        content_type: str | None = None,
     ) -> None:
         self.id = attachment_id
         self.filename = filename
         self.size = size
         self._fail = fail
+        self.content_type = content_type
 
     async def save(self, path: str | Path) -> None:
         if self._fail:
@@ -661,6 +668,43 @@ async def test_on_message_marks_failed_attachment_download(tmp_path, monkeypatch
     assert len(handled) == 1
     assert handled[0]["media"] == []
     assert handled[0]["content"] == "[attachment: photo.png - download failed]"
+
+
+_AUDIO_EXTS = (".ogg", ".oga", ".opus", ".mp3", ".m4a", ".wav", ".flac")
+
+
+def _make_channel() -> DiscordChannel:
+    return DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+
+
+class _FakeTranscription:
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    async def transcribe_and_cache(self, file_path):
+        return SimpleNamespace(text=self._text)
+
+
+@pytest.mark.asyncio
+async def test_audio_attachment_is_transcribed_to_bare_text(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("durin.channels.discord.get_media_dir", lambda _c: tmp_path)
+    channel = _make_channel()
+    channel.transcription = _FakeTranscription("hola desde el audio")
+    att = _FakeAttachment(filename="note.ogg", content_type="audio/ogg")
+    media, markers = await channel._download_attachments([att])
+    assert media == []
+    assert markers == ["hola desde el audio"]
+
+
+@pytest.mark.asyncio
+async def test_audio_attachment_falls_back_to_marker_when_transcription_empty(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("durin.channels.discord.get_media_dir", lambda _c: tmp_path)
+    channel = _make_channel()
+    channel.transcription = _FakeTranscription("")
+    att = _FakeAttachment(filename="note.ogg", content_type="audio/ogg")
+    media, markers = await channel._download_attachments([att])
+    assert len(media) == 1 and media[0].endswith("note.ogg")
+    assert markers[0].startswith("[attachment:")
 
 
 @pytest.mark.asyncio
