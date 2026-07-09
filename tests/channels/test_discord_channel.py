@@ -1705,6 +1705,75 @@ async def test_split_buffer_flushes_on_timer_without_continuation(monkeypatch) -
 
 
 @pytest.mark.asyncio
+async def test_timer_flush_survives_real_suspension_points(monkeypatch) -> None:
+    """Regression: _flush_later runs _flush_split from inside buf.task itself.
+    If _flush_split cancels buf.task unconditionally, asyncio marks that
+    self-cancellation and raises CancelledError at the task's next real
+    suspension point — silently dropping the buffered message before it
+    reaches the bus. The fakes in the timer test above never actually
+    suspend, so this needs a real await inside the dispatch path to catch it."""
+    monkeypatch.setattr("durin.channels.discord._SPLIT_FLUSH_DELAY_S", 0.05)
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+
+    original_handle_message = channel._handle_message
+
+    async def _delayed_handle_message(**kwargs):
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await original_handle_message(**kwargs)
+
+    channel._handle_message = _delayed_handle_message  # type: ignore[method-assign]
+
+    part1 = _make_dm_message(author_id="777", content="x" * 1950, message_id="1")
+    await channel._handle_discord_message(part1)
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.content == "x" * 1950
+
+
+@pytest.mark.asyncio
+async def test_attachment_message_dispatches_independently_while_buffer_open() -> None:
+    """An attachment message arriving while a split buffer is open for the same
+    sender must dispatch on its own, not get swallowed into the pending join."""
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+    part1 = _make_dm_message(author_id="777", content="x" * 1950, message_id="1")
+    await channel._handle_discord_message(part1)
+
+    att_msg = _make_dm_message(
+        author_id="777", content="photo", attachments=[_FakeAttachment(12, "photo.png")], message_id="2"
+    )
+    await channel._handle_discord_message(att_msg)
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.content.startswith("photo")
+
+    assert channel._pending_splits  # the split buffer is still open, untouched
+
+    for buf in channel._pending_splits.values():
+        if buf.task is not None:
+            buf.task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_three_part_split_joins_in_order() -> None:
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+    part1 = _make_dm_message(author_id="777", content="x" * 1950, message_id="1")
+    part2 = _make_dm_message(author_id="777", content="y" * 1950, message_id="2")
+    part3 = _make_dm_message(author_id="777", content="tail", message_id="3")
+    await channel._handle_discord_message(part1)
+    await channel._handle_discord_message(part2)
+    await channel._handle_discord_message(part3)
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.content == "x" * 1950 + "\n" + "y" * 1950 + "\ntail"
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(bus.consume_inbound(), timeout=0.2)
+
+
+@pytest.mark.asyncio
 async def test_short_message_is_not_delayed() -> None:
     bus = MessageBus()
     channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)

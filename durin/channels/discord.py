@@ -687,7 +687,14 @@ class DiscordChannel(BaseChannel):
         buf = self._pending_splits.pop(key, None)
         if buf is None:
             return
-        if buf.task is not None and not buf.task.done():
+        # When the timer fires, _flush_later calls this method from within
+        # buf.task itself, so buf.task IS the running task here. Cancelling
+        # your own running task doesn't raise immediately — asyncio marks it
+        # and raises CancelledError at the task's next real suspension point,
+        # which would land inside _dispatch_inbound below and silently drop
+        # the message. Only cancel the timer when some other caller (e.g. a
+        # continuation part arriving) is flushing early.
+        if buf.task is not None and buf.task is not asyncio.current_task() and not buf.task.done():
             buf.task.cancel()
         await self._dispatch_inbound(buf.message, "\n".join(buf.parts))
 
