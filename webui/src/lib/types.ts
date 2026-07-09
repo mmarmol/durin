@@ -22,7 +22,7 @@ export interface UIImage {
   name?: string;
 }
 
-export type UIMediaKind = "image" | "video" | "file";
+export type UIMediaKind = "image" | "video" | "html" | "file";
 
 export interface UIMediaAttachment {
   kind: UIMediaKind;
@@ -32,6 +32,12 @@ export interface UIMediaAttachment {
 
 export interface UIMessage {
   id: string;
+  /** Client-only stable React key. A streamed reply is re-identified twice
+   * (placeholder id → server id at finalization, then the canonical replay id
+   * after refetch); keying rows by the first identity keeps the DOM subtree
+   * mounted across those swaps, so iframes don't reload and open code/preview
+   * toggles keep their state. Never persisted. */
+  renderKey?: string;
   role: Role;
   content: string;
   kind?: MessageKind;

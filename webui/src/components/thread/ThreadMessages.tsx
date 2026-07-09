@@ -191,7 +191,7 @@ function unitKey(unit: DisplayUnit, index: number): string {
   if (unit.type === "toolBlock" || unit.type === "toolChips") {
     return unit.key;
   }
-  return unit.message.id;
+  return unit.message.renderKey ?? unit.message.id;
 }
 
 function marginAfterPrevUnit(prev: DisplayUnit): string {

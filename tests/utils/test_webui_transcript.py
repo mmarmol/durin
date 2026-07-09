@@ -117,3 +117,28 @@ def test_replay_merges_blocking_tool_end_after_user_answer() -> None:
     # The answer bubble is still its own message.
     users = [m for m in messages if m.get("role") == "user"]
     assert any(m.get("content") == "Rojo" for m in users)
+
+
+def test_replay_infers_attachment_kind_from_name() -> None:
+    """Assistant attachment kinds come from the filename: an ``.html`` mockup
+    must replay as ``html`` (rendered sandboxed), not as a broken image."""
+    lines = [
+        {"event": "user", "chat_id": "t9", "text": "mockup please"},
+        {
+            "event": "message",
+            "chat_id": "t9",
+            "text": "here you go",
+            "media_urls": [
+                {"url": "/api/media/sig/page.html", "name": "page.html"},
+                {"url": "/api/media/sig/shot.png", "name": "shot.png"},
+                {"url": "/api/media/sig/clip.mp4", "name": "clip.mp4"},
+                {"url": "/api/media/sig/notes.pdf", "name": "notes.pdf"},
+                {"url": "/api/media/sig/opaque", "name": ""},
+            ],
+        },
+        {"event": "turn_end", "chat_id": "t9"},
+    ]
+    msgs = replay_transcript_to_ui_messages(lines)
+    assistant = [m for m in msgs if m["role"] == "assistant"][-1]
+    kinds = [m["kind"] for m in assistant["media"]]
+    assert kinds == ["html", "image", "video", "file", "image"]

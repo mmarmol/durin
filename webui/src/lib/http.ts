@@ -41,3 +41,11 @@ export async function fetchWithReauth(
   }
   return res;
 }
+
+/** Plain fetch for self-authenticating ``/api/media/<sig>/…`` URLs: the
+ *  signature embedded in the URL is the credential, so no Bearer header or
+ *  401-reauth retry applies — the browser loads ``<img>``/``<video>`` from
+ *  these same URLs without headers. */
+export async function fetchSignedMedia(url: string): Promise<Response> {
+  return fetch(url, { credentials: "same-origin" });
+}

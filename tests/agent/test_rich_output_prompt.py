@@ -32,3 +32,13 @@ def test_rich_output_section_present(tmp_path):
     assert "Rich output" in prompt
     assert "vega-lite" in prompt
     assert "mermaid" in prompt
+
+
+def test_rich_output_steers_away_from_competing_paths(tmp_path):
+    """The section must neutralize the two live-observed failure modes:
+    delivering renderable content as a bare workspace file, and ASCII-art
+    diagrams."""
+    b = _make_builder(tmp_path)
+    prompt = b.build_system_prompt(channel="cli")
+    assert "Prefer the fence" in prompt
+    assert "ASCII art" in prompt

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import time
-import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -143,6 +143,24 @@ def merge_tool_events(existing: list[dict[str, Any]] | None, incoming: Any) -> l
     return out
 
 
+def _attachment_kind(name: str) -> str:
+    """Display kind for an assistant attachment, from its filename.
+
+    Unknown or extension-less names keep the historical ``image`` default so
+    existing image attachments (whose names may be opaque) render unchanged.
+    """
+    mime, _ = mimetypes.guess_type(name)
+    if not mime:
+        return "image"
+    if mime == "text/html":
+        return "html"
+    if mime.startswith("video/"):
+        return "video"
+    if mime.startswith("image/"):
+        return "image"
+    return "file"
+
+
 def replay_transcript_to_ui_messages(
     lines: list[dict[str, Any]],
     *,
@@ -161,7 +179,11 @@ def replay_transcript_to_ui_messages(
     _ts_base = int(time.time() * 1000)
 
     def _new_id(prefix: str, idx: int) -> str:
-        return f"{prefix}-{idx}-{uuid.uuid4().hex[:8]}"
+        # Deterministic per (prefix, line index): two replays of the same JSONL
+        # must mint identical ids, or every canonical refetch re-keys these rows
+        # and the webui remounts their DOM (iframes reload, open toggles reset).
+        # ``idx`` is unique per transcript line, so ids never collide in-thread.
+        return f"{prefix}-{idx}"
 
     def attach_reasoning_chunk(prev: list[dict[str, Any]], chunk: str, idx: int) -> None:
         for i in range(len(prev) - 1, -1, -1):
@@ -448,11 +470,12 @@ def replay_transcript_to_ui_messages(
             if isinstance(media_urls, list):
                 for m in media_urls:
                     if isinstance(m, dict) and m.get("url"):
+                        name = str(m.get("name") or "")
                         media.append(
                             {
-                                "kind": "image",
+                                "kind": _attachment_kind(name),
                                 "url": str(m["url"]),
-                                "name": str(m.get("name") or ""),
+                                "name": name,
                             },
                         )
             extra: dict[str, Any] = {"content": content_s}
