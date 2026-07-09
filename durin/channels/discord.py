@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
+import os
+import tempfile
 import time
+from collections import OrderedDict
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
 
 from pydantic import Field
 
@@ -18,7 +27,7 @@ from durin.channels.base import BaseChannel
 from durin.command.builtin import build_help_text, specs_for_surface
 from durin.config.paths import get_media_dir
 from durin.config.schema import Base
-from durin.utils.helpers import safe_filename, split_message
+from durin.utils.helpers import convert_gfm_tables, safe_filename, split_message
 
 DISCORD_AVAILABLE = importlib.util.find_spec("discord") is not None
 if TYPE_CHECKING:
@@ -35,6 +44,13 @@ if DISCORD_AVAILABLE:
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # 20MB
 MAX_MESSAGE_LEN = 2000  # Discord message character limit
 TYPING_INTERVAL_S = 8
+LIVENESS_INTERVAL_S = 60.0
+LIVENESS_TIMEOUT_S = 15.0
+LIVENESS_MAX_FAILURES = 3
+_DEDUP_TTL_S = 300.0
+_DEDUP_MAX_IDS = 5000
+_SPLIT_SUSPECT_LEN = 1900
+_SPLIT_FLUSH_DELAY_S = 2.0
 
 
 @dataclass
@@ -45,6 +61,15 @@ class _StreamBuf:
     message: Any | None = None
     last_edit: float = 0.0
     stream_id: str | None = None
+
+
+@dataclass
+class _SplitBuf:
+    """Reassembly buffer for messages the Discord client split at 2000 chars."""
+
+    message: Any
+    parts: list[str]
+    task: asyncio.Task[None] | None = None
 
 
 class DiscordConfig(Base):
@@ -78,7 +103,17 @@ if DISCORD_AVAILABLE:
             proxy: str | None = None,
             proxy_auth: aiohttp.BasicAuth | None = None,
         ) -> None:
-            super().__init__(intents=intents, proxy=proxy, proxy_auth=proxy_auth)
+            super().__init__(
+                intents=intents,
+                proxy=proxy,
+                proxy_auth=proxy_auth,
+                # LLM output is untrusted for mention purposes: echoed
+                # @everyone/@here or role pings must never fan out to a server.
+                # Users may still be mentioned (replies, direct address).
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=False, roles=False, users=True, replied_user=False
+                ),
+            )
             self._channel = channel
             self.tree = app_commands.CommandTree(self)
             self._register_app_commands()
@@ -86,11 +121,17 @@ if DISCORD_AVAILABLE:
         async def on_ready(self) -> None:
             self._channel._bot_user_id = str(self.user.id) if self.user else None
             self._channel.logger.info("bot connected as user {}", self._channel._bot_user_id)
-            try:
-                synced = await self.tree.sync()
-                self._channel.logger.info("app commands synced: {}", len(synced))
-            except Exception as e:
-                self._channel.logger.warning("app command sync failed: {}", e)
+            self._channel._start_liveness_probe()
+            if not self._channel._commands_synced:
+                # Global command sync is daily-rate-limited; on_ready re-fires
+                # after re-identify and the channel restarts under supervision,
+                # so sync exactly once per gateway process.
+                try:
+                    synced = await self.tree.sync()
+                    self._channel._commands_synced = True
+                    self._channel.logger.info("app commands synced: {}", len(synced))
+                except Exception as e:
+                    self._channel.logger.warning("app command sync failed: {}", e)
 
         async def on_message(self, message: discord.Message) -> None:
             await self._channel._handle_discord_message(message)
@@ -241,6 +282,11 @@ if DISCORD_AVAILABLE:
                     self._channel.logger.warning("channel {} unavailable: {}", msg.chat_id, e)
                     return
 
+            forum_types = {discord.ChannelType.forum, discord.ChannelType.media}
+            if getattr(channel, "type", None) in forum_types:
+                await self._send_to_forum(channel, msg)
+                return
+
             reference, mention_settings = self._build_reply_context(channel, msg.reply_to)
             sent_media = False
             failed_media: list[str] = []
@@ -264,6 +310,28 @@ if DISCORD_AVAILABLE:
                     kwargs["reference"] = reference
                     kwargs["allowed_mentions"] = mention_settings
                 await channel.send(**kwargs)
+
+        async def _send_to_forum(self, forum: Any, msg: OutboundMessage) -> None:
+            """Forum/media channels reject plain sends; post a new thread instead."""
+            files: list[discord.File] = []
+            failed_media: list[str] = []
+            for media_path in msg.media or []:
+                path = Path(media_path)
+                if path.is_file():
+                    files.append(discord.File(path))
+                else:
+                    failed_media.append(path.name)
+            chunks = self._build_chunks(msg.content or "", failed_media, bool(files)) or ["…"]
+            first_line = (msg.content or "").strip().splitlines()[0] if (msg.content or "").strip() else ""
+            name = (first_line or "durin")[:100]
+            kwargs: dict[str, Any] = {"name": name, "content": chunks[0]}
+            if files:
+                kwargs["files"] = files
+            created = await forum.create_thread(**kwargs)
+            thread = getattr(created, "thread", created)
+            self._channel._remember_channel(thread)
+            for chunk in chunks[1:]:
+                await thread.send(content=chunk)
 
         async def _send_file(
             self,
@@ -298,6 +366,7 @@ if DISCORD_AVAILABLE:
         @staticmethod
         def _build_chunks(content: str, failed_media: list[str], sent_media: bool) -> list[str]:
             """Build outbound text chunks, including attachment-failure fallback text."""
+            content = convert_gfm_tables(content)
             chunks = split_message(content, MAX_MESSAGE_LEN)
             if chunks or not failed_media or sent_media:
                 return chunks
@@ -358,6 +427,16 @@ class DiscordChannel(BaseChannel):
             return cls._channel_key(parent)
         return None
 
+    _AUDIO_EXTENSIONS = {".ogg", ".oga", ".opus", ".mp3", ".m4a", ".wav", ".flac"}
+
+    @classmethod
+    def _is_audio_attachment(cls, attachment: discord.Attachment) -> bool:
+        content_type = (getattr(attachment, "content_type", None) or "").lower()
+        if content_type.startswith("audio/"):
+            return True
+        suffix = Path(getattr(attachment, "filename", "") or "").suffix.lower()
+        return suffix in cls._AUDIO_EXTENSIONS
+
     def __init__(self, config: Any, bus: MessageBus):
         if isinstance(config, dict):
             config = DiscordConfig.model_validate(config)
@@ -369,7 +448,40 @@ class DiscordChannel(BaseChannel):
         self._pending_reactions: dict[str, Any] = {}  # chat_id -> message object
         self._working_emoji_tasks: dict[str, asyncio.Task[None]] = {}
         self._stream_bufs: dict[str, _StreamBuf] = {}
+        self._pending_splits: dict[tuple[str, str], _SplitBuf] = {}
         self._known_channels: dict[str, Any] = {}
+        self._stop_requested = False
+        self._liveness_failed = False
+        self._liveness_task: asyncio.Task[None] | None = None
+        self._seen_message_ids: OrderedDict[str, float] = OrderedDict()
+        self._commands_synced = False
+        self._token_lock_fd: int | None = None
+
+    def _acquire_token_lock(self) -> bool:
+        """One gateway per bot token per host.
+
+        Two clients on the same token both receive every event and reply
+        twice (split-brain). An advisory flock held for the channel's
+        lifetime rejects the second starter with a clear error instead.
+        """
+        if fcntl is None or not self.config.token:
+            return True
+        digest = hashlib.sha256(self.config.token.encode()).hexdigest()[:16]
+        lock_path = Path(tempfile.gettempdir()) / f"durin-discord-{digest}.lock"
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return False
+        self._token_lock_fd = fd
+        return True
+
+    def _release_token_lock(self) -> None:
+        fd, self._token_lock_fd = self._token_lock_fd, None
+        if fd is not None:
+            with suppress(OSError):
+                os.close(fd)  # closing the fd releases the flock
 
     def _remember_channel(self, channel: Any) -> None:
         self._known_channels[self._channel_key(channel)] = channel
@@ -385,6 +497,13 @@ class DiscordChannel(BaseChannel):
 
         if not self.config.token:
             self.logger.error("bot token not configured")
+            return
+
+        if not self._acquire_token_lock():
+            self.logger.error(
+                "another running process already uses this Discord bot token "
+                "(a second client would double-reply); not starting"
+            )
             return
 
         try:
@@ -426,8 +545,11 @@ class DiscordChannel(BaseChannel):
             self.logger.exception("Failed to initialize client")
             self._client = None
             self._running = False
+            self._release_token_lock()
             return
 
+        self._stop_requested = False
+        self._liveness_failed = False
         self._running = True
         self.logger.info("Starting client via discord.py...")
 
@@ -435,14 +557,31 @@ class DiscordChannel(BaseChannel):
             await self._client.start(self.config.token)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            self.logger.exception("client startup failed")
+        except discord.LoginFailure:
+            # Fatal config error: restarting cannot help and hammers the API.
+            self.logger.error(
+                "Discord rejected the bot token; fix channels.discord.token and restart"
+            )
+        except discord.PrivilegedIntentsRequired:
+            self.logger.error(
+                "Privileged intents are not enabled for this bot. Enable "
+                "'Message Content Intent' (and any other configured privileged "
+                "intents) in the Discord Developer Portal, or lower "
+                "channels.discord.intents"
+            )
         finally:
             self._running = False
             await self._reset_runtime_state(close_client=True)
 
+        if self._liveness_failed and not self._stop_requested:
+            self._liveness_failed = False
+            # Zombie socket was force-closed by the liveness probe; surface it
+            # as a crash so the manager supervisor reconnects us.
+            raise RuntimeError("discord connection liveness lost")
+
     async def stop(self) -> None:
         """Stop the Discord channel."""
+        self._stop_requested = True
         self._running = False
         await self._reset_runtime_state(close_client=True)
 
@@ -450,8 +589,9 @@ class DiscordChannel(BaseChannel):
         """Send a message through Discord using discord.py."""
         client = self._client
         if client is None or not client.is_ready():
-            self.logger.warning("client not ready; dropping outbound message")
-            return
+            # Raise so the manager's retry policy covers reconnect windows;
+            # a silent return here loses the message permanently.
+            raise RuntimeError("discord client not ready")
 
         is_progress = bool((msg.metadata or {}).get("_progress"))
 
@@ -471,8 +611,9 @@ class DiscordChannel(BaseChannel):
         """Progressive Discord delivery: send once, then edit until the stream ends."""
         client = self._client
         if client is None or not client.is_ready():
-            self.logger.warning("client not ready; dropping stream delta")
-            return
+            # Raise so the manager's retry policy covers reconnect windows;
+            # a silent return here loses the message permanently.
+            raise RuntimeError("discord client not ready")
 
         meta = metadata or {}
         stream_id = meta.get("_stream_id")
@@ -524,6 +665,20 @@ class DiscordChannel(BaseChannel):
             self.logger.warning("stream edit failed: {}", e)
             raise
 
+    def _is_duplicate(self, message_id: str) -> bool:
+        """TTL'd replay guard: gateway RESUME re-delivers recent events."""
+        now = time.monotonic()
+        while self._seen_message_ids:
+            oldest_id, seen_at = next(iter(self._seen_message_ids.items()))
+            if now - seen_at > _DEDUP_TTL_S or len(self._seen_message_ids) >= _DEDUP_MAX_IDS:
+                self._seen_message_ids.pop(oldest_id, None)
+            else:
+                break
+        if message_id in self._seen_message_ids:
+            return True
+        self._seen_message_ids[message_id] = now
+        return False
+
     async def _handle_discord_message(self, message: discord.Message) -> None:
         """Handle incoming Discord messages from discord.py.
 
@@ -537,16 +692,74 @@ class DiscordChannel(BaseChannel):
             return
         if self._is_system_message(message):
             return
+        if self._is_duplicate(str(message.id)):
+            return
 
         sender_id = str(message.author.id)
         channel_id = self._channel_key(message.channel)
         self._remember_channel(message.channel)
         content = message.content or ""
 
-        if not self._should_accept_inbound(message, sender_id, content):
+        if not self._should_accept_inbound(message, content):
             return
 
-        media_paths, attachment_markers = await self._download_attachments(message.attachments)
+        key = (channel_id, sender_id)
+        buf = self._pending_splits.get(key)
+        if buf is not None and not message.attachments:
+            buf.parts.append(content)
+            if len(content) >= _SPLIT_SUSPECT_LEN:
+                self._reschedule_split_flush(key, buf)
+                return
+            await self._flush_split(key)
+            return
+        if len(content) >= _SPLIT_SUSPECT_LEN and not message.attachments:
+            # Looks like the first piece of a client-side 2000-char split:
+            # hold briefly for its continuation so the agent gets one turn.
+            buf = _SplitBuf(message=message, parts=[content])
+            self._pending_splits[key] = buf
+            self._reschedule_split_flush(key, buf)
+            return
+        await self._dispatch_inbound(message, content)
+
+    def _reschedule_split_flush(self, key: tuple[str, str], buf: _SplitBuf) -> None:
+        if buf.task is not None and not buf.task.done():
+            buf.task.cancel()
+
+        async def _flush_later() -> None:
+            await asyncio.sleep(_SPLIT_FLUSH_DELAY_S)
+            try:
+                await self._flush_split(key)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.logger.exception("Timer flush failed for split buffer {}", key)
+
+        buf.task = asyncio.create_task(_flush_later())
+
+    async def _flush_split(self, key: tuple[str, str]) -> None:
+        buf = self._pending_splits.pop(key, None)
+        if buf is None:
+            return
+        # When the timer fires, _flush_later calls this method from within
+        # buf.task itself, so buf.task IS the running task here. Cancelling
+        # your own running task doesn't raise immediately — asyncio marks it
+        # and raises CancelledError at the task's next real suspension point,
+        # which would land inside _dispatch_inbound below and silently drop
+        # the message. Only cancel the timer when some other caller (e.g. a
+        # continuation part arriving) is flushing early.
+        if buf.task is not None and buf.task is not asyncio.current_task() and not buf.task.done():
+            buf.task.cancel()
+        await self._dispatch_inbound(buf.message, "\n".join(buf.parts))
+
+    async def _dispatch_inbound(self, message: discord.Message, content: str) -> None:
+        sender_id = str(message.author.id)
+        channel_id = self._channel_key(message.channel)
+
+        authorized = self.is_allowed(sender_id)
+
+        media_paths, attachment_markers = (
+            (await self._download_attachments(message.attachments)) if authorized else ([], [])
+        )
         full_content = self._compose_inbound_content(content, attachment_markers)
         metadata = self._build_inbound_metadata(message)
         parent_channel_id = self._channel_parent_key(message.channel)
@@ -557,22 +770,23 @@ class DiscordChannel(BaseChannel):
             metadata["thread_id"] = channel_id
             session_key = f"{self.name}:{parent_channel_id}:thread:{channel_id}"
 
-        await self._start_typing(message.channel)
+        if authorized:
+            await self._start_typing(message.channel)
 
-        # Add read receipt reaction immediately, working emoji after delay
-        try:
-            await message.add_reaction(self.config.read_receipt_emoji)
-            self._pending_reactions[channel_id] = message
-        except Exception as e:
-            self.logger.debug("Failed to add read receipt reaction: {}", e)
+            # Add read receipt reaction immediately, working emoji after delay
+            try:
+                await message.add_reaction(self.config.read_receipt_emoji)
+                self._pending_reactions[channel_id] = message
+            except Exception as e:
+                self.logger.debug("Failed to add read receipt reaction: {}", e)
 
-        # Delayed working indicator (cosmetic — not tied to subagent lifecycle)
-        async def _delayed_working_emoji() -> None:
-            await asyncio.sleep(self.config.working_emoji_delay)
-            with suppress(Exception):
-                await message.add_reaction(self.config.working_emoji)
+            # Delayed working indicator (cosmetic — not tied to subagent lifecycle)
+            async def _delayed_working_emoji() -> None:
+                await asyncio.sleep(self.config.working_emoji_delay)
+                with suppress(Exception):
+                    await message.add_reaction(self.config.working_emoji)
 
-        self._working_emoji_tasks[channel_id] = asyncio.create_task(_delayed_working_emoji())
+            self._working_emoji_tasks[channel_id] = asyncio.create_task(_delayed_working_emoji())
 
         try:
             await self._handle_message(
@@ -637,16 +851,13 @@ class DiscordChannel(BaseChannel):
         await self._stop_typing(chat_id)
         await self._clear_reactions(chat_id)
 
-    def _should_accept_inbound(
-        self,
-        message: discord.Message,
-        sender_id: str,
-        content: str,
-    ) -> bool:
-        """Check if inbound Discord message should be processed."""
-        if not self.is_allowed(sender_id):
-            return False
-        # Channel-based filtering: only respond in allowed channels
+    def _should_accept_inbound(self, message: discord.Message, content: str) -> bool:
+        """Channel-policy filter only (allowed channels, group mention policy).
+
+        Sender authorization is deliberately NOT checked here: the central
+        bus-ingress gate enforces it uniformly and issues pairing codes for
+        unknown DM senders, so the channel must publish unconditionally.
+        """
         allow_channels = self.config.allow_channels
         if allow_channels:
             channel_ids = self._channel_allow_keys(message.channel)
@@ -675,6 +886,14 @@ class DiscordChannel(BaseChannel):
                 safe_name = safe_filename(filename)
                 file_path = media_dir / f"{attachment.id}_{safe_name}"
                 await attachment.save(file_path)
+                if self._is_audio_attachment(attachment):
+                    transcription = await self.transcribe_audio(file_path)
+                    if transcription:
+                        # Bare transcript, no marker and no audio path: the agent
+                        # should read it as what the user said, not as a file it
+                        # must open (matches the Telegram voice path).
+                        markers.append(transcription)
+                        continue
                 media_paths.append(str(file_path))
                 markers.append(f"[attachment: {file_path.name}]")
             except Exception as e:
@@ -799,10 +1018,71 @@ class DiscordChannel(BaseChannel):
         for channel_id in channel_ids:
             await self._stop_typing(channel_id)
 
+    def _start_liveness_probe(self) -> None:
+        self._stop_liveness_probe()
+        self._liveness_task = asyncio.create_task(self._liveness_loop())
+
+    def _stop_liveness_probe(self) -> None:
+        task, self._liveness_task = self._liveness_task, None
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _liveness_loop(self) -> None:
+        """Detect zombie sockets the gateway heartbeat cannot see.
+
+        A NAT/proxy that drops the connection without RST leaves the websocket
+        "open" forever; a periodic authenticated REST call proves the token
+        and the network path are actually alive. After consecutive failures
+        the client is force-closed, which ends ``start()`` and lets the
+        manager supervisor reconnect with backoff.
+        """
+        failures = 0
+        while self._running:
+            await asyncio.sleep(LIVENESS_INTERVAL_S)
+            client = self._client
+            if client is None or not client.is_ready() or client.user is None:
+                failures = 0  # reconnecting: discord.py is already on it
+                continue
+            try:
+                await asyncio.wait_for(
+                    client.fetch_user(client.user.id), timeout=LIVENESS_TIMEOUT_S
+                )
+                failures = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                failures += 1
+                self.logger.warning(
+                    "liveness probe failed ({}/{}): {}", failures, LIVENESS_MAX_FAILURES, e
+                )
+                if failures >= LIVENESS_MAX_FAILURES:
+                    self._liveness_failed = True
+                    self.logger.error("connection unresponsive; forcing reconnect")
+                    with suppress(Exception):
+                        await client.close()
+                    return
+
     async def _reset_runtime_state(self, close_client: bool) -> None:
         """Reset client and typing state."""
+        self._stop_liveness_probe()
         await self._cancel_all_typing()
         self._stream_bufs.clear()
+        pending_splits, self._pending_splits = self._pending_splits, {}
+        for key, buf in pending_splits.items():
+            # Same current-task guard as _flush_split: a buffer's own timer
+            # task could in principle be the one calling this (e.g. a future
+            # caller triggering teardown from within _flush_later); cancelling
+            # your own running task doesn't raise until the next suspension
+            # point, which would land inside the dispatch below.
+            if buf.task is not None and buf.task is not asyncio.current_task() and not buf.task.done():
+                buf.task.cancel()
+            # Flush rather than drop: dedup already marked the buffered
+            # message seen, so discarding it here would lose it permanently.
+            # Publishing to the bus does not need a live client.
+            try:
+                await self._dispatch_inbound(buf.message, "\n".join(buf.parts))
+            except Exception:
+                self.logger.exception("Failed to flush buffered split message for {}", key)
         self._known_channels.clear()
         if close_client and self._client is not None and not self._client.is_closed():
             try:
@@ -811,3 +1091,4 @@ class DiscordChannel(BaseChannel):
                 self.logger.warning("client close failed: {}", e)
         self._client = None
         self._bot_user_id = None
+        self._release_token_lock()
