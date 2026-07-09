@@ -35,6 +35,9 @@ if DISCORD_AVAILABLE:
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # 20MB
 MAX_MESSAGE_LEN = 2000  # Discord message character limit
 TYPING_INTERVAL_S = 8
+LIVENESS_INTERVAL_S = 60.0
+LIVENESS_TIMEOUT_S = 15.0
+LIVENESS_MAX_FAILURES = 3
 
 
 @dataclass
@@ -96,6 +99,7 @@ if DISCORD_AVAILABLE:
         async def on_ready(self) -> None:
             self._channel._bot_user_id = str(self.user.id) if self.user else None
             self._channel.logger.info("bot connected as user {}", self._channel._bot_user_id)
+            self._channel._start_liveness_probe()
             try:
                 synced = await self.tree.sync()
                 self._channel.logger.info("app commands synced: {}", len(synced))
@@ -392,6 +396,7 @@ class DiscordChannel(BaseChannel):
         self._known_channels: dict[str, Any] = {}
         self._stop_requested = False
         self._liveness_failed = False
+        self._liveness_task: asyncio.Task[None] | None = None
 
     def _remember_channel(self, channel: Any) -> None:
         self._known_channels[self._channel_key(channel)] = channel
@@ -852,8 +857,53 @@ class DiscordChannel(BaseChannel):
         for channel_id in channel_ids:
             await self._stop_typing(channel_id)
 
+    def _start_liveness_probe(self) -> None:
+        self._stop_liveness_probe()
+        self._liveness_task = asyncio.create_task(self._liveness_loop())
+
+    def _stop_liveness_probe(self) -> None:
+        task, self._liveness_task = self._liveness_task, None
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _liveness_loop(self) -> None:
+        """Detect zombie sockets the gateway heartbeat cannot see.
+
+        A NAT/proxy that drops the connection without RST leaves the websocket
+        "open" forever; a periodic authenticated REST call proves the token
+        and the network path are actually alive. After consecutive failures
+        the client is force-closed, which ends ``start()`` and lets the
+        manager supervisor reconnect with backoff.
+        """
+        failures = 0
+        while self._running:
+            await asyncio.sleep(LIVENESS_INTERVAL_S)
+            client = self._client
+            if client is None or not client.is_ready() or client.user is None:
+                failures = 0  # reconnecting: discord.py is already on it
+                continue
+            try:
+                await asyncio.wait_for(
+                    client.fetch_user(client.user.id), timeout=LIVENESS_TIMEOUT_S
+                )
+                failures = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                failures += 1
+                self.logger.warning(
+                    "liveness probe failed ({}/{}): {}", failures, LIVENESS_MAX_FAILURES, e
+                )
+                if failures >= LIVENESS_MAX_FAILURES:
+                    self._liveness_failed = True
+                    self.logger.error("connection unresponsive; forcing reconnect")
+                    with suppress(Exception):
+                        await client.close()
+                    return
+
     async def _reset_runtime_state(self, close_client: bool) -> None:
         """Reset client and typing state."""
+        self._stop_liveness_probe()
         await self._cancel_all_typing()
         self._stream_bufs.clear()
         self._known_channels.clear()

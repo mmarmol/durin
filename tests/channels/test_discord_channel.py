@@ -1504,3 +1504,32 @@ async def test_unauthorized_sender_attachments_not_downloaded(tmp_path, monkeypa
     await channel._handle_discord_message(msg)
     inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
     assert inbound.media == []
+
+
+@pytest.mark.asyncio
+async def test_liveness_probe_closes_client_after_consecutive_failures(monkeypatch) -> None:
+    channel = _make_channel()
+    channel._running = True
+    closed = []
+
+    class _ZombieClient:
+        user = SimpleNamespace(id=999)
+
+        def is_ready(self):
+            return True
+
+        async def fetch_user(self, uid):
+            raise OSError("socket wedged")
+
+        async def close(self):
+            closed.append(True)
+
+    channel._client = _ZombieClient()
+
+    async def instant_sleep(_delay):
+        return None
+
+    monkeypatch.setattr("durin.channels.discord.asyncio.sleep", instant_sleep)
+    await channel._liveness_loop()
+    assert channel._liveness_failed is True
+    assert closed == [True]
