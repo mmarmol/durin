@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import time
 import uuid
@@ -141,6 +142,24 @@ def merge_tool_events(existing: list[dict[str, Any]] | None, incoming: Any) -> l
             merged["arguments"] = out[idx].get("arguments")
         out[idx] = merged
     return out
+
+
+def _attachment_kind(name: str) -> str:
+    """Display kind for an assistant attachment, from its filename.
+
+    Unknown or extension-less names keep the historical ``image`` default so
+    existing image attachments (whose names may be opaque) render unchanged.
+    """
+    mime, _ = mimetypes.guess_type(name)
+    if not mime:
+        return "image"
+    if mime == "text/html":
+        return "html"
+    if mime.startswith("video/"):
+        return "video"
+    if mime.startswith("image/"):
+        return "image"
+    return "file"
 
 
 def replay_transcript_to_ui_messages(
@@ -448,11 +467,12 @@ def replay_transcript_to_ui_messages(
             if isinstance(media_urls, list):
                 for m in media_urls:
                     if isinstance(m, dict) and m.get("url"):
+                        name = str(m.get("name") or "")
                         media.append(
                             {
-                                "kind": "image",
+                                "kind": _attachment_kind(name),
                                 "url": str(m["url"]),
-                                "name": str(m.get("name") or ""),
+                                "name": name,
                             },
                         )
             extra: dict[str, Any] = {"content": content_s}

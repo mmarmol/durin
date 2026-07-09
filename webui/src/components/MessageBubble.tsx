@@ -11,7 +11,9 @@ import { useTranslation } from "react-i18next";
 
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
+import { RichBlock } from "@/components/rich/RichBlock";
 import { ToolCallBlock } from "@/components/thread/ToolCallBlock";
+import { fetchSignedMedia } from "@/lib/http";
 import { cn } from "@/lib/utils";
 import { formatTurnLatency } from "@/lib/format";
 import type { UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
@@ -272,7 +274,63 @@ function MessageMedia({
   );
 }
 
+/**
+ * An ``.html`` attachment renders inline through the same sandboxed preview as
+ * a fenced ``html`` block: the agent frequently delivers a full-page mockup as
+ * a file attachment, and a download-only chip would hide the content the user
+ * asked to see. Falls back to the generic file chip while loading or when the
+ * fetch fails, so the download affordance is never lost.
+ */
+function HtmlAttachmentCell({ media }: { media: UIMediaAttachment }) {
+  const [html, setHtml] = useState<string | null>(null);
+  const url = media.url ?? "";
+
+  useEffect(() => {
+    let cancelled = false;
+    setHtml(null);
+    fetchSignedMedia(url)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.text();
+      })
+      .then((text) => {
+        if (!cancelled) setHtml(text);
+      })
+      .catch(() => {
+        // keep the FileChip fallback — the download affordance still works
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+
+  if (html === null) {
+    return <FileChip media={media} />;
+  }
+  return (
+    <figure className="w-full min-w-0 basis-full">
+      <RichBlock language="html" code={html} />
+      {media.name ? (
+        <figcaption className="truncate text-[11.5px] text-muted-foreground">
+          <a href={url} download={media.name} className="hover:underline">
+            {media.name}
+          </a>
+        </figcaption>
+      ) : null}
+    </figure>
+  );
+}
+
 function MediaCell({ media }: { media: UIMediaAttachment }) {
+  const hasUrl = typeof media.url === "string" && media.url.length > 0;
+
+  if (media.kind === "html" && hasUrl) {
+    return <HtmlAttachmentCell media={media} />;
+  }
+  return <FileChip media={media} />;
+}
+
+function FileChip({ media }: { media: UIMediaAttachment }) {
   const { t } = useTranslation();
   const hasUrl = typeof media.url === "string" && media.url.length > 0;
 

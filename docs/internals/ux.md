@@ -207,6 +207,19 @@ SVG previews run in a sandboxed iframe with `allow-scripts` and a
 cannot load external resources. Mermaid diagrams and Vega-Lite charts are rendered
 by bundled lazy-loaded modules so they do not add to the initial bundle.
 
+The agent-side contract lives in the system prompt
+(`durin/templates/agent/rich_output.md`, injected by the context builder's stable
+layer): it advertises the four fence languages and the sandbox constraints, and
+explicitly steers the agent away from the paths that bypass rendering — leaving
+the content only as a workspace file path, and drawing diagrams as ASCII art in
+plain code blocks.
+
+`.html` message attachments render inline through the same sandboxed preview as
+a fenced `html` block (the agent often delivers a full-page mockup as a file
+attachment rather than a fence), with the download link preserved as a caption.
+The attachment's display kind is inferred from the filename on both paths: in
+the client for live frames, and in the transcript replay builder for reloads.
+
 ### Work-visibility surfaces (WebUI)
 
 Three surfaces make background work visible inside a chat without navigating
