@@ -860,3 +860,52 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
         logger.exception("Failed to initialize skills git store for {}", workspace)
 
     return added
+
+
+_TABLE_SEPARATOR = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
+
+
+def _table_cells(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def convert_gfm_tables(text: str) -> str:
+    """Convert GFM pipe tables to bullet lists for surfaces without table support.
+
+    Each body row becomes ``- **first-cell** — Header2: v2; Header3: v3``.
+    Fenced code blocks are left untouched; non-table lines pass through.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    in_fence = False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            out.append(line)
+            i += 1
+            continue
+        is_header = (
+            not in_fence
+            and "|" in line
+            and i + 1 < len(lines)
+            and _TABLE_SEPARATOR.match(lines[i + 1]) is not None
+        )
+        if not is_header:
+            out.append(line)
+            i += 1
+            continue
+        headers = _table_cells(line)
+        i += 2  # skip header + separator
+        while i < len(lines) and "|" in lines[i] and lines[i].strip():
+            cells = _table_cells(lines[i])
+            first = cells[0] if cells else ""
+            rest = "; ".join(
+                f"{headers[j]}: {cells[j]}"
+                for j in range(1, min(len(headers), len(cells)))
+                if cells[j]
+            )
+            out.append(f"- **{first}** — {rest}" if rest else f"- **{first}**")
+            i += 1
+    return "\n".join(out)

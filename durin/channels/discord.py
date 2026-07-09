@@ -19,7 +19,7 @@ from durin.channels.base import BaseChannel
 from durin.command.builtin import build_help_text, specs_for_surface
 from durin.config.paths import get_media_dir
 from durin.config.schema import Base
-from durin.utils.helpers import safe_filename, split_message
+from durin.utils.helpers import convert_gfm_tables, safe_filename, split_message
 
 DISCORD_AVAILABLE = importlib.util.find_spec("discord") is not None
 if TYPE_CHECKING:
@@ -342,6 +342,7 @@ if DISCORD_AVAILABLE:
         @staticmethod
         def _build_chunks(content: str, failed_media: list[str], sent_media: bool) -> list[str]:
             """Build outbound text chunks, including attachment-failure fallback text."""
+            content = convert_gfm_tables(content)
             chunks = split_message(content, MAX_MESSAGE_LEN)
             if chunks or not failed_media or sent_media:
                 return chunks

@@ -887,6 +887,12 @@ async def test_send_to_forum_channel_splits_oversized_content_across_thread_send
     assert [p["content"] for p in thread.sent_payloads] == expected_chunks[1:]
 
 
+def test_build_chunks_converts_tables() -> None:
+    content = "| H |\n| - |\n| v |"
+    chunks = DiscordBotClient._build_chunks(content, [], False)
+    assert chunks and "|" not in chunks[0]
+
+
 @pytest.mark.asyncio
 async def test_send_to_forum_channel_attaches_files_when_media_present(tmp_path) -> None:
     owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
