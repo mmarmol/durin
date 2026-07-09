@@ -262,7 +262,7 @@ class ChannelManager:
             return True
         if msg.is_dm:
             code = generate_code(channel.name, str(msg.sender_id))
-            await channel.send(OutboundMessage(
+            await self._send_with_retry(channel, OutboundMessage(
                 channel=channel.name,
                 chat_id=str(msg.chat_id),
                 content=format_pairing_reply(code),

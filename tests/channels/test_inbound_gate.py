@@ -27,6 +27,11 @@ def _make_manager():
     m = mgr_mod.ChannelManager.__new__(mgr_mod.ChannelManager)
     m.channels = {}
     m.bus = types.SimpleNamespace(set_inbound_authorizer=lambda fn: None)
+    # _authorize_inbound routes pairing-code sends through _send_with_retry,
+    # which reads the retry count off config.
+    m.config = types.SimpleNamespace(
+        channels=types.SimpleNamespace(send_max_retries=3)
+    )
     return m
 
 
@@ -90,3 +95,32 @@ async def test_unauthorized_group_denied(mgr):
     )
     assert ok is False
     assert len(ch.sent) == 0  # group denial must NOT send a pairing code
+
+
+class _RaisingChan(_Chan):
+    """A channel whose send() always raises — e.g. a not-ready platform client."""
+
+    async def send(self, msg):
+        raise RuntimeError("client not ready")
+
+
+async def test_pairing_send_failure_does_not_propagate(mgr, monkeypatch):
+    """send() can raise (e.g. Discord's not-ready guard); the gate must route
+    pairing delivery through _send_with_retry so that failure is swallowed
+    after retries instead of crashing the caller's event dispatch."""
+    from durin.bus.events import InboundMessage
+
+    ch = _RaisingChan(False)
+    mgr.channels["telegram"] = ch
+    monkeypatch.setattr(
+        "durin.channels.manager.generate_code",
+        lambda channel, sender: "AAAA-BBBB",
+    )
+    monkeypatch.setattr(mgr_mod, "_SEND_RETRY_DELAYS", (0, 0, 0))
+
+    ok = await mgr._authorize_inbound(
+        InboundMessage(
+            channel="telegram", sender_id="s", chat_id="c", content="x", is_dm=True
+        )
+    )
+    assert ok is False

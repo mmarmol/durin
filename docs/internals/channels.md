@@ -199,12 +199,13 @@ be bypassed once a message is published.
 
 The channel contract is to be **pure transport**: publish unconditionally with
 `is_dm` set and let the gate authorize — a channel should NOT re-implement
-`is_allowed`/pairing in its handlers. **Telegram and Slack are the reference
-implementations of this contract.** Several other channels still pre-filter
-with their own `is_allowed` check and early-`return` in their handlers (legacy
-behaviour, unchanged here — those messages never reach the gate); migrating
-them to pure transport so they route through the central gate is a follow-up.
-New channels should follow the Telegram/Slack model.
+`is_allowed`/pairing in its handlers. **Telegram, Slack, and Discord are the
+reference implementations of this contract.** Several other channels still
+pre-filter with their own `is_allowed` check and early-`return` in their
+handlers (legacy behaviour, unchanged here — those messages never reach the
+gate); migrating them to pure transport so they route through the central
+gate is a follow-up. New channels should follow the Telegram/Slack/Discord
+model.
 
 The agent loop (`AgentLoop.run()`) consumes from `bus.inbound`. The
 `InboundMessage.session_key` property returns `session_key_override` when set,
@@ -358,7 +359,8 @@ Channel-specific extensions:
 
 - **Telegram**: no additional permission fields beyond `allow_from`.
 - **Discord**: `allow_channels` — list of Discord channel IDs allowed to
-  trigger the bot (empty means all).
+  trigger the bot (empty means all). Sender authorization uses the standard
+  `allow_from` + pairing flow via the central ingress gate.
 - **Slack**: `dm_enabled` (routing toggle for DMs), `group_policy`
   (`open`/`mention`/`allowlist`), `group_allow_from` (channel IDs for the
   allowlist policy), `open_channels` (rooms that reply to every message under
@@ -461,7 +463,7 @@ detection wrong, and the pairing logic lives in one place instead of being
 re-implemented per channel. (A channel that still pre-filters with its own
 `is_allowed` and early-returns short-circuits before publishing, so it never
 reaches the gate; that is the legacy pattern the pure-transport migration
-removes — Telegram first.)
+removes — Telegram first, then Slack and Discord.)
 
 **Why does stream coalescing key on `_stream_id` and not just `(channel,
 chat_id)`?** Channels like Telegram forum topics or Discord threads can have

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -62,7 +63,7 @@ class _FakeDiscordClient:
 class _FakeAttachment:
     # Attachment double that can simulate successful or failing save() calls.
     def __init__(
-        self, attachment_id: int, filename: str, *, size: int = 1, fail: bool = False
+        self, attachment_id: int = 1, filename: str = "file.bin", *, size: int = 1, fail: bool = False
     ) -> None:
         self.id = attachment_id
         self.filename = filename
@@ -209,6 +210,32 @@ def _make_message(
         id=message_id,
         type=message_type or discord.MessageType.default,
     )
+
+
+_dm_message_ids = itertools.count(1)
+
+
+def _make_dm_message(
+    *,
+    author_id: str = "1",
+    content: str = "hello",
+    attachments: list[object] | None = None,
+):
+    # Factory for incoming direct-message doubles: no guild, records add_reaction
+    # calls so tests can assert cosmetic feedback (typing/reactions) was skipped.
+    message = _make_message(
+        author_id=int(author_id),
+        content=content,
+        attachments=attachments,
+        message_id=next(_dm_message_ids),
+    )
+    message.reactions_added = []
+
+    async def add_reaction(emoji):
+        message.reactions_added.append(emoji)
+
+    message.add_reaction = add_reaction
+    return message
 
 
 @pytest.mark.asyncio
@@ -1342,3 +1369,39 @@ async def test_client_denies_mass_mentions_by_default() -> None:
     assert client.allowed_mentions.roles is False
     assert client.allowed_mentions.users is True
     assert client.allowed_mentions.replied_user is False
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_dm_is_published_for_central_pairing_gate() -> None:
+    """The channel must not pre-filter senders: the bus-ingress gate owns
+    authorization and issues pairing codes for unknown DM senders."""
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["42"]}, bus)
+    channel._bot_user_id = "999"
+    msg = _make_dm_message(author_id="777", content="hello")  # build like existing DM tests
+    await channel._handle_discord_message(msg)
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.sender_id == "777"
+    assert inbound.is_dm is True
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_sender_gets_no_typing_or_reactions() -> None:
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["42"]}, bus)
+    channel._bot_user_id = "999"
+    msg = _make_dm_message(author_id="777", content="hello")
+    await channel._handle_discord_message(msg)
+    assert msg.reactions_added == []          # extend the fake message to record add_reaction calls
+    assert channel._typing_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_sender_attachments_not_downloaded(tmp_path, monkeypatch) -> None:
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["42"]}, bus)
+    channel._bot_user_id = "999"
+    msg = _make_dm_message(author_id="777", content="hi", attachments=[_FakeAttachment()])
+    await channel._handle_discord_message(msg)
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.media == []

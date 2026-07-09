@@ -555,10 +555,14 @@ class DiscordChannel(BaseChannel):
         self._remember_channel(message.channel)
         content = message.content or ""
 
-        if not self._should_accept_inbound(message, sender_id, content):
+        if not self._should_accept_inbound(message, content):
             return
 
-        media_paths, attachment_markers = await self._download_attachments(message.attachments)
+        authorized = self.is_allowed(sender_id)
+
+        media_paths, attachment_markers = (
+            (await self._download_attachments(message.attachments)) if authorized else ([], [])
+        )
         full_content = self._compose_inbound_content(content, attachment_markers)
         metadata = self._build_inbound_metadata(message)
         parent_channel_id = self._channel_parent_key(message.channel)
@@ -569,22 +573,23 @@ class DiscordChannel(BaseChannel):
             metadata["thread_id"] = channel_id
             session_key = f"{self.name}:{parent_channel_id}:thread:{channel_id}"
 
-        await self._start_typing(message.channel)
+        if authorized:
+            await self._start_typing(message.channel)
 
-        # Add read receipt reaction immediately, working emoji after delay
-        try:
-            await message.add_reaction(self.config.read_receipt_emoji)
-            self._pending_reactions[channel_id] = message
-        except Exception as e:
-            self.logger.debug("Failed to add read receipt reaction: {}", e)
+            # Add read receipt reaction immediately, working emoji after delay
+            try:
+                await message.add_reaction(self.config.read_receipt_emoji)
+                self._pending_reactions[channel_id] = message
+            except Exception as e:
+                self.logger.debug("Failed to add read receipt reaction: {}", e)
 
-        # Delayed working indicator (cosmetic — not tied to subagent lifecycle)
-        async def _delayed_working_emoji() -> None:
-            await asyncio.sleep(self.config.working_emoji_delay)
-            with suppress(Exception):
-                await message.add_reaction(self.config.working_emoji)
+            # Delayed working indicator (cosmetic — not tied to subagent lifecycle)
+            async def _delayed_working_emoji() -> None:
+                await asyncio.sleep(self.config.working_emoji_delay)
+                with suppress(Exception):
+                    await message.add_reaction(self.config.working_emoji)
 
-        self._working_emoji_tasks[channel_id] = asyncio.create_task(_delayed_working_emoji())
+            self._working_emoji_tasks[channel_id] = asyncio.create_task(_delayed_working_emoji())
 
         try:
             await self._handle_message(
@@ -649,16 +654,13 @@ class DiscordChannel(BaseChannel):
         await self._stop_typing(chat_id)
         await self._clear_reactions(chat_id)
 
-    def _should_accept_inbound(
-        self,
-        message: discord.Message,
-        sender_id: str,
-        content: str,
-    ) -> bool:
-        """Check if inbound Discord message should be processed."""
-        if not self.is_allowed(sender_id):
-            return False
-        # Channel-based filtering: only respond in allowed channels
+    def _should_accept_inbound(self, message: discord.Message, content: str) -> bool:
+        """Channel-policy filter only (allowed channels, group mention policy).
+
+        Sender authorization is deliberately NOT checked here: the central
+        bus-ingress gate enforces it uniformly and issues pairing codes for
+        unknown DM senders, so the channel must publish unconditionally.
+        """
         allow_channels = self.config.allow_channels
         if allow_channels:
             channel_ids = self._channel_allow_keys(message.channel)

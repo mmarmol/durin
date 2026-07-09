@@ -141,6 +141,11 @@ async def test_unauthorized_dm_pairs_via_gate(monkeypatch) -> None:
     m = mgr_mod.ChannelManager.__new__(mgr_mod.ChannelManager)
     m.channels = {"telegram": _TelegramStub()}
     m.bus = types.SimpleNamespace(set_inbound_authorizer=lambda fn: None)
+    # _authorize_inbound routes pairing-code sends through _send_with_retry,
+    # which reads the retry count off config.
+    m.config = types.SimpleNamespace(
+        channels=types.SimpleNamespace(send_max_retries=3)
+    )
 
     monkeypatch.setattr(
         "durin.channels.manager.generate_code",
