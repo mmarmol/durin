@@ -146,6 +146,20 @@ class _FakeChannel:
         return _TypingContext()
 
 
+class _FakeForumChannel:
+    # Forum/media channel double: rejects plain sends, only accepts thread creation.
+    type = discord.ChannelType.forum
+
+    def __init__(self):
+        self.threads_created = []
+        self.id = 555
+
+    async def create_thread(self, *, name, content=None, files=None):
+        thread = _FakeChannel()
+        self.threads_created.append({"name": name, "content": content, "files": files})
+        return SimpleNamespace(thread=thread, message=None)
+
+
 class _FakeInteractionResponse:
     def __init__(self) -> None:
         self.messages: list[dict] = []
@@ -829,6 +843,22 @@ async def test_send_uses_seen_thread_channel_when_client_cannot_resolve_it() -> 
     await client.send_outbound(OutboundMessage(channel="discord", chat_id="777", content="hello"))
 
     assert target.sent_payloads == [{"content": "hello"}]
+
+
+@pytest.mark.asyncio
+async def test_send_to_forum_channel_creates_thread_post() -> None:
+    # Forum/media channels reject plain message sends; outbound must create a thread post.
+    owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    client = DiscordBotClient(owner, intents=discord.Intents.none())
+    forum = _FakeForumChannel()
+    owner._known_channels["555"] = forum
+
+    await client.send_outbound(
+        OutboundMessage(channel="discord", chat_id="555", content="Title line\nbody")
+    )
+
+    assert forum.threads_created
+    assert forum.threads_created[0]["name"] == "Title line"
 
 
 def test_supports_streaming_enabled_by_default() -> None:

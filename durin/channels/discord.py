@@ -263,6 +263,11 @@ if DISCORD_AVAILABLE:
                     self._channel.logger.warning("channel {} unavailable: {}", msg.chat_id, e)
                     return
 
+            forum_types = {discord.ChannelType.forum, discord.ChannelType.media}
+            if getattr(channel, "type", None) in forum_types:
+                await self._send_to_forum(channel, msg)
+                return
+
             reference, mention_settings = self._build_reply_context(channel, msg.reply_to)
             sent_media = False
             failed_media: list[str] = []
@@ -286,6 +291,23 @@ if DISCORD_AVAILABLE:
                     kwargs["reference"] = reference
                     kwargs["allowed_mentions"] = mention_settings
                 await channel.send(**kwargs)
+
+        async def _send_to_forum(self, forum: Any, msg: OutboundMessage) -> None:
+            """Forum/media channels reject plain sends; post a new thread instead."""
+            chunks = self._build_chunks(msg.content or "", [], False) or ["…"]
+            first_line = (msg.content or "").strip().splitlines()[0] if (msg.content or "").strip() else ""
+            name = (first_line or "durin")[:100]
+            files = [
+                discord.File(Path(p)) for p in (msg.media or []) if Path(p).is_file()
+            ]
+            kwargs: dict[str, Any] = {"name": name, "content": chunks[0]}
+            if files:
+                kwargs["files"] = files
+            created = await forum.create_thread(**kwargs)
+            thread = getattr(created, "thread", created)
+            self._channel._remember_channel(thread)
+            for chunk in chunks[1:]:
+                await thread.send(content=chunk)
 
         async def _send_file(
             self,
