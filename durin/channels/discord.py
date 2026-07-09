@@ -78,7 +78,17 @@ if DISCORD_AVAILABLE:
             proxy: str | None = None,
             proxy_auth: aiohttp.BasicAuth | None = None,
         ) -> None:
-            super().__init__(intents=intents, proxy=proxy, proxy_auth=proxy_auth)
+            super().__init__(
+                intents=intents,
+                proxy=proxy,
+                proxy_auth=proxy_auth,
+                # LLM output is untrusted for mention purposes: echoed
+                # @everyone/@here or role pings must never fan out to a server.
+                # Users may still be mentioned (replies, direct address).
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=False, roles=False, users=True, replied_user=False
+                ),
+            )
             self._channel = channel
             self.tree = app_commands.CommandTree(self)
             self._register_app_commands()

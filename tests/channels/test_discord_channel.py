@@ -1325,3 +1325,14 @@ async def test_send_succeeds_normally() -> None:
     assert len(sent_messages) == 1
     assert sent_messages[0].content == "hello world"
     assert sent_messages[0].chat_id == "123"
+
+
+@pytest.mark.asyncio
+async def test_client_denies_mass_mentions_by_default() -> None:
+    channel = DiscordChannel(DiscordConfig(enabled=True, token="t"), MessageBus())
+    client = DiscordBotClient(channel, intents=discord.Intents.none())
+    assert client.allowed_mentions is not None
+    assert client.allowed_mentions.everyone is False
+    assert client.allowed_mentions.roles is False
+    assert client.allowed_mentions.users is True
+    assert client.allowed_mentions.replied_user is False
