@@ -1802,3 +1802,19 @@ async def test_on_ready_syncs_commands_only_once() -> None:
     await DiscordBotClient.on_ready(fake_client)
     await DiscordBotClient.on_ready(fake_client)
     assert len(sync_calls) == 1
+
+
+def test_token_lock_rejects_second_holder() -> None:
+    channel_a = _make_channel()
+    channel_b = _make_channel()
+    try:
+        assert channel_a._acquire_token_lock() is True
+        assert channel_b._acquire_token_lock() is False
+    finally:
+        channel_a._release_token_lock()
+        channel_b._release_token_lock()
+    # Released: can be re-acquired.
+    try:
+        assert channel_b._acquire_token_lock() is True
+    finally:
+        channel_b._release_token_lock()

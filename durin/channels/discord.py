@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
+import os
+import tempfile
 import time
 from collections import OrderedDict
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
 
 from pydantic import Field
 
@@ -442,6 +450,33 @@ class DiscordChannel(BaseChannel):
         self._liveness_task: asyncio.Task[None] | None = None
         self._seen_message_ids: OrderedDict[str, float] = OrderedDict()
         self._commands_synced = False
+        self._token_lock_fd: int | None = None
+
+    def _acquire_token_lock(self) -> bool:
+        """One gateway per bot token per host.
+
+        Two clients on the same token both receive every event and reply
+        twice (split-brain). An advisory flock held for the channel's
+        lifetime rejects the second starter with a clear error instead.
+        """
+        if fcntl is None or not self.config.token:
+            return True
+        digest = hashlib.sha256(self.config.token.encode()).hexdigest()[:16]
+        lock_path = Path(tempfile.gettempdir()) / f"durin-discord-{digest}.lock"
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return False
+        self._token_lock_fd = fd
+        return True
+
+    def _release_token_lock(self) -> None:
+        fd, self._token_lock_fd = self._token_lock_fd, None
+        if fd is not None:
+            with suppress(OSError):
+                os.close(fd)  # closing the fd releases the flock
 
     def _remember_channel(self, channel: Any) -> None:
         self._known_channels[self._channel_key(channel)] = channel
@@ -457,6 +492,13 @@ class DiscordChannel(BaseChannel):
 
         if not self.config.token:
             self.logger.error("bot token not configured")
+            return
+
+        if not self._acquire_token_lock():
+            self.logger.error(
+                "another running process already uses this Discord bot token "
+                "(a second client would double-reply); not starting"
+            )
             return
 
         try:
@@ -498,6 +540,7 @@ class DiscordChannel(BaseChannel):
             self.logger.exception("Failed to initialize client")
             self._client = None
             self._running = False
+            self._release_token_lock()
             return
 
         self._stop_requested = False
@@ -1026,3 +1069,4 @@ class DiscordChannel(BaseChannel):
                 self.logger.warning("client close failed: {}", e)
         self._client = None
         self._bot_user_id = None
+        self._release_token_lock()
