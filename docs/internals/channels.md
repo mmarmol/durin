@@ -177,7 +177,25 @@ overrides (`send_progress`, `send_tool_hints`, `show_reasoning`). Per-channel
 values in config can override the global defaults.
 
 Once `start_all` is called, a dedicated asyncio task is created for
-`_dispatch_outbound`, and one task per channel calls `channel.start()`.
+`_dispatch_outbound`, and one task per channel runs under a supervision loop
+(`ChannelManager._start_channel`) that calls `channel.start()`.
+
+**Channel crash supervision.** An exception raised out of `channel.start()` is
+treated as a transient crash: the supervisor restarts the channel with a
+capped exponential backoff, and the backoff resets once the channel has run
+stably for a while. A clean return from `channel.start()`, by contrast, ends
+supervision for that channel — it signals either a deliberate stop or a fatal
+configuration error that a restart loop cannot fix and would only hammer the
+platform with reconnect attempts. Fatal-configuration examples include a
+rejected bot token, missing privileged intents, or (Discord-specific) another
+process already holding a lock on the same bot token — Discord enforces a
+single active connection per token and refuses the second one cleanly rather
+than raising.
+
+**Liveness.** Discord also runs a REST-based liveness probe alongside the
+gateway connection; when the probe detects a zombie socket the heartbeat
+cannot see, it force-closes the connection so the crash supervisor above
+reconnects it.
 
 ### Inbound path
 
@@ -206,6 +224,16 @@ handlers (legacy behaviour, unchanged here — those messages never reach the
 gate); migrating them to pure transport so they route through the central
 gate is a follow-up. New channels should follow the Telegram/Slack/Discord
 model.
+
+Pure transport applies to *sender authorization* only — the gate owns who is
+allowed to talk to the bot. Channel-policy filters that decide *which
+messages within an already-authorized conversation* get a response, such as
+mention gating in group chats or an allowed-channels list, are unrelated to
+authorization and stay channel-local. On top of the shared contract, Discord's
+adapter applies two inbound normalizations of its own: it deduplicates
+messages replayed by the gateway on reconnect, and it reassembles a long
+message the Discord client split client-side before re-publishing it as one
+`InboundMessage`.
 
 The agent loop (`AgentLoop.run()`) consumes from `bus.inbound`. The
 `InboundMessage.session_key` property returns `session_key_override` when set,
@@ -261,6 +289,11 @@ Every channel is a subclass of `BaseChannel` with three abstract methods:
 - `stop()` — graceful shutdown.
 - `send(msg: OutboundMessage)` — deliver a final response; raise on failure so
   the manager retries.
+
+Adapters may transform content before delivery. Discord's `send` converts GFM
+tables to bullet lists before chunking, since Discord's client does not render
+markdown tables, and posts to forum and media channels as a new thread instead
+of a plain message, since those channel types reject plain sends.
 
 Two optional streaming methods default to no-ops: `send_delta(chat_id, delta,
 metadata)` and `send_reasoning_delta(chat_id, delta, metadata)`. The
