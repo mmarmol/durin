@@ -152,11 +152,15 @@ class _FakeForumChannel:
 
     def __init__(self):
         self.threads_created = []
+        self.created_threads: list[_FakeChannel] = []
         self.id = 555
 
-    async def create_thread(self, *, name, content=None, files=None):
+    async def create_thread(self, *, name, content=None, **kwargs):
+        # Capture kwargs as-passed (not defaulted) so tests can assert on
+        # presence/absence of optional keys like "files".
         thread = _FakeChannel()
-        self.threads_created.append({"name": name, "content": content, "files": files})
+        self.threads_created.append({"name": name, "content": content, **kwargs})
+        self.created_threads.append(thread)
         return SimpleNamespace(thread=thread, message=None)
 
 
@@ -859,6 +863,93 @@ async def test_send_to_forum_channel_creates_thread_post() -> None:
 
     assert forum.threads_created
     assert forum.threads_created[0]["name"] == "Title line"
+
+
+@pytest.mark.asyncio
+async def test_send_to_forum_channel_splits_oversized_content_across_thread_sends() -> None:
+    # Content over the Discord message limit must be posted as the thread's
+    # initial content plus follow-up thread.send() calls, in order.
+    owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    client = DiscordBotClient(owner, intents=discord.Intents.none())
+    forum = _FakeForumChannel()
+    owner._known_channels["555"] = forum
+
+    long_content = " ".join("word" for _ in range(500))  # well over MAX_MESSAGE_LEN
+    expected_chunks = DiscordBotClient._build_chunks(long_content, [], False)
+    assert len(expected_chunks) > 1
+
+    await client.send_outbound(
+        OutboundMessage(channel="discord", chat_id="555", content=long_content)
+    )
+
+    assert forum.threads_created[0]["content"] == expected_chunks[0]
+    thread = forum.created_threads[0]
+    assert [p["content"] for p in thread.sent_payloads] == expected_chunks[1:]
+
+
+@pytest.mark.asyncio
+async def test_send_to_forum_channel_attaches_files_when_media_present(tmp_path) -> None:
+    owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    client = DiscordBotClient(owner, intents=discord.Intents.none())
+    forum = _FakeForumChannel()
+    owner._known_channels["555"] = forum
+
+    file_path = tmp_path / "image.png"
+    file_path.write_bytes(b"fake-image-bytes")
+
+    await client.send_outbound(
+        OutboundMessage(
+            channel="discord", chat_id="555", content="hello", media=[str(file_path)]
+        )
+    )
+
+    files = forum.threads_created[0]["files"]
+    assert files
+    assert all(isinstance(f, discord.File) for f in files)
+
+
+@pytest.mark.asyncio
+async def test_send_to_forum_channel_omits_files_kwarg_when_no_media() -> None:
+    owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    client = DiscordBotClient(owner, intents=discord.Intents.none())
+    forum = _FakeForumChannel()
+    owner._known_channels["555"] = forum
+
+    await client.send_outbound(
+        OutboundMessage(channel="discord", chat_id="555", content="hello")
+    )
+
+    assert "files" not in forum.threads_created[0]
+
+
+@pytest.mark.asyncio
+async def test_send_to_forum_channel_falls_back_on_empty_content() -> None:
+    owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    client = DiscordBotClient(owner, intents=discord.Intents.none())
+    forum = _FakeForumChannel()
+    owner._known_channels["555"] = forum
+
+    await client.send_outbound(OutboundMessage(channel="discord", chat_id="555", content=""))
+
+    assert forum.threads_created[0]["name"] == "durin"
+    assert forum.threads_created[0]["content"] == "…"
+    thread = forum.created_threads[0]
+    assert thread.sent_payloads == []
+
+
+@pytest.mark.asyncio
+async def test_send_to_forum_channel_caches_created_thread() -> None:
+    owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    client = DiscordBotClient(owner, intents=discord.Intents.none())
+    forum = _FakeForumChannel()
+    owner._known_channels["555"] = forum
+
+    await client.send_outbound(
+        OutboundMessage(channel="discord", chat_id="555", content="hello")
+    )
+
+    thread = forum.created_threads[0]
+    assert owner._known_channels[DiscordChannel._channel_key(thread)] is thread
 
 
 def test_supports_streaming_enabled_by_default() -> None:
