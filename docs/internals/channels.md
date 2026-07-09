@@ -296,8 +296,8 @@ audio; the bare text reads as what the user said.
 WhatsApp is the reference implementation of this contract. Channels that
 transcribe locally (currently Telegram, Discord, Matrix, Feishu, and Weixin)
 apply the same idiom: on transcription success, return an empty `media` list
-and a `[transcription: …]` content part; on failure, return the audio path so
-the `interpret_audio` tool remains a usable fallback.
+and the transcript as the bare user message text; on failure, return the audio
+path so the `interpret_audio` tool remains a usable fallback.
 
 ### Pairing store
 

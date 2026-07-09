@@ -670,9 +670,6 @@ async def test_on_message_marks_failed_attachment_download(tmp_path, monkeypatch
     assert handled[0]["content"] == "[attachment: photo.png - download failed]"
 
 
-_AUDIO_EXTS = (".ogg", ".oga", ".opus", ".mp3", ".m4a", ".wav", ".flac")
-
-
 def _make_channel() -> DiscordChannel:
     return DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
 
@@ -705,6 +702,17 @@ async def test_audio_attachment_falls_back_to_marker_when_transcription_empty(tm
     media, markers = await channel._download_attachments([att])
     assert len(media) == 1 and media[0].endswith("note.ogg")
     assert markers[0].startswith("[attachment:")
+
+
+def test_audio_detection_by_extension_without_content_type() -> None:
+    channel = _make_channel()
+    # Test detection by file extension when content_type is None.
+    att_audio = _FakeAttachment(filename="note.ogg", content_type=None)
+    assert DiscordChannel._is_audio_attachment(att_audio) is True
+
+    # Test that non-audio files are rejected.
+    att_non_audio = _FakeAttachment(filename="doc.pdf", content_type=None)
+    assert DiscordChannel._is_audio_attachment(att_non_audio) is False
 
 
 @pytest.mark.asyncio
