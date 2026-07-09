@@ -26,3 +26,14 @@ def test_convert_gfm_tables_ignores_fenced_code() -> None:
 
 def test_convert_gfm_tables_passthrough_plain_text() -> None:
     assert convert_gfm_tables("no tables | here") == "no tables | here"
+
+
+def test_convert_gfm_tables_single_column() -> None:
+    text = "| H |\n| - |\n| v |"
+    result = convert_gfm_tables(text)
+    assert result == "- **v**"
+
+
+def test_convert_gfm_tables_ignores_horizontal_rule_after_pipe_prose() -> None:
+    text = "Run: foo | bar\n---\nThen check the | pipe output\nDone"
+    assert convert_gfm_tables(text) == text

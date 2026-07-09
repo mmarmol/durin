@@ -890,6 +890,12 @@ def convert_gfm_tables(text: str) -> str:
             not in_fence
             and "|" in line
             and i + 1 < len(lines)
+            # A bare horizontal rule ("---") also matches _TABLE_SEPARATOR's
+            # zero-pipe case; require at least one literal "|" on the
+            # separator row so prose with a "---" divider isn't mistaken
+            # for a table (GFM separators always have pipes, even for a
+            # single column: "| - |").
+            and "|" in lines[i + 1]
             and _TABLE_SEPARATOR.match(lines[i + 1]) is not None
         )
         if not is_header:
