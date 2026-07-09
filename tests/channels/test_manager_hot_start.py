@@ -246,3 +246,51 @@ async def test_start_channel_parks_long_running_start(monkeypatch):
     assert len(m._background_tasks) == 1
     release.set()
     await asyncio.sleep(0)
+
+
+async def test_start_channel_parked_task_is_supervised_after_crash(monkeypatch):
+    """A start() that survives the fail-fast window is handed off to the same
+    crash-supervision loop boot-time channels get: if it later crashes, it is
+    restarted, not left dead with an unretrieved task exception."""
+    import asyncio
+    import contextlib
+
+    monkeypatch.setattr(mgr, "_HOT_START_FAIL_FAST_WINDOW_S", 0.05)
+    m = _make_manager()
+    m._background_tasks = set()
+    m.config.channels.fake = types.SimpleNamespace(enabled=True)
+
+    channel = _FakeChannel(None, None)
+    calls = {"n": 0}
+
+    async def _start():
+        calls["n"] += 1
+        channel.is_running = True
+        if calls["n"] == 1:
+            # Outlive the fail-fast window, then crash.
+            await asyncio.sleep(0.1)
+            raise RuntimeError("crashed after park")
+        # Second attempt (the supervised restart): stays "running" forever.
+        await asyncio.Event().wait()
+
+    channel.start = _start
+    monkeypatch.setattr(m, "_make_channel", lambda n: channel)
+
+    fake_config = MagicMock()
+    fake_config.channels.fake = types.SimpleNamespace(enabled=True)
+    with patch("durin.config.loader.load_config", return_value=fake_config):
+        await m.start_channel("fake")  # returns promptly, past the fail-fast window
+
+    assert m.channels["fake"] is channel
+    assert len(m._background_tasks) == 1
+
+    for _ in range(30):
+        if calls["n"] >= 2:
+            break
+        await asyncio.sleep(0.1)
+    assert calls["n"] == 2  # crash after park was restarted, not dropped
+
+    task = next(iter(m._background_tasks))
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task

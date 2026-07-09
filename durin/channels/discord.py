@@ -313,12 +313,17 @@ if DISCORD_AVAILABLE:
 
         async def _send_to_forum(self, forum: Any, msg: OutboundMessage) -> None:
             """Forum/media channels reject plain sends; post a new thread instead."""
-            chunks = self._build_chunks(msg.content or "", [], False) or ["…"]
+            files: list[discord.File] = []
+            failed_media: list[str] = []
+            for media_path in msg.media or []:
+                path = Path(media_path)
+                if path.is_file():
+                    files.append(discord.File(path))
+                else:
+                    failed_media.append(path.name)
+            chunks = self._build_chunks(msg.content or "", failed_media, bool(files)) or ["…"]
             first_line = (msg.content or "").strip().splitlines()[0] if (msg.content or "").strip() else ""
             name = (first_line or "durin")[:100]
-            files = [
-                discord.File(Path(p)) for p in (msg.media or []) if Path(p).is_file()
-            ]
             kwargs: dict[str, Any] = {"name": name, "content": chunks[0]}
             if files:
                 kwargs["files"] = files
@@ -722,7 +727,12 @@ class DiscordChannel(BaseChannel):
 
         async def _flush_later() -> None:
             await asyncio.sleep(_SPLIT_FLUSH_DELAY_S)
-            await self._flush_split(key)
+            try:
+                await self._flush_split(key)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.logger.exception("Timer flush failed for split buffer {}", key)
 
         buf.task = asyncio.create_task(_flush_later())
 
@@ -1057,10 +1067,22 @@ class DiscordChannel(BaseChannel):
         self._stop_liveness_probe()
         await self._cancel_all_typing()
         self._stream_bufs.clear()
-        for buf in self._pending_splits.values():
-            if buf.task is not None and not buf.task.done():
+        pending_splits, self._pending_splits = self._pending_splits, {}
+        for key, buf in pending_splits.items():
+            # Same current-task guard as _flush_split: a buffer's own timer
+            # task could in principle be the one calling this (e.g. a future
+            # caller triggering teardown from within _flush_later); cancelling
+            # your own running task doesn't raise until the next suspension
+            # point, which would land inside the dispatch below.
+            if buf.task is not None and buf.task is not asyncio.current_task() and not buf.task.done():
                 buf.task.cancel()
-        self._pending_splits.clear()
+            # Flush rather than drop: dedup already marked the buffered
+            # message seen, so discarding it here would lose it permanently.
+            # Publishing to the bus does not need a live client.
+            try:
+                await self._dispatch_inbound(buf.message, "\n".join(buf.parts))
+            except Exception:
+                self.logger.exception("Failed to flush buffered split message for {}", key)
         self._known_channels.clear()
         if close_client and self._client is not None and not self._client.is_closed():
             try:

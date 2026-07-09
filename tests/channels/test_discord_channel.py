@@ -916,6 +916,27 @@ async def test_send_to_forum_channel_attaches_files_when_media_present(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_send_to_forum_channel_reports_missing_media(tmp_path) -> None:
+    # A missing/unreadable attachment must surface a failure marker in the
+    # posted content, matching the regular (non-forum) send path's convention.
+    owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
+    client = DiscordBotClient(owner, intents=discord.Intents.none())
+    forum = _FakeForumChannel()
+    owner._known_channels["555"] = forum
+
+    missing_file = tmp_path / "missing.png"
+
+    await client.send_outbound(
+        OutboundMessage(
+            channel="discord", chat_id="555", content="", media=[str(missing_file)]
+        )
+    )
+
+    assert "files" not in forum.threads_created[0]
+    assert forum.threads_created[0]["content"] == "[attachment: missing.png - send failed]"
+
+
+@pytest.mark.asyncio
 async def test_send_to_forum_channel_omits_files_kwarg_when_no_media() -> None:
     owner = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
     client = DiscordBotClient(owner, intents=discord.Intents.none())
@@ -1733,6 +1754,25 @@ async def test_timer_flush_survives_real_suspension_points(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_reset_runtime_state_flushes_pending_split_buffer() -> None:
+    """Teardown must not silently drop a buffered split part: dedup already
+    marked the underlying message seen, so cancelling and dropping it here
+    (instead of flushing) would lose it permanently."""
+    bus = MessageBus()
+    channel = DiscordChannel({"enabled": True, "token": "t", "allow_from": ["777"]}, bus)
+    channel._bot_user_id = "999"
+    part1 = _make_dm_message(author_id="777", content="x" * 1950, message_id="1")
+    await channel._handle_discord_message(part1)
+    assert channel._pending_splits  # buffer open, awaiting continuation/timer
+
+    await channel._reset_runtime_state(close_client=False)
+
+    inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+    assert inbound.content == "x" * 1950
+    assert channel._pending_splits == {}
+
+
+@pytest.mark.asyncio
 async def test_attachment_message_dispatches_independently_while_buffer_open() -> None:
     """An attachment message arriving while a split buffer is open for the same
     sender must dispatch on its own, not get swallowed into the pending join."""
@@ -1804,7 +1844,12 @@ async def test_on_ready_syncs_commands_only_once() -> None:
     assert len(sync_calls) == 1
 
 
-def test_token_lock_rejects_second_holder() -> None:
+def test_token_lock_rejects_second_holder(monkeypatch, tmp_path) -> None:
+    # Isolate the advisory lock file to a per-test tmp dir: the lock path is
+    # derived only from the (shared, hardcoded) token, so two concurrent test
+    # runs on the same host would otherwise collide on the same lock file in
+    # the real system tempdir and deadlock the second assertion below.
+    monkeypatch.setattr("durin.channels.discord.tempfile.gettempdir", lambda: str(tmp_path))
     channel_a = _make_channel()
     channel_b = _make_channel()
     try:

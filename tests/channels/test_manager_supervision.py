@@ -50,3 +50,22 @@ async def test_supervisor_does_not_restart_clean_return() -> None:
     channel.starts = 10                  # start() will return cleanly
     await manager._start_channel("crashonce", channel)
     assert channel.starts == 11
+
+
+@pytest.mark.asyncio
+async def test_supervisor_does_not_restart_deregistered_channel(monkeypatch) -> None:
+    """If stop_channel() pops the channel from the registry while the
+    supervisor sleeps its crash backoff, the supervisor must not restart it —
+    a resurrected but deregistered channel would bypass _authorize_inbound's
+    trust-unknown-channels gate and process inbound messages unauthorized."""
+    manager = ChannelManager.__new__(ChannelManager)
+    channel = _CrashOnceChannel()
+    manager.channels = {"crashonce": channel}
+
+    async def fake_sleep(delay: float) -> None:
+        # Simulate stop_channel() racing the backoff sleep.
+        manager.channels.pop("crashonce", None)
+
+    monkeypatch.setattr("durin.channels.manager.asyncio.sleep", fake_sleep)
+    await manager._start_channel("crashonce", channel)
+    assert channel.starts == 1           # crashed once; must NOT be restarted

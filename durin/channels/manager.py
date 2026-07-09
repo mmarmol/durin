@@ -332,7 +332,13 @@ class ChannelManager:
         value = getattr(section, key, None)
         return value if isinstance(value, bool) else default
 
-    async def _start_channel(self, name: str, channel: BaseChannel) -> None:
+    async def _start_channel(
+        self,
+        name: str,
+        channel: BaseChannel,
+        *,
+        first_attempt: asyncio.Task[None] | None = None,
+    ) -> None:
         """Run a channel under crash supervision.
 
         A clean return from ``channel.start()`` ends supervision — that is the
@@ -340,12 +346,29 @@ class ChannelManager:
         (bad token, missing privileged intents) where a restart loop would
         just hammer the platform. Any exception is treated as a transient
         crash: restart with exponential backoff, reset after stable uptime.
+
+        ``first_attempt``, when given, is an already-running ``channel.start()``
+        task — the hot-start path hands it off here once it outlives its
+        fail-fast window — and is awaited as this loop's first attempt instead
+        of calling ``channel.start()`` again.
         """
+        # Snapshot whether the caller had already registered *channel* under
+        # *name* before supervision began. Only then is it meaningful to treat
+        # a later disappearance as "deregistered while we slept" — some tests
+        # build the manager via __new__ and never populate (or don't touch)
+        # `channels` at all, and those must keep restarting normally.
+        channels = getattr(self, "channels", None)
+        was_registered = channels is not None and channels.get(name) is channel
+
         attempt = 0
         while True:
             started_at = time.monotonic()
             try:
-                await channel.start()
+                if first_attempt is not None:
+                    pending, first_attempt = first_attempt, None
+                    await pending
+                else:
+                    await channel.start()
                 return
             except asyncio.CancelledError:
                 raise
@@ -357,6 +380,13 @@ class ChannelManager:
             attempt += 1
             logger.info("Restarting channel {} in {}s", name, delay)
             await asyncio.sleep(delay)
+            # A concurrent stop_channel() may have popped (or replaced) this
+            # channel from the registry while we slept the backoff — restarting
+            # it here would resurrect a deregistered channel whose inbound
+            # bypasses _authorize_inbound's trust-unknown-channels gate.
+            if was_registered and channels.get(name) is not channel:
+                logger.info("Channel {} was replaced or stopped; ending supervision", name)
+                return
 
     async def start_all(self) -> None:
         """Start all channels and the outbound dispatcher."""
@@ -520,8 +550,17 @@ class ChannelManager:
                     f"Channel {name} did not start (check its credentials in the logs)"
                 )
         else:
-            self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
+            # Still running past the fail-fast window (e.g. Slack's inline
+            # keepalive loop): hand it to the same crash-supervision loop
+            # boot-time channels get, so a later crash restarts it instead of
+            # leaving it dead with an unretrieved task exception.
+            # _start_channel's own registry guard keeps this safe to combine
+            # with a concurrent stop_channel().
+            supervised = asyncio.create_task(
+                self._start_channel(name, channel, first_attempt=task)
+            )
+            self._background_tasks.add(supervised)
+            supervised.add_done_callback(self._background_tasks.discard)
         logger.info("Hot-started channel {}", name)
 
     async def stop_channel(self, name: str) -> None:
