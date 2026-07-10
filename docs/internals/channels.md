@@ -277,6 +277,65 @@ The agent loop (`AgentLoop.run()`) consumes from `bus.inbound`. The
 or `"{channel}:{chat_id}"` otherwise. This lets thread-scoped sessions (for
 example, Slack threads) share a distinct session from the channel-level one.
 
+### Inbound deduplication
+
+Several transports redeliver events the gateway already handled: a
+reconnecting long-lived connection replays its recent window, a webhook
+retries when the handler acks slowly, or a crash leaves a sync cursor
+pointing at events the channel already processed once. `MessageDeduplicator`
+(`durin/channels/dedup.py`) centralizes the "have I seen this id recently?"
+check so channel adapters stop reimplementing their own TTL'd id cache. Each
+channel owns its own instance, keyed by whatever the platform calls its
+event or message id, and checks it before any other inbound processing.
+
+**Two modes.** The default is in-memory: entries are pruned once the cache
+exceeds its size cap or ages past its TTL, and everything is lost on gateway
+restart — acceptable for transports that only redeliver within a live
+connection or a slow-ack window, never across a restart. Persistence is
+opt-in via a `persist_path` (a JSON file under the runtime `dedup/`
+subdirectory, written atomically) for transports whose redelivery window can
+outlive the process: Feishu's Lark WebSocket redelivers un-ACKed events
+after the gateway itself restarts, and Matrix's `nio` client resyncs from
+the last persisted sync token after a crash that lands between an event
+callback and the token-store write, replaying that window on the next
+start. Only a persistent cache closes that gap — an in-memory one would
+reprocess the replayed events as if they were new.
+
+**Adoption by channel.** Slack, WhatsApp, WeCom, Weixin, and QQ migrated
+their pre-existing ad hoc caches onto the shared helper in memory-only mode,
+keeping each channel's prior cache size and TTL so the migration is
+behavior-preserving. DingTalk and MS Teams gained dedup they didn't have
+before, also in memory-only mode: DingTalk's stream SDK re-pushes a message
+when the gateway acks slowly, and Bot Framework retries a webhook delivery
+under the same condition — both are same-connection replays, not crash
+recovery, so memory-only is sufficient. Feishu and Matrix use the persistent
+mode described above, since only they need to survive a gateway restart.
+
+Weixin deliberately does not layer a content fingerprint (hashing
+sender+text, as some other bot frameworks do) on top of id-based dedup:
+that would drop a message a user legitimately sends twice in a row within
+the same TTL window — a short "ok" retyped after a typo, for instance —
+which id-based dedup does not.
+
+**Explicit non-adoptions.** Telegram, Discord, Email, and WebSocket don't
+use the shared helper because their transport already guarantees
+no-redelivery at a lower level:
+
+- **Telegram** acks `getUpdates` with an offset; the offset itself tells
+  Telegram's servers which updates were consumed, so there is nothing left
+  to redeliver.
+- **Discord** already carries its own local replay guard tied to the
+  gateway's sequence number and RESUME handshake (see "Inbound path"
+  above) — that reconnect replay is a property of Discord's own protocol,
+  not a pattern shared with the other transports, so it was left as-is
+  rather than migrated.
+- **Email** stamps `\Seen` on a message immediately after processing it;
+  the next IMAP poll simply won't refetch a `\Seen` message, a stronger,
+  protocol-level guarantee than a local id cache could add.
+- **WebSocket** (the webui) is a direct, local connection with no upstream
+  platform relaying or retrying events on durin's behalf, so there is no
+  redelivery to guard against.
+
 ### Outbound path
 
 After completing a turn, the agent loop publishes one or more `OutboundMessage`
@@ -576,6 +635,7 @@ background worker. `approve_code` moves an entry from pending to approved;
 | `ChannelManager` | `durin/channels/manager.py` | Lifecycle and dispatch coordinator. `_init_channels` discovers and instantiates. `_dispatch_outbound` applies gating, coalescing, dedup, and retry. `start_all` / `stop_all` manage the asyncio task tree. |
 | `MessageBus` | `durin/bus/queue.py` | Two `asyncio.Queue` objects (`inbound`, `outbound`). `publish_inbound` runs the installed inbound-authorizer gate before enqueuing; `set_inbound_authorizer` wires the gate. |
 | `InboundMessage` | `durin/bus/events.py` | Channel-to-loop event: `channel`, `sender_id`, `chat_id`, `content`, `media`, `metadata`, `session_key_override`. `session_key` property returns override or `"channel:chat_id"`. |
+| `MessageDeduplicator` | `durin/channels/dedup.py` | Shared TTL + size-capped id cache guarding against transport redelivery. In-memory by default; an optional `persist_path` backs it with an atomically-written JSON file for transports whose redelivery window can span a restart. See "Inbound deduplication" above. |
 | `OutboundMessage` | `durin/bus/events.py` | Loop-to-channel event: `channel`, `chat_id`, `content`, `reply_to`, `media`, `metadata`, `buttons`. Metadata carries routing and flag keys such as `_progress`, `_stream_delta`, `_reasoning_delta`, `_retry_wait`. |
 | `discover_all` | `durin/channels/registry.py` | Returns merged dict of built-in (pkgutil scan) + external (entry_points) channel classes. Built-ins shadow plugins of the same name. |
 | `generate_code` | `durin/pairing/store.py` | Creates a pairing code (`ABCD-EFGH` format, 8 chars) for an unapproved DM sender and writes it to `pairing.json` with a TTL. |
