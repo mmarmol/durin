@@ -20,6 +20,7 @@ if not WECOM_AVAILABLE:
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.wecom import (
+    WECOM_MAX_MESSAGE_LEN,
     WecomChannel,
     WecomConfig,
     _guess_wecom_media_type,
@@ -406,21 +407,83 @@ async def test_send_media_file_not_found() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_exception_caught_not_raised() -> None:
-    """Exceptions inside send() must not propagate."""
+async def test_send_propagates_client_exception_with_frame() -> None:
+    """A transport/delivery failure from the SDK must raise so ChannelManager
+    can apply its retry policy — swallowing it here silently drops the
+    message (base.py's send() contract)."""
     channel = WecomChannel(WecomConfig(bot_id="b", secret="s", allow_from=["*"]), MessageBus())
     client = _FakeWeComClient()
     channel._client = client
     channel._generate_req_id = lambda x: f"req_{x}"
     channel._chat_frames["chat1"] = _FakeFrame()
 
-    # Make reply_stream raise
+    # Make reply_stream raise, as the real SDK does on a WS transport error
+    # or a non-zero ack errcode (see wecom_aibot_sdk.ws.WsConnectionManager).
     client.reply_stream.side_effect = RuntimeError("boom")
 
+    with pytest.raises(RuntimeError, match="boom"):
+        await channel.send(
+            OutboundMessage(channel="wecom", chat_id="chat1", content="fail test")
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_propagates_client_exception_proactive() -> None:
+    """Same contract for the no-frame (proactive send_message) path."""
+    channel = WecomChannel(WecomConfig(bot_id="b", secret="s", allow_from=["*"]), MessageBus())
+    client = _FakeWeComClient()
+    channel._client = client
+
+    client.send_message.side_effect = RuntimeError("transport down")
+
+    with pytest.raises(RuntimeError, match="transport down"):
+        await channel.send(
+            OutboundMessage(channel="wecom", chat_id="chat1", content="fail test")
+        )
+
+
+@pytest.mark.asyncio
+async def test_send_splits_long_message_with_frame() -> None:
+    """Content over WECOM_MAX_MESSAGE_LEN is split into multiple reply_stream
+    calls, each within the limit, in order."""
+    channel = WecomChannel(WecomConfig(bot_id="b", secret="s", allow_from=["*"]), MessageBus())
+    client = _FakeWeComClient()
+    channel._client = client
+    channel._generate_req_id = lambda x: f"req_{x}"
+    channel._chat_frames["chat1"] = _FakeFrame()
+
+    long_content = "x" * (WECOM_MAX_MESSAGE_LEN + 500)
+
     await channel.send(
-        OutboundMessage(channel="wecom", chat_id="chat1", content="fail test")
+        OutboundMessage(channel="wecom", chat_id="chat1", content=long_content)
     )
-    # No exception — test passes if we reach here.
+
+    assert client.reply_stream.call_count == 2
+    calls = client.reply_stream.call_args_list
+    chunks = [call[0][2] for call in calls]
+    assert all(len(chunk) <= WECOM_MAX_MESSAGE_LEN for chunk in chunks)
+    # Order preserved: concatenating the chunks reproduces the original text.
+    assert "".join(chunks) == long_content
+
+
+@pytest.mark.asyncio
+async def test_send_splits_long_message_proactive() -> None:
+    """Same split behavior for the no-frame proactive send_message path."""
+    channel = WecomChannel(WecomConfig(bot_id="b", secret="s", allow_from=["*"]), MessageBus())
+    client = _FakeWeComClient()
+    channel._client = client
+
+    long_content = "y" * (WECOM_MAX_MESSAGE_LEN + 500)
+
+    await channel.send(
+        OutboundMessage(channel="wecom", chat_id="chat1", content=long_content)
+    )
+
+    assert client.send_message.call_count == 2
+    calls = client.send_message.call_args_list
+    chunks = [call[0][1]["markdown"]["content"] for call in calls]
+    assert all(len(chunk) <= WECOM_MAX_MESSAGE_LEN for chunk in chunks)
+    assert "".join(chunks) == long_content
 
 
 # ── _process_message() ──────────────────────────────────────────────

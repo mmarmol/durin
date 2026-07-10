@@ -17,11 +17,20 @@ from durin.channels.base import BaseChannel
 from durin.channels.dedup import MessageDeduplicator
 from durin.config.paths import get_media_dir
 from durin.config.schema import Base
+from durin.utils.helpers import split_message
 
 WECOM_AVAILABLE = importlib.util.find_spec("wecom_aibot_sdk") is not None
 
 # Upload safety limits (matching QQ channel defaults)
 WECOM_UPLOAD_MAX_BYTES = 1024 * 1024 * 200  # 200MB
+
+# WeCom AI Bot app-message length cap. Both outbound paths this channel uses
+# (reply/reply_stream over the WS long connection, and the proactive
+# send_message markdown push) are the AI Bot "app message" type, which the
+# WeCom server truncates at 4000 chars — the same limit hermes-agent's WeCom
+# adapter applies to this payload type (its separate REST callback path uses
+# 2048, but durin's WeCom channel never uses that path).
+WECOM_MAX_MESSAGE_LEN = 4000
 
 # Replace unsafe characters with "_", keep Chinese and common safe punctuation.
 _SAFE_NAME_RE = re.compile(r"[^\w.\-()\[\]（）【】\u4e00-\u9fff]+", re.UNICODE)
@@ -485,7 +494,17 @@ class WecomChannel(BaseChannel):
             return None, None
 
     async def send(self, msg: OutboundMessage) -> None:
-        """Send a message through WeCom."""
+        """Send a message through WeCom.
+
+        Delivery failures propagate (raise) so ChannelManager's retry policy
+        can engage, per the BaseChannel.send() contract — mirrors the
+        weixin channel. The one swallowed failure is a per-file media
+        upload error: `_upload_media_ws` already reduces any upload failure
+        to a user-visible "[file upload failed]" text fallback, since the
+        WeCom WS upload protocol has no HTTP-status-style signal here to
+        split retryable from permanent (same treatment as weixin's 4xx
+        media fallback).
+        """
         if not self._client:
             self.logger.warning("client not initialized")
             return
@@ -521,29 +540,36 @@ class WecomChannel(BaseChannel):
             if not content:
                 return
 
+            # Split at WeCom's app-message length cap; see WECOM_MAX_MESSAGE_LEN.
+            chunks = split_message(content, WECOM_MAX_MESSAGE_LEN)
+
             if frame:
                 # Both progress and final messages must use reply_stream (cmd="aibot_respond_msg").
                 # The plain reply() uses cmd="reply" which does not support "text" msgtype
                 # and causes errcode=40008 from WeCom API.
-                stream_id = self._generate_req_id("stream")
-                await self._client.reply_stream(
-                    frame,
-                    stream_id,
-                    content,
-                    finish=not is_progress,
-                )
+                for chunk in chunks:
+                    stream_id = self._generate_req_id("stream")
+                    await self._client.reply_stream(
+                        frame,
+                        stream_id,
+                        chunk,
+                        finish=not is_progress,
+                    )
                 self.logger.debug(
-                    "{} sent to {}",
+                    "{} sent to {} ({} chunk(s))",
                     "progress" if is_progress else "message",
                     msg.chat_id,
+                    len(chunks),
                 )
             else:
                 # No frame (e.g. cron push): proactive send only supports markdown
-                await self._client.send_message(msg.chat_id, {
-                    "msgtype": "markdown",
-                    "markdown": {"content": content},
-                })
-                self.logger.info("proactive send to {}", msg.chat_id)
+                for chunk in chunks:
+                    await self._client.send_message(msg.chat_id, {
+                        "msgtype": "markdown",
+                        "markdown": {"content": chunk},
+                    })
+                self.logger.info("proactive send to {} ({} chunk(s))", msg.chat_id, len(chunks))
 
         except Exception:
             self.logger.exception("Error sending message to chat_id={}", msg.chat_id)
+            raise

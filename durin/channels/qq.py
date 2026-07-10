@@ -134,6 +134,20 @@ def _is_image_name(name: str) -> bool:
     return Path(name).suffix.lower() in _IMAGE_EXTS
 
 
+def _is_qq_media_host(hostname: str) -> bool:
+    """True for QQ's own media CDN host (or a subdomain of its domain).
+
+    QQ's media CDN (``multimedia.nt.qq.com.cn``) requires a bot
+    ``Authorization`` header, otherwise downloads get non-200s. That header
+    carries the bot's access token, so it must be host-gated: attachment
+    URLs come from QQ payloads but are treated as untrusted here, same as
+    the SSRF guard treats them — the token must never be sent to an
+    arbitrary host an attacker-controlled URL might point to.
+    """
+    hostname = (hostname or "").strip().lower().rstrip(".")
+    return hostname == "multimedia.nt.qq.com.cn" or hostname.endswith(".qq.com.cn")
+
+
 def _guess_send_file_type(filename: str) -> int:
     """Conservative send type: images -> 1, else -> 4."""
     ext = Path(filename).suffix.lower()
@@ -621,6 +635,34 @@ class QQChannel(BaseChannel):
 
         return media_paths, recv_lines, att_meta
 
+    async def _qq_auth_headers(self, url: str) -> dict[str, str]:
+        """Bot Authorization header for QQ's media CDN, host-gated.
+
+        Reuses the same botpy ``Token`` the SDK maintains for its own REST
+        calls (``self._client.api._http._token`` — the mechanism
+        ``_post_base64file`` already relies on via ``.request()``), so the
+        token is refreshed the same way. Only attached when ``url``'s
+        hostname is QQ's own media CDN (see ``_is_qq_media_host``).
+        """
+        if not _is_qq_media_host(urlparse(url).hostname or ""):
+            return {}
+
+        client = self._client
+        if not client:
+            return {}
+
+        token = getattr(getattr(client.api, "_http", None), "_token", None)
+        if not token:
+            return {}
+
+        try:
+            await token.check_token()
+        except Exception as e:
+            self.logger.warning("QQ media auth token refresh failed: {}", e)
+            return {}
+
+        return {"Authorization": token.get_string()}
+
     async def _download_to_media_dir_chunked(
         self,
         url: str,
@@ -639,6 +681,8 @@ class QQChannel(BaseChannel):
         if not self._http:
             self._http = _ssrf_guarded_session()
 
+        auth_headers = await self._qq_auth_headers(url)
+
         safe = _sanitize_filename(filename_hint)
         ts = int(time.time() * 1000)
         tmp_path: Path | None = None
@@ -648,6 +692,7 @@ class QQChannel(BaseChannel):
                 url,
                 timeout=aiohttp.ClientTimeout(total=120),
                 allow_redirects=True,
+                headers=auth_headers,
             ) as resp:
                 if resp.status != 200:
                     self.logger.warning("download failed: status={} url={}", resp.status, url)

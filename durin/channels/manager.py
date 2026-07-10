@@ -128,8 +128,8 @@ class ChannelManager:
     def _ensure_channel_extras(self) -> None:
         """Install the pip extra for any enabled channel whose dep is missing, so
         the next gateway start can load it. A freshly-installed channel SDK needs a
-        restart — its module-level import (slack) or availability flag (discord) was
-        already evaluated — so ``ensure_or_note`` logs a restart note."""
+        restart — its availability flag (slack, discord, matrix) was already
+        evaluated at import time — so ``ensure_or_note`` logs a restart note."""
         from durin.channels.registry import discover_channel_names
         from durin.extras import REGISTRY, _module_present, ensure_or_note
 
