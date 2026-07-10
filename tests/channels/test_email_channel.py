@@ -1001,3 +1001,178 @@ def test_extract_attachments_sanitizes_filename(tmp_path, monkeypatch) -> None:
     saved_path = Path(items[0]["media"][0])
     # File must be inside the media dir, not escaped via path traversal
     assert saved_path.parent == tmp_path
+
+
+# ---------------------------------------------------------------------------
+# Threading: RFC 3834 guard, thread resolution, per-thread session keys
+# ---------------------------------------------------------------------------
+
+
+def _make_raw_email_threaded(
+    from_addr: str = "alice@example.com",
+    subject: str = "Hello",
+    body: str = "This is the body.",
+    message_id: str = "<m1@example.com>",
+    in_reply_to: str | None = None,
+    references: str | None = None,
+    thread_index: str | None = None,
+    auto_submitted: str | None = None,
+) -> bytes:
+    msg = EmailMessage()
+    msg["From"] = from_addr
+    msg["To"] = "bot@example.com"
+    msg["Subject"] = subject
+    msg["Message-ID"] = message_id
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
+    if thread_index:
+        msg["Thread-Index"] = thread_index
+    if auto_submitted:
+        msg["Auto-Submitted"] = auto_submitted
+    msg.set_content(body)
+    return msg.as_bytes()
+
+
+class _FakeIMAPSingle:
+    """Serves one raw message for every fetch cycle."""
+
+    def __init__(self, raw: bytes, uid: str = "123") -> None:
+        self.raw = raw
+        self.uid = uid
+        self.store_calls: list[tuple[bytes, str, str]] = []
+
+    def login(self, _u, _p):
+        return "OK", [b"ok"]
+
+    def select(self, _m):
+        return "OK", [b"1"]
+
+    def search(self, *_a):
+        return "OK", [b"1"]
+
+    def fetch(self, _i, _p):
+        return "OK", [(f"1 (UID {self.uid} BODY[] {{200}})".encode(), self.raw), b")"]
+
+    def store(self, imap_id, op, flags):
+        self.store_calls.append((imap_id, op, flags))
+        return "OK", [b""]
+
+    def logout(self):
+        return "BYE", [b""]
+
+
+def _make_channel(tmp_path, monkeypatch, raw: bytes, uid: str = "123", **cfg):
+    fake = _FakeIMAPSingle(raw, uid=uid)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    channel = EmailChannel(_make_config(**cfg), MessageBus())
+    return channel, fake
+
+
+def test_auto_submitted_mail_is_dropped(tmp_path, monkeypatch) -> None:
+    raw = _make_raw_email_threaded(auto_submitted="auto-replied")
+    channel, fake = _make_channel(tmp_path, monkeypatch, raw)
+    assert channel._fetch_new_messages() == []
+    # Still marked seen so it is not re-fetched forever.
+    assert fake.store_calls == [(b"1", "+FLAGS", "\\Seen")]
+
+
+def test_auto_submitted_no_is_processed(tmp_path, monkeypatch) -> None:
+    raw = _make_raw_email_threaded(auto_submitted="no")
+    channel, _ = _make_channel(tmp_path, monkeypatch, raw)
+    assert len(channel._fetch_new_messages()) == 1
+
+
+def test_inbound_captures_threading_headers(tmp_path, monkeypatch) -> None:
+    raw = _make_raw_email_threaded(
+        message_id="<m3@example.com>",
+        in_reply_to="<m2@example.com>",
+        references="<m1@example.com> <m2@example.com>",
+    )
+    channel, _ = _make_channel(tmp_path, monkeypatch, raw)
+    items = channel._fetch_new_messages()
+    assert items[0]["references"] == ["<m1@example.com>", "<m2@example.com>"]
+    assert items[0]["in_reply_to"] == "<m2@example.com>"
+
+
+def test_resolve_thread_reply_joins_existing_thread(tmp_path, monkeypatch) -> None:
+    from durin.channels.email_threads import thread_digest
+
+    first = _make_raw_email_threaded(message_id="<m1@example.com>")
+    channel, _ = _make_channel(tmp_path, monkeypatch, first)
+    item1 = channel._fetch_new_messages()[0]
+    d1 = channel._resolve_thread(item1)
+    assert d1 == thread_digest("<m1@example.com>")
+
+    reply = _make_raw_email_threaded(
+        message_id="<m2@example.com>",
+        references="<m1@example.com>",
+        subject="Re: Hello",
+    )
+    channel2, _ = _make_channel(tmp_path, monkeypatch, reply, uid="124")
+    item2 = channel2._fetch_new_messages()[0]
+    assert channel2._resolve_thread(item2) == d1
+    entry = channel2._store.get(d1)
+    assert entry["last_message_id"] == "<m2@example.com>"
+    assert entry["references"] == ["<m1@example.com>", "<m2@example.com>"]
+
+
+def test_resolve_thread_thread_index_fallback(tmp_path, monkeypatch) -> None:
+    import base64
+
+    conv = base64.b64encode(bytes(range(22))).decode()
+    first = _make_raw_email_threaded(
+        message_id="<m1@example.com>", subject="Budget", thread_index=conv
+    )
+    channel, _ = _make_channel(tmp_path, monkeypatch, first)
+    d1 = channel._resolve_thread(channel._fetch_new_messages()[0])
+
+    # Exchange dropped References but kept the conversation prefix.
+    reply = _make_raw_email_threaded(
+        message_id="<m9@example.com>", subject="RE: Budget",
+        thread_index=base64.b64encode(bytes(range(22)) + b"\x01\x02\x03\x04\x05").decode(),
+    )
+    channel2, _ = _make_channel(tmp_path, monkeypatch, reply, uid="124")
+    assert channel2._resolve_thread(channel2._fetch_new_messages()[0]) == d1
+
+    # Same fingerprint, different subject → NOT merged.
+    other = _make_raw_email_threaded(
+        message_id="<mX@example.com>", subject="Totally different",
+        thread_index=conv,
+    )
+    channel3, _ = _make_channel(tmp_path, monkeypatch, other, uid="125")
+    assert channel3._resolve_thread(channel3._fetch_new_messages()[0]) != d1
+
+
+@pytest.mark.asyncio
+async def test_session_key_override_per_mode(tmp_path, monkeypatch) -> None:
+    from durin.channels.email_threads import thread_digest
+
+    raw = _make_raw_email_threaded(message_id="<m1@example.com>")
+    published: list = []
+
+    async def _capture(msg):
+        published.append(msg)
+
+    for mode, expected in (
+        ("thread", f"email:alice@example.com:{thread_digest('<m1@example.com>')}"),
+        ("sender", "email:alice@example.com"),
+    ):
+        published.clear()
+        channel, _ = _make_channel(tmp_path, monkeypatch, raw, threading_mode=mode)
+        monkeypatch.setattr(channel.bus, "publish_inbound", _capture)
+        channel._store.load()
+        items = channel._fetch_new_messages()
+        digest = channel._resolve_thread(items[0])
+        await channel._handle_message(
+            sender_id=items[0]["sender"],
+            chat_id=items[0]["sender"],
+            content=items[0]["content"],
+            metadata=items[0]["metadata"],
+            session_key=(
+                f"email:{items[0]['sender']}:{digest}" if mode == "thread" else None
+            ),
+        )
+        assert published[0].session_key == expected

@@ -6,6 +6,7 @@ import imaplib
 import re
 import smtplib
 import ssl
+import time
 from contextlib import suppress
 from datetime import date
 from email import policy
@@ -15,7 +16,7 @@ from email.parser import BytesParser
 from email.utils import parseaddr
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
 from pydantic import Field
@@ -23,7 +24,14 @@ from pydantic import Field
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
-from durin.config.paths import get_media_dir
+from durin.channels.email_threads import (
+    ThreadStore,
+    decode_thread_index_conv_id,
+    ensure_angle_brackets,
+    normalize_subject,
+    thread_digest,
+)
+from durin.config.paths import get_media_dir, get_runtime_subdir
 from durin.config.schema import Base
 from durin.utils.helpers import safe_filename
 
@@ -56,6 +64,9 @@ class EmailConfig(Base):
     mark_seen: bool = Field(default=True, json_schema_extra={"group": "behavior"})
     max_body_chars: int = Field(default=12000, json_schema_extra={"group": "behavior"})
     subject_prefix: str = Field(default="Re: ", json_schema_extra={"group": "behavior"})
+    threading_mode: Literal["thread", "sender"] = Field(
+        default="thread", json_schema_extra={"group": "behavior"}
+    )
     allow_from: list[str] = Field(default_factory=list, json_schema_extra={"group": "access"})
 
     # Email authentication verification (anti-spoofing)
@@ -131,6 +142,9 @@ class EmailChannel(BaseChannel):
         self._last_message_id_by_chat: dict[str, str] = {}
         self._processed_uids: set[str] = set()  # Capped to prevent unbounded growth
         self._MAX_PROCESSED_UIDS = 100000
+        self._store = ThreadStore(get_runtime_subdir("email") / "threads.json")
+        self._store.load()
+        self._last_prune = time.time()
 
     async def start(self) -> None:
         """Start polling IMAP for inbound emails."""
@@ -145,6 +159,7 @@ class EmailChannel(BaseChannel):
             return
 
         self._running = True
+        self._store.load()
         if not self.config.verify_dkim and not self.config.verify_spf:
             self.logger.warning(
                 "DKIM and SPF verification are both DISABLED. "
@@ -167,17 +182,27 @@ class EmailChannel(BaseChannel):
                     if message_id:
                         self._last_message_id_by_chat[sender] = message_id
 
+                    digest = self._resolve_thread(item)
+                    session_key = (
+                        f"email:{sender}:{digest}"
+                        if self.config.threading_mode == "thread"
+                        else None
+                    )
                     await self._handle_message(
                         sender_id=sender,
                         chat_id=sender,
                         content=item["content"],
                         media=item.get("media") or None,
                         metadata=item.get("metadata", {}),
+                        session_key=session_key,
                     )
             except Exception:
                 self.logger.exception("Polling error")
 
             await asyncio.sleep(poll_seconds)
+            if time.time() - self._last_prune > 86400:
+                self._store.prune()
+                self._last_prune = time.time()
 
     async def stop(self) -> None:
         """Stop polling loop."""
@@ -395,6 +420,17 @@ class EmailChannel(BaseChannel):
                         client.store(imap_id, "+FLAGS", "\\Seen")
                     continue
 
+                auto_submitted = (parsed.get("Auto-Submitted", "") or "").strip().lower()
+                if auto_submitted and auto_submitted != "no":
+                    self.logger.info(
+                        "From {} dropped: Auto-Submitted={} (RFC 3834)",
+                        sender, auto_submitted,
+                    )
+                    self._remember_processed_uid(uid, dedupe, cycle_uids)
+                    if mark_seen:
+                        client.store(imap_id, "+FLAGS", "\\Seen")
+                    continue
+
                 # --- Anti-spoofing: verify Authentication-Results ---
                 spf_pass, dkim_pass = self._check_authentication_results(parsed)
                 if self.config.verify_spf and not spf_pass:
@@ -422,7 +458,17 @@ class EmailChannel(BaseChannel):
 
                 subject = self._decode_header_value(parsed.get("Subject", ""))
                 date_value = parsed.get("Date", "")
-                message_id = parsed.get("Message-ID", "").strip()
+                message_id = ensure_angle_brackets(parsed.get("Message-ID", ""))
+                in_reply_to = ensure_angle_brackets(parsed.get("In-Reply-To", ""))
+                references = [
+                    ensure_angle_brackets(r)
+                    for r in (parsed.get("References", "") or "").split()
+                    if r.strip()
+                ]
+                # Folded RFC 2822 headers can carry embedded whitespace; collapse
+                # it all before base64-decoding the Thread-Index fingerprint.
+                thread_index = "".join((parsed.get("Thread-Index", "") or "").split())
+                thread_topic = self._decode_header_value(parsed.get("Thread-Topic", ""))
                 body = self._extract_text_body(parsed)
 
                 if not body:
@@ -457,6 +503,10 @@ class EmailChannel(BaseChannel):
                     "date": date_value,
                     "sender_email": sender,
                     "uid": uid,
+                    "in_reply_to": in_reply_to,
+                    "references": references,
+                    "thread_index": thread_index,
+                    "thread_topic": thread_topic,
                 }
                 messages.append(
                     {
@@ -466,6 +516,10 @@ class EmailChannel(BaseChannel):
                         "content": content,
                         "metadata": metadata,
                         "media": attachment_paths,
+                        "in_reply_to": in_reply_to,
+                        "references": references,
+                        "thread_index": thread_index,
+                        "thread_topic": thread_topic,
                     }
                 )
 
@@ -681,6 +735,42 @@ class EmailChannel(BaseChannel):
         text = re.sub(r"<\s*/\s*p\s*>", "\n", text, flags=re.IGNORECASE)
         text = re.sub(r"<[^>]+>", "", text)
         return html.unescape(text)
+
+    def _resolve_thread(self, item: dict[str, Any]) -> str:
+        """Resolve an inbound mail to its thread digest and record it.
+
+        Order: References/In-Reply-To chain → Thread-Index conversation
+        fingerprint gated by normalized subject (Exchange rewrites References
+        on internal hops) → new thread rooted at this mail's Message-ID.
+        """
+        message_id = item.get("message_id", "")
+        references: list[str] = item.get("references") or []
+        in_reply_to = item.get("in_reply_to", "")
+        subject = item.get("subject", "")
+        conv_id = decode_thread_index_conv_id(item.get("thread_index", ""))
+
+        root = references[0] if references else in_reply_to
+        digest = thread_digest(root) if root else ""
+        if not digest:
+            via_conv = self._store.lookup_conv(conv_id, normalize_subject(subject))
+            if via_conv:
+                digest = via_conv
+                root = self._store.get(digest)["root"]
+        if not digest:
+            root = message_id
+            digest = thread_digest(root)
+
+        self._store.upsert_inbound(
+            digest,
+            root=root,
+            address=item.get("sender", ""),
+            subject=subject,
+            references=references,
+            message_id=message_id,
+            thread_index_conv_id=conv_id,
+            thread_topic=item.get("thread_topic", ""),
+        )
+        return digest
 
     def _reply_subject(self, base_subject: str) -> str:
         subject = (base_subject or "").strip() or "durin reply"
