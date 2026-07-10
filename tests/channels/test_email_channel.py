@@ -1464,6 +1464,97 @@ async def test_send_appends_copy_to_sent_folder(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_appends_copy_to_sent_folder_unquoted_name(tmp_path, monkeypatch) -> None:
+    raw = _make_raw_email_threaded(message_id="<m1@x>", subject="Q")
+    channel, _ = _make_channel(tmp_path, monkeypatch, raw)
+    channel._store.load()
+    channel._resolve_thread(channel._fetch_new_messages()[0])
+
+    appended: list = []
+
+    class FakeIMAPSent:
+        def login(self, _u, _p):
+            return "OK", [b"ok"]
+
+        def list(self):
+            return "OK", [b'(\\HasNoChildren \\Sent) "/" Sent-Items']
+
+        def append(self, folder, flags, _dt, body):
+            appended.append((folder, flags, body))
+            return "OK", [b""]
+
+        def logout(self):
+            return "BYE", [b""]
+
+    monkeypatch.setattr(
+        "durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: FakeIMAPSent()
+    )
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: None)
+    await channel.send(OutboundMessage(
+        channel="email", chat_id="alice@example.com", content="hi",
+    ))
+    assert len(appended) == 1
+    assert appended[0][0] == "Sent-Items"
+
+
+@pytest.mark.asyncio
+async def test_sent_folder_detection_not_cached_on_failure(tmp_path, monkeypatch) -> None:
+    raw = _make_raw_email_threaded(message_id="<m1@x>", subject="Q")
+    channel, _ = _make_channel(tmp_path, monkeypatch, raw)
+    channel._store.load()
+    channel._resolve_thread(channel._fetch_new_messages()[0])
+
+    appended: list = []
+
+    class FakeIMAPListFails:
+        def login(self, _u, _p):
+            return "OK", [b"ok"]
+
+        def list(self):
+            raise OSError("list failed")
+
+        def append(self, folder, flags, _dt, body):
+            appended.append((folder, flags, body))
+            return "OK", [b""]
+
+        def logout(self):
+            return "BYE", [b""]
+
+    class FakeIMAPListWorks:
+        def login(self, _u, _p):
+            return "OK", [b"ok"]
+
+        def list(self):
+            return "OK", [b'(\\Sent) "/" "Enviados"']
+
+        def append(self, folder, flags, _dt, body):
+            appended.append((folder, flags, body))
+            return "OK", [b""]
+
+        def logout(self):
+            return "BYE", [b""]
+
+    monkeypatch.setattr(
+        "durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: FakeIMAPListFails()
+    )
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: None)
+    await channel.send(OutboundMessage(
+        channel="email", chat_id="alice@example.com", content="hi",
+    ))
+    assert appended[0][0] == '"Sent"'
+    assert channel._sent_folder is None
+
+    monkeypatch.setattr(
+        "durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: FakeIMAPListWorks()
+    )
+    await channel.send(OutboundMessage(
+        channel="email", chat_id="alice@example.com", content="hi again",
+    ))
+    assert appended[1][0] == '"Enviados"'
+    assert channel._sent_folder == '"Enviados"'
+
+
+@pytest.mark.asyncio
 async def test_sent_append_failure_does_not_break_send(tmp_path, monkeypatch) -> None:
     raw = _make_raw_email_threaded(message_id="<m1@x>", subject="Q")
     channel, _ = _make_channel(tmp_path, monkeypatch, raw)

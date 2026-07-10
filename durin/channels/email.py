@@ -333,8 +333,13 @@ class EmailChannel(BaseChannel):
             smtp.login(self.config.smtp_username, self.config.smtp_password)
             smtp.send_message(msg)
 
-    def _detect_sent_folder(self, client: Any) -> str:
-        """Find the mailbox flagged \\Sent via LIST; fall back to "Sent"."""
+    def _detect_sent_folder(self, client: Any) -> str | None:
+        """Find the mailbox flagged \\Sent via LIST.
+
+        Returns the folder name when a \\Sent-flagged mailbox was actually
+        found, or None when LIST failed or nothing matched — callers must
+        not cache None, so a transient failure gets retried on the next send.
+        """
         try:
             status, boxes = client.list()
             if status == "OK":
@@ -344,9 +349,14 @@ class EmailChannel(BaseChannel):
                         m = re.search(r'"([^"]+)"\s*$', decoded)
                         if m:
                             return f'"{m.group(1)}"'
+                        # RFC 3501 LIST may carry unquoted mailbox atoms, e.g.
+                        # (\HasNoChildren \Sent) "/" Sent — take the last token.
+                        tokens = decoded.split()
+                        if tokens:
+                            return tokens[-1]
         except Exception as exc:
             self.logger.debug("Sent-folder detection failed: {}", exc)
-        return '"Sent"'
+        return None
 
     def _append_to_sent(self, email_msg: EmailMessage) -> None:
         """Best-effort copy of an outbound mail into the Sent folder.
@@ -362,10 +372,14 @@ class EmailChannel(BaseChannel):
                 client = imaplib.IMAP4(self.config.imap_host, self.config.imap_port)
             try:
                 client.login(self.config.imap_username, self.config.imap_password)
+                detected = None
                 if self._sent_folder is None:
-                    self._sent_folder = self._detect_sent_folder(client)
+                    detected = self._detect_sent_folder(client)
+                    if detected is not None:
+                        self._sent_folder = detected
+                folder = self._sent_folder or detected or '"Sent"'
                 client.append(
-                    self._sent_folder,
+                    folder,
                     "(\\Seen)",
                     imaplib.Time2Internaldate(time.time()),
                     email_msg.as_bytes(),
