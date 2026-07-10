@@ -10,6 +10,7 @@ import pytest
 
 from durin.bus.events import OutboundMessage
 from durin.channels.whatsapp import (
+    ACK_TIMEOUT,
     WhatsAppChannel,
     _load_or_create_bridge_token,
 )
@@ -23,15 +24,44 @@ def _make_channel() -> WhatsAppChannel:
     return ch
 
 
+@pytest.fixture
+def whatsapp_channel() -> WhatsAppChannel:
+    bus = MagicMock()
+    ch = WhatsAppChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+    ch._ws = AsyncMock()
+    ch._connected = True
+    return ch
+
+
+def _outbound(content: str = "", reply_to: str | None = None, media: list[str] | None = None) -> OutboundMessage:
+    return OutboundMessage(
+        channel="whatsapp",
+        chat_id="123@s.whatsapp.net",
+        content=content,
+        reply_to=reply_to,
+        media=media or [],
+    )
+
+
+def _ack_all(channel):
+    """Auto-ack every frame the test sends (simulates a healthy bridge)."""
+    async def _send(raw):
+        frame = json.loads(raw)
+        if frame["type"] in ("send", "send_media"):
+            fut = channel._pending_acks[frame["id"]]
+            fut.set_result({"ok": True})
+    channel._ws.send.side_effect = _send
+
+
 @pytest.mark.asyncio
 async def test_send_text_only():
     ch = _make_channel()
+    _ack_all(ch)
     msg = OutboundMessage(channel="whatsapp", chat_id="123@s.whatsapp.net", content="hello")
 
     await ch.send(msg)
 
-    ch._ws.send.assert_called_once()
-    payload = json.loads(ch._ws.send.call_args[0][0])
+    payload = json.loads(ch._ws.send.call_args_list[0].args[0])
     assert payload["type"] == "send"
     assert payload["text"] == "hello"
 
@@ -39,6 +69,7 @@ async def test_send_text_only():
 @pytest.mark.asyncio
 async def test_send_media_dispatches_send_media_command():
     ch = _make_channel()
+    _ack_all(ch)
     msg = OutboundMessage(
         channel="whatsapp",
         chat_id="123@s.whatsapp.net",
@@ -48,7 +79,8 @@ async def test_send_media_dispatches_send_media_command():
 
     await ch.send(msg)
 
-    assert ch._ws.send.call_count == 2
+    # Text chunk, media, then a trailing fire-and-forget "typing: paused" frame.
+    assert ch._ws.send.call_count == 3
     text_payload = json.loads(ch._ws.send.call_args_list[0][0][0])
     media_payload = json.loads(ch._ws.send.call_args_list[1][0][0])
 
@@ -64,6 +96,7 @@ async def test_send_media_dispatches_send_media_command():
 @pytest.mark.asyncio
 async def test_send_media_only_no_text():
     ch = _make_channel()
+    _ack_all(ch)
     msg = OutboundMessage(
         channel="whatsapp",
         chat_id="123@s.whatsapp.net",
@@ -73,8 +106,7 @@ async def test_send_media_only_no_text():
 
     await ch.send(msg)
 
-    ch._ws.send.assert_called_once()
-    payload = json.loads(ch._ws.send.call_args[0][0])
+    payload = json.loads(ch._ws.send.call_args_list[0].args[0])
     assert payload["type"] == "send_media"
     assert payload["mimetype"] == "application/pdf"
 
@@ -82,6 +114,7 @@ async def test_send_media_only_no_text():
 @pytest.mark.asyncio
 async def test_send_multiple_media():
     ch = _make_channel()
+    _ack_all(ch)
     msg = OutboundMessage(
         channel="whatsapp",
         chat_id="123@s.whatsapp.net",
@@ -91,7 +124,8 @@ async def test_send_multiple_media():
 
     await ch.send(msg)
 
-    assert ch._ws.send.call_count == 2
+    # Two media sends, then a trailing fire-and-forget "typing: paused" frame.
+    assert ch._ws.send.call_count == 3
     p1 = json.loads(ch._ws.send.call_args_list[0][0][0])
     p2 = json.loads(ch._ws.send.call_args_list[1][0][0])
     assert p1["mimetype"] == "image/png"
@@ -99,7 +133,7 @@ async def test_send_multiple_media():
 
 
 @pytest.mark.asyncio
-async def test_send_when_disconnected_is_noop():
+async def test_send_when_disconnected_raises():
     ch = _make_channel()
     ch._connected = False
 
@@ -109,7 +143,8 @@ async def test_send_when_disconnected_is_noop():
         content="hello",
         media=["/tmp/x.jpg"],
     )
-    await ch.send(msg)
+    with pytest.raises(RuntimeError):
+        await ch.send(msg)
 
     ch._ws.send.assert_not_called()
 
@@ -377,3 +412,118 @@ async def test_start_sends_auth_message_with_generated_token(monkeypatch, tmp_pa
     assert sent_messages == [
         json.dumps({"type": "auth", "token": token_path.read_text(encoding="utf-8")})
     ]
+
+
+class TestSendAcks:
+    @pytest.mark.asyncio
+    async def test_send_waits_for_ack(self, whatsapp_channel):
+        assert ACK_TIMEOUT == 30.0
+        _ack_all(whatsapp_channel)
+        await whatsapp_channel.send(_outbound(content="hola"))
+        sent = json.loads(whatsapp_channel._ws.send.call_args_list[0].args[0])
+        assert sent["type"] == "send" and "id" in sent
+
+    @pytest.mark.asyncio
+    async def test_nack_raises(self, whatsapp_channel):
+        async def _send(raw):
+            frame = json.loads(raw)
+            if frame["type"] == "send":
+                whatsapp_channel._pending_acks[frame["id"]].set_result(
+                    {"ok": False, "error": "boom"})
+        whatsapp_channel._ws.send.side_effect = _send
+        with pytest.raises(RuntimeError, match="boom"):
+            await whatsapp_channel.send(_outbound(content="hola"))
+
+    @pytest.mark.asyncio
+    async def test_not_connected_raises(self, whatsapp_channel):
+        whatsapp_channel._connected = False
+        with pytest.raises(RuntimeError):
+            await whatsapp_channel.send(_outbound(content="hola"))
+
+
+class TestSendFormatting:
+    @pytest.mark.asyncio
+    async def test_markdown_converted(self, whatsapp_channel):
+        _ack_all(whatsapp_channel)
+        await whatsapp_channel.send(_outbound(content="**hola**"))
+        sent = json.loads(whatsapp_channel._ws.send.call_args_list[0].args[0])
+        assert sent["text"] == "*hola*"
+
+    @pytest.mark.asyncio
+    async def test_long_message_chunked(self, whatsapp_channel):
+        _ack_all(whatsapp_channel)
+        await whatsapp_channel.send(_outbound(content="x" * 9000))
+        sends = [json.loads(c.args[0]) for c in whatsapp_channel._ws.send.call_args_list
+                 if json.loads(c.args[0])["type"] == "send"]
+        assert len(sends) >= 3
+
+    @pytest.mark.asyncio
+    async def test_reply_to_on_first_chunk_only(self, whatsapp_channel):
+        _ack_all(whatsapp_channel)
+        await whatsapp_channel.send(_outbound(content="x" * 9000, reply_to="MSGID"))
+        sends = [json.loads(c.args[0]) for c in whatsapp_channel._ws.send.call_args_list
+                 if json.loads(c.args[0])["type"] == "send"]
+        assert sends[0]["reply_to"] == "MSGID"
+        assert all("reply_to" not in s for s in sends[1:])
+
+
+class TestInboundV2:
+    @pytest.mark.asyncio
+    async def test_voice_flag_triggers_transcription(self, whatsapp_channel):
+        whatsapp_channel._handle_message = AsyncMock()
+        whatsapp_channel.transcribe_audio = AsyncMock(return_value="Hello world")
+
+        await whatsapp_channel._handle_bridge_message(
+            json.dumps({
+                "type": "message",
+                "id": "voice-v2",
+                "sender": "12345@s.whatsapp.net",
+                "pn": "",
+                "content": "",
+                "voice": True,
+                "media": ["/tmp/v.ogg"],
+                "timestamp": 1,
+            })
+        )
+
+        whatsapp_channel.transcribe_audio.assert_awaited_once_with("/tmp/v.ogg")
+        kwargs = whatsapp_channel._handle_message.await_args.kwargs
+        assert kwargs["content"].startswith("Hello world")
+
+    @pytest.mark.asyncio
+    async def test_quoted_passed_in_metadata(self, whatsapp_channel):
+        whatsapp_channel._handle_message = AsyncMock()
+        quoted = {"id": "Q", "sender": "1@s.whatsapp.net", "text": "orig"}
+
+        await whatsapp_channel._handle_bridge_message(
+            json.dumps({
+                "type": "message",
+                "id": "m-quoted",
+                "sender": "12345@s.whatsapp.net",
+                "pn": "",
+                "content": "reply text",
+                "quoted": quoted,
+                "timestamp": 1,
+            })
+        )
+
+        kwargs = whatsapp_channel._handle_message.await_args.kwargs
+        assert kwargs["metadata"]["quoted"] == quoted
+
+    @pytest.mark.asyncio
+    async def test_typing_composing_sent_on_accept(self, whatsapp_channel):
+        whatsapp_channel._handle_message = AsyncMock()
+
+        await whatsapp_channel._handle_bridge_message(
+            json.dumps({
+                "type": "message",
+                "id": "m-typing",
+                "sender": "12345@s.whatsapp.net",
+                "pn": "",
+                "content": "hi",
+                "timestamp": 1,
+            })
+        )
+
+        sent = [json.loads(c.args[0]) for c in whatsapp_channel._ws.send.call_args_list]
+        assert {"type": "typing", "to": "12345@s.whatsapp.net", "state": "composing"} in sent

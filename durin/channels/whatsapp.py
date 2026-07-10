@@ -12,6 +12,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 from loguru import logger
 from pydantic import Field
@@ -19,7 +20,10 @@ from pydantic import Field
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
+from durin.channels.whatsapp_format import chunk_message, markdown_to_whatsapp
 from durin.config.schema import Base
+
+ACK_TIMEOUT = 30.0
 
 
 class WhatsAppConfig(Base):
@@ -77,6 +81,7 @@ class WhatsAppChannel(BaseChannel):
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()
         self._lid_to_phone: dict[str, str] = {}
         self._bridge_token: str | None = None
+        self._pending_acks: dict[str, asyncio.Future] = {}
 
     def _effective_bridge_token(self) -> str:
         """Resolve the bridge token, generating a local secret when needed."""
@@ -165,35 +170,60 @@ class WhatsAppChannel(BaseChannel):
             self._ws = None
 
     async def send(self, msg: OutboundMessage) -> None:
-        """Send a message through WhatsApp."""
+        """Send a message through WhatsApp. Raises on failure so the channel
+        manager's retry policy applies."""
         if not self._ws or not self._connected:
-            self.logger.warning("WhatsApp bridge not connected")
-            return
+            raise RuntimeError("WhatsApp bridge not connected")
 
         chat_id = msg.chat_id
 
         if msg.content:
-            try:
-                payload = {"type": "send", "to": chat_id, "text": msg.content}
-                await self._ws.send(json.dumps(payload, ensure_ascii=False))
-            except Exception:
-                self.logger.exception("Error sending message")
-                raise
+            text = markdown_to_whatsapp(msg.content)
+            for i, chunk in enumerate(chunk_message(text)):
+                payload: dict = {"type": "send", "to": chat_id, "text": chunk}
+                if i == 0 and msg.reply_to:
+                    payload["reply_to"] = msg.reply_to
+                await self._send_frame_with_ack(payload)
 
         for media_path in msg.media or []:
-            try:
-                mime, _ = mimetypes.guess_type(media_path)
-                payload = {
-                    "type": "send_media",
-                    "to": chat_id,
-                    "filePath": media_path,
-                    "mimetype": mime or "application/octet-stream",
-                    "fileName": media_path.rsplit("/", 1)[-1],
-                }
-                await self._ws.send(json.dumps(payload, ensure_ascii=False))
-            except Exception:
-                self.logger.exception("Error sending media {}", media_path)
-                raise
+            mime, _ = mimetypes.guess_type(media_path)
+            await self._send_frame_with_ack({
+                "type": "send_media",
+                "to": chat_id,
+                "filePath": media_path,
+                "mimetype": mime or "application/octet-stream",
+                "fileName": media_path.rsplit("/", 1)[-1],
+            })
+
+        await self._send_typing(chat_id, "paused")
+
+    async def _send_frame_with_ack(self, payload: dict) -> None:
+        """Send a frame with a uuid4 id and await the bridge's ack for it.
+
+        Raises RuntimeError on timeout or an explicit not-ok ack. The pending
+        future is always removed from ``_pending_acks``, even on timeout, so
+        a slow/never-acked frame cannot leak an entry forever.
+        """
+        frame_id = uuid4().hex
+        payload = {**payload, "id": frame_id}
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._pending_acks[frame_id] = fut
+        try:
+            await self._ws.send(json.dumps(payload, ensure_ascii=False))
+            ack = await asyncio.wait_for(fut, ACK_TIMEOUT)
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(f"bridge did not ack {payload['type']} within {ACK_TIMEOUT}s") from exc
+        finally:
+            self._pending_acks.pop(frame_id, None)
+        if not ack.get("ok"):
+            raise RuntimeError(f"bridge rejected {payload['type']}: {ack.get('error')}")
+
+    async def _send_typing(self, chat_id: str, state: str) -> None:
+        """Fire-and-forget presence hint; never fails a send."""
+        if not self._ws:
+            return
+        with suppress(Exception):
+            await self._ws.send(json.dumps({"type": "typing", "to": chat_id, "state": state}))
 
     async def _handle_bridge_message(self, raw: str) -> None:
         """Handle a message from the bridge."""
@@ -204,6 +234,12 @@ class WhatsAppChannel(BaseChannel):
             return
 
         msg_type = data.get("type")
+
+        if msg_type == "ack":
+            fut = self._pending_acks.get(data.get("id", ""))
+            if fut and not fut.done():
+                fut.set_result(data)
+            return
 
         if msg_type == "message":
             # Incoming message from WhatsApp
@@ -255,11 +291,15 @@ class WhatsAppChannel(BaseChannel):
 
             self.logger.info("Sender phone={} lid={} → sender_id={}", phone_id or "(empty)", lid_id or "(empty)", sender_id)
 
+            await self._send_typing(sender, "composing")
+
             # Extract media paths (images/documents/videos downloaded by the bridge)
             media_paths = data.get("media") or []
 
-            # Handle voice transcription if it's a voice message
-            if content == "[Voice Message]":
+            # Handle voice transcription if it's a voice message. The bridge's
+            # explicit "voice" flag is the current signal; the legacy
+            # "[Voice Message]" sentinel content is kept for older bridges.
+            if data.get("voice") or content == "[Voice Message]":
                 if media_paths:
                     self.logger.info("Transcribing voice message from {}...", sender_id)
                     transcription = await self.transcribe_audio(media_paths[0])
@@ -289,6 +329,7 @@ class WhatsAppChannel(BaseChannel):
                     "message_id": message_id,
                     "timestamp": data.get("timestamp"),
                     "is_group": data.get("isGroup", False),
+                    "quoted": data.get("quoted"),
                 },
             )
 
