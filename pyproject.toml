@@ -165,7 +165,7 @@ packages = ["durin"]
 # (it's a build artifact) but MUST ship inside the wheel so the
 # `durin gateway` dashboard works. `artifacts` force-includes paths
 # that would otherwise be excluded by the .gitignore.
-artifacts = ["durin/web/dist/**/*"]
+artifacts = ["durin/web/dist/**/*", "durin/channels/bridge_checksums.json"]
 
 # Build the webui SPA before the wheel is assembled (so durin/web/dist/ exists
 # for the force-include) and assert it landed in the wheel. Without this hook a
