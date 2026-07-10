@@ -41,10 +41,24 @@ type Bridge struct {
 	cli      *whatsmeow.Client
 	srv      *Server
 	mediaDir string
+	// out decouples inbound message relay from whatsmeow's event dispatch:
+	// a stalled WS client (bounded by the server's write deadline) must never
+	// delay the WhatsApp event loop.
+	out chan any
 }
 
 func NewBridge(cli *whatsmeow.Client, srv *Server, mediaDir string) *Bridge {
-	return &Bridge{cli: cli, srv: srv, mediaDir: mediaDir}
+	return &Bridge{cli: cli, srv: srv, mediaDir: mediaDir, out: make(chan any, 256)}
+}
+
+// enqueue hands a frame to the outbound consumer goroutine without ever
+// blocking the caller; when the buffer is full the frame is dropped.
+func (b *Bridge) enqueue(frame any) {
+	select {
+	case b.out <- frame:
+	default:
+		fmt.Fprintln(os.Stderr, "outbound buffer full; dropping frame")
+	}
 }
 
 func (b *Bridge) HandleCommand(cmd Command) {
@@ -163,6 +177,11 @@ func (b *Bridge) sendTyping(cmd Command) {
 }
 
 func (b *Bridge) RegisterEventHandlers() {
+	go func() {
+		for frame := range b.out {
+			_ = b.srv.Send(frame)
+		}
+	}()
 	b.cli.AddEventHandler(func(evt any) {
 		switch v := evt.(type) {
 		case *events.Connected:
@@ -192,16 +211,30 @@ func (b *Bridge) onMessage(v *events.Message) {
 		content = ext.GetText()
 	}
 
-	// Mentions: own JID present in the context-info mention list.
-	wasMentioned := false
+	// Context info lives on whichever message part is present: extended text
+	// for plain replies/mentions, or the media message for captioned media
+	// (a photo whose caption @mentions us, a media reply, ...).
 	var ctxInfo *waE2E.ContextInfo
-	if ext != nil {
+	switch {
+	case ext != nil:
 		ctxInfo = ext.GetContextInfo()
+	case msg.GetImageMessage() != nil:
+		ctxInfo = msg.GetImageMessage().GetContextInfo()
+	case msg.GetVideoMessage() != nil:
+		ctxInfo = msg.GetVideoMessage().GetContextInfo()
+	case msg.GetDocumentMessage() != nil:
+		ctxInfo = msg.GetDocumentMessage().GetContextInfo()
+	case msg.GetAudioMessage() != nil:
+		ctxInfo = msg.GetAudioMessage().GetContextInfo()
 	}
+
+	// Mentions: own user present in the context-info mention list. Compare
+	// parsed JID users so device-suffixed mention JIDs still match.
+	wasMentioned := false
 	own := b.cli.Store.ID
 	if ctxInfo != nil && own != nil {
 		for _, m := range ctxInfo.GetMentionedJID() {
-			if strings.HasPrefix(m, own.User+"@") {
+			if j, err := types.ParseJID(m); err == nil && j.User == own.User {
 				wasMentioned = true
 			}
 		}
@@ -241,16 +274,22 @@ func (b *Bridge) onMessage(v *events.Message) {
 		voice = msg.GetAudioMessage().GetPTT()
 	}
 	if d != nil {
-		if data, err := b.cli.Download(context.Background(), d.msg); err == nil {
-			if err := os.MkdirAll(b.mediaDir, 0o700); err == nil {
-				p := filepath.Join(b.mediaDir, v.Info.ID+d.ext)
-				if os.WriteFile(p, data, 0o600) == nil {
-					media = append(media, p)
-				}
+		data, err := b.cli.Download(context.Background(), d.msg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "media download failed for %s: %v\n", v.Info.ID, err)
+		} else if err := os.MkdirAll(b.mediaDir, 0o700); err == nil {
+			p := filepath.Join(b.mediaDir, v.Info.ID+d.ext)
+			if os.WriteFile(p, data, 0o600) == nil {
+				media = append(media, p)
 			}
 		}
 		if content == "" {
 			content = d.caption
+		}
+		// A failed download must not drop the message: ship a placeholder so
+		// the frame (including voice:true for PTT) still reaches the adapter.
+		if content == "" && len(media) == 0 {
+			content = "[media could not be downloaded]"
 		}
 	}
 
@@ -258,22 +297,27 @@ func (b *Bridge) onMessage(v *events.Message) {
 		return // reactions, receipts-as-messages, protocol messages: nothing to relay yet
 	}
 
-	// pn = phone-style JID when whatsmeow exposes it alongside a LID sender.
-	pn := ""
-	sender := v.Info.Sender.String()
-	if alt := v.Info.SenderAlt; !alt.IsEmpty() {
-		pn = alt.String()
-	}
-	chat := v.Info.Chat.String()
+	// Wire contract: `sender` is the reply target — the group JID for group
+	// messages, the participant JID for DMs. `pn` carries the other identity:
+	// in groups the real participant JID (phone-form preferred when the
+	// primary sender is a LID), in DMs the sender's alternative form.
 	isGroup := v.Info.IsGroup
-	// For DMs the reply target is the sender JID (legacy protocol behavior);
-	// for groups it is the group JID.
-	target := sender
+	var target, pn string
 	if isGroup {
-		target = chat
+		target = v.Info.Chat.String()
+		pn = v.Info.Sender.String()
+		if v.Info.Sender.Server == types.HiddenUserServer &&
+			v.Info.SenderAlt.Server == types.DefaultUserServer {
+			pn = v.Info.SenderAlt.String()
+		}
+	} else {
+		target = v.Info.Sender.String()
+		if !v.Info.SenderAlt.IsEmpty() {
+			pn = v.Info.SenderAlt.String()
+		}
 	}
 
-	b.srv.Send(Message{
+	b.enqueue(Message{
 		Type: "message", PN: pn, Sender: target, Content: content, ID: v.Info.ID,
 		IsGroup: isGroup, WasMentioned: wasMentioned, Media: media,
 		Timestamp: v.Info.Timestamp.Unix(), Voice: voice, Quoted: quoted,
