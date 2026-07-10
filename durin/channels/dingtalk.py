@@ -17,6 +17,7 @@ from pydantic import Field
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
+from durin.channels.dedup import MessageDeduplicator
 from durin.config.schema import Base
 from durin.security.network import (
     ssrf_safe_async_client,
@@ -62,6 +63,9 @@ class DurinDingTalkHandler(CallbackHandler):
         try:
             # Parse using SDK's ChatbotMessage for robust handling
             chatbot_msg = ChatbotMessage.from_dict(message.data)
+
+            if self.channel._dedup.is_duplicate(str(getattr(chatbot_msg, "message_id", "") or "")):
+                return AckMessage.STATUS_OK, "duplicate"
 
             # Extract text content; fall back to raw dict if SDK object is empty
             content = ""
@@ -202,6 +206,9 @@ class DingTalkChannel(BaseChannel):
 
         # Hold references to background tasks to prevent GC
         self._background_tasks: set[asyncio.Task] = set()
+
+        # DingTalk Stream re-delivers a message when the ack is slow.
+        self._dedup = MessageDeduplicator(max_size=1000, ttl_seconds=300.0)
 
     async def start(self) -> None:
         """Start the DingTalk bot with Stream Mode."""

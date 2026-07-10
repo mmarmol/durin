@@ -25,7 +25,6 @@ import os
 import re
 import socket
 import time
-from collections import deque
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -38,6 +37,7 @@ from pydantic import Field
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
+from durin.channels.dedup import MessageDeduplicator
 from durin.config.schema import Base
 from durin.security.network import (
     SSRFError,
@@ -204,7 +204,7 @@ class QQChannel(BaseChannel):
         self._client: botpy.Client | None = None
         self._http: aiohttp.ClientSession | None = None
 
-        self._processed_ids: deque[str] = deque(maxlen=1000)
+        self._dedup = MessageDeduplicator(max_size=1000, ttl_seconds=300.0)
         self._msg_seq: int = 1  # used to avoid QQ API dedup
         self._chat_type_cache: dict[str, str] = {}
 
@@ -534,9 +534,8 @@ class QQChannel(BaseChannel):
             if not self.is_allowed(user_id):
                 return
 
-            if data.id in self._processed_ids:
+            if self._dedup.is_duplicate(data.id):
                 return
-            self._processed_ids.append(data.id)
             self._chat_type_cache[chat_id] = chat_type
 
             # the data used by tests don't contain attachments property
