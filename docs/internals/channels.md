@@ -396,18 +396,32 @@ the bridge binary and hands it to `BridgeSupervisor`
 (`durin/channels/whatsapp_bridge.py`), which spawns
 `<binary> serve --port <port> --auth-dir <dir> --media-dir <dir>` with
 `BRIDGE_TOKEN` set, and restarts it on crash with jittered exponential
-backoff (starting at 2s, capped at 30s, reset after a stable run). The bridge
-uses its exit code to distinguish a crash from a pairing problem: `2` is a
-usage error (bad flags or a missing `BRIDGE_TOKEN`); `3` means `serve` was
-invoked with no paired session; `4` means whatsmeow's `LoggedOut` event fired
-during a run (the user unlinked the device from their phone). For `3` and
-`4`, `BridgeSupervisor` sets `needs_login` and does **not** restart — looping
-against a dead session would only hammer WhatsApp's servers — and
-`WhatsAppChannel.start()` stops the channel cleanly instead of leaving it for
-the channel-manager crash supervisor (see "Channel crash supervision" above)
-to keep resurrecting. Re-pairing is `durin channels login whatsapp`, which
-runs the bridge in `qr` mode in the foreground and prints a scannable QR to
-the terminal.
+backoff (starting at 2s, capped at 30s, reset after a stable run) — the same
+backoff applies when the WebSocket connection between `WhatsAppChannel` and
+the bridge drops, whether via an error or a clean close, so two gateways
+racing for the same bridge don't tight-loop reconnecting against each other.
+The bridge uses its exit code to distinguish a crash from a pairing or
+configuration problem: `2` is a usage/config error (bad flags or a missing
+`BRIDGE_TOKEN`); `3` means `serve` was invoked with no paired session; `4`
+means whatsmeow's `LoggedOut` event fired during a run (the user unlinked the
+device from their phone). `BridgeSupervisor` does **not** restart on any of
+`2`, `3`, or `4` — restarting can't fix a bad config or a dead session — but
+only `3`/`4` set `needs_login` (a config error isn't a pairing problem, and
+`WhatsAppChannel.start()` uses `needs_login` to decide whether to stop the
+channel cleanly rather than leave it for the channel-manager crash supervisor
+(see "Channel crash supervision" above) to keep resurrecting). Re-pairing is
+`durin channels login whatsapp`, which runs the bridge in `qr` mode in the
+foreground and prints a scannable QR to the terminal.
+
+Inbound media is written under `--media-dir` using a filename derived from
+the message's stanza ID — attacker-controlled, since it arrives in the
+inbound message itself — so the bridge sanitizes it to a safe charset
+(`[A-Za-z0-9._-]`, substituting `_` otherwise; a random name if nothing
+survives) and verifies the resulting path stays inside the media dir before
+writing, refusing the write otherwise. `WhatsAppChannel` re-checks the same
+containment on its side (`media` paths in the inbound frame must resolve
+under `get_media_dir("whatsapp")`) as defense in depth against a compromised
+or misbehaving bridge.
 
 Inbound media is written under `--media-dir` using a filename derived from
 the message's stanza ID — attacker-controlled, since it arrives in the

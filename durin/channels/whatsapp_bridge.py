@@ -24,6 +24,8 @@ _ASSET_TEMPLATE = "durin-whatsapp-bridge-{goos}-{goarch}"
 _RELEASE_URL = "https://github.com/mmarmol/durin/releases/download/v{version}/{asset}"
 # Exit codes the bridge uses for "re-pair needed" — supervisor must not restart.
 _NEEDS_LOGIN_EXIT_CODES = (3, 4)
+# Usage/config error — deterministic, restarting can't fix it either.
+_FATAL_CONFIG_EXIT_CODE = 2
 
 
 def platform_asset() -> str:
@@ -185,6 +187,10 @@ class BridgeSupervisor:
                 self.logger.error(
                     "WhatsApp session not paired or logged out (bridge exit {}). "
                     "Run `durin channels login whatsapp` to (re-)pair.", rc)
+                return
+            if rc == _FATAL_CONFIG_EXIT_CODE:
+                self.logger.error(
+                    "bridge usage/config error (exit 2); check bridge_url/port and BRIDGE_TOKEN")
                 return
             if time.monotonic() - started > 60:
                 delay = self._initial_delay  # it ran fine for a while: reset

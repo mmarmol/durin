@@ -825,3 +825,67 @@ class TestReplyParticipantCache:
 
         sent = json.loads(whatsapp_channel._ws.send.call_args_list[0].args[0])
         assert "reply_to_participant" not in sent
+
+
+class TestReconnectBackoff:
+    @pytest.mark.asyncio
+    async def test_clean_close_backs_off_before_reconnecting(self, monkeypatch, tmp_path):
+        """A clean WS close (async-for ends without an exception) must back
+        off just like a connection error, or two gateways racing for one
+        bridge tight-loop reconnecting against each other."""
+        token_path = tmp_path / "whatsapp-auth" / "bridge-token"
+        sleep_calls: list[float] = []
+        real_sleep = asyncio.sleep  # captured before asyncio.sleep is patched below
+
+        class FakeWS:
+            def __init__(self) -> None:
+                self.close = AsyncMock()
+
+            async def send(self, message: str) -> None:
+                pass
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                # A real yield point: without it, a pre-fix tight reconnect
+                # loop never suspends back to the event loop at all, which
+                # defeats asyncio.wait_for's cancellation below.
+                await real_sleep(0)
+                raise StopAsyncIteration  # clean close: no exception
+
+        class FakeConnect:
+            def __init__(self, ws):
+                self.ws = ws
+
+            async def __aenter__(self):
+                return self.ws
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        async def fake_ensure_bridge_binary():
+            return tmp_path / "durin-whatsapp-bridge"
+
+        monkeypatch.setattr("durin.channels.whatsapp._bridge_token_path", lambda: token_path)
+        monkeypatch.setattr("durin.channels.whatsapp_bridge.ensure_bridge_binary", fake_ensure_bridge_binary)
+        monkeypatch.setattr("durin.channels.whatsapp_bridge.BridgeSupervisor", FakeSupervisor)
+        monkeypatch.setitem(
+            sys.modules,
+            "websockets",
+            types.SimpleNamespace(connect=lambda url: FakeConnect(FakeWS())),
+        )
+
+        ch = WhatsAppChannel({"enabled": True, "bridgeUrl": "ws://localhost:3001"}, MagicMock())
+
+        async def fake_sleep(seconds):
+            sleep_calls.append(seconds)
+            ch._running = False  # stop after the first backoff so the test terminates
+            await real_sleep(0)
+
+        monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+        await asyncio.wait_for(ch.start(), timeout=1.0)
+
+        assert len(sleep_calls) == 1
+        assert sleep_calls[0] >= 2.0

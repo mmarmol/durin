@@ -116,6 +116,22 @@ class TestBridgeSupervisor:
         await sup.stop()
 
     @pytest.mark.asyncio
+    async def test_no_restart_on_fatal_config_exit(self, tmp_path):
+        """Exit code 2 (usage/config error) is deterministic — restarting
+        can't fix a bad bridge_url/port or BRIDGE_TOKEN — so the supervisor
+        must stop like it does for 3/4, but without claiming needs_login."""
+        marker = tmp_path / "runs"
+        binary = self._fake_bridge(tmp_path, f'echo run >> "{marker}"; exit 2')
+        sup = BridgeSupervisor(binary, port=39999, token="t",
+                               auth_dir=tmp_path, media_dir=tmp_path, logger=None)
+        sup._initial_delay = 0.05
+        await sup.start()
+        await asyncio.sleep(0.5)
+        assert sup.needs_login is False
+        assert marker.read_text().count("run") == 1
+        await sup.stop()
+
+    @pytest.mark.asyncio
     async def test_stop_terminates_running_process(self, tmp_path):
         binary = self._fake_bridge(tmp_path, "sleep 60")
         sup = BridgeSupervisor(binary, port=39999, token="t",

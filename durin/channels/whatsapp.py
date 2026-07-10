@@ -189,6 +189,14 @@ class WhatsAppChannel(BaseChannel):
                             await self._handle_bridge_message(message)
                         except Exception:
                             self.logger.exception("Error handling bridge message")
+                # Clean close: the bridge or peer ended the connection
+                # without raising. Back off exactly like a connection error
+                # so two gateways racing for the same bridge don't
+                # tight-loop reconnecting against each other.
+                self._connected = False
+                self._ws = None
+                if self._running:
+                    delay = await self._backoff_sleep(delay, "Bridge closed connection; reconnecting in {:.1f} seconds...")
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -196,10 +204,15 @@ class WhatsAppChannel(BaseChannel):
                 self._ws = None
                 self.logger.warning("WhatsApp bridge connection error: {}", e)
                 if self._running:
-                    jittered = delay + random.uniform(0, delay / 4)
-                    self.logger.info("Reconnecting in {:.1f} seconds...", jittered)
-                    await asyncio.sleep(jittered)
-                    delay = _next_backoff(delay)
+                    delay = await self._backoff_sleep(delay, "Reconnecting in {:.1f} seconds...")
+
+    async def _backoff_sleep(self, delay: float, message: str) -> float:
+        """Jittered backoff sleep before a reconnect attempt; returns the
+        next delay in the exponential sequence."""
+        jittered = delay + random.uniform(0, delay / 4)
+        self.logger.info(message, jittered)
+        await asyncio.sleep(jittered)
+        return _next_backoff(delay)
 
     async def stop(self) -> None:
         """Stop the WhatsApp channel."""

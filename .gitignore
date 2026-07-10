@@ -84,3 +84,6 @@ scripts/hypothesis_test/v9_runs/
 # WhatsApp bridge release checksum pin — generated at release build time,
 # not source.
 durin/channels/bridge_checksums.json
+
+# Stray `go build` output when built from bridge/ directly.
+bridge/bridge
