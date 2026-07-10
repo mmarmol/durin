@@ -424,19 +424,28 @@ under `get_media_dir("whatsapp")`) as defense in depth against a compromised
 or misbehaving bridge.
 
 **Binary distribution.** The bridge ships as a prebuilt platform binary, not
-Go source. Release CI cross-compiles it for each supported OS/arch and
-attaches `durin-whatsapp-bridge-<os>-<arch>` plus a `checksums.txt` to the
-GitHub Release; the wheel bundles the matching pin file,
-`durin/channels/bridge_checksums.json`. `ensure_bridge_binary()`
-(`durin/channels/whatsapp_bridge.py`) resolves the binary at first use: reuse
-a cached copy under `<durin_home>/bridge/<version>/` if present, otherwise
-download the release asset for the running package version and verify its
-sha256 against the bundled pin before making it executable — a mismatch
-raises rather than running an unverified binary. A source install with no
-bundled pin falls back to `go build` from `bridge/` with a local Go
-toolchain. `durin doctor` includes a `whatsapp bridge` check that reports
-whether the binary is cached (never fails the run — the binary self-installs
-on login or first start).
+Go source, and is **versioned and released independently of the durin
+package** — it changes rarely, so a durin release that doesn't touch it never
+rebuilds, re-publishes, or invalidates a user's cached binary. The version is
+`BRIDGE_VERSION` in `durin/channels/whatsapp_bridge.py`; its own workflow
+(`.github/workflows/bridge-release.yml`, triggered only by the
+`whatsapp-bridge-v<version>` tag) cross-compiles each supported OS/arch and
+attaches `durin-whatsapp-bridge-<os>-<arch>` plus a `checksums.txt` to a
+dedicated GitHub Release. The committed pin file
+`durin/channels/bridge_checksums.json` records the sha256 of each asset and
+ships inside the wheel as ordinary package data; the release workflow rebuilds
+the binaries reproducibly (pinned toolchain, `-trimpath -buildvcs=false`) and
+fails if they don't match the committed pin, so what the wheel verifies always
+matches what was published. `scripts/gen-bridge-checksums.sh` regenerates the
+pin from source. `ensure_bridge_binary()` resolves the binary at first use:
+reuse a cached copy under `<durin_home>/bridge/<BRIDGE_VERSION>/` if present,
+otherwise download the asset from the `whatsapp-bridge-v<BRIDGE_VERSION>`
+release and verify its sha256 against the bundled pin before making it
+executable — a mismatch raises rather than running an unverified binary. A
+source install with no matching pin falls back to `go build` from `bridge/`
+with a local Go toolchain. `durin doctor` includes a `whatsapp bridge` check
+that reports whether the binary is cached (never fails the run — the binary
+self-installs on login or first start).
 
 **Pairing.** WhatsApp follows the same pure-transport pairing model described
 above: it publishes unconditionally with `is_dm` set and lets the central

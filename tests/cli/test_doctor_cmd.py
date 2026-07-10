@@ -399,15 +399,13 @@ class TestWhatsAppBridgeCheck:
         assert "no build for zos/s390x" in r.message
 
     def test_unexpected_exception_is_contained(self, monkeypatch, tmp_path) -> None:
-        """Per-check isolation: an exception other than BridgeSetupError (e.g.
-        PackageNotFoundError from an unusual install) must degrade to a warn,
-        never crash the whole `durin doctor` run."""
-        from importlib.metadata import PackageNotFoundError
-
+        """Per-check isolation: an unexpected exception from resolving the
+        cache path (e.g. a broken DURIN_HOME) must degrade to a warn, never
+        crash the whole `durin doctor` run."""
         monkeypatch.setenv("DURIN_HOME", str(tmp_path))
         with patch(
-            "durin.channels.whatsapp_bridge.package_version",
-            side_effect=PackageNotFoundError("durin-agent"),
+            "durin.config.paths.get_bridge_install_dir",
+            side_effect=RuntimeError("boom"),
         ):
             r = check_whatsapp_bridge(_config_with_whatsapp(enabled=True))
         assert r.status == "warn"
