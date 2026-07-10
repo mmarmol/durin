@@ -50,6 +50,6 @@ jobs:
         run: |
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 \
-              go build -trimpath -o /dev/null .
+              go build -trimpath -buildvcs=false -o /dev/null .
             echo "built $target"
           done
