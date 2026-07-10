@@ -1391,7 +1391,7 @@ export async function testPersona(
 
 export interface ChannelField {
   name: string;
-  type: "string" | "int" | "bool" | "string_list" | "secret" | "select";
+  type: "string" | "int" | "float" | "bool" | "string_list" | "secret" | "select";
   secret: boolean;
   group: string;
   required: boolean;

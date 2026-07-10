@@ -1018,10 +1018,7 @@
     },
     "concurrency": {
       "description": "How many turns and sub-agents run at once. Changes apply immediately, no restart.",
-      "sections": {
-        "caps": "Limits",
-        "live": "Live"
-      },
+      "sections": { "caps": "Limits", "live": "Live" },
       "rows": {
         "interactive": "Interactive turns",
         "ceiling": "Global ceiling",

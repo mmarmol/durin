@@ -141,10 +141,13 @@ function FieldInput({
       />
     );
   }
-  if (field.type === "int") {
+  if (field.type === "int" || field.type === "float") {
     return (
       <Input
         type="number"
+        // Fractional knobs (seconds, intervals) need a fractional step, or the
+        // browser's spinner and validation reject anything but whole numbers.
+        step={field.type === "float" ? "any" : undefined}
         defaultValue={String(value ?? "")}
         disabled={busy}
         onBlur={(e) => onChange(Number(e.target.value))}
@@ -446,7 +449,7 @@ function ChannelRow({
             ? schemaForm
             : null}
 
-          {/* Legacy single-credential path: channels with empty fields (discord/etc) */}
+          {/* Legacy single-credential path: channels with empty fields (matrix/qq/etc) */}
           {!hasFields && channel.name !== "telegram" ? (
             <div className="mt-3 flex flex-wrap items-center gap-2">
               {channel.credential_field ? (

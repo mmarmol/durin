@@ -82,9 +82,28 @@ def test_token_renders_as_secret_field():
     assert field["type"] == "secret"
 
 
-def test_discord_no_longer_falls_back_to_legacy_credential_path():
-    """A channel with fields renders the typed grouped form; the legacy
-    single-password path is reserved for channels that expose none."""
+
+
+def test_working_emoji_delay_renders_as_a_number_not_a_text_box():
+    """A float knob must offer a numeric input; a plain text box invites
+    locale-specific decimal separators that fail validation opaquely."""
     from durin.service.config import _channel_field_schema
 
-    assert _channel_field_schema(DiscordConfig)
+    field = next(
+        f for f in _channel_field_schema(DiscordConfig) if f["name"] == "working_emoji_delay"
+    )
+    assert field["type"] == "float"
+
+
+def test_discord_does_not_get_a_legacy_credential_field():
+    """channels_list only computes credential_field when a channel exposes no
+    fields; with the typed form in place the legacy password box must not
+    render for discord."""
+    from durin.service.config import _CRED_FIELDS, _channel_field_schema
+
+    fields = _channel_field_schema(DiscordConfig)
+    credential_field = None
+    if not fields:  # the exact branch channels_list takes
+        defaults = DiscordChannel.default_config()
+        credential_field = next((n for n in _CRED_FIELDS if n in defaults), None)
+    assert credential_field is None
