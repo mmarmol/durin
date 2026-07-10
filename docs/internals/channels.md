@@ -457,15 +457,23 @@ in both modes, so toggling `threading_mode` is a lossless config change.
 
 **Thread resolution order** (`_resolve_thread`): the thread root is, in order,
 (1) the first entry in the inbound message's `References` header, falling
-back to `In-Reply-To` when `References` is absent; (2) when neither header
-resolves to a known thread, a secondary index keyed by the Outlook
-Thread-Index conversation prefix plus the normalized subject — this recovers
-threads where Exchange/Outlook rewrote or dropped `References` on an internal
-hop; (3) failing both, a new thread rooted at the mail's own `Message-ID`, or
+back to `In-Reply-To` when `References` is absent; (2) a secondary index
+keyed by the Outlook Thread-Index conversation prefix plus the normalized
+subject is consulted whenever step (1) found nothing, *or* found a root the
+thread store doesn't recognize (Exchange/Outlook rewrote or dropped
+`References` on an internal hop) — a hit there replaces the resolved root; a
+miss keeps the step-(1) root as-is when one was found, rather than
+discarding it, since a References-derived root the store hasn't seen yet is
+still better thread identity than starting a new thread; (3) if no root was
+found by either step, a new thread rooted at the mail's own `Message-ID`, or
 at a synthetic root derived from the IMAP UID when even `Message-ID` is
 missing, so header-less mail is never folded into an unrelated thread. The
 resolved root is hashed (`thread_digest`, from `durin/channels/email_threads.py`)
-into the short digest used in the session key and the thread store.
+into the short digest used in the session key and the thread store. The
+digest is a 16-hex-char SHA-256 prefix; a collision would require two
+distinct roots to hash identically within the store's ≤5000-entry cap, a
+probability negligible at this scale, so collision handling is deliberately
+not implemented.
 
 **Thread store** (`durin/channels/email_threads.py::ThreadStore`): a single
 JSON file at `~/.durin/email/threads.json`, with the gateway's email channel

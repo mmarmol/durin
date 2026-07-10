@@ -124,7 +124,10 @@ class ThreadStore:
         return self._threads.get(digest)
 
     def latest_for_address(self, address: str) -> dict[str, Any] | None:
-        candidates = [e for e in self._threads.values() if e.get("address") == address]
+        needle = address.lower()
+        candidates = [
+            e for e in self._threads.values() if e.get("address", "").lower() == needle
+        ]
         if not candidates:
             return None
         return max(candidates, key=lambda e: e.get("last_seen", 0.0))
@@ -181,6 +184,7 @@ class ThreadStore:
         self._save()
 
     def prune(self) -> None:
+        before = len(self._threads)
         cutoff = time.time() - self._max_age_seconds
         self._threads = {
             k: v for k, v in self._threads.items()
@@ -192,6 +196,8 @@ class ThreadStore:
             )
             self._threads = dict(by_age[len(by_age) - self._max_entries:])
         self._rebuild_conv_index()
+        if len(self._threads) != before:
+            self._save()
 
     @staticmethod
     def _cap_chain(chain: list[str]) -> list[str]:

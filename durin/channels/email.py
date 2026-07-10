@@ -176,6 +176,13 @@ class EmailChannel(BaseChannel):
                     sender = item["sender"]
 
                     digest = self._resolve_thread(item)
+                    # Embed the thread digest into inbound metadata so ordinary
+                    # replies (which flow through _assemble_outbound's inbound
+                    # passthrough, not the system/subagent-followup builder) can
+                    # still stitch to the right thread — mirrors Slack's
+                    # "slack": {"thread_ts": ...} idiom. Needed in both modes:
+                    # send() consults it regardless of threading_mode.
+                    item["metadata"]["email"] = {"thread": digest}
                     session_key = (
                         f"email:{sender}:{digest}"
                         if self.config.threading_mode == "thread"
@@ -222,10 +229,15 @@ class EmailChannel(BaseChannel):
         thread_meta = (msg.metadata or {}).get("email") or {}
         entry = None
         digest = ""
-        if isinstance(thread_meta, dict) and thread_meta.get("thread"):
-            entry = self._store.get(str(thread_meta["thread"]))
+        explicit_thread = isinstance(thread_meta, dict) and thread_meta.get("thread")
+        if explicit_thread:
             digest = str(thread_meta["thread"])
-        if entry is None:
+            entry = self._store.get(digest)
+            # An explicit digest that misses the store is a stale/unknown
+            # thread reference — treat as fresh mail, do NOT fall back to
+            # latest_for_address (that would stitch the reply to the wrong
+            # conversation).
+        else:
             entry = self._store.latest_for_address(to_addr)
             digest = thread_digest(entry["root"]) if entry else ""
         is_reply = entry is not None
@@ -367,9 +379,13 @@ class EmailChannel(BaseChannel):
         """
         try:
             if self.config.imap_use_ssl:
-                client = imaplib.IMAP4_SSL(self.config.imap_host, self.config.imap_port)
+                client = imaplib.IMAP4_SSL(
+                    self.config.imap_host, self.config.imap_port, timeout=15
+                )
             else:
-                client = imaplib.IMAP4(self.config.imap_host, self.config.imap_port)
+                client = imaplib.IMAP4(
+                    self.config.imap_host, self.config.imap_port, timeout=15
+                )
             try:
                 client.login(self.config.imap_username, self.config.imap_password)
                 detected = None
@@ -466,9 +482,13 @@ class EmailChannel(BaseChannel):
         mailbox = self.config.imap_mailbox or "INBOX"
 
         if self.config.imap_use_ssl:
-            client = imaplib.IMAP4_SSL(self.config.imap_host, self.config.imap_port)
+            client = imaplib.IMAP4_SSL(
+                self.config.imap_host, self.config.imap_port, timeout=30
+            )
         else:
-            client = imaplib.IMAP4(self.config.imap_host, self.config.imap_port)
+            client = imaplib.IMAP4(
+                self.config.imap_host, self.config.imap_port, timeout=30
+            )
 
         try:
             client.login(self.config.imap_username, self.config.imap_password)
@@ -709,9 +729,15 @@ class EmailChannel(BaseChannel):
         if not value:
             return ""
         try:
-            return str(make_header(decode_header(value)))
+            decoded = str(make_header(decode_header(value)))
         except Exception:
-            return value
+            decoded = value
+        # RFC 2047 decoding can yield embedded CR/LF (header injection via a
+        # crafted encoded-word); a raw newline in an outbound header makes
+        # stdlib's email package raise ValueError and permanently fails the
+        # reply. Collapse to a single-line value.
+        sanitized = re.sub(r"[\r\n]+", " ", decoded)
+        return " ".join(sanitized.split())
 
     @classmethod
     def _extract_text_body(cls, msg: Any) -> str:
@@ -847,7 +873,11 @@ class EmailChannel(BaseChannel):
 
         root = references[0] if references else in_reply_to
         digest = thread_digest(root) if root else ""
-        if not digest:
+        if not digest or self._store.get(digest) is None:
+            # Either no References/In-Reply-To at all, or they point at a root
+            # the store doesn't know (Exchange rewrote References on an
+            # internal hop). Try the Thread-Index fallback; if it misses too,
+            # keep the References-derived root rather than discarding it.
             via_conv = self._store.lookup_conv(conv_id, normalize_subject(subject))
             if via_conv:
                 digest = via_conv

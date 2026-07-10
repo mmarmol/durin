@@ -77,7 +77,7 @@ def test_fetch_new_messages_parses_unseen_and_marks_seen(monkeypatch) -> None:
             return "BYE", [b""]
 
     fake = FakeIMAP()
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     channel = EmailChannel(_make_config(), MessageBus())
     items = channel._fetch_new_messages()
@@ -120,7 +120,7 @@ def test_fetch_new_messages_skips_self_sent_email_and_marks_seen(monkeypatch) ->
             return "BYE", [b""]
 
     fake = FakeIMAP()
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     channel = EmailChannel(_make_config(from_address="bot@example.com"), MessageBus())
     items = channel._fetch_new_messages()
@@ -187,7 +187,7 @@ def test_fetch_new_messages_skips_self_sent_across_identity_sources(
             return "BYE", [b""]
 
     fake = FakeIMAP()
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     channel = EmailChannel(_make_config(**config_override), MessageBus())
     items = channel._fetch_new_messages()
@@ -230,7 +230,7 @@ def test_fetch_new_messages_retries_once_when_imap_connection_goes_stale(monkeyp
 
     fake_instances: list[FlakyIMAP] = []
 
-    def _factory(_host: str, _port: int):
+    def _factory(_host: str, _port: int, **_kw):
         instance = FlakyIMAP()
         fake_instances.append(instance)
         return instance
@@ -281,7 +281,7 @@ def test_fetch_new_messages_keeps_messages_collected_before_stale_retry(monkeypa
         def logout(self):
             return "BYE", [b""]
 
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: FlakyIMAP())
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: FlakyIMAP())
 
     channel = EmailChannel(_make_config(), MessageBus())
     items = channel._fetch_new_messages()
@@ -302,7 +302,7 @@ def test_fetch_new_messages_skips_missing_mailbox(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "durin.channels.email.imaplib.IMAP4_SSL",
-        lambda _h, _p: MissingMailboxIMAP(),
+        lambda _h, _p, **_kw: MissingMailboxIMAP(),
     )
 
     channel = EmailChannel(_make_config(), MessageBus())
@@ -599,7 +599,7 @@ def test_fetch_messages_between_dates_uses_imap_since_before_without_mark_seen(m
             return "BYE", [b""]
 
     fake = FakeIMAP()
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     channel = EmailChannel(_make_config(), MessageBus())
     items = channel.fetch_messages_between_dates(
@@ -652,7 +652,7 @@ def test_spoofed_email_rejected_when_verify_enabled(monkeypatch) -> None:
     """An email without Authentication-Results should be rejected when verify_dkim=True."""
     raw = _make_raw_email(subject="Spoofed", body="Malicious payload")
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     cfg = _make_config(verify_dkim=True, verify_spf=True)
     channel = EmailChannel(cfg, MessageBus())
@@ -669,7 +669,7 @@ def test_email_with_valid_auth_results_accepted(monkeypatch) -> None:
         auth_results="mx.example.com; spf=pass smtp.mailfrom=alice@example.com; dkim=pass header.d=example.com",
     )
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     cfg = _make_config(verify_dkim=True, verify_spf=True)
     channel = EmailChannel(cfg, MessageBus())
@@ -688,7 +688,7 @@ def test_email_with_partial_auth_rejected(monkeypatch) -> None:
         auth_results="mx.example.com; spf=pass smtp.mailfrom=alice@example.com; dkim=fail",
     )
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     cfg = _make_config(verify_dkim=True, verify_spf=True)
     channel = EmailChannel(cfg, MessageBus())
@@ -701,7 +701,7 @@ def test_backward_compat_verify_disabled(monkeypatch) -> None:
     """When verify_dkim=False and verify_spf=False, emails without auth headers are accepted."""
     raw = _make_raw_email(subject="NoAuth", body="No auth headers present")
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     cfg = _make_config(verify_dkim=False, verify_spf=False)
     channel = EmailChannel(cfg, MessageBus())
@@ -714,7 +714,7 @@ def test_email_content_tagged_with_email_context(monkeypatch) -> None:
     """Email content should be prefixed with [EMAIL-CONTEXT] for LLM isolation."""
     raw = _make_raw_email(subject="Tagged", body="Check the tag")
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     cfg = _make_config(verify_dkim=False, verify_spf=False)
     channel = EmailChannel(cfg, MessageBus())
@@ -812,7 +812,7 @@ def _make_raw_email_with_attachment(
 def test_fetch_new_messages_ignores_unauthorized_sender_before_attachments(monkeypatch) -> None:
     raw = _make_raw_email_with_attachment(from_addr="blocked@example.com")
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     called = {"attachments": False}
 
@@ -841,7 +841,7 @@ def test_extract_attachments_saves_pdf(tmp_path, monkeypatch) -> None:
 
     raw = _make_raw_email_with_attachment()
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     cfg = _make_config(allowed_attachment_types=["application/pdf"], verify_dkim=False, verify_spf=False)
     channel = EmailChannel(cfg, MessageBus())
@@ -860,7 +860,7 @@ def test_extract_attachments_disabled_by_default(monkeypatch) -> None:
     """With no allowed_attachment_types (default), no attachments are extracted."""
     raw = _make_raw_email_with_attachment()
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     cfg = _make_config(verify_dkim=False, verify_spf=False)
     assert cfg.allowed_attachment_types == []
@@ -882,7 +882,7 @@ def test_extract_attachments_mime_type_filter(tmp_path, monkeypatch) -> None:
         attachment_mime="image/png",
     )
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     cfg = _make_config(
         allowed_attachment_types=["application/pdf"],
@@ -906,7 +906,7 @@ def test_extract_attachments_empty_allowed_types_rejects_all(tmp_path, monkeypat
         attachment_mime="image/png",
     )
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     cfg = _make_config(
         allowed_attachment_types=[],
@@ -930,7 +930,7 @@ def test_extract_attachments_wildcard_pattern(tmp_path, monkeypatch) -> None:
         attachment_mime="image/jpeg",
     )
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     cfg = _make_config(
         allowed_attachment_types=["image/*"],
@@ -952,7 +952,7 @@ def test_extract_attachments_size_limit(tmp_path, monkeypatch) -> None:
         attachment_content=b"x" * 1000,
     )
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     cfg = _make_config(
         allowed_attachment_types=["*"],
@@ -988,7 +988,7 @@ def test_extract_attachments_max_count(tmp_path, monkeypatch) -> None:
     raw = msg.as_bytes()
 
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     cfg = _make_config(
         allowed_attachment_types=["*"],
@@ -1011,7 +1011,7 @@ def test_extract_attachments_sanitizes_filename(tmp_path, monkeypatch) -> None:
         attachment_name="../../../etc/passwd",
     )
     fake = _make_fake_imap(raw)
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
 
     cfg = _make_config(allowed_attachment_types=["*"], verify_dkim=False, verify_spf=False)
     channel = EmailChannel(cfg, MessageBus())
@@ -1086,7 +1086,7 @@ class _FakeIMAPSingle:
 
 def _make_channel(tmp_path, monkeypatch, raw: bytes, uid: str = "123", **cfg):
     fake = _FakeIMAPSingle(raw, uid=uid)
-    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: fake)
     monkeypatch.setenv("DURIN_HOME", str(tmp_path))
     channel = EmailChannel(_make_config(**cfg), MessageBus())
     return channel, fake
@@ -1258,6 +1258,14 @@ async def test_start_polling_loop_publishes_thread_scoped_session(tmp_path, monk
         assert len(published) == 1
         assert published[0].session_key == expected
         assert channel._store.get(thread_digest("<m1@example.com>")) is not None
+        # The start() loop must embed the thread digest into inbound metadata
+        # in BOTH modes — ordinary replies flow through the agent loop's
+        # generic inbound-metadata passthrough (_assemble_outbound), not the
+        # system/subagent-followup builder, so without this the digest never
+        # reaches send() for a normal reply.
+        assert published[0].metadata.get("email") == {
+            "thread": thread_digest("<m1@example.com>")
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1453,7 +1461,7 @@ async def test_send_appends_copy_to_sent_folder(tmp_path, monkeypatch) -> None:
             return "BYE", [b""]
 
     monkeypatch.setattr(
-        "durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: FakeIMAPSent()
+        "durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: FakeIMAPSent()
     )
     monkeypatch.setattr(channel, "_smtp_send", lambda m: None)
     await channel.send(OutboundMessage(
@@ -1487,7 +1495,7 @@ async def test_send_appends_copy_to_sent_folder_unquoted_name(tmp_path, monkeypa
             return "BYE", [b""]
 
     monkeypatch.setattr(
-        "durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: FakeIMAPSent()
+        "durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: FakeIMAPSent()
     )
     monkeypatch.setattr(channel, "_smtp_send", lambda m: None)
     await channel.send(OutboundMessage(
@@ -1535,7 +1543,7 @@ async def test_sent_folder_detection_not_cached_on_failure(tmp_path, monkeypatch
             return "BYE", [b""]
 
     monkeypatch.setattr(
-        "durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: FakeIMAPListFails()
+        "durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: FakeIMAPListFails()
     )
     monkeypatch.setattr(channel, "_smtp_send", lambda m: None)
     await channel.send(OutboundMessage(
@@ -1545,7 +1553,7 @@ async def test_sent_folder_detection_not_cached_on_failure(tmp_path, monkeypatch
     assert channel._sent_folder is None
 
     monkeypatch.setattr(
-        "durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: FakeIMAPListWorks()
+        "durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p, **_kw: FakeIMAPListWorks()
     )
     await channel.send(OutboundMessage(
         channel="email", chat_id="alice@example.com", content="hi again",
@@ -1561,7 +1569,7 @@ async def test_sent_append_failure_does_not_break_send(tmp_path, monkeypatch) ->
     channel._store.load()
     channel._resolve_thread(channel._fetch_new_messages()[0])
 
-    def _boom(_h, _p):
+    def _boom(_h, _p, **_kw):
         raise OSError("imap down")
 
     monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", _boom)
@@ -1571,3 +1579,170 @@ async def test_sent_append_failure_does_not_break_send(tmp_path, monkeypatch) ->
         channel="email", chat_id="alice@example.com", content="hi",
     ))
     assert len(sent) == 1  # send succeeded despite append failure
+
+
+# ---------------------------------------------------------------------------
+# Regression: ordinary replies must carry the thread digest (Fix 1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_ordinary_reply_uses_embedded_thread_not_latest_for_address(
+    tmp_path, monkeypatch
+) -> None:
+    """Reproduces the original bug shape: without the start()-loop embedding an
+    explicit `email.thread` digest into inbound metadata, an ordinary reply's
+    metadata (passed through unchanged by _assemble_outbound) would carry no
+    digest at all, so send() would fall back to latest_for_address and stitch
+    the reply into whichever thread for that sender is most recent — not
+    necessarily the one being replied to."""
+    import time
+
+    raw_a = _make_raw_email_threaded(message_id="<a1@x>", subject="Thread A")
+    channel, _ = _make_channel(tmp_path, monkeypatch, raw_a, uid="1")
+    channel._store.load()
+    item_a = channel._fetch_new_messages()[0]
+    digest_a = channel._resolve_thread(item_a)
+    # What EmailChannel.start() now does before _handle_message.
+    item_a["metadata"]["email"] = {"thread": digest_a}
+    channel._store._threads[digest_a]["last_seen"] = time.time() - 100  # make A older
+
+    raw_b = _make_raw_email_threaded(message_id="<b1@x>", subject="Thread B")
+    monkeypatch.setattr(
+        "durin.channels.email.imaplib.IMAP4_SSL",
+        lambda _h, _p, **_kw: _FakeIMAPSingle(raw_b, uid="2"),
+    )
+    item_b = channel._fetch_new_messages()[0]
+    digest_b = channel._resolve_thread(item_b)
+    item_b["metadata"]["email"] = {"thread": digest_b}
+    assert digest_b != digest_a
+
+    sent: list = []
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: sent.append(m))
+    await channel.send(OutboundMessage(
+        channel="email",
+        chat_id="alice@example.com",
+        content="Reply to A.",
+        metadata=item_a["metadata"],
+    ))
+
+    assert sent[0]["In-Reply-To"] == "<a1@x>"
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: Thread-Index fallback reachable even when References resolved to a
+# root the store doesn't recognize (rewritten References).
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_thread_index_recovers_when_references_rewritten(tmp_path, monkeypatch) -> None:
+    import base64
+
+    from durin.channels.email_threads import thread_digest
+
+    conv = base64.b64encode(bytes(range(22))).decode()
+    first = _make_raw_email_threaded(
+        message_id="<m1@example.com>", subject="Budget", thread_index=conv
+    )
+    channel, _ = _make_channel(tmp_path, monkeypatch, first)
+    d1 = channel._resolve_thread(channel._fetch_new_messages()[0])
+
+    # References got rewritten to an unknown root, but the Thread-Index
+    # conversation prefix and normalized subject still match.
+    rewritten = _make_raw_email_threaded(
+        message_id="<m2@example.com>", subject="RE: Budget",
+        references="<rewritten@x>", thread_index=conv,
+    )
+    channel2, _ = _make_channel(tmp_path, monkeypatch, rewritten, uid="124")
+    d2 = channel2._resolve_thread(channel2._fetch_new_messages()[0])
+    assert d2 == d1
+    assert channel2._store.get(d1)["root"] == "<m1@example.com>"
+
+    # Unknown References AND no conv match → a genuinely new thread, rooted at
+    # the References-derived value (kept, not discarded).
+    unrelated = _make_raw_email_threaded(
+        message_id="<m3@example.com>", subject="Something else",
+        references="<unknown@x>",
+    )
+    channel3, _ = _make_channel(tmp_path, monkeypatch, unrelated, uid="125")
+    d3 = channel3._resolve_thread(channel3._fetch_new_messages()[0])
+    assert d3 != d1
+    assert d3 == thread_digest("<unknown@x>")
+
+
+# ---------------------------------------------------------------------------
+# Fix 4: an explicit but unknown digest must not fall back to latest_for_address
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_explicit_digest_miss_does_not_fall_back_to_latest(
+    tmp_path, monkeypatch
+) -> None:
+    raw = _make_raw_email_threaded(message_id="<m1@x>", subject="Known thread")
+    channel, _ = _make_channel(tmp_path, monkeypatch, raw)
+    channel._store.load()
+    channel._resolve_thread(channel._fetch_new_messages()[0])
+
+    sent: list = []
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: sent.append(m))
+    await channel.send(OutboundMessage(
+        channel="email", chat_id="alice@example.com", content="hi",
+        metadata={"email": {"thread": "0000000000000000"}},
+    ))
+    assert "In-Reply-To" not in sent[0]
+
+
+# ---------------------------------------------------------------------------
+# Fix 5: CRLF injection via RFC 2047-decoded headers
+# ---------------------------------------------------------------------------
+
+
+def test_decode_header_value_sanitizes_embedded_crlf() -> None:
+    """RFC 2047 decoding can smuggle CR/LF via a crafted encoded-word; the
+    decoded value must be collapsed to a single line so it can't inject
+    headers into an outbound reply."""
+    import base64
+
+    encoded = base64.b64encode("Hi\r\nEvil-Header: x".encode()).decode()
+    raw_header = f"=?utf-8?b?{encoded}?="
+    decoded = EmailChannel._decode_header_value(raw_header)
+    assert "\r" not in decoded
+    assert "\n" not in decoded
+    assert decoded == "Hi Evil-Header: x"
+
+
+@pytest.mark.asyncio
+async def test_inbound_crlf_subject_is_sanitized_and_reply_succeeds(
+    tmp_path, monkeypatch
+) -> None:
+    """A CRLF-smuggling encoded-word Subject must parse inbound cleanly and,
+    critically, must not reach an outbound header unsanitized — stdlib's
+    email package raises ValueError on an embedded newline, which would
+    permanently fail the reply."""
+    import base64
+
+    encoded = base64.b64encode("Hi\r\nEvil-Header: x".encode()).decode()
+    raw_subject = f"=?utf-8?b?{encoded}?="
+    msg = EmailMessage()
+    msg["From"] = "alice@example.com"
+    msg["To"] = "bot@example.com"
+    msg["Subject"] = raw_subject
+    msg["Message-ID"] = "<crlf@example.com>"
+    msg.set_content("body")
+    raw = msg.as_bytes()
+
+    channel, _ = _make_channel(tmp_path, monkeypatch, raw)
+    item = channel._fetch_new_messages()[0]
+    assert "\r" not in item["subject"]
+    assert "\n" not in item["subject"]
+
+    channel._resolve_thread(item)
+    sent: list = []
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: sent.append(m))
+    await channel.send(OutboundMessage(
+        channel="email", chat_id="alice@example.com", content="Ack.",
+    ))
+    subject = sent[0]["Subject"]
+    assert "\r" not in subject
+    assert "\n" not in subject

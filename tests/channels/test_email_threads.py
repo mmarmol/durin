@@ -98,6 +98,16 @@ def test_store_latest_for_address(tmp_path):
     assert store.latest_for_address("nobody@x") is None
 
 
+def test_store_latest_for_address_case_insensitive(tmp_path):
+    """Inbound senders are stored lowercased; lookups must match regardless
+    of the case the caller queries with (or the case the address was stored
+    in, in case an older entry predates lowercasing)."""
+    store = _mk_store(tmp_path)
+    store.upsert_inbound("d1", root="<m1@x>", address="Alice@X.com",
+                         subject="s", references=[], message_id="<m1@x>")
+    assert store.latest_for_address("alice@x.com")["root"] == "<m1@x>"
+
+
 def test_store_conv_index_lookup(tmp_path):
     store = _mk_store(tmp_path)
     store.upsert_inbound("d1", root="<m1@x>", address="a@x", subject="Re: Hello",
@@ -145,3 +155,23 @@ def test_store_corrupt_file_starts_empty(tmp_path):
     store.upsert_inbound("d1", root="<m@x>", address="a@x", subject="s",
                          references=[], message_id="<m@x>")
     assert json.loads(path.read_text())["d1"]["root"] == "<m@x>"
+
+
+def test_prune_persists_when_entries_removed(tmp_path):
+    store = _mk_store(tmp_path)
+    store.upsert_inbound("old", root="<o@x>", address="a@x", subject="s",
+                         references=[], message_id="<o@x>")
+    store._threads["old"]["last_seen"] = time.time() - 40 * 86400
+    store.prune()
+    assert store.get("old") is None
+    # A fresh store instance reading the same file must not see it either —
+    # proves prune() actually wrote the change, not just mutated in memory.
+    store2 = _mk_store(tmp_path)
+    assert store2.get("old") is None
+
+
+def test_prune_does_not_write_when_nothing_removed(tmp_path):
+    path = tmp_path / "threads.json"
+    store = ThreadStore(path)
+    store.load()  # empty store; load()'s internal prune() must not write
+    assert not path.exists()
