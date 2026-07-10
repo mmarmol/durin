@@ -295,6 +295,66 @@ attachments and passed to the agent as `[quoted]` / `[shared]` context lines.
 
 ---
 
+## WhatsApp
+
+WhatsApp connects through a bundled Go bridge process (built on
+[whatsmeow](https://github.com/tulir/whatsmeow)) that durin downloads,
+supervises, and talks to over a local WebSocket — there is no WhatsApp
+Business API account, webhook, or app to register.
+
+> **Unofficial protocol — read before connecting.** WhatsApp does not offer
+> this integration. The bridge speaks the same WhatsApp Web "linked device"
+> protocol used by browser and desktop clients, which is outside WhatsApp's
+> terms of service. Using it carries a real risk of the number being banned.
+> Use a **dedicated phone number** you can afford to lose — never your
+> primary personal or business number.
+
+### Setup
+
+Enable the channel in config:
+
+```toml
+[channels.whatsapp]
+enabled = true
+group_policy = "open"   # "open" responds to all group messages, "mention" only when @-mentioned
+```
+
+Then log in:
+
+```sh
+durin channels login whatsapp
+```
+
+The first run downloads the bridge binary for your platform, verifies it
+against durin's bundled checksum, and prints a QR code in the terminal. Scan
+it from your phone: **WhatsApp → Linked devices → Link a device**. The paired
+session persists under `<durin_home>/whatsapp-auth/`, so this is a one-time
+step — starting (or restarting) the gateway reconnects automatically.
+
+If the linked session is revoked from the phone, or you want to switch to a
+different number, re-pair with:
+
+```sh
+durin channels login whatsapp --force
+```
+
+`--force` clears the local session before showing a new QR code.
+
+**Key fields (from `WhatsAppConfig`):**
+
+| Key | Default | Notes |
+|---|---|---|
+| `enabled` | `false` | Must be `true` to start the channel |
+| `bridge_url` | `"ws://localhost:3001"` | Loopback WebSocket URL the gateway uses to reach the bridge process |
+| `bridge_token` | _(empty)_ | Shared secret for the bridge socket; auto-generated and persisted if left empty |
+| `allow_from` | `[]` | Phone numbers or LIDs allowed to talk to durin without pairing; empty = pairing mode for DMs |
+| `group_policy` | `"open"` | `"open"` (reply to all) or `"mention"` (reply only when @-mentioned) |
+
+See [docs/internals/channels.md](../internals/channels.md) for the bridge's
+transport, frame protocol, and supervision details.
+
+---
+
 ## Email
 
 Email uses **IMAP polling** for inbound and **SMTP** for outbound. The full
@@ -372,7 +432,6 @@ interactively.
 | Channel | Module | Notes |
 |---|---|---|
 | Discord | `discord.py` | Requires the `discord` pip extra (auto-installed) |
-| WhatsApp | `whatsapp.py` | |
 | Matrix | `matrix.py` | |
 | Microsoft Teams | `msteams.py` | |
 | Feishu | `feishu.py` | |

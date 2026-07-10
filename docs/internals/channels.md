@@ -217,13 +217,13 @@ be bypassed once a message is published.
 
 The channel contract is to be **pure transport**: publish unconditionally with
 `is_dm` set and let the gate authorize — a channel should NOT re-implement
-`is_allowed`/pairing in its handlers. **Telegram, Slack, and Discord are the
-reference implementations of this contract.** Several other channels still
-pre-filter with their own `is_allowed` check and early-`return` in their
-handlers (legacy behaviour, unchanged here — those messages never reach the
-gate); migrating them to pure transport so they route through the central
-gate is a follow-up. New channels should follow the Telegram/Slack/Discord
-model.
+`is_allowed`/pairing in its handlers. **Telegram, Slack, Discord, and
+WhatsApp are the reference implementations of this contract.** Several other
+channels still pre-filter with their own `is_allowed` check and early-`return`
+in their handlers (legacy behaviour, unchanged here — those messages never
+reach the gate); migrating them to pure transport so they route through the
+central gate is a follow-up. New channels should follow the
+Telegram/Slack/Discord/WhatsApp model.
 
 Pure transport applies to *sender authorization* only — the gate owns who is
 allowed to talk to the bot. Channel-policy filters that decide *which
@@ -332,6 +332,87 @@ apply the same idiom: on transcription success, return an empty `media` list
 and the transcript as the bare user message text; on failure, return the audio
 path so the `interpret_audio` tool remains a usable fallback.
 
+### WhatsApp bridge transport
+
+Unlike every other channel, WhatsApp's `start()` does not talk to the platform
+directly: `WhatsAppChannel` (`durin/channels/whatsapp.py`) supervises a
+separate Go process — the bridge (`bridge/`) — that implements the WhatsApp
+Web multi-device protocol via the [whatsmeow](https://github.com/tulir/whatsmeow)
+library, and speaks to it over a loopback-only WebSocket
+(`bridge_url`, default `ws://localhost:3001`).
+
+**Transport and auth.** The bridge's WS server accepts exactly one client. The
+first frame on a new connection must be an `auth` command carrying a shared
+token (constant-time compared); anything else closes the socket. The token is
+either the configured `bridge_token` or one generated on first use and
+persisted at `<durin_home>/whatsapp-auth/bridge-token`, and is also passed to
+the bridge subprocess as the `BRIDGE_TOKEN` environment variable. A new client
+authenticating (e.g. after `WhatsAppChannel` reconnects) closes any previous
+connection — newest client wins.
+
+**v2 frame protocol.** Frame shapes are defined in `bridge/frames.go`; the
+two families are:
+
+| Python → bridge (`Command`) | Purpose | Key fields |
+|---|---|---|
+| `auth` | authenticate the socket (must be first frame) | `token` |
+| `send` | send a text message | `to`, `text`, `id`, `reply_to` (quoted reply) |
+| `send_media` | send an image/video/audio/document | `to`, `filePath`, `mimetype`, `fileName`, `id` |
+| `typing` | presence hint; fire-and-forget, no ack | `to`, `state` (`composing`/`paused`) |
+
+| Bridge → Python | Purpose | Key fields |
+|---|---|---|
+| `ack` | result of a `send`/`send_media` command | `id`, `ok`, `error` |
+| `message` | inbound WhatsApp message | `pn`, `sender`, `content`, `id`, `isGroup`, `wasMentioned`, `media`, `timestamp`, `voice`, `quoted` |
+| `status` | connection status, pushed on connect and on whatsmeow connect/disconnect events | `status` (`connected`/`disconnected`), `version` |
+| `qr` | QR code payload (`qr` login mode) | `code` |
+| `error` | protocol or delivery error | `error` |
+
+`WhatsAppChannel.send` awaits the matching `ack` (with a timeout) before
+returning, so the channel manager's retry-on-failure policy applies the same
+way it does for every other channel's `send`. On the bridge side, inbound
+whatsmeow events are handed off to a buffered outbound queue consumed by a
+dedicated goroutine that writes to the WS connection, so a slow or stalled
+Python client can never block whatsmeow's own event dispatch.
+
+**Supervision and the exit-code contract.** `WhatsAppChannel.start()` resolves
+the bridge binary and hands it to `BridgeSupervisor`
+(`durin/channels/whatsapp_bridge.py`), which spawns
+`<binary> serve --port <port> --auth-dir <dir> --media-dir <dir>` with
+`BRIDGE_TOKEN` set, and restarts it on crash with jittered exponential
+backoff (starting at 2s, capped at 30s, reset after a stable run). The bridge
+uses its exit code to distinguish a crash from a pairing problem: `2` is a
+usage error (bad flags or a missing `BRIDGE_TOKEN`); `3` means `serve` was
+invoked with no paired session; `4` means whatsmeow's `LoggedOut` event fired
+during a run (the user unlinked the device from their phone). For `3` and
+`4`, `BridgeSupervisor` sets `needs_login` and does **not** restart — looping
+against a dead session would only hammer WhatsApp's servers — and
+`WhatsAppChannel.start()` stops the channel cleanly instead of leaving it for
+the channel-manager crash supervisor (see "Channel crash supervision" above)
+to keep resurrecting. Re-pairing is `durin channels login whatsapp`, which
+runs the bridge in `qr` mode in the foreground and prints a scannable QR to
+the terminal.
+
+**Binary distribution.** The bridge ships as a prebuilt platform binary, not
+Go source. Release CI cross-compiles it for each supported OS/arch and
+attaches `durin-whatsapp-bridge-<os>-<arch>` plus a `checksums.txt` to the
+GitHub Release; the wheel bundles the matching pin file,
+`durin/channels/bridge_checksums.json`. `ensure_bridge_binary()`
+(`durin/channels/whatsapp_bridge.py`) resolves the binary at first use: reuse
+a cached copy under `<durin_home>/bridge/<version>/` if present, otherwise
+download the release asset for the running package version and verify its
+sha256 against the bundled pin before making it executable — a mismatch
+raises rather than running an unverified binary. A source install with no
+bundled pin falls back to `go build` from `bridge/` with a local Go
+toolchain. `durin doctor` includes a `whatsapp bridge` check that reports
+whether the binary is cached (never fails the run — the binary self-installs
+on login or first start).
+
+**Pairing.** WhatsApp follows the same pure-transport pairing model described
+above: it publishes unconditionally with `is_dm` set and lets the central
+gate authorize, generating pairing codes for unapproved DM senders exactly
+like Telegram and Slack.
+
 ### Pairing store
 
 The pairing store (`durin/pairing/store.py`) is a small JSON file at
@@ -362,6 +443,8 @@ background worker. `approve_code` moves an entry from pending to approved;
 | `SlackChannel` | `durin/channels/slack.py` | Slack Socket Mode adapter. Implements streaming via in-place `chat.update` edits, thread-scoped sessions, quoted/forwarded-content extraction, and mentioned-thread auto-follow. |
 | `WebSocketChannel` | `durin/channels/websocket.py` | WebSocket server channel that also hosts the embedded webui SPA. Handles token issuance, `websocket_requires_token`, and session/cron integration. |
 | `EmailChannel` | `durin/channels/email.py` | IMAP+SMTP adapter. Polls for new messages and sends replies. |
+| `WhatsAppChannel` | `durin/channels/whatsapp.py` | Supervises the Go bridge process (`bridge/`, whatsmeow) and speaks the v2 frame protocol to it over a loopback WebSocket. See "WhatsApp bridge transport" above. |
+| `BridgeSupervisor` | `durin/channels/whatsapp_bridge.py` | Spawns and restarts the WhatsApp bridge binary; resolves/downloads/verifies it via `ensure_bridge_binary`. |
 
 ## 6. Configuration and surfaces
 
@@ -408,6 +491,13 @@ Channel-specific extensions:
 - **Email**: `imap_host`, `imap_port`, `imap_username`, `imap_password`,
   `imap_mailbox`, `imap_use_ssl`, `smtp_host`, `smtp_port`, `smtp_username`,
   `smtp_password`, `smtp_use_tls`, `smtp_use_ssl`, `auto_reply_enabled`.
+- **WhatsApp**: `bridge_url` (loopback WS URL for the Go bridge, default
+  `ws://localhost:3001`), `bridge_token` (shared auth secret for the bridge
+  socket; auto-generated and persisted under
+  `<durin_home>/whatsapp-auth/bridge-token` when left empty), `group_policy`
+  (`open`/`mention`). Sender authorization uses the standard `allow_from` +
+  pairing flow via the central ingress gate (see "WhatsApp bridge transport"
+  above).
 - **WebSocket** (webui): `host`, `port`, `path`, `token`,
   `token_issue_secret`, `websocket_requires_token` (bool; default `true`),
   `allow_from` (default `["*"]`).
