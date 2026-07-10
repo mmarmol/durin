@@ -471,7 +471,7 @@ missing, so header-less mail is never folded into an unrelated thread. The
 resolved root is hashed (`thread_digest`, from `durin/channels/email_threads.py`)
 into the short digest used in the session key and the thread store. The
 digest is a 16-hex-char SHA-256 prefix; a collision would require two
-distinct roots to hash identically within the store's ≤5000-entry cap, a
+distinct roots to hash identically within the store's entry cap, a
 probability negligible at this scale, so collision handling is deliberately
 not implemented.
 
