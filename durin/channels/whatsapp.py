@@ -1,20 +1,17 @@
-"""WhatsApp channel implementation using Node.js bridge."""
+"""WhatsApp channel implementation using a Go bridge (whatsmeow)."""
 
 import asyncio
-import hashlib
 import json
 import mimetypes
 import os
+import random
 import secrets
-import shutil
-import subprocess
 from collections import OrderedDict
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from loguru import logger
 from pydantic import Field
 
 from durin.bus.events import OutboundMessage
@@ -24,6 +21,10 @@ from durin.channels.whatsapp_format import chunk_message, markdown_to_whatsapp
 from durin.config.schema import Base
 
 ACK_TIMEOUT = 30.0
+
+
+def _next_backoff(delay: float, *, factor: float = 1.6, cap: float = 30.0) -> float:
+    return min(delay * factor, cap)
 
 
 class WhatsAppConfig(Base):
@@ -59,10 +60,10 @@ def _load_or_create_bridge_token(path: Path) -> str:
 
 class WhatsAppChannel(BaseChannel):
     """
-    WhatsApp channel that connects to a Node.js bridge.
+    WhatsApp channel that supervises a Go bridge process and connects to it.
 
-    The bridge uses @whiskeysockets/baileys to handle the WhatsApp Web protocol.
-    Communication between Python and Node.js is via WebSocket.
+    The bridge uses whatsmeow to handle the WhatsApp Web protocol.
+    Communication between Python and the bridge is via WebSocket.
     """
 
     name = "whatsapp"
@@ -82,6 +83,7 @@ class WhatsAppChannel(BaseChannel):
         self._lid_to_phone: dict[str, str] = {}
         self._bridge_token: str | None = None
         self._pending_acks: dict[str, asyncio.Future] = {}
+        self._supervisor = None
 
     def _effective_bridge_token(self) -> str:
         """Resolve the bridge token, generating a local secret when needed."""
@@ -95,79 +97,93 @@ class WhatsAppChannel(BaseChannel):
         return self._bridge_token
 
     async def login(self, force: bool = False) -> bool:
-        """
-        Set up and run the WhatsApp bridge for QR code login.
+        """Pair with WhatsApp: run the bridge in QR mode in the foreground."""
+        from durin.channels.whatsapp_bridge import BridgeSetupError, ensure_bridge_binary
 
-        This spawns the Node.js bridge process which handles the WhatsApp
-        authentication flow. The process blocks until the user scans the QR code
-        or interrupts with Ctrl+C.
-        """
         try:
-            bridge_dir = _ensure_bridge_setup()
-        except RuntimeError:
+            binary = await ensure_bridge_binary()
+        except BridgeSetupError:
             self.logger.exception("bridge setup failed")
             return False
 
-        env = {**os.environ}
-        env["BRIDGE_TOKEN"] = self._effective_bridge_token()
-        env["AUTH_DIR"] = str(_bridge_token_path().parent)
+        auth_dir = _bridge_token_path().parent
+        if force:
+            db = auth_dir / "whatsmeow.db"
+            if db.exists():
+                db.unlink()
 
-        self.logger.info("Starting WhatsApp bridge for QR login...")
-        try:
-            subprocess.run(
-                [shutil.which("npm"), "start"], cwd=bridge_dir, check=True, env=env
-            )
-        except subprocess.CalledProcessError:
-            return False
-
-        return True
+        proc = await asyncio.create_subprocess_exec(
+            str(binary), "qr", "--auth-dir", str(auth_dir),
+            env={**os.environ, "BRIDGE_TOKEN": self._effective_bridge_token()},
+        )
+        return (await proc.wait()) == 0
 
     async def start(self) -> None:
-        """Start the WhatsApp channel by connecting to the bridge."""
+        """Start the channel: supervise the bridge process and connect."""
+        from urllib.parse import urlparse
+
         import websockets
 
-        bridge_url = self.config.bridge_url
-
-        self.logger.info("Connecting to WhatsApp bridge at {}...", bridge_url)
+        from durin.channels.whatsapp_bridge import BridgeSupervisor, ensure_bridge_binary
+        from durin.config.paths import get_runtime_subdir
 
         self._running = True
+        try:
+            binary = await ensure_bridge_binary()
+        except Exception:
+            self.logger.exception("WhatsApp bridge setup failed; channel not started")
+            self._running = False
+            return
 
+        port = urlparse(self.config.bridge_url).port or 3001
+        self._supervisor = BridgeSupervisor(
+            binary, port=port, token=self._effective_bridge_token(),
+            auth_dir=_bridge_token_path().parent,
+            media_dir=get_runtime_subdir("whatsapp-media"),
+            logger=self.logger,
+        )
+        await self._supervisor.start()
+
+        delay = 2.0
         while self._running:
+            if self._supervisor.needs_login:
+                self.logger.error("WhatsApp needs pairing; channel idle until `durin channels login whatsapp`")
+                break
             try:
-                async with websockets.connect(bridge_url) as ws:
+                async with websockets.connect(self.config.bridge_url) as ws:
                     self._ws = ws
-                    await ws.send(
-                        json.dumps({"type": "auth", "token": self._effective_bridge_token()})
-                    )
+                    await ws.send(json.dumps({"type": "auth", "token": self._effective_bridge_token()}))
                     self._connected = True
+                    delay = 2.0  # healthy connection: reset backoff
                     self.logger.info("Connected to WhatsApp bridge")
-
-                    # Listen for messages
                     async for message in ws:
                         try:
                             await self._handle_bridge_message(message)
                         except Exception:
                             self.logger.exception("Error handling bridge message")
-
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 self._connected = False
                 self._ws = None
                 self.logger.warning("WhatsApp bridge connection error: {}", e)
-
                 if self._running:
-                    self.logger.info("Reconnecting in 5 seconds...")
-                    await asyncio.sleep(5)
+                    jittered = delay + random.uniform(0, delay / 4)
+                    self.logger.info("Reconnecting in {:.1f} seconds...", jittered)
+                    await asyncio.sleep(jittered)
+                    delay = _next_backoff(delay)
 
     async def stop(self) -> None:
         """Stop the WhatsApp channel."""
         self._running = False
         self._connected = False
-
         if self._ws:
             await self._ws.close()
             self._ws = None
+        sup = getattr(self, "_supervisor", None)
+        if sup is not None:
+            await sup.stop()
+            self._supervisor = None
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through WhatsApp. Raises on failure so the channel
@@ -276,8 +292,6 @@ class WhatsAppChannel(BaseChannel):
                     phone_id = extracted  # best guess for bare values
 
             sender_id = phone_id or self._lid_to_phone.get(lid_id, "") or lid_id or id_a or id_b
-            if not self.is_allowed(sender_id):
-                return
 
             if message_id:
                 if message_id in self._processed_message_ids:
@@ -331,6 +345,7 @@ class WhatsAppChannel(BaseChannel):
                     "is_group": data.get("isGroup", False),
                     "quoted": data.get("quoted"),
                 },
+                is_dm=not is_group,
             )
 
         elif msg_type == "status":
@@ -349,76 +364,3 @@ class WhatsAppChannel(BaseChannel):
 
         elif msg_type == "error":
             self.logger.error("Bridge error: {}", data.get("error"))
-
-
-def _ensure_bridge_setup() -> Path:
-    """
-    Ensure the WhatsApp bridge is set up and built.
-
-    Returns the bridge directory. Raises RuntimeError if npm is not found
-    or bridge cannot be built.
-    """
-    from durin.config.paths import get_bridge_install_dir
-
-    user_bridge = get_bridge_install_dir()
-    stamp_file = user_bridge / ".durin-bridge-source-hash"
-
-    # Find source bridge
-    current_file = Path(__file__)
-    pkg_bridge = current_file.parent.parent / "bridge"
-    src_bridge = current_file.parent.parent.parent / "bridge"
-
-    source = None
-    if (pkg_bridge / "package.json").exists():
-        source = pkg_bridge
-    elif (src_bridge / "package.json").exists():
-        source = src_bridge
-
-    if not source:
-        raise RuntimeError(
-            "WhatsApp bridge source not found. "
-            "Try reinstalling: pip install --force-reinstall durin"
-        )
-
-    def source_hash(root: Path) -> str:
-        digest = hashlib.sha256()
-        for path in sorted(root.rglob("*")):
-            if not path.is_file():
-                continue
-            rel = path.relative_to(root)
-            if rel.parts and rel.parts[0] in {"node_modules", "dist"}:
-                continue
-            digest.update(rel.as_posix().encode("utf-8"))
-            digest.update(b"\0")
-            digest.update(path.read_bytes())
-            digest.update(b"\0")
-        return digest.hexdigest()
-
-    expected_hash = source_hash(source)
-    current_hash = stamp_file.read_text().strip() if stamp_file.exists() else None
-
-    if (user_bridge / "dist" / "index.js").exists() and current_hash == expected_hash:
-        return user_bridge
-
-    if (user_bridge / "dist" / "index.js").exists() and current_hash != expected_hash:
-        logger.info("WhatsApp bridge source changed; rebuilding bridge...")
-
-    npm_path = shutil.which("npm")
-    if not npm_path:
-        raise RuntimeError("npm not found. Please install Node.js >= 18.")
-
-    logger.info("Setting up WhatsApp bridge...")
-    user_bridge.parent.mkdir(parents=True, exist_ok=True)
-    if user_bridge.exists():
-        shutil.rmtree(user_bridge)
-    shutil.copytree(source, user_bridge, ignore=shutil.ignore_patterns("node_modules", "dist"))
-
-    logger.info("  Installing dependencies...")
-    subprocess.run([npm_path, "install"], cwd=user_bridge, check=True, capture_output=True)
-
-    logger.info("  Building...")
-    subprocess.run([npm_path, "run", "build"], cwd=user_bridge, check=True, capture_output=True)
-    stamp_file.write_text(expected_hash + "\n")
-
-    logger.info("Bridge ready")
-    return user_bridge

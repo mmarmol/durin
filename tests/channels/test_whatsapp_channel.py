@@ -1,5 +1,6 @@
 """Tests for WhatsApp channel outbound media support."""
 
+import asyncio
 import json
 import os
 import sys
@@ -30,6 +31,7 @@ def whatsapp_channel() -> WhatsAppChannel:
     ch = WhatsAppChannel({"enabled": True, "allowFrom": ["*"]}, bus)
     ch._ws = AsyncMock()
     ch._connected = True
+    ch._handle_message = AsyncMock()
     return ch
 
 
@@ -279,7 +281,10 @@ async def test_voice_message_transcription_uses_media_path():
 
 
 @pytest.mark.asyncio
-async def test_unauthorized_voice_message_does_not_transcribe() -> None:
+async def test_voice_message_transcribes_regardless_of_allow_from() -> None:
+    """Pure-transport: the channel does not gate on allow_from locally — the
+    central bus gate owns authorization, so an unlisted sender's voice
+    message is still transcribed and forwarded."""
     ch = WhatsAppChannel({"enabled": True, "allowFrom": ["allowed"]}, MagicMock())
     ch._handle_message = AsyncMock()
     ch.transcribe_audio = AsyncMock(return_value="Hello world")
@@ -296,8 +301,8 @@ async def test_unauthorized_voice_message_does_not_transcribe() -> None:
         })
     )
 
-    ch.transcribe_audio.assert_not_awaited()
-    ch._handle_message.assert_not_awaited()
+    ch.transcribe_audio.assert_awaited_once_with("/tmp/voice.ogg")
+    ch._handle_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -343,31 +348,90 @@ def test_configured_bridge_token_skips_local_token_file(monkeypatch, tmp_path):
     assert not token_path.exists()
 
 
+class FakeQrProc:
+    def __init__(self, returncode: int = 0) -> None:
+        self.returncode = returncode
+
+    async def wait(self) -> int:
+        return self.returncode
+
+
 @pytest.mark.asyncio
 async def test_login_exports_effective_bridge_token(monkeypatch, tmp_path):
     token_path = tmp_path / "whatsapp-auth" / "bridge-token"
-    bridge_dir = tmp_path / "bridge"
-    bridge_dir.mkdir()
+    binary_path = tmp_path / "durin-whatsapp-bridge"
     calls = []
 
     monkeypatch.setattr("durin.channels.whatsapp._bridge_token_path", lambda: token_path)
-    monkeypatch.setattr("durin.channels.whatsapp._ensure_bridge_setup", lambda: bridge_dir)
-    monkeypatch.setattr("durin.channels.whatsapp.shutil.which", lambda _: "/usr/bin/npm")
 
-    def fake_run(*args, **kwargs):
+    async def fake_ensure_bridge_binary():
+        return binary_path
+
+    monkeypatch.setattr("durin.channels.whatsapp_bridge.ensure_bridge_binary", fake_ensure_bridge_binary)
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
         calls.append((args, kwargs))
-        return MagicMock()
+        return FakeQrProc(0)
 
-    monkeypatch.setattr("durin.channels.whatsapp.subprocess.run", fake_run)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     ch = WhatsAppChannel({"enabled": True}, MagicMock())
 
     assert await ch.login() is True
     assert len(calls) == 1
 
-    _, kwargs = calls[0]
-    assert kwargs["cwd"] == bridge_dir
-    assert kwargs["env"]["AUTH_DIR"] == str(token_path.parent)
+    args, kwargs = calls[0]
+    assert args == (str(binary_path), "qr", "--auth-dir", str(token_path.parent))
     assert kwargs["env"]["BRIDGE_TOKEN"] == token_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_login_force_deletes_existing_session_db(monkeypatch, tmp_path):
+    token_path = tmp_path / "whatsapp-auth" / "bridge-token"
+    token_path.parent.mkdir(parents=True)
+    db_path = token_path.parent / "whatsmeow.db"
+    db_path.write_text("stale-session")
+
+    monkeypatch.setattr("durin.channels.whatsapp._bridge_token_path", lambda: token_path)
+
+    async def fake_ensure_bridge_binary():
+        return tmp_path / "durin-whatsapp-bridge"
+
+    monkeypatch.setattr("durin.channels.whatsapp_bridge.ensure_bridge_binary", fake_ensure_bridge_binary)
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return FakeQrProc(0)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    ch = WhatsAppChannel({"enabled": True}, MagicMock())
+
+    assert await ch.login(force=True) is True
+    assert not db_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_login_returns_false_when_binary_setup_fails(monkeypatch):
+    from durin.channels.whatsapp_bridge import BridgeSetupError
+
+    async def fake_ensure_bridge_binary():
+        raise BridgeSetupError("no build for this platform")
+
+    monkeypatch.setattr("durin.channels.whatsapp_bridge.ensure_bridge_binary", fake_ensure_bridge_binary)
+    ch = WhatsAppChannel({"enabled": True}, MagicMock())
+
+    assert await ch.login() is False
+
+
+class FakeSupervisor:
+    """Stand-in for BridgeSupervisor: no real process, never needs login."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        self.needs_login = False
+
+    async def start(self) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
 
 
 @pytest.mark.asyncio
@@ -399,7 +463,12 @@ async def test_start_sends_auth_message_with_generated_token(monkeypatch, tmp_pa
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
+    async def fake_ensure_bridge_binary():
+        return tmp_path / "durin-whatsapp-bridge"
+
     monkeypatch.setattr("durin.channels.whatsapp._bridge_token_path", lambda: token_path)
+    monkeypatch.setattr("durin.channels.whatsapp_bridge.ensure_bridge_binary", fake_ensure_bridge_binary)
+    monkeypatch.setattr("durin.channels.whatsapp_bridge.BridgeSupervisor", FakeSupervisor)
     monkeypatch.setitem(
         sys.modules,
         "websockets",
@@ -527,3 +596,39 @@ class TestInboundV2:
 
         sent = [json.loads(c.args[0]) for c in whatsapp_channel._ws.send.call_args_list]
         assert {"type": "typing", "to": "12345@s.whatsapp.net", "state": "composing"} in sent
+
+
+class TestPureTransport:
+    @pytest.mark.asyncio
+    async def test_unknown_sender_still_published_with_is_dm(self, whatsapp_channel):
+        """The channel must NOT pre-filter senders; the central bus gate
+        handles pairing. DMs must carry is_dm=True."""
+        whatsapp_channel.config.allow_from = []  # nobody allowed locally
+        frame = {"type": "message", "sender": "999@s.whatsapp.net",
+                 "content": "hola", "id": "M1", "isGroup": False}
+        await whatsapp_channel._handle_bridge_message(json.dumps(frame))
+        whatsapp_channel._handle_message.assert_called_once()
+        kwargs = whatsapp_channel._handle_message.call_args.kwargs
+        assert kwargs["is_dm"] is True
+
+    @pytest.mark.asyncio
+    async def test_group_message_not_dm(self, whatsapp_channel):
+        frame = {"type": "message", "sender": "123@g.us", "pn": "5@s.whatsapp.net",
+                 "content": "hola", "id": "M2", "isGroup": True}
+        await whatsapp_channel._handle_bridge_message(json.dumps(frame))
+        assert whatsapp_channel._handle_message.call_args.kwargs["is_dm"] is False
+
+
+class TestBackoff:
+    def test_backoff_progression(self):
+        from durin.channels.whatsapp import _next_backoff
+        d = 2.0
+        seen = []
+        # factor=1.6 needs 7 applications from 2.0 to actually hit the 30.0
+        # cap (2.0 -> 3.2 -> 5.12 -> 8.192 -> 13.1072 -> 20.97152 -> 30.0).
+        for _ in range(7):
+            seen.append(d)
+            d = _next_backoff(d)
+        assert seen[0] == 2.0
+        assert seen[-1] == 30.0  # capped
+        assert all(b > a or b == 30.0 for a, b in zip(seen, seen[1:]))
