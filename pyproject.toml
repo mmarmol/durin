@@ -165,7 +165,14 @@ packages = ["durin"]
 # (it's a build artifact) but MUST ship inside the wheel so the
 # `durin gateway` dashboard works. `artifacts` force-includes paths
 # that would otherwise be excluded by the .gitignore.
-artifacts = ["durin/web/dist/**/*"]
+artifacts = ["durin/web/dist/**/*", "durin/channels/bridge_checksums.json"]
+
+# bridge_checksums.json is VCS-ignored (generated at release build time) so
+# it's excluded from the sdist by default too; mirror the wheel's
+# force-include here so `pip install` from an sdist doesn't silently ship
+# without the pinned bridge checksums.
+[tool.hatch.build.targets.sdist]
+artifacts = ["durin/channels/bridge_checksums.json"]
 
 # Build the webui SPA before the wheel is assembled (so durin/web/dist/ exists
 # for the force-include) and assert it landed in the wheel. Without this hook a

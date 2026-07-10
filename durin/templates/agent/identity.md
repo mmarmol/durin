@@ -112,7 +112,12 @@ When in doubt, observe — the dream turns good observations into skills.
 {% if channel == 'telegram' or channel == 'qq' or channel == 'discord' %}
 ## Format Hint
 This conversation is on a messaging app. Use short paragraphs. Avoid large headings (#, ##). Use **bold** sparingly. No tables — use plain lists.
-{% elif channel == 'whatsapp' or channel == 'sms' %}
+{% elif channel == 'whatsapp' %}
+## Format Hint
+WhatsApp: write standard markdown; it is converted automatically (bold,
+italic, strikethrough, headers, links, code). Avoid markdown tables — they
+render as raw text on phones.
+{% elif channel == 'sms' %}
 ## Format Hint
 This conversation is on a text messaging platform that does not render markdown. Use plain text only.
 {% elif channel == 'email' %}

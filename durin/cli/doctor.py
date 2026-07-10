@@ -556,6 +556,44 @@ def check_stt_cloud_keys(cfg: "Config | None" = None) -> CheckResult:
     )
 
 
+def check_whatsapp_bridge(cfg: "Config | None" = None) -> CheckResult:
+    """When the WhatsApp channel is enabled, verify the Go bridge binary is
+    cached. Never fails: the binary self-installs on `channels login
+    whatsapp` or first start, so a miss is only a warning."""
+    try:
+        from durin.config.loader import load_config
+
+        config = cfg or load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult("whatsapp bridge", "ok", "skipped", category="channels")
+
+    wa = getattr(config.channels, "whatsapp", None) or {}
+    enabled = bool(wa.get("enabled") if isinstance(wa, dict) else getattr(wa, "enabled", False))
+    if not enabled:
+        return CheckResult("whatsapp bridge", "ok", "channel disabled", category="channels")
+
+    from durin.channels.whatsapp_bridge import cached_binary_path
+
+    # Broad guard: nothing may escape a doctor check. BridgeSetupError covers
+    # unsupported platforms; anything else (e.g. PackageNotFoundError on an
+    # unusual install) degrades to a warn the same way.
+    try:
+        path = cached_binary_path()
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult("whatsapp bridge", "warn", str(exc), category="channels")
+
+    if path.exists():
+        return CheckResult(
+            "whatsapp bridge", "ok", f"binary cached ({path.name})", category="channels",
+        )
+    return CheckResult(
+        "whatsapp bridge", "warn",
+        "bridge binary not installed — it downloads on `durin channels login "
+        "whatsapp` or first start",
+        category="channels",
+    )
+
+
 def check_stt_round_trip(cfg: "Config | None" = None) -> CheckResult:
     """``--ping-model``: download (if needed) + run the configured LOCAL STT
     engine on a tiny synthesized clip, proving the model loads end-to-end and
@@ -1445,6 +1483,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     report.add(check_tts_installed())
     report.add(check_tts_model_cached())
     report.add(check_stt_cloud_keys())
+    report.add(check_whatsapp_bridge())
     # Service-level checks: daemon liveness (PID-file ground truth), a
     # version match between the running gateway and this install, and the
     # webui dashboard when enabled.
