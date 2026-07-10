@@ -88,6 +88,19 @@ slack = [
 discord = [
     "discord.py>=2.5.2,<3.0.0",
 ]
+matrix = [
+    # Base matrix-nio covers the channel's full import set, including
+    # nio.crypto.attachments (AES media decryption via pycryptodome) and the
+    # sync-token store. The [e2e] extra (olm-encrypted rooms) is deliberately
+    # NOT included: python-olm has no wheels for modern macOS and its bundled
+    # libolm no longer builds under CMake >= 4 (verified 2026-07-10).
+    # E2EE-room support is a documented limitation, not a dependency.
+    "matrix-nio>=0.25,<0.26",
+    # Markdown -> HTML for org.matrix.custom.html formatted bodies.
+    "mistune>=3.0,<4.0",
+    # HTML sanitizer for outbound formatted bodies.
+    "nh3>=0.2,<1.0",
+]
 local = [
     "llama-cpp-python>=0.3.0",
     "huggingface-hub>=0.20.0",
