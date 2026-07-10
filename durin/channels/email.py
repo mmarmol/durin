@@ -757,7 +757,9 @@ class EmailChannel(BaseChannel):
                 digest = via_conv
                 root = self._store.get(digest)["root"]
         if not digest:
-            root = message_id
+            # Header-less mail must not share one thread identity: fall back to a
+            # per-message synthetic root keyed on the IMAP UID when Message-ID is empty.
+            root = message_id or f"<uid-{(item.get('metadata') or {}).get('uid') or 'noid'}@durin.invalid>"
             digest = thread_digest(root)
 
         self._store.upsert_inbound(

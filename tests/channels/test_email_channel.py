@@ -1146,6 +1146,22 @@ def test_resolve_thread_thread_index_fallback(tmp_path, monkeypatch) -> None:
     assert channel3._resolve_thread(channel3._fetch_new_messages()[0]) != d1
 
 
+def test_resolve_thread_header_less_mail_does_not_collapse_threads(tmp_path, monkeypatch) -> None:
+    """Two mails with no Message-ID/References/In-Reply-To/Thread-Index must not
+    collapse into the same thread — each gets its own digest from the UID."""
+    first = _make_raw_email_threaded(message_id="")
+    channel, _ = _make_channel(tmp_path, monkeypatch, first, uid="123")
+    item1 = channel._fetch_new_messages()[0]
+    d1 = channel._resolve_thread(item1)
+
+    second = _make_raw_email_threaded(message_id="")
+    channel2, _ = _make_channel(tmp_path, monkeypatch, second, uid="124")
+    item2 = channel2._fetch_new_messages()[0]
+    d2 = channel2._resolve_thread(item2)
+
+    assert d1 != d2
+
+
 @pytest.mark.asyncio
 async def test_session_key_override_per_mode(tmp_path, monkeypatch) -> None:
     from durin.channels.email_threads import thread_digest
@@ -1176,3 +1192,48 @@ async def test_session_key_override_per_mode(tmp_path, monkeypatch) -> None:
             ),
         )
         assert published[0].session_key == expected
+
+
+@pytest.mark.asyncio
+async def test_start_polling_loop_publishes_thread_scoped_session(tmp_path, monkeypatch) -> None:
+    """Exercises the real start() polling loop end-to-end — the _resolve_thread call,
+    the threading_mode session-key ternary, and the _handle_message call — rather than
+    re-deriving the ternary manually against a hand-called _fetch_new_messages/_resolve_thread."""
+    import durin.channels.email as email_module
+    from durin.channels.email_threads import thread_digest
+
+    class _FakeAsyncio:
+        """Delegates to the real asyncio module except sleep, which is a no-op so the
+        polling loop doesn't actually wait poll_interval_seconds between cycles."""
+
+        def __init__(self, real):
+            self._real = real
+
+        async def sleep(self, _seconds):
+            return None
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    monkeypatch.setattr(email_module, "asyncio", _FakeAsyncio(email_module.asyncio))
+
+    for mode, expected in (
+        ("thread", f"email:alice@example.com:{thread_digest('<m1@example.com>')}"),
+        ("sender", "email:alice@example.com"),
+    ):
+        raw = _make_raw_email_threaded(message_id="<m1@example.com>")
+        channel, _ = _make_channel(tmp_path, monkeypatch, raw, threading_mode=mode)
+
+        published: list = []
+
+        async def _capture(msg):
+            published.append(msg)
+            channel._running = False
+
+        monkeypatch.setattr(channel.bus, "publish_inbound", _capture)
+
+        await channel.start()
+
+        assert len(published) == 1
+        assert published[0].session_key == expected
+        assert channel._store.get(thread_digest("<m1@example.com>")) is not None
