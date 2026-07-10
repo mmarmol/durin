@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from contextlib import suppress
-from importlib import metadata, resources
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +22,18 @@ class BridgeSetupError(RuntimeError):
     """The bridge binary could not be resolved."""
 
 
+# The bridge is versioned and released independently of the durin package: it
+# changes rarely, so a durin release that doesn't touch it must not rebuild,
+# re-publish, or invalidate the user's cached binary. Bump this only when
+# cutting a new bridge release (tag `whatsapp-bridge-v<BRIDGE_VERSION>`), and
+# regenerate the committed checksum pin with scripts/gen-bridge-checksums.sh.
+BRIDGE_VERSION = "1.0.0"
+
 _ASSET_TEMPLATE = "durin-whatsapp-bridge-{goos}-{goarch}"
-_RELEASE_URL = "https://github.com/mmarmol/durin/releases/download/v{version}/{asset}"
+_RELEASE_URL = (
+    "https://github.com/mmarmol/durin/releases/download/"
+    "whatsapp-bridge-v{version}/{asset}"
+)
 # Exit codes the bridge uses for "re-pair needed" — supervisor must not restart.
 _NEEDS_LOGIN_EXIT_CODES = (3, 4)
 # Usage/config error — deterministic, restarting can't fix it either.
@@ -39,14 +49,10 @@ def platform_asset() -> str:
     return _ASSET_TEMPLATE.format(goos=goos, goarch=goarch)
 
 
-def package_version() -> str:
-    return metadata.version("durin-agent")
-
-
 def cached_binary_path() -> Path:
     from durin.config.paths import get_bridge_install_dir
 
-    return get_bridge_install_dir() / package_version() / platform_asset()
+    return get_bridge_install_dir() / BRIDGE_VERSION / platform_asset()
 
 
 def _pinned_checksum(asset: str) -> str | None:
@@ -75,7 +81,7 @@ async def ensure_bridge_binary() -> Path:
     asset = platform_asset()
     expected = _pinned_checksum(asset)
     if expected:
-        url = _RELEASE_URL.format(version=package_version(), asset=asset)
+        url = _RELEASE_URL.format(version=BRIDGE_VERSION, asset=asset)
         try:
             data = await _download(url)
         except Exception as exc:

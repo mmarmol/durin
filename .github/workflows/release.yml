@@ -30,47 +30,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  bridge-binaries:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.26.5"
-          cache-dependency-path: bridge/go.sum
-
-      - name: Cross-compile bridge binaries + checksums
-        run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          mkdir -p dist-bridge
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-            GOOS="${target%/*}"; GOARCH="${target#*/}"
-            out="dist-bridge/durin-whatsapp-bridge-${GOOS}-${GOARCH}"
-            (cd bridge && GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
-              go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "../$out" .)
-          done
-          (cd dist-bridge && sha256sum durin-whatsapp-bridge-* > checksums.txt)
-          python3 - <<'EOF'
-          import json, pathlib
-          lines = pathlib.Path("dist-bridge/checksums.txt").read_text().splitlines()
-          sums = {}
-          for line in lines:
-              digest, name = line.split(None, 1)
-              sums[name.strip()] = digest
-          pathlib.Path("dist-bridge/bridge_checksums.json").write_text(
-              json.dumps({"sha256": sums}, indent=2))
-          EOF
-
-      - name: Upload bridge artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: bridge-dist
-          path: dist-bridge/*
-          if-no-files-found: error
-
   build:
-    needs: bridge-binaries
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.meta.outputs.version }}
@@ -123,15 +83,6 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Download bridge checksums
-        uses: actions/download-artifact@v8
-        with:
-          name: bridge-dist
-          path: dist-bridge
-
-      - name: Pin bridge checksums into the package
-        run: cp dist-bridge/bridge_checksums.json durin/channels/bridge_checksums.json
-
       - name: Build sdist + wheel
         # `--sdist --wheel` builds each from the source tree directly
         # (not sdist→wheel), so the freshly-built durin/web/dist/ is
@@ -155,18 +106,11 @@ jobs:
           name: dist
           path: dist
 
-      - uses: actions/download-artifact@v8
-        with:
-          name: bridge-dist
-          path: dist-bridge
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*
-            dist-bridge/durin-whatsapp-bridge-*
-            dist-bridge/checksums.txt
           generate_release_notes: true
           prerelease: ${{ needs.build.outputs.prerelease == 'true' }}
 
