@@ -8,7 +8,6 @@ import re
 import threading
 import time
 import uuid
-from collections import OrderedDict
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -20,7 +19,8 @@ from pydantic import Field
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
-from durin.config.paths import get_media_dir
+from durin.channels.dedup import MessageDeduplicator
+from durin.config.paths import get_media_dir, get_runtime_subdir
 from durin.config.schema import Base
 from durin.utils.helpers import safe_filename
 from durin.utils.logging_bridge import redirect_lib_logging
@@ -297,7 +297,13 @@ class FeishuChannel(BaseChannel):
         self._client: lark.Client = None
         self._ws_client: Any = None
         self._ws_thread: threading.Thread | None = None
-        self._processed_message_ids: OrderedDict[str, None] = OrderedDict()  # Ordered dedup cache
+        # Lark WS re-delivers un-ACKed events across restarts; persist the
+        # seen-ids window so a gateway restart does not re-process them.
+        self._dedup = MessageDeduplicator(
+            max_size=2048,
+            ttl_seconds=86_400,
+            persist_path=get_runtime_subdir("dedup") / "feishu.json",
+        )
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stream_bufs: dict[str, _FeishuStreamBuf] = {}
         self._bot_open_id: str | None = None
@@ -1695,13 +1701,8 @@ class FeishuChannel(BaseChannel):
                 return
 
             # Deduplication check
-            if message_id in self._processed_message_ids:
+            if self._dedup.is_duplicate(message_id):
                 return
-            self._processed_message_ids[message_id] = None
-
-            # Trim cache
-            while len(self._processed_message_ids) > 1000:
-                self._processed_message_ids.popitem(last=False)
 
             # Early permission check — avoid side effects for unauthorized users.
             # Group chats are silently ignored; DMs are forwarded to the bus so
