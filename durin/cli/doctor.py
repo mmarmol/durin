@@ -572,11 +572,14 @@ def check_whatsapp_bridge(cfg: "Config | None" = None) -> CheckResult:
     if not enabled:
         return CheckResult("whatsapp bridge", "ok", "channel disabled", category="channels")
 
-    from durin.channels.whatsapp_bridge import BridgeSetupError, cached_binary_path
+    from durin.channels.whatsapp_bridge import cached_binary_path
 
+    # Broad guard: nothing may escape a doctor check. BridgeSetupError covers
+    # unsupported platforms; anything else (e.g. PackageNotFoundError on an
+    # unusual install) degrades to a warn the same way.
     try:
         path = cached_binary_path()
-    except BridgeSetupError as exc:
+    except Exception as exc:  # noqa: BLE001
         return CheckResult("whatsapp bridge", "warn", str(exc), category="channels")
 
     if path.exists():

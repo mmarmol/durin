@@ -386,6 +386,32 @@ class TestWhatsAppBridgeCheck:
         r = check_whatsapp_bridge(_config_with_whatsapp(enabled=True))
         assert r.status == "ok"
 
+    def test_unsupported_platform_warns_with_setup_error(self, monkeypatch, tmp_path) -> None:
+        from durin.channels.whatsapp_bridge import BridgeSetupError
+
+        monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+        with patch(
+            "durin.channels.whatsapp_bridge.cached_binary_path",
+            side_effect=BridgeSetupError("WhatsApp bridge has no build for zos/s390x"),
+        ):
+            r = check_whatsapp_bridge(_config_with_whatsapp(enabled=True))
+        assert r.status == "warn"
+        assert "no build for zos/s390x" in r.message
+
+    def test_unexpected_exception_is_contained(self, monkeypatch, tmp_path) -> None:
+        """Per-check isolation: an exception other than BridgeSetupError (e.g.
+        PackageNotFoundError from an unusual install) must degrade to a warn,
+        never crash the whole `durin doctor` run."""
+        from importlib.metadata import PackageNotFoundError
+
+        monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+        with patch(
+            "durin.channels.whatsapp_bridge.package_version",
+            side_effect=PackageNotFoundError("durin-agent"),
+        ):
+            r = check_whatsapp_bridge(_config_with_whatsapp(enabled=True))
+        assert r.status == "warn"
+
 
 # ---------------------------------------------------------------------------
 # Orchestrator + report
@@ -397,7 +423,7 @@ def test_run_checks_returns_report_with_many_results(valid_config: Path) -> None
     assert isinstance(report, DoctorReport)
     assert len(report.results) >= 8
     names = {r.name for r in report.results}
-    assert {"python", "config file", "config valid", "workspace", "providers"}.issubset(names)
+    assert {"python", "config file", "config valid", "workspace", "providers", "whatsapp bridge"}.issubset(names)
 
 
 def test_doctor_report_worst_picks_highest_severity() -> None:
