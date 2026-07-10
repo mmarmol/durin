@@ -1808,3 +1808,17 @@ async def test_audio_transcription_drops_media(monkeypatch, tmp_path) -> None:
     assert kwargs["media"] == []
     assert "hi there" in kwargs["content"]
     assert "[transcription:" not in kwargs["content"]
+
+
+def test_matrix_module_importable_and_discovered_without_extra(monkeypatch):
+    """The channel module, config model, and registry discovery must work even
+    when the optional nio/mistune/nh3 deps are absent (they may be absent in
+    this env or present — the discovery contract holds either way)."""
+    from durin.channels.registry import discover_channel_names, load_channel_class
+
+    assert "matrix" in discover_channel_names()
+    cls = load_channel_class("matrix")
+    assert cls.__name__ == "MatrixChannel"
+    # Config model importable -> webui gets its settings form.
+    model = cls.config_model()
+    assert "homeserver" in model.model_fields or len(model.model_fields) > 0

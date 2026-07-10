@@ -1,5 +1,7 @@
 """Matrix (Element) channel — inbound sync + outbound message/media delivery."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 import mimetypes
@@ -35,10 +37,10 @@ try:
     )
     from nio.crypto.attachments import decrypt_attachment
     from nio.exceptions import EncryptionError
-except ImportError as e:
-    raise ImportError(
-        "Matrix dependencies not installed. Run: pip install durin-ai[matrix]"
-    ) from e
+
+    MATRIX_AVAILABLE = True
+except ImportError:  # optional extra `durin-ai[matrix]` not installed
+    MATRIX_AVAILABLE = False
 
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
@@ -59,13 +61,18 @@ _ATTACH_UPLOAD_FAILED = "[attachment: {} - upload failed]"
 _DEFAULT_ATTACH_NAME = "attachment"
 _MSGTYPE_MAP = {"m.image": "image", "m.audio": "audio", "m.video": "video", "m.file": "file"}
 
-MATRIX_MEDIA_EVENT_FILTER = (RoomMessageMedia, RoomEncryptedMedia)
-MatrixMediaEvent: TypeAlias = RoomMessageMedia | RoomEncryptedMedia
+if MATRIX_AVAILABLE:
+    MATRIX_MEDIA_EVENT_FILTER = (RoomMessageMedia, RoomEncryptedMedia)
+    MatrixMediaEvent: TypeAlias = RoomMessageMedia | RoomEncryptedMedia
 
-MATRIX_MARKDOWN = create_markdown(
-    escape=True,
-    plugins=["table", "strikethrough", "url", "superscript", "subscript"],
-)
+    MATRIX_MARKDOWN = create_markdown(
+        escape=True,
+        plugins=["table", "strikethrough", "url", "superscript", "subscript"],
+    )
+else:
+    MATRIX_MEDIA_EVENT_FILTER = ()
+    MatrixMediaEvent = None
+    MATRIX_MARKDOWN = None
 
 MATRIX_ALLOWED_HTML_TAGS = {
     "p", "a", "strong", "em", "del", "code", "pre", "blockquote",
@@ -92,14 +99,17 @@ def _filter_matrix_html_attribute(tag: str, attr: str, value: str) -> str | None
     return value
 
 
-MATRIX_HTML_CLEANER = nh3.Cleaner(
-    tags=MATRIX_ALLOWED_HTML_TAGS,
-    attributes=MATRIX_ALLOWED_HTML_ATTRIBUTES,
-    attribute_filter=_filter_matrix_html_attribute,
-    url_schemes=MATRIX_ALLOWED_URL_SCHEMES,
-    strip_comments=True,
-    link_rel="noopener noreferrer",
-)
+if MATRIX_AVAILABLE:
+    MATRIX_HTML_CLEANER = nh3.Cleaner(
+        tags=MATRIX_ALLOWED_HTML_TAGS,
+        attributes=MATRIX_ALLOWED_HTML_ATTRIBUTES,
+        attribute_filter=_filter_matrix_html_attribute,
+        url_schemes=MATRIX_ALLOWED_URL_SCHEMES,
+        strip_comments=True,
+        link_rel="noopener noreferrer",
+    )
+else:
+    MATRIX_HTML_CLEANER = None
 
 @dataclass
 class _StreamBuf:
@@ -209,6 +219,10 @@ class MatrixChannel(BaseChannel):
     def default_config(cls) -> dict[str, Any]:
         return MatrixConfig().model_dump(by_alias=False)
 
+    @classmethod
+    def config_model(cls) -> type | None:
+        return MatrixConfig
+
     def __init__(
         self,
         config: Any,
@@ -235,6 +249,11 @@ class MatrixChannel(BaseChannel):
 
     async def start(self) -> None:
         """Start Matrix client and begin sync loop."""
+        if not MATRIX_AVAILABLE:
+            raise RuntimeError(
+                "Matrix dependencies not installed. Run: pip install 'durin-ai[matrix]' "
+                "(or enable channels.matrix and let auto_install_extras handle it)."
+            )
         self._running = True
         self._started_at_ms = int(time.time() * 1000)
         redirect_lib_logging("nio", level="WARNING")
