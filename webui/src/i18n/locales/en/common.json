@@ -484,14 +484,22 @@
         "working_emoji_delay": "Working emoji delay (s)",
         "proxy": "Proxy URL",
         "proxy_username": "Proxy username",
-        "proxy_password": "Proxy password"
+        "proxy_password": "Proxy password",
+        "threading_mode": "Conversation grouping"
       },
       "optionLabel": {
         "group_policy": {
           "open": "Reply to every message",
           "mention": "Only when mentioned",
           "allowlist": "Only in allowed channels"
+        },
+        "threading_mode": {
+          "thread": "One conversation per mail thread (recommended)",
+          "sender": "One continuous conversation per sender"
         }
+      },
+      "fieldHelp": {
+        "threading_mode": "Per mail thread: each email thread becomes its own conversation — best when the same person writes about different topics. Per sender: all mail from an address continues one long conversation."
       },
       "placeholder": {
         "allow_from": "",

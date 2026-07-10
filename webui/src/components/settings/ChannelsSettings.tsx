@@ -219,24 +219,34 @@ function FieldGroup({
           {t(labelKey)}
         </div>
       ) : null}
-      {groupFields.map((field) => (
-        <div key={field.name} className="flex flex-wrap items-center gap-2">
-          {/* consent_granted renders its own inline label inside FieldInput */}
-          {field.name !== "consent_granted" ? (
-            <span className="w-[160px] shrink-0 text-[13px] text-foreground/80">
-              {t(`settings.channels.field.${field.name}`, field.name)}
-            </span>
-          ) : null}
-          <FieldInput
-            channel={channel}
-            field={field}
-            value={channelValues[field.name]}
-            token={token}
-            busy={busy}
-            onChange={(v) => onFieldChange(field.name, v)}
-          />
-        </div>
-      ))}
+      {groupFields.map((field) => {
+        const help = t(`settings.channels.fieldHelp.${field.name}`, "");
+        return (
+          <div key={field.name} className="space-y-0.5">
+            <div className="flex flex-wrap items-center gap-2">
+              {/* consent_granted renders its own inline label inside FieldInput */}
+              {field.name !== "consent_granted" ? (
+                <span className="w-[160px] shrink-0 text-[13px] text-foreground/80">
+                  {t(`settings.channels.field.${field.name}`, field.name)}
+                </span>
+              ) : null}
+              <FieldInput
+                channel={channel}
+                field={field}
+                value={channelValues[field.name]}
+                token={token}
+                busy={busy}
+                onChange={(v) => onFieldChange(field.name, v)}
+              />
+            </div>
+            {help ? (
+              <p className="ml-[168px] max-w-[420px] text-[11px] leading-snug text-muted-foreground">
+                {help}
+              </p>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }
