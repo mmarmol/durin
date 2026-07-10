@@ -113,12 +113,15 @@ def test_store_prunes_by_age_and_cap(tmp_path):
     store.upsert_inbound("old", root="<o@x>", address="a@x", subject="s",
                          references=[], message_id="<o@x>")
     store._threads["old"]["last_seen"] = time.time() - 40 * 86400
-    for i in range(3):
+    for i in range(4):
         store.upsert_inbound(f"d{i}", root=f"<m{i}@x>", address="a@x",
                              subject="s", references=[], message_id=f"<m{i}@x>")
+        store._threads[f"d{i}"]["last_seen"] = time.time() - (10 - i)
     store.prune()
     assert store.get("old") is None          # age-pruned
-    assert len(store._threads) <= 3          # cap respected
+    assert len(store._threads) == 3          # cap enforced, was 4
+    assert store.get("d0") is None           # oldest dropped
+    assert store.get("d3") is not None       # newest kept
 
 
 def test_store_references_chain_is_capped(tmp_path):
