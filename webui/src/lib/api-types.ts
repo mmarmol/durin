@@ -40,6 +40,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/discord/guilds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the servers the bot is in and their messageable channels */
+        get: operations["discord_guilds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/discord/invite": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Build a least-privilege OAuth invite URL for the configured bot */
+        get: operations["discord_invite"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/discord/pairing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List pending and approved Discord pairing entries */
+        get: operations["discord_pairing"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/discord/pairing/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a pending Discord pairing code */
+        post: operations["discord_pairing_approve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/discord/pairing/deny": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Deny and discard a pending Discord pairing code */
+        post: operations["discord_pairing_deny"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/discord/pairing/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke an approved Discord sender */
+        post: operations["discord_pairing_revoke"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/discord/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate a Discord bot token and report read permission (persists nothing) */
+        post: operations["discord_test"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/channels/runtime": {
         parameters: {
             query?: never;
@@ -2580,6 +2699,85 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** DiscordGuildsListQuery */
+        DiscordGuildsListQuery: Record<string, never>;
+        /** DiscordGuildsListResult */
+        DiscordGuildsListResult: {
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /**
+             * Guilds
+             * @default []
+             */
+            guilds: {
+                [key: string]: unknown;
+            }[];
+            /** Ok */
+            ok: boolean;
+        };
+        /** DiscordInviteQuery */
+        DiscordInviteQuery: Record<string, never>;
+        /** DiscordInviteResult */
+        DiscordInviteResult: {
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /** Ok */
+            ok: boolean;
+            /**
+             * Permissions
+             * @default null
+             */
+            permissions: string | null;
+            /**
+             * Scopes
+             * @default null
+             */
+            scopes: string | null;
+            /**
+             * Url
+             * @default null
+             */
+            url: string | null;
+        };
+        /** DiscordTestCommand */
+        DiscordTestCommand: {
+            /**
+             * Token
+             * @default
+             */
+            token: string;
+        };
+        /** DiscordTestResult */
+        DiscordTestResult: {
+            /**
+             * Application Id
+             * @default null
+             */
+            application_id: string | null;
+            /**
+             * Bot User
+             * @default null
+             */
+            bot_user: string | null;
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /**
+             * Message Content Intent
+             * @default null
+             */
+            message_content_intent: string | null;
+            /** Ok */
+            ok: boolean;
+        };
         /**
          * DreamDigest
          * @description Recent dream activity: the latest run's counts (headline) plus a
@@ -3874,6 +4072,13 @@ export interface components {
         PairingListResult: {
             /** Approved */
             approved: string[];
+            /**
+             * Names
+             * @default {}
+             */
+            names: {
+                [key: string]: string;
+            };
             /** Pending */
             pending: {
                 [key: string]: unknown;
@@ -5233,6 +5438,174 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChannelsListResult"];
+                };
+            };
+        };
+    };
+    discord_guilds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiscordGuildsListQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscordGuildsListResult"];
+                };
+            };
+        };
+    };
+    discord_invite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiscordInviteQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscordInviteResult"];
+                };
+            };
+        };
+    };
+    discord_pairing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PairingListQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingListResult"];
+                };
+            };
+        };
+    };
+    discord_pairing_approve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PairingApproveCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingApproveResult"];
+                };
+            };
+        };
+    };
+    discord_pairing_deny: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PairingDenyCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingDenyResult"];
+                };
+            };
+        };
+    };
+    discord_pairing_revoke: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PairingRevokeCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingRevokeResult"];
+                };
+            };
+        };
+    };
+    discord_test: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiscordTestCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscordTestResult"];
                 };
             };
         };
