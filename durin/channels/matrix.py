@@ -46,7 +46,8 @@ except ImportError:  # optional extra `durin-ai[matrix]` not installed
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
-from durin.config.paths import get_data_dir, get_media_dir
+from durin.channels.dedup import MessageDeduplicator
+from durin.config.paths import get_data_dir, get_media_dir, get_runtime_subdir
 from durin.config.schema import Base
 from durin.utils.helpers import safe_filename
 from durin.utils.logging_bridge import redirect_lib_logging
@@ -250,6 +251,13 @@ class MatrixChannel(BaseChannel):
         self._server_upload_limit_checked = False
         self._stream_bufs: dict[str, _StreamBuf] = {}
         self._started_at_ms: int = 0
+        # nio re-syncs from the last persisted token after a crash between
+        # event callbacks and the token store write, replaying that window.
+        self._dedup = MessageDeduplicator(
+            max_size=2048,
+            ttl_seconds=86_400,
+            persist_path=get_runtime_subdir("dedup") / "matrix.json",
+        )
 
 
     def _resolve_encryption_enabled(self) -> bool:
@@ -902,6 +910,8 @@ class MatrixChannel(BaseChannel):
         return meta
 
     async def _on_message(self, room: MatrixRoom, event: RoomMessageText) -> None:
+        if self._dedup.is_duplicate(getattr(event, "event_id", "") or ""):
+            return
         if (
             event.sender == self.config.user_id
             or self._is_pre_startup_event(event)
@@ -920,6 +930,8 @@ class MatrixChannel(BaseChannel):
             raise
 
     async def _on_media_message(self, room: MatrixRoom, event: MatrixMediaEvent) -> None:
+        if self._dedup.is_duplicate(getattr(event, "event_id", "") or ""):
+            return
         if (
             event.sender == self.config.user_id
             or self._is_pre_startup_event(event)
