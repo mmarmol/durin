@@ -123,7 +123,7 @@ This conversation is on a text messaging platform that does not render markdown.
 {% elif channel == 'email' %}
 ## Format Hint
 This conversation is via email. Structure with clear sections. Markdown may not render — keep formatting simple.
-{% elif channel == 'cli' or channel == 'mochat' %}
+{% elif channel == 'cli' %}
 ## Format Hint
 Output is rendered in a terminal. Avoid markdown headings and tables. Use plain text with minimal formatting.
 {% endif %}

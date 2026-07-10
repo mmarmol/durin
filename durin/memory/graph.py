@@ -590,7 +590,6 @@ _CHANNEL_ABBREV = {
     "whatsapp": "wa",
     "feishu": "feishu",
     "dingtalk": "dt",
-    "mochat": "mochat",
     "qq": "qq",
     "wecom": "wc",
 }
