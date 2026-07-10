@@ -18,7 +18,6 @@ import random
 import re
 import time
 import uuid
-from collections import OrderedDict
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -31,6 +30,7 @@ from pydantic import Field
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
+from durin.channels.dedup import MessageDeduplicator
 from durin.config.paths import get_media_dir, get_runtime_subdir
 from durin.config.schema import Base
 from durin.utils.helpers import split_message
@@ -151,7 +151,7 @@ class WeixinChannel(BaseChannel):
         self._client: httpx.AsyncClient | None = None
         self._get_updates_buf: str = ""
         self._context_tokens: dict[str, str] = {}  # from_user_id -> context_token
-        self._processed_ids: OrderedDict[str, None] = OrderedDict()
+        self._dedup = MessageDeduplicator(max_size=1000, ttl_seconds=300.0)
         self._state_dir: Path | None = None
         self._token: str = ""
         self._poll_task: asyncio.Task | None = None
@@ -599,12 +599,11 @@ class WeixinChannel(BaseChannel):
         if not self.is_allowed(from_user_id):
             return
 
-        # Deduplication by message_id
-        if msg_id in self._processed_ids:
+        # Dedup by message id only. A content fingerprint (hermes-style
+        # md5(sender+text)) would drop a user legitimately repeating the
+        # same short message within the TTL window.
+        if self._dedup.is_duplicate(msg_id):
             return
-        self._processed_ids[msg_id] = None
-        while len(self._processed_ids) > 1000:
-            self._processed_ids.popitem(last=False)
 
         # Cache context_token (required for all replies — inbound.ts:23-27)
         ctx_token = msg.get("context_token", "")
