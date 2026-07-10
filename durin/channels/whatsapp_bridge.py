@@ -86,9 +86,15 @@ async def ensure_bridge_binary() -> Path:
             )
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(".tmp")
-        tmp.write_bytes(data)
-        tmp.chmod(0o755)
-        tmp.replace(target)
+        try:
+            tmp.write_bytes(data)
+            tmp.chmod(0o755)
+            tmp.replace(target)
+        except OSError as exc:
+            tmp.unlink(missing_ok=True)
+            raise BridgeSetupError(
+                f"Could not install the WhatsApp bridge at {target}: {exc}"
+            ) from exc
         return target
 
     return _dev_build(target)
@@ -105,10 +111,20 @@ def _dev_build(target: Path) -> Path:
             "Go >= 1.24 and re-run."
         )
     target.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [go, "build", "-o", str(target), "."],
-        cwd=src, check=True, env={**os.environ, "CGO_ENABLED": "0"},
-    )
+    try:
+        subprocess.run(
+            [go, "build", "-o", str(target), "."],
+            cwd=src, check=True, capture_output=True,
+            env={**os.environ, "CGO_ENABLED": "0"},
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr or b""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        raise BridgeSetupError(
+            f"WhatsApp bridge `go build` failed (exit {exc.returncode}): "
+            f"{stderr.strip()[-2000:]}"
+        ) from exc
     return target
 
 
@@ -151,6 +167,11 @@ class BridgeSupervisor:
                     "--media-dir", str(self.media_dir),
                     env={**os.environ, "BRIDGE_TOKEN": self.token},
                 )
+                # stop() may have run while we were awaiting the spawn: it saw
+                # no process to terminate and is blocked on this task. Kill the
+                # fresh child here so the task (and stop()) return promptly.
+                if self._stopping.is_set():
+                    self._proc.terminate()
                 rc = await self._proc.wait()
             except Exception:
                 self.logger.exception("WhatsApp bridge failed to spawn")

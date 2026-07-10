@@ -2,8 +2,7 @@
 
 import asyncio
 import hashlib
-import json
-import sys
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -73,6 +72,16 @@ class TestEnsureBridgeBinary:
             with pytest.raises(BridgeSetupError):
                 await ensure_bridge_binary()
 
+    @pytest.mark.asyncio
+    async def test_dev_build_failure_raises_setup_error(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+        boom = subprocess.CalledProcessError(1, ["go", "build"], stderr=b"compile error")
+        with patch("durin.channels.whatsapp_bridge._pinned_checksum", return_value=None), \
+             patch("durin.channels.whatsapp_bridge.shutil.which", return_value="/usr/bin/go"), \
+             patch("durin.channels.whatsapp_bridge.subprocess.run", side_effect=boom):
+            with pytest.raises(BridgeSetupError, match="go build"):
+                await ensure_bridge_binary()
+
 
 class TestBridgeSupervisor:
     def _fake_bridge(self, tmp_path: Path, script: str) -> Path:
@@ -114,3 +123,27 @@ class TestBridgeSupervisor:
         await sup.start()
         await asyncio.sleep(0.2)
         await sup.stop()  # must return promptly, not after 60s
+
+    @pytest.mark.asyncio
+    async def test_stop_during_spawn_terminates_child(self, tmp_path):
+        # stop() issued while _run() is still awaiting the subprocess spawn
+        # must not hang and must not orphan the freshly spawned child.
+        binary = self._fake_bridge(tmp_path, "sleep 60")
+        real_spawn = asyncio.create_subprocess_exec
+        spawned = []
+
+        async def slow_spawn(*args, **kwargs):
+            await asyncio.sleep(0.3)
+            proc = await real_spawn(*args, **kwargs)
+            spawned.append(proc)
+            return proc
+
+        sup = BridgeSupervisor(binary, port=39999, token="t",
+                               auth_dir=tmp_path, media_dir=tmp_path, logger=None)
+        with patch("durin.channels.whatsapp_bridge.asyncio.create_subprocess_exec",
+                   slow_spawn):
+            await sup.start()
+            await asyncio.sleep(0.05)  # let _run() enter the spawn await
+            await asyncio.wait_for(sup.stop(), timeout=5)  # must not hang
+        assert len(spawned) == 1
+        assert spawned[0].returncode is not None  # child terminated, not orphaned
