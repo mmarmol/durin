@@ -439,7 +439,6 @@ interactively.
 | WeCom | `wecom.py` | |
 | Weixin | `weixin.py` | |
 | QQ | `qq.py` | |
-| MoChat | `mochat.py` | |
 
 All of them follow the same pattern: add an `enabled = true` key under
 `[channels.<name>]`, supply the credentials as `${secret:…}` references, and
