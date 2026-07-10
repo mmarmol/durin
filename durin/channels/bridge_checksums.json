@@ -1,8 +1,8 @@
 {
   "sha256": {
-    "durin-whatsapp-bridge-darwin-amd64": "64188b5724aa6b824c5983c3eb135a6c694e545320d16deca612ba81adc25d74",
-    "durin-whatsapp-bridge-darwin-arm64": "b56905ac99c89c2bef1381f9038e839ef8f20863115a6d484f926b0bf372ad88",
-    "durin-whatsapp-bridge-linux-amd64": "5d568a4cfbdae312cf2dc5396ee5f5287baa73d8d75c7939dd31aec4edef280c",
-    "durin-whatsapp-bridge-linux-arm64": "b75687c6378efdc9a12e750b17e42cb390c19356a72ef4475eda249595c3e2f1"
+    "durin-whatsapp-bridge-darwin-amd64": "6fa4db586097755bdd4928f4798815f50b299b3687779f26d71e4dcf159820ff",
+    "durin-whatsapp-bridge-darwin-arm64": "5e567e941c5426ee0ee18a64a7a16d07a6c439f2f4a1180fdcfa2d6db666427e",
+    "durin-whatsapp-bridge-linux-amd64": "59fe8cfad791fe978f54411e707d6a0ed6cc50e1a206e8098951ea38078e7d7a",
+    "durin-whatsapp-bridge-linux-arm64": "4666c30502d8dde68801d41e0443fdbdd737f5a2df430dc68b9147c42f9fe7a6"
   }
 }
