@@ -1,0 +1,55 @@
+name: bridge
+
+# Vet + test + cross-compile the WhatsApp Go bridge. Not a required status
+# check (unlike test/webui), so a plain path filter is fine: the job simply
+# does not run for diffs that cannot affect bridge/.
+
+on:
+  pull_request:
+    paths:
+      - "bridge/**"
+      - ".github/workflows/bridge.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "bridge/**"
+      - ".github/workflows/bridge.yml"
+
+concurrency:
+  group: bridge-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  bridge:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bridge
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+          cache-dependency-path: bridge/go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Cross-compile all release targets
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 \
+              go build -trimpath -o /dev/null .
+            echo "built $target"
+          done
