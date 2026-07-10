@@ -210,7 +210,7 @@ their extra is installed, so `discover_channel_names()`
 (`durin/channels/registry.py`) can enumerate them with zero imports. Slack
 currently does **not** guard its import — `slack.py` hard-imports `slack_sdk`
 at module scope — so when the `slack` extra is missing, the module itself
-fails to import and Slack disappears from `discover_channel_names()` and
+fails to import and Slack disappears from `discover_all()` and
 every surface built on it (webui channel list, onboarding, config docs). The
 auto-install step described below covers the common case where Slack is
 enabled, since it installs the extra before the module is imported for that
