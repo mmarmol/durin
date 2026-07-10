@@ -272,10 +272,11 @@ class MatrixChannel(BaseChannel):
     async def start(self) -> None:
         """Start Matrix client and begin sync loop."""
         if not MATRIX_AVAILABLE:
-            raise RuntimeError(
+            self.logger.error(
                 "Matrix dependencies not installed. Run: pip install 'durin-ai[matrix]' "
                 "(or enable channels.matrix and let auto_install_extras handle it)."
             )
+            return
         self._running = True
         self._started_at_ms = int(time.time() * 1000)
         redirect_lib_logging("nio", level="WARNING")

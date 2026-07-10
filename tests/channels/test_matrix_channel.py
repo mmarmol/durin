@@ -301,6 +301,21 @@ def test_resolve_encryption_enabled_true_when_olm_present(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_returns_cleanly_when_matrix_unavailable(monkeypatch) -> None:
+    """Mirrors Discord's unavailable-extra guard: log and return, so the
+    manager's crash supervisor treats it as a clean stop, not a restart loop."""
+    monkeypatch.setattr(matrix_module, "MATRIX_AVAILABLE", False)
+    channel = MatrixChannel(_make_config(), MessageBus())
+    channel.logger = MagicMock()
+
+    result = await channel.start()
+
+    assert result is None
+    channel.logger.error.assert_called_once()
+    assert "durin-ai[matrix]" in channel.logger.error.call_args[0][0]
+
+
+@pytest.mark.asyncio
 async def test_on_sync_error_stops_loop_on_unknown_token() -> None:
     channel = MatrixChannel(_make_config(), MessageBus())
     client = _FakeAsyncClient("", "", "", None)
