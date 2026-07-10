@@ -1,0 +1,97 @@
+name: bridge-release
+
+# Build and publish the WhatsApp Go bridge as an independently-versioned
+# artifact. Runs ONLY on its own tag `whatsapp-bridge-v<X.Y.Z>` — never on a
+# durin release, never on an unrelated PR — so the bridge is built and shipped
+# once, when the bridge itself changes.
+#
+# Maintainer flow:
+#   1. Bump BRIDGE_VERSION in durin/channels/whatsapp_bridge.py.
+#   2. Run scripts/gen-bridge-checksums.sh and commit the updated
+#      durin/channels/bridge_checksums.json (via the normal PR flow).
+#   3. Push tag whatsapp-bridge-v<X.Y.Z>.
+# This workflow rebuilds the binaries reproducibly and fails if they don't
+# match the committed pin, so the checksums the durin wheel ships always
+# correspond to the published binaries.
+
+on:
+  push:
+    tags:
+      - "whatsapp-bridge-v[0-9]+.[0-9]+.[0-9]+*"
+
+concurrency:
+  group: bridge-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # create the GitHub Release + attach binaries
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.5"
+          cache-dependency-path: bridge/go.sum
+
+      - name: Verify BRIDGE_VERSION matches the tag
+        id: meta
+        run: |
+          TAG="${GITHUB_REF#refs/tags/whatsapp-bridge-v}"
+          CONST=$(sed -n 's/^BRIDGE_VERSION = "\(.*\)"/\1/p' \
+            durin/channels/whatsapp_bridge.py)
+          echo "tag=$TAG  const=$CONST"
+          if [ "$TAG" != "$CONST" ]; then
+            echo "::error::Tag ($TAG) does not match BRIDGE_VERSION ($CONST) in whatsapp_bridge.py."
+            exit 1
+          fi
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Cross-compile binaries (reproducible)
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          mkdir -p dist-bridge
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            GOOS="${target%/*}"; GOARCH="${target#*/}"
+            out="dist-bridge/durin-whatsapp-bridge-${GOOS}-${GOARCH}"
+            (cd bridge && GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
+              go build -trimpath -buildvcs=false \
+                -ldflags "-s -w -X main.version=${VERSION}" -o "../$out" .)
+          done
+          (cd dist-bridge && sha256sum durin-whatsapp-bridge-* > checksums.txt)
+
+      - name: Verify binaries match the committed checksum pin
+        run: |
+          python3 - <<'EOF'
+          import hashlib, json, pathlib, sys
+          pin = json.loads(
+              pathlib.Path("durin/channels/bridge_checksums.json").read_text()
+          )["sha256"]
+          built = {
+              p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+              for p in pathlib.Path("dist-bridge").glob("durin-whatsapp-bridge-*")
+          }
+          if built != pin:
+              print("::error::Built binaries do not match the committed "
+                    "bridge_checksums.json. Run scripts/gen-bridge-checksums.sh "
+                    "and commit the result before tagging.")
+              print("committed:", json.dumps(pin, indent=2))
+              print("built:    ", json.dumps(built, indent=2))
+              sys.exit(1)
+          print("Checksums match the committed pin.")
+          EOF
+
+      - name: Create the bridge GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist-bridge/durin-whatsapp-bridge-*
+            dist-bridge/checksums.txt
+          generate_release_notes: true
+          prerelease: ${{ contains(steps.meta.outputs.version, '-') }}

@@ -575,8 +575,8 @@ def check_whatsapp_bridge(cfg: "Config | None" = None) -> CheckResult:
     from durin.channels.whatsapp_bridge import cached_binary_path
 
     # Broad guard: nothing may escape a doctor check. BridgeSetupError covers
-    # unsupported platforms; anything else (e.g. PackageNotFoundError on an
-    # unusual install) degrades to a warn the same way.
+    # unsupported platforms; anything else (e.g. a broken DURIN_HOME while
+    # resolving the cache path) degrades to a warn the same way.
     try:
         path = cached_binary_path()
     except Exception as exc:  # noqa: BLE001

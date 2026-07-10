@@ -8,12 +8,16 @@ on:
   pull_request:
     paths:
       - "bridge/**"
+      - "durin/channels/whatsapp_bridge.py"
+      - "durin/channels/bridge_checksums.json"
       - ".github/workflows/bridge.yml"
   push:
     branches:
       - main
     paths:
       - "bridge/**"
+      - "durin/channels/whatsapp_bridge.py"
+      - "durin/channels/bridge_checksums.json"
       - ".github/workflows/bridge.yml"
 
 concurrency:
@@ -46,10 +50,38 @@ jobs:
       - name: Test
         run: go test ./...
 
-      - name: Cross-compile all release targets
+      - name: Cross-compile all release targets and verify the checksum pin
+        working-directory: ${{ github.workspace }}
         run: |
+          # Build every target with the exact release flags and version, then
+          # assert the results match the committed pin. This keeps
+          # bridge_checksums.json honest against the bridge source on every PR
+          # that touches either — a version bump without regenerating the pin
+          # (scripts/gen-bridge-checksums.sh) fails here instead of silently at
+          # bridge-release time.
+          VERSION=$(sed -n 's/^BRIDGE_VERSION = "\(.*\)"/\1/p' \
+            durin/channels/whatsapp_bridge.py)
+          mkdir -p dist-bridge
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-            GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 \
-              go build -trimpath -o /dev/null .
+            GOOS="${target%/*}"; GOARCH="${target#*/}"
+            out="dist-bridge/durin-whatsapp-bridge-${GOOS}-${GOARCH}"
+            (cd bridge && GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
+              go build -trimpath -buildvcs=false \
+                -ldflags "-s -w -X main.version=${VERSION}" -o "../$out" .)
             echo "built $target"
           done
+          python3 - <<'EOF'
+          import hashlib, json, pathlib, sys
+          pin = json.loads(
+              pathlib.Path("durin/channels/bridge_checksums.json").read_text()
+          )["sha256"]
+          built = {
+              p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+              for p in pathlib.Path("dist-bridge").glob("durin-whatsapp-bridge-*")
+          }
+          if built != pin:
+              print("::error::bridge_checksums.json is stale for BRIDGE_VERSION. "
+                    "Run scripts/gen-bridge-checksums.sh and commit the result.")
+              sys.exit(1)
+          print("Checksum pin matches the bridge source.")
+          EOF

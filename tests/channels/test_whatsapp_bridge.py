@@ -9,12 +9,48 @@ from unittest.mock import patch
 import pytest
 
 from durin.channels.whatsapp_bridge import (
+    BRIDGE_VERSION,
     BridgeSetupError,
     BridgeSupervisor,
     cached_binary_path,
     ensure_bridge_binary,
     platform_asset,
 )
+
+
+class TestBridgeVersioning:
+    """The bridge is versioned and released independently of durin, so its
+    cache path and download URL must key on BRIDGE_VERSION — never the durin
+    package version — or a durin upgrade would needlessly re-download it."""
+
+    def test_cache_path_keyed_to_bridge_version(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+        assert cached_binary_path().parent.name == BRIDGE_VERSION
+
+    def test_download_url_points_at_bridge_release_tag(self):
+        from durin.channels.whatsapp_bridge import _RELEASE_URL
+
+        url = _RELEASE_URL.format(version=BRIDGE_VERSION, asset="x")
+        assert f"whatsapp-bridge-v{BRIDGE_VERSION}" in url
+
+    def test_committed_pin_covers_every_target(self):
+        """The committed checksum pin must list all four release assets, so a
+        wheel install can verify the download on any supported platform."""
+        import json
+        from importlib import resources
+
+        pin = json.loads(
+            resources.files("durin.channels")
+            .joinpath("bridge_checksums.json")
+            .read_text(encoding="utf-8")
+        )["sha256"]
+        expected = {
+            f"durin-whatsapp-bridge-{os}-{arch}"
+            for os in ("linux", "darwin")
+            for arch in ("amd64", "arm64")
+        }
+        assert set(pin) == expected
+        assert all(len(v) == 64 for v in pin.values())
 
 
 class TestPlatformAsset:
