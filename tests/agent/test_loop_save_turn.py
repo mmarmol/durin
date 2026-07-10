@@ -955,3 +955,46 @@ async def test_system_subagent_followup_uses_thread_session_and_slack_metadata(t
     loop.sessions.invalidate("slack:C123:1700.42")
     persisted = loop.sessions.get_or_create("slack:C123:1700.42")
     assert any(m.get("subagent_task_id") == "sub-1" for m in persisted.messages)
+
+
+@pytest.mark.asyncio
+async def test_system_subagent_followup_uses_email_thread_metadata(tmp_path: Path) -> None:
+    loop = _make_full_loop(tmp_path)
+    loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+    digest = "abc123def4567890"
+    thread_session = loop.sessions.get_or_create(f"email:alice@example.com:{digest}")
+    thread_session.add_message("user", "thread question")
+    loop.sessions.save(thread_session)
+
+    seen: dict[str, list[dict]] = {}
+
+    async def fake_run_agent_loop(initial_messages, **_kwargs):
+        seen["initial_messages"] = initial_messages
+        return (
+            "done",
+            [],
+            [*initial_messages, {"role": "assistant", "content": "done"}],
+            "stop",
+            False,
+            [],
+        )
+
+    loop._run_agent_loop = fake_run_agent_loop  # type: ignore[method-assign]
+
+    outbound = await loop._process_message(
+        InboundMessage(
+            channel="system",
+            sender_id="subagent",
+            chat_id="email:alice@example.com",
+            content="subagent result",
+            session_key_override=f"email:alice@example.com:{digest}",
+            metadata={"subagent_task_id": "sub-1"},
+        )
+    )
+
+    assert outbound is not None
+    assert outbound.channel == "email"
+    assert outbound.chat_id == "alice@example.com"
+    assert outbound.metadata == {"email": {"thread": digest}}
+    assert "thread question" in seen["initial_messages"][1]["content"]
