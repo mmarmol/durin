@@ -107,3 +107,64 @@ def test_discord_does_not_get_a_legacy_credential_field():
         defaults = DiscordChannel.default_config()
         credential_field = next((n for n in _CRED_FIELDS if n in defaults), None)
     assert credential_field is None
+
+
+def test_intents_is_not_a_config_key_at_all():
+    """A raw gateway bitfield has no safe home in any tier: the guided flow
+    cannot verify it, a form cannot render it, and a mistyped digit yields a
+    bot that connects and silently ignores messages. durin derives it."""
+    assert "intents" not in DiscordConfig.model_fields
+    assert "intents" not in DiscordChannel.default_config()
+
+
+def test_derived_intents_cover_exactly_the_events_the_adapter_handles():
+    from durin.channels.discord import GATEWAY_INTENTS
+
+    assert GATEWAY_INTENTS.guilds is True  # thread create/update/delete, channel cache
+    assert GATEWAY_INTENTS.guild_messages is True  # on_message in servers
+    assert GATEWAY_INTENTS.dm_messages is True  # on_message in DMs
+    assert GATEWAY_INTENTS.message_content is True  # privileged: read the text
+    # Nothing durin does needs these, and each is a privileged ask or noise.
+    assert GATEWAY_INTENTS.members is False
+    assert GATEWAY_INTENTS.presences is False
+    assert GATEWAY_INTENTS.voice_states is False
+    assert GATEWAY_INTENTS.guild_reactions is False
+
+
+def test_derived_value_matches_the_former_default():
+    """Nobody on defaults sees a behaviour change from dropping the knob."""
+    from durin.channels.discord import GATEWAY_INTENTS
+
+    assert GATEWAY_INTENTS.value == 37377
+
+
+def test_a_legacy_intents_key_is_ignored_loudly():
+    """Pydantic drops unknown keys silently. An operator who hand-set intents
+    must be told their value no longer does anything."""
+    from loguru import logger as loguru_logger
+
+    from durin.bus.queue import MessageBus
+
+    warnings: list[str] = []
+    handler_id = loguru_logger.add(lambda m: warnings.append(str(m)), level="WARNING", format="{message}")
+    try:
+        DiscordChannel({"enabled": True, "token": "t", "intents": 12345}, MessageBus())
+    finally:
+        loguru_logger.remove(handler_id)
+
+    assert any("intents" in w and "obsolete" in w for w in warnings), warnings
+
+
+def test_a_config_without_the_legacy_key_warns_about_nothing():
+    from loguru import logger as loguru_logger
+
+    from durin.bus.queue import MessageBus
+
+    warnings: list[str] = []
+    handler_id = loguru_logger.add(lambda m: warnings.append(str(m)), level="WARNING", format="{message}")
+    try:
+        DiscordChannel({"enabled": True, "token": "t"}, MessageBus())
+    finally:
+        loguru_logger.remove(handler_id)
+
+    assert warnings == []

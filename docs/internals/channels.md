@@ -396,9 +396,11 @@ Channel-specific extensions:
   so allowing a forum covers its posts). `group_policy` (`mention`/`open`),
   the read-receipt and working emojis with their delay, and `proxy*`. Sender
   authorization uses the standard `allow_from` + pairing flow via the central
-  ingress gate. `intents` is a raw gateway bitfield and is deliberately absent
-  from the dashboard form: a mistyped digit yields a bot that connects and
-  silently ignores messages.
+  ingress gate. Gateway intents are **not configurable**: they are derived from
+  the events the adapter handles — guilds, guild messages, direct messages and
+  message content — because durin implements no member, presence, voice or
+  reaction-event handler. A legacy `intents` key is ignored with a warning
+  rather than silently dropped.
 - **Slack**: `dm_enabled` (routing toggle for DMs), `group_policy`
   (`open`/`mention`/`allowlist`), `group_allow_from` (channel IDs for the
   allowlist policy), `open_channels` (rooms that reply to every message under
