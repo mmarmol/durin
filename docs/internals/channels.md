@@ -197,6 +197,43 @@ gateway connection; when the probe detects a zombie socket the heartbeat
 cannot see, it force-closes the connection so the crash supervisor above
 reconnects it.
 
+### Optional extras and channel availability
+
+Some built-in channels depend on a third-party SDK that is not installed by
+default (Slack, Discord, Matrix today). Matrix guards the SDK import in a
+`try`/`except ImportError` block and sets a module-level availability flag
+(`MATRIX_AVAILABLE`) rather than letting the import fail. Discord instead
+probes with `importlib.util.find_spec` before importing, setting
+`DISCORD_AVAILABLE` and only running `import discord` when the probe
+succeeds. Either way, both modules stay importable regardless of whether
+their extra is installed, so `discover_channel_names()`
+(`durin/channels/registry.py`) can enumerate them with zero imports. Slack
+currently does **not** guard its import — `slack.py` hard-imports `slack_sdk`
+at module scope — so when the `slack` extra is missing, the module itself
+fails to import and Slack disappears from `discover_all()` and
+every surface built on it (webui channel list, onboarding, config docs). The
+auto-install step described below covers the common case where Slack is
+enabled, since it installs the extra before the module is imported for that
+process; it does not help an operator who wants to merely see Slack listed
+as available-but-disabled without enabling it first.
+
+`GET /api/v1/channels` (`durin/service/config.py`) reports this per channel as
+two extra fields: `available` (whether the channel's dependency currently
+imports) and `install_extra` (the pip extra to install when it does not, or
+`null` when the channel is available). Both are derived by looking the
+channel name up in the extras `REGISTRY` (`durin/extras.py`) and probing its
+declared module.
+
+At gateway start, `ChannelManager._ensure_channel_extras()`
+(`durin/channels/manager.py`) auto-installs the missing dependency for any
+*enabled* channel: it intersects the extras `REGISTRY` with the channel names
+`discover_channel_names()` reports, and for each enabled channel whose probe
+module is not importable, calls `ensure_or_note` (`durin/extras.py`) to
+install the corresponding pip extra (subject to
+`config.install.auto_install_extras`). A freshly-installed SDK needs a
+gateway restart to take effect, since the channel module's import already ran
+for the current process.
+
 ### Inbound path
 
 Every channel's `start()` implementation runs a platform-specific event loop

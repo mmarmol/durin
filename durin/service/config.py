@@ -721,6 +721,7 @@ class ConfigService:
         principal.require(Scope.CONFIG_READ)
         from durin.channels.registry import discover_all
         from durin.config.loader import load_config
+        from durin.extras import REGISTRY, _module_present
 
         config = load_config()
         extra = getattr(config.channels, "__pydantic_extra__", None) or {}
@@ -749,6 +750,8 @@ class ConfigService:
             always_on = name == "websocket" and bool(
                 getattr(config.gateway, "webui_enabled", False)
             )
+            fe = REGISTRY.get(name)
+            available = fe is None or _module_present(fe.module)
             items.append(
                 {
                     "name": name,
@@ -758,6 +761,8 @@ class ConfigService:
                     "description": getattr(cls, "channel_description", ""),
                     "credential_field": credential_field,
                     "fields": fields,
+                    "available": available,
+                    "install_extra": None if available else fe.extra,
                 }
             )
         return ChannelsListResult(channels=items)

@@ -462,7 +462,7 @@ interactively.
 | Channel | Module | Notes |
 |---|---|---|
 | Discord | `discord.py` | Requires the `discord` pip extra (auto-installed) |
-| Matrix | `matrix.py` | |
+| Matrix | `matrix.py` | Requires the `matrix` pip extra (auto-installed) |
 | Microsoft Teams | `msteams.py` | |
 | Feishu | `feishu.py` | |
 | DingTalk | `dingtalk.py` | |
@@ -474,6 +474,14 @@ All of them follow the same pattern: add an `enabled = true` key under
 `[channels.<name>]`, supply the credentials as `${secret:…}` references, and
 optionally list `allow_from` IDs. See the module's config class for the exact
 key names.
+
+Matrix rooms with end-to-end encryption enabled are not supported: the
+`matrix` extra ships without `olm` (the `[e2e]` extra of the underlying SDK),
+because `python-olm` no longer builds on modern platforms. Use unencrypted
+rooms, or a space configured without encryption. The `e2ee_enabled` config
+knob defaults to `true`, but the channel automatically downgrades it to
+`false` at startup when the `olm` bindings aren't installed, logging a
+warning instead of crashing.
 
 ---
 

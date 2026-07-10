@@ -1,6 +1,9 @@
 """Matrix (Element) channel — inbound sync + outbound message/media delivery."""
 
+from __future__ import annotations
+
 import asyncio
+import importlib.util
 import json
 import mimetypes
 import time
@@ -13,7 +16,7 @@ from pydantic import Field
 
 try:
     import nh3
-    from mistune import create_markdown
+    from mistune import HTMLRenderer, create_markdown
     from nio import (
         AsyncClient,
         AsyncClientConfig,
@@ -35,10 +38,10 @@ try:
     )
     from nio.crypto.attachments import decrypt_attachment
     from nio.exceptions import EncryptionError
-except ImportError as e:
-    raise ImportError(
-        "Matrix dependencies not installed. Run: pip install durin-ai[matrix]"
-    ) from e
+
+    MATRIX_AVAILABLE = True
+except ImportError:  # optional extra `durin-ai[matrix]` not installed
+    MATRIX_AVAILABLE = False
 
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
@@ -59,13 +62,22 @@ _ATTACH_UPLOAD_FAILED = "[attachment: {} - upload failed]"
 _DEFAULT_ATTACH_NAME = "attachment"
 _MSGTYPE_MAP = {"m.image": "image", "m.audio": "audio", "m.video": "video", "m.file": "file"}
 
-MATRIX_MEDIA_EVENT_FILTER = (RoomMessageMedia, RoomEncryptedMedia)
-MatrixMediaEvent: TypeAlias = RoomMessageMedia | RoomEncryptedMedia
+if MATRIX_AVAILABLE:
+    MATRIX_MEDIA_EVENT_FILTER = (RoomMessageMedia, RoomEncryptedMedia)
+    MatrixMediaEvent: TypeAlias = RoomMessageMedia | RoomEncryptedMedia
 
-MATRIX_MARKDOWN = create_markdown(
-    escape=True,
-    plugins=["table", "strikethrough", "url", "superscript", "subscript"],
-)
+    # mistune's own HTMLRenderer.safe_url rewrites unrecognized URL schemes to
+    # "#harmful-link" before nh3 ever sees them, so mxc: image sources must be
+    # allowed through here too — nh3's attribute_filter still enforces the
+    # actual per-tag policy (mxc: only on img src, not on href) below.
+    MATRIX_MARKDOWN = create_markdown(
+        renderer=HTMLRenderer(escape=True, allow_harmful_protocols=["mxc:"]),
+        plugins=["table", "strikethrough", "url", "superscript", "subscript"],
+    )
+else:
+    MATRIX_MEDIA_EVENT_FILTER = ()
+    MatrixMediaEvent = None
+    MATRIX_MARKDOWN = None
 
 MATRIX_ALLOWED_HTML_TAGS = {
     "p", "a", "strong", "em", "del", "code", "pre", "blockquote",
@@ -92,14 +104,17 @@ def _filter_matrix_html_attribute(tag: str, attr: str, value: str) -> str | None
     return value
 
 
-MATRIX_HTML_CLEANER = nh3.Cleaner(
-    tags=MATRIX_ALLOWED_HTML_TAGS,
-    attributes=MATRIX_ALLOWED_HTML_ATTRIBUTES,
-    attribute_filter=_filter_matrix_html_attribute,
-    url_schemes=MATRIX_ALLOWED_URL_SCHEMES,
-    strip_comments=True,
-    link_rel="noopener noreferrer",
-)
+if MATRIX_AVAILABLE:
+    MATRIX_HTML_CLEANER = nh3.Cleaner(
+        tags=MATRIX_ALLOWED_HTML_TAGS,
+        attributes=MATRIX_ALLOWED_HTML_ATTRIBUTES,
+        attribute_filter=_filter_matrix_html_attribute,
+        url_schemes=MATRIX_ALLOWED_URL_SCHEMES,
+        strip_comments=True,
+        link_rel="noopener noreferrer",
+    )
+else:
+    MATRIX_HTML_CLEANER = None
 
 @dataclass
 class _StreamBuf:
@@ -209,6 +224,10 @@ class MatrixChannel(BaseChannel):
     def default_config(cls) -> dict[str, Any]:
         return MatrixConfig().model_dump(by_alias=False)
 
+    @classmethod
+    def config_model(cls) -> type | None:
+        return MatrixConfig
+
     def __init__(
         self,
         config: Any,
@@ -233,8 +252,31 @@ class MatrixChannel(BaseChannel):
         self._started_at_ms: int = 0
 
 
+    def _resolve_encryption_enabled(self) -> bool:
+        """Downgrade e2ee_enabled to False when the olm bindings aren't installed.
+
+        The shipped `matrix-nio` extra ships without `olm`; nio deterministically
+        raises when `AsyncClientConfig(encryption_enabled=True)` is constructed
+        without it, so encryption can only be requested when both the config
+        flag and the bindings agree.
+        """
+        olm_present = importlib.util.find_spec("olm") is not None
+        if self.config.e2ee_enabled and not olm_present:
+            self.logger.warning(
+                "e2ee_enabled is set but the olm bindings are not installed; "
+                "end-to-end encrypted rooms are disabled. Install matrix-nio[e2e] "
+                "to enable them."
+            )
+        return self.config.e2ee_enabled and olm_present
+
     async def start(self) -> None:
         """Start Matrix client and begin sync loop."""
+        if not MATRIX_AVAILABLE:
+            self.logger.error(
+                "Matrix dependencies not installed. Run: pip install 'durin-ai[matrix]' "
+                "(or enable channels.matrix and let auto_install_extras handle it)."
+            )
+            return
         self._running = True
         self._started_at_ms = int(time.time() * 1000)
         redirect_lib_logging("nio", level="WARNING")
@@ -252,7 +294,7 @@ class MatrixChannel(BaseChannel):
             store_path=self.store_path,
             config=AsyncClientConfig(
                 store_sync_tokens=True,
-                encryption_enabled=self.config.e2ee_enabled,
+                encryption_enabled=self._resolve_encryption_enabled(),
                 store_name=safe_store_name,
             ),
         )
