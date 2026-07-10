@@ -246,7 +246,16 @@ class EmailChannel(BaseChannel):
         email_msg["From"] = self.config.from_address or self.config.smtp_username or self.config.imap_username
         email_msg["To"] = to_addr
         email_msg["Subject"] = subject
-        email_msg.set_content(msg.content or "")
+
+        body_md = msg.content or ""
+        email_msg.set_content(body_md)
+        try:
+            from markdown_it import MarkdownIt
+
+            html_body = MarkdownIt("commonmark").enable("table").render(body_md)
+            email_msg.add_alternative(html_body, subtype="html")
+        except Exception as exc:
+            self.logger.warning("Markdown→HTML render failed, sending plain only: {}", exc)
 
         from_addr = parseaddr(email_msg["From"] or "")[1] or "durin@localhost"
         own_message_id = make_msgid(domain=from_addr.split("@")[-1])

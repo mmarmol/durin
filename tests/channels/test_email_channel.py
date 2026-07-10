@@ -1405,3 +1405,25 @@ async def test_send_falls_back_to_references_tail_when_last_message_id_empty(mon
     refs = msg["References"].split()
     assert refs == ["<m1@example.com>", "<m2@example.com>"]
     assert refs[-1] == msg["In-Reply-To"]
+
+
+@pytest.mark.asyncio
+async def test_send_builds_html_multipart(tmp_path, monkeypatch) -> None:
+    raw = _make_raw_email_threaded(message_id="<m1@x>", subject="Q")
+    channel, _ = _make_channel(tmp_path, monkeypatch, raw)
+    channel._store.load()
+    channel._resolve_thread(channel._fetch_new_messages()[0])
+
+    sent: list = []
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: sent.append(m))
+    await channel.send(OutboundMessage(
+        channel="email", chat_id="alice@example.com",
+        content="**bold** and a [link](https://example.com)",
+    ))
+    msg = sent[0]
+    assert msg.get_content_type() == "multipart/alternative"
+    plain = msg.get_body(preferencelist=("plain",)).get_content()
+    html_part = msg.get_body(preferencelist=("html",)).get_content()
+    assert "**bold**" in plain
+    assert "<strong>bold</strong>" in html_part
+    assert '<a href="https://example.com">' in html_part
