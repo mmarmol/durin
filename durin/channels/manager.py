@@ -130,9 +130,13 @@ class ChannelManager:
         the next gateway start can load it. A freshly-installed channel SDK needs a
         restart — its module-level import (slack) or availability flag (discord) was
         already evaluated — so ``ensure_or_note`` logs a restart note."""
+        from durin.channels.registry import discover_channel_names
         from durin.extras import REGISTRY, _module_present, ensure_or_note
 
-        for name in ("slack", "discord"):
+        channel_names = set(discover_channel_names())
+        for name, fe in REGISTRY.items():
+            if name not in channel_names:
+                continue  # non-channel features (stt, tts, mcp, ...) are ensured elsewhere
             section = getattr(self.config.channels, name, None)
             if section is None:
                 continue
@@ -141,8 +145,7 @@ class ChannelManager:
                 if isinstance(section, dict)
                 else getattr(section, "enabled", False)
             )
-            fe = REGISTRY.get(name)
-            if enabled and fe is not None and not _module_present(fe.module):
+            if enabled and not _module_present(fe.module):
                 ensure_or_note(name, config=self.config)
 
     def _make_channel(self, name: str) -> "BaseChannel | None":

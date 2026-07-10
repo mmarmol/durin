@@ -1408,8 +1408,39 @@ def test_channels_api_lists_discovered_channels(
     tg = channels["telegram"]
     assert tg["enabled"] is False
     assert "display_name" in tg and "credential_field" in tg
+    assert tg["available"] is True and tg["install_extra"] is None
+
+    # matrix is present in the list regardless of whether nio is installed.
+    assert "matrix" in channels
+    assert channels["matrix"]["install_extra"] in (None, "matrix")
 
     assert client.get("/api/v1/channels").status_code == 401
+
+
+def test_channels_api_reports_unavailable_extra(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    """A channel whose extra module is missing reports available=False and its
+    pip extra name, so clients can render an install hint (Task 6)."""
+    import durin.extras as extras_mod
+
+    config_path = tmp_path / "config.json"
+    save_config(Config(), config_path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
+    monkeypatch.setattr(extras_mod, "_module_present", lambda m: m != "nio")
+
+    channel, client = _build_client(bus, monkeypatch, tmp_path)
+    tok = client.get("/webui/bootstrap").json()["token"]
+
+    got = client.get("/api/v1/channels", headers={"Authorization": f"Bearer {tok}"})
+    assert got.status_code == 200
+    channels = {c["name"]: c for c in got.json()["channels"]}
+    matrix = channels["matrix"]
+    assert matrix["available"] is False
+    assert matrix["install_extra"] == "matrix"
+
+    # Channels not gated by an extra stay available.
+    assert channels["telegram"]["available"] is True
 
 
 def test_models_and_capabilities_api(
