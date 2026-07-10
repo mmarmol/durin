@@ -10,7 +10,11 @@ from durin.channels.whatsapp_format import (
 class TestMarkdownToWhatsApp:
     def test_bold(self):
         assert markdown_to_whatsapp("**hola**") == "*hola*"
-        assert markdown_to_whatsapp("__hola__") == "*hola*"
+        assert markdown_to_whatsapp("__hola__") == "__hola__"
+
+    def test_dunder_identifiers_preserved(self):
+        text = "the __init__ method calls __repr__"
+        assert markdown_to_whatsapp(text) == text
 
     def test_italic_single_star_becomes_underscore(self):
         assert markdown_to_whatsapp("*hola*") == "_hola_"

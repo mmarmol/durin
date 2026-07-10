@@ -26,7 +26,6 @@ def markdown_to_whatsapp(text: str) -> str:
     out = re.sub(r"^#{1,6}\s+(.+)$", r"**\1**", out, flags=re.MULTILINE)
     # Bold first (via sentinel) so the single-star italic pass can't eat it.
     out = re.sub(r"\*\*(.+?)\*\*", rf"{_BOLD_SENTINEL}\1{_BOLD_SENTINEL}", out)
-    out = re.sub(r"__(.+?)__", rf"{_BOLD_SENTINEL}\1{_BOLD_SENTINEL}", out)
     out = re.sub(r"(?<![\w*])\*([^*\n]+)\*(?![\w*])", r"_\1_", out)
     out = out.replace(_BOLD_SENTINEL, "*")
     out = re.sub(r"~~(.+?)~~", r"~\1~", out)
