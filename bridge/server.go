@@ -55,16 +55,15 @@ func (s *Server) Handler() http.Handler {
 		if err != nil {
 			return
 		}
+		defer ws.Close()
 		ws.SetReadDeadline(time.Now().Add(10 * time.Second))
 		_, raw, err := ws.ReadMessage()
 		if err != nil {
-			ws.Close()
 			return
 		}
 		cmd, err := DecodeCommand(raw)
 		if err != nil || cmd.Type != "auth" ||
 			subtle.ConstantTimeCompare([]byte(cmd.Token), []byte(s.token)) != 1 {
-			ws.Close()
 			return
 		}
 		ws.SetReadDeadline(time.Time{})
@@ -76,7 +75,9 @@ func (s *Server) Handler() http.Handler {
 		s.conn = ws
 		s.mu.Unlock()
 
-		_ = s.Send(s.statusFrame())
+		// Target this connection explicitly: a reconnect may have swapped
+		// s.conn to a newer client by the time these writes happen.
+		_ = s.sendTo(ws, s.statusFrame())
 
 		for {
 			_, raw, err := ws.ReadMessage()
@@ -90,7 +91,7 @@ func (s *Server) Handler() http.Handler {
 			}
 			cmd, err := DecodeCommand(raw)
 			if err != nil {
-				_ = s.Send(ErrorFrame{Type: "error", Error: err.Error()})
+				_ = s.sendTo(ws, ErrorFrame{Type: "error", Error: err.Error()})
 				continue
 			}
 			if s.OnCommand != nil {
@@ -100,16 +101,27 @@ func (s *Server) Handler() http.Handler {
 	})
 }
 
-// Send marshals v and writes it to the current client, if any.
-func (s *Server) Send(v any) error {
+// sendTo marshals v and writes it to ws. Writes are serialized under s.mu
+// and bounded by a write deadline so a stalled peer errors out instead of
+// blocking forever while holding the lock.
+func (s *Server) sendTo(ws *websocket.Conn, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.conn == nil {
+	ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	return ws.WriteMessage(websocket.TextMessage, b)
+}
+
+// Send marshals v and writes it to the current client, if any.
+func (s *Server) Send(v any) error {
+	s.mu.Lock()
+	ws := s.conn
+	s.mu.Unlock()
+	if ws == nil {
 		return errors.New("no client connected")
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, b)
+	return s.sendTo(ws, v)
 }

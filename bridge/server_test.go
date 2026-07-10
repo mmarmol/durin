@@ -70,3 +70,43 @@ func TestAuthThenStatusAndCommands(t *testing.T) {
 		t.Fatalf("expected ack, got %s", raw)
 	}
 }
+
+func TestNewClientReplacesOld(t *testing.T) {
+	s := NewServer("secret", "test")
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	ws1 := dial(t, ts.URL)
+	defer ws1.Close()
+	ws1.WriteMessage(websocket.TextMessage, []byte(`{"type":"auth","token":"secret"}`))
+	ws1.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := ws1.ReadMessage(); err != nil { // welcome status
+		t.Fatal(err)
+	}
+
+	ws2 := dial(t, ts.URL)
+	defer ws2.Close()
+	ws2.WriteMessage(websocket.TextMessage, []byte(`{"type":"auth","token":"secret"}`))
+	ws2.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := ws2.ReadMessage(); err != nil { // welcome status
+		t.Fatal(err)
+	}
+
+	// The replaced first client must see its connection closed.
+	ws1.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := ws1.ReadMessage(); err == nil {
+		t.Fatal("expected first client to be closed after replacement")
+	}
+
+	// Send must reach the second (current) client.
+	if err := s.Send(NewAck("2", nil)); err != nil {
+		t.Fatal(err)
+	}
+	_, raw, err := ws2.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"type":"ack"`) || !strings.Contains(string(raw), `"id":"2"`) {
+		t.Fatalf("expected ack for id 2, got %s", raw)
+	}
+}
