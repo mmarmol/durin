@@ -373,7 +373,8 @@
       "desc": {
         "websocket": "Transport for the web dashboard and external WebSocket clients. Always on while the dashboard is enabled. The token is optional, only for external clients.",
         "email": "Receive and reply to email over IMAP (inbound) and SMTP (outbound).",
-        "slack": "Chat with durin in Slack DMs, channels and threads over Socket Mode — no public URL needed."
+        "slack": "Chat with durin in Slack DMs, channels and threads over Socket Mode — no public URL needed.",
+        "discord": "Chat with durin in Discord servers and direct messages."
       },
       "field": {
         "consent_granted": "Consent",
@@ -412,7 +413,14 @@
         "max_attachments_per_email": "Max attachments per email",
         "token": "Token",
         "persona": "Persona",
-        "open_channels": "Open channels"
+        "open_channels": "Open channels",
+        "allow_channels": "Allowed channels",
+        "read_receipt_emoji": "Read-receipt emoji",
+        "working_emoji": "Working emoji",
+        "working_emoji_delay": "Working emoji delay (s)",
+        "proxy": "Proxy URL",
+        "proxy_username": "Proxy username",
+        "proxy_password": "Proxy password"
       },
       "optionLabel": {
         "group_policy": {
@@ -426,7 +434,9 @@
         "email_allow_from": "a@b.com, c@d.com",
         "slack_allow_from": "U0123ABCD, or * for everyone",
         "slack_group_allow_from": "C0123ABCD, C0456EFGH",
-        "slack_open_channels": "C0123ABCD, C0456EFGH"
+        "slack_open_channels": "C0123ABCD, C0456EFGH",
+        "discord_allow_from": "empty = pairing only",
+        "discord_allow_channels": "empty = every channel"
       },
       "personaDefault": "Default persona"
     },
@@ -1008,7 +1018,10 @@
     },
     "concurrency": {
       "description": "How many turns and sub-agents run at once. Changes apply immediately, no restart.",
-      "sections": { "caps": "Limits", "live": "Live" },
+      "sections": {
+        "caps": "Limits",
+        "live": "Live"
+      },
       "rows": {
         "interactive": "Interactive turns",
         "ceiling": "Global ceiling",

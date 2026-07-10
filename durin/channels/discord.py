@@ -73,21 +73,40 @@ class _SplitBuf:
 
 
 class DiscordConfig(Base):
-    """Discord channel configuration."""
+    """Discord channel configuration.
+
+    Sender authorization (who may talk to durin) lives in ``allow_from`` and is
+    enforced by the central bus-ingress gate; unapproved DM senders receive a
+    pairing code.  ``allow_channels`` is routing, not auth: an empty list means
+    every channel the bot can see, and a non-empty list is a closed allowlist.
+
+    ``intents`` deliberately carries no ``group``, so it never reaches the
+    dashboard form: it is a raw gateway bitfield, and a mistyped digit yields a
+    bot that connects and silently ignores messages.  The default enables
+    guilds, guild messages, direct messages and message content.
+    """
 
     enabled: bool = False
-    token: str = ""
-    allow_from: list[str] = Field(default_factory=list)
-    allow_channels: list[str] = Field(default_factory=list)  # Allowed channel IDs (empty = all)
+    token: str = Field(default="", json_schema_extra={"secret": True, "required": True})
+    allow_from: list[str] = Field(default_factory=list, json_schema_extra={"group": "access"})
+    # Empty = every visible channel; non-empty = closed allowlist (a thread is
+    # matched by its parent channel too, see DiscordChannel._channel_allow_keys).
+    allow_channels: list[str] = Field(
+        default_factory=list, json_schema_extra={"group": "access"}
+    )
     intents: int = 37377
-    group_policy: Literal["mention", "open"] = "mention"
-    read_receipt_emoji: str = "👀"
-    working_emoji: str = "🔧"
-    working_emoji_delay: float = 2.0
-    streaming: bool = True
-    proxy: str | None = None
-    proxy_username: str | None = None
-    proxy_password: str | None = None
+    group_policy: Literal["mention", "open"] = Field(
+        default="mention", json_schema_extra={"group": "access"}
+    )
+    read_receipt_emoji: str = Field(default="👀", json_schema_extra={"group": "behavior"})
+    working_emoji: str = Field(default="🔧", json_schema_extra={"group": "behavior"})
+    working_emoji_delay: float = Field(default=2.0, json_schema_extra={"group": "behavior"})
+    streaming: bool = Field(default=True, json_schema_extra={"group": "behavior"})
+    proxy: str | None = Field(default=None, json_schema_extra={"group": "security"})
+    proxy_username: str | None = Field(default=None, json_schema_extra={"group": "security"})
+    proxy_password: str | None = Field(
+        default=None, json_schema_extra={"secret": True, "group": "security"}
+    )
 
 
 if DISCORD_AVAILABLE:
@@ -401,6 +420,10 @@ class DiscordChannel(BaseChannel):
     @classmethod
     def default_config(cls) -> dict[str, Any]:
         return DiscordConfig().model_dump(by_alias=False)
+
+    @classmethod
+    def config_model(cls) -> type | None:
+        return DiscordConfig
 
     @staticmethod
     def _channel_key(channel_or_id: Any) -> str:

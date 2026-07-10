@@ -319,7 +319,8 @@
       "desc": {
         "websocket": "Transporte del panel web y de clientes WebSocket externos. Siempre activo mientras el panel esté habilitado. El token es opcional, solo para clientes externos.",
         "email": "Recibe y responde correo por IMAP (entrada) y SMTP (salida).",
-        "slack": "Chatea con durin en DMs, canales e hilos de Slack vía Socket Mode — sin URL pública."
+        "slack": "Chatea con durin en DMs, canales e hilos de Slack vía Socket Mode — sin URL pública.",
+        "discord": "Chatea con durin en servidores y mensajes directos de Discord."
       },
       "field": {
         "consent_granted": "Consentimiento",
@@ -358,7 +359,14 @@
         "max_attachments_per_email": "Máx. adjuntos por correo",
         "token": "Token",
         "persona": "Persona",
-        "open_channels": "Canales abiertos"
+        "open_channels": "Canales abiertos",
+        "allow_channels": "Canales permitidos",
+        "read_receipt_emoji": "Emoji de recibido",
+        "working_emoji": "Emoji de trabajando",
+        "working_emoji_delay": "Retardo del emoji (s)",
+        "proxy": "URL del proxy",
+        "proxy_username": "Usuario del proxy",
+        "proxy_password": "Contraseña del proxy"
       },
       "optionLabel": {
         "group_policy": {
@@ -372,7 +380,9 @@
         "email_allow_from": "a@b.com, c@d.com",
         "slack_allow_from": "U0123ABCD, o * para todos",
         "slack_group_allow_from": "C0123ABCD, C0456EFGH",
-        "slack_open_channels": "C0123ABCD, C0456EFGH"
+        "slack_open_channels": "C0123ABCD, C0456EFGH",
+        "discord_allow_from": "vacío = solo por vinculación",
+        "discord_allow_channels": "vacío = todos los canales"
       },
       "personaDefault": "Persona por defecto"
     },
@@ -1007,7 +1017,10 @@
     },
     "concurrency": {
       "description": "Cuántos turnos y sub-agentes se ejecutan a la vez. Los cambios se aplican de inmediato, sin reiniciar.",
-      "sections": { "caps": "Límites", "live": "En vivo" },
+      "sections": {
+        "caps": "Límites",
+        "live": "En vivo"
+      },
       "rows": {
         "interactive": "Turnos interactivos",
         "ceiling": "Techo global",
