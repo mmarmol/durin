@@ -197,6 +197,34 @@ gateway connection; when the probe detects a zombie socket the heartbeat
 cannot see, it force-closes the connection so the crash supervisor above
 reconnects it.
 
+### Optional extras and channel availability
+
+Some built-in channels depend on a third-party SDK that is not installed by
+default (Slack, Discord, Matrix today). Those modules guard the SDK import in
+a `try`/`except ImportError` block and set a module-level availability flag
+(e.g. Matrix's `MATRIX_AVAILABLE`) rather than letting the import fail — so
+the channel module itself is always importable regardless of whether its
+extra is installed, and `discover_channel_names()`
+(`durin/channels/registry.py`) can enumerate every built-in channel with zero
+imports.
+
+`GET /api/v1/channels` (`durin/service/config.py`) reports this per channel as
+two extra fields: `available` (whether the channel's dependency currently
+imports) and `install_extra` (the pip extra to install when it does not, or
+`null` when the channel is available). Both are derived by looking the
+channel name up in the extras `REGISTRY` (`durin/extras.py`) and probing its
+declared module.
+
+At gateway start, `ChannelManager._ensure_channel_extras()`
+(`durin/channels/manager.py`) auto-installs the missing dependency for any
+*enabled* channel: it intersects the extras `REGISTRY` with the channel names
+`discover_channel_names()` reports, and for each enabled channel whose probe
+module is not importable, calls `ensure_or_note` (`durin/extras.py`) to
+install the corresponding pip extra (subject to
+`config.install.auto_install_extras`). A freshly-installed SDK needs a
+gateway restart to take effect, since the channel module's import already ran
+for the current process.
+
 ### Inbound path
 
 Every channel's `start()` implementation runs a platform-specific event loop
