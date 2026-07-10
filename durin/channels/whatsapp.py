@@ -17,6 +17,7 @@ from pydantic import Field
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
+from durin.channels.dedup import MessageDeduplicator
 from durin.channels.whatsapp_format import chunk_message, markdown_to_whatsapp
 from durin.config.schema import Base
 
@@ -98,7 +99,7 @@ class WhatsAppChannel(BaseChannel):
         super().__init__(config, bus)
         self._ws = None
         self._connected = False
-        self._processed_message_ids: OrderedDict[str, None] = OrderedDict()
+        self._dedup = MessageDeduplicator(max_size=1000, ttl_seconds=300.0)
         self._lid_to_phone: dict[str, str] = {}
         # Inbound message_id -> the participant JID to quote when replying:
         # the group's real participant JID for group messages, the sender
@@ -339,13 +340,10 @@ class WhatsAppChannel(BaseChannel):
 
             sender_id = phone_id or self._lid_to_phone.get(lid_id, "") or lid_id or id_a or id_b
 
-            if message_id:
-                if message_id in self._processed_message_ids:
-                    return
-                self._processed_message_ids[message_id] = None
-                while len(self._processed_message_ids) > 1000:
-                    self._processed_message_ids.popitem(last=False)
+            if self._dedup.is_duplicate(message_id):
+                return
 
+            if message_id:
                 # Cache the participant JID to quote when replying to this
                 # message: the real participant for groups (carried in pn),
                 # the sender itself for DMs.
