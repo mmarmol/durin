@@ -1,6 +1,7 @@
 """Email channel implementation using IMAP polling + SMTP replies."""
 
 import asyncio
+import base64
 import html
 import imaplib
 import re
@@ -247,21 +248,29 @@ class EmailChannel(BaseChannel):
         email_msg["Subject"] = subject
         email_msg.set_content(msg.content or "")
 
-        own_message_id = make_msgid(domain=(email_msg["From"] or "durin@localhost").split("@")[-1])
+        from_addr = parseaddr(email_msg["From"] or "")[1] or "durin@localhost"
+        own_message_id = make_msgid(domain=from_addr.split("@")[-1])
         email_msg["Message-ID"] = own_message_id
         if entry:
-            last_id = ensure_angle_brackets(entry.get("last_message_id", ""))
+            chain = [ensure_angle_brackets(r) for r in entry.get("references") or []]
+            last_id = ensure_angle_brackets(entry.get("last_message_id", "")) or (
+                chain[-1] if chain else ""
+            )
             if last_id:
                 email_msg["In-Reply-To"] = last_id
-                chain = [ensure_angle_brackets(r) for r in entry.get("references") or []]
                 if last_id not in chain:
                     chain.append(last_id)  # invariant: References ends with In-Reply-To
                 email_msg["References"] = " ".join(chain)
             if entry.get("thread_index_conv_id"):
-                import base64 as _b64
-                email_msg["Thread-Index"] = _b64.b64encode(
-                    bytes.fromhex(entry["thread_index_conv_id"])
-                ).decode()
+                try:
+                    email_msg["Thread-Index"] = base64.b64encode(
+                        bytes.fromhex(entry["thread_index_conv_id"])
+                    ).decode()
+                except Exception as exc:
+                    self.logger.warning(
+                        "Skipping Thread-Index re-emit: corrupt thread_index_conv_id {!r}: {}",
+                        entry["thread_index_conv_id"], exc,
+                    )
             if entry.get("thread_topic"):
                 email_msg["Thread-Topic"] = entry["thread_topic"]
 

@@ -1,4 +1,5 @@
 import imaplib
+import re
 from datetime import date
 from email.message import EmailMessage
 from pathlib import Path
@@ -1329,3 +1330,78 @@ async def test_send_without_thread_uses_latest_for_address(tmp_path, monkeypatch
     ))
     assert sent[0]["In-Reply-To"] == "<m1@x>"
     assert sent[0]["Subject"] == "Re: Question"
+
+
+@pytest.mark.asyncio
+async def test_send_message_id_domain_ignores_display_name(monkeypatch) -> None:
+    """From with a display name must not leak into the Message-ID domain."""
+    channel = EmailChannel(
+        _make_config(from_address="Durin Bot <bot@example.com>"), MessageBus()
+    )
+    sent: list = []
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: sent.append(m))
+
+    await channel.send(OutboundMessage(
+        channel="email", chat_id="alice@example.com", content="hi",
+    ))
+
+    assert re.match(r"^<[^<>@]+@example\.com>$", sent[0]["Message-ID"])
+
+
+@pytest.mark.asyncio
+async def test_send_skips_thread_index_when_store_entry_corrupt(tmp_path, monkeypatch) -> None:
+    """A corrupt thread_index_conv_id must not kill the send; drop the header."""
+    from durin.channels.email_threads import thread_digest
+
+    channel = EmailChannel(_make_config(), MessageBus())
+    channel._store.upsert_inbound(
+        thread_digest("<m1@example.com>"),
+        root="<m1@example.com>",
+        address="alice@example.com",
+        subject="Invoice",
+        references=[],
+        message_id="<m1@example.com>",
+        thread_index_conv_id="zz-not-hex",
+    )
+    sent: list = []
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: sent.append(m))
+
+    await channel.send(OutboundMessage(
+        channel="email", chat_id="alice@example.com", content="Acknowledged.",
+    ))
+
+    assert len(sent) == 1
+    assert "Thread-Index" not in sent[0]
+
+
+@pytest.mark.asyncio
+async def test_send_falls_back_to_references_tail_when_last_message_id_empty(monkeypatch) -> None:
+    """When last_message_id is empty but references exist, In-Reply-To must
+    fall back to the chain's last element instead of dropping stitching."""
+    from durin.channels.email_threads import thread_digest
+
+    channel = EmailChannel(_make_config(), MessageBus())
+    digest = thread_digest("<m1@example.com>")
+    channel._store.upsert_inbound(
+        digest,
+        root="<m1@example.com>",
+        address="alice@example.com",
+        subject="Invoice",
+        references=["<m1@example.com>", "<m2@example.com>"],
+        message_id="",
+    )
+    entry = channel._store.get(digest)
+    entry["last_message_id"] = ""
+
+    sent: list = []
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: sent.append(m))
+    await channel.send(OutboundMessage(
+        channel="email", chat_id="alice@example.com", content="On it.",
+        metadata={"email": {"thread": digest}},
+    ))
+
+    msg = sent[0]
+    assert msg["In-Reply-To"] == "<m2@example.com>"
+    refs = msg["References"].split()
+    assert refs == ["<m1@example.com>", "<m2@example.com>"]
+    assert refs[-1] == msg["In-Reply-To"]
