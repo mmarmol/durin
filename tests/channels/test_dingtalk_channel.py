@@ -162,6 +162,53 @@ async def test_handler_uses_voice_recognition_text_when_text_is_empty(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_handler_dedups_redelivered_stream_message(monkeypatch) -> None:
+    """DingTalk Stream re-delivers a message when the ack is slow; the second
+    delivery of the same msgId must not be published to the bus again."""
+    bus = MessageBus()
+    channel = DingTalkChannel(
+        DingTalkConfig(client_id="app", client_secret="secret", allow_from=["user1"]),
+        bus,
+    )
+    handler = DurinDingTalkHandler(channel)
+
+    class _FakeChatbotMessage:
+        text = SimpleNamespace(content="hello")
+        extensions = {}
+        message_type = "text"
+        message_id = "msg-123"
+        sender_staff_id = "user1"
+        sender_id = "fallback-user"
+        sender_nick = "Alice"
+
+        @staticmethod
+        def from_dict(_data):
+            return _FakeChatbotMessage()
+
+    monkeypatch.setattr(dingtalk_module, "ChatbotMessage", _FakeChatbotMessage)
+    monkeypatch.setattr(dingtalk_module, "AckMessage", SimpleNamespace(STATUS_OK="OK"))
+
+    payload = SimpleNamespace(
+        data={
+            "msgId": "msg-123",
+            "conversationType": "1",
+            "text": {"content": "hello"},
+        }
+    )
+
+    status1, body1 = await handler.process(payload)
+    status2, body2 = await handler.process(payload)
+
+    await asyncio.gather(*list(channel._background_tasks))
+    msg = await bus.consume_inbound()
+
+    assert (status1, body1) == ("OK", "OK")
+    assert (status2, body2) == ("OK", "duplicate")
+    assert msg.content == "hello"
+    assert bus.inbound_size == 0
+
+
+@pytest.mark.asyncio
 async def test_handler_processes_file_message(monkeypatch) -> None:
     """Test that file messages are handled and forwarded with downloaded path."""
     bus = MessageBus()
