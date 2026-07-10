@@ -11,6 +11,7 @@ import { getConfig, listChannels, setConfigValue, startChannel, stopChannel, typ
 import { TelegramGuided } from "@/components/settings/channels/TelegramGuided";
 import { SlackGuided } from "@/components/settings/channels/SlackGuided";
 import { DiscordGuided } from "@/components/settings/channels/DiscordGuided";
+import { WhatsAppGuided } from "@/components/settings/channels/WhatsAppGuided";
 import { PersonaSelect } from "@/components/settings/channels/PersonaSelect";
 
 // Groups that are always visible in the form.
@@ -406,9 +407,14 @@ function ChannelRow({
                     : t("settings.channels.enable")}
                 </Button>
               ) : null}
-              {/* Slack and Discord are excluded: enabling without tokens strands
-                  the channel, so their guided wizards own the save-and-enable step. */}
-              {hasFields && !channel.enabled && channel.name !== "slack" && channel.name !== "discord" ? (
+              {/* Slack, Discord and WhatsApp are excluded: enabling without
+                  credentials/pairing strands the channel, so their guided
+                  wizards own the save-and-enable (or pair-and-enable) step. */}
+              {hasFields &&
+              !channel.enabled &&
+              channel.name !== "slack" &&
+              channel.name !== "discord" &&
+              channel.name !== "whatsapp" ? (
                 <Button
                   size="sm"
                   variant="outline"
@@ -471,8 +477,25 @@ function ChannelRow({
             </DiscordGuided>
           ) : null}
 
+          {/* WhatsApp wraps the generic form the same way Slack/Discord do,
+              but the guided flow pairs via QR scan instead of a token */}
+          {channel.name === "whatsapp" ? (
+            <WhatsAppGuided
+              channel={channel}
+              channelValues={channelValues}
+              token={token}
+              onChanged={onChanged}
+            >
+              {schemaForm}
+            </WhatsAppGuided>
+          ) : null}
+
           {/* Schema-driven grouped field form (websocket / email) */}
-          {hasFields && channel.name !== "telegram" && channel.name !== "slack" && channel.name !== "discord"
+          {hasFields &&
+          channel.name !== "telegram" &&
+          channel.name !== "slack" &&
+          channel.name !== "discord" &&
+          channel.name !== "whatsapp"
             ? schemaForm
             : null}
 

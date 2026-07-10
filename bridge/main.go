@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -38,44 +39,79 @@ func run() int {
 	port := fs.Int("port", 3001, "loopback WS port")
 	authDir := fs.String("auth-dir", "", "session/auth state directory (required)")
 	mediaDir := fs.String("media-dir", "", "inbound media download directory")
+	emitFrames := fs.Bool("emit-frames", false,
+		"qr mode: emit NDJSON qr/status frames on stdout instead of an ASCII QR")
 	fs.Parse(args)
 	if *authDir == "" {
 		fmt.Fprintln(os.Stderr, "--auth-dir is required")
 		return 2
 	}
 
-	cli, err := NewWAClient(*authDir)
+	// In qr --emit-frames mode stdout is an NDJSON channel; silence the
+	// whatsmeow client logger so it can't corrupt the frame stream.
+	cli, err := NewWAClient(*authDir, mode == "qr" && *emitFrames)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
 	}
 
 	if mode == "qr" {
-		return runQR(cli)
+		return runQR(cli, *emitFrames)
 	}
 	return runServe(cli, *port, *mediaDir)
 }
 
-func runQR(cli *whatsmeow.Client) int {
+// emitFrame writes one NDJSON frame to stdout for the gateway to parse.
+func emitFrame(v any) {
+	if b, err := json.Marshal(v); err == nil {
+		fmt.Println(string(b))
+	}
+}
+
+// runQR drives QR-code pairing. With emitFrames, it streams machine-readable
+// qr/status frames on stdout (consumed by the gateway to show the QR in the
+// webui); otherwise it renders a scannable ASCII QR for the terminal (the CLI
+// `durin channels login whatsapp` path).
+func runQR(cli *whatsmeow.Client, emitFrames bool) int {
 	if cli.Store.ID != nil {
-		fmt.Println("Already paired. Use --force via `durin channels login whatsapp --force` (clears auth dir) to re-pair.")
+		if emitFrames {
+			emitFrame(Status{Type: "status", Status: "already_paired"})
+		} else {
+			fmt.Println("Already paired. Use --force via `durin channels login whatsapp --force` (clears auth dir) to re-pair.")
+		}
 		return 0
 	}
 	qrChan, _ := cli.GetQRChannel(context.Background())
 	if err := cli.Connect(); err != nil {
-		fmt.Fprintln(os.Stderr, "connect:", err)
+		if emitFrames {
+			emitFrame(ErrorFrame{Type: "error", Error: err.Error()})
+		} else {
+			fmt.Fprintln(os.Stderr, "connect:", err)
+		}
 		return 1
 	}
 	for evt := range qrChan {
 		switch evt.Event {
 		case "code":
-			fmt.Println("Scan this QR with WhatsApp (Linked devices):")
-			qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+			if emitFrames {
+				emitFrame(QR{Type: "qr", Code: evt.Code})
+			} else {
+				fmt.Println("Scan this QR with WhatsApp (Linked devices):")
+				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+			}
 		case "success":
-			fmt.Println("Paired successfully.")
+			if emitFrames {
+				emitFrame(Status{Type: "status", Status: "connected"})
+			} else {
+				fmt.Println("Paired successfully.")
+			}
 			return 0
 		case "timeout":
-			fmt.Fprintln(os.Stderr, "QR timed out; run login again.")
+			if emitFrames {
+				emitFrame(Status{Type: "status", Status: "timeout"})
+			} else {
+				fmt.Fprintln(os.Stderr, "QR timed out; run login again.")
+			}
 			return 1
 		}
 	}

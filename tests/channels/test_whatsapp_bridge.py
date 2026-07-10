@@ -163,3 +163,110 @@ class TestBridgeSupervisor:
             await asyncio.wait_for(sup.stop(), timeout=5)  # must not hang
         assert len(spawned) == 1
         assert spawned[0].returncode is not None  # child terminated, not orphaned
+
+
+async def _wait_status(sess, want, timeout=3.0):
+    """Poll the pairing snapshot until it reaches `want` — robust to scheduler
+    load, unlike a fixed sleep."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if sess.snapshot()["status"] == want:
+            return sess.snapshot()
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"status never became {want}: {sess.snapshot()}")
+
+
+class TestPairingSession:
+    def _fake_qr_bridge(self, tmp_path: Path, body: str) -> Path:
+        """A fake bridge whose `qr --emit-frames` invocation runs `body`."""
+        p = tmp_path / "fake-qr-bridge"
+        p.write_text(f"#!/bin/sh\n{body}\n")
+        p.chmod(0o755)
+        return p
+
+    @pytest.mark.asyncio
+    async def test_captures_qr_then_connected(self, tmp_path):
+        from durin.channels.whatsapp_bridge import PairingSession
+
+        # Emit a qr frame, then (after a beat) a connected status, then exit 0.
+        binary = self._fake_qr_bridge(
+            tmp_path,
+            'echo \'{"type":"qr","code":"WA123"}\'; sleep 0.4; '
+            'echo \'{"type":"status","status":"connected"}\'',
+        )
+        with patch("durin.channels.whatsapp_bridge.ensure_bridge_binary",
+                   return_value=binary):
+            sess = PairingSession(auth_dir=tmp_path, token="t")
+            await sess.start()
+            snap = await _wait_status(sess, "waiting_scan")
+            assert snap["qr"] == "WA123"
+            final = await _wait_status(sess, "connected")
+            assert final["qr"] is None
+
+    @pytest.mark.asyncio
+    async def test_nonzero_exit_before_terminal_becomes_error(self, tmp_path):
+        from durin.channels.whatsapp_bridge import PairingSession
+
+        binary = self._fake_qr_bridge(
+            tmp_path, 'echo \'{"type":"qr","code":"X"}\'; exit 1')
+        with patch("durin.channels.whatsapp_bridge.ensure_bridge_binary",
+                   return_value=binary):
+            sess = PairingSession(auth_dir=tmp_path, token="t")
+            await sess.start()
+            await _wait_status(sess, "error")
+
+    @pytest.mark.asyncio
+    async def test_crash_stderr_tail_surfaces_in_error(self, tmp_path):
+        from durin.channels.whatsapp_bridge import PairingSession
+
+        # A crash with no error frame must still give the UI something to show.
+        binary = self._fake_qr_bridge(
+            tmp_path, 'echo "boom: bad auth dir" 1>&2; exit 1')
+        with patch("durin.channels.whatsapp_bridge.ensure_bridge_binary",
+                   return_value=binary):
+            sess = PairingSession(auth_dir=tmp_path, token="t")
+            await sess.start()
+            await _wait_status(sess, "error")
+            assert "boom" in (sess.snapshot()["error"] or "")
+
+    @pytest.mark.asyncio
+    async def test_concurrent_start_leaves_one_live_process(self, tmp_path):
+        from durin.channels.whatsapp_bridge import PairingSession
+
+        binary = self._fake_qr_bridge(
+            tmp_path, 'echo \'{"type":"qr","code":"X"}\'; sleep 5')
+        with patch("durin.channels.whatsapp_bridge.ensure_bridge_binary",
+                   return_value=binary):
+            sess = PairingSession(auth_dir=tmp_path, token="t")
+            # Two racing starts (two settings tabs) must serialize under the
+            # lock — no leaked second subprocess.
+            await asyncio.gather(sess.start(), sess.start())
+            await _wait_status(sess, "waiting_scan")
+            await sess.cancel()
+            assert sess._proc is None
+
+    @pytest.mark.asyncio
+    async def test_setup_error_surfaces_as_error_status(self, tmp_path):
+        from durin.channels.whatsapp_bridge import BridgeSetupError, PairingSession
+
+        with patch("durin.channels.whatsapp_bridge.ensure_bridge_binary",
+                   side_effect=BridgeSetupError("no binary")):
+            sess = PairingSession(auth_dir=tmp_path, token="t")
+            snap = await sess.start()
+            assert snap["status"] == "error"
+            assert "no binary" in snap["error"]
+
+    @pytest.mark.asyncio
+    async def test_force_deletes_existing_session_db(self, tmp_path):
+        from durin.channels.whatsapp_bridge import PairingSession
+
+        db = tmp_path / "whatsmeow.db"
+        db.write_text("stale")
+        binary = self._fake_qr_bridge(
+            tmp_path, 'echo \'{"type":"status","status":"connected"}\'')
+        with patch("durin.channels.whatsapp_bridge.ensure_bridge_binary",
+                   return_value=binary):
+            sess = PairingSession(auth_dir=tmp_path, token="t")
+            await sess.start(force=True)
+            await asyncio.sleep(0.2)
+        assert not db.exists()
