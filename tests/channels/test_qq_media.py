@@ -310,6 +310,99 @@ async def test_post_base64file_includes_file_name_for_files() -> None:
     assert payload["file_type"] == QQ_FILE_TYPE_FILE
 
 
+class _FakeToken:
+    """Fake botpy Token: matches the get_string()/check_token() contract."""
+
+    def __init__(self, access_token: str = "tok123") -> None:
+        self.access_token = access_token
+        self.check_calls = 0
+
+    async def check_token(self) -> None:
+        self.check_calls += 1
+
+    def get_string(self) -> str:
+        return f"QQBot {self.access_token}"
+
+
+class _FakeDownloadResp:
+    def __init__(self, status: int = 200, chunks: tuple[bytes, ...] = (b"data",)) -> None:
+        self.status = status
+        self.headers: dict[str, str] = {"Content-Type": "image/png"}
+        self._chunks = chunks
+        self.content = self
+
+    def iter_chunked(self, size: int):
+        async def _gen():
+            for c in self._chunks:
+                yield c
+
+        return _gen()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info) -> bool:
+        return False
+
+
+class _FakeDownloadSession:
+    """Fake aiohttp session capturing .get() calls for header assertions."""
+
+    def __init__(self, resp: _FakeDownloadResp) -> None:
+        self._resp = resp
+        self.calls: list[tuple[str, dict]] = []
+
+    def get(self, url: str, **kwargs):
+        self.calls.append((url, kwargs))
+        return self._resp
+
+
+# ── inbound download: QQ CDN Authorization header (host-gated) ──────
+
+
+@pytest.mark.asyncio
+async def test_download_attaches_qq_authorization_header_for_qq_cdn_host(tmp_path) -> None:
+    """QQ's media CDN requires `Authorization: QQBot <token>` or downloads 4xx."""
+    channel = QQChannel(QQConfig(app_id="app", secret="secret", allow_from=["*"]), MessageBus())
+    channel._media_root = tmp_path
+    channel._client = _FakeClient()
+    channel._client.api._http._token = _FakeToken("tok123")
+
+    fake_resp = _FakeDownloadResp()
+    fake_session = _FakeDownloadSession(fake_resp)
+    channel._http = fake_session
+
+    result = await channel._download_to_media_dir_chunked(
+        "https://multimedia.nt.qq.com.cn/download/abc", filename_hint="pic.png"
+    )
+
+    assert result is not None
+    assert len(fake_session.calls) == 1
+    _, kwargs = fake_session.calls[0]
+    assert kwargs.get("headers") == {"Authorization": "QQBot tok123"}
+
+
+@pytest.mark.asyncio
+async def test_download_omits_authorization_header_for_non_qq_host(tmp_path) -> None:
+    """The bot token must never be sent to an arbitrary (non-QQ-CDN) host."""
+    channel = QQChannel(QQConfig(app_id="app", secret="secret", allow_from=["*"]), MessageBus())
+    channel._media_root = tmp_path
+    channel._client = _FakeClient()
+    channel._client.api._http._token = _FakeToken("tok123")
+
+    fake_resp = _FakeDownloadResp()
+    fake_session = _FakeDownloadSession(fake_resp)
+    channel._http = fake_session
+
+    result = await channel._download_to_media_dir_chunked(
+        "https://evil.example.com/steal", filename_hint="pic.png"
+    )
+
+    assert result is not None
+    _, kwargs = fake_session.calls[0]
+    assert not kwargs.get("headers")
+
+
 @pytest.mark.asyncio
 async def test_post_base64file_filters_response_to_file_info() -> None:
     """Response with file_info + extra fields must be filtered to only file_info."""

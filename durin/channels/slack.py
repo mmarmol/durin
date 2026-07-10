@@ -1,5 +1,7 @@
 """Slack channel implementation using Socket Mode."""
 
+from __future__ import annotations
+
 import asyncio
 import re
 import time
@@ -9,16 +11,22 @@ from typing import Any, Literal
 
 import httpx
 from pydantic import Field
-from slack_sdk.errors import SlackApiError
-from slack_sdk.http_retry.builtin_async_handlers import (
-    AsyncConnectionErrorRetryHandler,
-    AsyncRateLimitErrorRetryHandler,
-)
-from slack_sdk.socket_mode.request import SocketModeRequest
-from slack_sdk.socket_mode.response import SocketModeResponse
-from slack_sdk.socket_mode.websockets import SocketModeClient
-from slack_sdk.web.async_client import AsyncWebClient
-from slackify_markdown import slackify_markdown
+
+try:
+    from slack_sdk.errors import SlackApiError
+    from slack_sdk.http_retry.builtin_async_handlers import (
+        AsyncConnectionErrorRetryHandler,
+        AsyncRateLimitErrorRetryHandler,
+    )
+    from slack_sdk.socket_mode.request import SocketModeRequest
+    from slack_sdk.socket_mode.response import SocketModeResponse
+    from slack_sdk.socket_mode.websockets import SocketModeClient
+    from slack_sdk.web.async_client import AsyncWebClient
+    from slackify_markdown import slackify_markdown
+
+    SLACK_AVAILABLE = True
+except ImportError:  # optional extra `durin-ai[slack]` not installed
+    SLACK_AVAILABLE = False
 
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
@@ -142,6 +150,12 @@ class SlackChannel(BaseChannel):
 
     async def start(self) -> None:
         """Start the Slack Socket Mode client and keep it connected."""
+        if not SLACK_AVAILABLE:
+            self.logger.error(
+                "Slack dependencies not installed. Run: pip install 'durin-ai[slack]' "
+                "(or enable channels.slack and let auto_install_extras handle it)."
+            )
+            return
         if not self.config.bot_token or not self.config.app_token:
             self.logger.error("bot/app token not configured")
             return
