@@ -392,8 +392,13 @@ Channel-specific extensions:
 
 - **Telegram**: no additional permission fields beyond `allow_from`.
 - **Discord**: `allow_channels` — list of Discord channel IDs allowed to
-  trigger the bot (empty means all). Sender authorization uses the standard
-  `allow_from` + pairing flow via the central ingress gate.
+  trigger the bot (empty means all; a thread also matches its parent channel,
+  so allowing a forum covers its posts). `group_policy` (`mention`/`open`),
+  the read-receipt and working emojis with their delay, and `proxy*`. Sender
+  authorization uses the standard `allow_from` + pairing flow via the central
+  ingress gate. `intents` is a raw gateway bitfield and is deliberately absent
+  from the dashboard form: a mistyped digit yields a bot that connects and
+  silently ignores messages.
 - **Slack**: `dm_enabled` (routing toggle for DMs), `group_policy`
   (`open`/`mention`/`allowlist`), `group_allow_from` (channel IDs for the
   allowlist policy), `open_channels` (rooms that reply to every message under
@@ -436,6 +441,32 @@ will be discovered at startup and can be enabled with
 - **Webui** — the WebSocket channel hosts the embedded single-page app at the
   configured `host:port/path`. Authentication is handled via `token` or
   `token_issue_secret` (reverse-proxy path).
+
+### Dashboard channel services
+
+A channel renders a typed, grouped settings form when its class overrides
+`config_model()`; a field reaches that form only if it carries a `group` in
+`json_schema_extra` or is marked `secret`. Channels that expose no fields fall
+back to a single credential box.
+
+Telegram, Slack and Discord additionally have a service module
+(`durin/service/channels_<name>.py`) backing a guided panel. Each registers in
+**both** `durin/service/catalog.py` and `durin/service/wiring.py` — a service
+present in only one is served to tooling and silently 405s on the live gateway,
+and a test freezes that invariant. All three expose a token `test` plus the
+pairing quartet (list / approve / deny / revoke) over the channel-agnostic
+pairing store. Slack adds workspace-channel listing and joining; Discord adds
+guild-and-channel listing and a least-privilege OAuth invite URL. The Discord
+service is REST-only against the configured token, so its panel keeps working
+while the channel is stopped, and its `test` reports whether the bot may read
+message content as `enabled | limited | disabled | unknown` — `limited` is the
+normal state of an unverified app, which works until it passes 100 guilds.
+
+Adding or changing a route means regenerating the contract
+(`PYTHONPATH=<worktree> python scripts/gen_openapi.py`, then
+`cd webui && bun run gen:api-types`); running the generator without
+`PYTHONPATH` from a worktree imports the installed package and silently emits a
+stale contract.
 
 ### Viewing non-websocket sessions in the webui
 
