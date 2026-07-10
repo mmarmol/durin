@@ -28,8 +28,6 @@ import {
 // Reactions — never Administrator). Used only before the token is saved,
 // when GET /discord/invite has nothing configured to read yet; once the
 // token is persisted the connected panel calls that endpoint instead.
-const DISCORD_INVITE_PERMISSIONS = "274878024768";
-const DISCORD_INVITE_SCOPES = "bot+applications.commands";
 
 const AUTO_VALIDATE_DEBOUNCE_MS = 700;
 
@@ -698,7 +696,13 @@ function ConnectedPanel({
 type TokenCheck =
   | { state: "idle" }
   | { state: "checking" }
-  | { state: "ok"; bot_user: string | null; application_id: string | null; intent: string }
+  | {
+      state: "ok";
+      bot_user: string | null;
+      application_id: string | null;
+      intent: string;
+      invite_url: string | null;
+    }
   | { state: "error"; code: string };
 
 function GuidedSetup({
@@ -738,6 +742,7 @@ function GuidedSetup({
             state: "ok",
             bot_user: res.bot_user,
             application_id: res.application_id,
+            invite_url: res.invite_url,
             intent: res.message_content_intent ?? "unknown",
           });
         } else {
@@ -763,10 +768,9 @@ function GuidedSetup({
 
   const tokenOk = tokenCheck.state === "ok" && tokenCheck.intent !== "disabled";
 
-  const inviteUrl =
-    tokenCheck.state === "ok" && tokenCheck.application_id
-      ? `https://discord.com/oauth2/authorize?client_id=${tokenCheck.application_id}&scope=${DISCORD_INVITE_SCOPES}&permissions=${DISCORD_INVITE_PERMISSIONS}`
-      : null;
+  // The backend builds this: it owns the permission bitfield, and a second
+  // copy here would be free to drift away from what the bot actually needs.
+  const inviteUrl = tokenCheck.state === "ok" ? tokenCheck.invite_url : null;
 
   const copyInvite = async () => {
     if (!inviteUrl) return;

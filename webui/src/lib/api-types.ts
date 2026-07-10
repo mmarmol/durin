@@ -2771,6 +2771,11 @@ export interface components {
              */
             error: string | null;
             /**
+             * Invite Url
+             * @default null
+             */
+            invite_url: string | null;
+            /**
              * Message Content Intent
              * @default null
              */

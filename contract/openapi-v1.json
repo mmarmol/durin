@@ -1258,6 +1258,18 @@
             "default": null,
             "title": "Error"
           },
+          "invite_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invite Url"
+          },
           "message_content_intent": {
             "anyOf": [
               {

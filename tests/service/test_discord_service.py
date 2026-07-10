@@ -350,3 +350,18 @@ def test_gateway_registry_registers_discord_like_the_catalog():
     assert "discord" in wnames
     for suffix in ("/discord/test", "/discord/pairing", "/discord/guilds", "/discord/invite"):
         assert any(b.spec.path.endswith(suffix) for b in wiring.routes), suffix
+
+
+@pytest.mark.asyncio
+async def test_test_returns_the_invite_url_so_the_ui_never_duplicates_permissions(monkeypatch):
+    """The permission bitfield is a security constant. If the frontend rebuilt
+    the invite URL it would hold a second copy, free to drift."""
+    monkeypatch.setattr(
+        "durin.service.channels_discord._rest_client", lambda: _FakeClient()
+    )
+    svc = DiscordService()
+    res = await svc.test(DiscordTestCommand(token=TOKEN), Principal.local())
+    assert res.invite_url is not None
+    assert "permissions=274878024768" in res.invite_url
+    assert "client_id=1524863570091966544" in res.invite_url
+    assert "permissions=8" not in res.invite_url

@@ -2573,6 +2573,8 @@ export interface DiscordTestResult {
   bot_user: string | null;
   application_id: string | null;
   message_content_intent: string | null;
+  /** Built by the backend, which owns the permission bitfield. */
+  invite_url: string | null;
   error: string | null;
 }
 export interface DiscordPairing { pending: PendingPairing[]; approved: string[]; names?: Record<string, string>; }

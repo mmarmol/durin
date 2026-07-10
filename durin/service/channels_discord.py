@@ -62,6 +62,10 @@ class DiscordTestResult(Result):
     # enabled | limited | disabled | unknown.  "limited" is the normal state of
     # an unverified app: it works today and Discord revokes it past 100 guilds.
     message_content_intent: str | None = None
+    # Built here, before the token is saved, so the setup wizard never has to
+    # rebuild it — a second copy of the permission bitfield would be free to
+    # drift away from the one this module owns.
+    invite_url: str | None = None
     error: str | None = None
 
 
@@ -145,11 +149,13 @@ class DiscordService:
         try:
             await _login(client, token)
             app = await client.application_info()
+            app_id = str(app.id) if app and app.id else _application_id_from_token(token)
             return DiscordTestResult(
                 ok=True,
                 bot_user=str(client.user) if client.user else None,
-                application_id=str(app.id) if app and app.id else _application_id_from_token(token),
+                application_id=app_id,
                 message_content_intent=_intent_state(getattr(app, "flags", None)),
+                invite_url=_invite_url(app_id) if app_id else None,
             )
         except Exception as e:  # noqa: BLE001 — the message may contain the token
             return DiscordTestResult(ok=False, error=_error_code(e))
@@ -277,12 +283,12 @@ class DiscordService:
         app_id = _application_id_from_token(token)
         if not app_id:
             return DiscordInviteResult(ok=False, error="unknown")
-        permissions = str(INVITE_PERMISSIONS)
-        url = (
-            "https://discord.com/oauth2/authorize"
-            f"?client_id={app_id}&scope={INVITE_SCOPES}&permissions={permissions}"
+        return DiscordInviteResult(
+            ok=True,
+            url=_invite_url(app_id),
+            permissions=str(INVITE_PERMISSIONS),
+            scopes=INVITE_SCOPES,
         )
-        return DiscordInviteResult(ok=True, url=url, permissions=permissions, scopes=INVITE_SCOPES)
 
 
 # --------------------------------------------------------------------- helpers
@@ -306,6 +312,14 @@ async def _close(client: Any) -> None:
         await client.close()
     except Exception:  # noqa: BLE001 — teardown must never mask the real error
         pass
+
+
+def _invite_url(application_id: str) -> str:
+    """The one place the invite URL is built.  Never requests Administrator."""
+    return (
+        "https://discord.com/oauth2/authorize"
+        f"?client_id={application_id}&scope={INVITE_SCOPES}&permissions={INVITE_PERMISSIONS}"
+    )
 
 
 def _intent_state(flags: Any) -> str:
