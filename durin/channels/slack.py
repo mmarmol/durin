@@ -23,6 +23,7 @@ from slackify_markdown import slackify_markdown
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
+from durin.channels.dedup import MessageDeduplicator
 from durin.config.paths import get_media_dir
 from durin.config.schema import Base
 from durin.utils.helpers import safe_filename, split_message
@@ -135,7 +136,7 @@ class SlackChannel(BaseChannel):
         self._bot_user_id: str | None = None
         self._target_cache: dict[str, str] = {}
         self._thread_context_attempted: set[str] = set()
-        self._seen_events: dict[str, float] = {}  # event_id -> monotonic deadline
+        self._dedup = MessageDeduplicator(max_size=SLACK_EVENT_DEDUP_MAX, ttl_seconds=SLACK_EVENT_DEDUP_TTL_S)
         self._stream_bufs: dict[str, _StreamBuf] = {}  # chat_id -> streaming state
         self._followed_threads: set[str] = set()  # "chat_id:thread_ts" the bot follows
 
@@ -543,7 +544,7 @@ class SlackChannel(BaseChannel):
         dedup_key = str(payload.get("event_id") or "") or (
             f"{event_type}:{event.get('channel')}:{event.get('ts')}"
         )
-        if self._is_duplicate_event(dedup_key):
+        if self._dedup.is_duplicate(dedup_key):
             self.logger.debug("Dropping redelivered event {}", dedup_key)
             return
 
@@ -867,21 +868,6 @@ class SlackChannel(BaseChannel):
                 )
             except Exception as e:
                 self.logger.debug("done reaction failed: {}", e)
-
-    def _is_duplicate_event(self, dedup_key: str) -> bool:
-        """Record *dedup_key* and report whether it was seen within the TTL."""
-        now = time.monotonic()
-        deadline = self._seen_events.get(dedup_key)
-        if deadline is not None and deadline > now:
-            return True
-        if len(self._seen_events) >= SLACK_EVENT_DEDUP_MAX:
-            self._seen_events = {
-                key: exp for key, exp in self._seen_events.items() if exp > now
-            }
-            if len(self._seen_events) >= SLACK_EVENT_DEDUP_MAX:
-                self._seen_events.clear()
-        self._seen_events[dedup_key] = now + SLACK_EVENT_DEDUP_TTL_S
-        return False
 
     def _should_respond_in_channel(
         self, event_type: str, text: str, chat_id: str, thread_root: str | None = None
