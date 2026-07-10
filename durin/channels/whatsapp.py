@@ -100,6 +100,10 @@ class WhatsAppChannel(BaseChannel):
         self._connected = False
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()
         self._lid_to_phone: dict[str, str] = {}
+        # Inbound message_id -> the participant JID to quote when replying:
+        # the group's real participant JID for group messages, the sender
+        # JID for DMs. ContextInfo.Participant must never be the group JID.
+        self._reply_participants: OrderedDict[str, str] = OrderedDict()
         self._bridge_token: str | None = None
         self._pending_acks: dict[str, asyncio.Future] = {}
         self._supervisor = None
@@ -223,6 +227,9 @@ class WhatsAppChannel(BaseChannel):
                 payload: dict = {"type": "send", "to": chat_id, "text": chunk}
                 if i == 0 and msg.reply_to:
                     payload["reply_to"] = msg.reply_to
+                    participant = self._reply_participants.get(msg.reply_to)
+                    if participant:
+                        payload["reply_to_participant"] = participant
                 await self._send_frame_with_ack(payload)
 
         for media_path in msg.media or []:
@@ -298,19 +305,21 @@ class WhatsAppChannel(BaseChannel):
                 if not was_mentioned:
                     return
 
-            # Classify by JID suffix: @s.whatsapp.net = phone, @lid.whatsapp.net = LID
-            # The bridge's pn/sender fields don't consistently map to phone/LID across versions.
+            # Classify by JID server: s.whatsapp.net = phone, lid or
+            # lid.whatsapp.net = LID (whatsmeow emits the bare "@lid" form;
+            # older bridges may still send "@lid.whatsapp.net").
             raw_a = pn or ""
             raw_b = sender or ""
-            id_a = raw_a.split("@")[0] if "@" in raw_a else raw_a
-            id_b = raw_b.split("@")[0] if "@" in raw_b else raw_b
+            id_a = raw_a.rsplit("@", 1)[0] if "@" in raw_a else raw_a
+            id_b = raw_b.rsplit("@", 1)[0] if "@" in raw_b else raw_b
 
             phone_id = ""
             lid_id = ""
             for raw, extracted in [(raw_a, id_a), (raw_b, id_b)]:
-                if "@s.whatsapp.net" in raw:
+                server = raw.rsplit("@", 1)[1] if "@" in raw else ""
+                if server == "s.whatsapp.net":
                     phone_id = extracted
-                elif "@lid.whatsapp.net" in raw:
+                elif server in ("lid", "lid.whatsapp.net"):
                     lid_id = extracted
                 elif extracted and not phone_id:
                     phone_id = extracted  # best guess for bare values
@@ -323,6 +332,15 @@ class WhatsAppChannel(BaseChannel):
                 self._processed_message_ids[message_id] = None
                 while len(self._processed_message_ids) > 1000:
                     self._processed_message_ids.popitem(last=False)
+
+                # Cache the participant JID to quote when replying to this
+                # message: the real participant for groups (carried in pn),
+                # the sender itself for DMs.
+                participant_jid = raw_a if is_group else raw_b
+                if participant_jid:
+                    self._reply_participants[message_id] = participant_jid
+                    while len(self._reply_participants) > 1000:
+                        self._reply_participants.popitem(last=False)
 
             if phone_id and lid_id:
                 self._lid_to_phone[lid_id] = phone_id

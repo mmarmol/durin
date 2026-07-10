@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"go.mau.fi/whatsmeow/types"
 )
 
 func TestSanitizeMediaNameStripsPathTraversal(t *testing.T) {
@@ -46,5 +48,76 @@ func TestSanitizeMediaNameAllDisallowedCharsGetsRandomName(t *testing.T) {
 	got := sanitizeMediaName("///", ".png")
 	if got != "___.png" {
 		t.Fatalf("expected slashes substituted with underscores, got %q", got)
+	}
+}
+
+func TestMentionMatchesOwnUserMatchesPhone(t *testing.T) {
+	if !mentionMatchesOwnUser("123", "123", "456") {
+		t.Fatal("expected phone-user match")
+	}
+}
+
+func TestMentionMatchesOwnUserMatchesLID(t *testing.T) {
+	if !mentionMatchesOwnUser("456", "123", "456") {
+		t.Fatal("expected LID-user match")
+	}
+}
+
+func TestMentionMatchesOwnUserNoMatch(t *testing.T) {
+	if mentionMatchesOwnUser("999", "123", "456") {
+		t.Fatal("expected no match for unrelated user")
+	}
+}
+
+func TestMentionMatchesOwnUserEmptyLIDGuarded(t *testing.T) {
+	// An empty own-LID must never match an empty mentioned user.
+	if mentionMatchesOwnUser("", "123", "") {
+		t.Fatal("empty mentioned user must never match")
+	}
+}
+
+func TestBuildTextMessagePlainWhenNoParticipant(t *testing.T) {
+	msg := buildTextMessage("hello", "STANZA1", "")
+	if msg.GetConversation() != "hello" {
+		t.Fatalf("expected plain conversation message, got %+v", msg)
+	}
+	if msg.GetExtendedTextMessage() != nil {
+		t.Fatalf("must not emit a quote without a known participant: %+v", msg)
+	}
+}
+
+func TestBuildTextMessageQuotedWithParticipant(t *testing.T) {
+	msg := buildTextMessage("hello", "STANZA1", "555@s.whatsapp.net")
+	ext := msg.GetExtendedTextMessage()
+	if ext == nil {
+		t.Fatalf("expected an extended text message with a quote, got %+v", msg)
+	}
+	ci := ext.GetContextInfo()
+	if ci.GetStanzaID() != "STANZA1" || ci.GetParticipant() != "555@s.whatsapp.net" {
+		t.Fatalf("unexpected context info: %+v", ci)
+	}
+}
+
+func TestResolveReplyParticipantDMDefaultsToDestination(t *testing.T) {
+	jid := types.JID{User: "555", Server: types.DefaultUserServer}
+	got := resolveReplyParticipant("", jid)
+	if got != jid.String() {
+		t.Fatalf("expected DM participant to default to the destination JID, got %q", got)
+	}
+}
+
+func TestResolveReplyParticipantGroupWithKnownParticipant(t *testing.T) {
+	jid := types.JID{User: "12345", Server: types.GroupServer}
+	got := resolveReplyParticipant("555@s.whatsapp.net", jid)
+	if got != "555@s.whatsapp.net" {
+		t.Fatalf("expected the known participant to be used verbatim, got %q", got)
+	}
+}
+
+func TestResolveReplyParticipantGroupWithoutKnownParticipantStaysEmpty(t *testing.T) {
+	jid := types.JID{User: "12345", Server: types.GroupServer}
+	got := resolveReplyParticipant("", jid)
+	if got != "" {
+		t.Fatalf("group JID must never be used as the fallback participant, got %q", got)
 	}
 }

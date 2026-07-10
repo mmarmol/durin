@@ -230,6 +230,61 @@ async def test_sender_id_prefers_phone_jid_over_lid():
 
 
 @pytest.mark.asyncio
+async def test_sender_id_prefers_phone_jid_over_bare_lid():
+    """whatsmeow emits the bare '@lid' server form (not '@lid.whatsapp.net');
+    it must still be classified as LID, not swallowed by the phone branch."""
+    ch = WhatsAppChannel({"enabled": True, "allowFrom": ["*"]}, MagicMock())
+    ch._handle_message = AsyncMock()
+
+    await ch._handle_bridge_message(
+        json.dumps({
+            "type": "message",
+            "id": "bare-lid-1",
+            "sender": "456@lid",
+            "pn": "123@s.whatsapp.net",
+            "content": "hi",
+            "timestamp": 1,
+        })
+    )
+
+    kwargs = ch._handle_message.await_args.kwargs
+    assert kwargs["sender_id"] == "123"
+    assert ch._lid_to_phone.get("456") == "123"
+
+
+@pytest.mark.asyncio
+async def test_bare_lid_cache_resolves_lid_only_messages():
+    """A follow-up frame carrying only the bare '@lid' sender resolves via
+    the cache populated by an earlier frame that also carried the phone."""
+    ch = WhatsAppChannel({"enabled": True, "allowFrom": ["*"]}, MagicMock())
+    ch._handle_message = AsyncMock()
+
+    await ch._handle_bridge_message(
+        json.dumps({
+            "type": "message",
+            "id": "bare-lid-2",
+            "sender": "456@lid",
+            "pn": "123@s.whatsapp.net",
+            "content": "first",
+            "timestamp": 1,
+        })
+    )
+    await ch._handle_bridge_message(
+        json.dumps({
+            "type": "message",
+            "id": "bare-lid-3",
+            "sender": "456@lid",
+            "pn": "",
+            "content": "second",
+            "timestamp": 2,
+        })
+    )
+
+    second_kwargs = ch._handle_message.await_args_list[1].kwargs
+    assert second_kwargs["sender_id"] == "123"
+
+
+@pytest.mark.asyncio
 async def test_lid_to_phone_cache_resolves_lid_only_messages():
     """When only LID is present, a cached LID→phone mapping should be used."""
     ch = WhatsAppChannel({"enabled": True, "allowFrom": ["*"]}, MagicMock())
@@ -734,3 +789,39 @@ class TestBackoff:
         assert seen[0] == 2.0
         assert seen[-1] == 30.0  # capped
         assert all(b > a or b == 30.0 for a, b in zip(seen, seen[1:]))
+
+
+class TestReplyParticipantCache:
+    @pytest.mark.asyncio
+    async def test_group_reply_includes_known_participant(self, whatsapp_channel):
+        _ack_all(whatsapp_channel)
+        await whatsapp_channel._handle_bridge_message(
+            json.dumps({
+                "type": "message",
+                "id": "Q1",
+                "sender": "12345@g.us",
+                "pn": "555@s.whatsapp.net",
+                "content": "hi",
+                "isGroup": True,
+                "timestamp": 1,
+            })
+        )
+
+        msg = OutboundMessage(channel="whatsapp", chat_id="12345@g.us", content="reply", reply_to="Q1")
+        await whatsapp_channel.send(msg)
+
+        # index 0 is the "composing" typing frame fired while handling the
+        # inbound message above; the reply is the "send" frame after it.
+        sends = [json.loads(c.args[0]) for c in whatsapp_channel._ws.send.call_args_list
+                 if json.loads(c.args[0])["type"] == "send"]
+        assert sends[0]["reply_to"] == "Q1"
+        assert sends[0]["reply_to_participant"] == "555@s.whatsapp.net"
+
+    @pytest.mark.asyncio
+    async def test_reply_without_known_participant_omits_field(self, whatsapp_channel):
+        _ack_all(whatsapp_channel)
+        msg = OutboundMessage(channel="whatsapp", chat_id="12345@g.us", content="reply", reply_to="UNKNOWN")
+        await whatsapp_channel.send(msg)
+
+        sent = json.loads(whatsapp_channel._ws.send.call_args_list[0].args[0])
+        assert "reply_to_participant" not in sent

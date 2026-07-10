@@ -83,6 +83,36 @@ func parseJID(raw string) (types.JID, error) {
 	return types.ParseJID(raw)
 }
 
+// resolveReplyParticipant picks the ContextInfo.Participant for a reply. In
+// DMs the destination JID is itself the participant. In groups the
+// destination JID is the group, never a participant, so there is no safe
+// default: the caller-supplied participant (learned from the inbound
+// message being replied to) is used as-is, which may be empty — callers
+// must treat an empty result as "no quote".
+func resolveReplyParticipant(known string, jid types.JID) string {
+	if known != "" || jid.Server == types.GroupServer {
+		return known
+	}
+	return jid.String()
+}
+
+// buildTextMessage constructs the outbound message. A quote is only
+// attached when both a stanza ID and a participant are known; otherwise a
+// plain text message is sent rather than a quote with a wrong Participant.
+func buildTextMessage(text, replyTo, participant string) *waE2E.Message {
+	if replyTo != "" && participant != "" {
+		return &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{
+			Text: proto.String(text),
+			ContextInfo: &waE2E.ContextInfo{
+				StanzaID:      proto.String(replyTo),
+				Participant:   proto.String(participant),
+				QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
+			},
+		}}
+	}
+	return &waE2E.Message{Conversation: proto.String(text)}
+}
+
 func (b *Bridge) sendText(cmd Command) error {
 	jid, err := parseJID(cmd.To)
 	if err != nil {
@@ -90,19 +120,8 @@ func (b *Bridge) sendText(cmd Command) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	var msg *waE2E.Message
-	if cmd.ReplyTo != "" {
-		msg = &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{
-			Text: proto.String(cmd.Text),
-			ContextInfo: &waE2E.ContextInfo{
-				StanzaID:      proto.String(cmd.ReplyTo),
-				Participant:   proto.String(jid.String()),
-				QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
-			},
-		}}
-	} else {
-		msg = &waE2E.Message{Conversation: proto.String(cmd.Text)}
-	}
+	participant := resolveReplyParticipant(cmd.ReplyToParticipant, jid)
+	msg := buildTextMessage(cmd.Text, cmd.ReplyTo, participant)
 	_, err = b.cli.SendMessage(ctx, jid, msg)
 	return err
 }
@@ -229,6 +248,18 @@ func sanitizeMediaName(id, ext string) string {
 	return name + ext
 }
 
+// mentionMatchesOwnUser reports whether a mentioned JID's user part refers
+// to this device, under either its phone identity or its LID identity. An
+// empty own identity (device not yet known, or no LID assigned) never
+// matches, and an empty mentioned user never matches.
+func mentionMatchesOwnUser(mentionedUser, ownPhoneUser, ownLIDUser string) bool {
+	if mentionedUser == "" {
+		return false
+	}
+	return (ownPhoneUser != "" && mentionedUser == ownPhoneUser) ||
+		(ownLIDUser != "" && mentionedUser == ownLIDUser)
+}
+
 func (b *Bridge) onMessage(v *events.Message) {
 	if v.Info.IsFromMe {
 		return
@@ -258,12 +289,20 @@ func (b *Bridge) onMessage(v *events.Message) {
 	}
 
 	// Mentions: own user present in the context-info mention list. Compare
-	// parsed JID users so device-suffixed mention JIDs still match.
+	// parsed JID users so device-suffixed mention JIDs still match. LID
+	// groups carry LID JIDs in MentionedJID, not phone JIDs, so both of
+	// this device's identities are checked.
 	wasMentioned := false
-	own := b.cli.Store.ID
-	if ctxInfo != nil && own != nil {
+	if ctxInfo != nil {
+		var ownUser, ownLIDUser string
+		if b.cli.Store.ID != nil {
+			ownUser = b.cli.Store.ID.User
+		}
+		if !b.cli.Store.LID.IsEmpty() {
+			ownLIDUser = b.cli.Store.LID.User
+		}
 		for _, m := range ctxInfo.GetMentionedJID() {
-			if j, err := types.ParseJID(m); err == nil && j.User == own.User {
+			if j, err := types.ParseJID(m); err == nil && mentionMatchesOwnUser(j.User, ownUser, ownLIDUser) {
 				wasMentioned = true
 			}
 		}

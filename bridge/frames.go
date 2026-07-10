@@ -9,16 +9,17 @@ import (
 // decoding trivial; Type discriminates. Field names must match the legacy
 // Node-bridge protocol (camelCase media fields).
 type Command struct {
-	Type     string `json:"type"`
-	Token    string `json:"token,omitempty"`
-	ID       string `json:"id,omitempty"`
-	To       string `json:"to,omitempty"`
-	Text     string `json:"text,omitempty"`
-	ReplyTo  string `json:"reply_to,omitempty"`
-	FilePath string `json:"filePath,omitempty"`
-	Mimetype string `json:"mimetype,omitempty"`
-	FileName string `json:"fileName,omitempty"`
-	State    string `json:"state,omitempty"`
+	Type               string `json:"type"`
+	Token              string `json:"token,omitempty"`
+	ID                 string `json:"id,omitempty"`
+	To                 string `json:"to,omitempty"`
+	Text               string `json:"text,omitempty"`
+	ReplyTo            string `json:"reply_to,omitempty"`
+	ReplyToParticipant string `json:"reply_to_participant,omitempty"`
+	FilePath           string `json:"filePath,omitempty"`
+	Mimetype           string `json:"mimetype,omitempty"`
+	FileName           string `json:"fileName,omitempty"`
+	State              string `json:"state,omitempty"`
 }
 
 func DecodeCommand(raw []byte) (Command, error) {

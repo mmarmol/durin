@@ -356,7 +356,7 @@ two families are:
 | Python → bridge (`Command`) | Purpose | Key fields |
 |---|---|---|
 | `auth` | authenticate the socket (must be first frame) | `token` |
-| `send` | send a text message | `to`, `text`, `id`, `reply_to` (quoted reply) |
+| `send` | send a text message | `to`, `text`, `id`, `reply_to` (quoted reply), `reply_to_participant` (quoted message's participant JID; required for a valid group quote, see below) |
 | `send_media` | send an image/video/audio/document | `to`, `filePath`, `mimetype`, `fileName`, `id` |
 | `typing` | presence hint; fire-and-forget, no ack | `to`, `state` (`composing`/`paused`) |
 
@@ -374,6 +374,22 @@ way it does for every other channel's `send`. On the bridge side, inbound
 whatsmeow events are handed off to a buffered outbound queue consumed by a
 dedicated goroutine that writes to the WS connection, so a slow or stalled
 Python client can never block whatsmeow's own event dispatch.
+
+**Quoted replies and LID identities.** A WhatsApp quote's `ContextInfo.Participant`
+must be the replied-to message's sender JID, never the chat JID — for a group
+that's a participant JID, not the group JID. `WhatsAppChannel` tracks this by
+caching each inbound `message_id → participant JID` (bounded, same
+capacity/eviction as the dedup cache) and sending it back as
+`reply_to_participant` when replying. If the mapping is unknown for a group
+reply, the bridge sends a plain (unquoted) message rather than emit a quote
+with a wrong `Participant`; DM replies always know their participant (the
+peer JID) and are unaffected. Separately, `wasMentioned` detection compares
+the message's `MentionedJID` list against *both* of the device's identities —
+its phone JID and its LID (`store.Device.LID`) — because groups on WhatsApp's
+LID rollout carry LID JIDs in `MentionedJID`, not phone JIDs. The Python side's
+own phone/LID classification (`_handle_bridge_message`) parses the JID's
+server suffix (`s.whatsapp.net` = phone, `lid` or `lid.whatsapp.net` = LID)
+rather than substring-matching, since whatsmeow emits the bare `@lid` form.
 
 **Supervision and the exit-code contract.** `WhatsAppChannel.start()` resolves
 the bridge binary and hands it to `BridgeSupervisor`
