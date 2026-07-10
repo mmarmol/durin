@@ -380,17 +380,38 @@
         "forumBadge": "foro",
         "loadingChannels": "Cargando servidores…"
       },
+      "whatsapp": {
+        "modeGuided": "Guiado",
+        "modeManual": "Manual",
+        "banRiskWarning": "La vinculación de WhatsApp usa un protocolo no oficial, no la API de WhatsApp Business. Meta puede banear el número por uso automatizado — vincula un número dedicado, nunca tu número principal.",
+        "connect": "Conectar WhatsApp",
+        "starting": "Iniciando la sesión de vinculación…",
+        "scanInstruction": "Abre WhatsApp en tu teléfono → Ajustes → Dispositivos vinculados → Vincular un dispositivo, y escanea este código. Se renueva solo hasta que lo escanees.",
+        "finishing": "Terminando la configuración…",
+        "timeout": "El código QR expiró sin ser escaneado.",
+        "retry": "Reintentar",
+        "paired": "Vinculado con WhatsApp",
+        "relink": "Volver a vincular",
+        "runtimeChecking": "Verificando si el canal está corriendo…",
+        "runtimeRunning": "Canal corriendo — conectado a WhatsApp.",
+        "runtimeStopped": "Canal detenido — los mensajes no van a llegar hasta que arranque.",
+        "runtimeStart": "Arrancar canal",
+        "runtimeStarting": "Arrancando…"
+      },
       "desc": {
         "websocket": "Transporte del panel web y de clientes WebSocket externos. Siempre activo mientras el panel esté habilitado. El token es opcional, solo para clientes externos.",
         "email": "Recibe y responde correo por IMAP (entrada) y SMTP (salida).",
         "slack": "Chatea con durin en DMs, canales e hilos de Slack vía Socket Mode — sin URL pública.",
-        "discord": "Chatea con durin en servidores y mensajes directos de Discord."
+        "discord": "Chatea con durin en servidores y mensajes directos de Discord.",
+        "whatsapp": "Chatea con durin por WhatsApp vinculando un número de teléfono con un código QR."
       },
       "field": {
         "consent_granted": "Consentimiento",
         "allow_from": "Permitir desde",
         "bot_token": "Token del bot",
         "app_token": "Token de aplicación",
+        "bridge_url": "URL del bridge",
+        "bridge_token": "Token del bridge",
         "dm_enabled": "Mensajes directos",
         "group_policy": "Política en canales",
         "group_allow_from": "Canales permitidos",
@@ -445,7 +466,9 @@
         }
       },
       "fieldHelp": {
-        "threading_mode": "Por hilo: cada hilo de mail es su propia conversación — ideal cuando la misma persona escribe sobre temas distintos. Por remitente: todo el correo de una dirección continúa una sola conversación."
+        "threading_mode": "Por hilo: cada hilo de mail es su propia conversación — ideal cuando la misma persona escribe sobre temas distintos. Por remitente: todo el correo de una dirección continúa una sola conversación.",
+        "bridge_url": "Dirección interna del proceso local del bridge de WhatsApp — deja el valor por defecto salvo que lo corras en otro lado.",
+        "bridge_token": "Token interno de autenticación del proceso del bridge. Se genera automáticamente; solo cámbialo si corres el bridge por separado."
       },
       "placeholder": {
         "allow_from": "",

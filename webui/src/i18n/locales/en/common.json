@@ -434,17 +434,38 @@
         "forumBadge": "forum",
         "loadingChannels": "Loading servers…"
       },
+      "whatsapp": {
+        "modeGuided": "Guided",
+        "modeManual": "Manual",
+        "banRiskWarning": "WhatsApp pairing uses an unofficial protocol, not WhatsApp's Business API. Meta can ban the number for automated use — pair a dedicated number, never your primary one.",
+        "connect": "Connect WhatsApp",
+        "starting": "Starting the pairing session…",
+        "scanInstruction": "Open WhatsApp on your phone → Settings → Linked Devices → Link a device, then scan this code. It refreshes automatically until scanned.",
+        "finishing": "Finishing setup…",
+        "timeout": "The QR code expired without being scanned.",
+        "retry": "Retry",
+        "paired": "Paired with WhatsApp",
+        "relink": "Re-pair",
+        "runtimeChecking": "Checking whether the channel is running…",
+        "runtimeRunning": "Channel running — connected to WhatsApp.",
+        "runtimeStopped": "Channel stopped — messages will not arrive until it starts.",
+        "runtimeStart": "Start channel",
+        "runtimeStarting": "Starting…"
+      },
       "desc": {
         "websocket": "Transport for the web dashboard and external WebSocket clients. Always on while the dashboard is enabled. The token is optional, only for external clients.",
         "email": "Receive and reply to email over IMAP (inbound) and SMTP (outbound).",
         "slack": "Chat with durin in Slack DMs, channels and threads over Socket Mode — no public URL needed.",
-        "discord": "Chat with durin in Discord servers and direct messages."
+        "discord": "Chat with durin in Discord servers and direct messages.",
+        "whatsapp": "Chat with durin over WhatsApp by pairing a phone number with a QR code."
       },
       "field": {
         "consent_granted": "Consent",
         "allow_from": "Allowed senders",
         "bot_token": "Bot token",
         "app_token": "App token",
+        "bridge_url": "Bridge URL",
+        "bridge_token": "Bridge token",
         "dm_enabled": "Direct messages",
         "group_policy": "Channel policy",
         "group_allow_from": "Allowed channels",
@@ -499,7 +520,9 @@
         }
       },
       "fieldHelp": {
-        "threading_mode": "Per mail thread: each email thread becomes its own conversation — best when the same person writes about different topics. Per sender: all mail from an address continues one long conversation."
+        "threading_mode": "Per mail thread: each email thread becomes its own conversation — best when the same person writes about different topics. Per sender: all mail from an address continues one long conversation.",
+        "bridge_url": "Internal address of the local WhatsApp bridge process — leave the default unless you're running it elsewhere.",
+        "bridge_token": "Internal auth token for the bridge process. Generated automatically; only set this if running the bridge separately."
       },
       "placeholder": {
         "allow_from": "",
