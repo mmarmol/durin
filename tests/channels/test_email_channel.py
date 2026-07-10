@@ -1693,6 +1693,38 @@ async def test_send_explicit_digest_miss_does_not_fall_back_to_latest(
     assert "In-Reply-To" not in sent[0]
 
 
+@pytest.mark.asyncio
+async def test_send_ignores_top_level_subject_passthrough(tmp_path, monkeypatch) -> None:
+    """Ordinary agent replies pass INBOUND metadata through to send() unchanged,
+    and that metadata carries a top-level "subject" key holding the inbound
+    mail's own subject. That key must not be read as an override — only
+    metadata["email"]["subject"] is an intentional override — otherwise every
+    ordinary reply would echo the inbound subject verbatim instead of getting
+    the "Re: " prefix."""
+    from durin.channels.email_threads import thread_digest
+
+    raw = _make_raw_email_threaded(message_id="<m1@x>", subject="Invoice")
+    channel, _ = _make_channel(tmp_path, monkeypatch, raw)
+    channel._store.load()
+    channel._resolve_thread(channel._fetch_new_messages()[0])
+    digest = thread_digest("<m1@x>")
+
+    sent: list = []
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: sent.append(m))
+    await channel.send(OutboundMessage(
+        channel="email",
+        chat_id="alice@example.com",
+        content="hi",
+        metadata={
+            "message_id": "<m1@x>",
+            "subject": "Invoice",
+            "uid": "123",
+            "email": {"thread": digest},
+        },
+    ))
+    assert sent[0]["Subject"] == "Re: Invoice"
+
+
 # ---------------------------------------------------------------------------
 # Fix 5: CRLF injection via RFC 2047-decoded headers
 # ---------------------------------------------------------------------------

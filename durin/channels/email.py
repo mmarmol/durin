@@ -250,8 +250,11 @@ class EmailChannel(BaseChannel):
 
         base_subject = (entry or {}).get("subject") or "durin reply"
         subject = self._reply_subject(base_subject)
-        if msg.metadata and isinstance(msg.metadata.get("subject"), str):
-            override = msg.metadata["subject"].strip()
+        # Top-level metadata carries inbound passthrough (including the
+        # inbound mail's own "subject"), which is not an override signal.
+        # Only the email-namespaced "subject" is an intentional override.
+        if isinstance(thread_meta.get("subject"), str):
+            override = thread_meta["subject"].strip()
             if override:
                 subject = override
 
