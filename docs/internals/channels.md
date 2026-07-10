@@ -200,22 +200,20 @@ reconnects it.
 ### Optional extras and channel availability
 
 Some built-in channels depend on a third-party SDK that is not installed by
-default (Slack, Discord, Matrix today). Matrix guards the SDK import in a
-`try`/`except ImportError` block and sets a module-level availability flag
-(`MATRIX_AVAILABLE`) rather than letting the import fail. Discord instead
-probes with `importlib.util.find_spec` before importing, setting
-`DISCORD_AVAILABLE` and only running `import discord` when the probe
-succeeds. Either way, both modules stay importable regardless of whether
-their extra is installed, so `discover_channel_names()`
-(`durin/channels/registry.py`) can enumerate them with zero imports. Slack
-currently does **not** guard its import — `slack.py` hard-imports `slack_sdk`
-at module scope — so when the `slack` extra is missing, the module itself
-fails to import and Slack disappears from `discover_all()` and
-every surface built on it (webui channel list, onboarding, config docs). The
-auto-install step described below covers the common case where Slack is
-enabled, since it installs the extra before the module is imported for that
-process; it does not help an operator who wants to merely see Slack listed
-as available-but-disabled without enabling it first.
+default (Slack, Discord, Matrix today). Matrix and Slack both guard the SDK
+import in a `try`/`except ImportError` block and set a module-level
+availability flag (`MATRIX_AVAILABLE`, `SLACK_AVAILABLE`) rather than letting
+the import fail. Discord instead probes with `importlib.util.find_spec`
+before importing, setting `DISCORD_AVAILABLE` and only running `import
+discord` when the probe succeeds. Either way, all three modules stay
+importable regardless of whether their extra is installed, so
+`discover_channel_names()` (`durin/channels/registry.py`) can enumerate them
+with zero imports, and `discover_all()` still surfaces them (webui channel
+list, onboarding, config docs) when the extra is missing. Each channel's
+`start()` checks its availability flag first and, when the dependency isn't
+installed, logs the pip-install hint and returns cleanly — a clean return is
+the fatal-config signal the `ChannelManager` supervisor expects; raising
+would crash-loop it instead.
 
 `GET /api/v1/channels` (`durin/service/config.py`) reports this per channel as
 two extra fields: `available` (whether the channel's dependency currently

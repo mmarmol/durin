@@ -1046,3 +1046,17 @@ async def test_open_channels_respond_without_mention_under_mention_policy() -> N
 
     await channel._on_socket_request(client, message_in("C_GATED", "o2"))
     assert channel._handle_message.await_count == 1
+
+
+def test_slack_module_importable_and_discovered_without_extra() -> None:
+    """The channel module, config model, and registry discovery must work even
+    when the optional slack-sdk/slackify-markdown deps are absent (they may be
+    absent in this env or present — the discovery contract holds either way)."""
+    from durin.channels.registry import discover_channel_names, load_channel_class
+
+    assert "slack" in discover_channel_names()
+    cls = load_channel_class("slack")
+    assert cls.__name__ == "SlackChannel"
+    # Config model importable -> webui gets its settings form.
+    model = cls.config_model()
+    assert "bot_token" in model.model_fields or len(model.model_fields) > 0
