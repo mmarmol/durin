@@ -393,6 +393,16 @@ to keep resurrecting. Re-pairing is `durin channels login whatsapp`, which
 runs the bridge in `qr` mode in the foreground and prints a scannable QR to
 the terminal.
 
+Inbound media is written under `--media-dir` using a filename derived from
+the message's stanza ID — attacker-controlled, since it arrives in the
+inbound message itself — so the bridge sanitizes it to a safe charset
+(`[A-Za-z0-9._-]`, substituting `_` otherwise; a random name if nothing
+survives) and verifies the resulting path stays inside the media dir before
+writing, refusing the write otherwise. `WhatsAppChannel` re-checks the same
+containment on its side (`media` paths in the inbound frame must resolve
+under `get_media_dir("whatsapp")`) as defense in depth against a compromised
+or misbehaving bridge.
+
 **Binary distribution.** The bridge ships as a prebuilt platform binary, not
 Go source. Release CI cross-compiles it for each supported OS/arch and
 attaches `durin-whatsapp-bridge-<os>-<arch>` plus a `checksums.txt` to the

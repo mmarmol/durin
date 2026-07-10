@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -200,6 +202,33 @@ func (b *Bridge) RegisterEventHandlers() {
 	})
 }
 
+// sanitizeMediaName turns a WhatsApp stanza ID (attacker-controlled: it
+// arrives in an inbound message) into a filesystem-safe base name, so it can
+// never be used for path traversal or to escape the media directory. Only
+// [A-Za-z0-9._-] survive; everything else becomes "_". If nothing survives,
+// a random name is generated instead of writing to a fixed/guessable path.
+func sanitizeMediaName(id, ext string) string {
+	var sb strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			sb.WriteRune(r)
+		default:
+			sb.WriteRune('_')
+		}
+	}
+	name := sb.String()
+	if name == "" {
+		buf := make([]byte, 8)
+		if _, err := rand.Read(buf); err != nil {
+			name = "media"
+		} else {
+			name = hex.EncodeToString(buf)
+		}
+	}
+	return name + ext
+}
+
 func (b *Bridge) onMessage(v *events.Message) {
 	if v.Info.IsFromMe {
 		return
@@ -278,8 +307,12 @@ func (b *Bridge) onMessage(v *events.Message) {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "media download failed for %s: %v\n", v.Info.ID, err)
 		} else if err := os.MkdirAll(b.mediaDir, 0o700); err == nil {
-			p := filepath.Join(b.mediaDir, v.Info.ID+d.ext)
-			if os.WriteFile(p, data, 0o600) == nil {
+			p := filepath.Join(b.mediaDir, sanitizeMediaName(v.Info.ID, d.ext))
+			// Defense in depth: sanitizeMediaName already strips path
+			// separators, but verify containment before ever writing.
+			if rel, relErr := filepath.Rel(b.mediaDir, p); relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				fmt.Fprintf(os.Stderr, "media path %q escapes media dir %q; skipping write\n", p, b.mediaDir)
+			} else if os.WriteFile(p, data, 0o600) == nil {
 				media = append(media, p)
 			}
 		}

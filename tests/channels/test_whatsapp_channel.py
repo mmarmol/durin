@@ -17,6 +17,14 @@ from durin.channels.whatsapp import (
 )
 
 
+def _media_path(name: str) -> str:
+    """A media path under the real sandboxed media dir, so it survives the
+    channel's containment check on inbound media paths."""
+    from durin.config.paths import get_media_dir
+
+    return str(get_media_dir("whatsapp") / name)
+
+
 def _make_channel() -> WhatsAppChannel:
     bus = MagicMock()
     ch = WhatsAppChannel({"enabled": True}, bus)
@@ -262,6 +270,7 @@ async def test_voice_message_transcription_uses_media_path():
     ch.transcription_api_key = "sk-test"
     ch._handle_message = AsyncMock()
     ch.transcribe_audio = AsyncMock(return_value="Hello world")
+    voice_path = _media_path("voice.ogg")
 
     await ch._handle_bridge_message(
         json.dumps({
@@ -271,11 +280,11 @@ async def test_voice_message_transcription_uses_media_path():
             "pn": "",
             "content": "[Voice Message]",
             "timestamp": 1,
-            "media": ["/tmp/voice.ogg"],
+            "media": [voice_path],
         })
     )
 
-    ch.transcribe_audio.assert_awaited_once_with("/tmp/voice.ogg")
+    ch.transcribe_audio.assert_awaited_once_with(voice_path)
     kwargs = ch._handle_message.await_args.kwargs
     assert kwargs["content"].startswith("Hello world")
 
@@ -288,6 +297,7 @@ async def test_voice_message_transcribes_regardless_of_allow_from() -> None:
     ch = WhatsAppChannel({"enabled": True, "allowFrom": ["allowed"]}, MagicMock())
     ch._handle_message = AsyncMock()
     ch.transcribe_audio = AsyncMock(return_value="Hello world")
+    voice_path = _media_path("voice.ogg")
 
     await ch._handle_bridge_message(
         json.dumps({
@@ -297,11 +307,11 @@ async def test_voice_message_transcribes_regardless_of_allow_from() -> None:
             "pn": "",
             "content": "[Voice Message]",
             "timestamp": 1,
-            "media": ["/tmp/voice.ogg"],
+            "media": [voice_path],
         })
     )
 
-    ch.transcribe_audio.assert_awaited_once_with("/tmp/voice.ogg")
+    ch.transcribe_audio.assert_awaited_once_with(voice_path)
     ch._handle_message.assert_awaited_once()
 
 
@@ -541,6 +551,7 @@ class TestInboundV2:
     async def test_voice_flag_triggers_transcription(self, whatsapp_channel):
         whatsapp_channel._handle_message = AsyncMock()
         whatsapp_channel.transcribe_audio = AsyncMock(return_value="Hello world")
+        voice_path = _media_path("v.ogg")
 
         await whatsapp_channel._handle_bridge_message(
             json.dumps({
@@ -550,12 +561,12 @@ class TestInboundV2:
                 "pn": "",
                 "content": "",
                 "voice": True,
-                "media": ["/tmp/v.ogg"],
+                "media": [voice_path],
                 "timestamp": 1,
             })
         )
 
-        whatsapp_channel.transcribe_audio.assert_awaited_once_with("/tmp/v.ogg")
+        whatsapp_channel.transcribe_audio.assert_awaited_once_with(voice_path)
         kwargs = whatsapp_channel._handle_message.await_args.kwargs
         assert kwargs["content"].startswith("Hello world")
 
@@ -617,6 +628,27 @@ class TestPureTransport:
                  "content": "hola", "id": "M2", "isGroup": True}
         await whatsapp_channel._handle_bridge_message(json.dumps(frame))
         assert whatsapp_channel._handle_message.call_args.kwargs["is_dm"] is False
+
+    @pytest.mark.asyncio
+    async def test_media_path_outside_media_dir_is_dropped(self, whatsapp_channel):
+        """A path-traversal bridge (or a compromised/legacy one) could report
+        a media path outside our sandboxed media dir; the channel must drop
+        it rather than hand it to the agent as a readable attachment."""
+        await whatsapp_channel._handle_bridge_message(
+            json.dumps({
+                "type": "message",
+                "id": "trav1",
+                "sender": "12345@s.whatsapp.net",
+                "pn": "",
+                "content": "hi",
+                "timestamp": 1,
+                "media": ["/etc/passwd"],
+            })
+        )
+
+        kwargs = whatsapp_channel._handle_message.await_args.kwargs
+        assert kwargs["media"] == []
+        assert kwargs["content"] == "hi"
 
 
 class TestSupervisorLifecycle:

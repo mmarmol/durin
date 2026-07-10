@@ -27,6 +27,25 @@ def _next_backoff(delay: float, *, factor: float = 1.6, cap: float = 30.0) -> fl
     return min(delay * factor, cap)
 
 
+def _sanitize_media_paths(paths: list[str], media_dir: Path, logger) -> list[str]:
+    """Drop any inbound media path that doesn't resolve under ``media_dir``.
+
+    Defense in depth against a compromised or buggy bridge reporting a
+    path-traversal media path (the bridge is expected to sandbox writes to
+    its own media dir, but the channel must not trust that blindly)."""
+    resolved_dir = media_dir.resolve()
+    safe: list[str] = []
+    for p in paths:
+        resolved = Path(p).resolve()
+        try:
+            resolved.relative_to(resolved_dir)
+        except ValueError:
+            logger.warning("Dropping inbound media path outside media dir: {}", p)
+            continue
+        safe.append(p)
+    return safe
+
+
 class WhatsAppConfig(Base):
     """WhatsApp channel configuration."""
 
@@ -314,6 +333,10 @@ class WhatsAppChannel(BaseChannel):
 
             # Extract media paths (images/documents/videos downloaded by the bridge)
             media_paths = data.get("media") or []
+            if media_paths:
+                from durin.config.paths import get_media_dir
+
+                media_paths = _sanitize_media_paths(media_paths, get_media_dir("whatsapp"), self.logger)
 
             # Handle voice transcription if it's a voice message. The bridge's
             # explicit "voice" flag is the current signal; the legacy
