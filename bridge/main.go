@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/mdp/qrterminal/v3"
@@ -29,6 +30,9 @@ func run() int {
 	args := os.Args[1:]
 	if len(args) > 0 && (args[0] == "serve" || args[0] == "qr") {
 		mode, args = args[0], args[1:]
+	} else if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		fmt.Fprintf(os.Stderr, "unknown mode: %q (want serve or qr)\n", args[0])
+		return 2
 	}
 	fs := flag.NewFlagSet(mode, flag.ExitOnError)
 	port := fs.Int("port", 3001, "loopback WS port")
@@ -99,9 +103,12 @@ func runServe(cli *whatsmeow.Client, port int, mediaDir string) int {
 	}
 
 	httpSrv := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", port), Handler: srv.Handler()}
+	// Register the signal handler before spawning the goroutine: a signal
+	// delivered before a late Notify would kill the process with the default
+	// disposition, skipping the clean disconnect and server close.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
 		cli.Disconnect()
 		httpSrv.Close()
