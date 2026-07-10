@@ -47,7 +47,9 @@ func run() int {
 		return 2
 	}
 
-	cli, err := NewWAClient(*authDir)
+	// In qr --emit-frames mode stdout is an NDJSON channel; silence the
+	// whatsmeow client logger so it can't corrupt the frame stream.
+	cli, err := NewWAClient(*authDir, mode == "qr" && *emitFrames)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1

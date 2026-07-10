@@ -216,6 +216,36 @@ class TestPairingSession:
             await _wait_status(sess, "error")
 
     @pytest.mark.asyncio
+    async def test_crash_stderr_tail_surfaces_in_error(self, tmp_path):
+        from durin.channels.whatsapp_bridge import PairingSession
+
+        # A crash with no error frame must still give the UI something to show.
+        binary = self._fake_qr_bridge(
+            tmp_path, 'echo "boom: bad auth dir" 1>&2; exit 1')
+        with patch("durin.channels.whatsapp_bridge.ensure_bridge_binary",
+                   return_value=binary):
+            sess = PairingSession(auth_dir=tmp_path, token="t")
+            await sess.start()
+            await _wait_status(sess, "error")
+            assert "boom" in (sess.snapshot()["error"] or "")
+
+    @pytest.mark.asyncio
+    async def test_concurrent_start_leaves_one_live_process(self, tmp_path):
+        from durin.channels.whatsapp_bridge import PairingSession
+
+        binary = self._fake_qr_bridge(
+            tmp_path, 'echo \'{"type":"qr","code":"X"}\'; sleep 5')
+        with patch("durin.channels.whatsapp_bridge.ensure_bridge_binary",
+                   return_value=binary):
+            sess = PairingSession(auth_dir=tmp_path, token="t")
+            # Two racing starts (two settings tabs) must serialize under the
+            # lock — no leaked second subprocess.
+            await asyncio.gather(sess.start(), sess.start())
+            await _wait_status(sess, "waiting_scan")
+            await sess.cancel()
+            assert sess._proc is None
+
+    @pytest.mark.asyncio
     async def test_setup_error_surfaces_as_error_status(self, tmp_path):
         from durin.channels.whatsapp_bridge import BridgeSetupError, PairingSession
 

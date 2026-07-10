@@ -21,7 +21,10 @@ import (
 	_ "modernc.org/sqlite" // pure-Go driver: keeps CGO_ENABLED=0 cross-compiles working
 )
 
-func NewWAClient(authDir string) (*whatsmeow.Client, error) {
+// NewWAClient builds the whatsmeow client. When quiet, the client logger is
+// silenced: `qr --emit-frames` uses stdout as an NDJSON channel the gateway
+// parses, so whatsmeow's own INFO logging must not interleave with it.
+func NewWAClient(authDir string, quiet bool) (*whatsmeow.Client, error) {
 	if err := os.MkdirAll(authDir, 0o700); err != nil {
 		return nil, err
 	}
@@ -36,7 +39,11 @@ func NewWAClient(authDir string) (*whatsmeow.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load device: %w", err)
 	}
-	return whatsmeow.NewClient(device, waLog.Stdout("wa", "INFO", true)), nil
+	logger := waLog.Stdout("wa", "INFO", true)
+	if quiet {
+		logger = waLog.Noop
+	}
+	return whatsmeow.NewClient(device, logger), nil
 }
 
 type Bridge struct {

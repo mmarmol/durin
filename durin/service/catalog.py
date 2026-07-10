@@ -77,6 +77,7 @@ SERVICE_CLASSES: list[type] = [
     DiscordService,
     TelegramService,
     SlackService,
+    WhatsAppService,
     ChannelsRuntimeService,
 ]
 

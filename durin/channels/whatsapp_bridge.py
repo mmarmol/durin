@@ -241,6 +241,10 @@ class PairingSession:
         self._error: str | None = None
         self._proc: asyncio.subprocess.Process | None = None
         self._task: asyncio.Task | None = None
+        # Serialize start()/cancel(): two settings tabs (both CONFIG_WRITE) can
+        # POST /login/start concurrently; without the lock each spawns a bridge
+        # and the loser's subprocess leaks (holding whatsmeow.db open).
+        self._lock = asyncio.Lock()
 
     def snapshot(self) -> dict[str, Any]:
         """Current pairing state for the poll endpoint."""
@@ -248,32 +252,32 @@ class PairingSession:
 
     async def start(self, *, force: bool = False) -> dict[str, Any]:
         """(Re)start a pairing attempt. Cancels any in-flight one first."""
-        await self.cancel()
-        try:
-            binary = await ensure_bridge_binary()
-        except BridgeSetupError as exc:
-            self._status, self._error = "error", str(exc)
+        async with self._lock:
+            await self._cancel_locked()
+            try:
+                binary = await ensure_bridge_binary()
+            except BridgeSetupError as exc:
+                self._status, self._error = "error", str(exc)
+                return self.snapshot()
+
+            if force:
+                db = self._auth_dir / "whatsmeow.db"
+                if db.exists():
+                    db.unlink()
+
+            self._status, self._qr, self._error = "starting", None, None
+            self._auth_dir.mkdir(parents=True, exist_ok=True)
+            self._proc = await asyncio.create_subprocess_exec(
+                str(binary), "qr", "--emit-frames", "--auth-dir", str(self._auth_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env={**os.environ, "BRIDGE_TOKEN": self._token},
+            )
+            self._task = asyncio.create_task(self._read_frames(self._proc))
             return self.snapshot()
 
-        if force:
-            db = self._auth_dir / "whatsmeow.db"
-            if db.exists():
-                db.unlink()
-
-        self._status, self._qr, self._error = "starting", None, None
-        self._auth_dir.mkdir(parents=True, exist_ok=True)
-        self._proc = await asyncio.create_subprocess_exec(
-            str(binary), "qr", "--emit-frames", "--auth-dir", str(self._auth_dir),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            env={**os.environ, "BRIDGE_TOKEN": self._token},
-        )
-        self._task = asyncio.create_task(self._read_frames())
-        return self.snapshot()
-
-    async def _read_frames(self) -> None:
-        proc = self._proc
-        assert proc is not None and proc.stdout is not None
+    async def _read_frames(self, proc: asyncio.subprocess.Process) -> None:
+        assert proc.stdout is not None
         try:
             async for raw in proc.stdout:
                 try:
@@ -295,12 +299,23 @@ class PairingSession:
         finally:
             rc = await proc.wait()
             # If the process exited before reaching a terminal state, treat a
-            # nonzero exit as failure so the UI never waits forever.
+            # nonzero exit as failure so the UI never waits forever, and surface
+            # the bridge's stderr tail so a crash isn't a blank error.
             if self._status in ("starting", "waiting_scan"):
                 self._status = "error" if rc else "timeout"
+                if rc and proc.stderr is not None:
+                    tail = (await proc.stderr.read())[-500:].decode(
+                        "utf-8", errors="replace").strip()
+                    if tail:
+                        self._error = tail
 
     async def cancel(self) -> None:
         """Stop any running pairing subprocess and reader."""
+        async with self._lock:
+            await self._cancel_locked()
+
+    async def _cancel_locked(self) -> None:
+        """Terminate the current subprocess/reader. Caller holds ``self._lock``."""
         proc = self._proc
         if proc is not None and proc.returncode is None:
             proc.terminate()

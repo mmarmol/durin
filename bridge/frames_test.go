@@ -73,3 +73,10 @@ func TestQRAndStatusFrameShapes(t *testing.T) {
 		t.Fatalf("unexpected status frame: %s", b)
 	}
 }
+
+func TestErrorFrameShape(t *testing.T) {
+	b, _ := json.Marshal(ErrorFrame{Type: "error", Error: "boom"})
+	if string(b) != `{"type":"error","error":"boom"}` {
+		t.Fatalf("unexpected error frame: %s", b)
+	}
+}
