@@ -46,10 +46,14 @@ if DISCORD_AVAILABLE:
         """The gateway subscriptions this adapter's handlers require.
 
         Derived rather than configured: every bit below is demanded by an event
-        the channel actually implements, and durin implements no member,
-        presence, voice or reaction-event handler, so asking for those would be
-        a privileged request nothing consumes.  Reactions the bot *adds* are
-        REST calls and need no intent.
+        this adapter implements.  durin registers no member, presence, voice or
+        reaction-event handler, so those intents are never asked for — members
+        and presences would be privileged requests nothing consumes, and the
+        rest would be traffic nothing reads.  Reactions the bot *adds* are REST
+        calls and need no intent.
+
+        The handler set this mirrors is frozen by a test: adding an on_* handler
+        fails it, forcing whoever adds it to decide which intent it needs.
         """
         intents = discord.Intents.none()
         intents.guilds = True  # on_thread_update / on_thread_delete, channel cache

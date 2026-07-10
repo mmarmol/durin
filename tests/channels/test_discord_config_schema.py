@@ -119,15 +119,31 @@ def test_intents_is_not_a_config_key_at_all():
     assert "intents" not in DiscordChannel.default_config()
 
 
+def test_the_handler_set_is_frozen_so_a_new_event_forces_an_intents_review():
+    """The derivation is only as honest as the handler list it was derived from.
+
+    Asserting the four intents by hand would let someone add ``on_member_join``
+    and ship a bot that never receives it — the same silent failure, moved from
+    the operator to the developer. Freeze the handlers instead: adding one makes
+    this fail, and whoever fixes it has to decide which intent it needs.
+    """
+    pytest.importorskip("discord")
+    from durin.channels.discord import DiscordBotClient
+
+    handlers = {name for name in vars(DiscordBotClient) if name.startswith("on_")}
+    assert handlers == {"on_ready", "on_message", "on_thread_delete", "on_thread_update"}
+
+
 def test_derived_intents_cover_exactly_the_events_the_adapter_handles():
     pytest.importorskip("discord")
     from durin.channels.discord import GATEWAY_INTENTS
 
-    assert GATEWAY_INTENTS.guilds is True  # thread create/update/delete, channel cache
+    assert GATEWAY_INTENTS.guilds is True  # on_thread_update / on_thread_delete
     assert GATEWAY_INTENTS.guild_messages is True  # on_message in servers
     assert GATEWAY_INTENTS.dm_messages is True  # on_message in DMs
     assert GATEWAY_INTENTS.message_content is True  # privileged: read the text
-    # Nothing durin does needs these, and each is a privileged ask or noise.
+    # No handler consumes these. members and presences are privileged asks;
+    # voice_states and guild_reactions are ordinary but unused.
     assert GATEWAY_INTENTS.members is False
     assert GATEWAY_INTENTS.presences is False
     assert GATEWAY_INTENTS.voice_states is False
