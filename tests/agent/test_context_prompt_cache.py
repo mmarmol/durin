@@ -203,13 +203,15 @@ def test_channel_format_hint_telegram(tmp_path) -> None:
 
 
 def test_channel_format_hint_whatsapp(tmp_path) -> None:
-    """WhatsApp should get plain-text format hint."""
+    """WhatsApp converts markdown, so the hint must invite it (not forbid it)."""
     workspace = _make_workspace(tmp_path)
     builder = ContextBuilder(workspace)
 
     prompt = builder.build_system_prompt(channel="whatsapp")
     assert "Format Hint" in prompt
-    assert "plain text only" in prompt
+    assert "converted automatically" in prompt
+    assert "plain text only" not in prompt
+    assert "Avoid markdown tables" in prompt
 
 
 def test_channel_format_hint_absent_for_unknown(tmp_path) -> None:
