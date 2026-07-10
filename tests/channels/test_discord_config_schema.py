@@ -1,3 +1,5 @@
+import pytest
+
 from durin.channels.discord import DiscordChannel, DiscordConfig
 
 
@@ -118,6 +120,7 @@ def test_intents_is_not_a_config_key_at_all():
 
 
 def test_derived_intents_cover_exactly_the_events_the_adapter_handles():
+    pytest.importorskip("discord")
     from durin.channels.discord import GATEWAY_INTENTS
 
     assert GATEWAY_INTENTS.guilds is True  # thread create/update/delete, channel cache
@@ -133,6 +136,7 @@ def test_derived_intents_cover_exactly_the_events_the_adapter_handles():
 
 def test_derived_value_matches_the_former_default():
     """Nobody on defaults sees a behaviour change from dropping the knob."""
+    pytest.importorskip("discord")
     from durin.channels.discord import GATEWAY_INTENTS
 
     assert GATEWAY_INTENTS.value == 37377
