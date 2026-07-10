@@ -37,6 +37,7 @@ from pydantic import Field
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
+from durin.channels.dedup import MessageDeduplicator
 from durin.config.paths import get_workspace_path
 from durin.config.schema import Base
 
@@ -125,6 +126,8 @@ class MSTeamsChannel(BaseChannel):
         self._refs_lock_path = self._refs_path.parent / MSTEAMS_REF_LOCK_FILENAME
         self._refs_guard = threading.RLock()
         self._conversation_refs: dict[str, ConversationRef] = self._load_refs()
+        # Bot Framework retries webhook deliveries it considers unacknowledged.
+        self._dedup = MessageDeduplicator(max_size=1000, ttl_seconds=300.0)
         with self._refs_guard:
             if self._prune_conversation_refs():
                 self._save_refs_locked(prune=True)
@@ -268,6 +271,9 @@ class MSTeamsChannel(BaseChannel):
     async def _handle_activity(self, activity: dict[str, Any]) -> None:
         """Handle inbound Teams/Bot Framework activity."""
         if activity.get("type") != "message":
+            return
+
+        if self._dedup.is_duplicate(str(activity.get("id") or "")):
             return
 
         conversation = activity.get("conversation") or {}
