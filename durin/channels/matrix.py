@@ -910,13 +910,17 @@ class MatrixChannel(BaseChannel):
         return meta
 
     async def _on_message(self, room: MatrixRoom, event: RoomMessageText) -> None:
-        if self._dedup.is_duplicate(getattr(event, "event_id", "") or ""):
-            return
         if (
             event.sender == self.config.user_id
             or self._is_pre_startup_event(event)
             or not self._should_process_message(room, event)
         ):
+            return
+        # Dedup runs after the self-echo and pre-startup filters so those never
+        # get recorded as a "seen" id: with persistence enabled, every recorded
+        # miss is a file write, and the initial-sync timeline replay at startup
+        # can be large.
+        if self._dedup.is_duplicate(getattr(event, "event_id", "") or ""):
             return
         await self._start_typing_keepalive(room.room_id)
         try:
@@ -930,13 +934,17 @@ class MatrixChannel(BaseChannel):
             raise
 
     async def _on_media_message(self, room: MatrixRoom, event: MatrixMediaEvent) -> None:
-        if self._dedup.is_duplicate(getattr(event, "event_id", "") or ""):
-            return
         if (
             event.sender == self.config.user_id
             or self._is_pre_startup_event(event)
             or not self._should_process_message(room, event)
         ):
+            return
+        # Dedup runs after the self-echo and pre-startup filters so those never
+        # get recorded as a "seen" id: with persistence enabled, every recorded
+        # miss is a file write, and the initial-sync timeline replay at startup
+        # can be large.
+        if self._dedup.is_duplicate(getattr(event, "event_id", "") or ""):
             return
         attachment, marker = await self._fetch_media_attachment(room, event)
         parts: list[str] = []
