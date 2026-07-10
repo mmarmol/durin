@@ -619,6 +619,76 @@ class TestPureTransport:
         assert whatsapp_channel._handle_message.call_args.kwargs["is_dm"] is False
 
 
+class TestSupervisorLifecycle:
+    @pytest.mark.asyncio
+    async def test_needs_login_leaves_channel_not_running(self, monkeypatch, tmp_path):
+        """When the supervisor reports needs_login, start() must return with
+        is_running False so ChannelManager's rebuild path can restart the
+        channel after the operator re-pairs."""
+        token_path = tmp_path / "whatsapp-auth" / "bridge-token"
+        monkeypatch.setattr("durin.channels.whatsapp._bridge_token_path", lambda: token_path)
+
+        async def fake_ensure_bridge_binary():
+            return tmp_path / "durin-whatsapp-bridge"
+
+        monkeypatch.setattr("durin.channels.whatsapp_bridge.ensure_bridge_binary", fake_ensure_bridge_binary)
+
+        class NeedsLoginSupervisor(FakeSupervisor):
+            def __init__(self, *args, **kwargs) -> None:
+                super().__init__()
+                self.needs_login = True
+                self.stopped = False
+
+            async def stop(self) -> None:
+                self.stopped = True
+
+        created: list[NeedsLoginSupervisor] = []
+
+        def make_supervisor(*args, **kwargs):
+            sup = NeedsLoginSupervisor()
+            created.append(sup)
+            return sup
+
+        monkeypatch.setattr("durin.channels.whatsapp_bridge.BridgeSupervisor", make_supervisor)
+
+        ch = WhatsAppChannel({"enabled": True, "bridgeUrl": "ws://localhost:3001"}, MagicMock())
+        await ch.start()
+
+        assert ch.is_running is False
+        assert created[0].stopped is True
+        assert ch._supervisor is None
+
+    @pytest.mark.asyncio
+    async def test_supervisor_media_dir_is_sandboxed_media_dir(self, monkeypatch, tmp_path):
+        """The bridge's inbound media dir must live under the allowlisted
+        media root (get_media_dir), like every other channel, so agent tools
+        can read WhatsApp attachments."""
+        from durin.config.paths import get_media_dir
+
+        token_path = tmp_path / "whatsapp-auth" / "bridge-token"
+        monkeypatch.setattr("durin.channels.whatsapp._bridge_token_path", lambda: token_path)
+
+        async def fake_ensure_bridge_binary():
+            return tmp_path / "durin-whatsapp-bridge"
+
+        monkeypatch.setattr("durin.channels.whatsapp_bridge.ensure_bridge_binary", fake_ensure_bridge_binary)
+
+        captured_kwargs: dict = {}
+
+        class RecordingSupervisor(FakeSupervisor):
+            def __init__(self, *args, **kwargs) -> None:
+                super().__init__()
+                captured_kwargs.update(kwargs)
+                self.needs_login = True  # end start() immediately
+
+        monkeypatch.setattr("durin.channels.whatsapp_bridge.BridgeSupervisor", RecordingSupervisor)
+
+        ch = WhatsAppChannel({"enabled": True, "bridgeUrl": "ws://localhost:3001"}, MagicMock())
+        await ch.start()
+
+        assert captured_kwargs["media_dir"] == get_media_dir("whatsapp")
+
+
 class TestBackoff:
     def test_backoff_progression(self):
         from durin.channels.whatsapp import _next_backoff

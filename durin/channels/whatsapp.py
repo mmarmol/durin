@@ -125,7 +125,7 @@ class WhatsAppChannel(BaseChannel):
         import websockets
 
         from durin.channels.whatsapp_bridge import BridgeSupervisor, ensure_bridge_binary
-        from durin.config.paths import get_runtime_subdir
+        from durin.config.paths import get_media_dir
 
         self._running = True
         try:
@@ -139,7 +139,9 @@ class WhatsAppChannel(BaseChannel):
         self._supervisor = BridgeSupervisor(
             binary, port=port, token=self._effective_bridge_token(),
             auth_dir=_bridge_token_path().parent,
-            media_dir=get_runtime_subdir("whatsapp-media"),
+            # Under the allowlisted media root so agent tools can read
+            # inbound attachments (matches every other channel).
+            media_dir=get_media_dir("whatsapp"),
             logger=self.logger,
         )
         await self._supervisor.start()
@@ -148,6 +150,9 @@ class WhatsAppChannel(BaseChannel):
         while self._running:
             if self._supervisor.needs_login:
                 self.logger.error("WhatsApp needs pairing; channel idle until `durin channels login whatsapp`")
+                # Fully stop (running flag, supervisor) so the manager sees the
+                # channel as not running and can rebuild it after re-pairing.
+                await self.stop()
                 break
             try:
                 async with websockets.connect(self.config.bridge_url) as ws:
