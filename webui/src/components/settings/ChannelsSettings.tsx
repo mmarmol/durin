@@ -5,10 +5,12 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ChannelSecretField } from "@/components/settings/secrets/ChannelSecretField";
+import { DiscordIcon } from "@/components/icons/DiscordIcon";
 import { useClient } from "@/providers/ClientProvider";
 import { getConfig, listChannels, setConfigValue, startChannel, stopChannel, type ChannelField, type ChannelInfo } from "@/lib/api";
 import { TelegramGuided } from "@/components/settings/channels/TelegramGuided";
 import { SlackGuided } from "@/components/settings/channels/SlackGuided";
+import { DiscordGuided } from "@/components/settings/channels/DiscordGuided";
 import { PersonaSelect } from "@/components/settings/channels/PersonaSelect";
 
 // Groups that are always visible in the form.
@@ -32,12 +34,15 @@ function secretName(channel: string, field: string): string {
 }
 
 /** Generic per-type glyphs so channel rows carry an icon like the Providers
- *  tab does (lucide has no brand marks for these platforms — match by kind). */
-const CHANNEL_ICONS: Record<string, LucideIcon> = {
+ *  tab does (lucide has no brand marks for these platforms — match by kind).
+ *  Discord gets its own inline brand mark (see DiscordIcon) since lucide
+ *  ships no glyph for it at all. */
+const CHANNEL_ICONS: Record<string, LucideIcon | typeof DiscordIcon> = {
   email: Mail,
   websocket: Plug,
   telegram: Send,
   slack: Slack,
+  discord: DiscordIcon,
 };
 
 /** Icon container mirroring the Providers tab's ProviderIcon treatment. */
@@ -141,10 +146,13 @@ function FieldInput({
       />
     );
   }
-  if (field.type === "int") {
+  if (field.type === "int" || field.type === "float") {
     return (
       <Input
         type="number"
+        // Fractional knobs (seconds, intervals) need a fractional step, or the
+        // browser's spinner and validation reject anything but whole numbers.
+        step={field.type === "float" ? "any" : undefined}
         defaultValue={String(value ?? "")}
         disabled={busy}
         onBlur={(e) => onChange(Number(e.target.value))}
@@ -388,9 +396,9 @@ function ChannelRow({
                     : t("settings.channels.enable")}
                 </Button>
               ) : null}
-              {/* Slack is excluded: enabling without tokens strands the channel,
-                  so its guided wizard owns the save-and-enable step. */}
-              {hasFields && !channel.enabled && channel.name !== "slack" ? (
+              {/* Slack and Discord are excluded: enabling without tokens strands
+                  the channel, so their guided wizards own the save-and-enable step. */}
+              {hasFields && !channel.enabled && channel.name !== "slack" && channel.name !== "discord" ? (
                 <Button
                   size="sm"
                   variant="outline"
@@ -441,12 +449,24 @@ function ChannelRow({
             </SlackGuided>
           ) : null}
 
+          {/* Discord wraps the generic form the same way Slack does */}
+          {channel.name === "discord" ? (
+            <DiscordGuided
+              channel={channel}
+              channelValues={channelValues}
+              token={token}
+              onChanged={onChanged}
+            >
+              {schemaForm}
+            </DiscordGuided>
+          ) : null}
+
           {/* Schema-driven grouped field form (websocket / email) */}
-          {hasFields && channel.name !== "telegram" && channel.name !== "slack"
+          {hasFields && channel.name !== "telegram" && channel.name !== "slack" && channel.name !== "discord"
             ? schemaForm
             : null}
 
-          {/* Legacy single-credential path: channels with empty fields (discord/etc) */}
+          {/* Legacy single-credential path: channels with empty fields (matrix/qq/etc) */}
           {!hasFields && channel.name !== "telegram" ? (
             <div className="mt-3 flex flex-wrap items-center gap-2">
               {channel.credential_field ? (

@@ -59,6 +59,7 @@ def build_service_registry(
     from durin.service.auth import AuthService
     from durin.service.channels_runtime import ChannelsRuntimeService
     from durin.service.channels_slack import SlackService
+    from durin.service.channels_discord import DiscordService
     from durin.service.channels_telegram import TelegramService
     from durin.service.commands import CommandsService
     from durin.service.config import ConfigService
@@ -97,6 +98,7 @@ def build_service_registry(
     registry.register("settings", SettingsService(on_default_changed=on_default_changed))
     registry.register("config", ConfigService(on_config_changed=on_config_changed))
     registry.register("telegram", TelegramService())
+    registry.register("discord", DiscordService())
     registry.register("slack", SlackService())
     registry.register("channels_runtime", ChannelsRuntimeService(channel_manager=channel_manager))
     registry.register("skills", SkillsService(workspace=_workspace()))

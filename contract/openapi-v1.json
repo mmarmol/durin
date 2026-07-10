@@ -1101,6 +1101,198 @@
         "title": "CrossEncoderTestResult",
         "type": "object"
       },
+      "DiscordGuildsListQuery": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "DiscordGuildsListQuery",
+        "type": "object"
+      },
+      "DiscordGuildsListResult": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "guilds": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Guilds",
+            "type": "array"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "DiscordGuildsListResult",
+        "type": "object"
+      },
+      "DiscordInviteQuery": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "DiscordInviteQuery",
+        "type": "object"
+      },
+      "DiscordInviteResult": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "permissions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Permissions"
+          },
+          "scopes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scopes"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Url"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "DiscordInviteResult",
+        "type": "object"
+      },
+      "DiscordTestCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "default": "",
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "title": "DiscordTestCommand",
+        "type": "object"
+      },
+      "DiscordTestResult": {
+        "properties": {
+          "application_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Application Id"
+          },
+          "bot_user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bot User"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "invite_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Invite Url"
+          },
+          "message_content_intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message Content Intent"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "DiscordTestResult",
+        "type": "object"
+      },
       "DreamDigest": {
         "description": "Recent dream activity: the latest run's counts (headline) plus a\nnewest-first feed of prior runs and their activity, capped at *limit*.",
         "properties": {
@@ -3716,6 +3908,14 @@
             },
             "title": "Approved",
             "type": "array"
+          },
+          "names": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Names",
+            "type": "object"
           },
           "pending": {
             "items": {
@@ -6654,6 +6854,209 @@
         },
         "summary": "Discovered channels with their enabled state and primary credential field",
         "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/discord/guilds": {
+      "get": {
+        "operationId": "discord_guilds",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscordGuildsListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscordGuildsListResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List the servers the bot is in and their messageable channels",
+        "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/discord/invite": {
+      "get": {
+        "operationId": "discord_invite",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscordInviteQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscordInviteResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Build a least-privilege OAuth invite URL for the configured bot",
+        "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/discord/pairing": {
+      "get": {
+        "operationId": "discord_pairing",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingListResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List pending and approved Discord pairing entries",
+        "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/discord/pairing/approve": {
+      "post": {
+        "operationId": "discord_pairing_approve",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingApproveCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingApproveResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Approve a pending Discord pairing code",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/discord/pairing/deny": {
+      "post": {
+        "operationId": "discord_pairing_deny",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingDenyCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingDenyResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Deny and discard a pending Discord pairing code",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/discord/pairing/revoke": {
+      "post": {
+        "operationId": "discord_pairing_revoke",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingRevokeCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingRevokeResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Revoke an approved Discord sender",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/discord/test": {
+      "post": {
+        "operationId": "discord_test",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscordTestCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscordTestResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Validate a Discord bot token and report read permission (persists nothing)",
+        "x-required-scope": "config:write"
       }
     },
     "/api/v1/channels/runtime": {
