@@ -286,7 +286,7 @@ pointing at events the channel already processed once. `MessageDeduplicator`
 (`durin/channels/dedup.py`) centralizes the "have I seen this id recently?"
 check so channel adapters stop reimplementing their own TTL'd id cache. Each
 channel owns its own instance, keyed by whatever the platform calls its
-event or message id, and checks it before any other inbound processing.
+event or message id, and checks it before any side-effecting processing.
 
 **Two modes.** The default is in-memory: entries are pruned once the cache
 exceeds its size cap or ages past its TTL, and everything is lost on gateway
@@ -295,21 +295,31 @@ connection or a slow-ack window, never across a restart. Persistence is
 opt-in via a `persist_path` (a JSON file under the runtime `dedup/`
 subdirectory, written atomically) for transports whose redelivery window can
 outlive the process: Feishu's Lark WebSocket redelivers un-ACKed events
-after the gateway itself restarts, and Matrix's `nio` client resyncs from
-the last persisted sync token after a crash that lands between an event
-callback and the token-store write, replaying that window on the next
-start. Only a persistent cache closes that gap — an in-memory one would
-reprocess the replayed events as if they were new.
+after the gateway itself restarts, and only a persistent cache closes that
+gap there — an in-memory one would reprocess the replayed events as if they
+were new. Matrix's `nio` client resyncs from the last persisted sync token
+after a crash that lands between an event callback and the token-store
+write, replaying that window on the next start; there, the
+`_is_pre_startup_event` timestamp filter already drops that replay on its
+own, so the persistent cache's marginal value is defense in depth against
+clock skew rather than closing the gap — it can never false-drop a message,
+since Matrix event ids are unique.
 
 **Adoption by channel.** Slack, WhatsApp, WeCom, Weixin, and QQ migrated
 their pre-existing ad hoc caches onto the shared helper in memory-only mode,
-keeping each channel's prior cache size and TTL so the migration is
-behavior-preserving. DingTalk and MS Teams gained dedup they didn't have
-before, also in memory-only mode: DingTalk's stream SDK re-pushes a message
-when the gateway acks slowly, and Bot Framework retries a webhook delivery
-under the same condition — both are same-connection replays, not crash
-recovery, so memory-only is sufficient. Feishu and Matrix use the persistent
-mode described above, since only they need to survive a gateway restart.
+preserving each channel's prior cache size. Slack already had a 300s TTL,
+carried over unchanged; WhatsApp, WeCom, Weixin, and QQ previously had no
+TTL at all (an `OrderedDict` or `deque` pruned by size alone), so the shared
+helper's 300s TTL is new for them — a deliberate loosening, not a
+preservation: realistic redelivery windows for these transports are
+seconds, and bounding by TTL *and* size cap is strictly safer than the
+unbounded-age retention the old size-only caches allowed. DingTalk and MS
+Teams gained dedup they didn't have before, also in memory-only mode:
+DingTalk's stream SDK re-pushes a message when the gateway acks slowly, and
+Bot Framework retries a webhook delivery under the same condition — both
+are same-connection replays, not crash recovery, so memory-only is
+sufficient. Feishu and Matrix use the persistent mode described above,
+since only they need to survive a gateway restart.
 
 Weixin deliberately does not layer a content fingerprint (hashing
 sender+text, as some other bot frameworks do) on top of id-based dedup:
