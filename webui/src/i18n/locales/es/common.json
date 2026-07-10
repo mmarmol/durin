@@ -1081,10 +1081,7 @@
     },
     "concurrency": {
       "description": "Cuántos turnos y sub-agentes se ejecutan a la vez. Los cambios se aplican de inmediato, sin reiniciar.",
-      "sections": {
-        "caps": "Límites",
-        "live": "En vivo"
-      },
+      "sections": { "caps": "Límites", "live": "En vivo" },
       "rows": {
         "interactive": "Turnos interactivos",
         "ceiling": "Techo global",
