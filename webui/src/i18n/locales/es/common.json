@@ -236,6 +236,8 @@
       "groupAttachments": "Adjuntos",
       "sectionActive": "Activos",
       "sectionAvailable": "Disponibles",
+      "needsInstall": "Requiere dependencia opcional — se instala automáticamente al habilitar (durin-ai[{{extra}}])",
+      "installOnRestart": "Se instalará al reiniciar el gateway (durin-ai[{{extra}}])",
       "advanced": "Avanzado",
       "groupAccess": "Acceso",
       "telegram": {

@@ -290,6 +290,8 @@
       "groupAttachments": "Attachments",
       "sectionActive": "Active",
       "sectionAvailable": "Available",
+      "needsInstall": "Optional dependency required — installs automatically when enabled (durin-ai[{{extra}}])",
+      "installOnRestart": "Will install on next gateway restart (durin-ai[{{extra}}])",
       "advanced": "Advanced",
       "groupAccess": "Access",
       "telegram": {

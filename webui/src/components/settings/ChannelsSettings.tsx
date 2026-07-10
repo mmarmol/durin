@@ -363,6 +363,13 @@ function ChannelRow({
                 {t("settings.channels.disabled")}
               </div>
             )}
+            {!channel.available ? (
+              <div className="text-[11px] text-muted-foreground/80">
+                {channel.enabled
+                  ? t("settings.channels.installOnRestart", { extra: channel.install_extra })
+                  : t("settings.channels.needsInstall", { extra: channel.install_extra })}
+              </div>
+            ) : null}
           </div>
         </div>
         {/* Action buttons + chevron — stopPropagation keeps buttons independent of accordion */}
