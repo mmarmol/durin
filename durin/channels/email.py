@@ -1,21 +1,23 @@
 """Email channel implementation using IMAP polling + SMTP replies."""
 
 import asyncio
+import base64
 import html
 import imaplib
 import re
 import smtplib
 import ssl
+import time
 from contextlib import suppress
 from datetime import date
 from email import policy
 from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.parser import BytesParser
-from email.utils import parseaddr
+from email.utils import make_msgid, parseaddr
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
 from pydantic import Field
@@ -23,7 +25,14 @@ from pydantic import Field
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
-from durin.config.paths import get_media_dir
+from durin.channels.email_threads import (
+    ThreadStore,
+    decode_thread_index_conv_id,
+    ensure_angle_brackets,
+    normalize_subject,
+    thread_digest,
+)
+from durin.config.paths import get_media_dir, get_runtime_subdir
 from durin.config.schema import Base
 from durin.utils.helpers import safe_filename
 
@@ -56,6 +65,9 @@ class EmailConfig(Base):
     mark_seen: bool = Field(default=True, json_schema_extra={"group": "behavior"})
     max_body_chars: int = Field(default=12000, json_schema_extra={"group": "behavior"})
     subject_prefix: str = Field(default="Re: ", json_schema_extra={"group": "behavior"})
+    threading_mode: Literal["thread", "sender"] = Field(
+        default="thread", json_schema_extra={"group": "behavior"}
+    )
     allow_from: list[str] = Field(default_factory=list, json_schema_extra={"group": "access"})
 
     # Email authentication verification (anti-spoofing)
@@ -127,10 +139,12 @@ class EmailChannel(BaseChannel):
         super().__init__(config, bus)
         self.config: EmailConfig = config
         self._self_addresses = self._collect_self_addresses()
-        self._last_subject_by_chat: dict[str, str] = {}
-        self._last_message_id_by_chat: dict[str, str] = {}
         self._processed_uids: set[str] = set()  # Capped to prevent unbounded growth
         self._MAX_PROCESSED_UIDS = 100000
+        self._store = ThreadStore(get_runtime_subdir("email") / "threads.json")
+        self._store.load()
+        self._last_prune = time.time()
+        self._sent_folder: str | None = None
 
     async def start(self) -> None:
         """Start polling IMAP for inbound emails."""
@@ -145,6 +159,7 @@ class EmailChannel(BaseChannel):
             return
 
         self._running = True
+        self._store.load()
         if not self.config.verify_dkim and not self.config.verify_spf:
             self.logger.warning(
                 "DKIM and SPF verification are both DISABLED. "
@@ -159,25 +174,35 @@ class EmailChannel(BaseChannel):
                 inbound_items = await asyncio.to_thread(self._fetch_new_messages)
                 for item in inbound_items:
                     sender = item["sender"]
-                    subject = item.get("subject", "")
-                    message_id = item.get("message_id", "")
 
-                    if subject:
-                        self._last_subject_by_chat[sender] = subject
-                    if message_id:
-                        self._last_message_id_by_chat[sender] = message_id
-
+                    digest = self._resolve_thread(item)
+                    # Embed the thread digest into inbound metadata so ordinary
+                    # replies (which flow through _assemble_outbound's inbound
+                    # passthrough, not the system/subagent-followup builder) can
+                    # still stitch to the right thread — mirrors Slack's
+                    # "slack": {"thread_ts": ...} idiom. Needed in both modes:
+                    # send() consults it regardless of threading_mode.
+                    item["metadata"]["email"] = {"thread": digest}
+                    session_key = (
+                        f"email:{sender}:{digest}"
+                        if self.config.threading_mode == "thread"
+                        else None
+                    )
                     await self._handle_message(
                         sender_id=sender,
                         chat_id=sender,
                         content=item["content"],
                         media=item.get("media") or None,
                         metadata=item.get("metadata", {}),
+                        session_key=session_key,
                     )
             except Exception:
                 self.logger.exception("Polling error")
 
             await asyncio.sleep(poll_seconds)
+            if time.time() - self._last_prune > 86400:
+                self._store.prune()
+                self._last_prune = time.time()
 
     async def stop(self) -> None:
         """Stop polling loop."""
@@ -198,8 +223,24 @@ class EmailChannel(BaseChannel):
             self.logger.warning("Missing recipient address")
             return
 
-        # Determine if this is a reply (recipient has sent us an email before)
-        is_reply = to_addr in self._last_subject_by_chat
+        # Resolve thread state from the store: explicit digest from outbound
+        # metadata (set by the agent loop from the session key) → latest
+        # thread for the address → fresh mail with no reply context.
+        thread_meta = (msg.metadata or {}).get("email") or {}
+        entry = None
+        digest = ""
+        explicit_thread = isinstance(thread_meta, dict) and thread_meta.get("thread")
+        if explicit_thread:
+            digest = str(thread_meta["thread"])
+            entry = self._store.get(digest)
+            # An explicit digest that misses the store is a stale/unknown
+            # thread reference — treat as fresh mail, do NOT fall back to
+            # latest_for_address (that would stitch the reply to the wrong
+            # conversation).
+        else:
+            entry = self._store.latest_for_address(to_addr)
+            digest = thread_digest(entry["root"]) if entry else ""
+        is_reply = entry is not None
         force_send = bool((msg.metadata or {}).get("force_send"))
 
         # autoReplyEnabled only controls automatic replies, not proactive sends
@@ -207,10 +248,13 @@ class EmailChannel(BaseChannel):
             self.logger.info("Skip automatic reply to {}: auto_reply_enabled is false", to_addr)
             return
 
-        base_subject = self._last_subject_by_chat.get(to_addr, "durin reply")
+        base_subject = (entry or {}).get("subject") or "durin reply"
         subject = self._reply_subject(base_subject)
-        if msg.metadata and isinstance(msg.metadata.get("subject"), str):
-            override = msg.metadata["subject"].strip()
+        # Top-level metadata carries inbound passthrough (including the
+        # inbound mail's own "subject"), which is not an override signal.
+        # Only the email-namespaced "subject" is an intentional override.
+        if isinstance(thread_meta.get("subject"), str):
+            override = thread_meta["subject"].strip()
             if override:
                 subject = override
 
@@ -218,18 +262,53 @@ class EmailChannel(BaseChannel):
         email_msg["From"] = self.config.from_address or self.config.smtp_username or self.config.imap_username
         email_msg["To"] = to_addr
         email_msg["Subject"] = subject
-        email_msg.set_content(msg.content or "")
 
-        in_reply_to = self._last_message_id_by_chat.get(to_addr)
-        if in_reply_to:
-            email_msg["In-Reply-To"] = in_reply_to
-            email_msg["References"] = in_reply_to
+        body_md = msg.content or ""
+        email_msg.set_content(body_md)
+        try:
+            from markdown_it import MarkdownIt
+
+            html_body = MarkdownIt("commonmark").enable("table").render(body_md)
+            email_msg.add_alternative(html_body, subtype="html")
+        except Exception as exc:
+            self.logger.warning("Markdown→HTML render failed, sending plain only: {}", exc)
+
+        from_addr = parseaddr(email_msg["From"] or "")[1] or "durin@localhost"
+        own_message_id = make_msgid(domain=from_addr.split("@")[-1])
+        email_msg["Message-ID"] = own_message_id
+        if entry:
+            chain = [ensure_angle_brackets(r) for r in entry.get("references") or []]
+            last_id = ensure_angle_brackets(entry.get("last_message_id", "")) or (
+                chain[-1] if chain else ""
+            )
+            if last_id:
+                email_msg["In-Reply-To"] = last_id
+                if last_id not in chain:
+                    chain.append(last_id)  # invariant: References ends with In-Reply-To
+                email_msg["References"] = " ".join(chain)
+            if entry.get("thread_index_conv_id"):
+                try:
+                    email_msg["Thread-Index"] = base64.b64encode(
+                        bytes.fromhex(entry["thread_index_conv_id"])
+                    ).decode()
+                except Exception as exc:
+                    self.logger.warning(
+                        "Skipping Thread-Index re-emit: corrupt thread_index_conv_id {!r}: {}",
+                        entry["thread_index_conv_id"], exc,
+                    )
+            if entry.get("thread_topic"):
+                email_msg["Thread-Topic"] = entry["thread_topic"]
 
         try:
             await asyncio.to_thread(self._smtp_send, email_msg)
         except Exception:
             self.logger.exception("Error sending to {}", to_addr)
             raise
+
+        await asyncio.to_thread(self._append_to_sent, email_msg)
+
+        if entry and digest:
+            self._store.record_outbound(digest, own_message_id)
 
     def _validate_config(self) -> bool:
         missing = []
@@ -268,6 +347,67 @@ class EmailChannel(BaseChannel):
                 smtp.starttls(context=ssl.create_default_context())
             smtp.login(self.config.smtp_username, self.config.smtp_password)
             smtp.send_message(msg)
+
+    def _detect_sent_folder(self, client: Any) -> str | None:
+        """Find the mailbox flagged \\Sent via LIST.
+
+        Returns the folder name when a \\Sent-flagged mailbox was actually
+        found, or None when LIST failed or nothing matched — callers must
+        not cache None, so a transient failure gets retried on the next send.
+        """
+        try:
+            status, boxes = client.list()
+            if status == "OK":
+                for line in boxes or []:
+                    decoded = line.decode("utf-8", errors="ignore") if isinstance(line, bytes) else str(line)
+                    if "\\sent" in decoded.lower():
+                        m = re.search(r'"([^"]+)"\s*$', decoded)
+                        if m:
+                            return f'"{m.group(1)}"'
+                        # RFC 3501 LIST may carry unquoted mailbox atoms, e.g.
+                        # (\HasNoChildren \Sent) "/" Sent — take the last token.
+                        tokens = decoded.split()
+                        if tokens:
+                            return tokens[-1]
+        except Exception as exc:
+            self.logger.debug("Sent-folder detection failed: {}", exc)
+        return None
+
+    def _append_to_sent(self, email_msg: EmailMessage) -> None:
+        """Best-effort copy of an outbound mail into the Sent folder.
+
+        Without this, mail durin sends never appears in the mailbox: threads
+        look one-sided from every mail client. Failure only logs — the SMTP
+        send already succeeded.
+        """
+        try:
+            if self.config.imap_use_ssl:
+                client = imaplib.IMAP4_SSL(
+                    self.config.imap_host, self.config.imap_port, timeout=15
+                )
+            else:
+                client = imaplib.IMAP4(
+                    self.config.imap_host, self.config.imap_port, timeout=15
+                )
+            try:
+                client.login(self.config.imap_username, self.config.imap_password)
+                detected = None
+                if self._sent_folder is None:
+                    detected = self._detect_sent_folder(client)
+                    if detected is not None:
+                        self._sent_folder = detected
+                folder = self._sent_folder or detected or '"Sent"'
+                client.append(
+                    folder,
+                    "(\\Seen)",
+                    imaplib.Time2Internaldate(time.time()),
+                    email_msg.as_bytes(),
+                )
+            finally:
+                with suppress(Exception):
+                    client.logout()
+        except Exception as exc:
+            self.logger.warning("Could not copy sent mail to Sent folder: {}", exc)
 
     def _fetch_new_messages(self) -> list[dict[str, Any]]:
         """Poll IMAP and return parsed unread messages."""
@@ -345,9 +485,13 @@ class EmailChannel(BaseChannel):
         mailbox = self.config.imap_mailbox or "INBOX"
 
         if self.config.imap_use_ssl:
-            client = imaplib.IMAP4_SSL(self.config.imap_host, self.config.imap_port)
+            client = imaplib.IMAP4_SSL(
+                self.config.imap_host, self.config.imap_port, timeout=30
+            )
         else:
-            client = imaplib.IMAP4(self.config.imap_host, self.config.imap_port)
+            client = imaplib.IMAP4(
+                self.config.imap_host, self.config.imap_port, timeout=30
+            )
 
         try:
             client.login(self.config.imap_username, self.config.imap_password)
@@ -395,6 +539,17 @@ class EmailChannel(BaseChannel):
                         client.store(imap_id, "+FLAGS", "\\Seen")
                     continue
 
+                auto_submitted = (parsed.get("Auto-Submitted", "") or "").strip().lower()
+                if auto_submitted and auto_submitted != "no":
+                    self.logger.info(
+                        "From {} dropped: Auto-Submitted={} (RFC 3834)",
+                        sender, auto_submitted,
+                    )
+                    self._remember_processed_uid(uid, dedupe, cycle_uids)
+                    if mark_seen:
+                        client.store(imap_id, "+FLAGS", "\\Seen")
+                    continue
+
                 # --- Anti-spoofing: verify Authentication-Results ---
                 spf_pass, dkim_pass = self._check_authentication_results(parsed)
                 if self.config.verify_spf and not spf_pass:
@@ -422,7 +577,17 @@ class EmailChannel(BaseChannel):
 
                 subject = self._decode_header_value(parsed.get("Subject", ""))
                 date_value = parsed.get("Date", "")
-                message_id = parsed.get("Message-ID", "").strip()
+                message_id = ensure_angle_brackets(parsed.get("Message-ID", ""))
+                in_reply_to = ensure_angle_brackets(parsed.get("In-Reply-To", ""))
+                references = [
+                    ensure_angle_brackets(r)
+                    for r in (parsed.get("References", "") or "").split()
+                    if r.strip()
+                ]
+                # Folded RFC 2822 headers can carry embedded whitespace; collapse
+                # it all before base64-decoding the Thread-Index fingerprint.
+                thread_index = "".join((parsed.get("Thread-Index", "") or "").split())
+                thread_topic = self._decode_header_value(parsed.get("Thread-Topic", ""))
                 body = self._extract_text_body(parsed)
 
                 if not body:
@@ -457,6 +622,10 @@ class EmailChannel(BaseChannel):
                     "date": date_value,
                     "sender_email": sender,
                     "uid": uid,
+                    "in_reply_to": in_reply_to,
+                    "references": references,
+                    "thread_index": thread_index,
+                    "thread_topic": thread_topic,
                 }
                 messages.append(
                     {
@@ -466,6 +635,10 @@ class EmailChannel(BaseChannel):
                         "content": content,
                         "metadata": metadata,
                         "media": attachment_paths,
+                        "in_reply_to": in_reply_to,
+                        "references": references,
+                        "thread_index": thread_index,
+                        "thread_topic": thread_topic,
                     }
                 )
 
@@ -559,9 +732,15 @@ class EmailChannel(BaseChannel):
         if not value:
             return ""
         try:
-            return str(make_header(decode_header(value)))
+            decoded = str(make_header(decode_header(value)))
         except Exception:
-            return value
+            decoded = value
+        # RFC 2047 decoding can yield embedded CR/LF (header injection via a
+        # crafted encoded-word); a raw newline in an outbound header makes
+        # stdlib's email package raise ValueError and permanently fails the
+        # reply. Collapse to a single-line value.
+        sanitized = re.sub(r"[\r\n]+", " ", decoded)
+        return " ".join(sanitized.split())
 
     @classmethod
     def _extract_text_body(cls, msg: Any) -> str:
@@ -681,6 +860,48 @@ class EmailChannel(BaseChannel):
         text = re.sub(r"<\s*/\s*p\s*>", "\n", text, flags=re.IGNORECASE)
         text = re.sub(r"<[^>]+>", "", text)
         return html.unescape(text)
+
+    def _resolve_thread(self, item: dict[str, Any]) -> str:
+        """Resolve an inbound mail to its thread digest and record it.
+
+        Order: References/In-Reply-To chain → Thread-Index conversation
+        fingerprint gated by normalized subject (Exchange rewrites References
+        on internal hops) → new thread rooted at this mail's Message-ID.
+        """
+        message_id = item.get("message_id", "")
+        references: list[str] = item.get("references") or []
+        in_reply_to = item.get("in_reply_to", "")
+        subject = item.get("subject", "")
+        conv_id = decode_thread_index_conv_id(item.get("thread_index", ""))
+
+        root = references[0] if references else in_reply_to
+        digest = thread_digest(root) if root else ""
+        if not digest or self._store.get(digest) is None:
+            # Either no References/In-Reply-To at all, or they point at a root
+            # the store doesn't know (Exchange rewrote References on an
+            # internal hop). Try the Thread-Index fallback; if it misses too,
+            # keep the References-derived root rather than discarding it.
+            via_conv = self._store.lookup_conv(conv_id, normalize_subject(subject))
+            if via_conv:
+                digest = via_conv
+                root = self._store.get(digest)["root"]
+        if not digest:
+            # Header-less mail must not share one thread identity: fall back to a
+            # per-message synthetic root keyed on the IMAP UID when Message-ID is empty.
+            root = message_id or f"<uid-{(item.get('metadata') or {}).get('uid') or 'noid'}@durin.invalid>"
+            digest = thread_digest(root)
+
+        self._store.upsert_inbound(
+            digest,
+            root=root,
+            address=item.get("sender", ""),
+            subject=subject,
+            references=references,
+            message_id=message_id,
+            thread_index_conv_id=conv_id,
+            thread_topic=item.get("thread_topic", ""),
+        )
+        return digest
 
     def _reply_subject(self, base_subject: str) -> str:
         subject = (base_subject or "").strip() or "durin reply"

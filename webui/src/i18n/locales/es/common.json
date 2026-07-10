@@ -430,14 +430,22 @@
         "working_emoji_delay": "Retardo del emoji (s)",
         "proxy": "URL del proxy",
         "proxy_username": "Usuario del proxy",
-        "proxy_password": "Contraseña del proxy"
+        "proxy_password": "Contraseña del proxy",
+        "threading_mode": "Agrupación de conversaciones"
       },
       "optionLabel": {
         "group_policy": {
           "open": "Responder a todos los mensajes",
           "mention": "Solo cuando lo mencionan",
           "allowlist": "Solo en canales permitidos"
+        },
+        "threading_mode": {
+          "thread": "Una conversación por hilo de mail (recomendado)",
+          "sender": "Una conversación continua por remitente"
         }
+      },
+      "fieldHelp": {
+        "threading_mode": "Por hilo: cada hilo de mail es su propia conversación — ideal cuando la misma persona escribe sobre temas distintos. Por remitente: todo el correo de una dirección continúa una sola conversación."
       },
       "placeholder": {
         "allow_from": "",

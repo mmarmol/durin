@@ -413,12 +413,42 @@ allow_from = ["trusted@example.com"]
 | `verify_spf` | `true` | Require `spf=pass` in `Authentication-Results` |
 | `allowed_attachment_types` | `[]` | MIME types to accept (e.g. `["image/*", "application/pdf"]`); empty = no attachments |
 | `max_body_chars` | `12000` | Truncate message body beyond this length |
+| `threading_mode` | `"thread"` | `"thread"` gives each mail conversation its own session; `"sender"` keeps one session per address regardless of subject/thread |
 
 > The `consent_granted` flag is a deliberate gate: the email channel reads
 > your mailbox and replies on your behalf. Set it to `true` only after you
 > have reviewed and accepted that behaviour. Both `consent_granted` and a
 > non-empty `allow_from` list must be set for the channel to receive and
 > authorize mail.
+
+### Conversation threading
+
+With `threading_mode = "thread"` (the default), each mail conversation gets
+its own durin session — a reply in one email thread never sees context from
+an unrelated thread with the same sender, even if the subject repeats. With
+`threading_mode = "sender"`, every message from a given address shares one
+session regardless of subject or thread, matching the channel's original
+behaviour. Switching between the two modes at any time is safe: nothing needs
+to be migrated or reset.
+
+Replies are stitched into the mail client's own thread view — durin tracks
+the References/In-Reply-To chain (and Outlook's Thread-Index, for Exchange
+clients) so a reply shows up as part of the original conversation instead of
+arriving as a disconnected new message.
+
+Auto-submitted mail — bounces, out-of-office replies, vacation autoresponders,
+and other automated mail (per RFC 3834) — is always dropped before it reaches
+the agent, in both threading modes. Durin never auto-replies to an
+autoresponder.
+
+After durin sends a reply, it also appends a copy to the mailbox's own Sent
+folder (detected automatically over IMAP), so a reply sent through durin
+appears in the mailbox the same way a reply sent from a regular mail client
+would.
+
+Replies are sent as styled HTML with a plain-text fallback: durin renders the
+response markdown to HTML for clients that display it, and includes the raw
+markdown as a plain-text alternative for clients that don't.
 
 ---
 

@@ -2298,6 +2298,8 @@ class AgentLoop:
         outbound_metadata: dict[str, Any] = {}
         if channel == "slack" and key.startswith("slack:") and key.count(":") >= 2:
             outbound_metadata["slack"] = {"thread_ts": key.split(":", 2)[2]}
+        if channel == "email" and key.startswith("email:") and key.count(":") >= 2:
+            outbound_metadata["email"] = {"thread": key.rsplit(":", 1)[1]}
         if origin_message_id := msg.metadata.get("origin_message_id"):
             outbound_metadata["origin_message_id"] = origin_message_id
         return OutboundMessage(
