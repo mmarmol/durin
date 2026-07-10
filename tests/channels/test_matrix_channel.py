@@ -541,6 +541,71 @@ async def test_on_media_message_skips_pre_startup_event() -> None:
 
 
 @pytest.mark.asyncio
+async def test_on_message_dedups_repeated_event_id() -> None:
+    channel = MatrixChannel(_make_config(), MessageBus())
+    client = _FakeAsyncClient("", "", "", None)
+    channel.client = client
+
+    handled: list[str] = []
+
+    async def _fake_handle_message(**kwargs) -> None:
+        handled.append(kwargs["sender_id"])
+
+    channel._handle_message = _fake_handle_message  # type: ignore[method-assign]
+
+    room = SimpleNamespace(room_id="!room:matrix.org", display_name="Test room")
+    event = SimpleNamespace(
+        sender="@alice:matrix.org", body="Hello", source={}, event_id="$evt1"
+    )
+
+    # nio re-delivers events after a reconnect; the same event_id must only
+    # reach _handle_message once.
+    await channel._on_message(room, event)
+    await channel._on_message(room, event)
+
+    assert handled == ["@alice:matrix.org"]
+
+
+@pytest.mark.asyncio
+async def test_on_media_message_dedups_repeated_event_id(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("durin.channels.matrix.get_data_dir", lambda: tmp_path)
+
+    channel = MatrixChannel(_make_config(), MessageBus())
+    client = _FakeAsyncClient("", "", "", None)
+    channel.client = client
+
+    handled: list[dict[str, object]] = []
+
+    async def _fake_handle_message(**kwargs) -> None:
+        handled.append(kwargs)
+
+    channel._handle_message = _fake_handle_message  # type: ignore[method-assign]
+
+    room = SimpleNamespace(room_id="!room:matrix.org", display_name="Test room", member_count=2)
+    event = SimpleNamespace(
+        sender="@alice:matrix.org",
+        body="photo.png",
+        url="mxc://example.org/mediaid",
+        event_id="$evt2",
+        source={"content": {"msgtype": "m.image"}},
+    )
+
+    await channel._on_media_message(room, event)
+    await channel._on_media_message(room, event)
+
+    assert len(client.download_calls) == 1
+    assert len(handled) == 1
+
+
+def test_matrix_dedup_survives_restart(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    ch1 = MatrixChannel(_make_config(), MessageBus())
+    assert ch1._dedup.is_duplicate("$evt_restart") is False
+    ch2 = MatrixChannel(_make_config(), MessageBus())
+    assert ch2._dedup.is_duplicate("$evt_restart") is True
+
+
+@pytest.mark.asyncio
 async def test_on_message_skips_typing_for_denied_sender() -> None:
     channel = MatrixChannel(_make_config(allow_from=["@bob:matrix.org"]), MessageBus())
     client = _FakeAsyncClient("", "", "", None)
