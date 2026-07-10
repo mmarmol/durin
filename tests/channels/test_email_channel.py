@@ -1427,3 +1427,56 @@ async def test_send_builds_html_multipart(tmp_path, monkeypatch) -> None:
     assert "**bold**" in plain
     assert "<strong>bold</strong>" in html_part
     assert '<a href="https://example.com">' in html_part
+
+
+@pytest.mark.asyncio
+async def test_send_appends_copy_to_sent_folder(tmp_path, monkeypatch) -> None:
+    raw = _make_raw_email_threaded(message_id="<m1@x>", subject="Q")
+    channel, _ = _make_channel(tmp_path, monkeypatch, raw)
+    channel._store.load()
+    channel._resolve_thread(channel._fetch_new_messages()[0])
+
+    appended: list = []
+
+    class FakeIMAPSent:
+        def login(self, _u, _p):
+            return "OK", [b"ok"]
+
+        def list(self):
+            return "OK", [b'(\\HasNoChildren \\Sent) "/" "Enviados"']
+
+        def append(self, folder, flags, _dt, body):
+            appended.append((folder, flags, body))
+            return "OK", [b""]
+
+        def logout(self):
+            return "BYE", [b""]
+
+    monkeypatch.setattr(
+        "durin.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: FakeIMAPSent()
+    )
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: None)
+    await channel.send(OutboundMessage(
+        channel="email", chat_id="alice@example.com", content="hi",
+    ))
+    assert len(appended) == 1
+    assert appended[0][0] == '"Enviados"'
+
+
+@pytest.mark.asyncio
+async def test_sent_append_failure_does_not_break_send(tmp_path, monkeypatch) -> None:
+    raw = _make_raw_email_threaded(message_id="<m1@x>", subject="Q")
+    channel, _ = _make_channel(tmp_path, monkeypatch, raw)
+    channel._store.load()
+    channel._resolve_thread(channel._fetch_new_messages()[0])
+
+    def _boom(_h, _p):
+        raise OSError("imap down")
+
+    monkeypatch.setattr("durin.channels.email.imaplib.IMAP4_SSL", _boom)
+    sent: list = []
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: sent.append(m))
+    await channel.send(OutboundMessage(
+        channel="email", chat_id="alice@example.com", content="hi",
+    ))
+    assert len(sent) == 1  # send succeeded despite append failure

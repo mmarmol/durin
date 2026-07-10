@@ -144,6 +144,7 @@ class EmailChannel(BaseChannel):
         self._store = ThreadStore(get_runtime_subdir("email") / "threads.json")
         self._store.load()
         self._last_prune = time.time()
+        self._sent_folder: str | None = None
 
     async def start(self) -> None:
         """Start polling IMAP for inbound emails."""
@@ -289,6 +290,8 @@ class EmailChannel(BaseChannel):
             self.logger.exception("Error sending to {}", to_addr)
             raise
 
+        await asyncio.to_thread(self._append_to_sent, email_msg)
+
         if entry and digest:
             self._store.record_outbound(digest, own_message_id)
 
@@ -329,6 +332,49 @@ class EmailChannel(BaseChannel):
                 smtp.starttls(context=ssl.create_default_context())
             smtp.login(self.config.smtp_username, self.config.smtp_password)
             smtp.send_message(msg)
+
+    def _detect_sent_folder(self, client: Any) -> str:
+        """Find the mailbox flagged \\Sent via LIST; fall back to "Sent"."""
+        try:
+            status, boxes = client.list()
+            if status == "OK":
+                for line in boxes or []:
+                    decoded = line.decode("utf-8", errors="ignore") if isinstance(line, bytes) else str(line)
+                    if "\\sent" in decoded.lower():
+                        m = re.search(r'"([^"]+)"\s*$', decoded)
+                        if m:
+                            return f'"{m.group(1)}"'
+        except Exception as exc:
+            self.logger.debug("Sent-folder detection failed: {}", exc)
+        return '"Sent"'
+
+    def _append_to_sent(self, email_msg: EmailMessage) -> None:
+        """Best-effort copy of an outbound mail into the Sent folder.
+
+        Without this, mail durin sends never appears in the mailbox: threads
+        look one-sided from every mail client. Failure only logs — the SMTP
+        send already succeeded.
+        """
+        try:
+            if self.config.imap_use_ssl:
+                client = imaplib.IMAP4_SSL(self.config.imap_host, self.config.imap_port)
+            else:
+                client = imaplib.IMAP4(self.config.imap_host, self.config.imap_port)
+            try:
+                client.login(self.config.imap_username, self.config.imap_password)
+                if self._sent_folder is None:
+                    self._sent_folder = self._detect_sent_folder(client)
+                client.append(
+                    self._sent_folder,
+                    "(\\Seen)",
+                    imaplib.Time2Internaldate(time.time()),
+                    email_msg.as_bytes(),
+                )
+            finally:
+                with suppress(Exception):
+                    client.logout()
+        except Exception as exc:
+            self.logger.warning("Could not copy sent mail to Sent folder: {}", exc)
 
     def _fetch_new_messages(self) -> list[dict[str, Any]]:
         """Poll IMAP and return parsed unread messages."""
