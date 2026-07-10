@@ -455,7 +455,6 @@ async def test_send_multiple_messages_only_first_uses_reply_when_reply_to_messag
 @pytest.mark.asyncio
 async def test_on_message_captures_parent_and_root_id_in_metadata() -> None:
     channel = _make_feishu_channel()
-    channel._processed_message_ids.clear()
     channel._client.im.v1.message.react.return_value = MagicMock(success=lambda: True)
 
     captured = []
@@ -483,7 +482,6 @@ async def test_on_message_captures_parent_and_root_id_in_metadata() -> None:
 @pytest.mark.asyncio
 async def test_on_message_parent_and_root_id_none_when_absent() -> None:
     channel = _make_feishu_channel()
-    channel._processed_message_ids.clear()
 
     captured = []
 
@@ -504,7 +502,6 @@ async def test_on_message_parent_and_root_id_none_when_absent() -> None:
 @pytest.mark.asyncio
 async def test_on_message_prepends_reply_context_when_parent_id_present() -> None:
     channel = _make_feishu_channel()
-    channel._processed_message_ids.clear()
     channel._client.im.v1.message.get.return_value = _make_get_message_response("original question")
 
     captured = []
@@ -531,7 +528,6 @@ async def test_on_message_prepends_reply_context_when_parent_id_present() -> Non
 @pytest.mark.asyncio
 async def test_on_message_no_extra_api_call_when_no_parent_id() -> None:
     channel = _make_feishu_channel()
-    channel._processed_message_ids.clear()
 
     captured = []
 
@@ -555,7 +551,6 @@ async def test_on_message_no_extra_api_call_when_no_parent_id() -> None:
 @pytest.mark.asyncio
 async def test_on_message_audio_publishes_downloaded_path_and_transcription() -> None:
     channel = _make_feishu_channel()
-    channel._processed_message_ids.clear()
     captured = []
 
     async def capture(msg):
@@ -1053,7 +1048,6 @@ async def test_session_key_with_topic_isolation_false_uses_group_scoped() -> Non
 @pytest.mark.asyncio
 async def test_on_message_audio_keeps_path_when_transcription_fails() -> None:
     channel = _make_feishu_channel()
-    channel._processed_message_ids.clear()
     captured = []
 
     async def capture(msg):
@@ -1077,3 +1071,11 @@ async def test_on_message_audio_keeps_path_when_transcription_fails() -> None:
     assert len(captured) == 1
     # Path kept as fallback when transcription fails.
     assert audio_path in captured[0].media
+
+
+def test_feishu_dedup_survives_restart(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+    ch1 = _make_feishu_channel()
+    assert ch1._dedup.is_duplicate("om_abc") is False
+    ch2 = _make_feishu_channel()
+    assert ch2._dedup.is_duplicate("om_abc") is True
