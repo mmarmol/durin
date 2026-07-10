@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -202,6 +202,13 @@ async def test_start_skips_load_store_when_device_id_missing(
     monkeypatch.setattr(
         "durin.channels.matrix.asyncio.create_task", _fake_create_task
     )
+    # This test is about the device_id skip path, not the olm downgrade, so
+    # force olm "present" to keep the historical encryption_enabled=True
+    # expectation regardless of whether this venv actually has olm installed.
+    monkeypatch.setattr(
+        "durin.channels.matrix.importlib.util.find_spec",
+        lambda name: object() if name == "olm" else None,
+    )
 
     channel = MatrixChannel(_make_config(device_id=""), MessageBus())
     await channel.start()
@@ -264,6 +271,48 @@ async def test_start_disables_e2ee_when_configured(
     assert clients[0].config.encryption_enabled is False
 
     await channel.stop()
+
+
+def test_resolve_encryption_enabled_downgrades_when_olm_absent(monkeypatch) -> None:
+    """The shipped extra ships nio without olm; requesting encryption in that
+    state must downgrade rather than let nio raise at client construction."""
+    channel = MatrixChannel(_make_config(e2ee_enabled=True), MessageBus())
+    monkeypatch.setattr(
+        "durin.channels.matrix.importlib.util.find_spec",
+        lambda name: None,
+    )
+    channel.logger = MagicMock()
+
+    assert channel._resolve_encryption_enabled() is False
+    channel.logger.warning.assert_called_once()
+    assert "olm" in channel.logger.warning.call_args[0][0]
+
+
+def test_resolve_encryption_enabled_true_when_olm_present(monkeypatch) -> None:
+    channel = MatrixChannel(_make_config(e2ee_enabled=True), MessageBus())
+    monkeypatch.setattr(
+        "durin.channels.matrix.importlib.util.find_spec",
+        lambda name: object() if name == "olm" else None,
+    )
+    channel.logger = MagicMock()
+
+    assert channel._resolve_encryption_enabled() is True
+    channel.logger.warning.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_start_returns_cleanly_when_matrix_unavailable(monkeypatch) -> None:
+    """Mirrors Discord's unavailable-extra guard: log and return, so the
+    manager's crash supervisor treats it as a clean stop, not a restart loop."""
+    monkeypatch.setattr(matrix_module, "MATRIX_AVAILABLE", False)
+    channel = MatrixChannel(_make_config(), MessageBus())
+    channel.logger = MagicMock()
+
+    result = await channel.start()
+
+    assert result is None
+    channel.logger.error.assert_called_once()
+    assert "durin-ai[matrix]" in channel.logger.error.call_args[0][0]
 
 
 @pytest.mark.asyncio
@@ -1808,3 +1857,17 @@ async def test_audio_transcription_drops_media(monkeypatch, tmp_path) -> None:
     assert kwargs["media"] == []
     assert "hi there" in kwargs["content"]
     assert "[transcription:" not in kwargs["content"]
+
+
+def test_matrix_module_importable_and_discovered_without_extra(monkeypatch):
+    """The channel module, config model, and registry discovery must work even
+    when the optional nio/mistune/nh3 deps are absent (they may be absent in
+    this env or present — the discovery contract holds either way)."""
+    from durin.channels.registry import discover_channel_names, load_channel_class
+
+    assert "matrix" in discover_channel_names()
+    cls = load_channel_class("matrix")
+    assert cls.__name__ == "MatrixChannel"
+    # Config model importable -> webui gets its settings form.
+    model = cls.config_model()
+    assert "homeserver" in model.model_fields or len(model.model_fields) > 0
