@@ -443,6 +443,65 @@ above: it publishes unconditionally with `is_dm` set and lets the central
 gate authorize, generating pairing codes for unapproved DM senders exactly
 like Telegram and Slack.
 
+### Email conversation threading
+
+The email channel (`durin/channels/email.py`) resolves each inbound message to
+a thread and, depending on `threading_mode`, uses that resolution to scope the
+session — mirroring the Slack thread-scoped session precedent
+(`InboundMessage.session_key_override`, see "Inbound path" above). With
+`threading_mode="thread"`, `_resolve_thread` computes a thread digest and sets
+`session_key_override` to `email:{sender}:{digest}`; with
+`threading_mode="sender"`, no override is set and `session_key` falls back to
+`email:{sender}`, as before. The thread store (below) is updated identically
+in both modes, so toggling `threading_mode` is a lossless config change.
+
+**Thread resolution order** (`_resolve_thread`): the thread root is, in order,
+(1) the first entry in the inbound message's `References` header, falling
+back to `In-Reply-To` when `References` is absent; (2) when neither header
+resolves to a known thread, a secondary index keyed by the Outlook
+Thread-Index conversation prefix plus the normalized subject — this recovers
+threads where Exchange/Outlook rewrote or dropped `References` on an internal
+hop; (3) failing both, a new thread rooted at the mail's own `Message-ID`, or
+at a synthetic root derived from the IMAP UID when even `Message-ID` is
+missing, so header-less mail is never folded into an unrelated thread. The
+resolved root is hashed (`thread_digest`, from `durin/channels/email_threads.py`)
+into the short digest used in the session key and the thread store.
+
+**Thread store** (`durin/channels/email_threads.py::ThreadStore`): a single
+JSON file at `~/.durin/email/threads.json`, with the gateway's email channel
+instance as its only writer, written atomically (temp file + rename). It is
+pruned both at load and once a day: entries idle beyond the configured
+max age are dropped, and if the store still exceeds the entry cap the
+oldest-by-last-seen entries are evicted. A corrupt or unreadable file is
+treated as an empty store rather than raised — replies degrade to unstitched
+(no `In-Reply-To`/`References`), since the store only carries header-stitching
+state; conversation content lives in durin sessions and is never affected.
+
+**Outbound stitching invariant**: `send()` resolves the thread entry for a
+reply from, in order, an explicit digest carried in the outbound metadata, the
+latest known thread for the recipient address, or no entry (a fresh mail with
+no reply context). Durin always generates its own `Message-ID` for the
+outbound mail and records it via `record_outbound`. When a thread entry
+exists, the outbound `References` header is the stored chain with the
+resolved `In-Reply-To` value appended if it isn't already the last entry —
+`References` always ends with `In-Reply-To`. `Thread-Index` and
+`Thread-Topic` are re-emitted verbatim when the store carries them, so
+Outlook/Exchange clients keep grouping the conversation. The reply body is
+sent as `multipart/alternative`: the raw markdown as `text/plain`, plus HTML
+rendered from it; a render failure logs a warning and falls back to
+plain-only.
+
+After a successful SMTP send, `_append_to_sent` makes a best-effort copy of
+the message into the mailbox's Sent folder over IMAP. The Sent folder is
+auto-detected via `LIST` for the mailbox flagged `\Sent` (falling back to a
+literal `"Sent"` if detection fails), and a failed detection is not cached, so
+it is retried on the next send rather than giving up permanently.
+
+**Inbound RFC 3834 guard**: any inbound message whose `Auto-Submitted` header
+is present and not equal to `"no"` — bounces, out-of-office replies, vacation
+autoresponders, and other automated mail — is dropped before it reaches the
+agent loop, regardless of `threading_mode`.
+
 ### Pairing store
 
 The pairing store (`durin/pairing/store.py`) is a small JSON file at
@@ -527,7 +586,9 @@ Channel-specific extensions:
   override > session pick > chat map > channel default > global default.
 - **Email**: `imap_host`, `imap_port`, `imap_username`, `imap_password`,
   `imap_mailbox`, `imap_use_ssl`, `smtp_host`, `smtp_port`, `smtp_username`,
-  `smtp_password`, `smtp_use_tls`, `smtp_use_ssl`, `auto_reply_enabled`.
+  `smtp_password`, `smtp_use_tls`, `smtp_use_ssl`, `auto_reply_enabled`,
+  `threading_mode` (`"thread"` | `"sender"`; see "Email conversation
+  threading" above).
 - **WhatsApp**: `bridge_url` (loopback WS URL for the Go bridge, default
   `ws://localhost:3001`), `bridge_token` (shared auth secret for the bridge
   socket; auto-generated and persisted under
