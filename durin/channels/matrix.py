@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import mimetypes
 import time
@@ -70,7 +71,6 @@ if MATRIX_AVAILABLE:
     # allowed through here too — nh3's attribute_filter still enforces the
     # actual per-tag policy (mxc: only on img src, not on href) below.
     MATRIX_MARKDOWN = create_markdown(
-        escape=True,
         renderer=HTMLRenderer(escape=True, allow_harmful_protocols=["mxc:"]),
         plugins=["table", "strikethrough", "url", "superscript", "subscript"],
     )
@@ -252,6 +252,23 @@ class MatrixChannel(BaseChannel):
         self._started_at_ms: int = 0
 
 
+    def _resolve_encryption_enabled(self) -> bool:
+        """Downgrade e2ee_enabled to False when the olm bindings aren't installed.
+
+        The shipped `matrix-nio` extra ships without `olm`; nio deterministically
+        raises when `AsyncClientConfig(encryption_enabled=True)` is constructed
+        without it, so encryption can only be requested when both the config
+        flag and the bindings agree.
+        """
+        olm_present = importlib.util.find_spec("olm") is not None
+        if self.config.e2ee_enabled and not olm_present:
+            self.logger.warning(
+                "e2ee_enabled is set but the olm bindings are not installed; "
+                "end-to-end encrypted rooms are disabled. Install matrix-nio[e2e] "
+                "to enable them."
+            )
+        return self.config.e2ee_enabled and olm_present
+
     async def start(self) -> None:
         """Start Matrix client and begin sync loop."""
         if not MATRIX_AVAILABLE:
@@ -276,7 +293,7 @@ class MatrixChannel(BaseChannel):
             store_path=self.store_path,
             config=AsyncClientConfig(
                 store_sync_tokens=True,
-                encryption_enabled=self.config.e2ee_enabled,
+                encryption_enabled=self._resolve_encryption_enabled(),
                 store_name=safe_store_name,
             ),
         )

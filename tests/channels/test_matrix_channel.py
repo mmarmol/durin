@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -202,6 +202,13 @@ async def test_start_skips_load_store_when_device_id_missing(
     monkeypatch.setattr(
         "durin.channels.matrix.asyncio.create_task", _fake_create_task
     )
+    # This test is about the device_id skip path, not the olm downgrade, so
+    # force olm "present" to keep the historical encryption_enabled=True
+    # expectation regardless of whether this venv actually has olm installed.
+    monkeypatch.setattr(
+        "durin.channels.matrix.importlib.util.find_spec",
+        lambda name: object() if name == "olm" else None,
+    )
 
     channel = MatrixChannel(_make_config(device_id=""), MessageBus())
     await channel.start()
@@ -264,6 +271,33 @@ async def test_start_disables_e2ee_when_configured(
     assert clients[0].config.encryption_enabled is False
 
     await channel.stop()
+
+
+def test_resolve_encryption_enabled_downgrades_when_olm_absent(monkeypatch) -> None:
+    """The shipped extra ships nio without olm; requesting encryption in that
+    state must downgrade rather than let nio raise at client construction."""
+    channel = MatrixChannel(_make_config(e2ee_enabled=True), MessageBus())
+    monkeypatch.setattr(
+        "durin.channels.matrix.importlib.util.find_spec",
+        lambda name: None,
+    )
+    channel.logger = MagicMock()
+
+    assert channel._resolve_encryption_enabled() is False
+    channel.logger.warning.assert_called_once()
+    assert "olm" in channel.logger.warning.call_args[0][0]
+
+
+def test_resolve_encryption_enabled_true_when_olm_present(monkeypatch) -> None:
+    channel = MatrixChannel(_make_config(e2ee_enabled=True), MessageBus())
+    monkeypatch.setattr(
+        "durin.channels.matrix.importlib.util.find_spec",
+        lambda name: object() if name == "olm" else None,
+    )
+    channel.logger = MagicMock()
+
+    assert channel._resolve_encryption_enabled() is True
+    channel.logger.warning.assert_not_called()
 
 
 @pytest.mark.asyncio

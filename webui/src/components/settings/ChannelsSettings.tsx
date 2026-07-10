@@ -364,7 +364,7 @@ function ChannelRow({
               </div>
             )}
             {/* === false, not !available: older gateways omit the field and
-                every channel would otherwise hint "durin-ai[undefined]" */}
+                every channel would otherwise hint "durin-ai[]" */}
             {channel.available === false ? (
               <div className="text-[11px] text-muted-foreground/80">
                 {channel.enabled

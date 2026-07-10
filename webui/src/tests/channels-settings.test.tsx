@@ -46,7 +46,7 @@ describe("ChannelsSettings availability hint", () => {
       channel({ name: "matrix", display_name: "Matrix", available: false, install_extra: "matrix" }),
       channel({ name: "qq", display_name: "QQ", enabled: true, available: false, install_extra: "qq" }),
       // Old gateway payload: no available/install_extra at all → no hint.
-      channel({ name: "telegram", display_name: "Telegram", available: undefined as unknown as boolean }),
+      channel({ name: "telegram", display_name: "Telegram", available: undefined }),
     ]);
     render(<ChannelsSettings token="t" />);
     await screen.findByText("Matrix");

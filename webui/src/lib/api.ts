@@ -1407,8 +1407,8 @@ export interface ChannelInfo {
   description: string;
   credential_field: string | null;
   fields: ChannelField[];
-  available: boolean;
-  install_extra: string | null;
+  available?: boolean;
+  install_extra?: string | null;
 }
 
 export async function listChannels(
