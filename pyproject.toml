@@ -89,7 +89,7 @@ discord = [
     "discord.py>=2.5.2,<3.0.0",
 ]
 matrix = [
-    # Base matrix-nio covers the channel's full import set, including
+    # Base matrix-nio covers the channel's full nio import set, including
     # nio.crypto.attachments (AES media decryption via pycryptodome) and the
     # sync-token store. The [e2e] extra (olm-encrypted rooms) is deliberately
     # NOT included: python-olm has no wheels for modern macOS and its bundled
