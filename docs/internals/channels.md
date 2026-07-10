@@ -481,7 +481,8 @@ state; conversation content lives in durin sessions and is never affected.
 reply from, in order, an explicit digest carried in the outbound metadata, the
 latest known thread for the recipient address, or no entry (a fresh mail with
 no reply context). Durin always generates its own `Message-ID` for the
-outbound mail and records it via `record_outbound`. When a thread entry
+outbound mail and, when replying within a known thread, records it via
+`record_outbound` as the thread's new last link. When a thread entry
 exists, the outbound `References` header is the stored chain with the
 resolved `In-Reply-To` value appended if it isn't already the last entry —
 `References` always ends with `In-Reply-To`. `Thread-Index` and
