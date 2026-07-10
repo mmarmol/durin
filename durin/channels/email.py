@@ -13,7 +13,7 @@ from email import policy
 from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.parser import BytesParser
-from email.utils import parseaddr
+from email.utils import make_msgid, parseaddr
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Literal
@@ -138,8 +138,6 @@ class EmailChannel(BaseChannel):
         super().__init__(config, bus)
         self.config: EmailConfig = config
         self._self_addresses = self._collect_self_addresses()
-        self._last_subject_by_chat: dict[str, str] = {}
-        self._last_message_id_by_chat: dict[str, str] = {}
         self._processed_uids: set[str] = set()  # Capped to prevent unbounded growth
         self._MAX_PROCESSED_UIDS = 100000
         self._store = ThreadStore(get_runtime_subdir("email") / "threads.json")
@@ -174,13 +172,6 @@ class EmailChannel(BaseChannel):
                 inbound_items = await asyncio.to_thread(self._fetch_new_messages)
                 for item in inbound_items:
                     sender = item["sender"]
-                    subject = item.get("subject", "")
-                    message_id = item.get("message_id", "")
-
-                    if subject:
-                        self._last_subject_by_chat[sender] = subject
-                    if message_id:
-                        self._last_message_id_by_chat[sender] = message_id
 
                     digest = self._resolve_thread(item)
                     session_key = (
@@ -223,8 +214,19 @@ class EmailChannel(BaseChannel):
             self.logger.warning("Missing recipient address")
             return
 
-        # Determine if this is a reply (recipient has sent us an email before)
-        is_reply = to_addr in self._last_subject_by_chat
+        # Resolve thread state from the store: explicit digest from outbound
+        # metadata (set by the agent loop from the session key) → latest
+        # thread for the address → fresh mail with no reply context.
+        thread_meta = (msg.metadata or {}).get("email") or {}
+        entry = None
+        digest = ""
+        if isinstance(thread_meta, dict) and thread_meta.get("thread"):
+            entry = self._store.get(str(thread_meta["thread"]))
+            digest = str(thread_meta["thread"])
+        if entry is None:
+            entry = self._store.latest_for_address(to_addr)
+            digest = thread_digest(entry["root"]) if entry else ""
+        is_reply = entry is not None
         force_send = bool((msg.metadata or {}).get("force_send"))
 
         # autoReplyEnabled only controls automatic replies, not proactive sends
@@ -232,7 +234,7 @@ class EmailChannel(BaseChannel):
             self.logger.info("Skip automatic reply to {}: auto_reply_enabled is false", to_addr)
             return
 
-        base_subject = self._last_subject_by_chat.get(to_addr, "durin reply")
+        base_subject = (entry or {}).get("subject") or "durin reply"
         subject = self._reply_subject(base_subject)
         if msg.metadata and isinstance(msg.metadata.get("subject"), str):
             override = msg.metadata["subject"].strip()
@@ -245,16 +247,32 @@ class EmailChannel(BaseChannel):
         email_msg["Subject"] = subject
         email_msg.set_content(msg.content or "")
 
-        in_reply_to = self._last_message_id_by_chat.get(to_addr)
-        if in_reply_to:
-            email_msg["In-Reply-To"] = in_reply_to
-            email_msg["References"] = in_reply_to
+        own_message_id = make_msgid(domain=(email_msg["From"] or "durin@localhost").split("@")[-1])
+        email_msg["Message-ID"] = own_message_id
+        if entry:
+            last_id = ensure_angle_brackets(entry.get("last_message_id", ""))
+            if last_id:
+                email_msg["In-Reply-To"] = last_id
+                chain = [ensure_angle_brackets(r) for r in entry.get("references") or []]
+                if last_id not in chain:
+                    chain.append(last_id)  # invariant: References ends with In-Reply-To
+                email_msg["References"] = " ".join(chain)
+            if entry.get("thread_index_conv_id"):
+                import base64 as _b64
+                email_msg["Thread-Index"] = _b64.b64encode(
+                    bytes.fromhex(entry["thread_index_conv_id"])
+                ).decode()
+            if entry.get("thread_topic"):
+                email_msg["Thread-Topic"] = entry["thread_topic"]
 
         try:
             await asyncio.to_thread(self._smtp_send, email_msg)
         except Exception:
             self.logger.exception("Error sending to {}", to_addr)
             raise
+
+        if entry and digest:
+            self._store.record_outbound(digest, own_message_id)
 
     def _validate_config(self) -> bool:
         missing = []

@@ -341,6 +341,8 @@ async def test_start_returns_immediately_without_consent(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_send_uses_smtp_and_reply_subject(monkeypatch) -> None:
+    from durin.channels.email_threads import thread_digest
+
     class FakeSMTP:
         def __init__(self, _host: str, _port: int, timeout: int = 30) -> None:
             self.timeout = timeout
@@ -373,8 +375,14 @@ async def test_send_uses_smtp_and_reply_subject(monkeypatch) -> None:
     monkeypatch.setattr("durin.channels.email.smtplib.SMTP", _smtp_factory)
 
     channel = EmailChannel(_make_config(), MessageBus())
-    channel._last_subject_by_chat["alice@example.com"] = "Invoice #42"
-    channel._last_message_id_by_chat["alice@example.com"] = "<m1@example.com>"
+    channel._store.upsert_inbound(
+        thread_digest("<m1@example.com>"),
+        root="<m1@example.com>",
+        address="alice@example.com",
+        subject="Invoice #42",
+        references=[],
+        message_id="<m1@example.com>",
+    )
 
     await channel.send(
         OutboundMessage(
@@ -393,11 +401,16 @@ async def test_send_uses_smtp_and_reply_subject(monkeypatch) -> None:
     assert sent["Subject"] == "Re: Invoice #42"
     assert sent["To"] == "alice@example.com"
     assert sent["In-Reply-To"] == "<m1@example.com>"
+    refs = sent["References"].split()
+    assert refs == ["<m1@example.com>"]
+    assert sent["Message-ID"].startswith("<") and sent["Message-ID"].endswith(">")
 
 
 @pytest.mark.asyncio
 async def test_send_skips_reply_when_auto_reply_disabled(monkeypatch) -> None:
     """When auto_reply_enabled=False, replies should be skipped but proactive sends allowed."""
+    from durin.channels.email_threads import thread_digest
+
     class FakeSMTP:
         def __init__(self, _host: str, _port: int, timeout: int = 30) -> None:
             self.sent_messages: list[EmailMessage] = []
@@ -431,7 +444,14 @@ async def test_send_skips_reply_when_auto_reply_disabled(monkeypatch) -> None:
     channel = EmailChannel(cfg, MessageBus())
 
     # Mark alice as someone who sent us an email (making this a "reply")
-    channel._last_subject_by_chat["alice@example.com"] = "Previous email"
+    channel._store.upsert_inbound(
+        thread_digest("<prev@example.com>"),
+        root="<prev@example.com>",
+        address="alice@example.com",
+        subject="Previous email",
+        references=[],
+        message_id="<prev@example.com>",
+    )
 
     # Reply should be skipped (auto_reply_enabled=False)
     await channel.send(
@@ -1237,3 +1257,75 @@ async def test_start_polling_loop_publishes_thread_scoped_session(tmp_path, monk
         assert len(published) == 1
         assert published[0].session_key == expected
         assert channel._store.get(thread_digest("<m1@example.com>")) is not None
+
+
+# ---------------------------------------------------------------------------
+# Outbound: stitching from the store + agent-loop routing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_stitches_full_reference_chain(tmp_path, monkeypatch) -> None:
+    raw = _make_raw_email_threaded(
+        message_id="<m2@example.com>", references="<m1@example.com>",
+        subject="Re: Invoice",
+    )
+    channel, _ = _make_channel(tmp_path, monkeypatch, raw)
+    channel._store.load()
+    item = channel._fetch_new_messages()[0]
+    digest = channel._resolve_thread(item)
+
+    sent: list = []
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: sent.append(m))
+    await channel.send(OutboundMessage(
+        channel="email", chat_id="alice@example.com", content="On it.",
+        metadata={"email": {"thread": digest}},
+    ))
+
+    msg = sent[0]
+    assert msg["In-Reply-To"] == "<m2@example.com>"
+    refs = msg["References"].split()
+    assert refs == ["<m1@example.com>", "<m2@example.com>"]
+    assert msg["Subject"] == "Re: Invoice"
+    own_id = msg["Message-ID"]
+    assert own_id.startswith("<") and own_id.endswith(">")
+    # durin's own message becomes the thread's new last link.
+    entry = channel._store.get(digest)
+    assert entry["last_message_id"] == own_id
+    assert entry["references"][-1] == own_id
+
+
+@pytest.mark.asyncio
+async def test_send_two_parallel_threads_do_not_cross(tmp_path, monkeypatch) -> None:
+    channel = None
+    digests = []
+    for mid, subj, uid in (("<a1@x>", "Thread A", "1"), ("<b1@x>", "Thread B", "2")):
+        raw = _make_raw_email_threaded(message_id=mid, subject=subj)
+        channel, _ = _make_channel(tmp_path, monkeypatch, raw, uid=uid)
+        channel._store.load()
+        digests.append(channel._resolve_thread(channel._fetch_new_messages()[0]))
+
+    sent: list = []
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: sent.append(m))
+    await channel.send(OutboundMessage(
+        channel="email", chat_id="alice@example.com", content="re A",
+        metadata={"email": {"thread": digests[0]}},
+    ))
+    assert sent[0]["In-Reply-To"] == "<a1@x>"
+    assert sent[0]["Subject"] == "Re: Thread A"
+
+
+@pytest.mark.asyncio
+async def test_send_without_thread_uses_latest_for_address(tmp_path, monkeypatch) -> None:
+    raw = _make_raw_email_threaded(message_id="<m1@x>", subject="Question")
+    channel, _ = _make_channel(tmp_path, monkeypatch, raw, threading_mode="sender")
+    channel._store.load()
+    channel._resolve_thread(channel._fetch_new_messages()[0])
+
+    sent: list = []
+    monkeypatch.setattr(channel, "_smtp_send", lambda m: sent.append(m))
+    await channel.send(OutboundMessage(
+        channel="email", chat_id="alice@example.com", content="hi",
+    ))
+    assert sent[0]["In-Reply-To"] == "<m1@x>"
+    assert sent[0]["Subject"] == "Re: Question"
