@@ -6,7 +6,6 @@ import hashlib
 import importlib.util
 import os
 import re
-from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +14,7 @@ from pydantic import Field
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
+from durin.channels.dedup import MessageDeduplicator
 from durin.config.paths import get_media_dir
 from durin.config.schema import Base
 
@@ -93,7 +93,7 @@ class WecomChannel(BaseChannel):
         super().__init__(config, bus)
         self.config: WecomConfig = config
         self._client: Any = None
-        self._processed_message_ids: OrderedDict[str, None] = OrderedDict()
+        self._dedup = MessageDeduplicator(max_size=1000, ttl_seconds=300.0)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._generate_req_id = None
         # Store frame headers for each chat to enable replies
@@ -242,13 +242,8 @@ class WecomChannel(BaseChannel):
                 return
 
             # Deduplication check
-            if msg_id in self._processed_message_ids:
+            if self._dedup.is_duplicate(msg_id):
                 return
-            self._processed_message_ids[msg_id] = None
-
-            # Trim cache
-            while len(self._processed_message_ids) > 1000:
-                self._processed_message_ids.popitem(last=False)
 
             # For single chat, chatid is the sender's userid
             # For group chat, chatid is provided in body
