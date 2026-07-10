@@ -175,9 +175,15 @@ function ConnectedPanel({
 function GuidedSetup({
   token,
   onChanged,
+  forceOnConnect = false,
 }: {
   token: string;
   onChanged: () => void;
+  /** Re-pair session: force the bridge to drop the existing linked session so
+   *  a fresh QR is shown (otherwise it reports "already_paired" instantly and
+   *  the user can never link a different number). Retries within the session
+   *  keep this intent. */
+  forceOnConnect?: boolean;
 }) {
   const { t } = useTranslation();
   const [login, setLogin] = useState<WhatsAppLoginState | null>(null);
@@ -259,7 +265,7 @@ function GuidedSetup({
       ) : null}
 
       {!login || login.status === "idle" ? (
-        <Button size="sm" variant="outline" onClick={() => void connect(false)} className="rounded-full">
+        <Button size="sm" variant="outline" onClick={() => void connect(forceOnConnect)} className="rounded-full">
           <QrCode className="mr-1.5 h-3.5 w-3.5" />
           {t("settings.channels.whatsapp.connect")}
         </Button>
@@ -294,7 +300,7 @@ function GuidedSetup({
       {login?.status === "timeout" ? (
         <div className="space-y-1.5">
           <p className="text-[12px] text-muted-foreground">{t("settings.channels.whatsapp.timeout")}</p>
-          <Button size="sm" variant="outline" onClick={() => void connect(false)} className="rounded-full">
+          <Button size="sm" variant="outline" onClick={() => void connect(forceOnConnect)} className="rounded-full">
             <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
             {t("settings.channels.whatsapp.retry")}
           </Button>
@@ -306,7 +312,7 @@ function GuidedSetup({
           <p className="text-[12px] text-amber-600 dark:text-amber-400">
             {login.error ?? t("settings.channels.saveError")}
           </p>
-          <Button size="sm" variant="outline" onClick={() => void connect(false)} className="rounded-full">
+          <Button size="sm" variant="outline" onClick={() => void connect(forceOnConnect)} className="rounded-full">
             <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
             {t("settings.channels.whatsapp.retry")}
           </Button>
@@ -357,6 +363,7 @@ export function WhatsAppGuided({
       ) : (
         <GuidedSetup
           token={token}
+          forceOnConnect={relinking}
           onChanged={() => {
             setRelinking(false);
             onChanged();

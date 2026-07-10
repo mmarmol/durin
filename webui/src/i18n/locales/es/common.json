@@ -410,8 +410,6 @@
         "allow_from": "Permitir desde",
         "bot_token": "Token del bot",
         "app_token": "Token de aplicación",
-        "bridge_url": "URL del bridge",
-        "bridge_token": "Token del bridge",
         "dm_enabled": "Mensajes directos",
         "group_policy": "Política en canales",
         "group_allow_from": "Canales permitidos",
@@ -466,9 +464,7 @@
         }
       },
       "fieldHelp": {
-        "threading_mode": "Por hilo: cada hilo de mail es su propia conversación — ideal cuando la misma persona escribe sobre temas distintos. Por remitente: todo el correo de una dirección continúa una sola conversación.",
-        "bridge_url": "Dirección interna del proceso local del bridge de WhatsApp — deja el valor por defecto salvo que lo corras en otro lado.",
-        "bridge_token": "Token interno de autenticación del proceso del bridge. Se genera automáticamente; solo cámbialo si corres el bridge por separado."
+        "threading_mode": "Por hilo: cada hilo de mail es su propia conversación — ideal cuando la misma persona escribe sobre temas distintos. Por remitente: todo el correo de una dirección continúa una sola conversación."
       },
       "placeholder": {
         "allow_from": "",
