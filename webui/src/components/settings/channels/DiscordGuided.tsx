@@ -410,7 +410,7 @@ function ScopePanel({
           ) : null}
 
           {guilds === null && !guildsError ? (
-            <p className="text-[12px] text-muted-foreground">{t("settings.status.loading")}</p>
+            <p className="text-[12px] text-muted-foreground">{t("settings.channels.discord.loadingChannels")}</p>
           ) : null}
 
           {guilds && guilds.length === 0 ? (

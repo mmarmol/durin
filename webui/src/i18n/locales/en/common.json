@@ -427,11 +427,12 @@
         "scopeTitle": "Where durin answers",
         "scopeAll": "Answer in every channel it can see",
         "scopeOnly": "Only in the channels I choose",
-        "scopeOnlyWarning": "No channels are ticked yet — the bot will not answer anywhere until you pick at least one.",
+        "scopeOnlyWarning": "With no channels ticked, durin answers everywhere it can see. Tick the channels you want to restrict it to.",
         "searchChannels": "Filter channels…",
         "guildSelectedCount": "{{n}} of {{m}} selected",
         "noGuilds": "The bot is not in any server yet — invite it first.",
-        "forumBadge": "forum"
+        "forumBadge": "forum",
+        "loadingChannels": "Loading servers…"
       },
       "desc": {
         "websocket": "Transport for the web dashboard and external WebSocket clients. Always on while the dashboard is enabled. The token is optional, only for external clients.",
@@ -1081,7 +1082,10 @@
     },
     "concurrency": {
       "description": "How many turns and sub-agents run at once. Changes apply immediately, no restart.",
-      "sections": { "caps": "Limits", "live": "Live" },
+      "sections": {
+        "caps": "Limits",
+        "live": "Live"
+      },
       "rows": {
         "interactive": "Interactive turns",
         "ceiling": "Global ceiling",

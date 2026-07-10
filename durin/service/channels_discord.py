@@ -248,7 +248,7 @@ class DiscordService:
         allowed = set(_configured_allow_channels())
         try:
             out: list[dict[str, Any]] = []
-            for guild in await _rest_guilds(token):
+            for guild, raw_channels in await _rest_guild_tree(token):
                 channels = [
                     {
                         "id": str(c["id"]),
@@ -256,7 +256,7 @@ class DiscordService:
                         "type": c.get("type"),
                         "allowed": str(c["id"]) in allowed,
                     }
-                    for c in await _rest_channels(token, str(guild["id"]))
+                    for c in raw_channels
                     if c.get("type") in _MESSAGEABLE_CHANNEL_TYPES
                 ]
                 out.append(
@@ -402,22 +402,23 @@ def _configured_allow_channels() -> list[str]:
         return []
 
 
-async def _rest_guilds(token: str) -> list[dict[str, Any]]:
-    """GET /users/@me/guilds — works with the channel stopped."""
+async def _rest_guild_tree(token: str) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+    """Every guild the bot is in, paired with its channels.
+
+    One login for the whole tree: a client per guild would mean a fresh TLS
+    handshake and a /users/@me round trip for each one, and a bot in twenty
+    servers would spend twenty of them every time the panel opens.
+
+    REST only, so this works while the channel is stopped.
+    """
     client = _rest_client()
     try:
         await _login(client, token)
-        return await client.http.get_guilds(limit=200)
-    finally:
-        await _close(client)
-
-
-async def _rest_channels(token: str, guild_id: str) -> list[dict[str, Any]]:
-    """GET /guilds/{id}/channels."""
-    client = _rest_client()
-    try:
-        await _login(client, token)
-        return await client.http.get_all_guild_channels(int(guild_id))
+        guilds = await client.http.get_guilds(limit=200)
+        return [
+            (guild, await client.http.get_all_guild_channels(int(guild["id"])))
+            for guild in guilds
+        ]
     finally:
         await _close(client)
 

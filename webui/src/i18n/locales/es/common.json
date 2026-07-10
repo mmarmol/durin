@@ -373,11 +373,12 @@
         "scopeTitle": "Dónde responde durin",
         "scopeAll": "Responder en todos los canales que pueda ver",
         "scopeOnly": "Solo en los canales que elija",
-        "scopeOnlyWarning": "Aún no hay canales marcados — el bot no responderá en ningún lado hasta que elijas al menos uno.",
+        "scopeOnlyWarning": "Sin canales marcados, durin responde en todos los que pueda ver. Marca los canales a los que quieras restringirlo.",
         "searchChannels": "Filtrar canales…",
         "guildSelectedCount": "{{n}} de {{m}} seleccionados",
         "noGuilds": "El bot todavía no está en ningún servidor — invítalo primero.",
-        "forumBadge": "foro"
+        "forumBadge": "foro",
+        "loadingChannels": "Cargando servidores…"
       },
       "desc": {
         "websocket": "Transporte del panel web y de clientes WebSocket externos. Siempre activo mientras el panel esté habilitado. El token es opcional, solo para clientes externos.",
@@ -1080,7 +1081,10 @@
     },
     "concurrency": {
       "description": "Cuántos turnos y sub-agentes se ejecutan a la vez. Los cambios se aplican de inmediato, sin reiniciar.",
-      "sections": { "caps": "Límites", "live": "En vivo" },
+      "sections": {
+        "caps": "Límites",
+        "live": "En vivo"
+      },
       "rows": {
         "interactive": "Turnos interactivos",
         "ceiling": "Techo global",

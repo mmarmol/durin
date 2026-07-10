@@ -65,8 +65,10 @@ class _FakeClient:
 
 @pytest.fixture(autouse=True)
 def _isolated_pairing(tmp_path, monkeypatch):
+    """DURIN_HOME is the only isolation the pairing store honours: it derives
+    its path per call. A `_STORE_PATH` pin looks reassuring and does nothing —
+    the attribute does not exist, so tests would write the real store."""
     monkeypatch.setenv("DURIN_HOME", str(tmp_path))
-    monkeypatch.setattr(store, "_STORE_PATH", tmp_path / "pairing.json", raising=False)
     yield
 
 
@@ -249,8 +251,9 @@ async def test_guilds_lists_only_messageable_channels(monkeypatch):
         {"id": "5", "name": "Cat", "type": 4},       # category -> dropped
     ]
     monkeypatch.setattr("durin.service.channels_discord._configured_token", lambda: TOKEN)
-    monkeypatch.setattr("durin.service.channels_discord._rest_guilds", _fake_guilds(guilds))
-    monkeypatch.setattr("durin.service.channels_discord._rest_channels", _fake_channels(channels))
+    monkeypatch.setattr(
+        "durin.service.channels_discord._rest_guild_tree", _fake_tree(guilds, channels)
+    )
     svc = DiscordService()
     res = await svc.guilds(DiscordGuildsListQuery(), Principal.local())
     assert res.ok
@@ -262,11 +265,8 @@ async def test_guilds_lists_only_messageable_channels(monkeypatch):
 async def test_guilds_marks_allowed_channels(monkeypatch):
     monkeypatch.setattr("durin.service.channels_discord._configured_token", lambda: TOKEN)
     monkeypatch.setattr(
-        "durin.service.channels_discord._rest_guilds", _fake_guilds([{"id": "10", "name": "S"}])
-    )
-    monkeypatch.setattr(
-        "durin.service.channels_discord._rest_channels",
-        _fake_channels([{"id": "1", "name": "general", "type": 0}]),
+        "durin.service.channels_discord._rest_guild_tree",
+        _fake_tree([{"id": "10", "name": "S"}], [{"id": "1", "name": "general", "type": 0}]),
     )
     monkeypatch.setattr(
         "durin.service.channels_discord._configured_allow_channels", lambda: ["1"]
@@ -284,16 +284,9 @@ async def test_guilds_without_token_is_not_configured(monkeypatch):
     assert res.ok is False and res.error == "not_configured"
 
 
-def _fake_guilds(guilds):
+def _fake_tree(guilds, channels):
     async def _f(token):
-        return guilds
-
-    return _f
-
-
-def _fake_channels(channels):
-    async def _f(token, guild_id):
-        return channels
+        return [(g, channels) for g in guilds]
 
     return _f
 
