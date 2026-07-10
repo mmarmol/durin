@@ -25,6 +25,7 @@ from durin.cli.doctor import (
     check_optional_extra,
     check_python_version,
     check_state_dirs_writable,
+    check_whatsapp_bridge,
     check_workspace,
     run_checks,
     run_doctor,
@@ -350,6 +351,40 @@ def test_install_missing_extras_unknown_mode_returns_one() -> None:
 def test_check_cache_size_no_cache(fake_home: Path) -> None:
     r = check_cache_size()
     assert r.status == "ok"
+
+
+# ---------------------------------------------------------------------------
+# check_whatsapp_bridge
+# ---------------------------------------------------------------------------
+
+
+def _config_with_whatsapp(*, enabled: bool) -> Config:
+    cfg = Config()
+    cfg.channels.whatsapp = {"enabled": enabled}
+    return cfg
+
+
+class TestWhatsAppBridgeCheck:
+    def test_disabled_channel_is_ok(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+        r = check_whatsapp_bridge(_config_with_whatsapp(enabled=False))
+        assert r.status == "ok"
+
+    def test_enabled_without_binary_warns(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+        r = check_whatsapp_bridge(_config_with_whatsapp(enabled=True))
+        assert r.status == "warn"
+        assert "bridge" in r.message.lower()
+
+    def test_enabled_with_binary_ok(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setenv("DURIN_HOME", str(tmp_path))
+        from durin.channels.whatsapp_bridge import cached_binary_path
+
+        p = cached_binary_path()
+        p.parent.mkdir(parents=True)
+        p.write_bytes(b"x")
+        r = check_whatsapp_bridge(_config_with_whatsapp(enabled=True))
+        assert r.status == "ok"
 
 
 # ---------------------------------------------------------------------------
