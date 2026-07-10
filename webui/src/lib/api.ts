@@ -1391,7 +1391,7 @@ export async function testPersona(
 
 export interface ChannelField {
   name: string;
-  type: "string" | "int" | "bool" | "string_list" | "secret" | "select";
+  type: "string" | "int" | "float" | "bool" | "string_list" | "secret" | "select";
   secret: boolean;
   group: string;
   required: boolean;
@@ -2564,4 +2564,45 @@ export async function startChannel(token: string, name: string, base = ""): Prom
 
 export async function stopChannel(token: string, name: string, base = ""): Promise<{ ok: boolean; error?: string | null }> {
   return post(`${base}/api/v1/channels/stop`, token, { name });
+}
+
+// -- Discord channel ----------------------------------------------------------
+
+export interface DiscordTestResult {
+  ok: boolean;
+  bot_user: string | null;
+  application_id: string | null;
+  message_content_intent: string | null;
+  /** Built by the backend, which owns the permission bitfield. */
+  invite_url: string | null;
+  error: string | null;
+}
+export interface DiscordPairing { pending: PendingPairing[]; approved: string[]; names?: Record<string, string>; }
+export interface DiscordChannelEntry { id: string; name: string; type: number; allowed: boolean; }
+export interface DiscordGuildEntry { id: string; name: string; channels: DiscordChannelEntry[]; }
+export interface DiscordGuildsList { ok: boolean; guilds: DiscordGuildEntry[]; error: string | null; }
+export interface DiscordInviteResult { ok: boolean; url: string | null; permissions: string | null; scopes: string | null; error: string | null; }
+
+// Empty value means "check the token already saved in config" — how the
+// connected panel re-verifies a stored credential without re-pasting it.
+export async function testDiscordToken(token: string, value: string, base = ""): Promise<DiscordTestResult> {
+  return post<DiscordTestResult>(`${base}/api/v1/channels/discord/test`, token, { token: value });
+}
+export async function getDiscordPairing(token: string, base = ""): Promise<DiscordPairing> {
+  return request<DiscordPairing>(`${base}/api/v1/channels/discord/pairing`, token);
+}
+export async function approveDiscordPairing(token: string, code: string, base = ""): Promise<{ ok: boolean }> {
+  return post(`${base}/api/v1/channels/discord/pairing/approve`, token, { code });
+}
+export async function denyDiscordPairing(token: string, code: string, base = ""): Promise<{ ok: boolean }> {
+  return post(`${base}/api/v1/channels/discord/pairing/deny`, token, { code });
+}
+export async function revokeDiscordPairing(token: string, senderId: string, base = ""): Promise<{ ok: boolean }> {
+  return post(`${base}/api/v1/channels/discord/pairing/revoke`, token, { sender_id: senderId });
+}
+export async function getDiscordGuilds(token: string, base = ""): Promise<DiscordGuildsList> {
+  return request<DiscordGuildsList>(`${base}/api/v1/channels/discord/guilds`, token);
+}
+export async function getDiscordInvite(token: string, base = ""): Promise<DiscordInviteResult> {
+  return request<DiscordInviteResult>(`${base}/api/v1/channels/discord/invite`, token);
 }

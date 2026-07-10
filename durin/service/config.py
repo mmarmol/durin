@@ -266,6 +266,8 @@ def _py_type_name(annotation: Any) -> str:
         return "bool"
     if annotation is int:
         return "int"
+    if annotation is float:
+        return "float"
     if origin in (list, typing.List):
         return "string_list"
     return "string"

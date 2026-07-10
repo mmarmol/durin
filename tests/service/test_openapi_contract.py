@@ -142,8 +142,17 @@ def test_scopes_are_valid():
 
 
 def test_all_service_classes_enumerated():
-    """SERVICE_CLASSES contains all 19 expected service types."""
-    assert len(SERVICE_CLASSES) == 19
+    """Every class in SERVICE_CLASSES is actually registered, and nothing is
+    registered that the list does not know about.
+
+    A hardcoded count froze the number, not the invariant: a service added to
+    the list but never registered contributes no routes and still passed.
+    """
+    registered = {bound.service_name for bound in build_catalog_registry().routes}
+    assert len(registered) == len(SERVICE_CLASSES), (
+        f"{len(SERVICE_CLASSES)} service classes but {len(registered)} registered: "
+        "one was added to SERVICE_CLASSES without a register() call, or vice versa"
+    )
 
 
 def test_catalog_registry_has_no_duplicate_routes():

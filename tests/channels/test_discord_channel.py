@@ -12,6 +12,7 @@ discord = pytest.importorskip("discord")
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.discord import (
+    GATEWAY_INTENTS,
     MAX_MESSAGE_LEN,
     DiscordBotClient,
     DiscordChannel,
@@ -327,7 +328,7 @@ async def test_start_handles_client_start_failure(monkeypatch) -> None:
 
     assert channel.is_running is False
     assert channel._client is None
-    assert _FakeDiscordClient.instances[0].intents.value == channel.config.intents
+    assert _FakeDiscordClient.instances[0].intents.value == GATEWAY_INTENTS.value
     assert _FakeDiscordClient.instances[0].closed is True
 
     _FakeDiscordClient.start_error = None

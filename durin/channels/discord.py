@@ -19,6 +19,7 @@ try:
 except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
+from loguru import logger
 from pydantic import Field
 
 from durin.bus.events import OutboundMessage
@@ -40,6 +41,28 @@ if DISCORD_AVAILABLE:
     import discord
     from discord import app_commands
     from discord.abc import Messageable
+
+    def _gateway_intents() -> "discord.Intents":
+        """The gateway subscriptions this adapter's handlers require.
+
+        Derived rather than configured: every bit below is demanded by an event
+        this adapter implements.  durin registers no member, presence, voice or
+        reaction-event handler, so those intents are never asked for — members
+        and presences would be privileged requests nothing consumes, and the
+        rest would be traffic nothing reads.  Reactions the bot *adds* are REST
+        calls and need no intent.
+
+        The handler set this mirrors is frozen by a test: adding an on_* handler
+        fails it, forcing whoever adds it to decide which intent it needs.
+        """
+        intents = discord.Intents.none()
+        intents.guilds = True  # on_thread_update / on_thread_delete, channel cache
+        intents.guild_messages = True  # on_message in servers
+        intents.dm_messages = True  # on_message in direct messages
+        intents.message_content = True  # privileged: read the text of a message
+        return intents
+
+    GATEWAY_INTENTS = _gateway_intents()
 
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # 20MB
 MAX_MESSAGE_LEN = 2000  # Discord message character limit
@@ -73,21 +96,39 @@ class _SplitBuf:
 
 
 class DiscordConfig(Base):
-    """Discord channel configuration."""
+    """Discord channel configuration.
+
+    Sender authorization (who may talk to durin) lives in ``allow_from`` and is
+    enforced by the central bus-ingress gate; unapproved DM senders receive a
+    pairing code.  ``allow_channels`` is routing, not auth: an empty list means
+    every channel the bot can see, and a non-empty list is a closed allowlist.
+
+    Gateway intents are not configurable: they are derived from the events this
+    adapter handles (see ``GATEWAY_INTENTS``).  A raw bitfield had no safe home
+    — the setup flow cannot verify it, a form cannot render it, and a mistyped
+    digit yields a bot that connects and silently ignores every message.
+    """
 
     enabled: bool = False
-    token: str = ""
-    allow_from: list[str] = Field(default_factory=list)
-    allow_channels: list[str] = Field(default_factory=list)  # Allowed channel IDs (empty = all)
-    intents: int = 37377
-    group_policy: Literal["mention", "open"] = "mention"
-    read_receipt_emoji: str = "👀"
-    working_emoji: str = "🔧"
-    working_emoji_delay: float = 2.0
-    streaming: bool = True
-    proxy: str | None = None
-    proxy_username: str | None = None
-    proxy_password: str | None = None
+    token: str = Field(default="", json_schema_extra={"secret": True, "required": True})
+    allow_from: list[str] = Field(default_factory=list, json_schema_extra={"group": "access"})
+    # Empty = every visible channel; non-empty = closed allowlist (a thread is
+    # matched by its parent channel too, see DiscordChannel._channel_allow_keys).
+    allow_channels: list[str] = Field(
+        default_factory=list, json_schema_extra={"group": "access"}
+    )
+    group_policy: Literal["mention", "open"] = Field(
+        default="mention", json_schema_extra={"group": "access"}
+    )
+    read_receipt_emoji: str = Field(default="👀", json_schema_extra={"group": "behavior"})
+    working_emoji: str = Field(default="🔧", json_schema_extra={"group": "behavior"})
+    working_emoji_delay: float = Field(default=2.0, json_schema_extra={"group": "behavior"})
+    streaming: bool = Field(default=True, json_schema_extra={"group": "behavior"})
+    proxy: str | None = Field(default=None, json_schema_extra={"group": "security"})
+    proxy_username: str | None = Field(default=None, json_schema_extra={"group": "security"})
+    proxy_password: str | None = Field(
+        default=None, json_schema_extra={"secret": True, "group": "security"}
+    )
 
 
 if DISCORD_AVAILABLE:
@@ -402,6 +443,10 @@ class DiscordChannel(BaseChannel):
     def default_config(cls) -> dict[str, Any]:
         return DiscordConfig().model_dump(by_alias=False)
 
+    @classmethod
+    def config_model(cls) -> type | None:
+        return DiscordConfig
+
     @staticmethod
     def _channel_key(channel_or_id: Any) -> str:
         """Normalize channel-like objects and ids to a stable string key."""
@@ -439,6 +484,15 @@ class DiscordChannel(BaseChannel):
 
     def __init__(self, config: Any, bus: MessageBus):
         if isinstance(config, dict):
+            if "intents" in config:
+                # Pydantic drops unknown keys without a word.  Someone who once
+                # hand-tuned this bitfield deserves to hear that their value no
+                # longer does anything, rather than debug a bot that ignores it.
+                logger.warning(
+                    "channels.discord.intents is obsolete and ignored: gateway "
+                    "intents are derived from the events durin handles. Remove "
+                    "the key from your config."
+                )
             config = DiscordConfig.model_validate(config)
         super().__init__(config, bus)
         self.config: DiscordConfig = config
@@ -507,8 +561,7 @@ class DiscordChannel(BaseChannel):
             return
 
         try:
-            intents = discord.Intents.none()
-            intents.value = self.config.intents
+            intents = GATEWAY_INTENTS
 
             proxy_auth = None
             has_user = bool(self.config.proxy_username)
@@ -565,9 +618,9 @@ class DiscordChannel(BaseChannel):
         except discord.PrivilegedIntentsRequired:
             self.logger.error(
                 "Privileged intents are not enabled for this bot. Enable "
-                "'Message Content Intent' (and any other configured privileged "
-                "intents) in the Discord Developer Portal, or lower "
-                "channels.discord.intents"
+                "'Message Content Intent' on the Bot page of your application "
+                "in the Discord Developer Portal; durin cannot read messages "
+                "without it."
             )
         finally:
             self._running = False
