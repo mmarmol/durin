@@ -6320,6 +6320,61 @@
         "title": "WebuiThreadResult",
         "type": "object"
       },
+      "WhatsAppLoginPollQuery": {
+        "additionalProperties": false,
+        "properties": {},
+        "title": "WhatsAppLoginPollQuery",
+        "type": "object"
+      },
+      "WhatsAppLoginStartCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          }
+        },
+        "title": "WhatsAppLoginStartCommand",
+        "type": "object"
+      },
+      "WhatsAppLoginState": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "qr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Qr"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "WhatsAppLoginState",
+        "type": "object"
+      },
       "WorkflowDeleteCommand": {
         "additionalProperties": false,
         "properties": {
@@ -7520,6 +7575,64 @@
           }
         },
         "summary": "Validate a Telegram bot token via getMe (persists nothing)",
+        "x-required-scope": "config:write"
+      }
+    },
+    "/api/v1/channels/whatsapp/login/poll": {
+      "get": {
+        "operationId": "whatsapp_login_poll",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WhatsAppLoginPollQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WhatsAppLoginState"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Poll the current WhatsApp pairing status and QR code",
+        "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/channels/whatsapp/login/start": {
+      "post": {
+        "operationId": "whatsapp_login_start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WhatsAppLoginStartCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WhatsAppLoginState"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Start WhatsApp QR pairing (runs the bridge, streams the QR)",
         "x-required-scope": "config:write"
       }
     },

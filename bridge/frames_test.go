@@ -60,3 +60,23 @@ func TestMessageFrameLegacyKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestQRAndStatusFrameShapes(t *testing.T) {
+	// The gateway parses these NDJSON frames from `qr --emit-frames` stdout to
+	// drive the webui pairing UI, so their JSON shape is a wire contract.
+	b, _ := json.Marshal(QR{Type: "qr", Code: "wa-code"})
+	if string(b) != `{"type":"qr","code":"wa-code"}` {
+		t.Fatalf("unexpected qr frame: %s", b)
+	}
+	b, _ = json.Marshal(Status{Type: "status", Status: "connected"})
+	if string(b) != `{"type":"status","status":"connected"}` {
+		t.Fatalf("unexpected status frame: %s", b)
+	}
+}
+
+func TestErrorFrameShape(t *testing.T) {
+	b, _ := json.Marshal(ErrorFrame{Type: "error", Error: "boom"})
+	if string(b) != `{"type":"error","error":"boom"}` {
+		t.Fatalf("unexpected error frame: %s", b)
+	}
+}

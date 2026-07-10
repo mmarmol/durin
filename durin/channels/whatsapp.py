@@ -52,8 +52,15 @@ class WhatsAppConfig(Base):
     enabled: bool = False
     bridge_url: str = "ws://localhost:3001"
     bridge_token: str = ""
-    allow_from: list[str] = Field(default_factory=list)
-    group_policy: Literal["open", "mention"] = "open"  # "open" responds to all, "mention" only when @mentioned
+    # Pairing is done through the guided UI / `durin channels login whatsapp`;
+    # only these two are meaningful to edit by hand, so only they carry the UI
+    # metadata that surfaces them in the manual-mode settings form.
+    allow_from: list[str] = Field(
+        default_factory=list, json_schema_extra={"group": "access"}
+    )
+    group_policy: Literal["open", "mention"] = Field(
+        "open", json_schema_extra={"group": "behavior"}
+    )  # "open" responds to all group messages, "mention" only when @mentioned
 
 
 def _bridge_token_path() -> Path:
@@ -91,6 +98,11 @@ class WhatsAppChannel(BaseChannel):
     @classmethod
     def default_config(cls) -> dict[str, Any]:
         return WhatsAppConfig().model_dump(by_alias=False)
+
+    @classmethod
+    def config_model(cls) -> type | None:
+        # Supplies the manual-mode field form behind the guided pairing panel.
+        return WhatsAppConfig
 
     def __init__(self, config: Any, bus: MessageBus):
         if isinstance(config, dict):

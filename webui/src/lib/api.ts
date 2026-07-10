@@ -2606,3 +2606,34 @@ export async function getDiscordGuilds(token: string, base = ""): Promise<Discor
 export async function getDiscordInvite(token: string, base = ""): Promise<DiscordInviteResult> {
   return request<DiscordInviteResult>(`${base}/api/v1/channels/discord/invite`, token);
 }
+
+// -- WhatsApp channel ---------------------------------------------------------
+
+/** idle | starting | waiting_scan | connected | timeout | already_paired | error */
+export type WhatsAppLoginStatus =
+  | "idle"
+  | "starting"
+  | "waiting_scan"
+  | "connected"
+  | "timeout"
+  | "already_paired"
+  | "error";
+
+export interface WhatsAppLoginState {
+  status: WhatsAppLoginStatus;
+  /** QR payload to render, present only while status === "waiting_scan". */
+  qr: string | null;
+  error: string | null;
+}
+
+export async function startWhatsAppLogin(
+  token: string,
+  force = false,
+  base = "",
+): Promise<WhatsAppLoginState> {
+  return post<WhatsAppLoginState>(`${base}/api/v1/channels/whatsapp/login/start`, token, { force });
+}
+
+export async function pollWhatsAppLogin(token: string, base = ""): Promise<WhatsAppLoginState> {
+  return request<WhatsAppLoginState>(`${base}/api/v1/channels/whatsapp/login/poll`, token);
+}
