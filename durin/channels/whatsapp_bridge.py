@@ -10,8 +10,10 @@ import shutil
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from importlib import metadata, resources
 from pathlib import Path
+from typing import Any
 
 from loguru import logger as _default_logger
 
@@ -214,3 +216,100 @@ class BridgeSupervisor:
         if self._task is not None:
             await self._task
             self._task = None
+
+
+class PairingSession:
+    """Drive a browser-based QR pairing: run the bridge in `qr --emit-frames`
+    mode and capture the QR code and pairing status from its stdout so a
+    gateway service can relay them to the webui.
+
+    Statuses (also the values the webui branches on):
+      ``starting``       — subprocess launching, no QR yet
+      ``waiting_scan``   — a QR code is available; ``qr`` holds it
+      ``connected``      — the device paired successfully
+      ``timeout``        — the QR expired without a scan
+      ``already_paired`` — a session already exists (no QR shown)
+      ``error``          — the bridge could not start or crashed
+    """
+
+    def __init__(self, *, auth_dir: Path, token: str, logger=None):
+        self._auth_dir = auth_dir
+        self._token = token
+        self.logger = logger or _default_logger
+        self._status = "idle"
+        self._qr: str | None = None
+        self._error: str | None = None
+        self._proc: asyncio.subprocess.Process | None = None
+        self._task: asyncio.Task | None = None
+
+    def snapshot(self) -> dict[str, Any]:
+        """Current pairing state for the poll endpoint."""
+        return {"status": self._status, "qr": self._qr, "error": self._error}
+
+    async def start(self, *, force: bool = False) -> dict[str, Any]:
+        """(Re)start a pairing attempt. Cancels any in-flight one first."""
+        await self.cancel()
+        try:
+            binary = await ensure_bridge_binary()
+        except BridgeSetupError as exc:
+            self._status, self._error = "error", str(exc)
+            return self.snapshot()
+
+        if force:
+            db = self._auth_dir / "whatsmeow.db"
+            if db.exists():
+                db.unlink()
+
+        self._status, self._qr, self._error = "starting", None, None
+        self._auth_dir.mkdir(parents=True, exist_ok=True)
+        self._proc = await asyncio.create_subprocess_exec(
+            str(binary), "qr", "--emit-frames", "--auth-dir", str(self._auth_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env={**os.environ, "BRIDGE_TOKEN": self._token},
+        )
+        self._task = asyncio.create_task(self._read_frames())
+        return self.snapshot()
+
+    async def _read_frames(self) -> None:
+        proc = self._proc
+        assert proc is not None and proc.stdout is not None
+        try:
+            async for raw in proc.stdout:
+                try:
+                    frame = json.loads(raw)
+                except ValueError:
+                    continue  # ignore any non-frame line
+                kind = frame.get("type")
+                if kind == "qr":
+                    self._qr = frame.get("code")
+                    self._status = "waiting_scan"
+                elif kind == "status":
+                    st = frame.get("status")
+                    if st in ("connected", "timeout", "already_paired"):
+                        self._status, self._qr = st, None
+                elif kind == "error":
+                    self._status, self._error = "error", frame.get("error")
+        except Exception:  # noqa: BLE001
+            self.logger.exception("WhatsApp pairing reader failed")
+        finally:
+            rc = await proc.wait()
+            # If the process exited before reaching a terminal state, treat a
+            # nonzero exit as failure so the UI never waits forever.
+            if self._status in ("starting", "waiting_scan"):
+                self._status = "error" if rc else "timeout"
+
+    async def cancel(self) -> None:
+        """Stop any running pairing subprocess and reader."""
+        proc = self._proc
+        if proc is not None and proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), 5)
+            except asyncio.TimeoutError:
+                proc.kill()
+        if self._task is not None:
+            with suppress(Exception):
+                await self._task
+            self._task = None
+        self._proc = None

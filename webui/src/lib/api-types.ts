@@ -431,6 +431,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/channels/whatsapp/login/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Poll the current WhatsApp pairing status and QR code */
+        get: operations["whatsapp_login_poll"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/whatsapp/login/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start WhatsApp QR pairing (runs the bridge, streams the QR) */
+        post: operations["whatsapp_login_start"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/commands": {
         parameters: {
             query?: never;
@@ -5142,6 +5176,31 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** WhatsAppLoginPollQuery */
+        WhatsAppLoginPollQuery: Record<string, never>;
+        /** WhatsAppLoginStartCommand */
+        WhatsAppLoginStartCommand: {
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
+        };
+        /** WhatsAppLoginState */
+        WhatsAppLoginState: {
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /**
+             * Qr
+             * @default null
+             */
+            qr: string | null;
+            /** Status */
+            status: string;
+        };
         /** WorkflowDeleteCommand */
         WorkflowDeleteCommand: {
             /** Name */
@@ -5995,6 +6054,54 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TelegramTestResult"];
+                };
+            };
+        };
+    };
+    whatsapp_login_poll: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WhatsAppLoginPollQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WhatsAppLoginState"];
+                };
+            };
+        };
+    };
+    whatsapp_login_start: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WhatsAppLoginStartCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WhatsAppLoginState"];
                 };
             };
         };

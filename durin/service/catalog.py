@@ -39,6 +39,7 @@ from durin.service.channels_discord import DiscordService
 from durin.service.channels_runtime import ChannelsRuntimeService
 from durin.service.channels_slack import SlackService
 from durin.service.channels_telegram import TelegramService
+from durin.service.channels_whatsapp import WhatsAppService
 from durin.service.commands import CommandsService
 from durin.service.config import ConfigService
 from durin.service.cron import CronService
@@ -107,5 +108,6 @@ def build_catalog_registry() -> ServiceRegistry:
     registry.register("telegram", TelegramService())
     registry.register("discord", DiscordService())
     registry.register("slack", SlackService())
+    registry.register("whatsapp", WhatsAppService())
     registry.register("channels_runtime", ChannelsRuntimeService())
     return registry
