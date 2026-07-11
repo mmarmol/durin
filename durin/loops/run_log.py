@@ -13,7 +13,7 @@ from pathlib import Path
 from durin.utils.atomic_write import atomic_write_text
 
 SCHEMA = 1
-ACTIVE_STATUSES = ("running", "needs_operator")
+ACTIVE_STATUSES = ("running", "needs_operator", "waiting_info")
 
 
 def runs_root(workspace: str | Path) -> Path:
@@ -36,10 +36,10 @@ def _write(ws, loop: str, run_id: str, record: dict) -> dict:
     return record
 
 
-def start_run(ws, loop: str, run_id: str, *, source: str, task: str) -> dict:
+def start_run(ws, loop: str, run_id: str, *, source: str, task: str, origin: dict | None = None) -> dict:
     return _write(ws, loop, run_id, {
         "schema": SCHEMA, "run_id": run_id, "loop": loop, "status": "running",
-        "source": source, "task": task[:8000], "workflow_run_id": None,
+        "source": source, "task": task[:8000], "origin": origin, "workflow_run_id": None,
         "ask": None, "detail": None, "checks": None, "goal_reached": None,
         "started_at": time.time(), "finished_at": None,
     })
@@ -167,9 +167,10 @@ def prune_runs(ws, loop: str, keep: int) -> None:
     keepers = set()
     kept = 0
     for m in runs:
-        if m.get("status") == "needs_operator" or kept < keep:
+        status = m.get("status")
+        if status in ("needs_operator", "waiting_info") or kept < keep:
             keepers.add(m["run_id"])
-            if m.get("status") != "needs_operator":
+            if status not in ("needs_operator", "waiting_info"):
                 kept += 1
     for m in runs:
         if m["run_id"] not in keepers:

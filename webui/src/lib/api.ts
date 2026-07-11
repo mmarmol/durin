@@ -738,7 +738,7 @@ export interface LoopCheck {
   text?: string;
 }
 
-export interface LoopTrigger {
+export interface LoopTriggerCron {
   source: "cron";
   schedule: {
     kind: "at" | "every" | "cron";
@@ -748,6 +748,19 @@ export interface LoopTrigger {
     at_ms?: number;
   };
 }
+
+// V2: only "email" — durin/loops/spec.py's _parse_channel_trigger rejects
+// any other value. filters/match are always emitted by loop_to_dict (never
+// omitted, filters may be {}); semantic is omitted when unset.
+export interface LoopTriggerChannel {
+  source: "channel";
+  channel: "email";
+  filters: { from_contains?: string; subject_contains?: string };
+  semantic?: string;
+  match: "wake_or_new" | "always_new";
+}
+
+export type LoopTrigger = LoopTriggerCron | LoopTriggerChannel;
 
 export interface LoopDef {
   name: string;
@@ -764,12 +777,25 @@ export interface LoopDef {
 export interface LoopSummary extends LoopDef {
   active_runs: number;
   needs_operator: number;
+  waiting_info: number;
+  pending_events: number;
+}
+
+// The trigger context recorded at fire time for a channel-sourced run (null
+// for manual/cron fires, which have nobody to reply to). See
+// durin.loops.matcher._dispatch_match.
+export interface LoopRunOrigin {
+  channel: string;
+  sender: string;
+  chat_id: string;
+  thread: string | null;
+  subject: string;
 }
 
 export interface LoopRun {
   run_id: string;
   loop: string;
-  status: "running" | "needs_operator" | "done" | "no_goal" | "escalated" | "error";
+  status: "running" | "needs_operator" | "waiting_info" | "done" | "no_goal" | "escalated" | "error";
   source: string;
   task: string;
   ask: string | null;
@@ -777,6 +803,7 @@ export interface LoopRun {
   started_at: number;
   finished_at: number | null;
   detail: string | null;
+  origin: LoopRunOrigin | null;
 }
 
 export async function listLoops(

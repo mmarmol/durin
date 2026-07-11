@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from durin.loops import run_log
+from durin.loops import queue, run_log
 from durin.loops.cron_sync import remove_loop_jobs, sync_loop_jobs
 from durin.loops.runtime import LoopBusy
 from durin.loops.spec import LoopError, LoopNotFound, loop_to_dict, parse_loop
@@ -34,7 +34,7 @@ class LoopsListQuery(Query):
 
 
 class LoopsListResult(Result):
-    loops: list[dict[str, Any]]   # loop_to_dict() fields + active_runs/needs_operator counts
+    loops: list[dict[str, Any]]   # loop_to_dict() fields + active_runs/needs_operator/waiting_info/pending_events counts
 
 
 class LoopGetQuery(Query):
@@ -99,10 +99,16 @@ class LoopsRunsResult(Result):
     runs: list[dict[str, Any]]   # newest-first manifests across every loop
 
 
-def _counts(workspace: Path, name: str) -> tuple[int, int]:
+def _counts(workspace: Path, name: str) -> dict[str, int]:
     active = run_log.active_runs(workspace, name)
     needs_operator = sum(1 for r in active if r.get("status") == "needs_operator")
-    return len(active), needs_operator
+    waiting_info = sum(1 for r in active if r.get("status") == "waiting_info")
+    return {
+        "active_runs": len(active),
+        "needs_operator": needs_operator,
+        "waiting_info": waiting_info,
+        "pending_events": queue.pending(workspace, name),
+    }
 
 
 class LoopsService:
@@ -121,8 +127,7 @@ class LoopsService:
         principal.require(Scope.LOOPS_READ)
         loops = []
         for spec in list_loops(self._workspace):
-            active_runs, needs_operator = _counts(self._workspace, spec.name)
-            loops.append({**loop_to_dict(spec), "active_runs": active_runs, "needs_operator": needs_operator})
+            loops.append({**loop_to_dict(spec), **_counts(self._workspace, spec.name)})
         return LoopsListResult(loops=loops)
 
     @route(
@@ -195,7 +200,7 @@ class LoopsService:
         "POST", "/api/v1/loops/{name}/runs/{run_id}/answer",
         scope=Scope.LOOPS_WRITE.value,
         request_model=LoopAnswerCommand, response_model=LoopAnswerResult,
-        summary="Answer a loop run that is waiting on an operator.",
+        summary="Answer a loop run awaiting an operator or a counterpart reply.",
     )
     async def answer(self, cmd: LoopAnswerCommand, principal: Principal) -> LoopAnswerResult:
         principal.require(Scope.LOOPS_WRITE)

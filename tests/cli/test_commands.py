@@ -1821,10 +1821,14 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
         def close(self) -> None:
             self.closed = True
 
+    class _FakeBus:
+        def add_inbound_interceptor(self, _fn) -> None:
+            return None
+
     _patch_cli_command_runtime(
         monkeypatch,
         config,
-        message_bus=lambda: object(),
+        message_bus=lambda: _FakeBus(),
         session_manager=lambda _workspace: object(),
     )
     monkeypatch.setattr("durin.cli.commands.AgentLoop", _FakeAgentLoop)

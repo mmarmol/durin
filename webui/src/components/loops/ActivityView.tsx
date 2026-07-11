@@ -15,15 +15,20 @@ function errMsg(e: unknown): string {
 }
 
 // Theme tokens only, no hardcoded colors: needs_operator gets the same accent
-// treatment as other actionable items in the app, escalated/error read as
-// destructive, everything else (running, done, no_goal) is quiet muted text.
+// treatment as other actionable items in the app; waiting_info reads as a
+// distinct, quieter tone (primary tint, not the accent surface) since it's
+// waiting on the counterpart rather than the operator; escalated/error read
+// as destructive; everything else (running, done, no_goal) is quiet muted text.
 function statusTone(status: LoopRun["status"]): string {
   if (status === "needs_operator") return "bg-accent text-accent-foreground";
+  if (status === "waiting_info") return "bg-primary/15 text-primary";
   if (status === "escalated" || status === "error") return "text-destructive";
   return "text-muted-foreground";
 }
 
-function AnswerRow({
+/** The answer text box + send button, shared by AnswerRow (always visible)
+ *  and WaitingInfoRow (revealed behind an "answer as operator" toggle). */
+function AnswerInput({
   run,
   onAnswer,
   answering,
@@ -50,6 +55,37 @@ function AnswerRow({
     }
   }, [answering, answer, run, onAnswer]);
 
+  if (sent) {
+    return <div className="text-xs text-muted-foreground">{t("loops.activity.answerSent")}</div>;
+  }
+  return (
+    <div className="flex gap-1.5">
+      <Input
+        value={answer}
+        onChange={(e) => setAnswer(e.target.value)}
+        placeholder={t("loops.activity.answerPlaceholder")}
+        className="h-8 bg-background text-foreground"
+        disabled={answering}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") void handleSend();
+        }}
+      />
+      <Button size="sm" disabled={answering || !answer.trim()} onClick={() => void handleSend()}>
+        {answering ? <Loader2 className="h-4 w-4 animate-spin" /> : t("loops.activity.send")}
+      </Button>
+    </div>
+  );
+}
+
+function AnswerRow({
+  run,
+  onAnswer,
+  answering,
+}: {
+  run: LoopRun;
+  onAnswer: (run: LoopRun, answer: string) => Promise<boolean>;
+  answering: boolean;
+}) {
   return (
     <div className="flex flex-col gap-1.5 rounded-md border border-accent bg-accent/40 px-3 py-2 text-accent-foreground">
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
@@ -60,28 +96,49 @@ function AnswerRow({
         )}
       </div>
       {run.ask && <div className="whitespace-pre-wrap break-words text-xs">{run.ask}</div>}
-      {sent ? (
-        <div className="text-xs text-muted-foreground">{t("loops.activity.answerSent")}</div>
+      <AnswerInput run={run} onAnswer={onAnswer} answering={answering} />
+    </div>
+  );
+}
+
+// A run parked waiting for the counterpart (channel sender) to reply. The
+// ask is shown read-only — the counterpart answers, not the operator — but
+// an "answer as operator" toggle reveals the same input as an override.
+function WaitingInfoRow({
+  run,
+  onAnswer,
+  answering,
+}: {
+  run: LoopRun;
+  onAnswer: (run: LoopRun, answer: string) => Promise<boolean>;
+  answering: boolean;
+}) {
+  const { t } = useTranslation();
+  const [showAnswer, setShowAnswer] = useState(false);
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md border border-border px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-mono font-medium">{run.loop}</span>
+        <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", statusTone(run.status))}>
+          {t("loops.activity.status.waiting_info")}
+        </span>
+        <span className="text-[10px] text-muted-foreground">{run.source}</span>
+        {!!run.started_at && (
+          <span className="text-[10px] text-muted-foreground">{relativeTime(run.started_at * 1000)}</span>
+        )}
+      </div>
+      {run.ask && <div className="whitespace-pre-wrap break-words text-foreground/80">{run.ask}</div>}
+      {showAnswer ? (
+        <AnswerInput run={run} onAnswer={onAnswer} answering={answering} />
       ) : (
-        <div className="flex gap-1.5">
-          <Input
-            value={answer}
-            onChange={(e) => setAnswer(e.target.value)}
-            placeholder={t("loops.activity.answerPlaceholder")}
-            className="h-8 bg-background text-foreground"
-            disabled={answering}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void handleSend();
-            }}
-          />
-          <Button
-            size="sm"
-            disabled={answering || !answer.trim()}
-            onClick={() => void handleSend()}
-          >
-            {answering ? <Loader2 className="h-4 w-4 animate-spin" /> : t("loops.activity.send")}
-          </Button>
-        </div>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 w-fit gap-1 px-2 text-[11px] text-muted-foreground"
+          onClick={() => setShowAnswer(true)}
+        >
+          {t("loops.activity.answerAsOperator")}
+        </Button>
       )}
     </div>
   );
@@ -217,6 +274,13 @@ export function ActivityView() {
             sorted.map((run) =>
               run.status === "needs_operator" ? (
                 <AnswerRow
+                  key={run.run_id}
+                  run={run}
+                  onAnswer={onAnswer}
+                  answering={answeringId === run.run_id}
+                />
+              ) : run.status === "waiting_info" ? (
+                <WaitingInfoRow
                   key={run.run_id}
                   run={run}
                   onAnswer={onAnswer}
