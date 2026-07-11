@@ -89,7 +89,7 @@ The I/O contract is plain Unix:
   `DURIN_WORK_DIR` (the shared working folder's path). The rest of the
   subprocess environment is controlled by `env`: `"clean"` (the default) gives
   the script a minimal allowlist (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`,
-  `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR`) plus those `DURIN_*` vars; `"inherit"`
+  `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR`, `DURIN_HOME`) plus those `DURIN_*` vars; `"inherit"`
   gives it the full environment your durin gateway runs in — opt into it only
   when the script genuinely needs an ambient variable durin doesn't forward.
 - **Timeout.** A script node has its own `timeout` in seconds, or falls back to

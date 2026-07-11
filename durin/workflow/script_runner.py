@@ -40,8 +40,11 @@ _POLL_SLICE_SECONDS = 0.5
 # "clean" env (the node default): just enough of the gateway environment for a
 # script to behave normally (PATH-resolved binaries, locale, a writable tmp dir)
 # without forwarding ambient provider keys or other secrets the gateway process holds.
+# DURIN_HOME passes through so a script invoking the `durin` CLI targets the same
+# home the running gateway uses (it is durin's own pointer, not a secret).
 _CLEAN_ENV_ALLOWLIST = (
     "PATH", "HOME", "USER", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR",
+    "DURIN_HOME",
 )
 
 

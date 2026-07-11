@@ -2085,6 +2085,7 @@ export function WorkflowsView() {
         {selectedNode && (
           <aside className="w-96 shrink-0 flex flex-col h-full border-l p-3 overflow-y-auto">
             <NodeConfigPanel
+              key={selectedNode.id}
               node={selectedNode}
               nodeIds={nodeIds}
               isStart={def?.start === selectedNode.id}

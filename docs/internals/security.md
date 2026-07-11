@@ -259,7 +259,7 @@ patterns, workspace boundary, SSRF URL detection) or a sandbox — there is no
 sandboxing at all. Its environment is separate from `_build_env()` but follows the
 same instinct: by default (`env: "clean"`, the node's default) the subprocess gets a
 minimal allowlist (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_ALL`, `LC_CTYPE`,
-`TERM`, `TMPDIR` — only those present) plus the `DURIN_*` run-metadata vars, keeping
+`TERM`, `TMPDIR`, `DURIN_HOME` — only those present) plus the `DURIN_*` run-metadata vars, keeping
 ambient provider keys and other gateway-process secrets out of the subprocess. A node
 can opt into `env: "inherit"` to get the full gateway process environment
 (`dict(os.environ)`) instead — consistent with the same local-trust model, but a
