@@ -1436,31 +1436,6 @@ class WorkflowImproveStructuralEvent(TypedDict):
     runs: int
 
 
-class LoopsFiredEvent(TypedDict):
-    """A loop was fired (triggered to run)."""
-
-    loop: str
-    source: str
-    skipped: bool
-
-
-class LoopsRunFinishedEvent(TypedDict):
-    """A loop run completed."""
-
-    loop: str
-    run_id: str
-    status: str
-    goal_reached: bool
-
-
-class LoopsEscalatedEvent(TypedDict):
-    """A loop was escalated due to consecutive failures."""
-
-    loop: str
-    run_id: str
-    consecutive_no_goal: int
-
-
 # ===========================================================================
 # Catalog — single source of truth
 # ===========================================================================
@@ -1583,10 +1558,6 @@ EVENTS: dict[str, type] = {
     "workflow.improve.applied": WorkflowImproveAppliedEvent,
     "workflow.improve.reverted": WorkflowImproveRevertedEvent,
     "workflow.improve.structural": WorkflowImproveStructuralEvent,
-    # Loops subsystem
-    "loops.fired": LoopsFiredEvent,
-    "loops.run_finished": LoopsRunFinishedEvent,
-    "loops.escalated": LoopsEscalatedEvent,
     "skill.curation_run": SkillCurationRunEvent,
     "skill.suggestion_resolved": SkillSuggestionResolvedEvent,
 }
