@@ -77,7 +77,7 @@ class MessageBus:
             except Exception as e:
                 logger.warning(
                     "inbound interceptor raised; skipping (message will be enqueued)",
-                    extra={"interceptor": interceptor.__name__, "error": str(e)},
+                    extra={"interceptor": getattr(interceptor, "__name__", repr(interceptor)), "error": str(e)},
                     exc_info=True,
                 )
                 continue

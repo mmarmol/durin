@@ -102,3 +102,26 @@ def test_raising_interceptor_does_not_block_consumer():
         assert bus.inbound_size == 0
 
     asyncio.run(run())
+
+
+def test_raising_nameless_interceptor_is_passthrough():
+    """A raising interceptor WITHOUT a __name__ (functools.partial, callable
+    object) must not crash the error handler itself — message still enqueued."""
+    import functools
+
+    async def run():
+        bus = MessageBus()
+
+        def raising(msg, flavor):
+            raise ValueError(f"test error {flavor}")
+
+        bus.add_inbound_interceptor(functools.partial(raising, flavor="partial"))
+
+        msg = _msg(1)
+        await bus.publish_inbound(msg)
+
+        assert bus.inbound_size == 1
+        got = await bus.consume_inbound()
+        assert got.content == "1"
+
+    asyncio.run(run())
