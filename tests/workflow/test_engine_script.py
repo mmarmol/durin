@@ -1,6 +1,8 @@
 import pytest
 
-from durin.workflow.engine import WorkflowConfigError, WorkflowEngine
+from durin.workflow import run_log
+from durin.workflow.artifacts import artifact_dir
+from durin.workflow.engine import WorkflowConfigError, WorkflowEngine, build_resume_state
 from durin.workflow.script_runner import ScriptNodeRunner
 from durin.workflow.spec import parse_workflow
 
@@ -120,6 +122,54 @@ def test_script_node_without_script_runner_is_config_error(tmp_path):
     eng = WorkflowEngine(node_runner=fake_agent_runner([]), workspace=str(tmp_path))
     with pytest.raises(WorkflowConfigError):
         eng.run(wf, "task")
+
+
+def test_linear_script_failure_records_exit_code_in_trace(tmp_path):
+    wf = parse_workflow({"name": "t", "start": "s", "nodes": [
+        {"id": "s", "kind": "script", "command": "exit 9", "next": None},
+    ]})
+    result = engine_for(tmp_path, []).run(wf, "task")
+    trace = {r.node_id: r for r in result.runs}
+    assert trace["s"].status == "node_failed"
+    assert trace["s"].exit_code == 9
+
+
+def test_timeout_failure_records_exit_code_none_in_trace(tmp_path):
+    wf = parse_workflow({"name": "t", "start": "s", "nodes": [
+        {"id": "s", "kind": "script", "command": "sleep 5", "timeout": 1, "next": None},
+    ]})
+    result = engine_for(tmp_path, []).run(wf, "task")
+    trace = {r.node_id: r for r in result.runs}
+    assert trace["s"].status == "node_failed"
+    assert trace["s"].exit_code is None
+
+
+def test_resume_at_script_node_feeds_answers_via_stdin(tmp_path):
+    # A multi-way script node that is itself the workflow's start: it re-runs on resume
+    # (not a downstream node), so the same node must see the composed answers on stdin,
+    # not its own prior stdout. `tee -a` records every pass's stdin into a file, and the
+    # branch it takes depends only on whether "answers" has shown up in that stdin yet —
+    # deterministic across the first pass (no needs_input/no answers) and the resumed
+    # pass (the framed answers context build_resume_state composes).
+    wf = parse_workflow({"name": "t", "start": "ask", "nodes": [
+        {"id": "ask", "kind": "script",
+         "command": 'tee -a seen.txt | grep -q answers && { echo done; echo OK; } '
+                    '|| { echo need more; echo MISSING; }',
+         "cases": {"MISSING": "__needs_input__", "OK": None}},
+    ]})
+    eng = engine_for(tmp_path, [])
+    first = eng.run(wf, "build the report")
+    assert first.status == "needs_input" and first.needs_input_node == "ask"
+
+    manifest = run_log.read_manifest(tmp_path, "t", first.run_id)
+    resume = build_resume_state(manifest, "the answers")
+    resumed = eng.run(wf, "build the report", resume=resume)
+    assert resumed.status == "completed"
+
+    work_dir = artifact_dir(tmp_path, first.run_id, "work", None)
+    seen = (work_dir / "seen.txt").read_text()
+    assert "build the report" in seen      # first pass: task text arrived on stdin
+    assert "the answers" in seen           # resumed pass: the framed answers arrived on stdin
 
 
 def test_shared_buffer_passes_through_script(tmp_path):

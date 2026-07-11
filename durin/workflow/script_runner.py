@@ -125,7 +125,7 @@ class ScriptNodeRunner:
             # Linear or multi-way node: a non-zero exit is an error, not a verdict —
             # continuing with half-produced output would poison the rest of the run.
             detail = f"script exited with code {rc}" + (f": {stderr_tail}" if stderr_tail else "")
-            raise NodeExecutionError(node.id, req.iteration, None, RuntimeError(detail))
+            raise NodeExecutionError(node.id, req.iteration, None, RuntimeError(detail), exit_code=rc)
 
         label = parse_label(stdout, node.cases) if node.cases is not None else None
         return NodeRunResponse(output=self._cap(stdout), session_key=None,

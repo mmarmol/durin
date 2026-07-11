@@ -361,7 +361,9 @@ node: a non-zero exit from a linear or multi-way (`cases`) script (a binary gate
 non-zero exit is a `FAIL` verdict instead, not a failure — see §2 and §4d), and a
 timeout (the process group is killed and reaped before the error is raised). Both
 record a `node_failed` `NodeRun` with no `session_key` (a script node has no session)
-and abort the run the same way an agent node's failure does.
+and abort the run the same way an agent node's failure does. The non-zero-exit path
+also carries the subprocess's `exit_code` into that `NodeRun` (a timeout has none —
+the process never returned one).
 
 **Missing script file.** When a `ScriptNode` names a `script` file, its existence is
 checked in the same pre-flight pass as input-file validation (§2), before any node

@@ -149,14 +149,20 @@ class NodeExecutionError(RuntimeError):
     """A node's agent turn raised. Carries the node identity, iteration and the session
     key under which the node runner persisted the partial conversation — so the engine
     can record an attributable ``node_failed`` NodeRun and name the node in the aborted
-    result, and the failed node's session stays navigable."""
+    result, and the failed node's session stays navigable. ``exit_code`` is set by the
+    script runner for a non-zero subprocess exit (None for a timeout, a spawn error, or
+    any agent-node failure) so the node_failed trace row carries it too."""
 
-    def __init__(self, node_id: str, iteration: int, session_key: str | None, cause: BaseException) -> None:
+    def __init__(
+        self, node_id: str, iteration: int, session_key: str | None, cause: BaseException,
+        *, exit_code: int | None = None,
+    ) -> None:
         super().__init__(f"node {node_id!r} (iteration {iteration}) failed: {cause}")
         self.node_id = node_id
         self.iteration = iteration
         self.session_key = session_key
         self.cause = cause
+        self.exit_code = exit_code
 
 
 class WorkflowEngine:
@@ -518,7 +524,8 @@ class WorkflowEngine:
                     runs.append(NodeRun(node_id=node.id, iteration=iteration,
                                         output="", session_key=exc.session_key,
                                         budget=budget,
-                                        status="node_failed", error=str(exc.cause)))
+                                        status="node_failed", error=str(exc.cause),
+                                        exit_code=getattr(exc, "exit_code", None)))
                     if update_manifest is not None:
                         update_manifest()
                     raise

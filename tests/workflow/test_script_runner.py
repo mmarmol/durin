@@ -1,9 +1,10 @@
+import os
 import time
 
 import pytest
 
 from durin.workflow.engine import NodeExecutionError, NodeRunRequest
-from durin.workflow.script_runner import ScriptNodeRunner
+from durin.workflow.script_runner import _MAX_TASK_ENV_CHARS, ScriptNodeRunner
 from durin.workflow.spec import ScriptNode
 
 
@@ -125,6 +126,48 @@ def test_non_utf8_output_degrades_instead_of_raising(tmp_path):
     node = ScriptNode(id="s", command="printf '\\xff\\xfe ok'")
     resp = runner(tmp_path)(_req(node, tmp_path=tmp_path))
     assert resp.exit_code == 0 and "ok" in resp.output
+
+
+def test_task_env_var_capped_at_max_chars(tmp_path):
+    node = ScriptNode(id="s", command='echo -n "${#DURIN_TASK}"')
+    req = NodeRunRequest(
+        node=node, task="x" * (_MAX_TASK_ENV_CHARS + 500), upstream_output=None,
+        shared_context=[], run_id="r1", iteration=1, root_session_key=None,
+        output_dir=str(tmp_path),
+    )
+    resp = runner(tmp_path)(req)
+    assert resp.output.strip() == str(_MAX_TASK_ENV_CHARS)
+
+
+def test_work_dir_env_var_equals_output_dir(tmp_path):
+    work = tmp_path / "work"
+    node = ScriptNode(id="s", command='echo -n "$DURIN_WORK_DIR"')
+    resp = runner(tmp_path)(_req(node, tmp_path=work))
+    assert resp.output == str(work)
+
+
+def test_timeout_kill_reaps_grandchild(tmp_path):
+    # The child backgrounds a grandchild that would otherwise outlive the timeout kill
+    # unless the process GROUP (not just the direct child) is signalled. It writes the
+    # grandchild's pid to a file in cwd first so the test can check on it after the kill.
+    node = ScriptNode(id="slow", command="sleep 60 & echo $! > child.pid; wait", timeout=1, next=None)
+    with pytest.raises(NodeExecutionError, match="timed out"):
+        runner(tmp_path)(_req(node, tmp_path=tmp_path))
+
+    pid_file = tmp_path / "child.pid"
+    assert pid_file.exists()
+    grandchild_pid = int(pid_file.read_text().strip())
+
+    deadline = time.time() + 5
+    dead = False
+    while time.time() < deadline:
+        try:
+            os.kill(grandchild_pid, 0)
+        except ProcessLookupError:
+            dead = True
+            break
+        time.sleep(0.1)
+    assert dead, "grandchild process is still alive after the timeout kill"
 
 
 def test_timeout_closes_pipes(tmp_path, monkeypatch):
