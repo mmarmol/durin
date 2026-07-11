@@ -6,6 +6,19 @@ from durin.loops.store import save_loop
 from durin.workflow.result import WorkflowResult
 
 
+@pytest.fixture(autouse=True)
+def _isolate_telemetry_dir(tmp_path, monkeypatch):
+    """LoopsRuntime binds a session telemetry logger around fire/try_fire/answer
+    (durin/loops/runtime.py) since those entrypoints run outside an agent turn's
+    bound ContextVar. Without this, every test below would write real JSONL
+    files to the developer's ~/.cache/durin/telemetry."""
+    import durin.telemetry.logger as telemetry_logger
+
+    telemetry_dir = tmp_path / "_telemetry"
+    monkeypatch.setattr(telemetry_logger, "_DEFAULT_DIR", telemetry_dir)
+    return telemetry_dir
+
+
 def _mk_runtime(tmp_path, results, judge_verdict=None, asks=None):
     calls = {"exec": []}
 
@@ -99,6 +112,65 @@ async def test_disabled_loop_skips_cron_fire(tmp_path):
     rt, calls = _mk_runtime(tmp_path, [])
     assert await rt.try_fire("l1", source="cron") is None
     assert calls["exec"] == []
+
+
+class _RecordingTelemetry:
+    """Minimal telemetry-sink double: records (event_type, data) pairs."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    def log(self, event_type: str, data: dict) -> None:
+        self.events.append((event_type, dict(data)))
+
+
+async def test_fire_emits_telemetry_when_unbound(tmp_path, _isolate_telemetry_dir):
+    """fire() runs outside an agent turn, so no logger is bound on entry.
+    LoopsRuntime must bind its own session logger for the call so
+    loops.fired / loops.run_finished actually land on disk."""
+    import json
+
+    from durin.telemetry.logger import current_telemetry
+
+    telemetry_dir = _isolate_telemetry_dir
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [_wr("completed")])
+
+    assert current_telemetry() is None
+    await rt.fire("l1", source="manual")
+    assert current_telemetry() is None  # unbound again after the call returns
+
+    files = list(telemetry_dir.glob("*.jsonl"))
+    assert len(files) == 1
+    event_types = [
+        json.loads(line)["type"]
+        for line in files[0].read_text(encoding="utf-8").strip().splitlines()
+    ]
+    assert "loops.fired" in event_types
+    assert "loops.run_finished" in event_types
+
+
+async def test_fire_reuses_already_bound_telemetry(tmp_path, _isolate_telemetry_dir):
+    """When a logger is already bound (e.g. fire() invoked via the loops agent
+    tool from inside a live agent turn), LoopsRuntime must not override it —
+    events go to the caller's logger, and no separate loop-scoped file appears."""
+    from durin.telemetry.logger import bind_telemetry, reset_telemetry
+
+    telemetry_dir = _isolate_telemetry_dir
+    _save(tmp_path)
+    rt, _ = _mk_runtime(tmp_path, [_wr("completed")])
+
+    fake = _RecordingTelemetry()
+    token = bind_telemetry(fake)
+    try:
+        await rt.fire("l1", source="manual")
+    finally:
+        reset_telemetry(token)
+
+    event_types = [event_type for event_type, _ in fake.events]
+    assert "loops.fired" in event_types
+    assert "loops.run_finished" in event_types
+    assert not telemetry_dir.exists() or list(telemetry_dir.glob("*.jsonl")) == []
 
 
 async def test_workflow_exec_exception_sets_detail_not_ask(tmp_path):

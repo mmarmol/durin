@@ -14,10 +14,28 @@ from durin.loops import run_log
 from durin.loops.checks import verify_goal
 from durin.loops.spec import LoopSpec
 from durin.loops.store import load_loop
+from durin.telemetry.logger import bind_telemetry, current_telemetry, get_session_logger, reset_telemetry
 
 
 class LoopBusy(Exception):
     """concurrency=single and an active run exists."""
+
+
+def _bind_loop_telemetry(name: str):
+    """Bind a session telemetry logger for this loop dispatch.
+
+    `fire`/`try_fire`/`answer` run outside an agent turn (cron dispatch,
+    HTTP request) where AgentLoop never binds `current_telemetry()`, so
+    `emit_tool_event` calls below would silently no-op. Bind a
+    `loop:<name>` session logger for the duration of the call — unless a
+    logger is already bound (e.g. `fire` invoked via the loops agent tool
+    from inside a live agent turn), in which case leave the caller's
+    binding alone so events keep flowing to the active session's file.
+    Returns the reset token, or None if nothing was bound here.
+    """
+    if current_telemetry() is not None:
+        return None
+    return bind_telemetry(get_session_logger(f"loop:{name}"))
 
 
 class LoopsRuntime:
@@ -32,31 +50,46 @@ class LoopsRuntime:
         self._run_id = run_id_factory or (lambda: uuid.uuid4().hex[:12])
 
     async def fire(self, name: str, *, source: str, task: str | None = None) -> dict:
-        spec = load_loop(self._ws, name)
-        if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
-            raise LoopBusy(f"loop '{name}' already has an active run")
-        return await self._run(spec, source=source, task=task)
+        token = _bind_loop_telemetry(name)
+        try:
+            spec = load_loop(self._ws, name)
+            if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
+                raise LoopBusy(f"loop '{name}' already has an active run")
+            return await self._run(spec, source=source, task=task)
+        finally:
+            if token is not None:
+                reset_telemetry(token)
 
     async def try_fire(self, name: str, *, source: str) -> dict | None:
-        spec = load_loop(self._ws, name)
-        if not spec.enabled:
-            return None
-        if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
-            emit_tool_event("loops.fired", {"loop": name, "source": source, "skipped": True})
-            return None
-        return await self._run(spec, source=source, task=None)
+        token = _bind_loop_telemetry(name)
+        try:
+            spec = load_loop(self._ws, name)
+            if not spec.enabled:
+                return None
+            if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
+                emit_tool_event("loops.fired", {"loop": name, "source": source, "skipped": True})
+                return None
+            return await self._run(spec, source=source, task=None)
+        finally:
+            if token is not None:
+                reset_telemetry(token)
 
     async def answer(self, name: str, run_id: str, answer: str) -> dict:
-        spec = load_loop(self._ws, name)
-        record = run_log.read_run(self._ws, name, run_id)
-        if not record or record.get("status") != "needs_operator":
-            raise ValueError(f"run '{run_id}' of loop '{name}' is not awaiting an answer")
-        run_log.update_run(self._ws, name, run_id, status="running")
+        token = _bind_loop_telemetry(name)
         try:
-            result = await self._exec(spec.workflow, answer, resume_run_id=record["workflow_run_id"])
-        except Exception as exc:  # noqa: BLE001 — any failure ends the run honestly
-            return await self._finish(spec, run_id, "error", None, detail=str(exc))
-        return await self._interpret(spec, run_id, result)
+            spec = load_loop(self._ws, name)
+            record = run_log.read_run(self._ws, name, run_id)
+            if not record or record.get("status") != "needs_operator":
+                raise ValueError(f"run '{run_id}' of loop '{name}' is not awaiting an answer")
+            run_log.update_run(self._ws, name, run_id, status="running")
+            try:
+                result = await self._exec(spec.workflow, answer, resume_run_id=record["workflow_run_id"])
+            except Exception as exc:  # noqa: BLE001 — any failure ends the run honestly
+                return await self._finish(spec, run_id, "error", None, detail=str(exc))
+            return await self._interpret(spec, run_id, result)
+        finally:
+            if token is not None:
+                reset_telemetry(token)
 
     async def _run(self, spec: LoopSpec, *, source: str, task: str | None) -> dict:
         run_id = self._run_id()
