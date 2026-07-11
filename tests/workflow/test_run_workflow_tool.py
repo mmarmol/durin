@@ -119,6 +119,24 @@ async def test_subworkflow_runs_end_to_end(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_script_node_runs_end_to_end(tmp_path):
+    # A script-only workflow needs no provider/agent turn at all — proves the
+    # tool wires a real ScriptNodeRunner through to the engine.
+    _write_workflow(tmp_path, "scripted", {
+        "name": "scripted", "start": "s",
+        "nodes": [{"id": "s", "kind": "script", "command": "echo tool-ok", "next": None}],
+    })
+    tool = _tool(tmp_path)
+    fake_provider = MagicMock(spec=LLMProvider)
+    fake_provider.get_default_model.return_value = "test-model"
+    with patch("durin.providers.factory.make_provider", return_value=fake_provider):
+        out = await tool.execute(name="scripted", task="go", background=False)
+    assert "completed" in out.lower()
+    assert "tool-ok" in out
+    assert "(no session)" in out
+
+
+@pytest.mark.asyncio
 async def test_run_anchors_node_sessions_to_invoking_session(tmp_path):
     from unittest.mock import AsyncMock
     from durin.agent.runner import AgentRunResult

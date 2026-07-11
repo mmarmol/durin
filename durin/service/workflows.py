@@ -288,11 +288,18 @@ class WorkflowsService:
             tools_config=self._app_config.tools,
             app_config=self._app_config,
         )
+        from durin.workflow.script_runner import ScriptNodeRunner
+        script_runner = ScriptNodeRunner(
+            self._workspace,
+            default_timeout=self._app_config.workflow.script_timeout,
+            max_output_chars=self._app_config.workflow.script_output_max_chars,
+        )
         judge = AgentJudgeRunner(runner, default_model=provider.get_default_model())
         ws = str(self._workspace)
         engine = WorkflowEngine(
             node_runner=node_runner,
-            subworkflow_runner=SubworkflowRunner(ws, node_runner, judge),
+            script_runner=script_runner,
+            subworkflow_runner=SubworkflowRunner(ws, node_runner, judge, script_runner=script_runner),
             workspace=ws, pick_runner=judge.pick,
             max_node_visits=self._app_config.workflow.max_node_visits)
         result = await asyncio.to_thread(
