@@ -3,7 +3,8 @@
 import json
 from types import SimpleNamespace
 
-from durin.workflow import run_log, workflow_recommendations as wr
+from durin.workflow import run_log
+from durin.workflow import workflow_recommendations as wr
 from durin.workflow.loader import workflows_dir
 from durin.workflow.result import NodeRun, WorkflowResult
 from durin.workflow.workflow_improve_dream import run_workflow_improve_pass
@@ -669,6 +670,7 @@ def test_unparseable_sibling_referencing_script_forces_manual(tmp_path):
     """A sibling definition that fails to parse fails SAFE: its raw JSON is
     scanned for the filename and the reference still forces review."""
     import json as _j
+
     from durin.workflow.workflow_improve_dream import _script_referenced_outside
     wfdir = tmp_path / "workflows"
     (wfdir / "scripts").mkdir(parents=True)

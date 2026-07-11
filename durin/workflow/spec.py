@@ -16,7 +16,6 @@ from typing import Any, Literal, Union
 
 from durin.workflow.verdict import normalize_label
 
-
 # ---------------------------------------------------------------------------
 # Human-readable node label helpers
 # ---------------------------------------------------------------------------
