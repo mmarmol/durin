@@ -21,15 +21,26 @@ def claims_path(ws: str | Path) -> Path:
 
 
 def _load_claims(ws: str | Path) -> dict:
-    """Load claims from file, returning empty dict if missing or malformed."""
+    """Load claims from file, returning empty dict if missing or malformed.
+
+    Tolerates: invalid JSON, non-UTF-8 bytes, top-level non-dict, and entries
+    with non-dict values. Drops malformed entries and always returns a dict.
+    """
     path = claims_path(ws)
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        # Malformed file: skip and return empty dict
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        # Any read/parse error: skip and return empty dict
         return {}
+
+    # Ensure top level is a dict
+    if not isinstance(data, dict):
+        return {}
+
+    # Filter: keep only entries with dict values
+    return {k: v for k, v in data.items() if isinstance(v, dict)}
 
 
 def lookup(ws: str | Path, key: str) -> dict | None:

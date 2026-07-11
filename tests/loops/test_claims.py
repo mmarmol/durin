@@ -198,3 +198,87 @@ def test_claims_file_malformed_tolerance(temp_ws: Path) -> None:
     # Register should overwrite with valid JSON
     register(temp_ws, key="key-1", loop="loop-a", run_id="run-1")
     assert lookup(temp_ws, "key-1") is not None
+
+
+def test_claims_file_contains_null_json(temp_ws: Path) -> None:
+    """File containing null (valid JSON, non-dict) is tolerated.
+
+    lookup returns None and register works after.
+    """
+    claims_file = claims_path(temp_ws)
+    claims_file.parent.mkdir(parents=True, exist_ok=True)
+    claims_file.write_text("null", encoding="utf-8")
+
+    # Lookup should return None (top-level is not a dict)
+    result = lookup(temp_ws, "any-key")
+    assert result is None
+
+    # Register should work and overwrite with valid JSON
+    register(temp_ws, key="key-1", loop="loop-a", run_id="run-1")
+    assert lookup(temp_ws, "key-1") is not None
+    claim = lookup(temp_ws, "key-1")
+    assert claim["loop"] == "loop-a"
+    assert claim["run_id"] == "run-1"
+
+
+def test_claims_file_non_dict_value_entries(temp_ws: Path) -> None:
+    """File with non-dict value entries is tolerated.
+
+    prune and release_run don't crash and bad entry is ignored.
+    """
+    import json
+
+    claims_file = claims_path(temp_ws)
+    claims_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write a file with mixed valid and invalid entries, with old timestamp
+    old_time = time.time() - 100  # 100 seconds ago
+    data = {
+        "good-key": {"loop": "loop-a", "run_id": "run-1", "registered_at": old_time},
+        "bad-key-string": "not-a-dict",  # Non-dict value
+        "bad-key-null": None,  # Null value
+        "bad-key-list": [1, 2, 3],  # List value
+    }
+    claims_file.write_text(json.dumps(data), encoding="utf-8")
+
+    # Lookup on bad entry should return None
+    assert lookup(temp_ws, "bad-key-string") is None
+    assert lookup(temp_ws, "bad-key-null") is None
+    assert lookup(temp_ws, "bad-key-list") is None
+
+    # Good entry should still be found
+    assert lookup(temp_ws, "good-key") is not None
+
+    # prune should not crash on bad entries
+    released = prune(temp_ws, max_age_s=50)
+    assert "good-key" in released  # Good entry is old, gets pruned
+    assert "bad-key-string" not in released  # Bad entries are silently dropped
+    assert "bad-key-null" not in released
+    assert "bad-key-list" not in released
+
+    # release_run should not crash on bad entries
+    claims_file.write_text(json.dumps(data), encoding="utf-8")
+    release_run(temp_ws, loop="loop-a", run_id="run-1")
+    # Good entry should be removed, bad entries should still be filtered out
+    assert lookup(temp_ws, "good-key") is None
+    assert lookup(temp_ws, "bad-key-string") is None
+
+
+def test_claims_file_non_utf8_bytes(temp_ws: Path) -> None:
+    """File with non-UTF-8 bytes is tolerated.
+
+    lookup returns None on UnicodeDecodeError.
+    """
+    claims_file = claims_path(temp_ws)
+    claims_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write non-UTF-8 bytes
+    claims_file.write_bytes(b"\xff\xfe invalid bytes")
+
+    # Lookup should return None (file is skipped)
+    result = lookup(temp_ws, "any-key")
+    assert result is None
+
+    # Register should work after
+    register(temp_ws, key="key-1", loop="loop-a", run_id="run-1")
+    assert lookup(temp_ws, "key-1") is not None
