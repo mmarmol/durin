@@ -74,3 +74,35 @@ def test_sort_is_deterministic_on_started_at_ties(tmp_path):
     # Verify order is deterministic (should be sorted by run_id descending for ties)
     expected = sorted(run_ids, reverse=True)
     assert order1 == expected, f"Expected {expected}, got {order1}"
+
+
+def test_list_all_runs_deterministic_on_ties(tmp_path):
+    """list_all_runs across multiple loops with tied started_at should be deterministic by run_id."""
+    # Create runs in two different loops with identical started_at
+    shared_started_at = 2000.0
+    a_run_ids = ["a_r1", "a_r2", "a_r3"]
+    b_run_ids = ["b_r1", "b_r2"]
+
+    # Create runs in loop "a"
+    for run_id in a_run_ids:
+        rl.start_run(tmp_path, "a", run_id, source="cron", task="t")
+        rl.update_run(tmp_path, "a", run_id, started_at=shared_started_at)
+
+    # Create runs in loop "b"
+    for run_id in b_run_ids:
+        rl.start_run(tmp_path, "b", run_id, source="cron", task="t")
+        rl.update_run(tmp_path, "b", run_id, started_at=shared_started_at)
+
+    # Call list_all_runs twice and verify same order both times
+    all_runs1 = rl.list_all_runs(tmp_path)
+    all_runs2 = rl.list_all_runs(tmp_path)
+
+    order1 = [m["run_id"] for m in all_runs1]
+    order2 = [m["run_id"] for m in all_runs2]
+
+    assert order1 == order2, f"Orders differ: {order1} vs {order2}"
+
+    # Verify order is deterministic (should be sorted by run_id descending for ties)
+    all_run_ids = a_run_ids + b_run_ids
+    expected = sorted(all_run_ids, reverse=True)
+    assert order1 == expected, f"Expected {expected}, got {order1}"

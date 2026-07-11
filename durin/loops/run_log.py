@@ -99,7 +99,7 @@ def list_all_runs(ws, limit: int = 100) -> list[dict]:
     for d in root.iterdir():
         if d.is_dir():
             out.extend(_load_dir(d))
-    out.sort(key=lambda m: m.get("started_at") or 0, reverse=True)
+    out.sort(key=lambda m: (m.get("started_at") or 0, m.get("run_id") or ""), reverse=True)
     return out[:limit]
 
 
