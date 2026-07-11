@@ -233,23 +233,28 @@ def apply_recommendation(workspace: str | Path, name: str, rec_id: str,
             name_error = _validate_script_name(script_name)
             if name_error:
                 return {"ok": False, "error": name_error}
-            scripts_dir = workflows_dir(workspace) / "scripts"
-            scripts_dir.mkdir(parents=True, exist_ok=True)
-            script_path = scripts_dir / script_name
-            try:
-                atomic_write_text(script_path, rec["proposed"])
-            except OSError as exc:
-                return {"ok": False, "error": f"cannot write script {script_name!r}: {exc}"}
-            # Best-effort: the scripts dir lives inside the versioned workflows dir, so
-            # this snapshot lands the file edit in the same history as a definition
-            # edit. snapshot() itself never raises; the try/except is defense in depth.
-            commit = None
-            try:
-                commit = WorkflowVersionStore(workflows_dir(workspace)).snapshot(
-                    f"apply recommendation {rec_id}: {rec.get('reason', '')}"
-                )
-            except Exception:  # noqa: BLE001 - versioning must not block the apply
+            script_path = workflows_dir(workspace) / "scripts" / script_name
+            # Every writer of files under the versioned workflows dir serializes on
+            # the version-lock target (the editor's script PUT, the definition save),
+            # so a concurrent editor save and this apply never silently race. The
+            # recommendations lock is already held; that nesting order matches the
+            # definition-field path (which calls save_workflow_definition inside it).
+            from durin.workflow.version_store import version_lock_target
+            with cross_process_lock(version_lock_target(workflows_dir(workspace))):
+                try:
+                    atomic_write_text(script_path, rec["proposed"])
+                except OSError as exc:
+                    return {"ok": False, "error": f"cannot write script {script_name!r}: {exc}"}
+                # Best-effort: the scripts dir lives inside the versioned workflows dir,
+                # so this snapshot lands the file edit in the same history as a
+                # definition edit; versioning must never block the apply.
                 commit = None
+                try:
+                    commit = WorkflowVersionStore(workflows_dir(workspace)).snapshot(
+                        f"apply recommendation {rec_id}: {rec.get('reason', '')}"
+                    )
+                except Exception:  # noqa: BLE001 - versioning must not block the apply
+                    commit = None
             rec["status"] = "applied"
             rec["applied_by"] = actor
             if commit:
