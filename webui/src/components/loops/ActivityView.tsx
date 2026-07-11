@@ -29,19 +29,25 @@ function AnswerRow({
   answering,
 }: {
   run: LoopRun;
-  onAnswer: (run: LoopRun, answer: string) => void;
+  onAnswer: (run: LoopRun, answer: string) => Promise<boolean>;
   answering: boolean;
 }) {
   const { t } = useTranslation();
   const [answer, setAnswer] = useState("");
   const [sent, setSent] = useState(false);
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     if (answering) return;
-    if (!answer.trim()) return;
+    const text = answer.trim();
+    if (!text) return;
     setAnswer("");
-    setSent(true);
-    onAnswer(run, answer);
+    const ok = await onAnswer(run, text);
+    if (ok) {
+      setSent(true);
+    } else {
+      // Restore the typed answer so the user can retry instead of retyping it.
+      setAnswer(text);
+    }
   }, [answering, answer, run, onAnswer]);
 
   return (
@@ -65,13 +71,13 @@ function AnswerRow({
             className="h-8 bg-background text-foreground"
             disabled={answering}
             onKeyDown={(e) => {
-              if (e.key === "Enter") handleSend();
+              if (e.key === "Enter") void handleSend();
             }}
           />
           <Button
             size="sm"
             disabled={answering || !answer.trim()}
-            onClick={handleSend}
+            onClick={() => void handleSend()}
           >
             {answering ? <Loader2 className="h-4 w-4 animate-spin" /> : t("loops.activity.send")}
           </Button>
@@ -137,15 +143,17 @@ export function ActivityView() {
   });
 
   const onAnswer = useCallback(
-    async (run: LoopRun, answer: string) => {
-      if (!answer.trim()) return;
+    async (run: LoopRun, answer: string): Promise<boolean> => {
+      if (!answer.trim()) return false;
       setAnsweringId(run.run_id);
       setError(null);
       try {
         await answerLoopRun(token, run.loop, run.run_id, answer);
         await refresh();
+        return true;
       } catch (e) {
         setError(errMsg(e));
+        return false;
       } finally {
         setAnsweringId(null);
       }

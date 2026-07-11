@@ -129,6 +129,24 @@ describe("LoopsView", () => {
     await waitFor(() => expect(api.listAllLoopRuns).toHaveBeenCalledTimes(2));
   });
 
+  it("a failed send keeps the typed answer and shows the error banner, no Answer sent", async () => {
+    vi.mocked(api.listAllLoopRuns).mockResolvedValue([NEEDS_OPERATOR]);
+    vi.mocked(api.answerLoopRun).mockRejectedValue(
+      new api.ApiError(500, "HTTP 500", "boom"),
+    );
+    const user = userEvent.setup();
+    render(wrap(<LoopsView />));
+
+    await screen.findByText(NEEDS_OPERATOR.ask!);
+    const input = screen.getByPlaceholderText(/answer/i);
+    await user.type(input, "staging");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await screen.findByText(/boom/i);
+    expect(screen.queryByText(/answer sent/i)).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/answer/i)).toHaveValue("staging");
+  });
+
   it("lists loop definitions in the definitions tab", async () => {
     vi.mocked(api.listAllLoopRuns).mockResolvedValue([]);
     vi.mocked(api.listLoops).mockResolvedValue([LOOP_DEF]);

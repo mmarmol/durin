@@ -165,7 +165,13 @@ export function LoopForm({
       await saveLoop(token, formToDef(form, enabledOnSubmitRef.current));
       onDone();
     } catch (e) {
-      setError(e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message);
+      setError(
+        e instanceof ApiError
+          ? e.detail
+            ? `HTTP ${e.status}: ${e.detail}`
+            : `HTTP ${e.status}`
+          : (e as Error).message,
+      );
     } finally {
       setSaving(false);
     }
