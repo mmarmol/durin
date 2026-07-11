@@ -1705,7 +1705,7 @@ def _run_gateway(
     # asks/escalations delivered through the same channel path cron uses. A
     # dedicated WorkflowsService instance (workflows_service isn't built yet at
     # this point — build_service_registry constructs its own further down).
-    import uuid
+    import time
 
     from durin.loops.judge import build_prompt as _loop_build_prompt
     from durin.loops.judge import parse_verdict as _loop_parse_verdict
@@ -1720,7 +1720,10 @@ def _run_gateway(
     async def _loop_judge(intent: str, assertions: list[str], evidence: str) -> dict:
         prompt = _loop_build_prompt(intent, assertions, evidence)
         resp = await agent.process_direct(
-            prompt, session_key=f"loop:judge:{uuid.uuid4().hex[:8]}",
+            # loop:judge:run:{ms} — matches durin.cron.reaper's run-session
+            # pattern so judge sessions are reaped like cron run sessions
+            # instead of accumulating forever.
+            prompt, session_key=f"loop:judge:run:{int(time.time() * 1000)}",
         )
         return _loop_parse_verdict(resp.content if resp else "")
 
