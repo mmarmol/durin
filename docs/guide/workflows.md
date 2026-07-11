@@ -86,7 +86,12 @@ The I/O contract is plain Unix:
 - **Environment.** A handful of `DURIN_*` variables carry run metadata:
   `DURIN_TASK` (the run's task, capped), `DURIN_RUN_ID`, `DURIN_NODE_ID`,
   `DURIN_ITERATION` (which pass this is, for a looping node), and
-  `DURIN_WORK_DIR` (the shared working folder's path).
+  `DURIN_WORK_DIR` (the shared working folder's path). The rest of the
+  subprocess environment is controlled by `env`: `"clean"` (the default) gives
+  the script a minimal allowlist (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`,
+  `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR`, `DURIN_HOME`) plus those `DURIN_*` vars; `"inherit"`
+  gives it the full environment your durin gateway runs in — opt into it only
+  when the script genuinely needs an ambient variable durin doesn't forward.
 - **Timeout.** A script node has its own `timeout` in seconds, or falls back to
   `workflow.script_timeout` (default 300s). A script that runs past it is
   killed and the node fails.
@@ -347,7 +352,9 @@ prompt/model-or-persona/mode/context/tools/session in a side panel, and add
 static or dynamic parallel branches with a concurrency cap. The palette also
 adds script nodes — an inline command or a picker over the files under
 `workflows/scripts/`, with a timeout and the same pass/fail or `cases` routing
-config as a work node. Input and
+config as a work node. The file picker's "New script…" and "Edit" actions let
+you create or edit those script files from the same panel, without leaving the
+browser. Input and
 Output are clickable canvas objects where you toggle text/file and write
 the free-text description. Runs launched from the editor show live,
 per-node progress as the graph executes.

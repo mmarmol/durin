@@ -82,6 +82,14 @@ function patch<T>(url: string, token: string, body: unknown): Promise<T> {
   });
 }
 
+function put<T>(url: string, token: string, body: unknown): Promise<T> {
+  return request<T>(url, token, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 function splitKey(key: string): { channel: string; chatId: string } {
   const idx = key.indexOf(":");
   if (idx === -1) return { channel: "", chatId: key };
@@ -242,6 +250,32 @@ export async function listWorkflowScripts(
     token,
   );
   return body.scripts;
+}
+
+export async function getWorkflowScript(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<string> {
+  const body = await request<{ name: string; content: string }>(
+    `${base}/api/v1/workflows/scripts/${encodeURIComponent(name)}`,
+    token,
+  );
+  return body.content;
+}
+
+/** Create or replace a script file under workflows/scripts/. */
+export async function saveWorkflowScript(
+  token: string,
+  name: string,
+  content: string,
+  base: string = "",
+): Promise<void> {
+  await put<{ name: string }>(
+    `${base}/api/v1/workflows/scripts/${encodeURIComponent(name)}`,
+    token,
+    { content },
+  );
 }
 
 export async function deleteWorkflow(

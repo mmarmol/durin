@@ -91,3 +91,56 @@ def test_workflow_named_scripts_is_still_reachable_by_its_own_route(client, work
     # list() still surfaces it as a workflow name (proves the file itself is intact)
     listing = client.get("/api/v1/workflows", headers=_auth_headers())
     assert "scripts" in listing.json()["workflows"]
+
+
+def test_script_put_then_get_round_trip(client):
+    put = client.put(
+        "/api/v1/workflows/scripts/check.py",
+        headers=_auth_headers(),
+        json={"content": "print('hi')\n"},
+    )
+    assert put.status_code == 200
+    assert put.json() == {"name": "check.py"}
+
+    got = client.get("/api/v1/workflows/scripts/check.py", headers=_auth_headers())
+    assert got.status_code == 200
+    assert got.json() == {"name": "check.py", "content": "print('hi')\n"}
+
+
+def test_script_get_missing_is_404(client):
+    resp = client.get("/api/v1/workflows/scripts/ghost.py", headers=_auth_headers())
+    assert resp.status_code == 404
+
+
+def test_script_put_rejects_path_traversal(client, workspace):
+    resp = client.put(
+        "/api/v1/workflows/scripts/../escape.py",
+        headers=_auth_headers(),
+        json={"content": "x"},
+    )
+    # The client/server normalize "../" out of the URL before routing, so this lands
+    # on /api/v1/workflows/escape.py instead — a path with no PUT route registered
+    # (workflow {name} only has GET/POST/DELETE) -> 405, not a successful write.
+    assert resp.status_code == 405
+    assert not (workspace / "workflows" / "escape.py").exists()
+    assert not (workspace / "workflows" / "scripts" / "escape.py").exists()
+
+
+def test_scripts_name_route_does_not_collide_with_a_run_of_a_workflow_named_scripts(client, workspace):
+    # POST /api/v1/workflows/scripts/run is unambiguous even though it shares a path
+    # shape with GET/PUT .../scripts/{name}: the run route is POST-only and the
+    # scripts/{name} routes are GET/PUT-only, so the method alone disambiguates.
+    workflows_dir = workspace / "workflows"
+    workflows_dir.mkdir(parents=True)
+    (workflows_dir / "scripts.json").write_text(
+        json.dumps({"name": "scripts", "start": "a", "nodes": [{"id": "a", "kind": "work"}]})
+    )
+    resp = client.post(
+        "/api/v1/workflows/scripts/run",
+        headers=_auth_headers(),
+        json={"task": "x"},
+    )
+    # No app_config/sessions wired on this registry's WorkflowsService -> 503, not the
+    # 404/422 that a scripts/{name} route mismatch would raise. Proves the POST landed
+    # on the run() handler for workflow "scripts", not on a scripts/{name} handler.
+    assert resp.status_code == 503

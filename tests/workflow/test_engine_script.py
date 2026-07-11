@@ -1,8 +1,13 @@
+import json
+import os
+import time
+from importlib.resources import files as pkg_files
+
 import pytest
 
 from durin.workflow import run_log
 from durin.workflow.artifacts import artifact_dir
-from durin.workflow.engine import WorkflowConfigError, WorkflowEngine, build_resume_state
+from durin.workflow.engine import NodeRunRequest, WorkflowConfigError, WorkflowEngine, build_resume_state
 from durin.workflow.script_runner import ScriptNodeRunner
 from durin.workflow.spec import parse_workflow
 
@@ -193,3 +198,98 @@ def test_shared_buffer_passes_through_script(tmp_path):
     assert result.status == "completed"
     # b (shared) still received a's turns — the script did not consume or reset the buffer
     assert any("turn-a" in str(m) for m in reqs[1].shared_context)
+
+
+def test_cancel_kills_a_running_script_node(tmp_path):
+    # The script writes its own pid to a file in its working folder (the engine's
+    # output_dir for a script node) before sleeping — so the test can confirm the
+    # subprocess actually died, not just that run() returned early.
+    wf = parse_workflow({"name": "t", "start": "s", "nodes": [
+        {"id": "s", "kind": "script", "command": "echo $$ > pid.txt; sleep 30",
+         "timeout": 30, "next": None},
+    ]})
+    t0 = time.monotonic()
+
+    def cancel_check():
+        return time.monotonic() - t0 > 1.0
+
+    eng = WorkflowEngine(node_runner=fake_agent_runner([]),
+                         script_runner=ScriptNodeRunner(str(tmp_path)),
+                         workspace=str(tmp_path),
+                         cancel_check=cancel_check)
+    result = eng.run(wf, "task")
+    assert time.monotonic() - t0 < 10
+    assert result.status == "cancelled"
+
+    work_dir = artifact_dir(tmp_path, result.run_id, "work", None)
+    pid = int((work_dir / "pid.txt").read_text().strip())
+    deadline = time.time() + 5
+    dead = False
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            dead = True
+            break
+        time.sleep(0.1)
+    assert dead, "script subprocess is still alive after the cancel"
+
+
+def _build_specs_gate_command() -> str:
+    # Load the actual seed file (not a re-typed copy) so this test pins the real
+    # gate command's behavior, not a paraphrase of it.
+    path = pkg_files("durin") / "templates" / "workflows" / "build-specs.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    wf = parse_workflow(data)
+    gate = wf.nodes["gate"]
+    assert gate.kind == "script" and gate.on_fail == "assemble"
+    return gate.command
+
+
+def test_build_specs_seed_gate_passes_when_every_component_is_present(tmp_path):
+    (tmp_path / "components.json").write_text(
+        json.dumps(["auth-module", "rate-limiter"]), encoding="utf-8")
+    node = parse_workflow({"name": "t", "start": "gate", "nodes": [
+        {"id": "gate", "kind": "script", "command": _build_specs_gate_command(),
+         "on_pass": None, "on_fail": "assemble"},
+        {"id": "assemble", "prompt": "reassemble", "next": None},
+    ]}).nodes["gate"]
+    spec_text = "## Auth-Module\nHandles login.\n\n## Rate-Limiter\nThrottles requests."
+    req = NodeRunRequest(node=node, task="task", upstream_output=spec_text, shared_context=[],
+                         run_id="r1", iteration=1, root_session_key=None, output_dir=str(tmp_path))
+    resp = ScriptNodeRunner(str(tmp_path))(req)
+    assert resp.route_label == "PASS" and resp.exit_code == 0
+
+
+def test_build_specs_seed_gate_fails_and_names_the_missing_component(tmp_path):
+    (tmp_path / "components.json").write_text(
+        json.dumps(["auth-module", "rate-limiter"]), encoding="utf-8")
+    node = parse_workflow({"name": "t", "start": "gate", "nodes": [
+        {"id": "gate", "kind": "script", "command": _build_specs_gate_command(),
+         "on_pass": None, "on_fail": "assemble"},
+        {"id": "assemble", "prompt": "reassemble", "next": None},
+    ]}).nodes["gate"]
+    spec_text = "## Auth-Module\nHandles login."   # rate-limiter section missing
+    req = NodeRunRequest(node=node, task="task", upstream_output=spec_text, shared_context=[],
+                         run_id="r1", iteration=1, root_session_key=None, output_dir=str(tmp_path))
+    resp = ScriptNodeRunner(str(tmp_path))(req)
+    assert resp.route_label == "FAIL" and resp.exit_code == 1
+    assert "rate-limiter" in resp.output
+
+
+def test_build_specs_seed_gate_fails_clearly_when_components_json_is_missing(tmp_path):
+    # frame is the only step that writes components.json; if it failed to do so,
+    # the gate must name that real problem instead of dying on an uncaught
+    # FileNotFoundError and looping back to assemble, which cannot fix it.
+    node = parse_workflow({"name": "t", "start": "gate", "nodes": [
+        {"id": "gate", "kind": "script", "command": _build_specs_gate_command(),
+         "on_pass": None, "on_fail": "assemble"},
+        {"id": "assemble", "prompt": "reassemble", "next": None},
+    ]}).nodes["gate"]
+    spec_text = "## Auth-Module\nHandles login.\n\n## Rate-Limiter\nThrottles requests."
+    req = NodeRunRequest(node=node, task="task", upstream_output=spec_text, shared_context=[],
+                         run_id="r1", iteration=1, root_session_key=None, output_dir=str(tmp_path))
+    resp = ScriptNodeRunner(str(tmp_path))(req)
+    assert resp.route_label == "FAIL" and resp.exit_code == 1
+    assert "components.json" in resp.output
+    assert "frame" in resp.output

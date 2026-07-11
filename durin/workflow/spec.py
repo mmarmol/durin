@@ -117,6 +117,7 @@ class ScriptNode:
     command: str = ""
     script: str = ""
     timeout: int | None = None           # seconds; None = the workflow.script_timeout config default
+    env: Literal["clean", "inherit"] = "clean"  # "clean" = minimal allowlist + DURIN_*; "inherit" = full gateway env
     next: str | None = None
     on_pass: str | None = None
     on_fail: str | None = None
@@ -364,6 +365,9 @@ def _build_node(raw: dict[str, Any]) -> Node:
         if timeout is not None:
             if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout < 1:
                 raise WorkflowError(f"node {node_id!r}: timeout must be an int >= 1, got {timeout!r}")
+        env = raw.get("env", "clean")
+        if env not in ("clean", "inherit"):
+            raise WorkflowError(f"node {node_id!r}: env must be 'clean' or 'inherit', got {env!r}")
         node_max_visits = raw.get("max_visits")
         if node_max_visits is not None:
             if isinstance(node_max_visits, bool) or not isinstance(node_max_visits, int) or node_max_visits < 1:
@@ -373,7 +377,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
         next_node, on_pass, on_fail, cases = _parse_routing(raw, node_id)
         return ScriptNode(
             id=node_id, title=raw.get("title", ""), command=command.strip(), script=script,
-            timeout=timeout, next=next_node, on_pass=on_pass, on_fail=on_fail,
+            timeout=timeout, env=env, next=next_node, on_pass=on_pass, on_fail=on_fail,
             cases=cases, max_visits=node_max_visits,
         )
     if kind == "subworkflow":

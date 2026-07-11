@@ -128,7 +128,7 @@ describe("Judge model settings row", () => {
     const user = userEvent.setup();
     const row = await judgeRow();
 
-    await user.click(within(row).getByRole("button", { name: /clear/i }));
+    await user.click(await within(row).findByRole("button", { name: /clear/i }));
     await waitFor(() => {
       expect(api.setConfigValue).toHaveBeenCalledWith(
         "tok", "skills.security.llm_judge.model", "");

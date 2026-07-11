@@ -6734,6 +6734,70 @@
         "title": "WorkflowSaveResult",
         "type": "object"
       },
+      "WorkflowScriptGetQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkflowScriptGetQuery",
+        "type": "object"
+      },
+      "WorkflowScriptGetResult": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "content"
+        ],
+        "title": "WorkflowScriptGetResult",
+        "type": "object"
+      },
+      "WorkflowScriptPutCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "content"
+        ],
+        "title": "WorkflowScriptPutCommand",
+        "type": "object"
+      },
+      "WorkflowScriptPutResult": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkflowScriptPutResult",
+        "type": "object"
+      },
       "WorkflowScriptsResult": {
         "properties": {
           "scripts": {
@@ -11051,6 +11115,62 @@
         },
         "summary": "List script filenames available to script nodes (the editor's file picker).",
         "x-required-scope": "workflows:read"
+      }
+    },
+    "/api/v1/workflows/scripts/{name}": {
+      "get": {
+        "operationId": "workflows_get_script",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowScriptGetQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowScriptGetResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Read one script file's content (the editor's script file viewer).",
+        "x-required-scope": "workflows:read"
+      },
+      "put": {
+        "operationId": "workflows_put_script",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowScriptPutCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowScriptPutResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Create or replace a script file (the editor's script create/edit action).",
+        "x-required-scope": "workflows:write"
       }
     },
     "/api/v1/workflows/{name}": {

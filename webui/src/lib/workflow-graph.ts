@@ -27,6 +27,9 @@ export type WorkflowNodeDef = {
   command?: string;
   script?: string;
   timeout?: number;
+  // script node: subprocess env — undefined = backend default "clean" (minimal
+  // allowlist + DURIN_*); "inherit" = full gateway process environment.
+  env?: "clean" | "inherit";
   [k: string]: unknown;
 };
 
