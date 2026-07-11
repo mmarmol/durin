@@ -3,6 +3,9 @@
 Single JSON file at <workspace>/loops/claims.json, atomically rewritten under
 cross_process_lock() so gateway, TUI, and cron processes can register and
 release claims concurrently without colliding on same keys.
+
+Policy: last claim on a key wins; a concurrent claimant on the same thread
+silently clobbers the prior one, and that clobbering is logged.
 """
 
 from __future__ import annotations
@@ -10,6 +13,8 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+
+from loguru import logger
 
 from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
@@ -60,6 +65,12 @@ def register(ws: str | Path, *, key: str, loop: str, run_id: str) -> None:
     path = claims_path(ws)
     with cross_process_lock(path):
         claims = _load_claims(ws)
+        existing = claims.get(key)
+        if existing and (existing.get("loop") != loop or existing.get("run_id") != run_id):
+            logger.warning(
+                "loops: claim on key '{}' clobbered — {}/{} overwrites {}/{}",
+                key, loop, run_id, existing.get("loop"), existing.get("run_id"),
+            )
         claims[key] = {
             "loop": loop,
             "run_id": run_id,

@@ -285,6 +285,35 @@ async def test_answer_on_waiting_info_resumes_and_releases_claim(tmp_path):
     assert claims.lookup(tmp_path, "thread-abc") is None
 
 
+async def test_reask_after_answer_keeps_fresh_claim(tmp_path):
+    """A tagged re-ask on the same thread after an answer must register a
+    fresh claim that survives — the pre-resume release (finding 1 fix) must
+    not wipe it via a trailing unconditional finally."""
+    _save(tmp_path)
+    counterpart_asks = []
+    rt, calls = _mk_runtime(
+        tmp_path,
+        [
+            _wr("needs_input", out="[TO:counterpart] confirm the invoice?", needs_input_node="gate"),
+            _wr("needs_input", out="[TO:counterpart] what's the PO number?", needs_input_node="gate2", run_id="wf1"),
+        ],
+        counterpart_asks=counterpart_asks,
+    )
+    origin = {"thread": "thread-reask"}
+    m = await rt.fire("l1", source="channel", origin=origin)
+    assert m["status"] == "waiting_info"
+    assert claims.lookup(tmp_path, "thread-reask")["run_id"] == m["run_id"]
+
+    m2 = await rt.answer("l1", m["run_id"], "confirmed")
+    assert m2["status"] == "waiting_info"
+    assert calls["exec"][1] == ("w1", "confirmed", "wf1")
+
+    claim = claims.lookup(tmp_path, "thread-reask")
+    assert claim is not None
+    assert claim["loop"] == "l1"
+    assert claim["run_id"] == m2["run_id"] == m["run_id"]
+
+
 async def test_answer_releases_claim_even_when_resumed_exec_raises(tmp_path):
     _save(tmp_path)
     results = [_wr("needs_input", out="[TO:counterpart] confirm?", needs_input_node="gate")]

@@ -110,17 +110,18 @@ class LoopsRuntime:
             if not record or record.get("status") not in ("needs_operator", "waiting_info"):
                 raise ValueError(f"run '{run_id}' of loop '{name}' is not awaiting an answer")
             run_log.update_run(self._ws, name, run_id, status="running")
+            # Release now, before the resume: the old claim is stale the
+            # moment the answer arrives (idempotent — a needs_operator run
+            # held no claim). If _interpret re-asks another tagged question
+            # below, it registers a fresh claim after this point, so a
+            # trailing release here would wipe it and orphan the next
+            # round-trip.
+            claims.release_run(self._ws, name, run_id)
             try:
-                try:
-                    result = await self._exec(spec.workflow, answer, resume_run_id=record["workflow_run_id"])
-                except Exception as exc:  # noqa: BLE001 — any failure ends the run honestly
-                    return await self._finish(spec, run_id, "error", None, detail=str(exc))
-                return await self._interpret(spec, run_id, result)
-            finally:
-                # Unconditional and idempotent: a needs_operator run held no
-                # claim (no-op), a waiting_info run's claim must never survive
-                # its resume regardless of how the resume ended.
-                claims.release_run(self._ws, name, run_id)
+                result = await self._exec(spec.workflow, answer, resume_run_id=record["workflow_run_id"])
+            except Exception as exc:  # noqa: BLE001 — any failure ends the run honestly
+                return await self._finish(spec, run_id, "error", None, detail=str(exc))
+            return await self._interpret(spec, run_id, result)
         finally:
             if token is not None:
                 reset_telemetry(token)

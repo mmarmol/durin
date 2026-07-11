@@ -264,6 +264,20 @@ def test_claims_file_non_dict_value_entries(temp_ws: Path) -> None:
     assert lookup(temp_ws, "bad-key-string") is None
 
 
+def test_register_double_claim_last_writer_wins(temp_ws: Path) -> None:
+    """Registering the same key for a different (loop, run_id) overwrites —
+    last claim wins. A warning is logged (best-effort, not asserted here)."""
+    key = "thread-double-claim"
+
+    register(temp_ws, key=key, loop="loop-a", run_id="run-A")
+    register(temp_ws, key=key, loop="loop-b", run_id="run-B")
+
+    claim = lookup(temp_ws, key)
+    assert claim is not None
+    assert claim["loop"] == "loop-b"
+    assert claim["run_id"] == "run-B"
+
+
 def test_claims_file_non_utf8_bytes(temp_ws: Path) -> None:
     """File with non-UTF-8 bytes is tolerated.
 
