@@ -1710,15 +1710,29 @@ def _run_gateway(
     # this point — build_service_registry constructs its own further down).
     import time
 
+    from durin.loops import queue as _loops_queue
+    from durin.loops.judge import build_filter_prompt as _loop_build_filter_prompt
     from durin.loops.judge import build_prompt as _loop_build_prompt
+    from durin.loops.judge import parse_filter_verdict as _loop_parse_filter_verdict
     from durin.loops.judge import parse_verdict as _loop_parse_verdict
+    from durin.loops.matcher import TriggerMatcher
     from durin.loops.runtime import LoopsRuntime
     from durin.loops.store import load_loop as _load_loop
+    from durin.memory.model_resolve import resolve_aux_preset
     from durin.service.workflows import WorkflowsService as _LoopsWorkflowsService
 
     _loops_workflows_service = _LoopsWorkflowsService(
         config.workspace_path, app_config=config, sessions=session_manager,
     )
+
+    def _loop_model_preset_ref() -> str | None:
+        """Resolve agents.aux_models.loops to the "provider model" picker-ref
+        string process_direct's model_preset expects. None means "no aux
+        override" — loops is the one aux purpose that does NOT fall back to a
+        separately resolved default preset (see durin.memory.model_resolve),
+        so the call rides the agent's own live model instead."""
+        preset = resolve_aux_preset(config, purpose="loops")
+        return f"{preset.provider} {preset.model}" if preset is not None else None
 
     async def _loop_judge(intent: str, assertions: list[str], evidence: str) -> dict:
         prompt = _loop_build_prompt(intent, assertions, evidence)
@@ -1727,8 +1741,19 @@ def _run_gateway(
             # pattern so judge sessions are reaped like cron run sessions
             # instead of accumulating forever.
             prompt, session_key=f"loop:judge:run:{int(time.time() * 1000)}",
+            model_preset=_loop_model_preset_ref(),
         )
         return _loop_parse_verdict(resp.content if resp else "")
+
+    async def _loop_semantic_judge(condition: str, summary: str) -> bool:
+        prompt = _loop_build_filter_prompt(condition, summary)
+        resp = await agent.process_direct(
+            # loop:filter:run:{ms} — reaped by the same run-session pattern as
+            # loop:judge:run: (see durin.cron.reaper).
+            prompt, session_key=f"loop:filter:run:{int(time.time() * 1000)}",
+            model_preset=_loop_model_preset_ref(),
+        )
+        return _loop_parse_filter_verdict(resp.content if resp else "")
 
     async def _on_loop_ask(loop: str, run_id: str, kind: str, text: str) -> None:
         try:
@@ -1744,6 +1769,20 @@ def _run_gateway(
         except Exception:
             logger.exception("loop operator notification (non-fatal) failed")
 
+    async def _on_counterpart_ask(loop: str, run_id: str, origin: dict, text: str) -> None:
+        """Deliver a waiting_info question back to the channel that triggered
+        the run (e.g. the same email thread), so a reply into that thread
+        wakes the run via the matcher's claim lookup."""
+        try:
+            await bus.publish_outbound(OutboundMessage(
+                channel=origin.get("channel"),
+                chat_id=origin.get("chat_id"),
+                content=text,
+                metadata={"email": {"thread": origin.get("thread")}, "force_send": True},
+            ))
+        except Exception:
+            logger.exception("loop counterpart delivery (non-fatal) failed")
+
     loops_runtime = LoopsRuntime(
         config.workspace_path,
         workflow_exec=_loops_workflows_service.execute,
@@ -1751,8 +1790,22 @@ def _run_gateway(
         keep_runs=config.loops.keep_runs,
         check_timeout_s=config.loops.check_timeout_s,
         on_operator_ask=_on_loop_ask,
+        on_counterpart_ask=_on_counterpart_ask,
+        queue_ttl_s=config.loops.queue_ttl_s,
     )
     agent.register_loops_tool(loops_runtime)
+
+    # Route inbound channel messages through the trigger matcher BEFORE they
+    # reach the normal agent turn: a claim wake or a fired/queued loop trigger
+    # consumes the message, everything else falls through unchanged.
+    _loops_matcher = TriggerMatcher(
+        config.workspace_path,
+        runtime=loops_runtime,
+        semantic_judge=_loop_semantic_judge,
+        queue_ttl_s=config.loops.queue_ttl_s,
+        enqueue=lambda loop, ev: _loops_queue.push(config.workspace_path, loop, ev),
+    )
+    bus.add_inbound_interceptor(_loops_matcher.handle_inbound)
 
     def _webui_runtime_model_name() -> str | None:
         model = getattr(agent, "model", None)

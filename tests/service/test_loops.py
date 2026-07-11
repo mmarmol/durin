@@ -210,6 +210,27 @@ async def test_answer_missing_loop_raises_not_found(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_list_counts_waiting_info_and_pending_events(tmp_path):
+    from durin.loops import queue
+
+    rt, _ = _runtime(tmp_path, [
+        _wr("needs_input", out="[TO:counterpart] need more info", needs_input_node="g"),
+    ])
+    svc, p = _svc(tmp_path, runtime=rt), Principal.local()
+    await svc.save(LoopSaveCommand(name="l1", definition=_VALID), p)
+    queue.push(tmp_path, "l1", {"content": "queued event"})
+
+    record = await rt.fire("l1", source="channel", origin={"thread": "t1", "channel": "test"})
+    assert record["status"] == "waiting_info"
+
+    listed = (await svc.list(LoopsListQuery(), p)).loops[0]
+    assert listed["active_runs"] == 1
+    assert listed["waiting_info"] == 1
+    assert listed["needs_operator"] == 0
+    assert listed["pending_events"] == 1
+
+
+@pytest.mark.asyncio
 async def test_runs_list_and_global_feed_shape(tmp_path):
     rt, _ = _runtime(tmp_path, [_wr("completed"), _wr("completed")])
     svc, p = _svc(tmp_path, runtime=rt), Principal.local()
@@ -265,3 +286,65 @@ def test_global_runs_feed_route_is_not_shadowed_by_loop_name_route(tmp_path):
     assert "runs" in body
     assert body["runs"] == []   # the global feed (no runs fired yet), not a loop-get 404/definition shape
     assert "definition" not in body
+
+
+def test_save_route_accepts_an_enabled_loop_with_a_channel_trigger(tmp_path):
+    """Regression: sync_loop_jobs used to do CronSchedule(**trig.schedule) on
+    every trigger regardless of source — a channel trigger's empty schedule
+    raised TypeError, which surfaced as a 500 on this route."""
+    client = _http_client(tmp_path)
+    headers = {"Authorization": "Bearer test-token"}
+    definition = {
+        **_VALID,
+        "name": "chan1",
+        "enabled": True,
+        "triggers": [{"source": "channel", "channel": "email"}],
+    }
+
+    resp = client.put("/api/v1/loops/chan1", json={"definition": definition}, headers=headers)
+    assert resp.status_code == 200
+
+    got = client.get("/api/v1/loops/chan1", headers=headers)
+    assert got.status_code == 200
+    assert got.json()["definition"]["triggers"] == [
+        {"source": "channel", "channel": "email", "filters": {}, "match": "wake_or_new"}
+    ]
+
+
+def test_answer_route_accepts_a_waiting_info_run(tmp_path):
+    """A run parked as waiting_info (counterpart-bound ask) must resolve through
+    the same /answer route as a needs_operator run — the route must not
+    special-case status; only the runtime does."""
+    import asyncio
+
+    from durin.api.asgi import build_api_app
+    from durin.security.api_tokens import ApiTokenStore
+    from durin.service.auth import AuthService
+    from durin.service.registry import ServiceRegistry
+
+    cron = _cron(tmp_path)
+    rt, _ = _runtime(tmp_path, [
+        _wr("needs_input", out="[TO:counterpart] need more info", needs_input_node="g"),
+        _wr("completed"),
+    ])
+    svc = LoopsService(workspace=tmp_path, cron_service=cron, runtime=rt)
+    asyncio.run(svc.save(LoopSaveCommand(name="l1", definition=_VALID), Principal.local()))
+    record = asyncio.run(rt.fire("l1", source="channel", origin={"thread": "t1", "channel": "test"}))
+    assert record["status"] == "waiting_info"
+
+    store = ApiTokenStore(path=tmp_path / "tokens.json")
+    auth = AuthService(store=store)
+    registry = ServiceRegistry()
+    registry.register("loops", svc)
+    registry.register("auth", auth)
+    app = build_api_app(registry, auth=auth, static_token="test-token")
+    client = TestClient(app, raise_server_exceptions=False)
+    headers = {"Authorization": "Bearer test-token"}
+
+    resp = client.post(
+        f"/api/v1/loops/l1/runs/{record['run_id']}/answer",
+        json={"answer": "yes"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["run"]["status"] == "done"

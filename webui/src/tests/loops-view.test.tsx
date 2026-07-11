@@ -53,6 +53,7 @@ const NEEDS_OPERATOR: api.LoopRun = {
   goal_reached: null,
   started_at: 1000,
   finished_at: null,
+  origin: null,
 };
 
 const ESCALATED: api.LoopRun = {
@@ -66,6 +67,7 @@ const ESCALATED: api.LoopRun = {
   goal_reached: false,
   started_at: 3000,
   finished_at: 3100,
+  origin: null,
 };
 
 const DONE: api.LoopRun = {
@@ -79,6 +81,21 @@ const DONE: api.LoopRun = {
   goal_reached: true,
   started_at: 2000,
   finished_at: 2100,
+  origin: null,
+};
+
+const WAITING_INFO: api.LoopRun = {
+  run_id: "run-waiting-info",
+  loop: "support",
+  status: "waiting_info",
+  source: "channel",
+  task: "help ticket",
+  ask: "Can you share the account id?",
+  detail: null,
+  goal_reached: null,
+  started_at: 4000,
+  finished_at: null,
+  origin: { channel: "email", sender: "user@example.com", chat_id: "user@example.com", thread: "t1", subject: "Help" },
 };
 
 const LOOP_DEF: api.LoopSummary = {
@@ -93,6 +110,8 @@ const LOOP_DEF: api.LoopSummary = {
   operator_to: null,
   active_runs: 1,
   needs_operator: 1,
+  waiting_info: 0,
+  pending_events: 0,
 };
 
 describe("LoopsView", () => {
@@ -256,5 +275,43 @@ describe("LoopsView", () => {
 
     await user.click(within(dialog).getByRole("button", { name: /Delete/i }));
     await waitFor(() => expect(api.deleteLoop).toHaveBeenCalledWith("tok", "digest"));
+  });
+
+  it("shows the waiting_info badge and the ask read-only, with no answer input by default", async () => {
+    vi.mocked(api.listAllLoopRuns).mockResolvedValue([WAITING_INFO]);
+    render(wrap(<LoopsView />));
+
+    await screen.findByText(WAITING_INFO.ask!);
+    expect(screen.getByText(/waiting reply/i)).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/answer/i)).not.toBeInTheDocument();
+  });
+
+  it("the operator-override toggle reveals the answer input and answering calls answerLoopRun", async () => {
+    vi.mocked(api.listAllLoopRuns).mockResolvedValue([WAITING_INFO]);
+    vi.mocked(api.answerLoopRun).mockResolvedValue({ ...WAITING_INFO, status: "running" });
+    const user = userEvent.setup();
+    render(wrap(<LoopsView />));
+
+    await screen.findByText(WAITING_INFO.ask!);
+    expect(screen.queryByPlaceholderText(/answer/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /answer as operator/i }));
+    const input = await screen.findByPlaceholderText(/answer/i);
+    await user.type(input, "acct-123");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() =>
+      expect(api.answerLoopRun).toHaveBeenCalledWith("tok", "support", "run-waiting-info", "acct-123"),
+    );
+  });
+
+  it("shows a queued chip in Definitions when pending_events > 0", async () => {
+    vi.mocked(api.listLoops).mockResolvedValue([{ ...LOOP_DEF, pending_events: 3 }]);
+    const user = userEvent.setup();
+    render(wrap(<LoopsView />));
+
+    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await screen.findByText("digest");
+    expect(screen.getByText(/3 queued/i)).toBeInTheDocument();
   });
 });

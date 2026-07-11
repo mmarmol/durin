@@ -166,3 +166,48 @@ def test_list_all_runs_deterministic_on_ties(tmp_path):
     all_run_ids = a_run_ids + b_run_ids
     expected = sorted(all_run_ids, reverse=True)
     assert order1 == expected, f"Expected {expected}, got {order1}"
+
+
+def test_start_run_origin_none_default(tmp_path):
+    """start_run without origin parameter should store None."""
+    rl.start_run(tmp_path, "a", "r1", source="cron", task="t")
+    m = rl.read_run(tmp_path, "a", "r1")
+    assert m["origin"] is None
+
+
+def test_start_run_origin_dict_roundtrips(tmp_path):
+    """start_run with origin dict should roundtrip correctly."""
+    origin = {"channel": "email", "sender": "user@example.com", "chat_id": "123", "thread": "xyz", "subject": "test"}
+    rl.start_run(tmp_path, "a", "r1", source="mail", task="t", origin=origin)
+    m = rl.read_run(tmp_path, "a", "r1")
+    assert m["origin"] == origin
+
+
+def test_waiting_info_is_active(tmp_path):
+    """waiting_info status should be included in active_runs."""
+    rl.start_run(tmp_path, "a", "r1", source="manual", task="t")
+    rl.start_run(tmp_path, "a", "r2", source="manual", task="t")
+    rl.finalize_run(tmp_path, "a", "r2", status="waiting_info")
+    rl.start_run(tmp_path, "a", "r3", source="manual", task="t")
+    rl.finalize_run(tmp_path, "a", "r3", status="done")
+    active = {m["run_id"] for m in rl.active_runs(tmp_path, "a")}
+    assert active == {"r1", "r2"}
+
+
+def test_prune_keeps_waiting_info(tmp_path):
+    """prune_runs should never prune waiting_info runs."""
+    for i in range(5):
+        rl.start_run(tmp_path, "a", f"r{i}", source="cron", task="t")
+        status = "waiting_info" if i == 0 else "done"
+        rl.finalize_run(tmp_path, "a", f"r{i}", status=status)
+    rl.prune_runs(tmp_path, "a", keep=2)
+    left = {m["run_id"] for m in rl.list_runs(tmp_path, "a", limit=50)}
+    assert "r0" in left and len(left) == 3  # 2 kept + the waiting_info one
+
+
+def test_consecutive_no_goal_skips_waiting_info(tmp_path):
+    """consecutive_no_goal should skip waiting_info (treat it like needs_operator)."""
+    for i, status in enumerate(["no_goal", "error", "no_goal", "waiting_info"]):
+        rl.start_run(tmp_path, "a", f"r{i}", source="cron", task="t")
+        rl.finalize_run(tmp_path, "a", f"r{i}", status=status)
+    assert rl.consecutive_no_goal(tmp_path, "a") == 3

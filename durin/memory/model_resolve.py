@@ -6,10 +6,18 @@ here to a full ``ModelPresetConfig`` (provider + model + endpoint + key):
 
 1. Purpose override — ``agents.aux_models.memory`` (a preset ref or an inline
    model+provider pair) for ``purpose="memory"``; ``skills.security.llm_judge``
-   (model + provider) for ``purpose="judge"``.
+   (model + provider) for ``purpose="judge"``; ``agents.aux_models.loops`` for
+   ``purpose="loops"``.
 2. ``memory.dream.model_override`` (DEPRECATED, memory purpose only) — a bare
    name, placed by provider auto-detection from the name.
 3. The user's default preset.
+
+``purpose="loops"`` is the one exception to "never returns None" below: loops'
+per-message trigger filter and goal-judge calls are meant to ride whatever
+model is live in the interactive session by default (not a separately
+resolved default preset that could lag a live ``/model`` switch), so an
+unconfigured ``aux_models.loops`` resolves to ``None`` and the caller passes
+that straight through as "no override" to ``AgentLoop.process_direct``.
 
 When a knob names a model without a provider (or with ``"auto"``), the
 provider is detected from the model name among the CONFIGURED providers — the
@@ -58,11 +66,32 @@ def _place_model(app_config: Any, default: Any, model: str, provider: str | None
 def resolve_aux_preset(app_config: Any, *, purpose: str):
     """Return the fully-resolved ``ModelPresetConfig`` for an out-of-loop LLM call.
 
-    NEVER returns a hardcoded model or ``None``: the invoke builds the provider
-    from this, so the call runs on the user's own provider / endpoint / key.
-    ``purpose`` is ``"memory"`` or ``"judge"``.
+    NEVER returns a hardcoded model: the invoke builds the provider from this,
+    so the call runs on the user's own provider / endpoint / key. ``purpose``
+    is ``"memory"``, ``"judge"``, or ``"loops"``. ``"loops"`` is the only
+    purpose that can return ``None`` (see the module docstring) — every other
+    purpose falls back to the whole default preset instead.
     """
     default = app_config.resolve_default_preset()
+
+    if purpose == "loops":
+        try:
+            aux = app_config.agents.aux_models.loops
+        except AttributeError:
+            aux = None
+        if aux is None:
+            return None
+        preset_name = getattr(aux, "preset", None)
+        if preset_name:
+            try:
+                return app_config.resolve_preset(preset_name)
+            except Exception:  # noqa: BLE001
+                pass
+        inline = getattr(aux, "model", None)
+        if inline:
+            return _place_model(app_config, default, inline,
+                                getattr(aux, "provider", "auto"), purpose=purpose)
+        return None
 
     if purpose == "memory":
         try:

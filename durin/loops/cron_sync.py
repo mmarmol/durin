@@ -30,6 +30,8 @@ def sync_loop_jobs(cron_service, spec: LoopSpec) -> None:
     wanted: dict[str, CronJob] = {}
     if spec.enabled:
         for idx, trig in enumerate(spec.triggers):
+            if trig.source != "cron":
+                continue
             job_id = loop_job_id(spec.name, idx)
             wanted[job_id] = CronJob(
                 id=job_id,

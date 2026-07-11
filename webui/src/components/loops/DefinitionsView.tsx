@@ -4,13 +4,37 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
-import { ApiError, deleteLoop, fireLoop, listLoops, type LoopDef, type LoopSummary } from "@/lib/api";
+import {
+  ApiError,
+  deleteLoop,
+  fireLoop,
+  listLoops,
+  type LoopDef,
+  type LoopSummary,
+  type LoopTrigger,
+} from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
 
 function errMsg(e: unknown): string {
   if (e instanceof ApiError) return e.detail ? `HTTP ${e.status}: ${e.detail}` : `HTTP ${e.status}`;
   return (e as Error).message;
+}
+
+// One-line row summary: cron shows its schedule, channel shows
+// "email · from:… · subject:…" with only the filters that are set.
+function summarizeTrigger(trig: LoopTrigger): string {
+  if (trig.source === "cron") {
+    const s = trig.schedule;
+    if (s.kind === "cron") return s.expr ?? "cron";
+    if (s.kind === "every") return s.every_ms != null ? `every ${s.every_ms / 1000}s` : "every …";
+    if (s.kind === "at") return "at";
+    return s.kind;
+  }
+  const parts: string[] = [trig.channel];
+  if (trig.filters.from_contains) parts.push(`from:${trig.filters.from_contains}`);
+  if (trig.filters.subject_contains) parts.push(`subject:${trig.filters.subject_contains}`);
+  return parts.join(" · ");
 }
 
 export function DefinitionsView({
@@ -124,10 +148,27 @@ export function DefinitionsView({
                             ? t("loops.definitions.enabled")
                             : t("loops.definitions.disabled")}
                         </span>
+                        {def.pending_events > 0 && (
+                          <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary">
+                            {t("loops.definitions.queuedChip", { n: def.pending_events })}
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="px-2 py-2 text-muted-foreground">{def.workflow}</td>
-                    <td className="px-2 py-2 text-muted-foreground">{def.triggers.length}</td>
+                    <td className="px-2 py-2 text-muted-foreground">
+                      {def.triggers.length === 0 ? (
+                        "—"
+                      ) : (
+                        <div className="flex flex-col gap-0.5">
+                          {def.triggers.map((trig, i) => (
+                            <span key={i} className="block max-w-[220px] truncate" title={summarizeTrigger(trig)}>
+                              {summarizeTrigger(trig)}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-2 py-2 text-muted-foreground">{def.active_runs}</td>
                     <td className="px-2 py-2 text-muted-foreground">{def.needs_operator}</td>
                     <td className="px-2 py-2">

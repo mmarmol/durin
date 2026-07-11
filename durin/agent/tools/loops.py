@@ -16,7 +16,7 @@ from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
-from durin.loops import run_log
+from durin.loops import queue, run_log
 from durin.loops.cron_sync import sync_loop_jobs
 from durin.loops.runtime import LoopBusy
 from durin.loops.spec import LoopError, LoopNotFound, parse_loop
@@ -155,6 +155,8 @@ class LoopsTool(Tool):
             return f"Error: {exc}"
         active = run_log.active_runs(self._ws, name)
         needs_op = sum(1 for r in active if r.get("status") == "needs_operator")
+        waiting = sum(1 for r in active if r.get("status") == "waiting_info")
+        pending = queue.pending(self._ws, name)
         recent = run_log.list_runs(self._ws, name, limit=5)
         state = "enabled" if spec.enabled else "paused"
         lines = [
@@ -162,7 +164,8 @@ class LoopsTool(Tool):
             f"  Workflow: {spec.workflow}",
             f"  Goal: {spec.goal_intent}",
             f"  Concurrency: {spec.concurrency}, stuck_after: {spec.stuck_after}",
-            f"  Active runs: {len(active)} ({needs_op} needs_operator)",
+            f"  Active runs: {len(active)} ({needs_op} needs_operator, {waiting} waiting_info)",
+            f"  Queued events: {pending}",
         ]
         if recent:
             lines.append("  Recent runs:")

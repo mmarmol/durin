@@ -85,3 +85,24 @@ def test_never_returns_a_hardcoded_model_for_any_default() -> None:
     c.agents.defaults.model = "claude-x"
     p = resolve_aux_preset(c, purpose="memory")
     assert (p.model, p.provider) == ("claude-x", "anthropic")
+
+
+def test_loops_returns_none_when_unconfigured() -> None:
+    # Unlike memory/judge, loops does NOT fall back to the default preset —
+    # None tells the caller to ride the live session model instead.
+    assert resolve_aux_preset(_real_cfg(), purpose="loops") is None
+
+
+def test_loops_aux_pair_is_honored_verbatim() -> None:
+    c = _real_cfg()
+    c.agents.aux_models.loops = AuxModelConfig(model="loops-model", provider="nvidia")
+    p = resolve_aux_preset(c, purpose="loops")
+    assert (p.model, p.provider) == ("loops-model", "nvidia")
+
+
+def test_loops_preset_ref_is_resolved() -> None:
+    c = _real_cfg()
+    c.model_presets["fast"] = c.resolve_default_preset().model_copy(update={"model": "fast-model"})
+    c.agents.aux_models.loops = AuxModelConfig(preset="fast")
+    p = resolve_aux_preset(c, purpose="loops")
+    assert p.model == "fast-model"

@@ -15,10 +15,15 @@ import {
 } from "@/lib/api";
 
 interface TriggerRow {
+  source: "cron" | "channel";
   scheduleKind: "cron" | "every";
   expr: string;
   tz: string;
   everySeconds: string;
+  fromContains: string;
+  subjectContains: string;
+  semantic: string;
+  match: "wake_or_new" | "always_new";
 }
 
 interface CheckRow {
@@ -41,7 +46,17 @@ interface FormState {
   operatorTo: string;
 }
 
-const EMPTY_TRIGGER: TriggerRow = { scheduleKind: "cron", expr: "", tz: "", everySeconds: "" };
+const EMPTY_TRIGGER: TriggerRow = {
+  source: "cron",
+  scheduleKind: "cron",
+  expr: "",
+  tz: "",
+  everySeconds: "",
+  fromContains: "",
+  subjectContains: "",
+  semantic: "",
+  match: "wake_or_new",
+};
 const EMPTY_CHECK: CheckRow = { kind: "script", required: true, command: "", text: "" };
 
 const EMPTY_FORM: FormState = {
@@ -69,15 +84,28 @@ function defToForm(def: LoopDef): FormState {
       text: c.text ?? "",
     })),
     checksSufficient: def.goal.checks_sufficient ?? false,
-    // The select only offers "cron" and "every". A one-shot "at" trigger
-    // (not creatable here) falls back to "cron" so the row still renders
-    // instead of crashing.
-    triggers: def.triggers.map((trig) => ({
-      scheduleKind: trig.schedule.kind === "every" ? "every" : "cron",
-      expr: trig.schedule.expr ?? "",
-      tz: trig.schedule.tz ?? "",
-      everySeconds: trig.schedule.every_ms != null ? String(trig.schedule.every_ms / 1000) : "",
-    })),
+    // The schedule-kind select only offers "cron" and "every". A one-shot
+    // "at" trigger (not creatable here) falls back to "cron" so the row
+    // still renders instead of crashing.
+    triggers: def.triggers.map((trig) =>
+      trig.source === "channel"
+        ? {
+            ...EMPTY_TRIGGER,
+            source: "channel",
+            fromContains: trig.filters.from_contains ?? "",
+            subjectContains: trig.filters.subject_contains ?? "",
+            semantic: trig.semantic ?? "",
+            match: trig.match,
+          }
+        : {
+            ...EMPTY_TRIGGER,
+            source: "cron",
+            scheduleKind: trig.schedule.kind === "every" ? "every" : "cron",
+            expr: trig.schedule.expr ?? "",
+            tz: trig.schedule.tz ?? "",
+            everySeconds: trig.schedule.every_ms != null ? String(trig.schedule.every_ms / 1000) : "",
+          },
+    ),
     concurrency: def.concurrency,
     stuckAfter: String(def.stuck_after),
     operatorChannel: def.operator_channel ?? "",
@@ -91,13 +119,27 @@ function formToDef(form: FormState, enabled: boolean): LoopDef {
       ? { kind: "script", required: c.required, command: c.command }
       : { kind: "assertion", required: c.required, text: c.text },
   );
-  const triggers: LoopTrigger[] = form.triggers.map((row) => ({
-    source: "cron",
-    schedule:
-      row.scheduleKind === "cron"
-        ? { kind: "cron", expr: row.expr, ...(row.tz ? { tz: row.tz } : {}) }
-        : { kind: "every", every_ms: Number(row.everySeconds) * 1000 },
-  }));
+  const triggers: LoopTrigger[] = form.triggers.map((row): LoopTrigger => {
+    if (row.source === "channel") {
+      const filters: { from_contains?: string; subject_contains?: string } = {};
+      if (row.fromContains.trim()) filters.from_contains = row.fromContains.trim();
+      if (row.subjectContains.trim()) filters.subject_contains = row.subjectContains.trim();
+      return {
+        source: "channel",
+        channel: "email",
+        filters,
+        match: row.match,
+        ...(row.semantic.trim() ? { semantic: row.semantic.trim() } : {}),
+      };
+    }
+    return {
+      source: "cron",
+      schedule:
+        row.scheduleKind === "cron"
+          ? { kind: "cron", expr: row.expr, ...(row.tz ? { tz: row.tz } : {}) }
+          : { kind: "every", every_ms: Number(row.everySeconds) * 1000 },
+    };
+  });
   return {
     name: form.name.trim(),
     enabled,
@@ -231,64 +273,133 @@ export function LoopForm({
           <div className="space-y-2">
             {form.triggers.map((row, i) => (
               <div key={i} className="flex flex-wrap items-end gap-2 rounded-md border border-border/40 p-2">
-                <div className="w-28">
-                  <label htmlFor={`loop-trigger-kind-${i}`} className={rowLabelClass}>
-                    {t("loops.form.scheduleKind")}
+                <div className="w-36">
+                  <label htmlFor={`loop-trigger-source-${i}`} className={rowLabelClass}>
+                    {t("loops.form.source")}
                   </label>
                   <select
-                    id={`loop-trigger-kind-${i}`}
+                    id={`loop-trigger-source-${i}`}
                     className={selectClass}
-                    value={row.scheduleKind}
-                    onChange={(e) => setTrigger(i, "scheduleKind", e.target.value as TriggerRow["scheduleKind"])}
+                    value={row.source}
+                    onChange={(e) => setTrigger(i, "source", e.target.value as TriggerRow["source"])}
                   >
-                    <option value="cron">{t("loops.form.scheduleKindCron")}</option>
-                    <option value="every">{t("loops.form.scheduleKindEvery")}</option>
+                    <option value="cron">{t("loops.form.sourceCron")}</option>
+                    <option value="channel">{t("loops.form.sourceChannelEmail")}</option>
                   </select>
                 </div>
-                {row.scheduleKind === "cron" ? (
+                {row.source === "cron" ? (
                   <>
-                    <div className="min-w-[140px] flex-1">
-                      <label htmlFor={`loop-trigger-expr-${i}`} className={rowLabelClass}>
-                        {t("loops.form.exprLabel")}
-                      </label>
-                      <input
-                        id={`loop-trigger-expr-${i}`}
-                        className={inputClass}
-                        placeholder="0 9 * * *"
-                        value={row.expr}
-                        onChange={(e) => setTrigger(i, "expr", e.target.value)}
-                        required
-                      />
-                    </div>
                     <div className="w-28">
-                      <label htmlFor={`loop-trigger-tz-${i}`} className={rowLabelClass}>
-                        {t("loops.form.tz")}
+                      <label htmlFor={`loop-trigger-kind-${i}`} className={rowLabelClass}>
+                        {t("loops.form.scheduleKind")}
                       </label>
-                      <input
-                        id={`loop-trigger-tz-${i}`}
-                        className={inputClass}
-                        placeholder="UTC"
-                        value={row.tz}
-                        onChange={(e) => setTrigger(i, "tz", e.target.value)}
-                      />
+                      <select
+                        id={`loop-trigger-kind-${i}`}
+                        className={selectClass}
+                        value={row.scheduleKind}
+                        onChange={(e) => setTrigger(i, "scheduleKind", e.target.value as TriggerRow["scheduleKind"])}
+                      >
+                        <option value="cron">{t("loops.form.scheduleKindCron")}</option>
+                        <option value="every">{t("loops.form.scheduleKindEvery")}</option>
+                      </select>
                     </div>
+                    {row.scheduleKind === "cron" ? (
+                      <>
+                        <div className="min-w-[140px] flex-1">
+                          <label htmlFor={`loop-trigger-expr-${i}`} className={rowLabelClass}>
+                            {t("loops.form.exprLabel")}
+                          </label>
+                          <input
+                            id={`loop-trigger-expr-${i}`}
+                            className={inputClass}
+                            placeholder="0 9 * * *"
+                            value={row.expr}
+                            onChange={(e) => setTrigger(i, "expr", e.target.value)}
+                            required
+                          />
+                        </div>
+                        <div className="w-28">
+                          <label htmlFor={`loop-trigger-tz-${i}`} className={rowLabelClass}>
+                            {t("loops.form.tz")}
+                          </label>
+                          <input
+                            id={`loop-trigger-tz-${i}`}
+                            className={inputClass}
+                            placeholder="UTC"
+                            value={row.tz}
+                            onChange={(e) => setTrigger(i, "tz", e.target.value)}
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <div className="min-w-[140px] flex-1">
+                        <label htmlFor={`loop-trigger-interval-${i}`} className={rowLabelClass}>
+                          {t("loops.form.intervalLabel")}
+                        </label>
+                        <input
+                          id={`loop-trigger-interval-${i}`}
+                          type="number"
+                          min="1"
+                          className={inputClass}
+                          placeholder="3600"
+                          value={row.everySeconds}
+                          onChange={(e) => setTrigger(i, "everySeconds", e.target.value)}
+                          required
+                        />
+                      </div>
+                    )}
                   </>
                 ) : (
-                  <div className="min-w-[140px] flex-1">
-                    <label htmlFor={`loop-trigger-interval-${i}`} className={rowLabelClass}>
-                      {t("loops.form.intervalLabel")}
-                    </label>
-                    <input
-                      id={`loop-trigger-interval-${i}`}
-                      type="number"
-                      min="1"
-                      className={inputClass}
-                      placeholder="3600"
-                      value={row.everySeconds}
-                      onChange={(e) => setTrigger(i, "everySeconds", e.target.value)}
-                      required
-                    />
-                  </div>
+                  <>
+                    <div className="min-w-[140px] flex-1">
+                      <label htmlFor={`loop-trigger-from-${i}`} className={rowLabelClass}>
+                        {t("loops.form.fromContains")}
+                      </label>
+                      <input
+                        id={`loop-trigger-from-${i}`}
+                        className={inputClass}
+                        value={row.fromContains}
+                        onChange={(e) => setTrigger(i, "fromContains", e.target.value)}
+                      />
+                    </div>
+                    <div className="min-w-[140px] flex-1">
+                      <label htmlFor={`loop-trigger-subject-${i}`} className={rowLabelClass}>
+                        {t("loops.form.subjectContains")}
+                      </label>
+                      <input
+                        id={`loop-trigger-subject-${i}`}
+                        className={inputClass}
+                        value={row.subjectContains}
+                        onChange={(e) => setTrigger(i, "subjectContains", e.target.value)}
+                      />
+                    </div>
+                    <div className="min-w-[200px] flex-[2]">
+                      <label htmlFor={`loop-trigger-semantic-${i}`} className={rowLabelClass}>
+                        {t("loops.form.semantic")}
+                      </label>
+                      <input
+                        id={`loop-trigger-semantic-${i}`}
+                        className={inputClass}
+                        value={row.semantic}
+                        onChange={(e) => setTrigger(i, "semantic", e.target.value)}
+                      />
+                      <p className="mt-1 text-[10.5px] text-muted-foreground">{t("loops.form.semanticHint")}</p>
+                    </div>
+                    <div className="w-56">
+                      <label htmlFor={`loop-trigger-match-${i}`} className={rowLabelClass}>
+                        {t("loops.form.match")}
+                      </label>
+                      <select
+                        id={`loop-trigger-match-${i}`}
+                        className={selectClass}
+                        value={row.match}
+                        onChange={(e) => setTrigger(i, "match", e.target.value as TriggerRow["match"])}
+                      >
+                        <option value="wake_or_new">{t("loops.form.matchWakeOrNew")}</option>
+                        <option value="always_new">{t("loops.form.matchAlwaysNew")}</option>
+                      </select>
+                    </div>
+                  </>
                 )}
                 <Button
                   type="button"
