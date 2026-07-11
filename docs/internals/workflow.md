@@ -20,12 +20,14 @@ node's work is a persisted, searchable session rather than ephemeral state.
 
 **A workflow is a graph of nodes, not a fixed pipeline.** A `Workflow`
 (`durin/workflow/spec.py`) is a set of nodes keyed by id, a `start` node id, and a
-per-node visit cap (`max_visits`). There is **one node type** (`WorkNode`): it carries a
-model (or the default), a context policy (`own` vs `shared` session), a tool set (`none`
-vs `default`), a prompt, optional skills/MCP, and either a single `next` edge or — when it
-**routes** — a pair of targets (`on_pass`, `on_fail`). A `None` target ends the run. The parser
-validates that the start and every edge target name a real node, and that `next` and
-routing are not both set.
+per-node visit cap (`max_visits`). A node that does the actual work is one of two
+kinds: an agent **work node** (`WorkNode`) — it carries a model (or the default), a
+context policy (`own` vs `shared` session), a tool set (`none` vs `default`), a prompt,
+optional skills/MCP — or a **script node** (`ScriptNode`) — a deterministic subprocess
+run in place of an agent turn (see below). Both carry either a single `next` edge or —
+when the node **routes** — a pair of targets (`on_pass`, `on_fail`) or a `cases` map. A
+`None`/`null` target ends the run. The parser validates that the start and every edge
+target name a real node, and that `next` and routing are not both set.
 
 **Workflow I/O is first-class.** A `Workflow` carries optional `input` (`{text?, file?, description?}`)
 and `output` descriptors — rendered as distinct **Input** and **Output** objects on the canvas. The text
@@ -106,6 +108,47 @@ recorded in the `NodeRun` trace (`route_label`); `passed` is `None` (pass/fail d
 Binary `on_pass`/`on_fail` is the 2-way special case of this pattern; `cases`, `on_pass`/`on_fail`,
 and `next` are mutually exclusive. Routing nodes default to **explore** (read-only) mode.
 
+**A script node runs a deterministic subprocess instead of an agent turn.** A
+`ScriptNode` (`durin/workflow/spec.py`) sets exactly one of `command` (inline, run via
+`bash -c`) or `script` (a file under `<workspace>/workflows/scripts/`, validated at
+parse time to be a relative path with no `..`); the parser rejects any agent-only
+field (`model`, `persona`, `context`, `session`, `prompt`, `mode`, `tools`, `skills`,
+`mcps`, `max_turns`) on a script node. `ScriptNodeRunner`
+(`durin/workflow/script_runner.py`) executes it: a `.py` script runs under the current
+interpreter, a `.sh` script under `bash`, anything else must be directly executable (a
+shebang); an inline `command` always runs via `bash -c`. **stdin** carries the upstream
+edge text — a node at the **start** position (no upstream output yet) receives the
+run's task instead, since the run's task is the incoming edge of the start node; an
+upstream node that produced an empty string stays empty (no fallback). Small run
+metadata rides in `DURIN_TASK`/`DURIN_RUN_ID`/`DURIN_NODE_ID`/`DURIN_ITERATION`/
+`DURIN_WORK_DIR` env vars (`DURIN_TASK` is capped — env values have platform size
+limits that stdin does not). **cwd** is the run's shared working folder, so a script
+reads earlier steps' files and writes its own the same way a `tools: "default"` work
+node does. **stdout** (capped at `workflow.script_output_max_chars`, truncated with a
+notice past the cap) becomes the edge text to the next node; **stderr** is
+diagnostic-only — never part of the edge text, though a failing binary gate folds a
+tail of it into the loop-back feedback (below). Output is decoded with
+`errors="replace"` so non-UTF-8 bytes degrade rather than crashing the runner. A script
+node has no session — `session_key` is always `None` and it never persists a
+conversation.
+
+**Script routing is exit-code-driven, not text-parsed.** A binary script gate
+(`on_pass`/`on_fail`) routes on the process exit code: `0` is `PASS` (output = stdout);
+non-zero is `FAIL`, and the node's output becomes stdout plus a stderr tail plus an
+explicit exit-code note, so the loop-back feedback explains what failed. A multi-way
+script node (`cases`) routes on the **last non-empty stdout line**, exactly like an
+agent's multi-way output (`parse_label`), but requires a `0` exit — a non-zero exit on
+a `cases` node, or on a plain linear node with no routing, is a node failure
+(`NodeExecutionError`, aborting the run), not a verdict, since half-produced script
+output is not a trustworthy label. A script node's timeout (its own `timeout`, else
+`workflow.script_timeout`) kills the whole process group on expiry so orphaned
+children die with it, and that too surfaces as a node failure (§4c). **Script nodes are
+exempt from the anti-Goodhart guard** below — their verdict is a deterministic exit
+code or stdout line, not a model's judgment of its own producer's work, so there is no
+structural-identity risk to guard against. A script node also never reads or extends
+the shared-context buffer (`context: "shared"` is not a script-node field): inserted
+into a chain of `shared` work nodes, it simply passes the buffer through untouched.
+
 **Independence is a graph rule, not a node type:** the
 parser rejects a routing agent node that is *structurally identical* (same model, mode,
 and prompt) to the producer feeding it, so a quality verdict comes from a genuinely
@@ -178,7 +221,7 @@ flowchart TD
     B --> C[parse_workflow to Workflow]
     C --> D[WorkflowEngine.run\nvia asyncio.to_thread]
     D --> MANIFEST_START[start_run manifest\nstatus='running']
-    MANIFEST_START --> E[execute node body (agent turn)]
+    MANIFEST_START --> E[execute node body\nagent turn or script]
     E --> UPDATE[update_run manifest\nper-node trace]
     UPDATE --> F{node routes?}
     F -->|no / next| G[output becomes\nnext upstream_output]
@@ -233,6 +276,7 @@ The per-node entries in the manifest's `runs` array carry:
 | `passed` | binary routing verdict (`true`/`false`/`null` for non-binary nodes) |
 | `route_label` | matched case label for multi-way nodes (`null` otherwise) |
 | `budget` | the node's effective visit budget at this pass (`null` for parallel branches/workers, which are not loop targets) |
+| `exit_code` | a script node's subprocess exit code (`null` for agent nodes, which have no exit code) |
 
 The finalized manifest also carries top-level fields: `needs_input_node` — the node
 that routed to `__needs_input__` (`null` otherwise), the resume re-entry point;
@@ -308,6 +352,19 @@ manifest captures it), then returns a `WorkflowResult(status="aborted")` that na
 failing node (`failed_node`, `failed_iteration`). The failed node's session remains
 navigable in full.
 
+**Script node failures.** A script node has no agent turn to raise, but two of its own
+failure paths land on the same `NodeExecutionError` → `node_failed` path as an agent
+node: a non-zero exit from a linear or multi-way (`cases`) script (a binary gate's
+non-zero exit is a `FAIL` verdict instead, not a failure — see §2 and §4d), and a
+timeout (the process group is killed and reaped before the error is raised). Both
+record a `node_failed` `NodeRun` with no `session_key` (a script node has no session)
+and abort the run the same way an agent node's failure does.
+
+**Missing script file.** When a `ScriptNode` names a `script` file, its existence is
+checked in the same pre-flight pass as input-file validation (§2), before any node
+runs or any manifest exists — a missing file aborts the run naming the node and the
+expected path, never reaching the walk.
+
 **Parallel node failure isolation.** For dynamic fan-out workers and `read`-reconcile
 static branches, a single worker/branch failure is isolated: the failing unit records
 its own `node_failed` NodeRun (with its `session_key` and `error`), surviving units
@@ -321,6 +378,10 @@ failure in those modes propagates and aborts the run.
 but the run continued), `"node_failed"` (the node's agent turn raised).
 
 ### 4d. The routing verdict — a forced tool call, text-parse as fallback
+
+This section covers **agent** routing nodes. A script node's verdict is derived
+directly from its exit code or last stdout line (§2) — there is no LLM call and no
+text-parse fallback involved.
 
 A routing node's verdict is **deterministic by construction**. After the node's work turn,
 the node runner makes one **forced `route` tool call** (`tool_choice="required"`) whose
@@ -503,7 +564,7 @@ End-to-end for a single `run_workflow` call:
 
 | Symbol | File | Role |
 |---|---|---|
-| `Workflow`, `WorkNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator (one work-node type; routing optional; structural-equivalence guard). |
+| `Workflow`, `WorkNode`, `ScriptNode`, `SubworkflowNode`, `ParallelNode`, `parse_workflow` | `durin/workflow/spec.py` | The flow-graph definition and its JSON parser/validator (agent work nodes and deterministic script nodes; routing optional; structural-equivalence guard). |
 | `parse_verdict`, `parse_label` | `durin/workflow/verdict.py` | The verdict contracts: `parse_verdict` returns the binary `PASS`/`FAIL` from a routing agent node's output (default `FAIL`); `parse_label` matches the last non-empty line of a multi-way node's output against the declared case labels (case-insensitive, punctuation-tolerant). They are the text-parse **fallback** used when the forced `route` tool call did not return a label. |
 | `artifact_dir`, `prune_runs` | `durin/workflow/artifacts.py` | The run's shared working folder (one per run; every sequential node reads/writes it) plus per-branch fork folders for writing-in-parallel — self-gitignored, pruned to recent runs. |
 | `AgentJudgeRunner` | `durin/workflow/judge.py` | The branch-pick reviewer: `pick` chooses the best of N outputs for a parallel `choose` reconcile. |
@@ -512,6 +573,7 @@ End-to-end for a single `run_workflow` call:
 | `SubworkflowRunner` | `durin/workflow/subworkflow.py` | Runs a named workflow as a nested run (depth-capped) for a sub-workflow node. |
 | `WorkflowEngine` | `durin/workflow/engine.py` | The graph executor: routing, loop-back with a visit cap, own/shared context, output threading, and concurrent parallel branches. |
 | `AgentNodeRunner` | `durin/workflow/node_runner.py` | The default node runner: one real `AgentRunner` turn per agent node (adds a verdict instruction when the node routes), persisted as a lineage'd node session. |
+| `ScriptNodeRunner` | `durin/workflow/script_runner.py` | The script-node runner: runs the node's `command`/`script` as a subprocess in the run's working folder (stdin = upstream edge text, capped stdout = edge text, stderr diagnostic-only), timeout-bounded with a process-group kill on expiry, exit code (or last stdout line for `cases`) drives routing. |
 | `seed_workflows` | `durin/utils/helpers.py` | Copy bundled seed JSONs into a workspace's `workflows/` dir (idempotent, called from `sync_workspace_templates`). |
 | `load_workflow` | `durin/workflow/loader.py` | Load and parse a workflow by name from the workspace. |
 | `WorkflowResult`, `NodeRun` | `durin/workflow/result.py` | The typed run outcome and per-node trace. |
@@ -519,7 +581,7 @@ End-to-end for a single `run_workflow` call:
 | `ListWorkflowsTool` | `durin/agent/tools/list_workflows.py` | The `list_workflows` LLM tool (core scope, read-only) that lists the workspace's workflows with their `description` and I/O for discovery; an optional `query` filters by name/description. |
 | `WorkflowWriteTool` | `durin/agent/tools/workflow_write.py` | The `workflow_write` LLM tool (core scope): validates a definition via `parse_workflow` before persisting, refuses overwriting an existing name, defaults `improvement_mode` to `manual`, and commits through the version store. The agent's sanctioned authoring path (also given to the dream's skill-extract sub-agent, so a skill can delegate to a workflow it authored). |
 | `start_run`, `update_run`, `finalize_run`, `read_manifest`, `runs_for_session`, `reconcile_running`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
-| `NodeExecutionError` | `durin/workflow/engine.py` | Typed error raised by the node runner when an agent turn fails; carries `node_id`, `iteration`, and `session_key` so the engine can record an attributable `NodeRun` before aborting. |
+| `NodeExecutionError` | `durin/workflow/engine.py` | Typed error raised by the node runner when an agent turn or a script node's process fails or times out; carries `node_id`, `iteration`, and `session_key` (`None` for a script node) so the engine can record an attributable `NodeRun` before aborting. |
 | `compute_diagnostics` | `durin/workflow/diagnostics.py` | Reduces run records to recurring per-node trouble (loop-backs, gate fails) → improvement candidates. |
 | `run_workflow_improve_pass` | `durin/workflow/workflow_improve_dream.py` | The dream pass: observes all workflows' runs since its cursor, proposes one prompt-scoped edit; manual → recommend, auto → apply + hold pending validation (auto-revert on a worsened diagnostic), out-of-scope → structural escalation. |
 | `save_workflow_definition` | `durin/workflow/editing.py` | The single sanctioned write path for definitions: graph validation, atomic write under the editor's lock, version commit with actor. All doors funnel through it. |
@@ -532,6 +594,8 @@ End-to-end for a single `run_workflow` call:
   directory is a small local git repo (`durin/workflow/version_store.py`, via the
   shared `GitRepo`); every run snapshots the current definitions, so there is a
   navigable version history of how each workflow changed and which version a run used.
+  A script node's referenced files live under `<workspace>/workflows/scripts/`, inside
+  that same tree, so they are versioned alongside the definitions that reference them.
 - **Discovery:** an optional top-level workflow `description` (one line — what it does and
   when to use it) is the discovery hint, surfaced by the `list_workflows` LLM tool —
   auto-discovered into the agent's tool registry at core scope, read-only. It lists the
@@ -555,6 +619,10 @@ End-to-end for a single `run_workflow` call:
   runs' working folders (`.workflow/<run_id>/`) are retained on disk and how many terminal run
   manifests are kept (see §4a Retention) — older ones are pruned automatically, so deliverables
   that must outlive retention should be copied to the workspace proper or elsewhere.
+  `workflow.script_timeout` (default 300s) is the default per-node timeout for a script
+  node (a node's own `timeout` overrides it); `workflow.script_output_max_chars`
+  (default 16000) caps a script node's captured stdout — the edge text it passes on
+  (excess is truncated with a notice).
 - **Management API:** `WorkflowsService` (`durin/service/workflows.py`) exposes, over HTTP
   at `/api/v1/workflows[/{name}]` and in the OpenAPI contract: list / load / save / delete
   (save validates via `parse_workflow` and writes atomically under the version lock — the
@@ -624,7 +692,10 @@ End-to-end for a single `run_workflow` call:
 
 - **Current scope.** Today: sequential execution with **concurrent parallel** branches —
   static (fixed `branches` list) or **dynamic** (`worker` template mapped over a runtime
-  list, bounded by `max_concurrency` default 2); read-only or **writing** with `choose` /
+  list, bounded by `max_concurrency` default 2) — only an agent work node may serve as a
+  branch or the fan-out worker template; a script node is rejected there (the parser
+  requires `WorkNode`), since a script already does its own iteration/parallelism
+  internally and wrapping it in the engine's fan-out would be redundant; read-only or **writing** with `choose` /
   `union` reconciliation (private copy per branch + content-aware conflict detection); a
   **shared working folder** per run that sequential nodes read and write, so file-producing
   stages collaborate on one evolving fileset (and a self-loop accumulates) instead of handing
@@ -662,8 +733,10 @@ End-to-end for a single `run_workflow` call:
   `workflow.keep_runs` (default 20) bounds how many runs' working folders and terminal
   manifests are retained, so the run summary tells the caller to copy out anything that
   must outlive that window;
-  **dream-driven self-improvement** (recommendations from
-  recurring run diagnostics); a **webui Workflows pane** (React Flow) with an editor that
+  **dream-driven self-improvement** (recommendations from recurring run diagnostics,
+  scoped to editing a `WorkNode`'s `prompt` — a proposal touching a script node, which
+  has no `prompt` field, therefore always surfaces as a structural escalation for the
+  user rather than an auto-appliable edit); a **webui Workflows pane** (React Flow) with an editor that
   has clickable Input/Output canvas objects (toggle text and/or files plus a free-text
   description; file input is supplied as paths in the run bar), a palette that adds
   work / script / parallel / subflow nodes (a routing node is a work or script node —
