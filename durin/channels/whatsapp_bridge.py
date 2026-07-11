@@ -214,11 +214,17 @@ class BridgeSupervisor:
         self._stopping.set()
         proc = self._proc
         if proc is not None:
-            proc.terminate()
+            # proc can already be fully exited (and its transport torn down)
+            # by the time we get here — see the identical race explained in
+            # PairingSession._cancel_locked. Tolerate ProcessLookupError on
+            # both signals as "already dead".
+            with suppress(ProcessLookupError):
+                proc.terminate()
             try:
                 await asyncio.wait_for(proc.wait(), 10)
             except asyncio.TimeoutError:
-                proc.kill()
+                with suppress(ProcessLookupError):
+                    proc.kill()
         if self._task is not None:
             await self._task
             self._task = None
@@ -328,7 +334,15 @@ class PairingSession:
             try:
                 await asyncio.wait_for(proc.wait(), 5)
             except asyncio.TimeoutError:
-                proc.kill()
+                # The process can exit (and its transport finish tearing
+                # itself down) between the timeout firing and this call: a
+                # pipe's EOF is sometimes detected slightly after the process
+                # actually exits, so wait_for() can time out on an already-dead
+                # process. kill() then races the transport nulling its
+                # internal handle — ProcessLookupError means it's already
+                # gone, not a bug.
+                with suppress(ProcessLookupError):
+                    proc.kill()
         if self._task is not None:
             with suppress(Exception):
                 await self._task
