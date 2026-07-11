@@ -7,7 +7,7 @@ import type { Edge, Node } from "@xyflow/react";
 
 export type WorkflowNodeDef = {
   id: string;
-  kind: "work" | "parallel" | "subworkflow";
+  kind: "work" | "script" | "parallel" | "subworkflow";
   next?: string | null;
   on_pass?: string | null;
   on_fail?: string | null;
@@ -22,6 +22,11 @@ export type WorkflowNodeDef = {
   reconcile?: "read" | "choose" | "union";
   // work node: per-node visit budget (blank/undefined = inherit workflow default)
   max_visits?: number;
+  // script node: exactly one of command (inline, bash) or script (a file under
+  // workflows/scripts/) is set; timeout is in seconds (undefined = backend default).
+  command?: string;
+  script?: string;
+  timeout?: number;
   [k: string]: unknown;
 };
 

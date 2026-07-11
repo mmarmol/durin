@@ -136,6 +136,31 @@ def test_routing_node_prompt_is_editable(tmp_path):
     assert recs[0]["target_id"] == "g" and recs[0]["field"] == "prompt"
 
 
+def test_prompt_proposal_on_a_script_node_is_structural_not_skipped(tmp_path):
+    # A script node has no 'prompt' field: a field:'prompt' proposal aimed at it
+    # is out of the prompt-only scope and must escalate, not be silently skipped.
+    data = {
+        "name": "wf", "start": "a", "improvement_mode": "manual",
+        "nodes": [
+            {"id": "a", "kind": "work", "prompt": "do it", "next": "g"},
+            {"id": "g", "kind": "work", "prompt": "is it good?", "on_pass": None, "on_fail": "a"},
+            {"id": "gate", "kind": "script", "command": "true"},
+        ],
+    }
+    _write_wf(tmp_path, data)
+    _seed_runs(tmp_path, n=2)
+    invoke = _fake_invoke({
+        "target_id": "gate", "field": "prompt",
+        "proposed": "be stricter", "reason": "gate keeps passing bad output",
+    })
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["structural"] == 1 and summary["proposals"] == 0 and summary["applied"] == 0
+    recs = wr.open_recommendations(tmp_path, "wf")
+    assert len(recs) == 1
+    assert recs[0]["kind"] == "structural"
+    assert "outside the prompt-only scope" in recs[0]["why_rejected"]
+
+
 def test_no_op_proposal_is_rejected(tmp_path):
     _write_wf(tmp_path)
     _seed_runs(tmp_path, n=2)

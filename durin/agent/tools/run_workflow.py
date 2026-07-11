@@ -355,8 +355,16 @@ class RunWorkflowTool(Tool, ContextAware):
             main_loop=main_loop,
             app_config=self._app_config,
         )
+        from durin.workflow.script_runner import ScriptNodeRunner
+        script_runner = ScriptNodeRunner(
+            self._workspace,
+            default_timeout=self._app_config.workflow.script_timeout,
+            max_output_chars=self._app_config.workflow.script_output_max_chars,
+        )
         judge_runner = AgentJudgeRunner(runner, default_model=provider.get_default_model())
-        subworkflow_runner = SubworkflowRunner(self._workspace, node_runner, judge_runner)
+        subworkflow_runner = SubworkflowRunner(
+            self._workspace, node_runner, judge_runner, script_runner=script_runner,
+        )
         bus = self._bus
         run_chat_id = self._chat_id.get()
         progress_emit = None
@@ -401,6 +409,7 @@ class RunWorkflowTool(Tool, ContextAware):
         run_id = resume.run_id if resume is not None else uuid.uuid4().hex[:12]
         engine = WorkflowEngine(
             node_runner=node_runner,
+            script_runner=script_runner,
             run_id_factory=lambda: run_id,
             subworkflow_runner=subworkflow_runner,
             workspace=self._workspace,

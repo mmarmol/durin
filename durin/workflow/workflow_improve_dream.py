@@ -157,7 +157,7 @@ def _classify_proposal(proposal: dict | None, wf):
     proposed = proposal.get("proposed")
     if not proposed or not str(proposed).strip():
         return "skip", None
-    if target and target in wf.nodes and field == "prompt":
+    if target and target in wf.nodes and field == "prompt" and isinstance(wf.nodes[target], WorkNode):
         return "skip", None            # in-scope no-op (same text) — nothing to escalate
     why = (f"field {field!r} is outside the prompt-only scope" if target and target in wf.nodes
            else f"target {target!r} is not an editable node of this workflow")

@@ -247,6 +247,23 @@ parent-process environment variables are not inherited unless explicitly listed 
 After the guard pipeline, the command is optionally wrapped by a sandbox
 (chroot, Landlock, or another configured mechanism) before spawning.
 
+### Workflow script nodes
+
+A workflow's script node (`ScriptNode`, see [workflow.md](workflow.md)) runs an
+inline `command` or a file under `<workspace>/workflows/scripts/` as a subprocess.
+These are local, user-authored workflow definitions and script files, not
+externally-sourced content — the same trust model as the agent's shell tool
+(`ExecTool`): executing them is equivalent to the user running them directly. A
+script node's subprocess does **not** go through `ExecTool`'s guard pipeline (deny
+patterns, workspace boundary, SSRF URL detection) or a sandbox — there is no
+sandboxing at all. It also does not go through `_build_env()`'s scrubbing: the
+subprocess inherits the full gateway process environment (`dict(os.environ)`),
+including any ambient provider keys, rather than the minimal set `ExecTool`
+constructs — consistent with the same local-trust model, but worth calling out
+since it differs from the adjacent `ExecTool` paragraph above. Importing remote
+or third-party workflow definitions (and the scripts they reference) is not
+supported in this scope.
+
 ### SSRF network guard
 
 All outbound HTTP fetches from durin's internal tools use `ssrf_safe_async_client()`

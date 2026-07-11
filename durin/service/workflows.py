@@ -122,6 +122,10 @@ class WorkflowRunsListResult(Result):
     runs: list[dict[str, Any]]   # newest-first manifest summaries for this workflow
 
 
+class WorkflowScriptsResult(Result):
+    scripts: list[str]   # sorted filenames under <workspace>/workflows/scripts/, for script-node file pickers
+
+
 class WorkflowRecsQuery(Query):
     name: str
 
@@ -166,6 +170,18 @@ class WorkflowsService:
         d = self._dir()
         names = [p.stem for p in d.glob("*.json") if p.is_file()] if d.is_dir() else []
         return WorkflowsListResult(workflows=sorted(names))
+
+    @route(
+        "GET", "/api/v1/workflows/scripts",
+        scope=Scope.WORKFLOWS_READ.value,
+        request_model=None, response_model=WorkflowScriptsResult,
+        summary="List script filenames available to script nodes (the editor's file picker).",
+    )
+    async def list_scripts(self, principal: Principal) -> WorkflowScriptsResult:
+        principal.require(Scope.WORKFLOWS_READ)
+        d = self._workspace / "workflows" / "scripts"
+        names = sorted(p.name for p in d.iterdir() if p.is_file()) if d.is_dir() else []
+        return WorkflowScriptsResult(scripts=names)
 
     @route(
         "GET", "/api/v1/workflows/{name}",
@@ -288,11 +304,18 @@ class WorkflowsService:
             tools_config=self._app_config.tools,
             app_config=self._app_config,
         )
+        from durin.workflow.script_runner import ScriptNodeRunner
+        script_runner = ScriptNodeRunner(
+            self._workspace,
+            default_timeout=self._app_config.workflow.script_timeout,
+            max_output_chars=self._app_config.workflow.script_output_max_chars,
+        )
         judge = AgentJudgeRunner(runner, default_model=provider.get_default_model())
         ws = str(self._workspace)
         engine = WorkflowEngine(
             node_runner=node_runner,
-            subworkflow_runner=SubworkflowRunner(ws, node_runner, judge),
+            script_runner=script_runner,
+            subworkflow_runner=SubworkflowRunner(ws, node_runner, judge, script_runner=script_runner),
             workspace=ws, pick_runner=judge.pick,
             max_node_visits=self._app_config.workflow.max_node_visits)
         result = await asyncio.to_thread(

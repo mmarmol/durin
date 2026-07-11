@@ -233,6 +233,17 @@ export async function saveWorkflow(
   );
 }
 
+export async function listWorkflowScripts(
+  token: string,
+  base: string = "",
+): Promise<string[]> {
+  const body = await request<{ scripts: string[] }>(
+    `${base}/api/v1/workflows/scripts`,
+    token,
+  );
+  return body.scripts;
+}
+
 export async function deleteWorkflow(
   token: string,
   name: string,

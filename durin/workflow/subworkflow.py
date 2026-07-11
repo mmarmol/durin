@@ -25,6 +25,7 @@ class SubworkflowRunner:
         node_runner: Callable[[Any], Any],
         judge_runner: Callable[[str, str, "str | None"], Any] | None = None,
         *,
+        script_runner: Callable[[Any], Any] | None = None,
         max_depth: int = 5,
         _depth: int = 0,
         _stack: tuple[str, ...] = (),
@@ -32,6 +33,7 @@ class SubworkflowRunner:
         self.workspace = workspace
         self.node_runner = node_runner
         self.judge_runner = judge_runner
+        self.script_runner = script_runner
         self.max_depth = max_depth
         self._depth = _depth
         self._stack = _stack
@@ -49,10 +51,12 @@ class SubworkflowRunner:
             return f"Error: {exc}"
         nested = SubworkflowRunner(
             self.workspace, self.node_runner, self.judge_runner,
+            script_runner=self.script_runner,
             max_depth=self.max_depth, _depth=self._depth + 1, _stack=self._stack + (name,),
         )
         engine = WorkflowEngine(
             node_runner=self.node_runner,
+            script_runner=self.script_runner,
             subworkflow_runner=nested,
             workspace=str(self.workspace),
             pick_runner=self.judge_runner.pick if self.judge_runner is not None else None,

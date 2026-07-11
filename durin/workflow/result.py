@@ -25,6 +25,7 @@ class NodeRun:
     budget: int | None = None        # the node's effective visit budget at this pass (None for parallel units)
     status: str = "ok"               # "ok" (node persisted) | "persist_failed" (save raised) | "node_failed" (the node's agent turn raised)
     error: str | None = None         # failure detail when status is "node_failed"/"persist_failed" (None otherwise)
+    exit_code: int | None = None     # script nodes: the subprocess exit code (None for agent nodes)
 
 
 @dataclass
