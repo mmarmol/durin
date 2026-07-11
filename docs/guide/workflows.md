@@ -352,7 +352,9 @@ prompt/model-or-persona/mode/context/tools/session in a side panel, and add
 static or dynamic parallel branches with a concurrency cap. The palette also
 adds script nodes — an inline command or a picker over the files under
 `workflows/scripts/`, with a timeout and the same pass/fail or `cases` routing
-config as a work node. Input and
+config as a work node. The file picker's "New script…" and "Edit" actions let
+you create or edit those script files from the same panel, without leaving the
+browser. Input and
 Output are clickable canvas objects where you toggle text/file and write
 the free-text description. Runs launched from the editor show live,
 per-node progress as the graph executes.

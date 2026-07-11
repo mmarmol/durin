@@ -648,7 +648,12 @@ End-to-end for a single `run_workflow` call:
   /api/v1/workflows/scripts`, which lists the filenames under
   `<workspace>/workflows/scripts/` available to script nodes (empty when the
   directory is absent) — the source for the visual editor's script-file picker.
-  This is the surface the webui visual editor uses.
+  `GET /api/v1/workflows/scripts/{name}` and `PUT /api/v1/workflows/scripts/{name}`
+  (body `{content}`) read and create-or-replace one script file — the editor's
+  file-mode "New script…" and "Edit" actions — with the same containment rule as
+  the parser (single relative filename, no `..`), a 256 KB content cap, an atomic
+  write, and a best-effort version-store snapshot. This is the surface the webui
+  visual editor uses.
 - **Lineage:** node sessions reuse the lineage metadata on the open session document
   (`durin/session/lineage.py`), so no schema migration is involved.
 - **Self-improvement** (per-workflow `improvement_mode`, two states like a skill's:

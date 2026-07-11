@@ -16,6 +16,8 @@ from durin.service.workflows import (
     WorkflowRunCommand,
     WorkflowRunResult,
     WorkflowSaveCommand,
+    WorkflowScriptGetQuery,
+    WorkflowScriptPutCommand,
     WorkflowSessionRunsQuery,
     WorkflowsListQuery,
     WorkflowsService,
@@ -341,3 +343,80 @@ async def test_list_scripts_skips_subdirectories(tmp_path):
     svc, p = _svc(tmp_path), Principal.local()
     result = await svc.list_scripts(p)
     assert result.scripts == ["top.py"]
+
+
+# --- get_script / put_script routes: create/edit script files from the editor ----
+
+
+@pytest.mark.asyncio
+async def test_script_put_get_round_trip(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.put_script(WorkflowScriptPutCommand(name="check.py", content="print('hi')\n"), p)
+    got = await svc.get_script(WorkflowScriptGetQuery(name="check.py"), p)
+    assert got.name == "check.py"
+    assert got.content == "print('hi')\n"
+    assert (tmp_path / "workflows" / "scripts" / "check.py").is_file()
+
+
+@pytest.mark.asyncio
+async def test_script_put_replaces_existing_content(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.put_script(WorkflowScriptPutCommand(name="check.py", content="v1"), p)
+    await svc.put_script(WorkflowScriptPutCommand(name="check.py", content="v2"), p)
+    got = await svc.get_script(WorkflowScriptGetQuery(name="check.py"), p)
+    assert got.content == "v2"
+
+
+@pytest.mark.asyncio
+async def test_script_put_creates_the_scripts_dir(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    assert not (tmp_path / "workflows" / "scripts").exists()
+    await svc.put_script(WorkflowScriptPutCommand(name="gate.sh", content="#!/bin/sh\nexit 0\n"), p)
+    assert (tmp_path / "workflows" / "scripts" / "gate.sh").is_file()
+
+
+@pytest.mark.asyncio
+async def test_script_put_snapshots_into_the_version_history(tmp_path):
+    from durin.workflow.version_store import WorkflowVersionStore
+
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.put_script(WorkflowScriptPutCommand(name="check.py", content="print(1)\n"), p)
+    store = WorkflowVersionStore(tmp_path / "workflows")
+    assert any(c.subject == "script check.py" for c in store.history())
+
+
+@pytest.mark.asyncio
+async def test_script_get_missing_raises_not_found(tmp_path):
+    with pytest.raises(NotFoundError):
+        await _svc(tmp_path).get_script(WorkflowScriptGetQuery(name="ghost.py"), Principal.local())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_name", ["../x.py", "a/b.py", "/etc/passwd", "..", ".", ""])
+async def test_script_put_rejects_traversal_and_invalid_names(tmp_path, bad_name):
+    with pytest.raises(ValidationFailedError):
+        await _svc(tmp_path).put_script(WorkflowScriptPutCommand(name=bad_name, content="x"), Principal.local())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_name", ["../x.py", "a/b.py", "/etc/passwd", "..", "."])
+async def test_script_get_rejects_traversal_names(tmp_path, bad_name):
+    with pytest.raises(ValidationFailedError):
+        await _svc(tmp_path).get_script(WorkflowScriptGetQuery(name=bad_name), Principal.local())
+
+
+@pytest.mark.asyncio
+async def test_script_put_rejects_oversize_content(tmp_path):
+    huge = "x" * (256 * 1024 + 1)
+    with pytest.raises(ValidationFailedError):
+        await _svc(tmp_path).put_script(WorkflowScriptPutCommand(name="big.py", content=huge), Principal.local())
+    assert not (tmp_path / "workflows" / "scripts" / "big.py").exists()
+
+
+@pytest.mark.asyncio
+async def test_script_put_accepts_content_at_the_cap(tmp_path):
+    at_cap = "x" * (256 * 1024)
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.put_script(WorkflowScriptPutCommand(name="big.py", content=at_cap), p)
+    got = await svc.get_script(WorkflowScriptGetQuery(name="big.py"), p)
+    assert len(got.content) == 256 * 1024
