@@ -34,6 +34,16 @@ function AnswerRow({
 }) {
   const { t } = useTranslation();
   const [answer, setAnswer] = useState("");
+  const [sent, setSent] = useState(false);
+
+  const handleSend = useCallback(() => {
+    if (answering) return;
+    if (!answer.trim()) return;
+    setAnswer("");
+    setSent(true);
+    onAnswer(run, answer);
+  }, [answering, answer, run, onAnswer]);
+
   return (
     <div className="flex flex-col gap-1.5 rounded-md border border-accent bg-accent/40 px-3 py-2 text-accent-foreground">
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
@@ -44,25 +54,29 @@ function AnswerRow({
         )}
       </div>
       {run.ask && <div className="whitespace-pre-wrap break-words text-xs">{run.ask}</div>}
-      <div className="flex gap-1.5">
-        <Input
-          value={answer}
-          onChange={(e) => setAnswer(e.target.value)}
-          placeholder={t("loops.activity.answerPlaceholder")}
-          className="h-8 bg-background text-foreground"
-          disabled={answering}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && answer.trim()) onAnswer(run, answer);
-          }}
-        />
-        <Button
-          size="sm"
-          disabled={answering || !answer.trim()}
-          onClick={() => onAnswer(run, answer)}
-        >
-          {answering ? <Loader2 className="h-4 w-4 animate-spin" /> : t("loops.activity.send")}
-        </Button>
-      </div>
+      {sent ? (
+        <div className="text-xs text-muted-foreground">{t("loops.answerSent")}</div>
+      ) : (
+        <div className="flex gap-1.5">
+          <Input
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            placeholder={t("loops.activity.answerPlaceholder")}
+            className="h-8 bg-background text-foreground"
+            disabled={answering}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSend();
+            }}
+          />
+          <Button
+            size="sm"
+            disabled={answering || !answer.trim()}
+            onClick={handleSend}
+          >
+            {answering ? <Loader2 className="h-4 w-4 animate-spin" /> : t("loops.activity.send")}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

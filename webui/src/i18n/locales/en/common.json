@@ -1310,6 +1310,7 @@
   },
   "loops": {
     "title": "Loops",
+    "answerSent": "Answer sent",
     "tab": {
       "activity": "Activity",
       "definitions": "Definitions"

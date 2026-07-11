@@ -1132,6 +1132,7 @@
   },
   "loops": {
     "title": "Loops",
+    "answerSent": "Respuesta enviada",
     "tab": {
       "activity": "Actividad",
       "definitions": "Definiciones"

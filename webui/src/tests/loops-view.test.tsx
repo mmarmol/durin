@@ -119,6 +119,12 @@ describe("LoopsView", () => {
     await waitFor(() =>
       expect(api.answerLoopRun).toHaveBeenCalledWith("tok", "digest", "run-waiting", "staging"),
     );
+
+    // After send, the input should be cleared (hidden) and sent message should appear
+    await waitFor(() => expect(screen.getByText(/answer sent/i)).toBeInTheDocument());
+    // The input should no longer be visible after sending
+    expect(screen.queryByPlaceholderText(/answer/i)).not.toBeInTheDocument();
+
     await waitFor(() => expect(api.listAllLoopRuns).toHaveBeenCalledTimes(2));
   });
 
