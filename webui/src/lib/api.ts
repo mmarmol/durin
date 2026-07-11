@@ -776,6 +776,7 @@ export interface LoopRun {
   goal_reached: boolean | null;
   started_at: number;
   finished_at: number | null;
+  detail: string | null;
 }
 
 export async function listLoops(

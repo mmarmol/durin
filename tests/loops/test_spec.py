@@ -130,6 +130,14 @@ def test_checks_sufficient_rejects_no_required_check():
         parse_loop(data)
 
 
+def test_checks_sufficient_rejects_empty_checks():
+    data = _minimal()
+    data["goal"]["checks_sufficient"] = True
+    data["goal"]["checks"] = []
+    with pytest.raises(LoopError):
+        parse_loop(data)
+
+
 def test_checks_sufficient_roundtrip():
     data = _minimal()
     data["goal"]["checks_sufficient"] = True

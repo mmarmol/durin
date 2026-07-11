@@ -166,13 +166,13 @@ failed.
 
 **`goal.checks_sufficient`** opts a loop out of the judge call entirely: when
 `True`, `verify_goal` returns as soon as the script checks run, `reached` is
-just `required_ok`, and the manifest's `intent_met` is `null` (never graded,
-not "graded and true"). Parsing enforces the precondition rather than leaving
-it to `verify_goal` to degrade gracefully: `checks_sufficient: true` requires
-every check to be a `script` (an `assertion` always needs the judge, so the
-two are mutually exclusive) and at least one `required` check (otherwise
-there is no hard evidence to call the goal reached without asking the
-model).
+just `required_ok`, and the verdict's `intent_met` is `None` (the judge was
+never consulted — never graded, not "graded and true"). Parsing enforces the
+precondition rather than leaving it to `verify_goal` to degrade gracefully:
+`checks_sufficient: true` requires every check to be a `script` (an `assertion`
+always needs the judge, so the two are mutually exclusive) and at least one
+`required` check (otherwise there is no hard evidence to call the goal reached
+without asking the model).
 
 ### 4d. Cron integration
 
