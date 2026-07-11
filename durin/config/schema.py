@@ -970,6 +970,8 @@ class WorkflowConfig(Base):
 
     max_node_visits: int = Field(default=25, ge=1, description="Cap on total node visits per workflow run, bounding loops")
     keep_runs: int = Field(default=20, ge=1, description="How many recent runs' working folders (.workflow/<run_id>/) to keep on disk")
+    script_timeout: int = Field(default=300, ge=1, description="Default per-node timeout (seconds) for script nodes; a node's own 'timeout' overrides it")
+    script_output_max_chars: int = Field(default=16000, ge=1000, description="Cap on a script node's captured stdout (the edge text); excess is truncated with a notice")
 
 
 class GatewayConfig(Base):
