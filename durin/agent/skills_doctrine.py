@@ -61,6 +61,26 @@ def composition_doctrine() -> str:
     return section.strip()
 
 
+def workflow_authoring_reference() -> str:
+    """The builtin `workflows` skill's authoring reference (the workflow JSON
+    schema — every node kind including the deterministic `script` node), verbatim.
+
+    Dream sub-agents that hold `workflow_write` cannot read the packaged skill
+    with their workspace/staging-scoped file tools, so the prompts that offer
+    workflow authoring embed this instead of pointing at an unreachable file.
+    Returns "" when the builtin is missing — callers embed nothing rather than
+    a stale copy.
+    """
+    from durin.agent.skills import BUILTIN_SKILLS_DIR
+
+    ref = Path(BUILTIN_SKILLS_DIR) / "workflows" / "references" / "authoring.md"
+    try:
+        return ref.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        logger.warning("workflow authoring reference unavailable (%s): %s", ref, exc)
+        return ""
+
+
 def workflow_catalog_text(workspace: str | Path) -> str:
     """One line per local workflow definition: name, description, I/O contract.
 

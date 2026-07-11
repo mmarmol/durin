@@ -321,6 +321,12 @@ bundle it as a script via `skill_write`'s `files` and have the body invoke it.
 EXISTING WORKFLOWS (delegate to these; check `list_workflows` for details):
 {workflow_catalog}
 
+If you author a NEW workflow with `workflow_write`, this is the definition \
+format (note the deterministic `script` node kind — use it for command/check/\
+transform steps instead of an agent node):
+
+{workflow_authoring}
+
 EXISTING SKILLS: {existing}{principles}
 """
 
@@ -357,7 +363,11 @@ def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict]
     if sessions_text.strip():
         user_parts.append(sessions_text)
 
-    from durin.agent.skills_doctrine import composition_doctrine, workflow_catalog_text
+    from durin.agent.skills_doctrine import (
+        composition_doctrine,
+        workflow_authoring_reference,
+        workflow_catalog_text,
+    )
 
     existing = _list_skills(workspace)
     return [
@@ -365,6 +375,8 @@ def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict]
          "content": _SKILL_EXTRACT_PROMPT.format(
              doctrine=composition_doctrine() or "(doctrine unavailable)",
              workflow_catalog=workflow_catalog_text(workspace),
+             workflow_authoring=workflow_authoring_reference()
+                 or "(authoring reference unavailable — rely on workflow_write's validation errors)",
              existing=", ".join(existing) or "(none)",
              principles=principles_block)},
         {"role": "user", "content": "\n\n".join(user_parts)},
