@@ -76,3 +76,11 @@ def test_smoke_false_still_fails_a_syntax_error():
         "command", "if [ 1 -eq 1 ]; then echo hi", smoke=False)
     assert ok is False
     assert "syntax" in detail.lower() or "unexpected" in detail.lower()
+
+
+def test_data_file_reading_command_passes_smoke():
+    """A script that reads a file earlier steps produce fails with "No such
+    file" in the smoke's empty scratch cwd — that is the healthy shape of a
+    data-reading workflow script, never a crash signature."""
+    ok, detail = precheck_script_edit("command", "wc -w < words.txt")
+    assert ok, detail

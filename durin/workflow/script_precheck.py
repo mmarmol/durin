@@ -47,11 +47,15 @@ _DETAIL_TAIL_CHARS = 500
 # Case-insensitive substrings in smoke-run stderr that mean the process never
 # got past startup — as opposed to a legitimate non-zero exit from a check
 # that ran fine and simply decided to fail.
+# Deliberately NOT in this list: "No such file or directory". Workflow scripts
+# read data files earlier steps left in the shared working folder, so in the
+# smoke's empty scratch cwd that message is the EXPECTED shape of a healthy
+# data-reading script, not a crash. A genuinely missing interpreter or binary
+# still fails via the spawn error or "command not found".
 _STARTUP_CRASH_SIGNATURES = (
     "traceback",
     "syntaxerror",
     "command not found",
-    "no such file or directory",
     "modulenotfounderror",
 )
 
