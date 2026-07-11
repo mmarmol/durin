@@ -1461,6 +1461,21 @@ class LoopsEscalatedEvent(TypedDict):
     consecutive_no_goal: int
 
 
+class LoopsEventMatchedEvent(TypedDict):
+    """An inbound channel message was routed by the trigger matcher.
+
+    ``action`` is one of: woke (claim-wake resumed a waiting_info run),
+    fired (a trigger matched and a new run was started), queued (a trigger
+    matched but the loop was busy and the event was queued), passed_busy
+    (a trigger matched, the loop was busy, and no queue was wired so the
+    message fell through as a normal turn instead).
+    """
+
+    loop: str
+    source_channel: str
+    action: str
+
+
 # ===========================================================================
 # Catalog — single source of truth
 # ===========================================================================
@@ -1587,6 +1602,7 @@ EVENTS: dict[str, type] = {
     "loops.fired": LoopsFiredEvent,
     "loops.run_finished": LoopsRunFinishedEvent,
     "loops.escalated": LoopsEscalatedEvent,
+    "loops.event_matched": LoopsEventMatchedEvent,
     "skill.curation_run": SkillCurationRunEvent,
     "skill.suggestion_resolved": SkillSuggestionResolvedEvent,
 }
