@@ -61,7 +61,8 @@ def _clean_env() -> dict[str, str]:
 def _check_syntax(kind: str, suffix: str, script_path: Path) -> tuple[bool, str]:
     if kind == "command" or suffix == ".sh":
         proc = subprocess.run(
-            ["bash", "-n", str(script_path)], capture_output=True, text=True)
+            ["bash", "-n", str(script_path)], capture_output=True, text=True,
+            errors="replace")
         if proc.returncode != 0:
             return False, _tail(proc.stderr or proc.stdout)
         return True, ""
@@ -75,7 +76,12 @@ def _check_syntax(kind: str, suffix: str, script_path: Path) -> tuple[bool, str]
 
 
 def _check_security(scratch_dir: str) -> tuple[bool, str]:
-    report = scan_skill(Path(scratch_dir))
+    # A security gate fails CLOSED: a scanner crash means "not verified safe",
+    # never a free pass — and never a raise out of the (bool, str) contract.
+    try:
+        report = scan_skill(Path(scratch_dir))
+    except Exception as exc:  # noqa: BLE001 - fail closed on any scanner error
+        return False, _tail(f"security scan failed: {exc}")
     if report.verdict == "safe":
         return True, ""
     reasons = "; ".join(f"{f.category}: {f.detail}" for f in report.findings)
@@ -143,6 +149,14 @@ def precheck_script_edit(
             suffix = Path(fname).suffix
         script_path = Path(scratch_dir) / fname
         script_path.write_text(content)
+
+        # Unscannable content fails closed: without a recognized extension or a
+        # shebang line the security scanner cannot classify the file as code and
+        # would report "safe" without looking at it. Refuse instead of coasting.
+        if kind == "script_file" and suffix not in (".py", ".sh") and not content.startswith("#!"):
+            return False, ("unscannable script content: no recognized extension "
+                           "(.py/.sh) and no shebang line — cannot be checked, so it "
+                           "cannot be auto-applied")
 
         ok, detail = _check_syntax(kind, suffix, script_path)
         if not ok:

