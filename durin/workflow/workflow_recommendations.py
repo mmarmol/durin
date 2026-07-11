@@ -33,6 +33,23 @@ def _rec_id(target_id: str, field: str, proposed: str) -> str:
     return hashlib.sha256(key).hexdigest()[:12]
 
 
+def _validate_script_name(name: str) -> str | None:
+    """Reject anything but a single relative path segment.
+
+    Mirrors the rule the script editor's PUT door enforces (see
+    ``_validate_script_name`` in the service layer): no '/', no '\\', no '..',
+    no NUL. Reimplemented locally so workflow/ does not depend on service/.
+    Returns an error message, or None when ``name`` is valid.
+    """
+    if not name or not name.strip():
+        return "script name must not be empty"
+    if name in (".", ".."):
+        return f"script name {name!r} is not a valid filename"
+    if "/" in name or "\\" in name or "\x00" in name:
+        return f"script name {name!r} must be a single path segment (no '/')"
+    return None
+
+
 def _read(path: Path) -> list[dict]:
     if not path.is_file():
         return []
@@ -50,8 +67,15 @@ def _read(path: Path) -> list[dict]:
 def log_recommendation(
     workspace: str | Path, name: str, *, target_id: str, field: str,
     current: str, proposed: str, reason: str, run_ids: list[str] | None = None,
+    manual_only: bool = False,
 ) -> str:
-    """Record (or dedup-bump) a recommendation. Returns its stable id."""
+    """Record (or dedup-bump) a recommendation. Returns its stable id.
+
+    ``manual_only`` flags a proposal that must never auto-apply even in
+    ``improvement_mode: auto`` (e.g. an edit to a routing node) — it is stored
+    only when True, so existing records stay shape-stable and readers must
+    treat its absence as False.
+    """
     rid = _rec_id(target_id, field, proposed)
     path = _path(workspace, name)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,12 +87,15 @@ def log_recommendation(
             merged = list(dict.fromkeys([*existing.get("run_ids", []), *(run_ids or [])]))
             existing["run_ids"] = merged
         else:
-            records.append({
+            record = {
                 "id": rid, "workflow": name, "target_id": target_id, "field": field,
                 "current": current, "proposed": proposed, "reason": reason,
                 "status": "open", "count": 1, "run_ids": run_ids or [],
                 "created_at": time.time(),
-            })
+            }
+            if manual_only:
+                record["manual_only"] = True
+            records.append(record)
         atomic_write_text(path, "\n".join(json.dumps(r) for r in records) + "\n")
     return rid
 
@@ -76,6 +103,41 @@ def log_recommendation(
 def open_recommendations(workspace: str | Path, name: str) -> list[dict]:
     """Recommendations awaiting the user's review (status == 'open')."""
     return [r for r in _read(_path(workspace, name)) if r.get("status") == "open"]
+
+
+def log_script_file_recommendation(
+    workspace: str | Path, name: str, *, script: str, current: str, proposed: str,
+    reason: str, run_ids: list[str] | None = None, manual_only: bool = False,
+) -> str:
+    """Record (or dedup-bump) a script-file repair proposal. Returns its stable id.
+
+    Unlike ``log_recommendation`` (which edits a node field through the workflow
+    definition path), this targets a file under ``workflows/scripts/``: the
+    record carries the full proposed file content so ``apply_recommendation``
+    can write it atomically and snapshot it into the workflow version history.
+    """
+    rid = _rec_id("__script__:" + script, "script_file", proposed)
+    path = _path(workspace, name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with cross_process_lock(path.with_suffix("")):
+        records = _read(path)
+        existing = next((r for r in records if r.get("id") == rid), None)
+        if existing is not None:
+            existing["count"] = existing.get("count", 1) + 1
+            merged = list(dict.fromkeys([*existing.get("run_ids", []), *(run_ids or [])]))
+            existing["run_ids"] = merged
+        else:
+            record = {
+                "id": rid, "workflow": name, "kind": "script_file", "script": script,
+                "current": current, "proposed": proposed, "reason": reason,
+                "status": "open", "count": 1, "run_ids": run_ids or [],
+                "created_at": time.time(),
+            }
+            if manual_only:
+                record["manual_only"] = True
+            records.append(record)
+        atomic_write_text(path, "\n".join(json.dumps(r) for r in records) + "\n")
+    return rid
 
 
 def log_structural_suggestion(
@@ -155,6 +217,7 @@ def apply_recommendation(workspace: str | Path, name: str, rec_id: str,
 
     from durin.workflow.editing import save_workflow_definition
     from durin.workflow.loader import workflows_dir
+    from durin.workflow.version_store import WorkflowVersionStore
 
     path = _path(workspace, name)
     with cross_process_lock(path.with_suffix("")):
@@ -165,6 +228,34 @@ def apply_recommendation(workspace: str | Path, name: str, rec_id: str,
         if rec.get("kind") == "structural":
             return {"ok": False, "error": "a structural suggestion has no auto-apply — "
                                           "treat it in a session and edit the workflow deliberately"}
+        if rec.get("kind") == "script_file":
+            script_name = rec["script"]
+            name_error = _validate_script_name(script_name)
+            if name_error:
+                return {"ok": False, "error": name_error}
+            scripts_dir = workflows_dir(workspace) / "scripts"
+            scripts_dir.mkdir(parents=True, exist_ok=True)
+            script_path = scripts_dir / script_name
+            try:
+                atomic_write_text(script_path, rec["proposed"])
+            except OSError as exc:
+                return {"ok": False, "error": f"cannot write script {script_name!r}: {exc}"}
+            # Best-effort: the scripts dir lives inside the versioned workflows dir, so
+            # this snapshot lands the file edit in the same history as a definition
+            # edit. snapshot() itself never raises; the try/except is defense in depth.
+            commit = None
+            try:
+                commit = WorkflowVersionStore(workflows_dir(workspace)).snapshot(
+                    f"apply recommendation {rec_id}: {rec.get('reason', '')}"
+                )
+            except Exception:  # noqa: BLE001 - versioning must not block the apply
+                commit = None
+            rec["status"] = "applied"
+            rec["applied_by"] = actor
+            if commit:
+                rec["applied_commit"] = commit
+            atomic_write_text(path, "\n".join(_json.dumps(r) for r in records) + "\n")
+            return {"ok": True, "script": script_name, "commit": commit}
         wf_path = workflows_dir(workspace) / f"{name}.json"
         try:
             data = _json.loads(wf_path.read_text(encoding="utf-8"))

@@ -64,3 +64,142 @@ def test_apply_unknown_recommendation_errors(tmp_path):
     workflows_dir(tmp_path).mkdir(parents=True)
     res = wr.apply_recommendation(tmp_path, "wf", "nope")
     assert not res["ok"] and "no open recommendation" in res["error"]
+
+
+def test_manual_only_defaults_false_and_absent_on_old_records(tmp_path):
+    rid = _log(tmp_path, target_id="a", field="prompt", proposed="x")
+    rec = wr.open_recommendations(tmp_path, "wf")[0]
+    assert "manual_only" not in rec                       # shape-stable: absent, not False
+    assert rec.get("manual_only", False) is False          # readers must treat absence as False
+    assert rid
+
+
+def test_log_recommendation_manual_only_persisted(tmp_path):
+    _log(tmp_path, target_id="gate", field="criteria", proposed="tighten", manual_only=True)
+    rec = wr.open_recommendations(tmp_path, "wf")[0]
+    assert rec["manual_only"] is True
+
+
+def test_script_file_recommendation_logs_and_dedups(tmp_path):
+    rid1 = wr.log_script_file_recommendation(
+        tmp_path, "wf", script="fix.sh", current="old body", proposed="new body",
+        reason="node crashes", run_ids=["r1"],
+    )
+    rid2 = wr.log_script_file_recommendation(
+        tmp_path, "wf", script="fix.sh", current="old body", proposed="new body",
+        reason="node crashes again", run_ids=["r2"],
+    )
+    assert rid1 == rid2
+    recs = wr.open_recommendations(tmp_path, "wf")
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec["kind"] == "script_file"
+    assert rec["script"] == "fix.sh"
+    assert rec["proposed"] == "new body"
+    assert rec["count"] == 2
+    assert set(rec["run_ids"]) == {"r1", "r2"}
+    assert "manual_only" not in rec
+
+
+def test_script_file_recommendation_manual_only(tmp_path):
+    wr.log_script_file_recommendation(
+        tmp_path, "wf", script="route.py", current="old", proposed="new",
+        reason="routing script referenced", manual_only=True,
+    )
+    rec = wr.open_recommendations(tmp_path, "wf")[0]
+    assert rec["manual_only"] is True
+
+
+def test_apply_script_file_recommendation_writes_file_and_marks_applied(tmp_path):
+    from durin.workflow.loader import workflows_dir
+
+    scripts_dir = workflows_dir(tmp_path) / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "fix.sh").write_text("#!/bin/sh\necho old\n")
+
+    rid = wr.log_script_file_recommendation(
+        tmp_path, "wf", script="fix.sh", current="#!/bin/sh\necho old\n",
+        proposed="#!/bin/sh\necho new\n", reason="node crashes",
+    )
+    res = wr.apply_recommendation(tmp_path, "wf", rid)
+    assert res["ok"] and res["script"] == "fix.sh"
+
+    assert (scripts_dir / "fix.sh").read_text() == "#!/bin/sh\necho new\n"
+    assert wr.open_recommendations(tmp_path, "wf") == []
+
+    applied = next(r for r in wr._read(wr._path(tmp_path, "wf")) if r["id"] == rid)
+    assert applied["status"] == "applied"
+    assert applied["applied_by"] == "user"
+
+
+def test_apply_script_file_recommendation_creates_missing_scripts_dir(tmp_path):
+    from durin.workflow.loader import workflows_dir
+
+    rid = wr.log_script_file_recommendation(
+        tmp_path, "wf", script="new_script.sh", current="",
+        proposed="#!/bin/sh\necho hi\n", reason="add missing script",
+    )
+    res = wr.apply_recommendation(tmp_path, "wf", rid)
+    assert res["ok"]
+    assert (workflows_dir(tmp_path) / "scripts" / "new_script.sh").read_text() == "#!/bin/sh\necho hi\n"
+
+
+def test_apply_script_file_recommendation_rejects_traversal_name(tmp_path):
+    rid = wr.log_script_file_recommendation(
+        tmp_path, "wf", script="../evil.sh", current="", proposed="rm -rf /",
+        reason="malicious proposal",
+    )
+    res = wr.apply_recommendation(tmp_path, "wf", rid)
+    assert not res["ok"]
+    assert "single path segment" in res["error"]
+    recs = wr.open_recommendations(tmp_path, "wf")
+    assert len(recs) == 1 and recs[0]["id"] == rid          # stays open, nothing written
+
+
+def test_apply_script_file_recommendation_rejects_backslash_and_nul(tmp_path):
+    rid = wr.log_script_file_recommendation(
+        tmp_path, "wf", script="a\\b", current="", proposed="x", reason="bad name",
+    )
+    res = wr.apply_recommendation(tmp_path, "wf", rid)
+    assert not res["ok"]
+
+
+def test_apply_command_recommendation_on_script_node_end_to_end(tmp_path):
+    import json
+    from durin.workflow.loader import workflows_dir
+
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True)
+    (d / "wf.json").write_text(json.dumps({
+        "name": "wf", "start": "a",
+        "nodes": [{"id": "a", "kind": "script", "command": "echo old", "next": None}],
+    }))
+    rid = wr.log_recommendation(tmp_path, "wf", target_id="a", field="command",
+                                current="echo old", proposed="echo new", reason="a crashes")
+    res = wr.apply_recommendation(tmp_path, "wf", rid)
+    assert res["ok"] and res["target_id"] == "a" and res["field"] == "command"
+
+    data = json.loads((d / "wf.json").read_text())
+    assert next(n for n in data["nodes"] if n["id"] == "a")["command"] == "echo new"
+    assert wr.open_recommendations(tmp_path, "wf") == []
+
+
+def test_apply_command_recommendation_fails_when_node_also_has_script(tmp_path):
+    import json
+    from durin.workflow.loader import workflows_dir
+
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True)
+    (d / "wf.json").write_text(json.dumps({
+        "name": "wf", "start": "a",
+        "nodes": [{"id": "a", "kind": "script", "script": "run.sh", "next": None}],
+    }))
+    rid = wr.log_recommendation(tmp_path, "wf", target_id="a", field="command",
+                                current="", proposed="echo new", reason="a crashes")
+    res = wr.apply_recommendation(tmp_path, "wf", rid)
+    assert not res["ok"] and "error" in res
+
+    data = json.loads((d / "wf.json").read_text())
+    assert next(n for n in data["nodes"] if n["id"] == "a").get("command") is None  # unchanged on disk
+    recs = wr.open_recommendations(tmp_path, "wf")
+    assert len(recs) == 1 and recs[0]["id"] == rid          # rec stays open
