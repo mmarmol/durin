@@ -206,6 +206,22 @@ export function LoopForm({
   const removeCheck = (i: number) =>
     setForm((f) => ({ ...f, checks: f.checks.filter((_, idx) => idx !== i) }));
 
+  // Native "press Enter to submit" is unreliable here: the form's default
+  // button is nested a few DOM levels down inside the actions row, and the
+  // browser's implicit-submission default action doesn't fire from every
+  // single-line field in that layout. Drive it explicitly instead, so Enter
+  // behaves the same regardless of where the input sits in the tree.
+  // Textareas (the Intention field) are excluded so Enter still inserts a
+  // newline there instead of submitting.
+  const handleFormKeyDown = (e: React.KeyboardEvent<HTMLFormElement>) => {
+    if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+    const target = e.target as HTMLElement;
+    if (target.tagName !== "INPUT" || (target as HTMLInputElement).type === "checkbox") return;
+    e.preventDefault();
+    enabledOnSubmitRef.current = true;
+    formRef.current?.requestSubmit();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -236,7 +252,12 @@ export function LoopForm({
     "focus:outline-none focus:ring-1 focus:ring-ring";
 
   return (
-    <form ref={formRef} onSubmit={(e) => void handleSubmit(e)} className="space-y-5 px-5 py-4">
+    <form
+      ref={formRef}
+      onSubmit={(e) => void handleSubmit(e)}
+      onKeyDown={handleFormKeyDown}
+      className="space-y-5 px-5 py-4"
+    >
       {/* Name */}
       <div>
         <label htmlFor="loop-name" className={labelClass}>

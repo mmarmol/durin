@@ -241,6 +241,40 @@ describe("LoopForm", () => {
     expect(def.triggers).toEqual([{ source: "cron", schedule: { kind: "cron", expr: "0 9 * * *" } }]);
   });
 
+  it("pressing Enter in the name input submits via Save & enable", async () => {
+    const onDone = vi.fn();
+    render(<LoopForm token="tok" editLoop={null} onDone={onDone} onCancel={vi.fn()} />);
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    const nameInput = screen.getByLabelText(/^name/i);
+    fireEvent.change(nameInput, { target: { value: "digest" } });
+    fireEvent.change(screen.getByLabelText(/workflow/i), { target: { value: "digest-wf" } });
+    fireEvent.change(screen.getByLabelText(/^intent/i), { target: { value: "send the digest" } });
+
+    fireEvent.keyDown(nameInput, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveLoop).mock.calls[0];
+    expect(def.enabled).toBe(true);
+    expect(onDone).toHaveBeenCalled();
+  });
+
+  it("pressing Enter in the intent textarea does NOT submit the form", async () => {
+    render(<LoopForm token="tok" editLoop={null} onDone={vi.fn()} onCancel={vi.fn()} />);
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "digest" } });
+    fireEvent.change(screen.getByLabelText(/workflow/i), { target: { value: "digest-wf" } });
+    const intent = screen.getByLabelText(/^intent/i);
+    fireEvent.change(intent, { target: { value: "send the digest" } });
+
+    fireEvent.keyDown(intent, { key: "Enter", code: "Enter" });
+
+    expect(saveLoop).not.toHaveBeenCalled();
+  });
+
   it("prefills a channel trigger from an existing LoopDef in edit mode", async () => {
     render(<LoopForm token="tok" editLoop={EXISTING_CHANNEL} onDone={vi.fn()} onCancel={vi.fn()} />);
 
