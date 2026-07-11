@@ -534,6 +534,14 @@ def run_workflow_improve_pass(workspace, *, llm_invoke=None, model=None) -> dict
             prompt = f"{_SYSTEM}\n\n{_build_prompt(name, wf_json, diag, history, wf, workspace)}"
             resp = llm_invoke(prompt, model=model)
             content = getattr(resp, "content", resp if isinstance(resp, str) else "")
+            if not (content or "").strip():
+                # An empty reply is a transport/provider failure, not "nothing to
+                # propose": leave the cursor unadvanced so the same evidence is
+                # retried next pass instead of being silently consumed. (Non-empty
+                # unparseable prose still advances — the model DID answer.)
+                logger.warning("workflow improve pass got an empty LLM reply for {}; "
+                               "keeping records for the next pass", name)
+                continue
             proposal = _parse_proposal(content) or {}
             verdict, payload = _classify_proposal(
                 proposal, wf, diag, lambda n: _script_file_exists(workspace, n),

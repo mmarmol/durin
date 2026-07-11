@@ -776,3 +776,24 @@ def test_unparseable_sibling_referencing_script_forces_manual(tmp_path):
         "nodes": [{"id": "s", "kind": "script", "script": "shared.sh", "next": None}]}))
     (wfdir / "broken.json").write_text('{"name": "broken", "start": "g", "nodes": [{"id": "g", "kind": "script", "script": "shared.sh", "on_pass"')
     assert _script_referenced_outside(tmp_path, "a", "shared.sh") is True
+
+
+def test_empty_llm_reply_keeps_cursor_for_retry(tmp_path):
+    """A provider failure (empty reply) must not consume the evidence window:
+    the cursor stays put and the SAME records re-trigger a proposal next pass."""
+    wf = {"name": "wf-a", "start": "s", "improvement_mode": "auto",
+          "nodes": [{"id": "s", "kind": "script", "command": "wc -w < missing.txt", "next": None}]}
+    _write_wf(tmp_path, wf, name="wf-a")
+    for i in range(2):
+        run_log.write_run(tmp_path, "wf-a", WorkflowResult(
+            status="aborted", final_output=None, run_id=f"r{i}",
+            runs=[NodeRun(node_id="s", iteration=1, output="", status="node_failed",
+                          error="missing.txt: No such file or directory")]), ts=float(i + 1))
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=_fake_invoke(""))
+    assert summary["proposals"] == 0
+    calls = []
+    def capture(prompt, *, model=None):
+        calls.append(prompt)
+        return SimpleNamespace(content="")
+    run_workflow_improve_pass(tmp_path, llm_invoke=capture)
+    assert calls, "second pass saw no records — the empty reply consumed the cursor"
