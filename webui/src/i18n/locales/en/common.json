@@ -1344,6 +1344,7 @@
       "editTitle": "Edit \"{{name}}\"",
       "countLabel_one": "{{count}} loop",
       "countLabel_other": "{{count}} loops",
+      "deleteTitle": "Delete loop {{title}}?",
       "columns": {
         "name": "Name",
         "workflow": "Workflow",

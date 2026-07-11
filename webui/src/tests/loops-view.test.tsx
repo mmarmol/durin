@@ -249,6 +249,7 @@ describe("LoopsView", () => {
 
     const dialog = await screen.findByRole("alertdialog");
     expect(window.confirm).not.toHaveBeenCalled();
+    expect(within(dialog).getByText(/Delete loop digest\?/i)).toBeInTheDocument();
 
     await user.click(within(dialog).getByRole("button", { name: /Delete/i }));
     await waitFor(() => expect(api.deleteLoop).toHaveBeenCalledWith("tok", "digest"));

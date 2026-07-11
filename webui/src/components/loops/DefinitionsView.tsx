@@ -176,6 +176,7 @@ export function DefinitionsView({
       <DeleteConfirm
         open={!!pendingDelete}
         title={pendingDelete?.name ?? ""}
+        titleKey="loops.definitions.deleteTitle"
         onCancel={() => setPendingDelete(null)}
         onConfirm={onConfirmDelete}
       />
