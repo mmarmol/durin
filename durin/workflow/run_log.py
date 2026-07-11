@@ -54,6 +54,7 @@ def _node_records(result) -> list[dict]:
             "budget": getattr(r, "budget", None),
             "status": r.status,
             "route_label": r.route_label,
+            "exit_code": getattr(r, "exit_code", None),
         }
         for r in result.runs
     ]

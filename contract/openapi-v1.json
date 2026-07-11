@@ -6734,6 +6734,22 @@
         "title": "WorkflowSaveResult",
         "type": "object"
       },
+      "WorkflowScriptsResult": {
+        "properties": {
+          "scripts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scripts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scripts"
+        ],
+        "title": "WorkflowScriptsResult",
+        "type": "object"
+      },
       "WorkflowSessionRunsQuery": {
         "additionalProperties": false,
         "properties": {
@@ -11015,6 +11031,25 @@
           }
         },
         "summary": "List a session's run manifests (forward lineage); without `session`, the global feed across every workflow, newest-first.",
+        "x-required-scope": "workflows:read"
+      }
+    },
+    "/api/v1/workflows/scripts": {
+      "get": {
+        "operationId": "workflows_list_scripts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowScriptsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List script filenames available to script nodes (the editor's file picker).",
         "x-required-scope": "workflows:read"
       }
     },

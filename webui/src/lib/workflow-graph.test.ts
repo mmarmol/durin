@@ -308,6 +308,18 @@ describe("workflowToFlow", () => {
     expect(edges.some((e) => e.source === "b" && e.target === "__output__")).toBe(false);
   });
 
+  it("maps a script node and its routing edges", () => {
+    const def: WorkflowDef = {
+      name: "t", start: "s",
+      nodes: [
+        { id: "s", kind: "script", command: "pytest -q", on_pass: null, on_fail: "s" },
+      ],
+    };
+    const { nodes, edges } = workflowToFlow(def);
+    expect(nodes.find((n) => n.id === "s")?.type).toBe("script");
+    expect(edges.map((e) => e.label)).toContain("fail");
+  });
+
   it("a routing node with BOTH branches null (freshly-enabled binary) routes and connects to OUTPUT", () => {
     // Checking the 'routes' toggle seeds on_pass=null and on_fail=null. Detection must be by
     // key presence, not value: a `!= null` test would mis-read both-null as non-routing.

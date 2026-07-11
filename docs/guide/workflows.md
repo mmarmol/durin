@@ -46,6 +46,92 @@ Every node has:
   conversational framing (e.g. "the parent should /build") that can derail
   a step running unattended.
 
+## Script nodes: deterministic steps with no agent turn
+
+Not every step needs a model. A **script node** runs a command or a script file
+instead of an agent turn — no tokens, no drift, the same answer every time. Reach
+for one when a step is really a check or a transform: running a test suite as a
+pass/fail gate, linting, computing a deterministic fan-out list, reformatting
+text, calling a small local tool. An agent step is for judgment; a script step is
+for "the same rule, every time."
+
+A script node has two forms — pick exactly one:
+
+- **`command`** — an inline shell command, run via `bash -c`, e.g.
+  `"command": "npm test"`.
+- **`script`** — a file under `<workspace>/workflows/scripts/`, run by extension:
+  `.py` under Python, `.sh` under `bash`, anything else must be directly
+  executable (a shebang line). Use this for anything longer than a one-liner.
+
+The I/O contract is plain Unix:
+
+- **stdin** is the previous node's output (the upstream edge text). If the
+  script node is the workflow's first node, stdin is the run's task instead.
+- **stdout** becomes the edge text for the next node — capped
+  (`workflow.script_output_max_chars`, default 16000 characters; excess is
+  truncated with a notice).
+- **stderr** is for diagnostics only — it never becomes the edge text, though a
+  failing gate folds a tail of it into the loop-back feedback so whoever
+  re-runs sees why it failed.
+- **The exit code decides pass/fail.** On a routing script node
+  (`on_pass`/`on_fail`), exit `0` is `PASS`; anything else is `FAIL`. On a
+  `cases` (multi-way) script node, the **last non-empty line of stdout** picks
+  the case, but the process must still exit `0` — a non-zero exit there (or on
+  a plain, non-routing script node) ends the run as a failure instead of a
+  verdict, since a script that crashed mid-way has nothing trustworthy to say.
+- **Work dir.** The script's current directory is the run's shared working
+  folder — the same folder an agent step with `tools: "default"` reads and
+  writes, so a script step can read files an earlier step produced, or leave
+  files for a later step.
+- **Environment.** A handful of `DURIN_*` variables carry run metadata:
+  `DURIN_TASK` (the run's task, capped), `DURIN_RUN_ID`, `DURIN_NODE_ID`,
+  `DURIN_ITERATION` (which pass this is, for a looping node), and
+  `DURIN_WORK_DIR` (the shared working folder's path).
+- **Timeout.** A script node has its own `timeout` in seconds, or falls back to
+  `workflow.script_timeout` (default 300s). A script that runs past it is
+  killed and the node fails.
+
+A script node has no `model`, `prompt`, `tools`, `mode`, or session — those
+fields don't apply and the workflow parser rejects them if you set one. It can't
+be a parallel branch or fan-out worker either: a script already does its own
+iteration internally, so wrapping it in the engine's fan-out would be redundant.
+
+### Example: implement, then gate on the real test suite
+
+An agent step implements a change; a script step runs the actual test suite as
+the gate — no model asked to eyeball test output, just the tests' own exit code
+deciding pass or fail. A failing run loops back to the implement step with the
+test output as feedback.
+
+```json
+{
+  "name": "implement-and-test",
+  "description": "Implement a change, then run the test suite as a deterministic gate.",
+  "start": "implement",
+  "nodes": [
+    {
+      "id": "implement",
+      "kind": "work",
+      "prompt": "Implement the requested change in the shared working folder.",
+      "tools": "default",
+      "next": "test"
+    },
+    {
+      "id": "test",
+      "kind": "script",
+      "command": "npm test",
+      "timeout": 120,
+      "on_fail": "implement"
+    }
+  ]
+}
+```
+
+`test` has no `on_pass` target, so a passing run (exit `0`) ends the workflow
+right there; a failing run (any other exit code) routes back to `implement` with
+the test output as loop-back feedback, bounded by the workflow's usual
+`max_visits` loop guard.
+
 ## Routing: deciding what happens next
 
 A node can just hand off to the next node (`"next": "other_node"`), or it
@@ -252,7 +338,10 @@ clean up.
 The web dashboard's **Workflows** pane is a visual graph editor (built on
 React Flow): drag nodes onto a canvas, wire edges, configure each node's
 prompt/model-or-persona/mode/context/tools/session in a side panel, and add
-static or dynamic parallel branches with a concurrency cap. Input and
+static or dynamic parallel branches with a concurrency cap. The palette also
+adds script nodes — an inline command or a picker over the files under
+`workflows/scripts/`, with a timeout and the same pass/fail or `cases` routing
+config as a work node. Input and
 Output are clickable canvas objects where you toggle text/file and write
 the free-text description. Runs launched from the editor show live,
 per-node progress as the graph executes.

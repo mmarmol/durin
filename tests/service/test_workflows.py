@@ -310,3 +310,34 @@ async def test_session_runs_global_feed_carries_questions_on_needs_input(tmp_pat
         needs_input_node="gate"), root_session_key=None, started_at=1.0, finished_at=1.0)
     result = await svc.session_runs(WorkflowSessionRunsQuery(), p)
     assert result.runs[0]["questions"] == "which env?"
+
+
+# --- list_scripts route: filenames under <workspace>/workflows/scripts/ -----
+
+
+@pytest.mark.asyncio
+async def test_list_scripts(tmp_path):
+    scripts = tmp_path / "workflows" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "b.sh").write_text("echo hi\n")
+    (scripts / "a.py").write_text("print('hi')\n")
+    svc, p = _svc(tmp_path), Principal.local()
+    result = await svc.list_scripts(p)
+    assert result.scripts == ["a.py", "b.sh"]
+
+
+@pytest.mark.asyncio
+async def test_list_scripts_empty_when_dir_absent(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    result = await svc.list_scripts(p)
+    assert result.scripts == []
+
+
+@pytest.mark.asyncio
+async def test_list_scripts_skips_subdirectories(tmp_path):
+    scripts = tmp_path / "workflows" / "scripts"
+    (scripts / "nested").mkdir(parents=True)
+    (scripts / "top.py").write_text("print('hi')\n")
+    svc, p = _svc(tmp_path), Principal.local()
+    result = await svc.list_scripts(p)
+    assert result.scripts == ["top.py"]
