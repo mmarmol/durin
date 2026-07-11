@@ -1077,7 +1077,16 @@ class AgentLoop:
             loops_runtime=loops_runtime,
         )
         if LoopsTool.enabled(ctx):
-            self.tools.register(LoopsTool.create(ctx))
+            tool = LoopsTool.create(ctx)
+            if self.tools.has(tool.name):
+                # Same collision warning ToolLoader.load emits — this path
+                # registers outside that loader (see docstring), but a name
+                # clash deserves the same visibility.
+                logger.warning(
+                    "Tool name collision: {} from {} overwrites existing",
+                    tool.name, LoopsTool.__name__,
+                )
+            self.tools.register(tool)
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""

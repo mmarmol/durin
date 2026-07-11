@@ -1642,7 +1642,10 @@ def _run_gateway(
             return None
 
         # Loop triggers fire the loops runtime directly (not the agent turn below).
-        if job.payload.kind == "loop_trigger" and job.payload.loop:
+        if job.payload.kind == "loop_trigger":
+            if not job.payload.loop:
+                logger.warning("loop_trigger cron job {} has no loop name; skipping", job.id)
+                return None
             await loops_runtime.try_fire(job.payload.loop, source="cron")
             return None
 
