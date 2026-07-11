@@ -3,19 +3,19 @@ import { useTranslation } from "react-i18next";
 
 import { ActivityView } from "@/components/loops/ActivityView";
 import { DefinitionsView } from "@/components/loops/DefinitionsView";
+import { LoopForm } from "@/components/loops/LoopForm";
 import type { LoopDef } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useClient } from "@/providers/ClientProvider";
 
 type LoopsPane = "activity" | "definitions";
 
 export function LoopsView() {
   const { t } = useTranslation();
+  const { token } = useClient();
   const [pane, setPane] = useState<LoopsPane>("activity");
   // undefined = editor panel closed; null = creating a new loop; a LoopDef =
-  // editing that loop. The actual edit form lands in a later task — this just
-  // renders a placeholder so DefinitionsView's "New loop"/"Edit" affordances
-  // have somewhere to go, wired for that form to slot in without touching
-  // this state shape.
+  // editing that loop.
   const [editing, setEditing] = useState<LoopDef | null | undefined>(undefined);
 
   if (editing !== undefined) {
@@ -29,11 +29,17 @@ export function LoopsView() {
           >
             {t("loops.definitions.back")}
           </button>
+          <span className="text-xs font-medium text-foreground/80">
+            {editing ? t("loops.definitions.editTitle", { name: editing.name }) : t("loops.definitions.newTitle")}
+          </span>
         </div>
-        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-          {editing
-            ? t("loops.definitions.editPlaceholder", { name: editing.name })
-            : t("loops.definitions.newPlaceholder")}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <LoopForm
+            token={token}
+            editLoop={editing}
+            onDone={() => setEditing(undefined)}
+            onCancel={() => setEditing(undefined)}
+          />
         </div>
       </div>
     );
