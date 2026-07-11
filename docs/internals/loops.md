@@ -181,8 +181,9 @@ without asking the model).
 
 ### 4d. Cron integration
 
-A loop's only V1 trigger source is `cron` (`LoopTrigger.source`); channel and
-webhook triggers are out of scope for this iteration. A trigger's `schedule`
+Cron is one of the two trigger sources (`LoopTrigger.source`, alongside
+`channel` — see the inbound matcher section); webhook sources arrive later.
+A cron trigger's `schedule`
 is shaped exactly like a `CronSchedule` (`kind: at | every | cron`, plus the
 matching fields), so the same schedule vocabulary cron jobs use applies to
 loop triggers.
@@ -377,8 +378,10 @@ claim *before* resuming the workflow, not after. The old claim is stale the
 moment the answer is in hand, and releasing first means that if the resumed
 workflow immediately asks another counterpart-bound question, the fresh
 claim it registers is never wiped by a trailing release from the answer that
-just resolved. Claims are also released wholesale whenever a run leaves
-`waiting_info` for any other reason.
+just resolved. There is no eager sweep beyond that: a claim whose run can
+no longer be answered (for example, its loop was deleted) is cleaned up
+lazily — released when the next message on that thread fails to wake it, or
+expired by the seven-day prune at gateway boot.
 
 Because a claim can otherwise live forever if a counterpart never replies (a
 crashed process, an abandoned thread), the gateway prunes claims older than
