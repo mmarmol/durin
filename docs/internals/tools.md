@@ -320,6 +320,7 @@ controls which MCP tools are registered.
 | Capability bridges | `interpret_image`, `interpret_audio`, `execute_code`, `notebook_edit` |
 | Secrets | `list_secrets`, `request_secret` |
 | Scheduling | `cron` |
+| Loops | `loops` |
 | Self-inspection | `my` |
 
 ---

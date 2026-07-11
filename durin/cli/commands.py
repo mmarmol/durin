@@ -1746,6 +1746,7 @@ def _run_gateway(
         check_timeout_s=config.loops.check_timeout_s,
         on_operator_ask=_on_loop_ask,
     )
+    agent.register_loops_tool(loops_runtime)
 
     def _webui_runtime_model_name() -> str | None:
         model = getattr(agent, "model", None)
