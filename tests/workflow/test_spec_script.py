@@ -100,3 +100,10 @@ def test_node_label_falls_back_to_command_then_file():
     assert node_label(ScriptNode(id="n", command="pytest -q")) == "pytest -q"
     assert node_label(ScriptNode(id="n", script="check.py")) == "check.py"
     assert node_label(ScriptNode(id="n", title="Gate", command="x")) == "Gate"
+
+
+def test_script_path_aliases_normalize_to_canonical():
+    wf = parse_workflow(_wf([{"id": "s", "kind": "script", "script": "./check.py"}]))
+    assert wf.nodes["s"].script == "check.py"
+    wf2 = parse_workflow(_wf([{"id": "s", "kind": "script", "script": "sub/./tool.sh"}]))
+    assert wf2.nodes["s"].script == "sub/tool.sh"

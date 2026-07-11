@@ -16,7 +16,6 @@ from typing import Any, Literal, Union
 
 from durin.workflow.verdict import normalize_label
 
-
 # ---------------------------------------------------------------------------
 # Human-readable node label helpers
 # ---------------------------------------------------------------------------
@@ -356,6 +355,12 @@ def _build_node(raw: dict[str, Any]) -> Node:
             raise WorkflowError(
                 f"node {node_id!r}: 'script' must be a relative path inside workflows/scripts (no '..')"
             )
+        if script:
+            # Normalize path aliases ("./x.sh", "a/./b") to one canonical form, so
+            # every consumer comparing script references by string ("which nodes run
+            # this file?") cannot be evaded by an equivalent spelling.
+            from pathlib import PurePosixPath
+            script = str(PurePosixPath(script))
         rejected = sorted(_AGENT_ONLY_FIELDS & raw.keys())
         if rejected:
             raise WorkflowError(
