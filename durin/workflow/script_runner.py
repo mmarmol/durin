@@ -80,6 +80,7 @@ class ScriptNodeRunner:
             proc = subprocess.Popen(
                 argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, cwd=cwd or None, env=env, text=True,
+                errors="replace",   # a script emitting non-UTF-8 bytes must degrade, not crash the runner
                 start_new_session=True,   # own process group, so a timeout kill reaps children too
             )
         except (FileNotFoundError, PermissionError, OSError) as exc:
@@ -91,7 +92,10 @@ class ScriptNodeRunner:
                 os.killpg(proc.pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 proc.kill()
-            proc.wait()
+            # Drain and close the pipes rather than a bare wait() — per the
+            # subprocess docs, communicate() after a kill is what reaps the
+            # process AND closes stdout/stderr, avoiding an fd leak.
+            proc.communicate()
             raise NodeExecutionError(
                 node.id, req.iteration, None,
                 TimeoutError(f"script timed out after {timeout}s")) from None

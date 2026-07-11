@@ -108,3 +108,34 @@ def test_missing_command_binary_is_node_failure(tmp_path):
     # bash -c returns 127 for a missing binary — a plain failure, not a crash.
     with pytest.raises(NodeExecutionError):
         runner(tmp_path)(_req(node, tmp_path=tmp_path))
+
+
+def test_non_utf8_output_degrades_instead_of_raising(tmp_path):
+    node = ScriptNode(id="s", command="printf '\\xff\\xfe ok'")
+    resp = runner(tmp_path)(_req(node, tmp_path=tmp_path))
+    assert resp.exit_code == 0 and "ok" in resp.output
+
+
+def test_timeout_closes_pipes(tmp_path, monkeypatch):
+    import subprocess as subprocess_mod
+
+    # Capture the Popen instance the runner creates so we can inspect its
+    # pipes after the timeout path runs — proves communicate() drained and
+    # closed them instead of leaving them for the garbage collector.
+    procs = []
+    real_popen = subprocess_mod.Popen
+
+    def spying_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        procs.append(proc)
+        return proc
+
+    monkeypatch.setattr(subprocess_mod, "Popen", spying_popen)
+
+    node = ScriptNode(id="slow", command="sleep 30", timeout=1, next=None)
+    with pytest.raises(NodeExecutionError, match="timed out"):
+        runner(tmp_path)(_req(node, tmp_path=tmp_path))
+
+    assert len(procs) == 1
+    assert procs[0].stdout.closed
+    assert procs[0].stderr.closed
