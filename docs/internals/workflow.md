@@ -282,6 +282,7 @@ The per-node entries in the manifest's `runs` array carry:
 | `route_label` | matched case label for multi-way nodes (`null` otherwise) |
 | `budget` | the node's effective visit budget at this pass (`null` for parallel branches/workers, which are not loop targets) |
 | `exit_code` | a script node's subprocess exit code (`null` for agent nodes, which have no exit code) |
+| `error` | failure detail (stderr tail / exception text, capped) for `node_failed`/`persist_failed` rows — the evidence the improve pass's script-repair lane reads (`null` otherwise) |
 
 The finalized manifest also carries top-level fields: `needs_input_node` — the node
 that routed to `__needs_input__` (`null` otherwise), the resume re-entry point;
@@ -597,11 +598,11 @@ End-to-end for a single `run_workflow` call:
 | `WorkflowWriteTool` | `durin/agent/tools/workflow_write.py` | The `workflow_write` LLM tool (core scope): validates a definition via `parse_workflow` before persisting, refuses overwriting an existing name, defaults `improvement_mode` to `manual`, and commits through the version store. The agent's sanctioned authoring path (also given to the dream's skill-extract sub-agent, so a skill can delegate to a workflow it authored). |
 | `start_run`, `update_run`, `finalize_run`, `read_manifest`, `runs_for_session`, `reconcile_running`, `read_runs_since` | `durin/workflow/run_log.py` | The live run manifest (running→terminal), per-run diagnostic records, crash reconciliation, and the self-improvement signal source. `read_runs_since` callers that need terminal runs should skip records with `status in {"running","crashed"}`. |
 | `NodeExecutionError` | `durin/workflow/engine.py` | Typed error raised by the node runner when an agent turn or a script node's process fails or times out; carries `node_id`, `iteration`, and `session_key` (`None` for a script node) so the engine can record an attributable `NodeRun` before aborting. |
-| `compute_diagnostics` | `durin/workflow/diagnostics.py` | Reduces run records to recurring per-node trouble (loop-backs, gate fails) → improvement candidates. |
-| `run_workflow_improve_pass` | `durin/workflow/workflow_improve_dream.py` | The dream pass: observes all workflows' runs since its cursor, proposes one prompt-scoped edit; manual → recommend, auto → apply + hold pending validation (auto-revert on a worsened diagnostic), out-of-scope → structural escalation. |
+| `compute_diagnostics` | `durin/workflow/diagnostics.py` | Reduces run records to recurring per-node trouble (loop-backs, gate fails, script failures with sample error strings) → improvement candidates. |
+| `run_workflow_improve_pass` | `durin/workflow/workflow_improve_dream.py` | The dream pass: observes all workflows' runs since its cursor, proposes one edit — a node's `prompt`, a script node's `command`, or a `script_file`'s content, the latter two gated by recurring failure evidence and a deterministic pre-apply check; manual (or `manual_only`) → recommend, auto → apply + hold pending validation (auto-revert on a worsened diagnostic), out-of-scope → structural escalation. |
 | `save_workflow_definition` | `durin/workflow/editing.py` | The single sanctioned write path for definitions: graph validation, atomic write under the editor's lock, version commit with actor. All doors funnel through it. |
 | `WorkflowEditTool` | `durin/agent/tools/workflow_edit.py` | The `workflow_edit` LLM tool (core scope): full-definition edit of an EXISTING workflow by the in-session agent; refuses a missing name. |
-| `log_recommendation`, `open_recommendations`, `apply_recommendation`, `dismiss_recommendation`, `log_structural_suggestion`, `mark_reverted` | `durin/workflow/workflow_recommendations.py` | The per-workflow recommendation queue: prompt edits (open → applied / dismissed / reverted) and annotated structural escalations. |
+| `log_recommendation`, `log_script_file_recommendation`, `open_recommendations`, `apply_recommendation`, `dismiss_recommendation`, `log_structural_suggestion`, `mark_reverted` | `durin/workflow/workflow_recommendations.py` | The per-workflow recommendation queue: prompt / command / script_file edits (open → applied / dismissed / reverted, `manual_only` flagged) and annotated structural escalations; `apply_recommendation` re-runs the script pre-apply gate for `command`/`script_file` kinds before writing. |
 
 ## 7. Configuration & surfaces
 
@@ -659,36 +660,101 @@ End-to-end for a single `run_workflow` call:
 - **Self-improvement** (per-workflow `improvement_mode`, two states like a skill's:
   `manual` default / `auto` — the same contract as skills: auto lets the dream act,
   manual routes everything to the user). Each run writes a diagnostic record
-  (`run_log.py`, beside `workflows/`). A dream pass (`run_workflow_improve_pass`, wired
-  into the `memory_dream` cron) reduces the runs since its per-workflow cursor to
-  recurring trouble (a node that loops, a gate that keeps failing — `diagnostics.py`),
-  shows a model the definition + that diagnostic + the change history (so it never
-  re-proposes a reverted edit), and produces one scoped proposal (a node's `prompt` —
-  which doubles as a routing node's criteria). A proposal has three dispositions:
-  - **manual** → recorded as a recommendation (`workflow_recommendations.py`); the user
-    reviews it in the webui Workflows banner or the `durin workflow` CLI and applies or
-    dismisses; applying writes the text through the shared editing engine and versions
-    it. The anti-Goodhart anchor is the human.
-  - **auto** → the pass applies it itself through the SAME path
-    (`apply_recommendation(actor="dream")`: graph re-validated, atomic write, version
-    commit), then holds it **pending validation**: on the workflow's next terminal runs,
-    if the edited node's trouble rate (loop-backs + gate fails per run) worsened vs the
-    pre-edit baseline, the pass restores the previous prompt (a forward revert commit),
-    marks the recommendation `reverted` (its dedup id pins any identical re-proposal),
-    and emits `workflow.improve.reverted`. Validated-or-equal clears the marker.
-  - **structural** (out of the prompt-only scope — add/remove nodes, rewire, other
-    fields): never applied in ANY mode; recorded annotated (the model's full proposal,
-    why the scope refused it, the diagnostic evidence) as a `kind: structural`
-    recommendation. The webui renders it as an escalation card with a copy-for-chat
-    action so the user can treat it in a session; `apply` refuses it in code.
+  (`run_log.py`, beside `workflows/`) whose per-node trace includes a script node's
+  `node_failed` rows (crash, timeout, non-zero exit outside a binary gate) with the
+  failure detail. A dream pass (`run_workflow_improve_pass`, wired into the
+  `memory_dream` cron) reduces the runs since its per-workflow cursor to recurring
+  trouble — a node that loops, a gate that keeps failing, a script node that keeps
+  raising (`diagnostics.py`: `loop_backs` / `gate_fails` / `script_failures`, plus up
+  to three `failure_samples` per script node) — shows a model the definition + that
+  diagnostic + the change history (so it never re-proposes a reverted edit), and
+  produces one scoped proposal in one of three shapes:
+  - a node's `prompt` (work nodes and routing nodes both use `prompt` as their
+    editable field) — unrestricted, the original lane.
+  - a script node's inline `command` — only for a node whose recurring
+    `script_failures` count meets the evidence floor (`RECURRENCE_FLOOR`, same floor
+    as every other diagnostic candidate). A gate-fail count alone is never evidence
+    for a script edit — that trouble keeps routing to the producer's prompt instead
+    (the anti-Goodhart anchor: the dream must never "improve" a workflow by weakening
+    a check).
+  - a `script_file`'s full new content — only for a file under
+    `<workspace>/workflows/scripts/` referenced by a node with that same evidence.
+    The repair lane only edits single-segment filenames: a nested reference (e.g.
+    `sub/tool.sh`) is left alone even when it is the one failing.
 
-  Every write lands through `durin/workflow/editing.py::save_workflow_definition` —
-  the single sanctioned path (`workflow_write` create / `workflow_edit` full-definition
-  edit by the in-session agent / recommendation applies): graph validation, atomic
-  write under the editor's lock, version-store commit with its actor. The dream never
-  gets the full-definition editor; its writes stay scoped to node prompts by the pass.
-  Telemetry: `workflow.improve.recommended` / `.applied` / `.reverted` / `.structural`
-  (catalogued in `durin/telemetry/schema.py`).
+  A script proposal on a node that **routes** (`on_pass`/`on_fail` or `cases` — a
+  gate), or a `script_file` referenced by any routing node, is always `manual_only`:
+  it is recorded as a recommendation and never auto-applied, even in
+  `improvement_mode: auto` — a person always reviews a gate edit.
+  `<workspace>/workflows/scripts/` is a namespace shared by every workflow in the
+  workspace, not scoped to the one proposing the edit: a `script_file` target is also
+  forced `manual_only` when a node in ANY OTHER workflow references that same file —
+  routing or not — since that sibling's damage would be invisible to this workflow's
+  own pending-validation window. A sibling definition that fails to parse fails safe
+  instead of being skipped: its raw JSON is substring-scanned for the filename, so a
+  broken-but-later-repaired sibling can never read as "not referenced".
+
+  Before an in-scope script proposal is even queued — and again, independently, at
+  the moment it is actually written (whether that write is the dream's own auto-apply
+  or a user clicking Apply on a manual recommendation) — it must pass the
+  deterministic pre-apply gate (`script_precheck.py::precheck_script_edit`): syntax
+  (`bash -n` / `py_compile`), a security scan (the same skill scanner that gates
+  dream-bundled skill scripts), and a smoke run (empty stdin, a scratch cwd, the
+  clean env allowlist regardless of the node's own `env` mode, a short timeout —
+  fails only on a startup-crash signature, not a plain non-zero exit, since a gate
+  legitimately exiting 1 on empty input is healthy). The smoke run is the only one
+  of the three that executes the proposed code, so it only runs at QUEUE time when
+  the proposal could land without a person acting (`improvement_mode: auto` and not
+  `manual_only`) — a manual-mode or `manual_only` proposal gets syntax + security
+  scan only at queue time, and the smoke run happens later, at APPLY time, where a
+  user's own Apply click is the consent for that execution. The apply-time re-run
+  always runs the full gate, smoke included. The gate fails closed at every
+  step (a scanner crash, unscannable content with no recognized extension or shebang,
+  etc. all count as a failure, never a free pass). A failing check is never silently
+  dropped: it lands as a `kind: structural` recommendation with the check's own
+  output as `why_rejected`; a failure at the apply-time re-run instead leaves the
+  recommendation `open` so the user sees why nothing happened.
+
+  A proposal has three dispositions:
+  - **manual** → recorded as a recommendation (`workflow_recommendations.py`:
+    `log_recommendation` for prompt/command, `log_script_file_recommendation` for a
+    file); the user reviews it in the webui Workflows banner or the `durin workflow`
+    CLI and applies or dismisses. Applying a prompt/command writes the field through
+    the shared editing engine and versions it; applying a `script_file` writes the
+    file atomically and snapshots it into the same version history. The anti-Goodhart
+    anchor is the human.
+  - **auto** (and not `manual_only`) → the pass applies it itself through the SAME
+    apply path (`apply_recommendation(actor="dream")`), then holds it **pending
+    validation**: on the workflow's next terminal runs, if the edited target's
+    trouble rate (loop-backs + gate fails + script failures per run; for a
+    `script_file`, the MAX rate across every node that runs it) worsened vs the
+    pre-edit baseline, the pass restores the previous state, branching on kind — a
+    `prompt`/`command` through the definition path (same as a manual apply), a
+    `script_file` by writing back its exact previous bytes atomically under the
+    version lock plus a version snapshot — marks the recommendation `reverted` (its
+    dedup id pins any identical re-proposal), and emits `workflow.improve.reverted`.
+    Validated-or-equal clears the marker. The baseline and the "previous" value it
+    can restore both come from `apply_recommendation`'s own pre-write read, not an
+    earlier one the pass took — closing a race where a concurrent editor save during
+    the multi-second precheck would otherwise leave the revert target stale.
+  - **structural** (out of the editable scope — add/remove nodes, rewire, other
+    fields, a script edit with no recurring failure evidence, or one that failed the
+    pre-apply gate): never applied in ANY mode; recorded annotated (the model's full
+    proposal, why the scope refused it, the diagnostic evidence) as a `kind:
+    structural` recommendation. The webui renders it as an escalation card with a
+    copy-for-chat action so the user can treat it in a session; `apply` refuses it in
+    code.
+
+  Every prompt/command write lands through
+  `durin/workflow/editing.py::save_workflow_definition` — the single sanctioned path
+  for a definition (`workflow_write` create / `workflow_edit` full-definition edit by
+  the in-session agent / recommendation applies): graph validation, atomic write
+  under the editor's lock, version-store commit with its actor. A `script_file` write
+  instead lands directly under `workflows/scripts/` (atomic write + version
+  snapshot, serialized on the same version lock) — the dream never gets the
+  full-definition editor. Telemetry: `workflow.improve.recommended` / `.applied` /
+  `.reverted` / `.structural`, each carrying a `kind` (`prompt` | `command` |
+  `script_file`) (catalogued in `durin/telemetry/schema.py`).
 - **Seeds.** Starter workflows ship bundled under `durin/templates/workflows/` and
   are copied into a fresh workspace's `workflows/` directory by
   `seed_workflows(workspace)` (called from `sync_workspace_templates`) — idempotent,
@@ -756,9 +822,10 @@ End-to-end for a single `run_workflow` call:
   manifests are retained, so the run summary tells the caller to copy out anything that
   must outlive that window;
   **dream-driven self-improvement** (recommendations from recurring run diagnostics,
-  scoped to editing a `WorkNode`'s `prompt` — a proposal touching a script node, which
-  has no `prompt` field, therefore always surfaces as a structural escalation for the
-  user rather than an auto-appliable edit); a **webui Workflows pane** (React Flow) with an editor that
+  scoped to a `WorkNode`'s `prompt`, a `ScriptNode`'s inline `command`, or a script
+  file's full content — the latter two only for a target with recurring script-failure
+  evidence, gated by a deterministic syntax/security/smoke pre-apply check, and never
+  auto-applied when the target routes — see §7 above); a **webui Workflows pane** (React Flow) with an editor that
   has clickable Input/Output canvas objects (toggle text and/or files plus a free-text
   description; file input is supplied as paths in the run bar), a palette that adds
   work / script / parallel / subflow nodes (a routing node is a work or script node —

@@ -1170,6 +1170,31 @@ function IOConfigPanel({
   );
 }
 
+// Shared current->proposed text presentation for the recommendations banner
+// (prompt/command field edits and full script_file rewrites alike). Plain
+// monospace before/after blocks — no diff library, matching the banner's
+// existing minimal styling.
+function RecommendationDiff({ current, proposed, t }: { current?: string; proposed?: string; t: (k: string) => string }) {
+  return (
+    <div className="mt-1 grid gap-1 text-[11px]">
+      {current !== undefined && (
+        <div>
+          <span className="font-semibold text-muted-foreground">{t("workflows.recCurrent")}</span>
+          <pre className="mt-0.5 max-h-24 overflow-y-auto whitespace-pre-wrap rounded border bg-background/60 p-1.5 font-mono">
+            {current}
+          </pre>
+        </div>
+      )}
+      <div>
+        <span className="font-semibold text-muted-foreground">{t("workflows.recProposed")}</span>
+        <pre className="mt-0.5 max-h-32 overflow-y-auto whitespace-pre-wrap rounded border bg-background/60 p-1.5 font-mono">
+          {proposed}
+        </pre>
+      </div>
+    </div>
+  );
+}
+
 let _idSeq = 0;
 
 type WorkflowsPane = "editor" | "runs";
@@ -1787,18 +1812,59 @@ export function WorkflowsView() {
                       {t("workflows.recDismiss")}
                     </Button>
                   </div>
+                ) : r.kind === "script_file" ? (
+                  <div key={r.id} className="flex items-start gap-2 text-sm">
+                    <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+                    <div className="flex-1 text-amber-700 dark:text-amber-300">
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase">
+                          {t("workflows.recScriptFile")}
+                        </span>
+                        <span className="font-mono font-medium">{r.script}</span>
+                        <span className="text-xs text-muted-foreground">— {r.reason}</span>
+                      </div>
+                      <RecommendationDiff current={r.current} proposed={r.proposed} t={t} />
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {r.manual_only && (
+                        <span className="rounded-full bg-orange-500/15 px-2 py-0.5 text-[10px] font-semibold text-orange-700 dark:text-orange-300">
+                          {t("workflows.recManualOnly")}
+                        </span>
+                      )}
+                      <Button size="sm" variant="outline" onClick={() => onApplyRec(r.id)}>
+                        apply
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => void onDismissRec(r.id)}>
+                        {t("workflows.recDismiss")}
+                      </Button>
+                    </div>
+                  </div>
                 ) : (
-                  <div key={r.id} className="flex items-center gap-2 text-sm">
-                    <Lightbulb className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
-                    <span className="flex-1 text-amber-700 dark:text-amber-300">
-                      <span className="font-medium">{r.target_id}.{r.field}</span> — {r.reason}
-                    </span>
-                    <Button size="sm" variant="outline" onClick={() => onApplyRec(r.id)}>
-                      apply
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => void onDismissRec(r.id)}>
-                      {t("workflows.recDismiss")}
-                    </Button>
+                  <div key={r.id} className="flex items-start gap-2 text-sm">
+                    <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+                    <div className="flex-1 text-amber-700 dark:text-amber-300">
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className="font-medium">{r.target_id}</span>
+                        <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase">
+                          {r.field}
+                        </span>
+                        <span className="text-xs text-muted-foreground">— {r.reason}</span>
+                      </div>
+                      <RecommendationDiff current={r.current} proposed={r.proposed} t={t} />
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {r.manual_only && (
+                        <span className="rounded-full bg-orange-500/15 px-2 py-0.5 text-[10px] font-semibold text-orange-700 dark:text-orange-300">
+                          {t("workflows.recManualOnly")}
+                        </span>
+                      )}
+                      <Button size="sm" variant="outline" onClick={() => onApplyRec(r.id)}>
+                        apply
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => void onDismissRec(r.id)}>
+                        {t("workflows.recDismiss")}
+                      </Button>
+                    </div>
                   </div>
                 ),
               )}

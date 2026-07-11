@@ -432,12 +432,23 @@ export type WorkflowRecommendation = {
   current?: string;
   proposed?: string;
   reason: string;
+  // Lifecycle: "open" awaits review; applied/dismissed/reverted are terminal.
+  status?: string;
+  // Dedup bump count: how many dream rounds re-proposed this identical edit.
+  count?: number;
   // Structural suggestions: the dream's out-of-scope idea, escalated for the
   // user instead of silently dropped. No auto-apply — treat it in a session.
-  kind?: "structural";
+  // "script_file" is a full-file script repair proposal (see `script` below);
+  // prompt/command proposals carry no `kind` at all.
+  kind?: "structural" | "script_file";
   proposal?: Record<string, unknown>;
   why_rejected?: string;
   diagnostic?: string;
+  // script_file only: the filename under workflows/scripts/ the proposal edits.
+  script?: string;
+  // A proposal that must never auto-apply (e.g. a routing-node edit) — always
+  // lands here for the user to review regardless of the workflow's improve mode.
+  manual_only?: boolean;
 };
 
 export async function getWorkflowRecommendations(

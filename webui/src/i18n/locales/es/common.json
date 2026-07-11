@@ -1958,7 +1958,11 @@
     "recCopied": "Contexto copiado — pegalo en un chat para trabajar la idea con el agente.",
     "recCopyFailed": "No se pudo copiar al portapapeles.",
     "recStructural": "estructural",
-    "recStructuralHint": "Fuera del alcance solo-prompts del dream — nunca se auto-aplica; tratalo en una sesión",
+    "recStructuralHint": "Fuera del alcance del dream (prompts, más ediciones de comando/archivo de scripts que fallan) — nunca se auto-aplica; tratalo en una sesión",
+    "recCurrent": "actual",
+    "recProposed": "propuesto",
+    "recScriptFile": "archivo de script",
+    "recManualOnly": "edición de gate — necesita tu revisión",
     "kind": {
       "work": "trabajo",
       "script": "script",
