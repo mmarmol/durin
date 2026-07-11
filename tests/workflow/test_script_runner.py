@@ -146,6 +146,27 @@ def test_work_dir_env_var_equals_output_dir(tmp_path):
     assert resp.output == str(work)
 
 
+def test_clean_env_hides_ambient_var_but_keeps_path_and_durin_vars(tmp_path, monkeypatch):
+    monkeypatch.setenv("DURIN_TEST_SENTINEL", "leaked")
+    node = ScriptNode(
+        id="mynode", command='echo "sentinel=${DURIN_TEST_SENTINEL:-unset}"; '
+                              'echo "path=${PATH:+set}"; echo "node=$DURIN_NODE_ID"',
+        env="clean",
+    )
+    resp = runner(tmp_path)(_req(node, tmp_path=tmp_path))
+    lines = resp.output.strip().splitlines()
+    assert lines[0] == "sentinel=unset"
+    assert lines[1] == "path=set"
+    assert lines[2] == "node=mynode"
+
+
+def test_inherit_env_exposes_ambient_var(tmp_path, monkeypatch):
+    monkeypatch.setenv("DURIN_TEST_SENTINEL", "visible")
+    node = ScriptNode(id="s", command='echo -n "$DURIN_TEST_SENTINEL"', env="inherit")
+    resp = runner(tmp_path)(_req(node, tmp_path=tmp_path))
+    assert resp.output == "visible"
+
+
 def test_timeout_kill_reaps_grandchild(tmp_path):
     # The child backgrounds a grandchild that would otherwise outlive the timeout kill
     # unless the process GROUP (not just the direct child) is signalled. It writes the

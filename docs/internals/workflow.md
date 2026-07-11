@@ -122,9 +122,11 @@ run's task instead, since the run's task is the incoming edge of the start node;
 upstream node that produced an empty string stays empty (no fallback). Small run
 metadata rides in `DURIN_TASK`/`DURIN_RUN_ID`/`DURIN_NODE_ID`/`DURIN_ITERATION`/
 `DURIN_WORK_DIR` env vars (`DURIN_TASK` is capped — env values have platform size
-limits that stdin does not). The subprocess otherwise inherits the gateway
-process's own environment unchanged — it is not scrubbed down to a safe set the
-way the agent's shell tool is (see [security.md](security.md)). **cwd** is the
+limits that stdin does not). The rest of the subprocess environment is controlled
+by the node's `env` field: `"clean"` (the default) starts from a minimal allowlist
+(`PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR` —
+only those present); `"inherit"` is the full gateway process environment, opt-in
+per node (see [security.md](security.md)). **cwd** is the
 run's shared working folder, so a script reads earlier steps' files and writes
 its own the same way a `tools: "default"` work node does. **stdout** (capped
 at `workflow.script_output_max_chars`, truncated with a

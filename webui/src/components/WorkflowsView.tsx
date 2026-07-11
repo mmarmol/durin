@@ -440,7 +440,8 @@ function RoutingFields({
 
 // Config fields for a "script" node: source (inline command vs. a file under
 // workflows/scripts/ — exactly one applies, mirroring the backend's contract),
-// an optional timeout, the shared routing controls, and the per-node visit budget.
+// an optional timeout, the subprocess env knob (clean allowlist default vs. full
+// gateway env), the shared routing controls, and the per-node visit budget.
 // Agent-only fields (model/persona/context/session/prompt/mode/tools/skills/mcps/
 // max_turns) are deliberately never rendered here — the backend parser rejects them
 // on a script node.
@@ -520,6 +521,17 @@ function ScriptFields({
           }}
           className="h-8"
         />
+      </Field>
+
+      <Field label={t("workflows.scriptEnv")}>
+        <select
+          className={selectCls}
+          value={node.env === "inherit" ? "inherit" : "clean"}
+          onChange={(e) => onChange({ env: e.target.value === "inherit" ? "inherit" : undefined })}
+        >
+          <option value="clean">{t("workflows.scriptEnvClean")}</option>
+          <option value="inherit">{t("workflows.scriptEnvInherit")}</option>
+        </select>
       </Field>
 
       <RoutingFields node={node} nodes={allNodes} patch={onChange} t={t} />

@@ -256,13 +256,15 @@ externally-sourced content — the same trust model as the agent's shell tool
 (`ExecTool`): executing them is equivalent to the user running them directly. A
 script node's subprocess does **not** go through `ExecTool`'s guard pipeline (deny
 patterns, workspace boundary, SSRF URL detection) or a sandbox — there is no
-sandboxing at all. It also does not go through `_build_env()`'s scrubbing: the
-subprocess inherits the full gateway process environment (`dict(os.environ)`),
-including any ambient provider keys, rather than the minimal set `ExecTool`
-constructs — consistent with the same local-trust model, but worth calling out
-since it differs from the adjacent `ExecTool` paragraph above. Importing remote
-or third-party workflow definitions (and the scripts they reference) is not
-supported in this scope.
+sandboxing at all. Its environment is separate from `_build_env()` but follows the
+same instinct: by default (`env: "clean"`, the node's default) the subprocess gets a
+minimal allowlist (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_ALL`, `LC_CTYPE`,
+`TERM`, `TMPDIR` — only those present) plus the `DURIN_*` run-metadata vars, keeping
+ambient provider keys and other gateway-process secrets out of the subprocess. A node
+can opt into `env: "inherit"` to get the full gateway process environment
+(`dict(os.environ)`) instead — consistent with the same local-trust model, but a
+per-node choice rather than the default. Importing remote or third-party workflow
+definitions (and the scripts they reference) is not supported in this scope.
 
 ### SSRF network guard
 
