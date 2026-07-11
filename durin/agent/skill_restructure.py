@@ -48,7 +48,9 @@ How to work (tools operate under `skills/{name}/`):
 the SKILL.md body to invoke it by path and DELETE the inline code block.
 - Replace a narrated workflow-shaped procedure: if a workflow above already \
 covers it, rewrite the body to run it via run_workflow; if none does, author one \
-with workflow_write, then rewrite the body to delegate to it.
+with workflow_write, then rewrite the body to delegate to it. Inside a workflow, \
+give deterministic steps (run a command, transform text, gate on a check) a \
+`script` node — a subprocess, not an agent turn — per the `workflows` skill.
 - Keep the skill's domain knowledge and its frontmatter (name, description). \
 NEVER leave the body a truncated stub — it must remain a complete, usable skill.
 
@@ -177,8 +179,8 @@ async def _restructure_async(
 def _build_restructure_tools(staging: Path) -> Any:
     """Read/write tools + workflow authoring, ALL scoped to the staging workspace
     so the sub-agent's edits never touch the live tree."""
-    from durin.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
     from durin.agent.tools.file_state import FileStates
+    from durin.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
     from durin.agent.tools.list_workflows import ListWorkflowsTool
     from durin.agent.tools.registry import ToolRegistry
     from durin.agent.tools.workflow_write import WorkflowWriteTool
