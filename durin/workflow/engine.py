@@ -83,6 +83,9 @@ class NodeRunResponse:
     # label from the node's own enum). None when the node does not route or the route call could
     # not produce a valid label — the engine then falls back to parsing the node's text output.
     route_label: str | None = None
+    # The subprocess exit code for a script node (None for agent nodes, which
+    # have no exit code). Recorded in the NodeRun trace and the run manifest.
+    exit_code: int | None = None
 
 
 NodeRunner = Callable[[NodeRunRequest], NodeRunResponse]
