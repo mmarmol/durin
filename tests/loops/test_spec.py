@@ -68,3 +68,31 @@ def test_parse_rejects_malformed(mutate):
     mutate(data)
     with pytest.raises(LoopError):
         parse_loop(data)
+
+
+def _with_trigger(schedule: dict) -> dict:
+    data = _minimal()
+    data["triggers"] = [{"source": "cron", "schedule": schedule}]
+    return data
+
+
+def test_parse_rejects_misnamed_schedule_key():
+    # "timezone" instead of "tz" — CronSchedule(**schedule) would otherwise
+    # raise TypeError at cron-sync time, well after the loop was saved.
+    with pytest.raises(LoopError):
+        parse_loop(_with_trigger({"kind": "cron", "expr": "0 8 * * *", "timezone": "UTC"}))
+
+
+def test_parse_rejects_bad_cron_expr():
+    with pytest.raises(LoopError):
+        parse_loop(_with_trigger({"kind": "cron", "expr": "not a cron expr"}))
+
+
+def test_parse_rejects_every_without_every_ms():
+    with pytest.raises(LoopError):
+        parse_loop(_with_trigger({"kind": "every"}))
+
+
+def test_parse_accepts_valid_cron_with_tz():
+    spec = parse_loop(_with_trigger({"kind": "cron", "expr": "0 8 * * 1-5", "tz": "UTC"}))
+    assert spec.triggers[0].schedule == {"kind": "cron", "expr": "0 8 * * 1-5", "tz": "UTC"}

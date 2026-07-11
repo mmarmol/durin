@@ -12,6 +12,16 @@ from typing import Literal
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _SCHEDULE_KINDS = {"at", "every", "cron"}
+# Keys each schedule kind accepts. `durin.loops.cron_sync.sync_loop_jobs` does
+# `CronSchedule(**trig.schedule)` at sync time (boot + save) — an unknown key
+# raises TypeError there, well after the definition was already saved. Reject
+# it here instead so a bad/misnamed key (e.g. "timezone" instead of "tz")
+# fails at parse time with a clear LoopError.
+_SCHEDULE_ALLOWED_KEYS = {
+    "cron": {"kind", "expr", "tz"},
+    "every": {"kind", "every_ms"},
+    "at": {"kind", "at_ms"},
+}
 
 
 class LoopError(ValueError):
@@ -68,8 +78,45 @@ def _parse_trigger(raw: dict, i: int) -> LoopTrigger:
     if raw.get("source") != "cron":
         raise LoopError(f"trigger[{i}]: only source 'cron' is supported")
     sched = raw.get("schedule") or {}
-    if sched.get("kind") not in _SCHEDULE_KINDS:
+    kind = sched.get("kind")
+    if kind not in _SCHEDULE_KINDS:
         raise LoopError(f"trigger[{i}]: schedule.kind must be one of {sorted(_SCHEDULE_KINDS)}")
+    unknown = set(sched) - _SCHEDULE_ALLOWED_KEYS[kind]
+    if unknown:
+        raise LoopError(
+            f"trigger[{i}]: unknown schedule key(s) {sorted(unknown)} for kind {kind!r}"
+        )
+    if kind == "cron":
+        expr = sched.get("expr")
+        if not isinstance(expr, str) or not expr.strip():
+            raise LoopError(f"trigger[{i}]: cron schedule requires a non-empty 'expr'")
+        # Mirror durin.cron.service._validate_schedule_for_add's add-time check:
+        # reject a bad expr here instead of letting it silently never fire.
+        try:
+            from croniter import croniter
+        except ImportError:
+            croniter = None  # type: ignore[assignment]
+        if croniter is not None:
+            try:
+                croniter(expr)
+            except (ValueError, KeyError) as exc:
+                raise LoopError(f"trigger[{i}]: invalid cron expression {expr!r}: {exc}") from None
+        tz = sched.get("tz")
+        if tz is not None:
+            try:
+                from zoneinfo import ZoneInfo
+
+                ZoneInfo(tz)
+            except Exception:
+                raise LoopError(f"trigger[{i}]: unknown timezone {tz!r}") from None
+    elif kind == "every":
+        every_ms = sched.get("every_ms")
+        if not isinstance(every_ms, int) or isinstance(every_ms, bool) or every_ms < 1:
+            raise LoopError(f"trigger[{i}]: 'every' schedule requires integer every_ms >= 1")
+    elif kind == "at":
+        at_ms = sched.get("at_ms")
+        if not isinstance(at_ms, int) or isinstance(at_ms, bool) or at_ms < 1:
+            raise LoopError(f"trigger[{i}]: 'at' schedule requires integer at_ms >= 1")
     return LoopTrigger(source="cron", schedule=dict(sched))
 
 

@@ -1858,9 +1858,15 @@ def _run_gateway(
         )
 
     # Reconcile loop trigger cron jobs with the stored loop definitions.
+    # Best-effort: parse-time validation (LoopSpec._parse_trigger) makes a bad
+    # schedule unrepresentable going forward, but a legacy/hand-edited loop
+    # file could still fail here — one bad loop must not crash gateway boot.
     from durin.loops.cron_sync import sync_all as _loops_sync_all
 
-    _loops_sync_all(cron, config.workspace_path)
+    try:
+        _loops_sync_all(cron, config.workspace_path)
+    except Exception:
+        logger.exception("loops cron sync (non-fatal) failed")
 
     # Wire the post-compaction + session-close hooks so dream picks up
     # consolidated context while the signal is fresh. Background daemon
