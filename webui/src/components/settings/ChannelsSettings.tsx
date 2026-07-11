@@ -97,16 +97,6 @@ function FieldInput({
       />
     );
   }
-  if (field.name === "persona") {
-    return (
-      <PersonaSelect
-        token={token}
-        value={typeof value === "string" ? value : ""}
-        busy={busy}
-        onChange={(v) => onChange(v)}
-      />
-    );
-  }
   if (field.type === "select" && field.options) {
     return (
       <select
@@ -210,7 +200,11 @@ function FieldGroup({
   onFieldChange: (fieldName: string, value: unknown) => void;
 }) {
   const { t } = useTranslation();
-  const groupFields = channel.fields.filter((f) => f.group === groupKey);
+  // `persona` is rendered as a universal row on every channel card, not as a
+  // schema field, so typed channels don't show the dropdown twice.
+  const groupFields = channel.fields.filter(
+    (f) => f.group === groupKey && f.name !== "persona",
+  );
   if (groupFields.length === 0) return null;
   const labelKey = GROUP_LABEL[groupKey];
   return (
@@ -284,9 +278,10 @@ function ChannelRow({
   const descKey = `settings.channels.desc.${channel.name}`;
   const desc = i18n.exists(descKey) ? t(descKey) : channel.description;
 
-  // Whether this channel has any advanced-group fields.
+  // Whether this channel has any advanced-group fields (persona excluded —
+  // it renders as the universal row above the form).
   const hasAdvancedFields = ADVANCED_GROUPS.some(
-    (g) => channel.fields.some((f) => f.group === g),
+    (g) => channel.fields.some((f) => f.group === g && f.name !== "persona"),
   );
 
   // Schema-driven grouped field form. Rendered directly for generic channels
@@ -449,6 +444,27 @@ function ChannelRow({
           {/* description line for always_on and schema-driven channels */}
           {(channel.always_on || hasFields) && desc ? (
             <p className="mt-1 text-[12px] text-muted-foreground">{desc}</p>
+          ) : null}
+
+          {/* Persona — universal identity knob: sessions born on this channel
+              use this persona instead of the global default. Websocket is
+              excluded: webui sessions pick their persona per-conversation. */}
+          {channel.name !== "websocket" ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="w-[160px] shrink-0 text-[13px] text-foreground/80">
+                {t("settings.channels.field.persona", "Persona")}
+              </span>
+              <PersonaSelect
+                token={token}
+                value={
+                  typeof channelValues.persona === "string"
+                    ? channelValues.persona
+                    : ""
+                }
+                busy={busy}
+                onChange={(v) => onFieldChange("persona", v)}
+              />
+            </div>
           ) : null}
 
           {/* Telegram gets its own guided/manual panel instead of the generic form */}
