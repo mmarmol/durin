@@ -275,3 +275,21 @@ def test_build_specs_seed_gate_fails_and_names_the_missing_component(tmp_path):
     resp = ScriptNodeRunner(str(tmp_path))(req)
     assert resp.route_label == "FAIL" and resp.exit_code == 1
     assert "rate-limiter" in resp.output
+
+
+def test_build_specs_seed_gate_fails_clearly_when_components_json_is_missing(tmp_path):
+    # frame is the only step that writes components.json; if it failed to do so,
+    # the gate must name that real problem instead of dying on an uncaught
+    # FileNotFoundError and looping back to assemble, which cannot fix it.
+    node = parse_workflow({"name": "t", "start": "gate", "nodes": [
+        {"id": "gate", "kind": "script", "command": _build_specs_gate_command(),
+         "on_pass": None, "on_fail": "assemble"},
+        {"id": "assemble", "prompt": "reassemble", "next": None},
+    ]}).nodes["gate"]
+    spec_text = "## Auth-Module\nHandles login.\n\n## Rate-Limiter\nThrottles requests."
+    req = NodeRunRequest(node=node, task="task", upstream_output=spec_text, shared_context=[],
+                         run_id="r1", iteration=1, root_session_key=None, output_dir=str(tmp_path))
+    resp = ScriptNodeRunner(str(tmp_path))(req)
+    assert resp.route_label == "FAIL" and resp.exit_code == 1
+    assert "components.json" in resp.output
+    assert "frame" in resp.output

@@ -19,7 +19,7 @@
       "kind": "work",
       "mode": "build",
       "tools": "default",
-      "prompt": "Break the slice into the genuinely INDEPENDENT components that each deserve their own spec — a module, an endpoint, a data shape, a UI piece. Read the relevant code so each names a real seam. Output ONLY a JSON array of SHORT, distinctive slugs (e.g. \"auth-module\", \"rate-limiter\") — no sentences, no descriptions. Each slug is that component's exact name: it will reappear verbatim later as the component's section heading and is checked for coverage, so keep it short and unambiguous. Do NOT write the spec itself here — that is the very next step; here you only IDENTIFY the components. Keep it to the genuinely separate pieces (usually a handful, 2-5); never split one function into sub-aspects. ALSO write that exact array to a file named components.json in your working directory — its contents must match your text output exactly.",
+      "prompt": "Break the slice into the genuinely INDEPENDENT components that each deserve their own spec — a module, an endpoint, a data shape, a UI piece. Read the relevant code so each names a real seam. Keep it to the genuinely separate pieces (usually a handful, 2-5); never split one function into sub-aspects.\n\nFor each component, pick a SHORT, distinctive slug (e.g. \"auth-module\", \"rate-limiter\"). The slug is that component's exact name: it reappears verbatim as the component's section heading and is checked for coverage, so keep it short and unambiguous.\n\nProduce two JSON arrays over the SAME components, in the SAME order:\n1. Your text output — an array of strings shaped \"slug: one-sentence responsibility\", the slug FIRST, then a colon, then one sentence on what that component must do. This is the whole task the fan-out worker for that component receives, so make the sentence carry real information.\n2. A file named components.json in your working directory — an array of the slugs ALONE, no responsibility text. These are the exact coverage keys checked later; each must match the slug half of the corresponding text-output item exactly.\n\nDo NOT write the spec itself here — that is the very next step; here you only IDENTIFY the components.",
       "next": "specs"
     },
     {
@@ -50,7 +50,7 @@
     {
       "id": "gate",
       "kind": "script",
-      "command": "python3 -c \"import json,sys; comps=json.load(open('components.json')); text=sys.stdin.read().lower(); missing=[c for c in comps if c.lower() not in text]; sys.stderr.write('\\n'.join(missing)); sys.exit(1 if missing else 0)\"",
+      "command": "python3 -c \"import json,sys\ntry:\n    comps=json.load(open('components.json'))\nexcept (OSError, ValueError):\n    sys.stderr.write('components.json missing or unreadable - the frame step failed to write it')\n    sys.exit(1)\ntext=sys.stdin.read().lower()\nmissing=[c for c in comps if c.lower() not in text]\nsys.stderr.write('\\n'.join(missing))\nsys.exit(1 if missing else 0)\"",
       "timeout": 30,
       "on_pass": null,
       "on_fail": "assemble"
