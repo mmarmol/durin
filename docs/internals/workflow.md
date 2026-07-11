@@ -775,3 +775,7 @@ End-to-end for a single `run_workflow` call:
 - **Security.** Definitions are local files the user authored, so running their
   commands and tools is equivalent to the user running them directly; importing remote
   or third-party definitions is not supported in this scope (see [security.md](security.md)).
+- **Consumed by loops.** A workflow can also serve as a **loop**'s body: a loop
+  fires a named workflow on a trigger, reads its terminal `WorkflowResult`, and
+  interprets it against a verifiable goal (script/assertion checks) rather than
+  just delivering the output — see [loops.md](loops.md).

@@ -89,6 +89,7 @@ def test_discover_finds_concrete_tools():
     assert "ExecTool" in class_names
     assert "MessageTool" in class_names
     assert "SpawnTool" in class_names
+    assert "LoopsTool" in class_names
 
 
 def test_discover_excludes_abstract_and_mcp():

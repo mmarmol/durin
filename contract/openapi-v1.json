@@ -2065,6 +2065,259 @@
         "title": "LogsListResult",
         "type": "object"
       },
+      "LoopAnswerCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "run_id",
+          "answer"
+        ],
+        "title": "LoopAnswerCommand",
+        "type": "object"
+      },
+      "LoopAnswerResult": {
+        "properties": {
+          "run": {
+            "additionalProperties": true,
+            "title": "Run",
+            "type": "object"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "LoopAnswerResult",
+        "type": "object"
+      },
+      "LoopDeleteCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LoopDeleteCommand",
+        "type": "object"
+      },
+      "LoopDeleteResult": {
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "title": "LoopDeleteResult",
+        "type": "object"
+      },
+      "LoopFireCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "task": {
+            "default": "",
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LoopFireCommand",
+        "type": "object"
+      },
+      "LoopFireResult": {
+        "properties": {
+          "run": {
+            "additionalProperties": true,
+            "title": "Run",
+            "type": "object"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "LoopFireResult",
+        "type": "object"
+      },
+      "LoopGetQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LoopGetQuery",
+        "type": "object"
+      },
+      "LoopGetResult": {
+        "properties": {
+          "definition": {
+            "additionalProperties": true,
+            "title": "Definition",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "definition"
+        ],
+        "title": "LoopGetResult",
+        "type": "object"
+      },
+      "LoopRunsQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LoopRunsQuery",
+        "type": "object"
+      },
+      "LoopRunsResult": {
+        "properties": {
+          "runs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "LoopRunsResult",
+        "type": "object"
+      },
+      "LoopSaveCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "definition": {
+            "additionalProperties": true,
+            "title": "Definition",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "definition"
+        ],
+        "title": "LoopSaveCommand",
+        "type": "object"
+      },
+      "LoopSaveResult": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LoopSaveResult",
+        "type": "object"
+      },
+      "LoopsListQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 lists every loop, each with its live run counts.",
+        "properties": {},
+        "title": "LoopsListQuery",
+        "type": "object"
+      },
+      "LoopsListResult": {
+        "properties": {
+          "loops": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Loops",
+            "type": "array"
+          }
+        },
+        "required": [
+          "loops"
+        ],
+        "title": "LoopsListResult",
+        "type": "object"
+      },
+      "LoopsRunsQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "LoopsRunsQuery",
+        "type": "object"
+      },
+      "LoopsRunsResult": {
+        "properties": {
+          "runs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "LoopsRunsResult",
+        "type": "object"
+      },
       "MCPOAuthConfig": {
         "description": "OAuth settings for a remote MCP server.\n\nPresence of an ``oauth`` value (``True`` or this object) marks the server\nas OAuth-requiring. The SDK does dynamic client registration automatically;\n``client_id`` / ``client_secret`` are an optional static-registration\noverride. ``scope`` is an optional requested-scope hint.",
         "properties": {
@@ -8083,6 +8336,234 @@
         },
         "summary": "Read JSONL log segments (gateway or telemetry) with pagination",
         "x-required-scope": "system:read"
+      }
+    },
+    "/api/v1/loops": {
+      "get": {
+        "operationId": "loops_list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopsListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopsListResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List all loop definitions, with live run counts.",
+        "x-required-scope": "loops:read"
+      }
+    },
+    "/api/v1/loops/runs": {
+      "get": {
+        "operationId": "loops_runs_feed",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopsRunsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopsRunsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Global activity feed across every loop, newest-first.",
+        "x-required-scope": "loops:read"
+      }
+    },
+    "/api/v1/loops/{name}": {
+      "delete": {
+        "operationId": "loops_delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopDeleteCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopDeleteResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Delete a loop definition.",
+        "x-required-scope": "loops:write"
+      },
+      "get": {
+        "operationId": "loops_get",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopGetQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopGetResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Load one loop's full definition.",
+        "x-required-scope": "loops:read"
+      },
+      "put": {
+        "operationId": "loops_save",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopSaveCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopSaveResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Create or update a loop definition.",
+        "x-required-scope": "loops:write"
+      }
+    },
+    "/api/v1/loops/{name}/fire": {
+      "post": {
+        "operationId": "loops_fire",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopFireCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopFireResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Manually fire a loop.",
+        "x-required-scope": "loops:write"
+      }
+    },
+    "/api/v1/loops/{name}/runs": {
+      "get": {
+        "operationId": "loops_runs_list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopRunsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopRunsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List one loop's persisted runs, newest-first.",
+        "x-required-scope": "loops:read"
+      }
+    },
+    "/api/v1/loops/{name}/runs/{run_id}/answer": {
+      "post": {
+        "operationId": "loops_answer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopAnswerCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopAnswerResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Answer a loop run that is waiting on an operator.",
+        "x-required-scope": "loops:write"
       }
     },
     "/api/v1/mcp/registry/describe": {

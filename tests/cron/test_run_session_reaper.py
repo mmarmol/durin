@@ -47,6 +47,19 @@ def test_malformed_run_suffix_is_ignored() -> None:
     assert select_expired_run_sessions(sessions, retention_hours=48, now_ms=now_ms) == []
 
 
+def test_loop_judge_run_sessions_are_reaped_like_cron_run_sessions() -> None:
+    now_ms = 100_000_000_000
+    hour_ms = 3_600_000
+    sessions = [
+        # Old judge session — should be reaped like a cron run session.
+        {"key": f"loop:judge:run:{now_ms - 50 * hour_ms}"},
+        # Recent judge session — within retention, kept.
+        {"key": f"loop:judge:run:{now_ms - 1 * hour_ms}"},
+    ]
+    expired = select_expired_run_sessions(sessions, retention_hours=48, now_ms=now_ms)
+    assert expired == [f"loop:judge:run:{now_ms - 50 * hour_ms}"]
+
+
 def test_boundary_at_retention_edge_is_kept() -> None:
     now_ms = 100_000_000_000
     retention_ms = 48 * 3_600_000

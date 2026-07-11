@@ -974,6 +974,13 @@ class WorkflowConfig(Base):
     script_output_max_chars: int = Field(default=16000, ge=1000, description="Cap on a script node's captured stdout (the edge text); excess is truncated with a notice")
 
 
+class LoopsConfig(Base):
+    """Loops subsystem configuration."""
+
+    keep_runs: int = Field(default=20, ge=1, description="Finalized loop-run manifests kept per loop (needs_operator runs are never pruned).")
+    check_timeout_s: int = Field(default=60, ge=1, le=3600, description="Timeout in seconds for a single script goal check.")
+
+
 class GatewayConfig(Base):
     """Gateway/server configuration."""
 
@@ -1246,6 +1253,7 @@ class Config(BaseSettings):
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Memory subsystem: vector retrieval, dream passes, file watcher, health checks")
     cron: CronConfig = Field(default_factory=CronConfig, description="Cron scheduler: run history and per-run session retention")
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig, description="Workflow engine: node-visit caps and run-folder retention")
+    loops: LoopsConfig = Field(default_factory=LoopsConfig, description="Loops subsystem settings.")
     skills: SkillsConfig = Field(default_factory=SkillsConfig, description="Skill subsystem governance: import security, install policy, discovery registries")
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig, description="API credentials and per-model parameter overrides for every LLM provider")
     catalog_refresh: CatalogRefreshConfig = Field(
