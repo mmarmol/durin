@@ -45,3 +45,21 @@ async def test_script_timeout_counts_as_failure(tmp_path):
     spec = _spec([{"kind": "script", "required": True, "command": "sleep 5"}])
     v = await verify_goal(spec, "out", judge=_judge_yes, work_dir=str(tmp_path), timeout_s=1)
     assert v.reached is False and "timeout" in v.results[0]["detail"]
+
+
+async def test_checks_sufficient_skips_the_judge_entirely(tmp_path):
+    spec = parse_loop({
+        "name": "l", "workflow": "w",
+        "goal": {
+            "intent": "goal met", "checks_sufficient": True,
+            "checks": [{"kind": "script", "required": True, "command": "true"}],
+        },
+    })
+
+    async def judge(intent, assertions, evidence):
+        raise AssertionError("judge must not be called when checks_sufficient")
+
+    v = await verify_goal(spec, "out", judge=judge, work_dir=str(tmp_path), timeout_s=10)
+    assert v.reached is True
+    assert v.intent_met is None
+    assert v.results[0]["passed"] is True

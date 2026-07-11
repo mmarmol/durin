@@ -33,6 +33,7 @@ interface FormState {
   workflow: string;
   intent: string;
   checks: CheckRow[];
+  checksSufficient: boolean;
   triggers: TriggerRow[];
   concurrency: "single" | "parallel";
   stuckAfter: string;
@@ -48,6 +49,7 @@ const EMPTY_FORM: FormState = {
   workflow: "",
   intent: "",
   checks: [],
+  checksSufficient: false,
   triggers: [],
   concurrency: "single",
   stuckAfter: "3",
@@ -66,6 +68,7 @@ function defToForm(def: LoopDef): FormState {
       command: c.command ?? "",
       text: c.text ?? "",
     })),
+    checksSufficient: def.goal.checks_sufficient ?? false,
     // The select only offers "cron" and "every". A one-shot "at" trigger
     // (not creatable here) falls back to "cron" so the row still renders
     // instead of crashing.
@@ -99,7 +102,11 @@ function formToDef(form: FormState, enabled: boolean): LoopDef {
     name: form.name.trim(),
     enabled,
     workflow: form.workflow,
-    goal: { intent: form.intent, checks },
+    goal: {
+      intent: form.intent,
+      checks,
+      ...(form.checksSufficient ? { checks_sufficient: true } : {}),
+    },
     triggers,
     concurrency: form.concurrency,
     stuck_after: Math.max(1, Number(form.stuckAfter) || 1),
@@ -392,6 +399,21 @@ export function LoopForm({
                 </Button>
               </div>
             ))}
+          </div>
+        </div>
+        <div className="flex items-start gap-2">
+          <input
+            id="loop-checks-sufficient"
+            type="checkbox"
+            checked={form.checksSufficient}
+            onChange={(e) => set("checksSufficient", e.target.checked)}
+            className="mt-0.5 h-3.5 w-3.5 rounded border-border accent-primary"
+          />
+          <div>
+            <label htmlFor="loop-checks-sufficient" className="text-[12px] font-medium text-foreground/80">
+              {t("loops.form.checksSufficient")}
+            </label>
+            <p className="text-[11px] text-muted-foreground">{t("loops.form.checksSufficientHint")}</p>
           </div>
         </div>
       </div>

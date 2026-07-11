@@ -1374,6 +1374,8 @@
       "checkRequired": "Required",
       "checkCommand": "Command",
       "checkText": "Assertion text",
+      "checksSufficient": "Checks are sufficient",
+      "checksSufficientHint": "When every required check passes, the goal counts as reached without asking the model. Script checks only.",
       "workflow": "Workflow",
       "workflowPlaceholder": "Select a workflow…",
       "stuckAfter": "Stuck after",

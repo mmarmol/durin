@@ -164,6 +164,16 @@ The per-check results (`kind`, `required`, the command/text reference,
 the webui and the `loops status` tool action can show exactly which check
 failed.
 
+**`goal.checks_sufficient`** opts a loop out of the judge call entirely: when
+`True`, `verify_goal` returns as soon as the script checks run, `reached` is
+just `required_ok`, and the manifest's `intent_met` is `null` (never graded,
+not "graded and true"). Parsing enforces the precondition rather than leaving
+it to `verify_goal` to degrade gracefully: `checks_sufficient: true` requires
+every check to be a `script` (an `assertion` always needs the judge, so the
+two are mutually exclusive) and at least one `required` check (otherwise
+there is no hard evidence to call the goal reached without asking the
+model).
+
 ### 4d. Cron integration
 
 A loop's only V1 trigger source is `cron` (`LoopTrigger.source`); channel and

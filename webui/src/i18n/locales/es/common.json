@@ -1196,6 +1196,8 @@
       "checkRequired": "Obligatoria",
       "checkCommand": "Comando",
       "checkText": "Texto de la aserción",
+      "checksSufficient": "Los checks son suficientes",
+      "checksSufficientHint": "Cuando todos los checks requeridos pasan, el goal cuenta como logrado sin consultar al modelo. Solo checks de script.",
       "workflow": "Workflow",
       "workflowPlaceholder": "Seleccioná un workflow…",
       "stuckAfter": "Estancado tras",

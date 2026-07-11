@@ -100,6 +100,23 @@ describe("LoopForm", () => {
     expect(onDone).toHaveBeenCalled();
   });
 
+  it("checking checks-are-sufficient emits goal.checks_sufficient=true", async () => {
+    render(<LoopForm token="tok" editLoop={null} onDone={vi.fn()} onCancel={vi.fn()} />);
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "digest" } });
+    fireEvent.change(screen.getByLabelText(/workflow/i), { target: { value: "digest-wf" } });
+    fireEvent.change(screen.getByLabelText(/^intent/i), { target: { value: "send the digest" } });
+    fireEvent.click(screen.getByLabelText(/checks are sufficient/i));
+
+    fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
+
+    await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveLoop).mock.calls[0];
+    expect(def.goal.checks_sufficient).toBe(true);
+  });
+
   it("save as paused button is type=button (not submit) and submits enabled:false", async () => {
     render(<LoopForm token="tok" editLoop={null} onDone={vi.fn()} onCancel={vi.fn()} />);
 

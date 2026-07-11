@@ -45,6 +45,12 @@ async def verify_goal(spec: LoopSpec, evidence: str, *, judge: AssertJudge,
         if c.required and not passed:
             required_ok = False
 
+    if spec.checks_sufficient:
+        # Validated at parse time: checks_sufficient=True means every check is
+        # a script, so the required-check results above are the whole verdict
+        # — no judge call, no intent_met (the intent is never graded here).
+        return GoalVerdict(reached=required_ok, results=results, intent_met=None)
+
     assertion_texts = [c.text for c in spec.checks if c.kind == "assertion"]
     verdict = await judge(spec.goal_intent, assertion_texts, evidence)
     intent_met = bool(verdict.get("intent_met"))

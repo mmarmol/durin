@@ -97,3 +97,43 @@ def test_parse_rejects_every_without_every_ms():
 def test_parse_accepts_valid_cron_with_tz():
     spec = parse_loop(_with_trigger({"kind": "cron", "expr": "0 8 * * 1-5", "tz": "UTC"}))
     assert spec.triggers[0].schedule == {"kind": "cron", "expr": "0 8 * * 1-5", "tz": "UTC"}
+
+
+def test_checks_sufficient_defaults_false():
+    assert parse_loop(_minimal()).checks_sufficient is False
+
+
+def test_checks_sufficient_valid_script_only():
+    data = _minimal()
+    data["goal"]["checks_sufficient"] = True
+    data["goal"]["checks"] = [{"kind": "script", "required": True, "command": "true"}]
+    spec = parse_loop(data)
+    assert spec.checks_sufficient is True
+
+
+def test_checks_sufficient_rejects_assertion_check():
+    data = _minimal()
+    data["goal"]["checks_sufficient"] = True
+    data["goal"]["checks"] = [
+        {"kind": "script", "required": True, "command": "true"},
+        {"kind": "assertion", "required": False, "text": "looks good"},
+    ]
+    with pytest.raises(LoopError):
+        parse_loop(data)
+
+
+def test_checks_sufficient_rejects_no_required_check():
+    data = _minimal()
+    data["goal"]["checks_sufficient"] = True
+    data["goal"]["checks"] = [{"kind": "script", "required": False, "command": "true"}]
+    with pytest.raises(LoopError):
+        parse_loop(data)
+
+
+def test_checks_sufficient_roundtrip():
+    data = _minimal()
+    data["goal"]["checks_sufficient"] = True
+    data["goal"]["checks"] = [{"kind": "script", "required": True, "command": "true"}]
+    spec = parse_loop(data)
+    assert parse_loop(loop_to_dict(spec)) == spec
+    assert loop_to_dict(spec)["goal"]["checks_sufficient"] is True

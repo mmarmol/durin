@@ -30,6 +30,13 @@ you what to do.
   grades assertions also independently judges the overall intent, so a run
   can pass every check and still not count as done if the judge isn't
   convinced the actual goal was met.
+
+  If your goal is fully mechanical — every check is a script and at least
+  one is required — you can turn on **Checks are sufficient** to skip the
+  judge altogether: the goal counts as reached the moment the required
+  checks pass, with no LLM call and no extra latency. It's off by default,
+  and it's unavailable once you add an assertion check (an assertion always
+  needs the judge to grade it).
 - **Triggers** — what fires the loop. Today that's a schedule (a cron
   expression, or a repeating interval) or a manual/chat request; see
   **V1 boundaries** below for what's not there yet.

@@ -52,6 +52,7 @@ class LoopSpec:
     workflow: str
     goal_intent: str
     checks: tuple[GoalCheck, ...] = ()
+    checks_sufficient: bool = False
     triggers: tuple[LoopTrigger, ...] = ()
     enabled: bool = True
     concurrency: Literal["single", "parallel"] = "single"
@@ -134,6 +135,16 @@ def parse_loop(data: dict) -> LoopSpec:
     if not isinstance(intent, str) or not intent.strip():
         raise LoopError("goal.intent is required")
     checks = tuple(_parse_check(c, i) for i, c in enumerate(goal.get("checks") or []))
+    checks_sufficient = bool(goal.get("checks_sufficient", False))
+    if checks_sufficient:
+        # Exists to make script-only loops zero-LLM: an assertion always needs
+        # the judge, so checks_sufficient=True is incompatible with one. At
+        # least one required check must exist, or there is no hard evidence
+        # to declare the goal reached without asking the model.
+        if any(c.kind == "assertion" for c in checks):
+            raise LoopError("goal.checks_sufficient requires all checks to be scripts, not assertions")
+        if not any(c.required for c in checks):
+            raise LoopError("goal.checks_sufficient requires at least one required check")
     triggers = tuple(_parse_trigger(t, i) for i, t in enumerate(data.get("triggers") or []))
     concurrency = data.get("concurrency", "single")
     if concurrency not in ("single", "parallel"):
@@ -148,6 +159,7 @@ def parse_loop(data: dict) -> LoopSpec:
         workflow=workflow.strip(),
         goal_intent=intent.strip(),
         checks=checks,
+        checks_sufficient=checks_sufficient,
         triggers=triggers,
         enabled=bool(data.get("enabled", True)),
         concurrency=concurrency,
@@ -168,6 +180,7 @@ def loop_to_dict(spec: LoopSpec) -> dict:
                 {k: v for k, v in {"kind": c.kind, "required": c.required, "command": c.command, "text": c.text}.items() if v is not None}
                 for c in spec.checks
             ],
+            "checks_sufficient": spec.checks_sufficient,
         },
         "triggers": [{"source": t.source, "schedule": t.schedule} for t in spec.triggers],
         "concurrency": spec.concurrency,

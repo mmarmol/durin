@@ -753,7 +753,7 @@ export interface LoopDef {
   name: string;
   enabled: boolean;
   workflow: string;
-  goal: { intent: string; checks: LoopCheck[] };
+  goal: { intent: string; checks: LoopCheck[]; checks_sufficient?: boolean };
   triggers: LoopTrigger[];
   concurrency: "single" | "parallel";
   stuck_after: number;
