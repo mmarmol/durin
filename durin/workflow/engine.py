@@ -31,13 +31,13 @@ from loguru import logger
 from durin.workflow import run_log, workspace_fork
 from durin.workflow.artifacts import artifact_dir, prune_runs
 from durin.workflow.result import NodeRun, WorkflowResult
-from durin.workflow.spec import NEEDS_INPUT_TARGET, ParallelNode, SubworkflowNode, WorkNode, Workflow, node_label
+from durin.workflow.spec import NEEDS_INPUT_TARGET, ParallelNode, ScriptNode, SubworkflowNode, WorkNode, Workflow, node_label
 from durin.workflow.verdict import parse_label, parse_verdict, strip_label_line, strip_verdict_line
 
 
 @dataclass
 class NodeRunRequest:
-    node: WorkNode
+    node: WorkNode | ScriptNode
     task: str
     upstream_output: str | None
     shared_context: list[dict]
@@ -156,6 +156,7 @@ class WorkflowEngine:
         self,
         node_runner: NodeRunner,
         *,
+        script_runner: NodeRunner | None = None,
         run_id_factory: Callable[[], str] | None = None,
         subworkflow_runner: Callable[..., str] | None = None,  # (name, task, root_session_key, work_dir=None, parent_run_id=None) -> str
         workspace: str | None = None,
@@ -166,6 +167,7 @@ class WorkflowEngine:
         prune_keep: int = 20,
     ) -> None:
         self._node_runner = node_runner
+        self._script_runner = script_runner
         self._run_id_factory = run_id_factory or (lambda: uuid.uuid4().hex[:12])
         self._subworkflow_runner = subworkflow_runner
         # The real workspace (writing-parallel forks/applies here) and a runner that
@@ -275,8 +277,7 @@ class WorkflowEngine:
         self._finalize_manifest(workflow, result, effective_root, started_at, parent_run_id)
         return result
 
-    @staticmethod
-    def _preflight_inputs(workflow, input_files, run_id, *, resuming: bool):
+    def _preflight_inputs(self, workflow, input_files, run_id, *, resuming: bool):
         """Validate the run's inputs before any node (or manifest) exists. Returns a
         terminal WorkflowResult on a problem, else None. Deterministic and LLM-free:
         a missing/colliding input file is the caller's error (aborted, naming it); a
@@ -302,6 +303,17 @@ class WorkflowEngine:
                 status="needs_input", runs=[], run_id=run_id,
                 final_output=("This workflow expects one or more input files"
                               f"{hint}. Please provide them (input_files) and run it again."))
+        # Missing referenced script files are the author's error: abort before any
+        # node runs or any manifest exists, naming the node and file.
+        if self._workspace is not None:
+            scripts_dir = Path(self._workspace) / "workflows" / "scripts"
+            for node in workflow.nodes.values():
+                if isinstance(node, ScriptNode) and node.script:
+                    if not (scripts_dir / node.script).is_file():
+                        return WorkflowResult(
+                            status="aborted", runs=[], run_id=run_id,
+                            final_output=(f"node {node.id!r}: script file not found: "
+                                          f"{node.script} (expected under workflows/scripts/)"))
         return None
 
     def _start_manifest(self, workflow, run_id, root_session_key, started_at, task=None,
@@ -440,17 +452,24 @@ class WorkflowEngine:
                     "status": "running",
                     "route_label": None,
                     "iteration": iteration,
-                    "budget": budget if isinstance(node, WorkNode) else None,
+                    "budget": budget if isinstance(node, (WorkNode, ScriptNode)) else None,
                 })
                 try:
                     self._progress_emit({"run_id": run_id, "nodes": started, "done": False})
                 except Exception:  # noqa: BLE001 - best-effort
                     pass
 
-            if isinstance(node, WorkNode):
+            if isinstance(node, (WorkNode, ScriptNode)):
+                if isinstance(node, ScriptNode) and self._script_runner is None:
+                    raise WorkflowConfigError(
+                        f"node {node.id!r} is a script node but the engine has no script_runner"
+                    )
                 # A node with file tools works in the run's shared working folder; a
-                # no-tools node does no file I/O and gets none.
-                out_dir: str | None = work_dir if node.tools == "default" else None
+                # no-tools node does no file I/O and gets none. A script node always
+                # gets the working folder (its whole point is deterministic file work).
+                out_dir: str | None = (
+                    work_dir if (isinstance(node, ScriptNode) or node.tools == "default") else None
+                )
 
                 fail_would_exhaust = False
                 if node.cases is None and node.on_fail is not None:
@@ -467,8 +486,9 @@ class WorkflowEngine:
                     task=task,
                     upstream_output=upstream_output,
                     # 'own' nodes are isolated from the shared buffer; 'shared'
-                    # nodes read it (a copy, so the runner can't mutate ours).
-                    shared_context=list(shared_context) if node.context == "shared" else [],
+                    # nodes read it (a copy, so the runner can't mutate ours). A
+                    # script node has no context field — it never reads the buffer.
+                    shared_context=list(shared_context) if (isinstance(node, WorkNode) and node.context == "shared") else [],
                     run_id=run_id,
                     iteration=iteration,
                     root_session_key=root_session_key,
@@ -481,7 +501,8 @@ class WorkflowEngine:
                 # case label; for binary routing it is PASS/FAIL from the first non-empty
                 # line; for a linear node there is no verdict.
                 try:
-                    resp = self._node_runner(req)
+                    runner = self._script_runner if isinstance(node, ScriptNode) else self._node_runner
+                    resp = runner(req)
                 except NodeExecutionError as exc:
                     # The node's turn raised: record an attributable node_failed run
                     # (with the persisted session key) so the manifest captures it,
@@ -505,8 +526,9 @@ class WorkflowEngine:
                 runs.append(NodeRun(node_id=node.id, iteration=iteration,
                                     output=output, session_key=resp.session_key,
                                     passed=passed, budget=budget,
-                                    status="persist_failed" if resp.persist_failed else "ok"))
-                if node.context == "shared":
+                                    status="persist_failed" if resp.persist_failed else "ok",
+                                    exit_code=getattr(resp, "exit_code", None)))
+                if isinstance(node, WorkNode) and node.context == "shared":
                     shared_context.extend(resp.messages)
                     if len(shared_context) > _SHARED_CONTEXT_MAX_MESSAGES:
                         # Keep only the most recent messages so a long shared chain
