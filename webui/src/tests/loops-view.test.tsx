@@ -15,6 +15,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     listAllLoopRuns: vi.fn(),
     answerLoopRun: vi.fn(),
     deleteLoop: vi.fn(),
+    fireLoop: vi.fn(),
   };
 });
 
@@ -137,6 +138,35 @@ describe("LoopsView", () => {
     await user.click(screen.getByRole("button", { name: /Definitions/i }));
     await screen.findByText("digest");
     expect(screen.getByText("digest-wf")).toBeInTheDocument();
+  });
+
+  it("clicking Run now calls fireLoop with the loop name and refreshes", async () => {
+    vi.mocked(api.listLoops).mockResolvedValue([LOOP_DEF]);
+    vi.mocked(api.fireLoop).mockResolvedValue({ ...DONE, loop: "digest" });
+    const user = userEvent.setup();
+    render(wrap(<LoopsView />));
+
+    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await screen.findByText("digest");
+    await user.click(screen.getByRole("button", { name: /Run now/i }));
+
+    await waitFor(() => expect(api.fireLoop).toHaveBeenCalledWith("tok", "digest"));
+    await waitFor(() => expect(api.listLoops).toHaveBeenCalledTimes(2));
+  });
+
+  it("a busy rejection from Run now shows the error banner, no crash", async () => {
+    vi.mocked(api.listLoops).mockResolvedValue([LOOP_DEF]);
+    vi.mocked(api.fireLoop).mockRejectedValue(
+      new api.ApiError(422, "HTTP 422", "Loop 'digest' is busy: run-x still running"),
+    );
+    const user = userEvent.setup();
+    render(wrap(<LoopsView />));
+
+    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await screen.findByText("digest");
+    await user.click(screen.getByRole("button", { name: /Run now/i }));
+
+    await screen.findByText(/is busy/i);
   });
 
   it("shows an empty state in both tabs when there is nothing to show", async () => {

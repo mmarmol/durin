@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { Loader2, Pencil, Play, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
-import { ApiError, deleteLoop, listLoops, type LoopDef, type LoopSummary } from "@/lib/api";
+import { ApiError, deleteLoop, fireLoop, listLoops, type LoopDef, type LoopSummary } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +24,7 @@ export function DefinitionsView({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<LoopSummary | null>(null);
+  const [runningLoop, setRunningLoop] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -40,6 +41,22 @@ export function DefinitionsView({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const onRunNow = useCallback(
+    async (name: string) => {
+      setError(null);
+      setRunningLoop(name);
+      try {
+        await fireLoop(token, name);
+        await refresh();
+      } catch (e) {
+        setError(errMsg(e));
+      } finally {
+        setRunningLoop(null);
+      }
+    },
+    [token, refresh],
+  );
 
   const onConfirmDelete = useCallback(async () => {
     if (!pendingDelete) return;
@@ -115,6 +132,20 @@ export function DefinitionsView({
                     <td className="px-2 py-2 text-muted-foreground">{def.needs_operator}</td>
                     <td className="px-2 py-2">
                       <div className="flex items-center justify-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1 px-2"
+                          disabled={!def.enabled || runningLoop === def.name}
+                          onClick={() => onRunNow(def.name)}
+                        >
+                          {runningLoop === def.name ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                          ) : (
+                            <Play className="h-3.5 w-3.5" aria-hidden />
+                          )}
+                          {t("loops.definitions.runNow")}
+                        </Button>
                         <Button
                           size="sm"
                           variant="ghost"

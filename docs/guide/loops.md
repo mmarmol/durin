@@ -133,10 +133,10 @@ first); past run history is unaffected.
   should react to an inbound event on a channel — a new email, a message in
   a specific chat — isn't triggerable that way yet; for now, schedule it or
   fire it yourself.
-- **Firing on demand is a chat/API action, not (yet) a dashboard button.**
-  The Definitions and Activity views don't have a "run now" button in this
-  version — ask the agent to fire a loop, or use the `loops` tool's `fire`
-  action, and watch the result show up in the Activity feed.
+- **Firing on demand works from the dashboard, chat, or the API.** Each
+  loop's row in the Definitions tab has a **Run now** button; you can also
+  ask the agent to fire a loop, or use the `loops` tool's `fire` action.
+  Either way, watch the result show up in the Activity feed.
 - **A single, cron-fired loop skips rather than queues.** If a scheduled
   tick lands while a `concurrency: "single"` loop already has a run in
   flight, that tick is silently skipped (it'll fire again next time). A

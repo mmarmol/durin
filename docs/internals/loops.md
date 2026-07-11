@@ -81,11 +81,10 @@ flowchart TD
     NOGOAL1 --> POST
     NOGOAL2 --> POST
     ERR --> POST
-    NOTIFY1 --> TELEM[loops.run_finished]
 
     POST --> STREAK{status in no_goal/error\nAND consecutive streak\n>= stuck_after?}
     STREAK -->|yes| ESC[rewrite status: escalated\nloops.escalated\nnotify operator: kind=escalation]
-    STREAK -->|no| TELEM
+    STREAK -->|no| TELEM[loops.run_finished]
     ESC --> TELEM
     TELEM --> PRUNE[prune_runs\nkeep_runs, needs_operator never pruned]
 ```
@@ -126,9 +125,13 @@ turns a workflow's terminal status into a loop-run status:
 | workflow execution raised | `error` | Any exception from `WorkflowsService.execute` (provider error, MCP failure, …) short-circuits straight to `error`. |
 | goal verification raised | `error` | A judge/provider failure during `verify_goal` must not strand a `completed` run — it is recorded as `error`, not left `running`. |
 
-After any terminal status is written, `_post_finish` checks for **escalation**
-(§4e) before emitting telemetry and pruning old runs. `needs_operator` runs
-are never escalated — that path only inspects `no_goal`/`error` streaks.
+`_post_finish` runs for the `done`, `no_goal`, and `error` outcomes: it checks
+for **escalation** (§4e), emits `loops.run_finished` telemetry, and prunes old
+runs. The `needs_input` → `needs_operator` branch returns from `_interpret`
+before `_post_finish` runs, so a `needs_operator` run emits no
+`loops.run_finished` event and is not pruned — it only reaches `_post_finish`
+once it is answered, the workflow is resumed, and the result is re-interpreted
+to a `done`/`no_goal`/`error` outcome.
 
 ### 4c. Goal verification
 
@@ -242,8 +245,10 @@ path.
 
 ### 4g. Escalation
 
-`_post_finish` runs after every finalized run. If the just-finalized status
-is `no_goal` or `error`, it counts the loop's **consecutive** `no_goal`/`error`
+`_post_finish` runs after every run finalized to `done`, `no_goal`, or
+`error` — a `needs_operator` run skips it entirely (§4b). If the
+just-finalized status is `no_goal` or `error`, it counts the loop's
+**consecutive** `no_goal`/`error`
 runs (`run_log.consecutive_no_goal`, most-recent-first, stopping at the first
 run that is neither `no_goal` nor `error` nor still active). Once that streak
 reaches the loop's `stuck_after` (default `3`), the just-finalized run's
