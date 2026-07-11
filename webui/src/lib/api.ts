@@ -432,6 +432,10 @@ export type WorkflowRecommendation = {
   current?: string;
   proposed?: string;
   reason: string;
+  // Lifecycle: "open" awaits review; applied/dismissed/reverted are terminal.
+  status?: string;
+  // Dedup bump count: how many dream rounds re-proposed this identical edit.
+  count?: number;
   // Structural suggestions: the dream's out-of-scope idea, escalated for the
   // user instead of silently dropped. No auto-apply — treat it in a session.
   // "script_file" is a full-file script repair proposal (see `script` below);
