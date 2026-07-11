@@ -17,9 +17,9 @@
     {
       "id": "frame",
       "kind": "work",
-      "mode": "read",
+      "mode": "build",
       "tools": "default",
-      "prompt": "Break the slice into the genuinely INDEPENDENT components that each deserve their own spec — a module, an endpoint, a data shape, a UI piece. Read the relevant code so each names a real seam. Output ONLY a JSON array of SHORT strings: each names ONE component and, in a single sentence, its responsibility. Do NOT write the spec itself here — that is the very next step; here you only IDENTIFY the components. Keep it to the genuinely separate pieces (usually a handful, 2-5); never split one function into sub-aspects.",
+      "prompt": "Break the slice into the genuinely INDEPENDENT components that each deserve their own spec — a module, an endpoint, a data shape, a UI piece. Read the relevant code so each names a real seam. Output ONLY a JSON array of SHORT, distinctive slugs (e.g. \"auth-module\", \"rate-limiter\") — no sentences, no descriptions. Each slug is that component's exact name: it will reappear verbatim later as the component's section heading and is checked for coverage, so keep it short and unambiguous. Do NOT write the spec itself here — that is the very next step; here you only IDENTIFY the components. Keep it to the genuinely separate pieces (usually a handful, 2-5); never split one function into sub-aspects. ALSO write that exact array to a file named components.json in your working directory — its contents must match your text output exactly.",
       "next": "specs"
     },
     {
@@ -43,8 +43,17 @@
       "kind": "work",
       "mode": "read",
       "tools": "none",
-      "prompt": "Combine the per-component specs above into ONE coherent handoff spec for the whole slice. Keep each component's contract and acceptance criteria; add a short overview and call out cross-component dependencies. This is what an implementation step will build against, so keep it precise and complete.",
-      "next": null
+      "session": "persistent",
+      "prompt": "Combine the per-component specs above into ONE coherent handoff spec for the whole slice. Give each component its own section headed by that component's exact name, verbatim — an automated check afterward confirms every component is covered by name. Keep each component's contract and acceptance criteria; add a short overview and call out cross-component dependencies. This is what an implementation step will build against, so keep it precise and complete.",
+      "next": "gate"
+    },
+    {
+      "id": "gate",
+      "kind": "script",
+      "command": "python3 -c \"import json,sys; comps=json.load(open('components.json')); text=sys.stdin.read().lower(); missing=[c for c in comps if c.lower() not in text]; sys.stderr.write('\\n'.join(missing)); sys.exit(1 if missing else 0)\"",
+      "timeout": 30,
+      "on_pass": null,
+      "on_fail": "assemble"
     }
   ]
 }

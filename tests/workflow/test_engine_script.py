@@ -1,11 +1,13 @@
+import json
 import os
 import time
+from importlib.resources import files as pkg_files
 
 import pytest
 
 from durin.workflow import run_log
 from durin.workflow.artifacts import artifact_dir
-from durin.workflow.engine import WorkflowConfigError, WorkflowEngine, build_resume_state
+from durin.workflow.engine import NodeRunRequest, WorkflowConfigError, WorkflowEngine, build_resume_state
 from durin.workflow.script_runner import ScriptNodeRunner
 from durin.workflow.spec import parse_workflow
 
@@ -231,3 +233,45 @@ def test_cancel_kills_a_running_script_node(tmp_path):
             break
         time.sleep(0.1)
     assert dead, "script subprocess is still alive after the cancel"
+
+
+def _build_specs_gate_command() -> str:
+    # Load the actual seed file (not a re-typed copy) so this test pins the real
+    # gate command's behavior, not a paraphrase of it.
+    path = pkg_files("durin") / "templates" / "workflows" / "build-specs.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    wf = parse_workflow(data)
+    gate = wf.nodes["gate"]
+    assert gate.kind == "script" and gate.on_fail == "assemble"
+    return gate.command
+
+
+def test_build_specs_seed_gate_passes_when_every_component_is_present(tmp_path):
+    (tmp_path / "components.json").write_text(
+        json.dumps(["auth-module", "rate-limiter"]), encoding="utf-8")
+    node = parse_workflow({"name": "t", "start": "gate", "nodes": [
+        {"id": "gate", "kind": "script", "command": _build_specs_gate_command(),
+         "on_pass": None, "on_fail": "assemble"},
+        {"id": "assemble", "prompt": "reassemble", "next": None},
+    ]}).nodes["gate"]
+    spec_text = "## Auth-Module\nHandles login.\n\n## Rate-Limiter\nThrottles requests."
+    req = NodeRunRequest(node=node, task="task", upstream_output=spec_text, shared_context=[],
+                         run_id="r1", iteration=1, root_session_key=None, output_dir=str(tmp_path))
+    resp = ScriptNodeRunner(str(tmp_path))(req)
+    assert resp.route_label == "PASS" and resp.exit_code == 0
+
+
+def test_build_specs_seed_gate_fails_and_names_the_missing_component(tmp_path):
+    (tmp_path / "components.json").write_text(
+        json.dumps(["auth-module", "rate-limiter"]), encoding="utf-8")
+    node = parse_workflow({"name": "t", "start": "gate", "nodes": [
+        {"id": "gate", "kind": "script", "command": _build_specs_gate_command(),
+         "on_pass": None, "on_fail": "assemble"},
+        {"id": "assemble", "prompt": "reassemble", "next": None},
+    ]}).nodes["gate"]
+    spec_text = "## Auth-Module\nHandles login."   # rate-limiter section missing
+    req = NodeRunRequest(node=node, task="task", upstream_output=spec_text, shared_context=[],
+                         run_id="r1", iteration=1, root_session_key=None, output_dir=str(tmp_path))
+    resp = ScriptNodeRunner(str(tmp_path))(req)
+    assert resp.route_label == "FAIL" and resp.exit_code == 1
+    assert "rate-limiter" in resp.output

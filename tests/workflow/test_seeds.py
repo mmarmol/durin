@@ -103,3 +103,19 @@ def test_looping_seed_producers_use_persistent_sessions():
         wf = _load_seed(name)
         for node_id in nodes:
             assert wf.nodes[node_id].session == "persistent", f"{name}:{node_id}"
+
+
+def test_build_specs_has_exactly_one_deterministic_coverage_gate():
+    # The seed's completeness check is a script node, not an LLM judgment call: an
+    # exit code cannot be sycophantic. Confirm exactly one exists, it routes as a
+    # binary gate back to the assemble node on failure, and its command actually
+    # reads the components list the frame node writes.
+    wf = _load_seed("build-specs")
+    script_nodes = [n for n in wf.nodes.values() if n.kind == "script"]
+    assert len(script_nodes) == 1, "build-specs must contain exactly one script node"
+    gate = script_nodes[0]
+    assert gate.on_pass is None and gate.on_fail == "assemble"
+    assert gate.cases is None, "the coverage gate is binary, not multi-way"
+    assert "components.json" in gate.command
+    assert wf.nodes["assemble"].session == "persistent"
+    assert wf.nodes["assemble"].next == gate.id
