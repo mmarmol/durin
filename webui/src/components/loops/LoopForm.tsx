@@ -128,6 +128,7 @@ export function LoopForm({
   // Which submit button was clicked (Save & enable vs Save as paused) — set
   // by the button's own onClick, which fires before the form's submit event.
   const enabledOnSubmitRef = useRef(true);
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     listWorkflows(token).then(setWorkflows).catch(() => {});
@@ -180,7 +181,7 @@ export function LoopForm({
     "focus:outline-none focus:ring-1 focus:ring-ring";
 
   return (
-    <form onSubmit={(e) => void handleSubmit(e)} className="space-y-5 px-5 py-4">
+    <form ref={formRef} onSubmit={(e) => void handleSubmit(e)} className="space-y-5 px-5 py-4">
       {/* Name */}
       <div>
         <label htmlFor="loop-name" className={labelClass}>
@@ -483,12 +484,13 @@ export function LoopForm({
           {t("loops.form.cancel")}
         </Button>
         <Button
-          type="submit"
+          type="button"
           size="sm"
           variant="outline"
           disabled={saving}
           onClick={() => {
             enabledOnSubmitRef.current = false;
+            formRef.current?.requestSubmit();
           }}
         >
           {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden /> : null}

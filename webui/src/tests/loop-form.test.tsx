@@ -100,16 +100,19 @@ describe("LoopForm", () => {
     expect(onDone).toHaveBeenCalled();
   });
 
-  it("save as paused submits enabled:false", async () => {
+  it("save as paused button is type=button (not submit) and submits enabled:false", async () => {
     render(<LoopForm token="tok" editLoop={null} onDone={vi.fn()} onCancel={vi.fn()} />);
 
     await screen.findByRole("option", { name: "digest-wf" });
+
+    const pausedBtn = screen.getByRole("button", { name: /save as paused/i }) as HTMLButtonElement;
+    expect(pausedBtn.type).toBe("button");
 
     fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "n" } });
     fireEvent.change(screen.getByLabelText(/workflow/i), { target: { value: "digest-wf" } });
     fireEvent.change(screen.getByLabelText(/^intent/i), { target: { value: "do it" } });
 
-    fireEvent.click(screen.getByRole("button", { name: /save as paused/i }));
+    fireEvent.click(pausedBtn);
 
     await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
     const [, def] = vi.mocked(saveLoop).mock.calls[0];
