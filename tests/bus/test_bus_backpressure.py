@@ -47,3 +47,58 @@ def test_default_bus_maxsize_guards_bad_value(monkeypatch):
 
     monkeypatch.delenv("DURIN_BUS_MAXSIZE", raising=False)
     assert _default_bus_maxsize() == 10000
+
+
+def test_raising_interceptor_is_passthrough():
+    """A raising interceptor is skipped; message is enqueued if no other
+    interceptor consumes it."""
+    async def run():
+        bus = MessageBus()
+
+        def raising_interceptor(msg):
+            raise ValueError("test error")
+
+        def normal_interceptor(msg):
+            return False  # does not consume
+
+        bus.add_inbound_interceptor(raising_interceptor)
+        bus.add_inbound_interceptor(normal_interceptor)
+
+        msg = _msg(1)
+        await bus.publish_inbound(msg)
+
+        # Message should be enqueued despite the raising interceptor
+        assert bus.inbound_size == 1
+        got = await bus.consume_inbound()
+        assert got.content == "1"
+
+    asyncio.run(run())
+
+
+def test_raising_interceptor_does_not_block_consumer():
+    """A raising interceptor is skipped, but a consuming interceptor after it
+    still consumes the message. Order is preserved."""
+    async def run():
+        bus = MessageBus()
+        interceptor_calls = []
+
+        def raising_interceptor(msg):
+            interceptor_calls.append("raising")
+            raise ValueError("test error")
+
+        def consuming_interceptor(msg):
+            interceptor_calls.append("consuming")
+            return True  # consume the message
+
+        bus.add_inbound_interceptor(raising_interceptor)
+        bus.add_inbound_interceptor(consuming_interceptor)
+
+        msg = _msg(1)
+        await bus.publish_inbound(msg)
+
+        # Both interceptors should have been called
+        assert interceptor_calls == ["raising", "consuming"]
+        # Message should NOT be enqueued (was consumed)
+        assert bus.inbound_size == 0
+
+    asyncio.run(run())

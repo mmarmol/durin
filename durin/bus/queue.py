@@ -69,10 +69,18 @@ class MessageBus:
             if not allowed:
                 return
         for interceptor in self._inbound_interceptors:
-            res = interceptor(msg)
-            consumed = await res if inspect.isawaitable(res) else res
-            if consumed:
-                return
+            try:
+                res = interceptor(msg)
+                consumed = await res if inspect.isawaitable(res) else res
+                if consumed:
+                    return
+            except Exception as e:
+                logger.warning(
+                    "inbound interceptor raised; skipping (message will be enqueued)",
+                    extra={"interceptor": interceptor.__name__, "error": str(e)},
+                    exc_info=True,
+                )
+                continue
         await self.inbound.put(msg)
 
     async def consume_inbound(self) -> InboundMessage:
