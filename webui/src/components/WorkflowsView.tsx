@@ -21,6 +21,7 @@ import {
   Play,
   Plus,
   Sparkles,
+  Terminal,
   Trash2,
   Workflow as WorkflowIcon,
 } from "lucide-react";
@@ -40,6 +41,7 @@ import {
   getWorkflowRunManifest,
   listWorkflowRuns,
   listWorkflows,
+  listWorkflowScripts,
   listPersonas,
   runWorkflow,
   saveWorkflow,
@@ -68,8 +70,15 @@ function errMsg(e: unknown): string {
 
 const KIND_RING: Record<string, string> = {
   work: "border-emerald-400/70",
+  script: "border-amber-400/70",
   parallel: "border-violet-400/70",
   subflow: "border-sky-400/70",
+};
+
+// Node kinds that render a distinguishing icon in their card header, beyond the
+// KIND_RING border color (e.g. script nodes look like agent nodes otherwise).
+const KIND_ICON: Record<string, typeof Terminal> = {
+  script: Terminal,
 };
 
 // Maps a stored node kind to the i18n key suffix used for display labels.
@@ -77,10 +86,11 @@ const KIND_RING: Record<string, string> = {
 export function kindLabelKey(kind: string): string {
   if (kind === "work") return "work";
   if (kind === "subworkflow") return "subflow";
-  return kind; // "parallel"
+  return kind; // "script" | "parallel"
 }
 
 function nodeSummary(node: WorkflowNodeDef): string {
+  if (node.kind === "script") return String(node.command || node.script || "");
   if (node.kind === "parallel") return node.worker ? "dynamic · ×N" : `${((node.branches as string[]) ?? []).length} branches`;
   if (node.kind === "subworkflow") return String(node.workflow ?? "");
   return `${(node.mode as string) ?? "build"} · ${(node.model as string) ?? "default"}`;
@@ -91,6 +101,7 @@ function NodeCard({ data, selected }: NodeProps) {
   const { node, isStart } = data as unknown as FlowNodeData;
   const isDynamicWorker = !!(data as Record<string, unknown>).dynamicWorker;
   const labelKey = kindLabelKey(node.kind);
+  const KindIcon = KIND_ICON[labelKey];
   return (
     <div
       className={cn(
@@ -102,6 +113,7 @@ function NodeCard({ data, selected }: NodeProps) {
     >
       <Handle type="target" position={Position.Left} />
       <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+        {KindIcon && <KindIcon className="h-2.5 w-2.5" aria-hidden />}
         <span>{t("workflows.kind." + labelKey)}{isStart ? " · " + t("workflows.start") : ""}</span>
         {isDynamicWorker && (
           <span className="rounded bg-violet-100 px-1 py-0.5 text-[9px] font-medium text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">
@@ -148,6 +160,7 @@ function IOCard({ data, selected }: NodeProps) {
 
 const nodeTypes = {
   work: NodeCard,
+  script: NodeCard,
   parallel: NodeCard,
   subworkflow: NodeCard,
   input_obj: IOCard,
@@ -303,6 +316,236 @@ function CasesEditor({
   );
 }
 
+// Routing controls shared by "work" and "script" nodes: the routes toggle, the
+// routing-shape select (binary vs multi-way), the on_pass/on_fail selects, the
+// cases editor, and the `next` field fallback when routing is off. `routingExtras`
+// merges extra fields when routing is switched on — work nodes default the mode to
+// "explore"; script nodes pass nothing, since mode does not apply to them.
+function RoutingFields({
+  node,
+  nodes,
+  patch,
+  t,
+  routingExtras,
+}: {
+  node: WorkflowNodeDef;
+  nodes: WorkflowNodeDef[];
+  patch: (p: Partial<WorkflowNodeDef>) => void;
+  t: (k: string) => string;
+  routingExtras?: Partial<WorkflowNodeDef>;
+}) {
+  const others = nodes.map((n) => n.id).filter((id) => id !== node.id);
+
+  // Determine the active routing shape: "binary" (on_pass/on_fail), "multiway" (cases), or "none" (next).
+  // Detect by KEY PRESENCE (!== undefined), not value: a routing branch may legitimately be
+  // null (= ends at the workflow output), and a freshly-enabled binary node has both edges
+  // null — so a `!= null` test would mis-read it as "none" and the routing toggle would
+  // un-check itself the moment it is checked.
+  const routingShape: "binary" | "multiway" | "none" =
+    node.on_pass !== undefined || node.on_fail !== undefined
+      ? "binary"
+      : node.cases !== undefined
+        ? "multiway"
+        : "none";
+  const routes = routingShape !== "none";
+
+  function switchRoutingShape(shape: "none" | "binary" | "multiway") {
+    // Always clear all three shapes first, then apply the selected one.
+    const clear: Partial<WorkflowNodeDef> = { on_pass: undefined, on_fail: undefined, cases: undefined, next: undefined };
+    if (shape === "none") {
+      patch({ ...clear, next: null });
+    } else if (shape === "binary") {
+      patch({ ...clear, on_pass: null, on_fail: null, ...routingExtras });
+    } else {
+      // multiway: start with one empty case row
+      patch({ ...clear, cases: { "case1": null }, ...routingExtras });
+    }
+  }
+
+  const routingToggleId = `routing-toggle-${node.id}`;
+
+  return (
+    <>
+      {/* Routing toggle — use explicit id/htmlFor to avoid any label nesting issue,
+          and a div wrapper so no outer label can capture the click. */}
+      <div className="flex items-center gap-2">
+        <input
+          id={routingToggleId}
+          type="checkbox"
+          className="h-4 w-4 cursor-pointer accent-primary"
+          checked={routes}
+          onChange={(e) => switchRoutingShape(e.target.checked ? "binary" : "none")}
+        />
+        <label
+          htmlFor={routingToggleId}
+          className="cursor-pointer select-none text-xs text-muted-foreground"
+        >
+          {t("workflows.routes")}
+        </label>
+      </div>
+
+      {routes && (
+        <Field label={t("workflows.routingShape")}>
+          <select
+            className={selectCls}
+            value={routingShape}
+            onChange={(e) => switchRoutingShape(e.target.value as "binary" | "multiway")}
+          >
+            <option value="binary">{t("workflows.routingShapeBinary")}</option>
+            <option value="multiway">{t("workflows.routingShapeMultiway")}</option>
+          </select>
+        </Field>
+      )}
+
+      {routingShape === "binary" && (
+        <>
+          <Field label={t("workflows.onPass")}>
+            <TargetSelect
+              value={node.on_pass as string | null}
+              options={others}
+              onChange={(v) => patch({ on_pass: v })}
+            />
+          </Field>
+          <Field label={t("workflows.onFail")}>
+            <TargetSelect
+              value={node.on_fail as string | null}
+              options={others}
+              onChange={(v) => patch({ on_fail: v })}
+            />
+          </Field>
+        </>
+      )}
+
+      {routingShape === "multiway" && (
+        <CasesEditor
+          cases={(node.cases as Record<string, string | null>) ?? {}}
+          options={others}
+          onChange={(cases) => patch({ cases })}
+          t={t}
+        />
+      )}
+
+      {routingShape === "none" && (
+        <Field label={t("workflows.next")}>
+          <TargetSelect
+            value={node.next as string}
+            options={others}
+            onChange={(v) => patch({ next: v })}
+          />
+        </Field>
+      )}
+    </>
+  );
+}
+
+// Config fields for a "script" node: source (inline command vs. a file under
+// workflows/scripts/ — exactly one applies, mirroring the backend's contract),
+// an optional timeout, the shared routing controls, and the per-node visit budget.
+// Agent-only fields (model/persona/context/session/prompt/mode/tools/skills/mcps/
+// max_turns) are deliberately never rendered here — the backend parser rejects them
+// on a script node.
+function ScriptFields({
+  node,
+  allNodes,
+  token,
+  onChange,
+  t,
+  workflowMaxVisits,
+}: {
+  node: WorkflowNodeDef;
+  allNodes: WorkflowNodeDef[];
+  token: string;
+  onChange: (patch: Partial<WorkflowNodeDef>) => void;
+  t: (k: string, opts?: Record<string, unknown>) => string;
+  workflowMaxVisits?: number;
+}) {
+  const [scriptFiles, setScriptFiles] = useState<string[]>([]);
+  useEffect(() => {
+    listWorkflowScripts(token).then(setScriptFiles).catch(() => setScriptFiles([]));
+  }, [token]);
+
+  // Detect by key presence, not truthiness: an empty `script: ""` (file mode, no file
+  // picked yet) must still show the file picker, not fall back to the inline command.
+  const isFileMode = node.script !== undefined;
+
+  return (
+    <>
+      <Field label={t("workflows.scriptSource")}>
+        <select
+          className={selectCls}
+          value={isFileMode ? "file" : "inline"}
+          onChange={(e) => {
+            if (e.target.value === "file") onChange({ command: undefined, script: "" });
+            else onChange({ script: undefined, command: "" });
+          }}
+        >
+          <option value="inline">{t("workflows.scriptSourceInline")}</option>
+          <option value="file">{t("workflows.scriptSourceFile")}</option>
+        </select>
+      </Field>
+
+      {isFileMode ? (
+        <Field label={t("workflows.scriptFile")}>
+          <select
+            className={selectCls}
+            value={String(node.script ?? "")}
+            onChange={(e) => onChange({ script: e.target.value })}
+          >
+            <option value="">{t("workflows.scriptFileNone")}</option>
+            {scriptFiles.map((f) => (
+              <option key={f} value={f}>{f}</option>
+            ))}
+          </select>
+        </Field>
+      ) : (
+        <Field label={t("workflows.command")}>
+          <Textarea
+            className="min-h-[6rem] resize-y font-mono text-sm"
+            value={String(node.command ?? "")}
+            placeholder={t("workflows.commandPlaceholder")}
+            onChange={(e) => onChange({ command: e.target.value })}
+          />
+        </Field>
+      )}
+
+      <Field label={t("workflows.timeout")}>
+        <Input
+          type="number"
+          min={1}
+          value={(node.timeout as number | undefined) ?? ""}
+          placeholder={t("workflows.timeoutHint")}
+          onChange={(e) => {
+            const n = parseInt(e.target.value, 10);
+            onChange({ timeout: e.target.value === "" || !Number.isFinite(n) ? undefined : Math.max(1, n) });
+          }}
+          className="h-8"
+        />
+      </Field>
+
+      <RoutingFields node={node} nodes={allNodes} patch={onChange} t={t} />
+
+      <Field label={t("workflows.maxVisits")}>
+        <Input
+          type="number"
+          min={1}
+          value={(node.max_visits as number | undefined) ?? ""}
+          placeholder={t("workflows.maxVisitsHint")}
+          onChange={(e) => {
+            const n = parseInt(e.target.value, 10);
+            onChange({ max_visits: e.target.value === "" || !Number.isFinite(n) ? undefined : Math.max(1, n) });
+          }}
+          className="h-8"
+        />
+      </Field>
+      <span className="text-[11px] text-muted-foreground">
+        {t("workflows.effectivePassLimit", {
+          limit: (node.max_visits as number | undefined) ?? workflowMaxVisits ?? 3,
+        })}
+      </span>
+    </>
+  );
+}
+
 // The id of the parallel node (if any) that references `nodeId` as a static branch
 // or as its dynamic worker — used to warn that a persistent session on `nodeId` is
 // invalid there (each parallel unit needs its own fresh session).
@@ -369,19 +612,6 @@ function NodeConfigPanel({
     return () => { alive = false; };
   }, [node.kind, allWorkflowNames, token]);
 
-  // Determine the active routing shape: "binary" (on_pass/on_fail), "multiway" (cases), or "none" (next).
-  // Detect by KEY PRESENCE (!== undefined), not value: a routing branch may legitimately be
-  // null (= ends at the workflow output), and a freshly-enabled binary node has both edges
-  // null — so a `!= null` test would mis-read it as "none" and the routing toggle would
-  // un-check itself the moment it is checked.
-  const routingShape: "binary" | "multiway" | "none" =
-    node.on_pass !== undefined || node.on_fail !== undefined
-      ? "binary"
-      : node.cases !== undefined
-        ? "multiway"
-        : "none";
-  const routes = routingShape !== "none";
-
   // Determine the current "runs as" picker value.
   // Persona takes precedence; if a model string is set, show model entry; else default.
   const currentPersona = node.persona as string | undefined;
@@ -406,21 +636,6 @@ function NodeConfigPanel({
       onChange({ persona: name, model: undefined });
     }
   }
-
-  function switchRoutingShape(shape: "none" | "binary" | "multiway") {
-    // Always clear all three shapes first, then apply the selected one.
-    const clear: Partial<WorkflowNodeDef> = { on_pass: undefined, on_fail: undefined, cases: undefined, next: undefined };
-    if (shape === "none") {
-      onChange({ ...clear, next: null });
-    } else if (shape === "binary") {
-      onChange({ ...clear, on_pass: null, on_fail: null, mode: "explore" });
-    } else {
-      // multiway: start with one empty case row
-      onChange({ ...clear, cases: { "case1": null }, mode: "explore" });
-    }
-  }
-
-  const routingToggleId = `routing-toggle-${node.id}`;
 
   return (
     <div className="flex flex-col gap-3">
@@ -541,74 +756,7 @@ function NodeConfigPanel({
                 />
               )}
 
-          {/* Routing toggle — use explicit id/htmlFor to avoid any label nesting issue,
-              and a div wrapper so no outer label can capture the click. */}
-          <div className="flex items-center gap-2">
-            <input
-              id={routingToggleId}
-              type="checkbox"
-              className="h-4 w-4 cursor-pointer accent-primary"
-              checked={routes}
-              onChange={(e) => switchRoutingShape(e.target.checked ? "binary" : "none")}
-            />
-            <label
-              htmlFor={routingToggleId}
-              className="cursor-pointer select-none text-xs text-muted-foreground"
-            >
-              {t("workflows.routes")}
-            </label>
-          </div>
-
-          {routes && (
-            <Field label={t("workflows.routingShape")}>
-              <select
-                className={selectCls}
-                value={routingShape}
-                onChange={(e) => switchRoutingShape(e.target.value as "binary" | "multiway")}
-              >
-                <option value="binary">{t("workflows.routingShapeBinary")}</option>
-                <option value="multiway">{t("workflows.routingShapeMultiway")}</option>
-              </select>
-            </Field>
-          )}
-
-          {routingShape === "binary" && (
-            <>
-              <Field label={t("workflows.onPass")}>
-                <TargetSelect
-                  value={node.on_pass as string | null}
-                  options={others}
-                  onChange={(v) => onChange({ on_pass: v })}
-                />
-              </Field>
-              <Field label={t("workflows.onFail")}>
-                <TargetSelect
-                  value={node.on_fail as string | null}
-                  options={others}
-                  onChange={(v) => onChange({ on_fail: v })}
-                />
-              </Field>
-            </>
-          )}
-
-          {routingShape === "multiway" && (
-            <CasesEditor
-              cases={(node.cases as Record<string, string | null>) ?? {}}
-              options={others}
-              onChange={(cases) => onChange({ cases })}
-              t={t}
-            />
-          )}
-
-          {routingShape === "none" && (
-            <Field label={t("workflows.next")}>
-              <TargetSelect
-                value={node.next as string}
-                options={others}
-                onChange={(v) => onChange({ next: v })}
-              />
-            </Field>
-          )}
+          <RoutingFields node={node} nodes={allNodes} patch={onChange} t={t} routingExtras={{ mode: "explore" }} />
 
           <Field label={t("workflows.maxVisits")}>
             <Input
@@ -629,6 +777,10 @@ function NodeConfigPanel({
             })}
           </span>
         </>
+      )}
+
+      {node.kind === "script" && (
+        <ScriptFields node={node} allNodes={allNodes} token={token} onChange={onChange} t={t} workflowMaxVisits={workflowMaxVisits} />
       )}
 
       {node.kind === "parallel" && (() => {
@@ -974,6 +1126,13 @@ export function WorkflowsView() {
   const addSubflowNode = useCallback(() => {
     const id = `subflow-${++_idSeq}`;
     const node: WorkflowNodeDef = { id, kind: "subworkflow", workflow: "", next: null };
+    mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
+    setSelectedNodeId(id);
+  }, [mutate]);
+
+  const addScriptNode = useCallback(() => {
+    const id = `script-${++_idSeq}`;
+    const node: WorkflowNodeDef = { id, kind: "script", command: "" };
     mutate((d) => ({ ...d, nodes: [...d.nodes, node] }));
     setSelectedNodeId(id);
   }, [mutate]);
@@ -1492,6 +1651,10 @@ export function WorkflowsView() {
                   <span className="h-4 w-px bg-border" />
                   <Button size="sm" variant="ghost" className="h-7 gap-1 px-2" onClick={addSubflowNode}>
                     <Plus className="h-3.5 w-3.5" /> {t("workflows.addSubflow")}
+                  </Button>
+                  <span className="h-4 w-px bg-border" />
+                  <Button size="sm" variant="ghost" className="h-7 gap-1 px-2" onClick={addScriptNode}>
+                    <Plus className="h-3.5 w-3.5" /> {t("workflows.addScript")}
                   </Button>
                   {!def.input && (
                     <>
