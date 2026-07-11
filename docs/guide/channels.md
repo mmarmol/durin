@@ -67,8 +67,11 @@ IDs, Slack user IDs, email addresses, etc.). Set `["*"]` to allow anyone.
 Channels can also carry their own identity: a `persona` key on any channel
 section makes sessions born there use that persona (and the model it pins)
 instead of the global default — e.g. a work persona on Slack and a personal
-one on Telegram. Precedence: cron-job override > persona picked in the
-conversation > per-chat mapping > channel default > global default.
+one on Telegram. The dashboard surfaces this as a Persona dropdown on every
+channel card in Settings → Channels (websocket excluded: web sessions pick
+their persona per-conversation in the chat composer). Precedence: cron-job
+override > persona picked in the conversation > per-chat mapping > channel
+default > global default.
 
 When `allow_from` is omitted or a sender is not on the list, durin enters
 **pairing mode**: the unknown sender receives a time-limited code (valid for

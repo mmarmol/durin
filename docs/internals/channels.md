@@ -705,6 +705,9 @@ Channel-specific extensions:
 - **Persona per channel** (any adapter): a `persona` key on the channel
   section sets the default persona for sessions born there; a
   `chat_personas` map (chat id → persona name) refines it per conversation.
+  The webui renders a persona selector on every channel card (websocket
+  excluded) independent of the channel's typed field form, so the key is
+  editable even for channels without a `config_model()`.
   Resolution lives in `durin.personas.resolve` with precedence: cron
   override > session pick > chat map > channel default > global default.
 - **Email**: `imap_host`, `imap_port`, `imap_username`, `imap_password`,
