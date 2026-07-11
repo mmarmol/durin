@@ -53,6 +53,18 @@ class TriggerMatcher:
         self._semantic_judge = semantic_judge
         self._queue_ttl_s = queue_ttl_s
         self._enqueue = enqueue
+        # Loop names with a fire task scheduled but not yet resolved. The
+        # busy decision in `_dispatch_match` is synchronous (reads
+        # `run_log.active_runs`) while the actual `runtime.fire()` call
+        # happens later inside the `asyncio.create_task`'d `_fire` — two
+        # messages arriving back-to-back for the same single-concurrency
+        # loop would otherwise both read "not active" and both decide to
+        # fire, so the second loses the race inside the task (LoopBusy) and
+        # gets dropped. This set closes that window: a name is added
+        # synchronously before the task is scheduled and removed in the
+        # task's `finally`. Single-threaded asyncio event loop — no lock
+        # needed, the add/check are never interleaved with the task start.
+        self._pending_fires: set[str] = set()
 
     async def handle_inbound(self, msg: Any) -> bool:
         """Return True when the message was consumed by a loop (claim wake
@@ -131,10 +143,12 @@ class TriggerMatcher:
     def _dispatch_match(self, spec: LoopSpec, sender: str, subject: str, thread: str | None, msg: Any) -> bool:
         origin = {"channel": msg.channel, "sender": sender, "chat_id": msg.chat_id,
                   "thread": thread, "subject": subject}
-        active = run_log.active_runs(self._ws, spec.name)
-        if spec.concurrency == "parallel" or not active:
-            self._emit(spec.name, msg.channel, "fired")
-            asyncio.create_task(self._fire(spec.name, msg.content, origin))
+        busy = spec.concurrency != "parallel" and (
+            spec.name in self._pending_fires or bool(run_log.active_runs(self._ws, spec.name))
+        )
+        if not busy:
+            self._pending_fires.add(spec.name)
+            asyncio.create_task(self._fire(spec.name, msg.channel, msg.content, origin))
             return True
         if self._enqueue is not None:
             self._emit(spec.name, msg.channel, "queued")
@@ -151,20 +165,28 @@ class TriggerMatcher:
         now = time.time()
         return {"content": content, "origin": origin, "received_at": now, "expires_at": now + self._queue_ttl_s}
 
-    async def _fire(self, name: str, content: str, origin: dict) -> None:
+    async def _fire(self, name: str, channel: str, content: str, origin: dict) -> None:
         try:
             await self._runtime.fire(name, source="channel", task=content, origin=origin)
+            self._emit(name, channel, "fired")
         except LoopBusy:
-            # Lost the race between the active_runs check and this fire.
+            # Belt and braces: the pending-fires guard should make this
+            # unreachable for the sequential-message race it was built for,
+            # but keep the fallback for any other path that can still lose
+            # the race against `runtime.fire`'s own active_runs check.
             if self._enqueue is not None:
                 self._enqueue(name, self._queue_event(content, origin))
+                self._emit(name, channel, "queued")
             else:
                 logger.warning(
                     "loops: loop '{}' lost the fire race (now busy) and no queue is "
                     "wired; message dropped", name,
                 )
+                self._emit(name, channel, "passed_busy")
         except Exception:
             logger.exception("loops: fire('{}') failed", name)
+        finally:
+            self._pending_fires.discard(name)
 
     async def _answer(self, loop_name: str, run_id: str, content: str) -> None:
         try:

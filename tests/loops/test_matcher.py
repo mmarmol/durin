@@ -334,6 +334,101 @@ async def test_disabled_loop_is_skipped(tmp_path):
     assert rt.fire_calls == []
 
 
+async def test_sequential_messages_single_loop_second_queues(tmp_path):
+    """Two sequential inbound messages for the same single-concurrency loop,
+    with no active run yet: the pending-fires guard must make the second
+    message see the loop as busy synchronously (before the first message's
+    scheduled `_fire` task has even run), so it queues instead of racing
+    into runtime.fire() and hitting LoopBusy."""
+    _save(tmp_path, concurrency="single",
+          triggers=[{"source": "channel", "channel": "email", "filters": {}}])
+    rt = FakeRuntime()
+    queued = []
+    matcher = TriggerMatcher(tmp_path, runtime=rt, enqueue=lambda loop, event: queued.append((loop, event)))
+
+    consumed1 = await matcher.handle_inbound(_email_msg(content="first"))
+    consumed2 = await matcher.handle_inbound(_email_msg(content="second"))
+    await _drain()
+
+    assert consumed1 is True
+    assert consumed2 is True
+    assert len(rt.fire_calls) == 1
+    assert rt.fire_calls[0][2] == "first"
+    assert len(queued) == 1
+    loop_name, event = queued[0]
+    assert loop_name == "l1"
+    assert event["content"] == "second"
+
+
+async def test_sequential_messages_no_enqueue_passthrough(tmp_path):
+    """Same race, but with no queue wired: the second message must be
+    rejected (passed through as a normal turn) at decision time via the
+    pending-fires guard — never by losing a LoopBusy race inside the
+    scheduled fire task."""
+    _save(tmp_path, concurrency="single",
+          triggers=[{"source": "channel", "channel": "email", "filters": {}}])
+    rt = FakeRuntime()
+    matcher = TriggerMatcher(tmp_path, runtime=rt)  # no enqueue wired
+
+    consumed1 = await matcher.handle_inbound(_email_msg(content="first"))
+    consumed2 = await matcher.handle_inbound(_email_msg(content="second"))
+    await _drain()
+
+    assert consumed1 is True
+    assert consumed2 is False
+    assert len(rt.fire_calls) == 1
+    assert rt.fire_calls[0][2] == "first"
+
+
+async def test_loopbusy_fallback_enqueues(tmp_path):
+    """Belt-and-braces: if the pending-fires guard somehow misses (e.g. the
+    fire task already started/finished its own bookkeeping) and
+    runtime.fire() itself raises LoopBusy, the fallback in `_fire` must
+    still enqueue the event when a queue is wired, with matching
+    telemetry."""
+    _save(tmp_path, concurrency="single",
+          triggers=[{"source": "channel", "channel": "email", "filters": {}}])
+    rt = FakeRuntime(busy={"l1"})
+    queued = []
+    matcher = TriggerMatcher(tmp_path, runtime=rt, enqueue=lambda loop, event: queued.append((loop, event)))
+    origin = {"channel": "email", "sender": "alice@example.com", "chat_id": "alice@example.com",
+              "thread": "digest-1", "subject": "Re: quarterly report"}
+
+    # Call _fire directly to simulate the guard having already been cleared
+    # (empty pending set) while runtime.fire() still raises LoopBusy.
+    await matcher._fire("l1", "email", "hello there", origin)
+
+    assert len(rt.fire_calls) == 1
+    assert len(queued) == 1
+    loop_name, event = queued[0]
+    assert loop_name == "l1"
+    assert event["content"] == "hello there"
+
+
+async def test_fired_telemetry_emitted_after_successful_fire(tmp_path):
+    """`_dispatch_match` must not claim "fired" before runtime.fire()
+    actually returns; the fired event is emitted from inside `_fire` only
+    on success."""
+    _save(tmp_path, triggers=[{"source": "channel", "channel": "email", "filters": {}}])
+    rt = FakeRuntime()
+    events = []
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    orig_emit = matcher._emit
+
+    def spy_emit(loop_name, channel, action):
+        events.append(action)
+        orig_emit(loop_name, channel, action)
+
+    matcher._emit = spy_emit
+
+    consumed = await matcher.handle_inbound(_email_msg())
+    assert events == []  # not emitted yet — fire task hasn't run
+    await _drain()
+
+    assert consumed is True
+    assert events == ["fired"]
+
+
 async def test_first_match_wins_in_alphabetical_order(tmp_path):
     _save(tmp_path, name="a-loop", triggers=[{"source": "channel", "channel": "email", "filters": {}}])
     _save(tmp_path, name="z-loop", triggers=[{"source": "channel", "channel": "email", "filters": {}}])
