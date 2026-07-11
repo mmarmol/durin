@@ -184,6 +184,33 @@ def test_apply_command_recommendation_on_script_node_end_to_end(tmp_path):
     assert wr.open_recommendations(tmp_path, "wf") == []
 
 
+def test_apply_command_recommendation_refuses_on_precheck_failure(tmp_path):
+    """apply_recommendation re-runs the pre-apply gate at apply time (not just
+    when the dream first proposed the edit): a hand-crafted open recommendation
+    whose proposed command has a bash syntax error must be refused, and the
+    recommendation must stay open (nothing gets written)."""
+    import json
+    from durin.workflow.loader import workflows_dir
+
+    d = workflows_dir(tmp_path)
+    d.mkdir(parents=True)
+    (d / "wf.json").write_text(json.dumps({
+        "name": "wf", "start": "a",
+        "nodes": [{"id": "a", "kind": "script", "command": "true", "next": None}],
+    }))
+    rid = wr.log_recommendation(tmp_path, "wf", target_id="a", field="command",
+                                current="true", proposed="if [ 1 -eq 1 ]; then echo hi",
+                                reason="fix it")
+    res = wr.apply_recommendation(tmp_path, "wf", rid)
+    assert res["ok"] is False
+    assert res["error"].startswith("precheck failed")
+
+    data = json.loads((d / "wf.json").read_text())
+    assert next(n for n in data["nodes"] if n["id"] == "a")["command"] == "true"   # untouched
+    recs = wr.open_recommendations(tmp_path, "wf")
+    assert len(recs) == 1 and recs[0]["id"] == rid   # stays open
+
+
 def test_apply_command_recommendation_fails_when_node_also_has_script(tmp_path):
     import json
     from durin.workflow.loader import workflows_dir

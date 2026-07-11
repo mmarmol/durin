@@ -28,6 +28,14 @@ An ``ok`` script proposal also runs the deterministic pre-apply gate
 before it is ever queued; a failing check escalates it as a structural
 suggestion carrying the check's own output, never silently dropped.
 
+``workflows/scripts/`` is a namespace shared by every workflow in the
+workspace, not scoped to one — a ``script_file`` proposal is auto-appliable
+ONLY when every node across ALL parseable workflows that references that file
+lives in the PROPOSING workflow and none of them routes. A reference from a
+DIFFERENT workflow (routing or not — its damage would be invisible to this
+workflow's own pending-validation window) or a routing reference anywhere
+forces ``manual_only``, exactly like the same-workflow gate case above.
+
 A proposal OUTSIDE all three shapes (restructure, rewire, other fields, a
 script edit with no recurring evidence) is never silently dropped either: it
 lands in the recommendations queue as an annotated ``structural`` suggestion
@@ -94,6 +102,25 @@ def _improvable_workflows(workspace):
             continue   # a malformed definition must not break the pass
         out.append((f.stem, wf))
     return out
+
+
+def _script_referenced_outside(workspace, name: str, script: str) -> bool:
+    """True when a node in some workflow OTHER than ``name`` references ``script``.
+
+    ``workflows/scripts/`` is a namespace shared across every workflow in the
+    workspace: two unrelated workflows can point a script node at the same
+    file. A proposal classified against only the PROPOSING workflow's nodes
+    cannot see damage a same-named-file edit would do to a sibling workflow,
+    so any reference from outside forces the proposal to ``manual_only``
+    regardless of whether that sibling reference itself routes. Reuses
+    ``_improvable_workflows`` so a malformed sibling definition is tolerated
+    (skipped), never raises out of this scan."""
+    for other_name, other_wf in _improvable_workflows(workspace):
+        if other_name == name:
+            continue
+        if any(isinstance(n, ScriptNode) and n.script == script for n in other_wf.nodes.values()):
+            return True
+    return False
 
 
 def _emit(event: str, **data) -> None:
@@ -234,10 +261,16 @@ def _maybe_auto_revert(workspace, name: str, records: list[dict]) -> bool:
             _revert_definition_field(workspace, name, pending, new_rate, kind)
         wr.mark_reverted(workspace, name, pending["rec_id"],
                          note=f"diagnostic worsened: {pending.get('baseline_rate', 0.0):.2f} -> {new_rate:.2f}")
+        # Only one of target_id/script applies per kind — omit the other rather
+        # than emitting it as an explicit None (the schema declares both NotRequired).
+        extra = {}
+        if pending.get("target_id") is not None:
+            extra["target_id"] = pending["target_id"]
+        if pending.get("script") is not None:
+            extra["script"] = pending["script"]
         _emit("workflow.improve.reverted", workflow=name, kind=kind,
-              target_id=pending.get("target_id"), script=pending.get("script"),
               rec_id=pending["rec_id"], baseline_rate=pending.get("baseline_rate", 0.0),
-              new_rate=new_rate)
+              new_rate=new_rate, **extra)
     finally:
         _clear_pending(workspace, name)
     return True
@@ -263,10 +296,17 @@ def _failing_script_nodes(wf, diag) -> list[str]:
     )
 
 
-def _classify_proposal(proposal: dict | None, wf, diag, script_exists: Callable[[str], bool]):
+def _classify_proposal(proposal: dict | None, wf, diag, script_exists: Callable[[str], bool],
+                       script_referenced_elsewhere: Callable[[str], bool]):
     """('ok', _Proposal) — in scope and actionable;
     ('structural', why) — outside scope, or script-shaped but missing evidence;
-    ('skip', None) — unparseable / empty / in-scope no-op."""
+    ('skip', None) — unparseable / empty / in-scope no-op.
+
+    ``script_referenced_elsewhere(script)`` must answer whether some OTHER
+    workflow's node references ``script`` (see ``_script_referenced_outside``)
+    — the script_file lane's ``manual_only`` decision needs this, since
+    ``workflows/scripts/`` is shared across the whole workspace, not scoped
+    to ``wf`` alone."""
     if not isinstance(proposal, dict) or not proposal:
         return "skip", None
     field = proposal.get("field")
@@ -304,7 +344,9 @@ def _classify_proposal(proposal: dict | None, wf, diag, script_exists: Callable[
             has_evidence = any(diag.script_failures.get(n.id, 0) >= RECURRENCE_FLOOR for n in referencing)
             if not has_evidence:
                 return "structural", "no recurring script-failure evidence"
-            manual_only = any(n.routes for n in referencing)
+            # manual_only if a reference in THIS workflow routes, or if ANY other
+            # workflow references the same shared file at all (see module docstring).
+            manual_only = any(n.routes for n in referencing) or script_referenced_elsewhere(script)
             return "ok", _Proposal(kind="script_file", script=script, proposed=proposed, manual_only=manual_only)
 
     # Generic scope fallback — same shape as the original prompt-only classifier.
@@ -313,7 +355,8 @@ def _classify_proposal(proposal: dict | None, wf, diag, script_exists: Callable[
     if field == "script_file":
         why = f"script {proposal.get('script')!r} does not exist under workflows/scripts/"
     elif target and target in wf.nodes:
-        why = f"field {field!r} is outside the prompt-only scope"
+        why = (f"field {field!r} is outside the editable scope "
+               f"(prompt; command/script_file with recurring failure evidence)")
     else:
         why = f"target {target!r} is not an editable node of this workflow"
     return "structural", why
@@ -350,6 +393,8 @@ def _script_home_text(node: ScriptNode, workspace) -> str:
         content = script_path.read_text(encoding="utf-8")
     except OSError as exc:
         return f"script file {node.script!r} (could not be read: {exc})"
+    except UnicodeDecodeError:
+        return f"script file {node.script!r} (unreadable content)"
     return f"script file {node.script!r}:\n{_truncate(content)}"
 
 
@@ -443,7 +488,8 @@ def run_workflow_improve_pass(workspace, *, llm_invoke=None, model=None) -> dict
             content = getattr(resp, "content", resp if isinstance(resp, str) else "")
             proposal = _parse_proposal(content) or {}
             verdict, payload = _classify_proposal(
-                proposal, wf, diag, lambda n: _script_file_exists(workspace, n))
+                proposal, wf, diag, lambda n: _script_file_exists(workspace, n),
+                lambda s: _script_referenced_outside(workspace, name, s))
             run_ids = [r.get("run_id") for r in records]
             if verdict == "ok":
                 reason = proposal.get("reason", "")
@@ -474,8 +520,13 @@ def run_workflow_improve_pass(workspace, *, llm_invoke=None, model=None) -> dict
                         r = wr.apply_recommendation(workspace, name, rid, actor="dream")
                         if r.get("ok"):
                             applied += 1
+                            # Use apply_recommendation's own pre-write read, not this
+                            # function's earlier 'current' — a concurrent editor save
+                            # during the multi-second precheck above would otherwise
+                            # leave the revert baseline stale and misapply on revert.
                             _write_pending(workspace, name, rec_id=rid, kind="script_file",
-                                           script=payload.script, previous_content=current,
+                                           script=payload.script,
+                                           previous_content=r.get("previous_content", current),
                                            baseline_rate=_script_file_trouble_rate(wf, diag, payload.script))
                             _emit("workflow.improve.applied", workflow=name, script=payload.script,
                                   rec_id=rid, reason=reason, runs=len(records), kind="script_file")
@@ -509,8 +560,12 @@ def run_workflow_improve_pass(workspace, *, llm_invoke=None, model=None) -> dict
                         r = wr.apply_recommendation(workspace, name, rid, actor="dream")
                         if r.get("ok"):
                             applied += 1
+                            # Same reasoning as the script_file branch above: prefer
+                            # apply_recommendation's own pre-write read over this
+                            # function's earlier 'current' as the revert baseline.
                             _write_pending(workspace, name, rec_id=rid, kind=field, target_id=target,
-                                           previous=current, baseline_rate=_node_trouble_rate(diag, target))
+                                           previous=r.get("previous", current),
+                                           baseline_rate=_node_trouble_rate(diag, target))
                             _emit("workflow.improve.applied", workflow=name,
                                   target_id=target, rec_id=rid, reason=reason,
                                   runs=len(records), kind=field)

@@ -212,14 +212,37 @@ def apply_recommendation(workspace: str | Path, name: str, rec_id: str,
     field through the shared editing engine (graph re-validated, atomic write,
     version commit with ``actor``), and mark it applied. The manual-mode apply path
     and the dream's auto mode both run through here.
+
+    For kinds ``command`` and ``script_file`` the deterministic pre-apply gate
+    (``script_precheck.precheck_script_edit``) is re-run here too, even though
+    a proposal's content never changes after it is recorded: the gate is
+    spec-mandated at apply time as well, to catch environment drift between
+    when the dream proposed the edit and when it (or a user) applies it. The
+    precheck runs a multi-second syntax/security/smoke check via subprocess —
+    never an LLM call — but it is still deliberately run OUTSIDE any lock so
+    it never blocks a concurrent reader/writer of the recommendations file or
+    the workflow definition. A precheck failure leaves the recommendation open
+    and applies nothing.
+
+    On success, the result also carries the pre-write value this call itself
+    observed immediately before overwriting it (``previous`` for a definition
+    field, ``previous_content`` for a script file, ``""`` if the file did not
+    exist) — a caller that later needs a revert baseline (e.g. the dream's
+    pending-validation marker) should use THIS value rather than one it read
+    earlier, since an earlier read can be stale by the time this call's write
+    actually lands (e.g. across this function's own precheck, or the model
+    round-trip preceding it) and a stale baseline would misapply on revert.
+
     Returns ``{"ok": bool, ...}``."""
     import json as _json
 
     from durin.workflow.editing import save_workflow_definition
     from durin.workflow.loader import workflows_dir
-    from durin.workflow.version_store import WorkflowVersionStore
+    from durin.workflow.script_precheck import precheck_script_edit
+    from durin.workflow.version_store import WorkflowVersionStore, version_lock_target
 
     path = _path(workspace, name)
+
     with cross_process_lock(path.with_suffix("")):
         records = _read(path)
         rec = next((r for r in records if r.get("id") == rec_id and r.get("status") == "open"), None)
@@ -228,19 +251,44 @@ def apply_recommendation(workspace: str | Path, name: str, rec_id: str,
         if rec.get("kind") == "structural":
             return {"ok": False, "error": "a structural suggestion has no auto-apply — "
                                           "treat it in a session and edit the workflow deliberately"}
+        kind = rec.get("kind")
+        field = rec.get("field")
+        script_name = rec.get("script")
+
+    if kind == "script_file":
+        name_error = _validate_script_name(script_name)
+        if name_error:
+            return {"ok": False, "error": name_error}
+        ok, detail = precheck_script_edit("script_file", rec["proposed"], filename=script_name)
+        if not ok:
+            return {"ok": False, "error": f"precheck failed: {detail}"}
+    elif field == "command":
+        ok, detail = precheck_script_edit("command", rec["proposed"])
+        if not ok:
+            return {"ok": False, "error": f"precheck failed: {detail}"}
+
+    # Re-acquire the lock to actually write. The record could have been
+    # dismissed/applied/reverted by a concurrent caller while the precheck ran
+    # above (it holds no lock) — re-fetching it here re-checks it is still open.
+    with cross_process_lock(path.with_suffix("")):
+        records = _read(path)
+        rec = next((r for r in records if r.get("id") == rec_id and r.get("status") == "open"), None)
+        if rec is None:
+            return {"ok": False, "error": f"no open recommendation {rec_id!r} for {name!r}"}
         if rec.get("kind") == "script_file":
             script_name = rec["script"]
-            name_error = _validate_script_name(script_name)
-            if name_error:
-                return {"ok": False, "error": name_error}
             script_path = workflows_dir(workspace) / "scripts" / script_name
             # Every writer of files under the versioned workflows dir serializes on
             # the version-lock target (the editor's script PUT, the definition save),
             # so a concurrent editor save and this apply never silently race. The
             # recommendations lock is already held; that nesting order matches the
             # definition-field path (which calls save_workflow_definition inside it).
-            from durin.workflow.version_store import version_lock_target
             with cross_process_lock(version_lock_target(workflows_dir(workspace))):
+                try:
+                    previous_content = (script_path.read_text(encoding="utf-8")
+                                        if script_path.is_file() else "")
+                except OSError:
+                    previous_content = ""
                 try:
                     atomic_write_text(script_path, rec["proposed"])
                 except OSError as exc:
@@ -260,7 +308,8 @@ def apply_recommendation(workspace: str | Path, name: str, rec_id: str,
             if commit:
                 rec["applied_commit"] = commit
             atomic_write_text(path, "\n".join(_json.dumps(r) for r in records) + "\n")
-            return {"ok": True, "script": script_name, "commit": commit}
+            return {"ok": True, "script": script_name, "commit": commit,
+                    "previous_content": previous_content}
         wf_path = workflows_dir(workspace) / f"{name}.json"
         try:
             data = _json.loads(wf_path.read_text(encoding="utf-8"))
@@ -269,6 +318,7 @@ def apply_recommendation(workspace: str | Path, name: str, rec_id: str,
         node = next((n for n in data.get("nodes", []) if n.get("id") == rec["target_id"]), None)
         if node is None:
             return {"ok": False, "error": f"node {rec['target_id']!r} no longer exists in {name!r}"}
+        previous = node.get(rec["field"], "")
         node[rec["field"]] = rec["proposed"]
         saved = save_workflow_definition(
             workspace, name, data,
@@ -282,4 +332,4 @@ def apply_recommendation(workspace: str | Path, name: str, rec_id: str,
         rec["applied_by"] = actor
         atomic_write_text(path, "\n".join(_json.dumps(r) for r in records) + "\n")
     return {"ok": True, "target_id": rec["target_id"], "field": rec["field"],
-            "commit": saved.get("commit")}
+            "commit": saved.get("commit"), "previous": previous}

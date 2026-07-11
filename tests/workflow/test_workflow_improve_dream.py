@@ -158,7 +158,7 @@ def test_prompt_proposal_on_a_script_node_is_structural_not_skipped(tmp_path):
     recs = wr.open_recommendations(tmp_path, "wf")
     assert len(recs) == 1
     assert recs[0]["kind"] == "structural"
-    assert "outside the prompt-only scope" in recs[0]["why_rejected"]
+    assert "outside the editable scope" in recs[0]["why_rejected"]
 
 
 def test_no_op_proposal_is_rejected(tmp_path):
@@ -270,6 +270,22 @@ def _script_file_wf(name="file_wf", improvement_mode="auto", script="check.sh"):
         "name": name, "start": "s", "improvement_mode": improvement_mode,
         "nodes": [{"id": "s", "kind": "script", "script": script, "next": None}],
     }
+
+
+def _routing_script_file_wf(name="gate_file_wf", improvement_mode="manual", script="check.sh"):
+    return {
+        "name": name, "start": "s", "improvement_mode": improvement_mode,
+        "nodes": [{"id": "s", "kind": "script", "script": script, "on_fail": "s"}],
+    }
+
+
+def _gate_fail_run(run_id, node_id="s"):
+    """A routing script gate whose verdict fails — a real gate-fail signal, but
+    the process itself never crashed (status stays 'ok', no node_failed row)."""
+    return WorkflowResult(
+        status="completed", final_output="x", run_id=run_id,
+        runs=[NodeRun(node_id=node_id, iteration=1, output="", passed=False, status="ok")],
+    )
 
 
 def test_linear_script_command_fix_auto_applies_and_reverts_on_worsened(tmp_path):
@@ -389,3 +405,248 @@ def test_precheck_failing_command_proposal_is_structural_with_syntax_detail(tmp_
     assert "syntax" in detail or "unexpected" in detail
     from durin.workflow.loader import load_workflow
     assert load_workflow(tmp_path, "s_wf").nodes["s"].command == "false"        # untouched
+
+
+# -- cross-workflow shared script_file references (FINDING 1) ------------------
+
+def test_script_file_referenced_by_another_workflows_routing_gate_forces_manual_only(tmp_path):
+    """The reviewer's probe: wf_a (auto, linear) and wf_b (routing gate) both point a
+    script node at the SAME shared file under workflows/scripts/. Classifying only
+    wf_a's own nodes finds no routing reference there and would auto-apply — but
+    wf_b's gate on that same file would be silently neutered by the edit. Any
+    cross-workflow reference to the file must force manual_only."""
+    scripts_dir = workflows_dir(tmp_path) / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    original = "#!/bin/bash\nexit 1\n"
+    (scripts_dir / "shared.sh").write_text(original, encoding="utf-8")
+
+    _write_wf(tmp_path, _script_file_wf(name="wf_a", improvement_mode="auto", script="shared.sh"), name="wf_a")
+    _write_wf(tmp_path, _routing_script_file_wf(name="wf_b", script="shared.sh"), name="wf_b")
+
+    run_log.write_run(tmp_path, "wf_a", _script_failed_run("r0"), ts=1.0)
+    run_log.write_run(tmp_path, "wf_a", _script_failed_run("r1"), ts=2.0)
+    run_log.write_run(tmp_path, "wf_a", _script_clean_run("r2"), ts=3.0)
+
+    invoke = _fake_invoke({"field": "script_file", "script": "shared.sh",
+                           "proposed": "#!/bin/bash\necho fixed\n", "reason": "script keeps crashing"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["applied"] == 0 and summary["proposals"] == 1
+
+    recs = wr.open_recommendations(tmp_path, "wf_a")
+    assert len(recs) == 1
+    assert recs[0]["status"] == "open"
+    assert recs[0].get("manual_only") is True
+    assert (scripts_dir / "shared.sh").read_text(encoding="utf-8") == original   # unchanged on disk
+
+
+def test_script_file_referenced_by_another_workflows_linear_node_forces_manual_only(tmp_path):
+    """Even a non-routing reference from a DIFFERENT workflow forces manual_only:
+    that workflow's own pending-validation window cannot see damage done by an
+    edit proposed from a sibling workflow's diagnostic evidence."""
+    scripts_dir = workflows_dir(tmp_path) / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    original = "#!/bin/bash\nexit 1\n"
+    (scripts_dir / "shared.sh").write_text(original, encoding="utf-8")
+
+    _write_wf(tmp_path, _script_file_wf(name="wf_a", improvement_mode="auto", script="shared.sh"), name="wf_a")
+    _write_wf(tmp_path, _script_file_wf(name="wf_c", improvement_mode="manual", script="shared.sh"), name="wf_c")
+
+    run_log.write_run(tmp_path, "wf_a", _script_failed_run("r0"), ts=1.0)
+    run_log.write_run(tmp_path, "wf_a", _script_failed_run("r1"), ts=2.0)
+    run_log.write_run(tmp_path, "wf_a", _script_clean_run("r2"), ts=3.0)
+
+    invoke = _fake_invoke({"field": "script_file", "script": "shared.sh",
+                           "proposed": "#!/bin/bash\necho fixed\n", "reason": "script keeps crashing"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["applied"] == 0 and summary["proposals"] == 1
+
+    recs = wr.open_recommendations(tmp_path, "wf_a")
+    assert recs[0].get("manual_only") is True
+    assert (scripts_dir / "shared.sh").read_text(encoding="utf-8") == original
+
+
+def test_script_file_referenced_only_within_proposing_workflow_auto_applies(tmp_path):
+    """A file referenced only inside the proposing workflow, by a non-routing
+    node, with an unrelated sibling workflow referencing a DIFFERENT file, still
+    auto-applies — the cross-workflow scan must not over-trigger."""
+    scripts_dir = workflows_dir(tmp_path) / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    (scripts_dir / "solo.sh").write_text("#!/bin/bash\nexit 1\n", encoding="utf-8")
+    (scripts_dir / "other.sh").write_text("#!/bin/bash\ntrue\n", encoding="utf-8")
+
+    _write_wf(tmp_path, _script_file_wf(name="wf_a", improvement_mode="auto", script="solo.sh"), name="wf_a")
+    _write_wf(tmp_path, _script_file_wf(name="wf_d", improvement_mode="manual", script="other.sh"), name="wf_d")
+
+    run_log.write_run(tmp_path, "wf_a", _script_failed_run("r0"), ts=1.0)
+    run_log.write_run(tmp_path, "wf_a", _script_failed_run("r1"), ts=2.0)
+    run_log.write_run(tmp_path, "wf_a", _script_clean_run("r2"), ts=3.0)
+
+    invoke = _fake_invoke({"field": "script_file", "script": "solo.sh",
+                           "proposed": "#!/bin/bash\necho fixed\n", "reason": "script keeps crashing"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["applied"] == 1 and summary["proposals"] == 1
+    assert (scripts_dir / "solo.sh").read_text(encoding="utf-8") == "#!/bin/bash\necho fixed\n"
+    assert wr.open_recommendations(tmp_path, "wf_a") == []   # applied -> terminal
+
+
+# -- lock-scoped revert baselines (FINDING 3) -----------------------------------
+
+def test_concurrent_editor_save_during_precheck_becomes_the_revert_baseline(tmp_path, monkeypatch):
+    """The improve pass reads a script's content BEFORE the multi-second precheck
+    runs. If a concurrent editor save lands during that window, the value that
+    actually gets overwritten by the apply is the CONCURRENT one, not the pass's
+    earlier read — the pending-validation baseline must reflect that, or a later
+    auto-revert would clobber the editor's save with stale bytes."""
+    data = _script_file_wf(name="race_wf", improvement_mode="auto", script="race.sh")
+    _write_wf(tmp_path, data, name="race_wf")
+    scripts_dir = workflows_dir(tmp_path) / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    original = "#!/bin/bash\necho original\n"
+    concurrent = "#!/bin/bash\necho concurrent_editor_save\n"
+    (scripts_dir / "race.sh").write_text(original, encoding="utf-8")
+
+    run_log.write_run(tmp_path, "race_wf", _script_failed_run("r0"), ts=1.0)
+    run_log.write_run(tmp_path, "race_wf", _script_failed_run("r1"), ts=2.0)
+    run_log.write_run(tmp_path, "race_wf", _script_clean_run("r2"), ts=3.0)
+
+    import durin.workflow.workflow_improve_dream as dream_mod
+    real_precheck = dream_mod.precheck_script_edit
+
+    def racing_precheck(kind, content, **kw):
+        # Simulate a concurrent editor save landing during this pre-log precheck.
+        (scripts_dir / "race.sh").write_text(concurrent, encoding="utf-8")
+        return real_precheck(kind, content, **kw)
+
+    monkeypatch.setattr(dream_mod, "precheck_script_edit", racing_precheck)
+
+    invoke = _fake_invoke({"field": "script_file", "script": "race.sh",
+                           "proposed": "#!/bin/bash\necho fixed\n", "reason": "script keeps crashing"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["applied"] == 1
+
+    from durin.workflow.workflow_improve_dream import _read_pending
+    pending = _read_pending(tmp_path, "race_wf")
+    assert pending["previous_content"] == concurrent   # NOT 'original' (the pass's early read)
+
+
+# -- minors (FINDING 4) ----------------------------------------------------------
+
+def test_script_home_text_handles_undecodable_content_without_crashing(tmp_path):
+    """A script file with invalid UTF-8 bytes must not crash the improve pass — the
+    prompt block notes it unreadable, and the round still completes normally
+    (the cursor advances so the workflow is not reprocessed forever)."""
+    data = _script_file_wf(name="bin_wf", improvement_mode="manual", script="bin.sh")
+    _write_wf(tmp_path, data, name="bin_wf")
+    scripts_dir = workflows_dir(tmp_path) / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    (scripts_dir / "bin.sh").write_bytes(b"\xff\xfe\x00garbage")   # not valid UTF-8
+
+    run_log.write_run(tmp_path, "bin_wf", _script_failed_run("r0"), ts=1.0)
+    run_log.write_run(tmp_path, "bin_wf", _script_failed_run("r1"), ts=2.0)
+
+    seen_prompts = []
+
+    def invoke(prompt, *, model=None):
+        seen_prompts.append(prompt)
+        return SimpleNamespace(content=json.dumps({"field": "unknown"}))
+
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["workflows"] == 1                       # did not crash
+    assert "(unreadable content)" in seen_prompts[0]
+    again = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert again["workflows"] == 0                          # cursor advanced -> not reprocessed
+
+
+def test_reverted_telemetry_omits_absent_target_id_key_for_prompt_kind(tmp_path, monkeypatch):
+    events = []
+    import durin.agent.tools._telemetry as telemetry_mod
+    monkeypatch.setattr(telemetry_mod, "emit_tool_event",
+                        lambda event, data: events.append((event, data)))
+
+    invoke = _auto_apply(tmp_path)
+    run_log.write_run(tmp_path, "wf", _looping_run("r3"), ts=4.0)
+    run_log.write_run(tmp_path, "wf", _looping_run("r4"), ts=5.0)
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["reverted"] == 1
+
+    reverted = next(d for e, d in events if e == "workflow.improve.reverted")
+    assert "target_id" in reverted
+    assert "script" not in reverted
+
+
+def test_reverted_telemetry_omits_absent_script_key_for_script_file_kind(tmp_path, monkeypatch):
+    events = []
+    import durin.agent.tools._telemetry as telemetry_mod
+    monkeypatch.setattr(telemetry_mod, "emit_tool_event",
+                        lambda event, data: events.append((event, data)))
+
+    data = _script_file_wf(name="tele_wf")
+    _write_wf(tmp_path, data, name="tele_wf")
+    scripts_dir = workflows_dir(tmp_path) / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    (scripts_dir / "check.sh").write_text("#!/bin/bash\nexit 1\n", encoding="utf-8")
+    run_log.write_run(tmp_path, "tele_wf", _script_failed_run("r0"), ts=1.0)
+    run_log.write_run(tmp_path, "tele_wf", _script_failed_run("r1"), ts=2.0)
+    run_log.write_run(tmp_path, "tele_wf", _script_clean_run("r2"), ts=3.0)
+    invoke = _fake_invoke({"field": "script_file", "script": "check.sh",
+                           "proposed": "#!/bin/bash\necho fixed\n", "reason": "crashes"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["applied"] == 1
+
+    run_log.write_run(tmp_path, "tele_wf", _script_failed_run("r3"), ts=4.0)
+    run_log.write_run(tmp_path, "tele_wf", _script_failed_run("r4"), ts=5.0)
+    summary2 = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary2["reverted"] == 1
+
+    reverted = next(d for e, d in events if e == "workflow.improve.reverted")
+    assert "script" in reverted
+    assert "target_id" not in reverted
+
+
+def test_routing_script_gate_with_gate_fails_but_no_script_failures_is_structural(tmp_path):
+    """The anti-Goodhart anchor: a script GATE that fails its verdict often, but
+    never actually crashes (zero node_failed rows), must never be treated as
+    script-edit evidence. Gate-fail counts alone never justify touching the
+    script — only recurring script_failures does."""
+    data = _routing_script_wf(name="anchor_wf", improvement_mode="manual", command="true")
+    _write_wf(tmp_path, data, name="anchor_wf")
+    run_log.write_run(tmp_path, "anchor_wf", _gate_fail_run("r0"), ts=1.0)
+    run_log.write_run(tmp_path, "anchor_wf", _gate_fail_run("r1"), ts=2.0)
+
+    invoke = _fake_invoke({"target_id": "s", "field": "command",
+                           "proposed": "echo fixed", "reason": "gate keeps failing its check"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["structural"] == 1 and summary["proposals"] == 0 and summary["applied"] == 0
+    recs = wr.open_recommendations(tmp_path, "anchor_wf")
+    assert len(recs) == 1
+    assert recs[0]["kind"] == "structural"
+    assert "no recurring script-failure evidence" in recs[0]["why_rejected"]
+    from durin.workflow.loader import load_workflow
+    assert load_workflow(tmp_path, "anchor_wf").nodes["s"].command == "true"   # untouched
+
+
+def test_legacy_pending_without_kind_reverts_as_prompt_edit(tmp_path):
+    """A pending-validation marker written before the script-repair upgrade has no
+    'kind' key at all; _maybe_auto_revert must still treat its absence as the
+    legacy 'prompt' shape and restore the node's definition field."""
+    data = dict(_WF, improvement_mode="auto")
+    data["nodes"] = [dict(n) for n in data["nodes"]]
+    data["nodes"][0]["prompt"] = "do it carefully"   # simulates a prompt edit already applied
+    _write_wf(tmp_path, data)
+
+    from durin.workflow.workflow_improve_dream import _pending_path
+    legacy = {"rec_id": "legacy1", "target_id": "a", "previous": "do it", "baseline_rate": 0.0}
+    p = _pending_path(tmp_path, "wf")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(legacy), encoding="utf-8")
+
+    _seed_runs(tmp_path, n=2)   # looping runs -> worsened vs the legacy baseline of 0.0
+    invoke = _fake_invoke({"target_id": "a", "field": "prompt", "proposed": "x", "reason": "y"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["reverted"] == 1
+
+    from durin.workflow.loader import load_workflow
+    assert load_workflow(tmp_path, "wf").nodes["a"].prompt == "do it"   # restored
+
+    from durin.workflow.workflow_improve_dream import _read_pending
+    assert _read_pending(tmp_path, "wf") is None
