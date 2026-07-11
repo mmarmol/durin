@@ -2,6 +2,39 @@
 from durin.loops import run_log as rl
 
 
+def test_reconcile_running_flips_stale_run_to_error(tmp_path):
+    rl.start_run(tmp_path, "a", "stale", source="cron", task="t")
+    rl.update_run(tmp_path, "a", "stale", started_at=0.0)
+
+    flipped = rl.reconcile_running(tmp_path, now=2000.0, max_age_s=100.0)
+
+    assert flipped == ["stale"]
+    rec = rl.read_run(tmp_path, "a", "stale")
+    assert rec["status"] == "error"
+    assert rec["ask"] is None
+
+
+def test_reconcile_running_leaves_fresh_run_untouched(tmp_path):
+    rl.start_run(tmp_path, "a", "fresh", source="cron", task="t")
+    rl.update_run(tmp_path, "a", "fresh", started_at=1950.0)
+
+    flipped = rl.reconcile_running(tmp_path, now=2000.0, max_age_s=100.0)
+
+    assert flipped == []
+    assert rl.read_run(tmp_path, "a", "fresh")["status"] == "running"
+
+
+def test_reconcile_running_leaves_needs_operator_untouched(tmp_path):
+    rl.start_run(tmp_path, "a", "waiting", source="cron", task="t")
+    rl.update_run(tmp_path, "a", "waiting", started_at=0.0)
+    rl.finalize_run(tmp_path, "a", "waiting", status="needs_operator", ask="approve?")
+
+    flipped = rl.reconcile_running(tmp_path, now=2000.0, max_age_s=100.0)
+
+    assert flipped == []
+    assert rl.read_run(tmp_path, "a", "waiting")["status"] == "needs_operator"
+
+
 def test_start_finalize_read(tmp_path):
     rl.start_run(tmp_path, "certs", "r1", source="cron", task="renew")
     m = rl.read_run(tmp_path, "certs", "r1")

@@ -120,6 +120,41 @@ def consecutive_no_goal(ws, loop: str) -> int:
     return n
 
 
+def reconcile_running(ws, now: float | None = None, max_age_s: float = 6 * 3600) -> list[str]:
+    """Boot sweep: flip any ``running`` manifest older than *max_age_s* to
+    ``error`` (loops vocabulary; ``ask`` cleared) so a gateway restart mid-run
+    does not leave a ``single``-concurrency loop permanently jammed — its next
+    trigger sees a stale ``running`` manifest in ``active_runs`` and refuses
+    to fire forever. Mirrors ``durin.workflow.run_log.reconcile_running``'s age
+    semantics (``started_at`` compared against ``now - max_age_s``). A
+    malformed manifest is skipped, never fatal. Returns the flipped run ids.
+    """
+    root = runs_root(ws)
+    if not root.is_dir():
+        return []
+    if now is None:
+        now = time.time()
+    cutoff = now - max_age_s
+    flipped: list[str] = []
+    for loop_dir in root.iterdir():
+        if not loop_dir.is_dir():
+            continue
+        for p in loop_dir.glob("*.json"):
+            try:
+                rec = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if rec.get("status") == "running" and (rec.get("started_at") or 0.0) < cutoff:
+                rec["status"] = "error"
+                rec["ask"] = None
+                try:
+                    atomic_write_text(p, json.dumps(rec, indent=2))
+                    flipped.append(rec.get("run_id"))
+                except OSError:
+                    continue
+    return flipped
+
+
 def prune_runs(ws, loop: str, keep: int) -> None:
     runs = list_runs(ws, loop, limit=100000)
     keepers = set()

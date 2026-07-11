@@ -55,7 +55,7 @@ async def test_needs_input_becomes_needs_operator_and_notifies(tmp_path):
     rt, _ = _mk_runtime(tmp_path, [_wr("needs_input", out="approve?", needs_input_node="gate")], asks=asks)
     m = await rt.fire("l1", source="cron")
     assert m["status"] == "needs_operator" and m["ask"] == "approve?"
-    assert asks == [("l1", m["run_id"], "ask", "approve?")]
+    assert asks == [("l1", m["run_id"], "ask", f"[l1 · {m['run_id']}] approve?")]
 
 
 async def test_answer_resumes_and_finishes(tmp_path):

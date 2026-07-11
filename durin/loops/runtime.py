@@ -74,7 +74,7 @@ class LoopsRuntime:
         if result.status == "needs_input":
             record = run_log.finalize_run(self._ws, spec.name, run_id, status="needs_operator",
                                           workflow_run_id=wf_run_id, ask=result.final_output or "")
-            await self._say(spec, run_id, "ask", record.get("ask") or "")
+            await self._say(spec, run_id, "ask", f"[{spec.name} · {run_id}] {record.get('ask') or ''}")
             return record
         if result.status == "completed":
             try:

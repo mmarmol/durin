@@ -141,4 +141,16 @@ def build_service_registry(
             _workspace(), now=time.time(), max_age_s=run_log.RECONCILE_AGE_S)
     except Exception:  # noqa: BLE001 - crash reconciliation is best-effort
         pass
+
+    # Same crash recovery for loop runs: a gateway restart mid-run otherwise
+    # leaves a "running" manifest forever, and a concurrency="single" loop
+    # never fires again (its active_runs check sees the stale manifest).
+    try:
+        import time
+
+        from durin.loops import run_log as loops_run_log
+
+        loops_run_log.reconcile_running(_workspace(), now=time.time())
+    except Exception:  # noqa: BLE001 - crash reconciliation is best-effort
+        pass
     return registry
