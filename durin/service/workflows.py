@@ -27,6 +27,7 @@ from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 from durin.workflow import run_log
 from durin.workflow.loader import WorkflowNotFound, load_workflow, workflows_dir
+from durin.workflow.result import WorkflowResult
 from durin.workflow.spec import WorkflowError, parse_workflow
 from durin.workflow.version_store import WorkflowVersionStore, version_lock_target
 
@@ -352,12 +353,47 @@ class WorkflowsService:
     )
     async def run(self, cmd: WorkflowRunCommand, principal: Principal) -> WorkflowRunResult:
         principal.require(Scope.WORKFLOWS_WRITE)
+        result = await self.execute(
+            cmd.name, cmd.task,
+            input_files=cmd.input_files or None,
+            output_format=cmd.output_format or None,
+            resume_run_id=cmd.resume_run_id or None,
+        )
+        return WorkflowRunResult(
+            status=result.status,
+            final_output=result.final_output or "",
+            final_output_node=result.final_output_node or "",
+            run_id=result.run_id,
+            runs=[
+                {"node_id": r.node_id, "iteration": r.iteration, "passed": r.passed,
+                 "session_key": r.session_key, "worker_index": r.worker_index,
+                 "branch_id": r.branch_id, "budget": r.budget,
+                 "status": r.status, "route_label": r.route_label,
+                 "exit_code": getattr(r, "exit_code", None),
+                 "output": (r.output or "")[:2000]}
+                for r in result.runs
+            ],
+            output_dir=result.output_dir or "",
+            exhausted_node=result.exhausted_node or "",
+            needs_input_node=result.needs_input_node or "",
+            output_files=list(result.output_files or []),
+        )
+
+    async def execute(
+        self,
+        name: str,
+        task: str,
+        *,
+        input_files: list[str] | None = None,
+        output_format: str | None = None,
+        resume_run_id: str | None = None,
+    ) -> WorkflowResult:
         if self._app_config is None or self._sessions is None:
             raise UnavailableError("running a workflow is not available on this surface")
         try:
-            workflow = load_workflow(self._workspace, cmd.name)
+            workflow = load_workflow(self._workspace, name)
         except WorkflowNotFound:
-            raise NotFoundError(f"workflow {cmd.name!r} not found")
+            raise NotFoundError(f"workflow {name!r} not found")
 
         import asyncio
 
@@ -369,16 +405,15 @@ class WorkflowsService:
         from durin.workflow.subworkflow import SubworkflowRunner
 
         resume = None
-        task = cmd.task
-        if cmd.resume_run_id:
-            manifest = run_log.read_manifest(self._workspace, cmd.name, cmd.resume_run_id)
+        if resume_run_id:
+            manifest = run_log.read_manifest(self._workspace, name, resume_run_id)
             if manifest is None or manifest.get("status") != "needs_input" or not manifest.get("needs_input_node"):
                 raise ValidationFailedError(
-                    f"run {cmd.resume_run_id!r} of workflow {cmd.name!r} cannot be resumed — "
+                    f"run {resume_run_id!r} of workflow {name!r} cannot be resumed — "
                     "only a needs_input run can."
                 )
-            resume = build_resume_state(manifest, cmd.task)
-            task = manifest.get("task") or cmd.task
+            resume = build_resume_state(manifest, task)
+            task = manifest.get("task") or task
 
         preset = self._app_config.resolve_default_preset()
         provider = make_provider(self._app_config, preset=preset)
@@ -404,30 +439,12 @@ class WorkflowsService:
             max_node_visits=self._app_config.workflow.max_node_visits)
         result = await asyncio.to_thread(
             engine.run, workflow, task,
-            input_files=cmd.input_files or None,
-            output_format=cmd.output_format or None,
+            input_files=input_files,
+            output_format=output_format,
             resume=resume,
         )
         # The engine owns the run manifest (started→updated→finalized); no record write here.
-        return WorkflowRunResult(
-            status=result.status,
-            final_output=result.final_output or "",
-            final_output_node=result.final_output_node or "",
-            run_id=result.run_id,
-            runs=[
-                {"node_id": r.node_id, "iteration": r.iteration, "passed": r.passed,
-                 "session_key": r.session_key, "worker_index": r.worker_index,
-                 "branch_id": r.branch_id, "budget": r.budget,
-                 "status": r.status, "route_label": r.route_label,
-                 "exit_code": getattr(r, "exit_code", None),
-                 "output": (r.output or "")[:2000]}
-                for r in result.runs
-            ],
-            output_dir=result.output_dir or "",
-            exhausted_node=result.exhausted_node or "",
-            needs_input_node=result.needs_input_node or "",
-            output_files=list(result.output_files or []),
-        )
+        return result
 
     @route(
         "GET", "/api/v1/workflows/runs",
