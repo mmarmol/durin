@@ -34,6 +34,12 @@ Do it by EDITING FILES WITH YOUR TOOLS — never by pasting whole files into a r
 Workflows you can delegate to (use list_workflows for detail):
 {workflow_catalog}
 
+If you author a NEW workflow with workflow_write, this is the definition format \
+(note the deterministic `script` node kind — use it for command/check/transform \
+steps instead of an agent node):
+
+{workflow_authoring}
+
 The skill lives under `skills/{name}/`. Its current SKILL.md:
 ---
 {current}
@@ -83,6 +89,7 @@ async def _restructure_async(
     from durin.agent.skills_doctrine import (
         composition_doctrine,
         judge_composition_async,
+        workflow_authoring_reference,
         workflow_catalog_text,
     )
 
@@ -122,6 +129,7 @@ async def _restructure_async(
         prompt = _RESTRUCTURE_PROMPT.format(
             doctrine=composition_doctrine() or "(doctrine unavailable)",
             workflow_catalog=workflow_catalog_text(staging),
+            workflow_authoring=workflow_authoring_reference() or "(authoring reference unavailable — rely on workflow_write's validation errors)",
             name=name, current=current, intent=intent,
         )
         await AgentRunner(provider).run(AgentRunSpec(
