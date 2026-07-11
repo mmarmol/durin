@@ -47,6 +47,7 @@ class LoopSpec:
     concurrency: Literal["single", "parallel"] = "single"
     stuck_after: int = 3
     operator_channel: str | None = None
+    operator_to: str | None = None
 
 
 def _parse_check(raw: dict, i: int) -> GoalCheck:
@@ -94,6 +95,7 @@ def parse_loop(data: dict) -> LoopSpec:
     if not isinstance(stuck_after, int) or stuck_after < 1:
         raise LoopError("stuck_after must be an integer >= 1")
     operator_channel = data.get("operator_channel") or None
+    operator_to = data.get("operator_to") or None
     return LoopSpec(
         name=name,
         workflow=workflow.strip(),
@@ -104,6 +106,7 @@ def parse_loop(data: dict) -> LoopSpec:
         concurrency=concurrency,
         stuck_after=stuck_after,
         operator_channel=operator_channel,
+        operator_to=operator_to,
     )
 
 
@@ -123,4 +126,5 @@ def loop_to_dict(spec: LoopSpec) -> dict:
         "concurrency": spec.concurrency,
         "stuck_after": spec.stuck_after,
         "operator_channel": spec.operator_channel,
+        "operator_to": spec.operator_to,
     }

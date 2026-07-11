@@ -1733,7 +1733,7 @@ def _run_gateway(
             return
         try:
             await _deliver_to_channel(
-                OutboundMessage(channel=spec.operator_channel, chat_id="direct", content=text),
+                OutboundMessage(channel=spec.operator_channel, chat_id=spec.operator_to or "direct", content=text),
             )
         except Exception:
             logger.exception("loop operator notification (non-fatal) failed")

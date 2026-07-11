@@ -21,6 +21,7 @@ def test_parse_minimal_defaults():
     assert spec.concurrency == "single"
     assert spec.stuck_after == 3
     assert spec.operator_channel is None
+    assert spec.operator_to is None
 
 
 def test_parse_full_roundtrip():
@@ -29,6 +30,7 @@ def test_parse_full_roundtrip():
         "concurrency": "parallel",
         "stuck_after": 5,
         "operator_channel": "telegram",
+        "operator_to": "12345",
         "goal": {
             "intent": "ticket answered",
             "checks": [
@@ -42,6 +44,7 @@ def test_parse_full_roundtrip():
     assert spec.checks[0] == GoalCheck(kind="script", required=True, command="true", text=None)
     assert spec.checks[1].kind == "assertion"
     assert spec.triggers[0] == LoopTrigger(source="cron", schedule={"kind": "cron", "expr": "0 8 * * 1-5", "tz": "UTC"})
+    assert spec.operator_to == "12345"
     assert parse_loop(loop_to_dict(spec)) == spec
 
 
