@@ -1385,45 +1385,58 @@ class SkillSuggestionResolvedEvent(TypedDict):
 
 
 class WorkflowImproveRecommendedEvent(TypedDict):
-    """The improve pass queued a prompt edit for a MANUAL-mode workflow."""
+    """The improve pass queued a proposal (prompt / command / script_file) as
+    a recommendation — either a MANUAL-mode workflow, or an AUTO-mode one where
+    ``manual_only`` forced the review (a routing/gate edit is never auto-applied)."""
 
     workflow: str
-    target_id: str
+    kind: str  # "prompt" | "command" | "script_file"
+    target_id: NotRequired[str]   # prompt/command proposals (node id)
+    script: NotRequired[str]      # script_file proposals (filename)
     rec_id: str
     reason: NotRequired[str]
     runs: int  # terminal runs whose diagnostic motivated the proposal
+    manual_only: NotRequired[bool]
 
 
 class WorkflowImproveAppliedEvent(TypedDict):
-    """The improve pass APPLIED a prompt edit to an AUTO-mode workflow.
+    """The improve pass APPLIED a proposal (prompt / command / script_file) to
+    an AUTO-mode workflow.
 
     The edit is versioned (actor=dream) and held pending validation: the
     workflow's next terminal runs decide whether it sticks or auto-reverts.
     """
 
     workflow: str
-    target_id: str
+    kind: str  # "prompt" | "command" | "script_file"
+    target_id: NotRequired[str]   # prompt/command proposals (node id)
+    script: NotRequired[str]      # script_file proposals (filename)
     rec_id: str
     reason: NotRequired[str]
     runs: int
 
 
 class WorkflowImproveRevertedEvent(TypedDict):
-    """An auto-applied edit worsened its node's diagnostic and was reverted.
+    """An auto-applied edit worsened its target's diagnostic and was reverted.
 
-    Without this event an auto-revert is invisible — the definition silently
-    returns to its previous text and only git shows why.
+    Without this event an auto-revert is invisible — the definition or script
+    file silently returns to its previous state and only git shows why.
     """
 
     workflow: str
-    target_id: str
+    kind: str  # "prompt" | "command" | "script_file"
+    target_id: NotRequired[str]   # prompt/command proposals (node id)
+    script: NotRequired[str]      # script_file proposals (filename)
     rec_id: str
     baseline_rate: float
     new_rate: float
 
 
 class WorkflowImproveStructuralEvent(TypedDict):
-    """The model proposed an edit OUTSIDE the prompt-only scope.
+    """The model proposed an edit OUTSIDE the editable scope — a field/target
+    the classifier does not recognize, a script edit with no recurring
+    failure evidence, or an in-scope script edit that failed the deterministic
+    pre-apply gate (syntax / security scan / smoke run).
 
     Never applied in any mode — it lands annotated in the recommendations
     queue for the user to treat deliberately. This event is the visibility
@@ -1434,6 +1447,7 @@ class WorkflowImproveStructuralEvent(TypedDict):
     rec_id: str
     why_rejected: str
     runs: int
+    kind: NotRequired[str | None]  # "prompt" | "command" | "script_file" | None (unrecognized shape)
 
 
 class LoopsFiredEvent(TypedDict):

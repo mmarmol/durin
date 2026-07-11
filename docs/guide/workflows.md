@@ -369,11 +369,16 @@ elsewhere in the app.
 
 Each workflow also has a self-improvement mode (`manual` by default): a
 background pass looks at recurring trouble (a node that keeps looping, a
-gate that keeps failing) and proposes one scoped prompt edit, shown as a
-recommendation you review and apply — from the Workflows pane's
-recommendations banner, or `durin workflow recommendations` /
-`durin workflow apply <name> <id>` on the command line. Applying always
-versions the change, so you can see exactly what changed and why.
+gate that keeps failing, a script node that keeps crashing) and proposes one
+scoped edit — a prompt rewrite, a fix to a script node's command, or a fix to
+a script file, the latter two only when the failure recurs and only after an
+automatic check (syntax, security, a quick trial run) passes — shown as a
+recommendation you review and apply from the Workflows pane's recommendations
+banner, or `durin workflow recommendations` / `durin workflow apply <name>
+<id>` on the command line. A fix to a routing/gate script always waits for
+your review, even in auto mode — the dream never weakens a check on its own.
+Applying always versions the change, so you can see exactly what changed and
+why.
 
 ## See also
 

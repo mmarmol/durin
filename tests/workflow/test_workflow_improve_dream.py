@@ -232,3 +232,160 @@ def test_improved_diagnostic_validates_and_clears_the_marker(tmp_path):
     from durin.workflow.workflow_improve_dream import _read_pending
     assert load_workflow(tmp_path, "wf").nodes["a"].prompt == "do it carefully"  # kept
     assert _read_pending(tmp_path, "wf") is None                                 # validated
+
+
+# -- script repair lane: command / script_file proposals, precheck, revert -----
+
+def _script_failed_run(run_id, node_id="s", error="boom: exit 1"):
+    return WorkflowResult(
+        status="aborted", final_output=None, run_id=run_id, failed_node=node_id,
+        runs=[NodeRun(node_id=node_id, iteration=1, output="", status="node_failed",
+                      error=error, exit_code=1)],
+    )
+
+
+def _script_clean_run(run_id, node_id="s"):
+    return WorkflowResult(
+        status="completed", final_output="ok", run_id=run_id,
+        runs=[NodeRun(node_id=node_id, iteration=1, output="ok", status="ok", exit_code=0)],
+    )
+
+
+def _linear_script_wf(name="s_wf", improvement_mode="auto", command="false"):
+    return {
+        "name": name, "start": "s", "improvement_mode": improvement_mode,
+        "nodes": [{"id": "s", "kind": "script", "command": command, "next": None}],
+    }
+
+
+def _routing_script_wf(name="gate_wf", improvement_mode="auto", command="false"):
+    return {
+        "name": name, "start": "s", "improvement_mode": improvement_mode,
+        "nodes": [{"id": "s", "kind": "script", "command": command, "on_fail": "s"}],
+    }
+
+
+def _script_file_wf(name="file_wf", improvement_mode="auto", script="check.sh"):
+    return {
+        "name": name, "start": "s", "improvement_mode": improvement_mode,
+        "nodes": [{"id": "s", "kind": "script", "script": script, "next": None}],
+    }
+
+
+def test_linear_script_command_fix_auto_applies_and_reverts_on_worsened(tmp_path):
+    data = _linear_script_wf()
+    _write_wf(tmp_path, data, name="s_wf")
+    # baseline: 2 of 3 runs fail -> 0.67 trouble/run (matches the recurrence floor)
+    run_log.write_run(tmp_path, "s_wf", _script_failed_run("r0"), ts=1.0)
+    run_log.write_run(tmp_path, "s_wf", _script_failed_run("r1"), ts=2.0)
+    run_log.write_run(tmp_path, "s_wf", _script_clean_run("r2"), ts=3.0)
+    invoke = _fake_invoke({"target_id": "s", "field": "command",
+                           "proposed": "echo fixed", "reason": "node s keeps crashing"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["applied"] == 1 and summary["proposals"] == 1
+    from durin.workflow.loader import load_workflow
+    assert load_workflow(tmp_path, "s_wf").nodes["s"].command == "echo fixed"   # definition on disk changed
+    recs = wr.open_recommendations(tmp_path, "s_wf")
+    assert recs == []                                                          # applied = terminal
+    from durin.workflow.workflow_improve_dream import _read_pending
+    pending = _read_pending(tmp_path, "s_wf")
+    assert pending and pending["kind"] == "command" and pending["target_id"] == "s"
+    assert pending["previous"] == "false"
+
+    # Post-edit runs: node 's' fails in EVERY run (1.0 > baseline 0.67) -> worse -> revert.
+    run_log.write_run(tmp_path, "s_wf", _script_failed_run("r3"), ts=4.0)
+    run_log.write_run(tmp_path, "s_wf", _script_failed_run("r4"), ts=5.0)
+    summary2 = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary2["reverted"] == 1
+    assert load_workflow(tmp_path, "s_wf").nodes["s"].command == "false"        # restored
+    assert _read_pending(tmp_path, "s_wf") is None
+    from durin.workflow.workflow_recommendations import _path, _read
+    rec = _read(_path(tmp_path, "s_wf"))[0]
+    assert rec["status"] == "reverted"
+
+
+def test_routing_gate_command_proposal_lands_manual_only_not_applied(tmp_path):
+    data = _routing_script_wf()
+    _write_wf(tmp_path, data, name="gate_wf")
+    run_log.write_run(tmp_path, "gate_wf", _script_failed_run("r0"), ts=1.0)
+    run_log.write_run(tmp_path, "gate_wf", _script_failed_run("r1"), ts=2.0)
+    invoke = _fake_invoke({"target_id": "s", "field": "command",
+                           "proposed": "echo fixed", "reason": "gate keeps failing"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["proposals"] == 1 and summary["applied"] == 0
+    recs = wr.open_recommendations(tmp_path, "gate_wf")
+    assert len(recs) == 1
+    assert recs[0]["target_id"] == "s" and recs[0]["field"] == "command"
+    assert recs[0].get("manual_only") is True
+    from durin.workflow.loader import load_workflow
+    assert load_workflow(tmp_path, "gate_wf").nodes["s"].command == "false"     # unchanged
+    from durin.workflow.workflow_improve_dream import _read_pending
+    assert _read_pending(tmp_path, "gate_wf") is None
+
+
+def test_script_file_fix_auto_applies_and_revert_restores_exact_bytes(tmp_path):
+    data = _script_file_wf()
+    _write_wf(tmp_path, data, name="file_wf")
+    scripts_dir = workflows_dir(tmp_path) / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    original = "#!/bin/bash\nexit 1\n"
+    (scripts_dir / "check.sh").write_text(original, encoding="utf-8")
+
+    run_log.write_run(tmp_path, "file_wf", _script_failed_run("r0"), ts=1.0)
+    run_log.write_run(tmp_path, "file_wf", _script_failed_run("r1"), ts=2.0)
+    run_log.write_run(tmp_path, "file_wf", _script_clean_run("r2"), ts=3.0)
+    invoke = _fake_invoke({"field": "script_file", "script": "check.sh",
+                           "proposed": "#!/bin/bash\necho fixed\n", "reason": "script keeps crashing"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["applied"] == 1 and summary["proposals"] == 1
+    assert (scripts_dir / "check.sh").read_text(encoding="utf-8") == "#!/bin/bash\necho fixed\n"
+    from durin.workflow.workflow_improve_dream import _read_pending
+    pending = _read_pending(tmp_path, "file_wf")
+    assert pending and pending["kind"] == "script_file" and pending["script"] == "check.sh"
+    assert pending["previous_content"] == original
+
+    run_log.write_run(tmp_path, "file_wf", _script_failed_run("r3"), ts=4.0)
+    run_log.write_run(tmp_path, "file_wf", _script_failed_run("r4"), ts=5.0)
+    summary2 = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary2["reverted"] == 1
+    assert (scripts_dir / "check.sh").read_text(encoding="utf-8") == original   # exact bytes restored
+    assert _read_pending(tmp_path, "file_wf") is None
+
+
+def test_script_node_with_no_failure_evidence_is_structural(tmp_path):
+    data = {
+        "name": "wf", "start": "a", "improvement_mode": "manual",
+        "nodes": [
+            {"id": "a", "kind": "work", "prompt": "do it", "next": "g"},
+            {"id": "g", "kind": "work", "prompt": "is it good?", "on_pass": None, "on_fail": "a"},
+            {"id": "s", "kind": "script", "command": "true", "next": None},
+        ],
+    }
+    _write_wf(tmp_path, data)
+    _seed_runs(tmp_path, n=2)   # 'a'/'g' loop -> candidates non-empty; 's' has no evidence at all
+    invoke = _fake_invoke({"target_id": "s", "field": "command",
+                           "proposed": "echo fixed", "reason": "let's fix it anyway"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["structural"] == 1 and summary["proposals"] == 0 and summary["applied"] == 0
+    recs = wr.open_recommendations(tmp_path, "wf")
+    assert len(recs) == 1
+    assert recs[0]["kind"] == "structural"
+    assert "no recurring script-failure evidence" in recs[0]["why_rejected"]
+
+
+def test_precheck_failing_command_proposal_is_structural_with_syntax_detail(tmp_path):
+    data = _linear_script_wf()
+    _write_wf(tmp_path, data, name="s_wf")
+    run_log.write_run(tmp_path, "s_wf", _script_failed_run("r0"), ts=1.0)
+    run_log.write_run(tmp_path, "s_wf", _script_failed_run("r1"), ts=2.0)
+    invoke = _fake_invoke({"target_id": "s", "field": "command",
+                           "proposed": "if [ 1 -eq 1 ]; then echo hi", "reason": "fix it"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["structural"] == 1 and summary["proposals"] == 0 and summary["applied"] == 0
+    recs = wr.open_recommendations(tmp_path, "s_wf")
+    assert len(recs) == 1
+    assert recs[0]["kind"] == "structural"
+    detail = recs[0]["why_rejected"].lower()
+    assert "syntax" in detail or "unexpected" in detail
+    from durin.workflow.loader import load_workflow
+    assert load_workflow(tmp_path, "s_wf").nodes["s"].command == "false"        # untouched
