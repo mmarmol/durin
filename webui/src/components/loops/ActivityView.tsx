@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ApiError, answerLoopRun, listAllLoopRuns, type LoopRun } from "@/lib/api";
+import { ApiError, answerLoopRun, fireLoop, listAllLoopRuns, type LoopRun } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
@@ -61,7 +61,7 @@ function AnswerRow({
       </div>
       {run.ask && <div className="whitespace-pre-wrap break-words text-xs">{run.ask}</div>}
       {sent ? (
-        <div className="text-xs text-muted-foreground">{t("loops.answerSent")}</div>
+        <div className="text-xs text-muted-foreground">{t("loops.activity.answerSent")}</div>
       ) : (
         <div className="flex gap-1.5">
           <Input
@@ -87,7 +87,15 @@ function AnswerRow({
   );
 }
 
-function RunRow({ run }: { run: LoopRun }) {
+function RunRow({
+  run,
+  onRetry,
+  retrying,
+}: {
+  run: LoopRun;
+  onRetry: (run: LoopRun) => void;
+  retrying: boolean;
+}) {
   const { t } = useTranslation();
   const label = run.task || run.run_id.slice(0, 8);
   return (
@@ -103,6 +111,18 @@ function RunRow({ run }: { run: LoopRun }) {
         {!!run.started_at && (
           <span className="text-[10px] text-muted-foreground">{relativeTime(run.started_at * 1000)}</span>
         )}
+        {run.status === "escalated" && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="ml-auto h-6 gap-1 px-2 text-[11px]"
+            disabled={retrying}
+            onClick={() => onRetry(run)}
+          >
+            {retrying ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+            {t("loops.activity.retry")}
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -115,6 +135,7 @@ export function ActivityView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [answeringId, setAnsweringId] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -161,6 +182,22 @@ export function ActivityView() {
     [token, refresh],
   );
 
+  const onRetry = useCallback(
+    async (run: LoopRun) => {
+      setRetryingId(run.run_id);
+      setError(null);
+      try {
+        await fireLoop(token, run.loop);
+        await refresh();
+      } catch (e) {
+        setError(errMsg(e));
+      } finally {
+        setRetryingId(null);
+      }
+    },
+    [token, refresh],
+  );
+
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
       <div className="flex min-h-0 flex-1 overflow-y-auto">
@@ -186,7 +223,12 @@ export function ActivityView() {
                   answering={answeringId === run.run_id}
                 />
               ) : (
-                <RunRow key={run.run_id} run={run} />
+                <RunRow
+                  key={run.run_id}
+                  run={run}
+                  onRetry={onRetry}
+                  retrying={retryingId === run.run_id}
+                />
               ),
             )
           )}

@@ -1132,7 +1132,6 @@
   },
   "loops": {
     "title": "Loops",
-    "answerSent": "Respuesta enviada",
     "tab": {
       "activity": "Actividad",
       "definitions": "Definiciones"
@@ -1142,6 +1141,8 @@
       "empty": "Todavía no hay ejecuciones de loops.",
       "answerPlaceholder": "Escribe tu respuesta…",
       "send": "Enviar",
+      "answerSent": "Respuesta enviada",
+      "retry": "Reintentar",
       "status": {
         "running": "en curso",
         "needs_operator": "te necesita",
@@ -1210,6 +1211,7 @@
       "operatorChannelPlaceholder": "ej. telegram",
       "operatorTo": "Destinatario",
       "operatorToPlaceholder": "Id de chat / usuario",
+      "operatorToHint": "Para canales de chat (Telegram, Slack…) los escalados necesitan un id de destinatario; sin él solo llegan a la bandeja de Activity.",
       "savePaused": "Guardar pausado",
       "saveEnabled": "Guardar y habilitar",
       "cancel": "Cancelar"

@@ -1310,7 +1310,6 @@
   },
   "loops": {
     "title": "Loops",
-    "answerSent": "Answer sent",
     "tab": {
       "activity": "Activity",
       "definitions": "Definitions"
@@ -1320,6 +1319,8 @@
       "empty": "No loop runs yet.",
       "answerPlaceholder": "Type your answer…",
       "send": "Send",
+      "answerSent": "Answer sent",
+      "retry": "Retry",
       "status": {
         "running": "running",
         "needs_operator": "needs you",
@@ -1388,6 +1389,7 @@
       "operatorChannelPlaceholder": "e.g. telegram",
       "operatorTo": "Recipient",
       "operatorToPlaceholder": "Chat id / user id",
+      "operatorToHint": "For chat channels (Telegram, Slack…) escalations need a recipient id; without it they only reach the Activity inbox.",
       "savePaused": "Save as paused",
       "saveEnabled": "Save & enable",
       "cancel": "Cancel"

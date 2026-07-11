@@ -501,6 +501,7 @@ export function LoopForm({
             />
           </div>
         </div>
+        <p className="mt-1 text-[11px] text-muted-foreground">{t("loops.form.operatorToHint")}</p>
       </div>
 
       {/* Error */}

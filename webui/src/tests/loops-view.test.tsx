@@ -54,6 +54,18 @@ const NEEDS_OPERATOR: api.LoopRun = {
   finished_at: null,
 };
 
+const ESCALATED: api.LoopRun = {
+  run_id: "run-escalated",
+  loop: "digest",
+  status: "escalated",
+  source: "cron",
+  task: "daily digest",
+  ask: null,
+  goal_reached: false,
+  started_at: 3000,
+  finished_at: 3100,
+};
+
 const DONE: api.LoopRun = {
   run_id: "run-done",
   loop: "cleanup",
@@ -145,6 +157,33 @@ describe("LoopsView", () => {
     await screen.findByText(/boom/i);
     expect(screen.queryByText(/answer sent/i)).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText(/answer/i)).toHaveValue("staging");
+  });
+
+  it("clicking Retry on an escalated run calls fireLoop and refreshes", async () => {
+    vi.mocked(api.listAllLoopRuns).mockResolvedValue([ESCALATED]);
+    vi.mocked(api.fireLoop).mockResolvedValue({ ...ESCALATED, status: "running" });
+    const user = userEvent.setup();
+    render(wrap(<LoopsView />));
+
+    await screen.findByText("daily digest");
+    await user.click(screen.getByRole("button", { name: /retry/i }));
+
+    await waitFor(() => expect(api.fireLoop).toHaveBeenCalledWith("tok", "digest"));
+    await waitFor(() => expect(api.listAllLoopRuns).toHaveBeenCalledTimes(2));
+  });
+
+  it("a busy retry shows the error banner", async () => {
+    vi.mocked(api.listAllLoopRuns).mockResolvedValue([ESCALATED]);
+    vi.mocked(api.fireLoop).mockRejectedValue(
+      new api.ApiError(422, "HTTP 422", "Loop 'digest' is busy: run-x still running"),
+    );
+    const user = userEvent.setup();
+    render(wrap(<LoopsView />));
+
+    await screen.findByText("daily digest");
+    await user.click(screen.getByRole("button", { name: /retry/i }));
+
+    await screen.findByText(/is busy/i);
   });
 
   it("lists loop definitions in the definitions tab", async () => {
