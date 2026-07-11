@@ -2151,6 +2151,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/scripts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List script filenames available to script nodes (the editor's file picker). */
+        get: operations["workflows_list_scripts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{name}": {
         parameters: {
             query?: never;
@@ -5370,6 +5387,11 @@ export interface components {
         WorkflowSaveResult: {
             /** Name */
             name: string;
+        };
+        /** WorkflowScriptsResult */
+        WorkflowScriptsResult: {
+            /** Scripts */
+            scripts: string[];
         };
         /** WorkflowSessionRunsQuery */
         WorkflowSessionRunsQuery: {
@@ -8934,6 +8956,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowSessionRunsResult"];
+                };
+            };
+        };
+    };
+    workflows_list_scripts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowScriptsResult"];
                 };
             };
         };

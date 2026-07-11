@@ -560,9 +560,12 @@ End-to-end for a single `run_workflow` call:
   (save validates via `parse_workflow` and writes atomically under the version lock — the
   same lock target the version store snapshots under, beside the dir, so a write and a
   snapshot never interleave); **run** (`…/{name}/run` — executes the workflow on a task and
-  returns the per-node trace); and the **recommendations** queue (`…/recommendations`,
-  `…/recommendations/{id}/apply`, `…/recommendations/{id}/dismiss`). This is the surface
-  the webui visual editor uses.
+  returns the per-node trace); the **recommendations** queue (`…/recommendations`,
+  `…/recommendations/{id}/apply`, `…/recommendations/{id}/dismiss`); and `GET
+  /api/v1/workflows/scripts`, which lists the filenames under
+  `<workspace>/workflows/scripts/` available to script nodes (empty when the
+  directory is absent) — the source for the visual editor's script-file picker.
+  This is the surface the webui visual editor uses.
 - **Lineage:** node sessions reuse the lineage metadata on the open session document
   (`durin/session/lineage.py`), so no schema migration is involved.
 - **Self-improvement** (per-workflow `improvement_mode`, two states like a skill's:
