@@ -71,6 +71,33 @@ def test_prune_keeps_needs_operator(tmp_path):
     assert "r0" in left and len(left) == 3  # 2 kept + the needs_operator one
 
 
+def test_finalize_ask_none_keeps_prior_ask(tmp_path):
+    rl.start_run(tmp_path, "a", "r1", source="cron", task="t")
+    rl.finalize_run(tmp_path, "a", "r1", status="needs_operator", ask="approve?")
+    rl.finalize_run(tmp_path, "a", "r1", status="running")
+    assert rl.read_run(tmp_path, "a", "r1")["ask"] == "approve?"
+
+
+def test_finalize_ask_empty_string_clears_prior_ask(tmp_path):
+    rl.start_run(tmp_path, "a", "r1", source="cron", task="t")
+    rl.finalize_run(tmp_path, "a", "r1", status="needs_operator", ask="approve?")
+    rl.finalize_run(tmp_path, "a", "r1", status="running", ask="")
+    assert rl.read_run(tmp_path, "a", "r1")["ask"] == ""
+
+
+def test_start_run_seeds_detail_none(tmp_path):
+    rec = rl.start_run(tmp_path, "a", "r1", source="cron", task="t")
+    assert rec["detail"] is None
+
+
+def test_finalize_detail_none_keeps_prior_value_stores(tmp_path):
+    rl.start_run(tmp_path, "a", "r1", source="cron", task="t")
+    rl.finalize_run(tmp_path, "a", "r1", status="error", detail="boom")
+    assert rl.read_run(tmp_path, "a", "r1")["detail"] == "boom"
+    rl.finalize_run(tmp_path, "a", "r1", status="error")
+    assert rl.read_run(tmp_path, "a", "r1")["detail"] == "boom"
+
+
 def test_update_run_on_missing_file_keeps_required_keys(tmp_path):
     """update_run on a nonexistent run should seed required manifest keys."""
     m = rl.update_run(tmp_path, "x", "ghost", status="running")

@@ -139,7 +139,7 @@ def parse_loop(data: dict) -> LoopSpec:
     if concurrency not in ("single", "parallel"):
         raise LoopError("concurrency must be 'single' or 'parallel'")
     stuck_after = data.get("stuck_after", 3)
-    if not isinstance(stuck_after, int) or stuck_after < 1:
+    if isinstance(stuck_after, bool) or not isinstance(stuck_after, int) or stuck_after < 1:
         raise LoopError("stuck_after must be an integer >= 1")
     operator_channel = data.get("operator_channel") or None
     operator_to = data.get("operator_to") or None

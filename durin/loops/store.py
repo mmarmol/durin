@@ -1,8 +1,9 @@
 """Loop definition persistence: one JSON file per loop under <workspace>/loops/.
 
 Same model as workflow definitions: files are the truth, atomic full-file
-rewrite; a cross-process lock guards save/delete because the webui, the agent
-tool, and the CLI may write concurrently.
+rewrite; a per-loop cross-process lock guards save/delete because the webui,
+the agent tool, and the CLI may write concurrently — writers touching
+different loops never block each other, only same-name writers serialize.
 """
 
 from __future__ import annotations
@@ -46,13 +47,13 @@ def list_loops(workspace: str | Path) -> list[LoopSpec]:
 def save_loop(workspace: str | Path, spec: LoopSpec) -> None:
     d = loops_dir(workspace)
     d.mkdir(parents=True, exist_ok=True)
-    with cross_process_lock(d / "loops"):
+    with cross_process_lock(loops_dir(workspace) / spec.name):
         atomic_write_text(_path(workspace, spec.name), json.dumps(loop_to_dict(spec), indent=2))
 
 
 def delete_loop(workspace: str | Path, name: str) -> None:
     p = _path(workspace, name)
-    with cross_process_lock(loops_dir(workspace) / "loops"):
+    with cross_process_lock(loops_dir(workspace) / name):
         if not p.exists():
             raise LoopNotFound(f"loop '{name}' not found")
         p.unlink()

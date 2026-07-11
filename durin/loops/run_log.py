@@ -40,7 +40,7 @@ def start_run(ws, loop: str, run_id: str, *, source: str, task: str) -> dict:
     return _write(ws, loop, run_id, {
         "schema": SCHEMA, "run_id": run_id, "loop": loop, "status": "running",
         "source": source, "task": task[:8000], "workflow_run_id": None,
-        "ask": None, "checks": None, "goal_reached": None,
+        "ask": None, "detail": None, "checks": None, "goal_reached": None,
         "started_at": time.time(), "finished_at": None,
     })
 
@@ -53,12 +53,16 @@ def update_run(ws, loop: str, run_id: str, **fields) -> dict:
 
 def finalize_run(ws, loop: str, run_id: str, *, status: str,
                  workflow_run_id: str | None = None, ask: str | None = None,
-                 checks: list | None = None, goal_reached: bool | None = None) -> dict:
+                 detail: str | None = None, checks: list | None = None,
+                 goal_reached: bool | None = None) -> dict:
     record = read_run(ws, loop, run_id) or {"schema": SCHEMA, "run_id": run_id, "loop": loop}
     record.update({
         "status": status, "finished_at": time.time(),
         "workflow_run_id": workflow_run_id or record.get("workflow_run_id"),
-        "ask": (ask or "")[:2000] or record.get("ask"),
+        # None keeps the prior value; "" explicitly clears it — distinct from
+        # "not provided" so a caller can clear a stale ask/detail on purpose.
+        "ask": ask[:2000] if ask is not None else record.get("ask"),
+        "detail": detail[:2000] if detail is not None else record.get("detail"),
         "checks": checks if checks is not None else record.get("checks"),
         "goal_reached": goal_reached if goal_reached is not None else record.get("goal_reached"),
     })
@@ -86,9 +90,12 @@ def _load_dir(d: Path) -> list[dict]:
     return out
 
 
-def list_runs(ws, loop: str, limit: int = 50) -> list[dict]:
+def list_runs(ws, loop: str, limit: int | None = 50) -> list[dict]:
     d = _dir(ws, loop)
-    return _load_dir(d)[:limit] if d.is_dir() else []
+    if not d.is_dir():
+        return []
+    runs = _load_dir(d)
+    return runs if limit is None else runs[:limit]
 
 
 def list_all_runs(ws, limit: int = 100) -> list[dict]:
@@ -104,12 +111,12 @@ def list_all_runs(ws, limit: int = 100) -> list[dict]:
 
 
 def active_runs(ws, loop: str) -> list[dict]:
-    return [m for m in list_runs(ws, loop, limit=1000) if m.get("status") in ACTIVE_STATUSES]
+    return [m for m in list_runs(ws, loop, limit=None) if m.get("status") in ACTIVE_STATUSES]
 
 
 def consecutive_no_goal(ws, loop: str) -> int:
     n = 0
-    for m in list_runs(ws, loop, limit=1000):
+    for m in list_runs(ws, loop, limit=None):
         status = m.get("status")
         if status in ACTIVE_STATUSES:
             continue
@@ -156,7 +163,7 @@ def reconcile_running(ws, now: float | None = None, max_age_s: float = 6 * 3600)
 
 
 def prune_runs(ws, loop: str, keep: int) -> None:
-    runs = list_runs(ws, loop, limit=100000)
+    runs = list_runs(ws, loop, limit=None)
     keepers = set()
     kept = 0
     for m in runs:

@@ -96,7 +96,7 @@ class LoopsRuntime:
 
     async def _finish(self, spec: LoopSpec, run_id: str, status: str, wf_run_id, detail: str = "") -> dict:
         record = run_log.finalize_run(self._ws, spec.name, run_id, status=status,
-                                      workflow_run_id=wf_run_id, ask=detail or None, goal_reached=False)
+                                      workflow_run_id=wf_run_id, detail=detail or None, goal_reached=False)
         return await self._post_finish(spec, run_id, record)
 
     async def _post_finish(self, spec: LoopSpec, run_id: str, record: dict) -> dict:

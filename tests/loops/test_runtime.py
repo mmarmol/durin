@@ -101,6 +101,24 @@ async def test_disabled_loop_skips_cron_fire(tmp_path):
     assert calls["exec"] == []
 
 
+async def test_workflow_exec_exception_sets_detail_not_ask(tmp_path):
+    _save(tmp_path)
+
+    async def workflow_exec(name, task, *, resume_run_id=None):
+        raise RuntimeError("boom")
+
+    async def judge(intent, assertions, evidence):
+        return {"intent_met": True, "assertions": {}}
+
+    ids = iter([f"lr{i}" for i in range(100)])
+    rt = LoopsRuntime(tmp_path, workflow_exec=workflow_exec, judge=judge, keep_runs=20,
+                      check_timeout_s=5, run_id_factory=lambda: next(ids))
+    m = await rt.fire("l1", source="manual")
+    assert m["status"] == "error"
+    assert m.get("detail") == "boom"
+    assert m.get("ask") is None
+
+
 async def test_judge_exception_finalizes_as_error_not_stuck_running(tmp_path):
     """Amendment 1: a judge that raises must not strand the run as 'running'.
 

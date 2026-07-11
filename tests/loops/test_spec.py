@@ -56,6 +56,7 @@ def test_parse_full_roundtrip():
         lambda d: d.__setitem__("name", "bad/name"),
         lambda d: d.__setitem__("concurrency", "queue"),
         lambda d: d.__setitem__("stuck_after", 0),
+        lambda d: d.__setitem__("stuck_after", True),
         lambda d: d["goal"].__setitem__("checks", [{"kind": "script", "required": True}]),  # no command
         lambda d: d["goal"].__setitem__("checks", [{"kind": "assertion", "required": True}]),  # no text
         lambda d: d.__setitem__("triggers", [{"source": "mail"}]),  # V1: cron only
