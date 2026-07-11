@@ -30,6 +30,26 @@ const EXISTING: LoopDef = {
   operator_to: "12345",
 };
 
+const EXISTING_CHANNEL: LoopDef = {
+  name: "support",
+  enabled: true,
+  workflow: "digest-wf",
+  goal: { intent: "resolve the ticket", checks: [] },
+  triggers: [
+    {
+      source: "channel",
+      channel: "email",
+      filters: { from_contains: "@acme.com", subject_contains: "urgent" },
+      semantic: "the sender is asking for a refund",
+      match: "always_new",
+    },
+  ],
+  concurrency: "single",
+  stuck_after: 3,
+  operator_channel: null,
+  operator_to: null,
+};
+
 describe("LoopForm", () => {
   beforeEach(() => {
     vi.mocked(listWorkflows).mockReset().mockResolvedValue(["digest-wf"]);
@@ -158,5 +178,86 @@ describe("LoopForm", () => {
     expect((screen.getAllByLabelText(/^kind$/i)[0] as HTMLSelectElement).value).toBe("assertion");
     expect((screen.getByLabelText(/assertion text/i) as HTMLInputElement).value).toBe("sent ok");
     expect((screen.getByLabelText(/^required$/i) as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("a channel trigger row submits the exact backend shape (filters/semantic/match, no schedule keys)", async () => {
+    render(<LoopForm token="tok" editLoop={null} onDone={vi.fn()} onCancel={vi.fn()} />);
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "support" } });
+    fireEvent.change(screen.getByLabelText(/workflow/i), { target: { value: "digest-wf" } });
+    fireEvent.change(screen.getByLabelText(/^intent/i), { target: { value: "resolve the ticket" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /add trigger/i }));
+    fireEvent.change(screen.getByLabelText(/^source$/i), { target: { value: "channel" } });
+    fireEvent.change(screen.getByLabelText(/from contains/i), { target: { value: "@acme.com" } });
+    // Subject contains left empty on purpose — the serialized filters object
+    // must omit it entirely, not send an empty string.
+    fireEvent.change(screen.getByLabelText(/semantic condition/i), {
+      target: { value: "the sender is asking for a refund" },
+    });
+    fireEvent.change(screen.getByLabelText(/match policy/i), { target: { value: "always_new" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
+
+    await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveLoop).mock.calls[0];
+    expect(def.triggers).toEqual([
+      {
+        source: "channel",
+        channel: "email",
+        filters: { from_contains: "@acme.com" },
+        semantic: "the sender is asking for a refund",
+        match: "always_new",
+      },
+    ]);
+  });
+
+  it("switching a trigger row's source drops the other shape's keys entirely", async () => {
+    render(<LoopForm token="tok" editLoop={null} onDone={vi.fn()} onCancel={vi.fn()} />);
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "n" } });
+    fireEvent.change(screen.getByLabelText(/workflow/i), { target: { value: "digest-wf" } });
+    fireEvent.change(screen.getByLabelText(/^intent/i), { target: { value: "do it" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /add trigger/i }));
+    // cron -> channel: schedule fields disappear, channel fields appear.
+    fireEvent.change(screen.getByLabelText(/^source$/i), { target: { value: "channel" } });
+    expect(screen.queryByLabelText(/cron expression/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/match policy/i)).toBeInTheDocument();
+
+    // channel -> cron: channel fields disappear, schedule fields come back.
+    fireEvent.change(screen.getByLabelText(/^source$/i), { target: { value: "cron" } });
+    expect(screen.queryByLabelText(/match policy/i)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/cron expression/i), { target: { value: "0 9 * * *" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
+
+    await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveLoop).mock.calls[0];
+    expect(def.triggers).toEqual([{ source: "cron", schedule: { kind: "cron", expr: "0 9 * * *" } }]);
+  });
+
+  it("prefills a channel trigger from an existing LoopDef in edit mode", async () => {
+    render(<LoopForm token="tok" editLoop={EXISTING_CHANNEL} onDone={vi.fn()} onCancel={vi.fn()} />);
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    expect((screen.getByLabelText(/^source$/i) as HTMLSelectElement).value).toBe("channel");
+    expect((screen.getByLabelText(/from contains/i) as HTMLInputElement).value).toBe("@acme.com");
+    expect((screen.getByLabelText(/subject contains/i) as HTMLInputElement).value).toBe("urgent");
+    expect((screen.getByLabelText(/semantic condition/i) as HTMLInputElement).value).toBe(
+      "the sender is asking for a refund",
+    );
+    expect((screen.getByLabelText(/match policy/i) as HTMLSelectElement).value).toBe("always_new");
+
+    // Round-trip: re-submitting the prefilled row reproduces the same shape.
+    fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
+    await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveLoop).mock.calls[0];
+    expect(def.triggers).toEqual(EXISTING_CHANNEL.triggers);
   });
 });
