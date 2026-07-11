@@ -1,0 +1,86 @@
+import pytest
+from durin.workflow.spec import ScriptNode, WorkflowError, node_label, parse_workflow
+
+
+def _wf(nodes, start="s"):
+    return {"name": "t", "start": start, "nodes": nodes}
+
+
+def test_parse_minimal_command_node():
+    wf = parse_workflow(_wf([{"id": "s", "kind": "script", "command": "pytest -q"}]))
+    node = wf.nodes["s"]
+    assert isinstance(node, ScriptNode)
+    assert node.command == "pytest -q" and node.script == ""
+    assert node.timeout is None and node.next is None and not node.routes
+
+
+def test_parse_script_file_node_with_routing():
+    wf = parse_workflow(_wf([
+        {"id": "s", "kind": "script", "script": "check.py", "on_pass": None, "on_fail": "s"},
+    ]))
+    assert wf.nodes["s"].script == "check.py" and wf.nodes["s"].routes
+
+
+def test_command_xor_script():
+    with pytest.raises(WorkflowError, match="exactly one"):
+        parse_workflow(_wf([{"id": "s", "kind": "script"}]))
+    with pytest.raises(WorkflowError, match="exactly one"):
+        parse_workflow(_wf([{"id": "s", "kind": "script", "command": "x", "script": "y.sh"}]))
+
+
+def test_agent_only_fields_rejected():
+    for field in ("model", "persona", "context", "session", "prompt", "mode", "tools", "skills", "mcps", "max_turns"):
+        with pytest.raises(WorkflowError, match="do not apply"):
+            parse_workflow(_wf([{"id": "s", "kind": "script", "command": "x", field: "v"}]))
+
+
+def test_script_path_must_stay_inside_scripts_dir():
+    for bad in ("/abs/path.sh", "../escape.sh", "a/../../b.sh"):
+        with pytest.raises(WorkflowError, match="relative path"):
+            parse_workflow(_wf([{"id": "s", "kind": "script", "script": bad}]))
+
+
+def test_routing_exclusive_and_cases_validated():
+    with pytest.raises(WorkflowError, match="mutually exclusive"):
+        parse_workflow(_wf([{"id": "s", "kind": "script", "command": "x",
+                             "next": "s", "on_pass": None, "on_fail": "s"}]))
+    with pytest.raises(WorkflowError, match="normalize to the same form"):
+        parse_workflow(_wf([{"id": "s", "kind": "script", "command": "x",
+                             "cases": {"OK": None, "ok.": "s"}}]))
+
+
+def test_cases_may_target_needs_input():
+    wf = parse_workflow(_wf([{"id": "s", "kind": "script", "command": "x",
+                              "cases": {"READY": None, "MISSING": "__needs_input__"}}]))
+    assert wf.nodes["s"].cases["MISSING"] == "__needs_input__"
+
+
+def test_timeout_and_max_visits_validated():
+    with pytest.raises(WorkflowError, match="timeout"):
+        parse_workflow(_wf([{"id": "s", "kind": "script", "command": "x", "timeout": 0}]))
+    wf = parse_workflow(_wf([{"id": "s", "kind": "script", "command": "x", "timeout": 30, "max_visits": 2}]))
+    assert wf.nodes["s"].timeout == 30 and wf.nodes["s"].max_visits == 2
+
+
+def test_script_node_rejected_in_parallel_positions():
+    with pytest.raises(WorkflowError, match="must be a work node"):
+        parse_workflow(_wf([
+            {"id": "s", "kind": "parallel", "branches": ["b"], "next": None},
+            {"id": "b", "kind": "script", "command": "x"},
+        ]))
+    with pytest.raises(WorkflowError, match="must be a work node"):
+        parse_workflow(_wf([
+            {"id": "s", "kind": "parallel", "worker": "w", "list_from": "s", "next": None},
+            {"id": "w", "kind": "script", "command": "x"},
+        ]))
+
+
+def test_edge_targets_validated():
+    with pytest.raises(WorkflowError, match="unknown node"):
+        parse_workflow(_wf([{"id": "s", "kind": "script", "command": "x", "next": "ghost"}]))
+
+
+def test_node_label_falls_back_to_command_then_file():
+    assert node_label(ScriptNode(id="n", command="pytest -q")) == "pytest -q"
+    assert node_label(ScriptNode(id="n", script="check.py")) == "check.py"
+    assert node_label(ScriptNode(id="n", title="Gate", command="x")) == "Gate"

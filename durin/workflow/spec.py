@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal, Union
 
 from durin.workflow.verdict import normalize_label
@@ -42,7 +43,12 @@ def node_label(node: Any) -> str:
     if title:
         return title
     sent = _first_sentence(getattr(node, "prompt", "") or "")
-    return sent or _prettify_id(node.id)
+    if sent:
+        return sent
+    cmd = (getattr(node, "command", "") or "").strip() or (getattr(node, "script", "") or "").strip()
+    if cmd:
+        return cmd if len(cmd) <= 80 else cmd[:80].rsplit(" ", 1)[0] + "…"
+    return _prettify_id(node.id)
 
 # Reserved multi-way routing target: a node whose matched case routes here ends the
 # run asking the caller for more information (status "needs_input", the node's output
@@ -89,6 +95,41 @@ class WorkNode:
         return self.on_pass is not None or self.on_fail is not None or self.cases is not None
 
 
+_AGENT_ONLY_FIELDS = frozenset(
+    {"model", "persona", "context", "session", "prompt", "mode", "tools", "skills", "mcps", "max_turns"}
+)
+
+
+@dataclass(frozen=True)
+class ScriptNode:
+    """A node that runs a deterministic subprocess instead of an agent turn.
+
+    Exactly one of ``command`` (inline, run via bash -c) or ``script`` (a file under
+    <workspace>/workflows/scripts/) is set. The upstream edge text arrives on stdin;
+    stdout becomes the edge text to the next node. Routing mirrors WorkNode: binary
+    (on_pass/on_fail) routes on the exit code (0 = PASS), multi-way (cases) on the
+    last non-empty stdout line, and a linear node treats a non-zero exit as a node
+    failure (aborting the run) rather than a verdict.
+    """
+
+    id: str
+    title: str = ""
+    command: str = ""
+    script: str = ""
+    timeout: int | None = None           # seconds; None = the workflow.script_timeout config default
+    next: str | None = None
+    on_pass: str | None = None
+    on_fail: str | None = None
+    cases: dict[str, str | None] | None = None
+    max_visits: int | None = None
+    kind: Literal["script"] = "script"
+
+    @property
+    def routes(self) -> bool:
+        """True when this node emits a verdict and branches (binary or multi-way)."""
+        return self.on_pass is not None or self.on_fail is not None or self.cases is not None
+
+
 @dataclass(frozen=True)
 class SubworkflowNode:
     """A node that runs another workflow and uses its output."""
@@ -127,7 +168,7 @@ class ParallelNode:
     kind: Literal["parallel"] = "parallel"
 
 
-Node = Union[WorkNode, SubworkflowNode, ParallelNode]
+Node = Union[WorkNode, ScriptNode, SubworkflowNode, ParallelNode]
 
 
 @dataclass(frozen=True)
@@ -153,6 +194,63 @@ def _str_list(value: Any, node_id: str, field: str) -> tuple[str, ...]:
             f"node {node_id!r}: {field} must be a list of strings, got {value!r}"
         )
     return tuple(value)
+
+
+def _parse_routing(raw: dict[str, Any], node_id: str) -> tuple[str | None, str | None, str | None, dict[str, str | None] | None]:
+    """Validate the shared routing fields of a work/script node: returns
+    (next, on_pass, on_fail, cases) after enforcing cases well-formedness,
+    label-normalization uniqueness, and next/binary/cases mutual exclusivity."""
+    on_pass = raw.get("on_pass")
+    on_fail = raw.get("on_fail")
+    next_node = raw.get("next")
+    cases_raw = raw.get("cases")
+    # Parse and validate multi-way routing cases.
+    cases: dict[str, str | None] | None = None
+    if cases_raw is not None:
+        if not isinstance(cases_raw, dict):
+            raise WorkflowError(
+                f"node {node_id!r}: 'cases' must be a dict, got {cases_raw!r}"
+            )
+        if not cases_raw:
+            raise WorkflowError(
+                f"node {node_id!r}: 'cases' must not be empty"
+            )
+        for label, target in cases_raw.items():
+            if not isinstance(label, str) or not label:
+                raise WorkflowError(
+                    f"node {node_id!r}: 'cases' keys must be non-empty strings, got {label!r}"
+                )
+            if target is not None and not isinstance(target, str):
+                raise WorkflowError(
+                    f"node {node_id!r}: 'cases' values must be a string node id or null, got {target!r}"
+                )
+        cases = dict(cases_raw)
+        # Reject labels that normalize to the same form — they would cause a
+        # silent mis-route because parse_label uses the same normalization.
+        seen_norms: dict[str, str] = {}
+        for label in cases:
+            norm = normalize_label(label)
+            if norm in seen_norms:
+                raise WorkflowError(
+                    f"node {node_id!r}: case labels {seen_norms[norm]!r} and "
+                    f"{label!r} normalize to the same form and would mis-route"
+                )
+            seen_norms[norm] = label
+    # Mutual exclusivity: exactly one of next, on_pass/on_fail, or cases.
+    binary_routing = on_pass is not None or on_fail is not None
+    if cases is not None and binary_routing:
+        raise WorkflowError(
+            f"node {node_id!r}: 'cases' and 'on_pass'/'on_fail' are mutually exclusive"
+        )
+    if cases is not None and next_node is not None:
+        raise WorkflowError(
+            f"node {node_id!r}: 'cases' and 'next' are mutually exclusive"
+        )
+    if next_node is not None and binary_routing:
+        raise WorkflowError(
+            f"node {node_id!r}: 'next' and routing ('on_pass'/'on_fail') are mutually exclusive"
+        )
+    return next_node, on_pass, on_fail, cases
 
 
 def _build_node(raw: dict[str, Any]) -> Node:
@@ -198,57 +296,8 @@ def _build_node(raw: dict[str, Any]) -> Node:
             )
         skills = _str_list(raw.get("skills", []), node_id, "skills")
         mcps = _str_list(raw.get("mcps", []), node_id, "mcps")
-        on_pass = raw.get("on_pass")
-        on_fail = raw.get("on_fail")
-        next_node = raw.get("next")
-        cases_raw = raw.get("cases")
-        # Parse and validate multi-way routing cases.
-        cases: dict[str, str | None] | None = None
-        if cases_raw is not None:
-            if not isinstance(cases_raw, dict):
-                raise WorkflowError(
-                    f"node {node_id!r}: 'cases' must be a dict, got {cases_raw!r}"
-                )
-            if not cases_raw:
-                raise WorkflowError(
-                    f"node {node_id!r}: 'cases' must not be empty"
-                )
-            for label, target in cases_raw.items():
-                if not isinstance(label, str) or not label:
-                    raise WorkflowError(
-                        f"node {node_id!r}: 'cases' keys must be non-empty strings, got {label!r}"
-                    )
-                if target is not None and not isinstance(target, str):
-                    raise WorkflowError(
-                        f"node {node_id!r}: 'cases' values must be a string node id or null, got {target!r}"
-                    )
-            cases = dict(cases_raw)
-            # Reject labels that normalize to the same form — they would cause a
-            # silent mis-route because parse_label uses the same normalization.
-            seen_norms: dict[str, str] = {}
-            for label in cases:
-                norm = normalize_label(label)
-                if norm in seen_norms:
-                    raise WorkflowError(
-                        f"node {node_id!r}: case labels {seen_norms[norm]!r} and "
-                        f"{label!r} normalize to the same form and would mis-route"
-                    )
-                seen_norms[norm] = label
-        # Mutual exclusivity: exactly one of next, on_pass/on_fail, or cases.
-        binary_routing = on_pass is not None or on_fail is not None
-        if cases is not None and binary_routing:
-            raise WorkflowError(
-                f"node {node_id!r}: 'cases' and 'on_pass'/'on_fail' are mutually exclusive"
-            )
-        if cases is not None and next_node is not None:
-            raise WorkflowError(
-                f"node {node_id!r}: 'cases' and 'next' are mutually exclusive"
-            )
-        if next_node is not None and binary_routing:
-            raise WorkflowError(
-                f"node {node_id!r}: 'next' and routing ('on_pass'/'on_fail') are mutually exclusive"
-            )
-        routes = binary_routing or cases is not None
+        next_node, on_pass, on_fail, cases = _parse_routing(raw, node_id)
+        routes = on_pass is not None or on_fail is not None or cases is not None
         # A routing node emits an independent verdict on its own output; a shared
         # context buffer would feed it sibling conversations and bias that verdict,
         # so the two are mutually exclusive.
@@ -291,6 +340,41 @@ def _build_node(raw: dict[str, Any]) -> Node:
             cases=cases,
             max_visits=node_max_visits,
             max_turns=node_max_turns,
+        )
+    if kind == "script":
+        command = raw.get("command", "")
+        script = raw.get("script", "")
+        if not isinstance(command, str) or not isinstance(script, str):
+            raise WorkflowError(f"node {node_id!r}: 'command' and 'script' must be strings")
+        if bool(command.strip()) == bool(script.strip()):
+            raise WorkflowError(
+                f"node {node_id!r}: a script node needs exactly one of 'command' (inline) or 'script' (file)"
+            )
+        script = script.strip()
+        if script and (Path(script).is_absolute() or ".." in Path(script).parts):
+            raise WorkflowError(
+                f"node {node_id!r}: 'script' must be a relative path inside workflows/scripts (no '..')"
+            )
+        rejected = sorted(_AGENT_ONLY_FIELDS & raw.keys())
+        if rejected:
+            raise WorkflowError(
+                f"node {node_id!r}: field(s) {', '.join(rejected)} do not apply to a script node"
+            )
+        timeout = raw.get("timeout")
+        if timeout is not None:
+            if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout < 1:
+                raise WorkflowError(f"node {node_id!r}: timeout must be an int >= 1, got {timeout!r}")
+        node_max_visits = raw.get("max_visits")
+        if node_max_visits is not None:
+            if isinstance(node_max_visits, bool) or not isinstance(node_max_visits, int) or node_max_visits < 1:
+                raise WorkflowError(
+                    f"node {node_id!r}: max_visits must be an int >= 1, got {node_max_visits!r}"
+                )
+        next_node, on_pass, on_fail, cases = _parse_routing(raw, node_id)
+        return ScriptNode(
+            id=node_id, title=raw.get("title", ""), command=command.strip(), script=script,
+            timeout=timeout, next=next_node, on_pass=on_pass, on_fail=on_fail,
+            cases=cases, max_visits=node_max_visits,
         )
     if kind == "subworkflow":
         workflow = raw.get("workflow", "")
@@ -354,7 +438,7 @@ def _build_node(raw: dict[str, Any]) -> Node:
 
 
 def _edge_targets(node: Node) -> list[str | None]:
-    if isinstance(node, WorkNode):
+    if isinstance(node, (WorkNode, ScriptNode)):
         if node.cases is not None:
             return list(node.cases.values())
         if node.routes:
@@ -410,6 +494,10 @@ def parse_workflow(data: dict[str, Any]) -> Workflow:
                     raise WorkflowError(
                         f"node {node.id!r}: parallel branch {branch!r} must be a work node"
                     )
+            if node.worker is not None and not isinstance(nodes[node.worker], WorkNode):
+                raise WorkflowError(
+                    f"node {node.id!r}: parallel worker {node.worker!r} must be a work node"
+                )
 
     for node in nodes.values():
         if isinstance(node, ParallelNode):
