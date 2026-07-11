@@ -59,3 +59,20 @@ def test_shebang_content_with_odd_extension_is_scanned():
     ok, detail = precheck_script_edit(
         "script_file", "#!/bin/bash\necho ok\n", filename="tool.run", timeout=5)
     assert ok, detail
+
+
+def test_smoke_false_skips_execution_even_for_a_startup_crash():
+    # Same shape as test_python_import_crash_fails_at_smoke (fails at smoke with
+    # smoke=True), but syntactically fine — with smoke=False the code is never
+    # executed, so the gate must pass on syntax + security alone.
+    ok, detail = precheck_script_edit(
+        "command", 'python3 -c "import nonexistent_module_xyz"', smoke=False)
+    assert ok is True
+    assert detail == ""
+
+
+def test_smoke_false_still_fails_a_syntax_error():
+    ok, detail = precheck_script_edit(
+        "command", "if [ 1 -eq 1 ]; then echo hi", smoke=False)
+    assert ok is False
+    assert "syntax" in detail.lower() or "unexpected" in detail.lower()

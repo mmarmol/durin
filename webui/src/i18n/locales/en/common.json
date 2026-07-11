@@ -1159,7 +1159,7 @@
     "recCopied": "Context copied — paste it in a chat to work the idea with the agent.",
     "recCopyFailed": "Could not copy to the clipboard.",
     "recStructural": "structural",
-    "recStructuralHint": "Out of the dream's prompt-only scope — never auto-applied; treat it in a session",
+    "recStructuralHint": "Out of the dream's scope (prompts, plus failing-script command/file edits) — never auto-applied; treat it in a session",
     "recCurrent": "current",
     "recProposed": "proposed",
     "recScriptFile": "script file",

@@ -666,6 +666,103 @@ def test_alias_reference_in_sibling_gate_forces_manual(tmp_path, monkeypatch):
     assert b.nodes["g"].script == a.nodes["s"].script  # aliases collapse to one form
 
 
+# -- queue-time smoke is consent-scoped (FINDING I1) ----------------------------
+
+def test_manual_mode_script_file_proposal_queues_without_smoke_execution(tmp_path, monkeypatch):
+    """A manual-mode proposal must not execute the proposed code at queue time:
+    the pass's precheck call gets smoke=False (syntax + security scan only). The
+    smoke step for it runs later, at apply time, when the user's own Apply click
+    is the consent for running it."""
+    data = _script_file_wf(name="manual_wf", improvement_mode="manual", script="check.sh")
+    _write_wf(tmp_path, data, name="manual_wf")
+    scripts_dir = workflows_dir(tmp_path) / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    (scripts_dir / "check.sh").write_text("#!/bin/bash\nexit 1\n", encoding="utf-8")
+    run_log.write_run(tmp_path, "manual_wf", _script_failed_run("r0"), ts=1.0)
+    run_log.write_run(tmp_path, "manual_wf", _script_failed_run("r1"), ts=2.0)
+
+    import durin.workflow.workflow_improve_dream as dream_mod
+    real_precheck = dream_mod.precheck_script_edit
+    smoke_flags = []
+
+    def spy_precheck(kind, content, **kw):
+        smoke_flags.append(kw.get("smoke", True))
+        return real_precheck(kind, content, **kw)
+
+    monkeypatch.setattr(dream_mod, "precheck_script_edit", spy_precheck)
+
+    invoke = _fake_invoke({"field": "script_file", "script": "check.sh",
+                           "proposed": "#!/bin/bash\necho fixed\n", "reason": "crashes"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["proposals"] == 1 and summary["applied"] == 0   # manual -> recommend, never apply
+    assert smoke_flags == [False]   # the queue-time precheck ran with execution disabled
+    recs = wr.open_recommendations(tmp_path, "manual_wf")
+    assert len(recs) == 1 and recs[0]["kind"] == "script_file"
+
+
+def test_auto_mode_not_manual_only_queues_with_smoke_execution(tmp_path, monkeypatch):
+    """The mirror case: a proposal that could land without a person acting (auto
+    mode, not manual_only) DOES get smoke at queue time — that's the moment code
+    is about to run unattended, so it must be proven safe first."""
+    data = _script_file_wf(name="auto_wf", improvement_mode="auto", script="check.sh")
+    _write_wf(tmp_path, data, name="auto_wf")
+    scripts_dir = workflows_dir(tmp_path) / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    (scripts_dir / "check.sh").write_text("#!/bin/bash\nexit 1\n", encoding="utf-8")
+    run_log.write_run(tmp_path, "auto_wf", _script_failed_run("r0"), ts=1.0)
+    run_log.write_run(tmp_path, "auto_wf", _script_failed_run("r1"), ts=2.0)
+    run_log.write_run(tmp_path, "auto_wf", _script_clean_run("r2"), ts=3.0)
+
+    import durin.workflow.workflow_improve_dream as dream_mod
+    real_precheck = dream_mod.precheck_script_edit
+    smoke_flags = []
+
+    def spy_precheck(kind, content, **kw):
+        smoke_flags.append(kw.get("smoke", True))
+        return real_precheck(kind, content, **kw)
+
+    monkeypatch.setattr(dream_mod, "precheck_script_edit", spy_precheck)
+
+    invoke = _fake_invoke({"field": "script_file", "script": "check.sh",
+                           "proposed": "#!/bin/bash\necho fixed\n", "reason": "crashes"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["applied"] == 1
+    assert smoke_flags == [True]
+
+
+# -- honest escalation for a nested script reference (FINDING M2) ---------------
+
+def test_nested_script_path_that_exists_gets_honest_escalation(tmp_path):
+    """A nested script reference (e.g. sub/tool.sh) is a valid filename in a
+    definition, but the repair lane only edits single-segment filenames. Before
+    this fix, the escalation claimed the file 'does not exist' — false when it is
+    merely out of the lane's reach. The message must say so honestly instead."""
+    _write_wf(tmp_path)
+    nested_dir = workflows_dir(tmp_path) / "scripts" / "sub"
+    nested_dir.mkdir(parents=True, exist_ok=True)
+    (nested_dir / "tool.sh").write_text("#!/bin/bash\nexit 1\n", encoding="utf-8")
+    _seed_runs(tmp_path, n=2)
+    invoke = _fake_invoke({"field": "script_file", "script": "sub/tool.sh",
+                           "proposed": "#!/bin/bash\necho fixed\n", "reason": "fix it"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["structural"] == 1 and summary["proposals"] == 0
+    recs = wr.open_recommendations(tmp_path, "wf")
+    assert len(recs) == 1
+    assert "nested script paths are not editable" in recs[0]["why_rejected"]
+    assert "does not exist" not in recs[0]["why_rejected"]
+
+
+def test_truly_missing_script_file_still_reports_does_not_exist(tmp_path):
+    _write_wf(tmp_path)
+    _seed_runs(tmp_path, n=2)
+    invoke = _fake_invoke({"field": "script_file", "script": "ghost.sh",
+                           "proposed": "#!/bin/bash\necho fixed\n", "reason": "fix it"})
+    summary = run_workflow_improve_pass(tmp_path, llm_invoke=invoke)
+    assert summary["structural"] == 1
+    recs = wr.open_recommendations(tmp_path, "wf")
+    assert "does not exist" in recs[0]["why_rejected"]
+
+
 def test_unparseable_sibling_referencing_script_forces_manual(tmp_path):
     """A sibling definition that fails to parse fails SAFE: its raw JSON is
     scanned for the filename and the reference still forces review."""

@@ -1,9 +1,10 @@
 """`durin workflow` — review and apply workflow self-improvement recommendations.
 
-In manual mode the dream pass records proposed edits (to a node prompt or a gate
-criterion) instead of applying them. This surfaces those recommendations and lets the
-user apply one: it writes the proposed text into the definition, versions the change,
-and marks the recommendation applied.
+In manual mode the dream pass records proposed edits — a node's prompt, a script
+node's inline command, or a failing script file's full content — instead of applying
+them. This surfaces those recommendations and lets the user apply one: it writes the
+proposed text into the definition (or the script file), versions the change, and
+marks the recommendation applied.
 """
 
 from __future__ import annotations
@@ -39,6 +40,12 @@ def recommendations(
                 typer.echo(f"    rejected  : {r.get('why_rejected', '')}")
                 typer.echo(f"    evidence  : {r.get('diagnostic', '')}")
                 continue
+            if r.get("kind") == "script_file":
+                typer.echo(f"[{r['id']}] {n}: script {r['script']}  (seen ×{r.get('count', 1)})")
+                typer.echo(f"    reason   : {r['reason']}")
+                if r.get("manual_only"):
+                    typer.echo("    manual_only: never auto-applied even in auto mode")
+                continue
             typer.echo(f"[{r['id']}] {n}: {r['target_id']}.{r['field']}  (seen ×{r.get('count', 1)})")
             typer.echo(f"    reason   : {r['reason']}")
             typer.echo(f"    proposed : {r['proposed'][:300]}")
@@ -56,7 +63,10 @@ def apply(
 
     result = apply_recommendation(_workspace(), name, rec_id)
     if result.get("ok"):
-        typer.echo(f"Applied: {name} — {result['target_id']}.{result['field']} updated and versioned.")
+        if "script" in result:
+            typer.echo(f"Applied: {name} — script {result['script']} updated and versioned.")
+        else:
+            typer.echo(f"Applied: {name} — {result['target_id']}.{result['field']} updated and versioned.")
     else:
         typer.echo(f"Error: {result.get('error')}")
         raise typer.Exit(1)

@@ -26,7 +26,16 @@ script edit on a node that *routes* (or a file referenced by one) is always
 An ``ok`` script proposal also runs the deterministic pre-apply gate
 (``script_precheck.precheck_script_edit`` — syntax, security scan, smoke run)
 before it is ever queued; a failing check escalates it as a structural
-suggestion carrying the check's own output, never silently dropped.
+suggestion carrying the check's own output, never silently dropped. The
+gate's smoke step is the only one that executes the proposed code, so the
+queue-time call runs it (``smoke=True``) ONLY when the proposal could land
+without a person acting — ``improvement_mode: auto`` and not
+``manual_only`` — since that is the case where code is about to run
+unattended anyway. A manual-mode or ``manual_only`` proposal gets syntax +
+security scan only at queue time (``smoke=False``); its code is not executed
+until a user clicks Apply, which re-runs the FULL gate (smoke included)
+inside ``apply_recommendation`` — the apply click is the consent for that
+execution.
 
 ``workflows/scripts/`` is a namespace shared by every workflow in the
 workspace, not scoped to one — a ``script_file`` proposal is auto-appliable
@@ -309,7 +318,8 @@ def _failing_script_nodes(wf, diag) -> list[str]:
 
 
 def _classify_proposal(proposal: dict | None, wf, diag, script_exists: Callable[[str], bool],
-                       script_referenced_elsewhere: Callable[[str], bool]):
+                       script_referenced_elsewhere: Callable[[str], bool],
+                       script_path_exists: Callable[[str], bool]):
     """('ok', _Proposal) — in scope and actionable;
     ('structural', why) — outside scope, or script-shaped but missing evidence;
     ('skip', None) — unparseable / empty / in-scope no-op.
@@ -318,7 +328,11 @@ def _classify_proposal(proposal: dict | None, wf, diag, script_exists: Callable[
     workflow's node references ``script`` (see ``_script_referenced_outside``)
     — the script_file lane's ``manual_only`` decision needs this, since
     ``workflows/scripts/`` is shared across the whole workspace, not scoped
-    to ``wf`` alone."""
+    to ``wf`` alone. ``script_path_exists(script)`` checks raw file existence
+    without the single-segment restriction ``script_exists`` enforces — used
+    only to tell a genuinely missing script apart from a nested one (e.g.
+    ``sub/tool.sh``) that exists but is out of the repair lane's reach, so the
+    escalation message never claims a real file "does not exist"."""
     if not isinstance(proposal, dict) or not proposal:
         return "skip", None
     field = proposal.get("field")
@@ -365,7 +379,12 @@ def _classify_proposal(proposal: dict | None, wf, diag, script_exists: Callable[
     if not proposed or not str(proposed).strip():
         return "skip", None
     if field == "script_file":
-        why = f"script {proposal.get('script')!r} does not exist under workflows/scripts/"
+        script = proposal.get("script")
+        if script and "/" in str(script).replace("\\", "/") and script_path_exists(script):
+            why = ("nested script paths are not editable by the dream "
+                   "(single-segment filenames only)")
+        else:
+            why = f"script {script!r} does not exist under workflows/scripts/"
     elif target and target in wf.nodes:
         why = (f"field {field!r} is outside the editable scope "
                f"(prompt; command/script_file with recurring failure evidence)")
@@ -456,6 +475,23 @@ def _script_file_exists(workspace, name: str) -> bool:
     return (workflows_dir(workspace) / "scripts" / name).is_file()
 
 
+def _script_path_exists(workspace, name: str) -> bool:
+    """True when ``name`` resolves to an existing file under workflows/scripts/,
+    including a nested path (e.g. ``sub/tool.sh``) — unlike ``_script_file_exists``,
+    this does not enforce the single-segment restriction. Used only to give an
+    honest escalation message: the repair lane still refuses to edit a nested
+    path, but "does not exist" is false when it does, just out of reach."""
+    if not name:
+        return False
+    parts = name.replace("\\", "/").split("/")
+    if any(p in ("", "..") for p in parts):
+        return False   # empty segment or traversal — never a real, safe path
+    try:
+        return (workflows_dir(workspace) / "scripts" / name).is_file()
+    except OSError:
+        return False
+
+
 def run_workflow_improve_pass(workspace, *, llm_invoke=None, model=None) -> dict:
     """Observe workflows with new runs; recommend (manual), apply (auto), or
     escalate structural ideas to the user. Best-effort per workflow: one failing
@@ -501,7 +537,8 @@ def run_workflow_improve_pass(workspace, *, llm_invoke=None, model=None) -> dict
             proposal = _parse_proposal(content) or {}
             verdict, payload = _classify_proposal(
                 proposal, wf, diag, lambda n: _script_file_exists(workspace, n),
-                lambda s: _script_referenced_outside(workspace, name, s))
+                lambda s: _script_referenced_outside(workspace, name, s),
+                lambda s: _script_path_exists(workspace, s))
             run_ids = [r.get("run_id") for r in records]
             if verdict == "ok":
                 reason = proposal.get("reason", "")
@@ -513,7 +550,13 @@ def run_workflow_improve_pass(workspace, *, llm_invoke=None, model=None) -> dict
                         logger.warning("cannot read script {} for {}: {}", payload.script, name, exc)
                         run_log.advance_cursor(workspace, name, newest_ts)
                         continue
-                    ok, detail = precheck_script_edit("script_file", payload.proposed, filename=payload.script)
+                    # Smoke (code execution) only at queue time when this proposal could
+                    # land without a person acting; manual/manual_only defers execution to
+                    # the user's own Apply click, which re-runs the full gate (see module
+                    # docstring for the exact contract).
+                    smoke = wf.improvement_mode == "auto" and not payload.manual_only
+                    ok, detail = precheck_script_edit(
+                        "script_file", payload.proposed, filename=payload.script, smoke=smoke)
                     if not ok:
                         rid = wr.log_structural_suggestion(
                             workspace, name, proposal=proposal, why_rejected=detail,
@@ -552,7 +595,9 @@ def run_workflow_improve_pass(workspace, *, llm_invoke=None, model=None) -> dict
                     target, field = payload.target_id, payload.kind
                     current = getattr(wf.nodes[target], field, "")
                     if field == "command":
-                        ok, detail = precheck_script_edit("command", payload.proposed)
+                        # Same execution-consent contract as the script_file branch above.
+                        smoke = wf.improvement_mode == "auto" and not payload.manual_only
+                        ok, detail = precheck_script_edit("command", payload.proposed, smoke=smoke)
                         if not ok:
                             rid = wr.log_structural_suggestion(
                                 workspace, name, proposal=proposal, why_rejected=detail,

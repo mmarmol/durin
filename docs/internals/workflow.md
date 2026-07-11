@@ -679,6 +679,8 @@ End-to-end for a single `run_workflow` call:
     a check).
   - a `script_file`'s full new content — only for a file under
     `<workspace>/workflows/scripts/` referenced by a node with that same evidence.
+    The repair lane only edits single-segment filenames: a nested reference (e.g.
+    `sub/tool.sh`) is left alone even when it is the one failing.
 
   A script proposal on a node that **routes** (`on_pass`/`on_fail` or `cases` — a
   gate), or a `script_file` referenced by any routing node, is always `manual_only`:
@@ -700,7 +702,13 @@ End-to-end for a single `run_workflow` call:
   dream-bundled skill scripts), and a smoke run (empty stdin, a scratch cwd, the
   clean env allowlist regardless of the node's own `env` mode, a short timeout —
   fails only on a startup-crash signature, not a plain non-zero exit, since a gate
-  legitimately exiting 1 on empty input is healthy). The gate fails closed at every
+  legitimately exiting 1 on empty input is healthy). The smoke run is the only one
+  of the three that executes the proposed code, so it only runs at QUEUE time when
+  the proposal could land without a person acting (`improvement_mode: auto` and not
+  `manual_only`) — a manual-mode or `manual_only` proposal gets syntax + security
+  scan only at queue time, and the smoke run happens later, at APPLY time, where a
+  user's own Apply click is the consent for that execution. The apply-time re-run
+  always runs the full gate, smoke included. The gate fails closed at every
   step (a scanner crash, unscannable content with no recognized extension or shebang,
   etc. all count as a failure, never a free pass). A failing check is never silently
   dropped: it lands as a `kind: structural` recommendation with the check's own

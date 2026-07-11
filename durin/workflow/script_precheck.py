@@ -21,6 +21,12 @@ failure wins and its output tail becomes the ``detail`` in the result:
    not a broken one. The smoke step only fails on a spawn error, a timeout,
    or a startup-crash signature in stderr (missing interpreter, unresolved
    import, syntax error surfacing at runtime instead of parse time, etc).
+
+The ``smoke`` keyword controls whether step 3 runs at all: when False, only
+syntax and the security scan run — the proposed code is never executed. This
+lets a caller separate "is this safe to look at" from "is this safe to run",
+so code is only ever executed where a human's own action (an apply click) or
+an already-approved auto-apply is the consent for running it.
 """
 
 from __future__ import annotations
@@ -128,6 +134,7 @@ def precheck_script_edit(
     filename: str | None = None,
     env: str = "clean",
     timeout: int = 5,
+    smoke: bool = True,
 ) -> tuple[bool, str]:
     """Run the syntax / security / smoke gate over a proposed script edit.
 
@@ -136,7 +143,11 @@ def precheck_script_edit(
     other-executable run directly via its own shebang). `env` is accepted for
     API symmetry with the node's own `env` field but is currently always
     treated as "clean" — the smoke run intentionally never adopts
-    `env: "inherit"`, since it isn't a real run.
+    `env: "inherit"`, since it isn't a real run. `smoke` (default True) gates
+    whether the third check — the only one that actually executes the
+    proposed code — runs at all; a caller in a context where execution is not
+    yet consented to (see callers for the exact contract) passes False and
+    gets syntax + security scan only.
     """
     if kind not in ("command", "script_file"):
         raise ValueError(f"kind must be 'command' or 'script_file', got {kind!r}")
@@ -166,9 +177,10 @@ def precheck_script_edit(
         if not ok:
             return False, detail
 
-        argv = _smoke_argv(kind, suffix, content, script_path)
-        ok, detail = _check_smoke(argv, timeout)
-        if not ok:
-            return False, detail
+        if smoke:
+            argv = _smoke_argv(kind, suffix, content, script_path)
+            ok, detail = _check_smoke(argv, timeout)
+            if not ok:
+                return False, detail
 
     return True, ""
