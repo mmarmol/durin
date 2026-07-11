@@ -45,3 +45,37 @@ def test_remove_and_boot_sync(tmp_path):
     assert cron.get_job(loop_job_id("briefing", 0)) is not None
     remove_loop_jobs(cron, "briefing")
     assert cron.get_job(loop_job_id("briefing", 0)) is None
+
+
+def test_sync_skips_channel_triggers_and_keeps_cron_index(tmp_path):
+    cron = _cron(tmp_path)
+    spec = _spec(triggers=[
+        {"source": "cron", "schedule": {"kind": "cron", "expr": "0 7 * * *", "tz": "UTC"}},
+        {"source": "channel", "channel": "email"},
+    ])
+    sync_loop_jobs(cron, spec)
+    jobs = cron.list_jobs(include_disabled=True)
+    assert len(jobs) == 1
+    job = cron.get_job(loop_job_id("briefing", 0))
+    assert job is not None
+    assert job.payload.kind == "loop_trigger" and job.payload.loop == "briefing"
+    assert cron.get_job(loop_job_id("briefing", 1)) is None
+
+
+def test_sync_channel_only_loop_registers_no_jobs(tmp_path):
+    cron = _cron(tmp_path)
+    spec = _spec(triggers=[{"source": "channel", "channel": "email"}])
+    sync_loop_jobs(cron, spec)
+    assert cron.list_jobs(include_disabled=True) == []
+
+
+def test_sync_disable_removes_mixed_trigger_jobs(tmp_path):
+    cron = _cron(tmp_path)
+    mixed_triggers = [
+        {"source": "cron", "schedule": {"kind": "cron", "expr": "0 7 * * *", "tz": "UTC"}},
+        {"source": "channel", "channel": "email"},
+    ]
+    sync_loop_jobs(cron, _spec(triggers=mixed_triggers))
+    assert cron.get_job(loop_job_id("briefing", 0)) is not None
+    sync_loop_jobs(cron, _spec(triggers=mixed_triggers, enabled=False))
+    assert cron.get_job(loop_job_id("briefing", 0)) is None

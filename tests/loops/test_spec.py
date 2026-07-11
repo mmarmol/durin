@@ -146,6 +146,13 @@ def test_parse_rejects_bad_channel():
         parse_loop(data)
 
 
+def test_parse_rejects_bad_match():
+    data = _minimal()
+    data["triggers"] = [{"source": "channel", "channel": "email", "match": "sometimes"}]
+    with pytest.raises(LoopError):
+        parse_loop(data)
+
+
 def test_parse_rejects_cron_with_filters():
     data = _minimal()
     data["triggers"] = [

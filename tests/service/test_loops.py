@@ -288,6 +288,29 @@ def test_global_runs_feed_route_is_not_shadowed_by_loop_name_route(tmp_path):
     assert "definition" not in body
 
 
+def test_save_route_accepts_an_enabled_loop_with_a_channel_trigger(tmp_path):
+    """Regression: sync_loop_jobs used to do CronSchedule(**trig.schedule) on
+    every trigger regardless of source — a channel trigger's empty schedule
+    raised TypeError, which surfaced as a 500 on this route."""
+    client = _http_client(tmp_path)
+    headers = {"Authorization": "Bearer test-token"}
+    definition = {
+        **_VALID,
+        "name": "chan1",
+        "enabled": True,
+        "triggers": [{"source": "channel", "channel": "email"}],
+    }
+
+    resp = client.put("/api/v1/loops/chan1", json={"definition": definition}, headers=headers)
+    assert resp.status_code == 200
+
+    got = client.get("/api/v1/loops/chan1", headers=headers)
+    assert got.status_code == 200
+    assert got.json()["definition"]["triggers"] == [
+        {"source": "channel", "channel": "email", "filters": {}, "match": "wake_or_new"}
+    ]
+
+
 def test_answer_route_accepts_a_waiting_info_run(tmp_path):
     """A run parked as waiting_info (counterpart-bound ask) must resolve through
     the same /answer route as a needs_operator run — the route must not
