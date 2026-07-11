@@ -1356,6 +1356,9 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
         def build_concurrency_snapshot(self):
             return {"lanes": {}, "queued": 0, "work": []}
 
+        def register_loops_tool(self, runtime) -> None:
+            return None
+
         async def process_direct(self, *_args, **_kwargs):
             return OutboundMessage(
                 channel="telegram",
@@ -1493,6 +1496,9 @@ def test_gateway_cron_job_passes_none_on_progress_for_bus_callback(
 
         def build_concurrency_snapshot(self):
             return {"lanes": {}, "queued": 0, "work": []}
+
+        def register_loops_tool(self, runtime) -> None:
+            return None
 
         async def process_direct(self, *_args, on_progress=None, **_kwargs):
             seen["on_progress"] = on_progress
@@ -1730,6 +1736,9 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
 
         def build_concurrency_snapshot(self):
             return {"lanes": {}, "queued": 0, "work": []}
+
+        def register_loops_tool(self, runtime) -> None:
+            return None
 
         async def run(self) -> None:
             await asyncio.Event().wait()

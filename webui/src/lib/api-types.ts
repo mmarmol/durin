@@ -622,6 +622,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/loops": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List all loop definitions, with live run counts. */
+        get: operations["loops_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loops/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Global activity feed across every loop, newest-first. */
+        get: operations["loops_runs_feed"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loops/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Load one loop's full definition. */
+        get: operations["loops_get"];
+        /** Create or update a loop definition. */
+        put: operations["loops_save"];
+        post?: never;
+        /** Delete a loop definition. */
+        delete: operations["loops_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loops/{name}/fire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Manually fire a loop. */
+        post: operations["loops_fire"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loops/{name}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List one loop's persisted runs, newest-first. */
+        get: operations["loops_runs_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/loops/{name}/runs/{run_id}/answer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Answer a loop run that is waiting on an operator. */
+        post: operations["loops_answer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mcp/registry/describe": {
         parameters: {
             query?: never;
@@ -3222,6 +3326,121 @@ export interface components {
             next_cursor: unknown;
             /** Scanned Through Ts */
             scanned_through_ts: unknown;
+        };
+        /** LoopAnswerCommand */
+        LoopAnswerCommand: {
+            /** Answer */
+            answer: string;
+            /** Name */
+            name: string;
+            /** Run Id */
+            run_id: string;
+        };
+        /** LoopAnswerResult */
+        LoopAnswerResult: {
+            /** Run */
+            run: {
+                [key: string]: unknown;
+            };
+        };
+        /** LoopDeleteCommand */
+        LoopDeleteCommand: {
+            /** Name */
+            name: string;
+        };
+        /** LoopDeleteResult */
+        LoopDeleteResult: {
+            /** Deleted */
+            deleted: boolean;
+        };
+        /** LoopFireCommand */
+        LoopFireCommand: {
+            /** Name */
+            name: string;
+            /**
+             * Task
+             * @default
+             */
+            task: string;
+        };
+        /** LoopFireResult */
+        LoopFireResult: {
+            /** Run */
+            run: {
+                [key: string]: unknown;
+            };
+        };
+        /** LoopGetQuery */
+        LoopGetQuery: {
+            /** Name */
+            name: string;
+        };
+        /** LoopGetResult */
+        LoopGetResult: {
+            /** Definition */
+            definition: {
+                [key: string]: unknown;
+            };
+            /** Name */
+            name: string;
+        };
+        /** LoopRunsQuery */
+        LoopRunsQuery: {
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+            /** Name */
+            name: string;
+        };
+        /** LoopRunsResult */
+        LoopRunsResult: {
+            /** Runs */
+            runs: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** LoopSaveCommand */
+        LoopSaveCommand: {
+            /** Definition */
+            definition: {
+                [key: string]: unknown;
+            };
+            /** Name */
+            name: string;
+        };
+        /** LoopSaveResult */
+        LoopSaveResult: {
+            /** Name */
+            name: string;
+        };
+        /**
+         * LoopsListQuery
+         * @description No inputs — lists every loop, each with its live run counts.
+         */
+        LoopsListQuery: Record<string, never>;
+        /** LoopsListResult */
+        LoopsListResult: {
+            /** Loops */
+            loops: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** LoopsRunsQuery */
+        LoopsRunsQuery: {
+            /**
+             * Limit
+             * @default 50
+             */
+            limit: number;
+        };
+        /** LoopsRunsResult */
+        LoopsRunsResult: {
+            /** Runs */
+            runs: {
+                [key: string]: unknown;
+            }[];
         };
         /**
          * MCPOAuthConfig
@@ -6478,6 +6697,198 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LogsListResult"];
+                };
+            };
+        };
+    };
+    loops_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoopsListQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopsListResult"];
+                };
+            };
+        };
+    };
+    loops_runs_feed: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoopsRunsQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopsRunsResult"];
+                };
+            };
+        };
+    };
+    loops_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoopGetQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopGetResult"];
+                };
+            };
+        };
+    };
+    loops_save: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoopSaveCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopSaveResult"];
+                };
+            };
+        };
+    };
+    loops_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoopDeleteCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopDeleteResult"];
+                };
+            };
+        };
+    };
+    loops_fire: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoopFireCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopFireResult"];
+                };
+            };
+        };
+    };
+    loops_runs_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoopRunsQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopRunsResult"];
+                };
+            };
+        };
+    };
+    loops_answer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoopAnswerCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopAnswerResult"];
                 };
             };
         };

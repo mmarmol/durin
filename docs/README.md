@@ -45,6 +45,8 @@ How to install, configure, and run durin.
   (PDF, Office, EPUB, web pages) to read now or remember into the Library.
 - [Workflows](guide/workflows.md) — defining and running multi-step flow
   graphs: nodes, routing, loops, and parallel branches.
+- [Loops](guide/loops.md) — goal-driven recurring work: triggers, checks,
+  the Activity view, and answering asks.
 
 ### Internals — for contributors and curious readers
 

@@ -14,6 +14,7 @@ import { useTranslation } from "react-i18next";
 interface DeleteConfirmProps {
   open: boolean;
   title: string;
+  titleKey?: string;
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -21,6 +22,7 @@ interface DeleteConfirmProps {
 export function DeleteConfirm({
   open,
   title,
+  titleKey = "deleteConfirm.title",
   onCancel,
   onConfirm,
 }: DeleteConfirmProps) {
@@ -37,7 +39,7 @@ export function DeleteConfirm({
             </div>
           </div>
           <AlertDialogTitle className="text-center text-[20px] font-semibold leading-tight tracking-[-0.02em] text-foreground">
-            {t("deleteConfirm.title", { title })}
+            {t(titleKey, { title })}
           </AlertDialogTitle>
           <AlertDialogDescription className="mt-3 max-w-[17rem] text-center text-[14px] leading-6 text-muted-foreground">
             {t("deleteConfirm.description")}

@@ -1641,6 +1641,14 @@ def _run_gateway(
                 ) from _dream_error
             return None
 
+        # Loop triggers fire the loops runtime directly (not the agent turn below).
+        if job.payload.kind == "loop_trigger":
+            if not job.payload.loop:
+                logger.warning("loop_trigger cron job {} has no loop name; skipping", job.id)
+                return None
+            await loops_runtime.try_fire(job.payload.loop, source="cron")
+            return None
+
         from durin.cron.prompting import build_cron_turn_prompt
         from durin.utils.evaluator import evaluate_response
 
@@ -1695,6 +1703,56 @@ def _run_gateway(
         return response
 
     cron.on_job = on_cron_job
+
+    # Loops: cron-triggered runs, verified against an LLM judge, with operator
+    # asks/escalations delivered through the same channel path cron uses. A
+    # dedicated WorkflowsService instance (workflows_service isn't built yet at
+    # this point — build_service_registry constructs its own further down).
+    import time
+
+    from durin.loops.judge import build_prompt as _loop_build_prompt
+    from durin.loops.judge import parse_verdict as _loop_parse_verdict
+    from durin.loops.runtime import LoopsRuntime
+    from durin.loops.store import load_loop as _load_loop
+    from durin.service.workflows import WorkflowsService as _LoopsWorkflowsService
+
+    _loops_workflows_service = _LoopsWorkflowsService(
+        config.workspace_path, app_config=config, sessions=session_manager,
+    )
+
+    async def _loop_judge(intent: str, assertions: list[str], evidence: str) -> dict:
+        prompt = _loop_build_prompt(intent, assertions, evidence)
+        resp = await agent.process_direct(
+            # loop:judge:run:{ms} — matches durin.cron.reaper's run-session
+            # pattern so judge sessions are reaped like cron run sessions
+            # instead of accumulating forever.
+            prompt, session_key=f"loop:judge:run:{int(time.time() * 1000)}",
+        )
+        return _loop_parse_verdict(resp.content if resp else "")
+
+    async def _on_loop_ask(loop: str, run_id: str, kind: str, text: str) -> None:
+        try:
+            spec = _load_loop(config.workspace_path, loop)
+        except Exception:
+            return
+        if not spec.operator_channel:
+            return
+        try:
+            await _deliver_to_channel(
+                OutboundMessage(channel=spec.operator_channel, chat_id=spec.operator_to or "direct", content=text),
+            )
+        except Exception:
+            logger.exception("loop operator notification (non-fatal) failed")
+
+    loops_runtime = LoopsRuntime(
+        config.workspace_path,
+        workflow_exec=_loops_workflows_service.execute,
+        judge=_loop_judge,
+        keep_runs=config.loops.keep_runs,
+        check_timeout_s=config.loops.check_timeout_s,
+        on_operator_ask=_on_loop_ask,
+    )
+    agent.register_loops_tool(loops_runtime)
 
     def _webui_runtime_model_name() -> str | None:
         model = getattr(agent, "model", None)
@@ -1804,6 +1862,17 @@ def _run_gateway(
         console.print(
             f"[green]✓[/green] Cron: pruned orphaned system job(s): {', '.join(pruned)}"
         )
+
+    # Reconcile loop trigger cron jobs with the stored loop definitions.
+    # Best-effort: parse-time validation (LoopSpec._parse_trigger) makes a bad
+    # schedule unrepresentable going forward, but a legacy/hand-edited loop
+    # file could still fail here — one bad loop must not crash gateway boot.
+    from durin.loops.cron_sync import sync_all as _loops_sync_all
+
+    try:
+        _loops_sync_all(cron, config.workspace_path)
+    except Exception:
+        logger.exception("loops cron sync (non-fatal) failed")
 
     # Wire the post-compaction + session-close hooks so dream picks up
     # consolidated context while the signal is fresh. Background daemon
@@ -2031,6 +2100,7 @@ def _run_gateway(
                     mcp_runtime=_McpRuntime(agent),
                     subagent_manager=agent.subagents,
                     channel_manager=channels,
+                    loops_runtime=loops_runtime,
                     tool_registry_resolver=lambda: agent.tools,
                     on_config_changed=agent.reload_app_config,
                     on_default_changed=agent.apply_default_model_live,

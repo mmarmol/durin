@@ -3,6 +3,7 @@ import {
   Menu,
   Moon,
   Network,
+  Repeat,
   Search,
   Settings,
   Sparkles,
@@ -34,6 +35,8 @@ interface SidebarProps {
   onOpenWorkflows?: () => void;
   workflowsActive?: boolean;
   strandedRunsCount?: number;
+  onOpenLoops?: () => void;
+  loopsActive?: boolean;
   onOpenDream?: () => void;
   dreamActive?: boolean;
   onCollapse: () => void;
@@ -235,6 +238,25 @@ export function Sidebar(props: SidebarProps) {
                 {props.strandedRunsCount}
               </span>
             )}
+          </Button>
+        </div>
+      ) : null}
+      {props.onOpenLoops ? (
+        <div className="px-2.5 pb-2">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={props.onOpenLoops}
+            className={cn(
+              "h-8 w-full justify-start gap-2 rounded-full px-2.5 text-[12.5px] font-medium",
+              props.loopsActive
+                ? "bg-sidebar-accent/80 text-sidebar-foreground"
+                : "text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
+            )}
+            aria-pressed={!!props.loopsActive}
+          >
+            <Repeat className="h-3.5 w-3.5" aria-hidden />
+            {t("loops.title")}
           </Button>
         </div>
       ) : null}

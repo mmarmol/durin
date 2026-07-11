@@ -729,6 +729,157 @@ export async function updateCronJob(
   return res.job;
 }
 
+// -- loops --------------------------------------------------------------
+
+export interface LoopCheck {
+  kind: "script" | "assertion";
+  required: boolean;
+  command?: string;
+  text?: string;
+}
+
+export interface LoopTrigger {
+  source: "cron";
+  schedule: {
+    kind: "at" | "every" | "cron";
+    expr?: string;
+    tz?: string;
+    every_ms?: number;
+    at_ms?: number;
+  };
+}
+
+export interface LoopDef {
+  name: string;
+  enabled: boolean;
+  workflow: string;
+  goal: { intent: string; checks: LoopCheck[]; checks_sufficient?: boolean };
+  triggers: LoopTrigger[];
+  concurrency: "single" | "parallel";
+  stuck_after: number;
+  operator_channel: string | null;
+  operator_to: string | null;
+}
+
+export interface LoopSummary extends LoopDef {
+  active_runs: number;
+  needs_operator: number;
+}
+
+export interface LoopRun {
+  run_id: string;
+  loop: string;
+  status: "running" | "needs_operator" | "done" | "no_goal" | "escalated" | "error";
+  source: string;
+  task: string;
+  ask: string | null;
+  goal_reached: boolean | null;
+  started_at: number;
+  finished_at: number | null;
+  detail: string | null;
+}
+
+export async function listLoops(
+  token: string,
+  base: string = "",
+): Promise<LoopSummary[]> {
+  const body = await request<{ loops: LoopSummary[] }>(
+    `${base}/api/v1/loops`,
+    token,
+  );
+  return body.loops;
+}
+
+export async function getLoop(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<LoopDef> {
+  const body = await request<{ name: string; definition: LoopDef }>(
+    `${base}/api/v1/loops/${encodeURIComponent(name)}`,
+    token,
+  );
+  return body.definition;
+}
+
+export async function saveLoop(
+  token: string,
+  def: LoopDef,
+  base: string = "",
+): Promise<void> {
+  await put<{ name: string }>(
+    `${base}/api/v1/loops/${encodeURIComponent(def.name)}`,
+    token,
+    { definition: def },
+  );
+}
+
+export async function deleteLoop(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<void> {
+  await del<{ deleted: boolean }>(
+    `${base}/api/v1/loops/${encodeURIComponent(name)}`,
+    token,
+    {},
+  );
+}
+
+export async function fireLoop(
+  token: string,
+  name: string,
+  task: string = "",
+  base: string = "",
+): Promise<LoopRun> {
+  const body = await post<{ run: LoopRun }>(
+    `${base}/api/v1/loops/${encodeURIComponent(name)}/fire`,
+    token,
+    { task },
+  );
+  return body.run;
+}
+
+export async function answerLoopRun(
+  token: string,
+  name: string,
+  runId: string,
+  answer: string,
+  base: string = "",
+): Promise<LoopRun> {
+  const body = await post<{ run: LoopRun }>(
+    `${base}/api/v1/loops/${encodeURIComponent(name)}/runs/${encodeURIComponent(runId)}/answer`,
+    token,
+    { answer },
+  );
+  return body.run;
+}
+
+export async function listLoopRuns(
+  token: string,
+  name: string,
+  limit: number = 50,
+  base: string = "",
+): Promise<LoopRun[]> {
+  const body = await request<{ runs: LoopRun[] }>(
+    `${base}/api/v1/loops/${encodeURIComponent(name)}/runs?limit=${encodeURIComponent(String(limit))}`,
+    token,
+  );
+  return body.runs;
+}
+
+export async function listAllLoopRuns(
+  token: string,
+  limit: number = 100,
+  base: string = "",
+): Promise<LoopRun[]> {
+  const body = await request<{ runs: LoopRun[] }>(
+    `${base}/api/v1/loops/runs?limit=${encodeURIComponent(String(limit))}`,
+    token,
+  );
+  return body.runs;
+}
+
 export async function getConfig(
   token: string,
   base: string = "",

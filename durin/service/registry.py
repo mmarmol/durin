@@ -88,12 +88,14 @@ class ServiceRegistry:
         cron_service: Any = None,
         bus: Any = None,
         channel_manager: Any = None,
+        loops_runtime: Any = None,
     ) -> None:
         self.config = config
         self.session_manager = session_manager
         self.cron_service = cron_service
         self.bus = bus
         self.channel_manager = channel_manager
+        self.loops_runtime = loops_runtime
         self._services: dict[str, Any] = {}
         self._routes: list[BoundRoute] = []
 

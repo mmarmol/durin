@@ -179,6 +179,7 @@ class CronService:
                                 or {}
                             ),
                             session_key=j["payload"].get("sessionKey") or j["payload"].get("session_key"),
+                            loop=j["payload"].get("loop"),
                         ),
                         state=CronJobState(
                             next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -320,6 +321,7 @@ class CronService:
                         "to": j.payload.to,
                         "channelMeta": j.payload.channel_meta,
                         "sessionKey": j.payload.session_key,
+                        "loop": j.payload.loop,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,
