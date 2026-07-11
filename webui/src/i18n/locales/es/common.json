@@ -1130,6 +1130,48 @@
       }
     }
   },
+  "loops": {
+    "title": "Loops",
+    "tab": {
+      "activity": "Actividad",
+      "definitions": "Definiciones"
+    },
+    "activity": {
+      "loading": "Cargando…",
+      "empty": "Todavía no hay ejecuciones de loops.",
+      "answerPlaceholder": "Escribe tu respuesta…",
+      "send": "Enviar",
+      "status": {
+        "running": "en curso",
+        "needs_operator": "te necesita",
+        "done": "listo",
+        "no_goal": "sin objetivo",
+        "escalated": "escalado",
+        "error": "error"
+      }
+    },
+    "definitions": {
+      "loading": "Cargando…",
+      "empty": "Todavía no hay loops — hacé clic en Nuevo loop para crear uno.",
+      "new": "Nuevo loop",
+      "edit": "Editar",
+      "delete": "Eliminar",
+      "enabled": "habilitado",
+      "disabled": "deshabilitado",
+      "back": "Volver",
+      "newPlaceholder": "El formulario para crear un loop llega en una siguiente entrega.",
+      "editPlaceholder": "El formulario para editar \"{{name}}\" llega en una siguiente entrega.",
+      "countLabel_one": "{{count}} loop",
+      "countLabel_other": "{{count}} loops",
+      "columns": {
+        "name": "Nombre",
+        "workflow": "Workflow",
+        "triggers": "Disparadores",
+        "active": "Activos",
+        "needsOperator": "Te necesitan"
+      }
+    }
+  },
   "skills": {
     "view": "Ver",
     "remove": "Eliminar",
