@@ -8562,7 +8562,7 @@
             "description": "Success"
           }
         },
-        "summary": "Answer a loop run that is waiting on an operator.",
+        "summary": "Answer a loop run awaiting an operator or a counterpart reply.",
         "x-required-scope": "loops:write"
       }
     },

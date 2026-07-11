@@ -718,7 +718,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Answer a loop run that is waiting on an operator. */
+        /** Answer a loop run awaiting an operator or a counterpart reply. */
         post: operations["loops_answer"];
         delete?: never;
         options?: never;

@@ -161,6 +161,21 @@ async def test_create_invalid_definition_returns_loop_error_message(tmp_path):
     assert "Traceback" not in out
 
 
+async def test_status_shows_waiting_info_and_queued_counts(tmp_path):
+    from durin.loops import queue
+
+    save_loop(tmp_path, parse_loop({"name": "l1", "workflow": "w1", "goal": {"intent": "done"}}))
+    rt = _runtime(tmp_path, [_wr("needs_input", out="[TO:counterpart] need more info", needs_input_node="g")])
+    tool = LoopsTool.create(_ctx(tmp_path, runtime=rt))
+    queue.push(tmp_path, "l1", {"content": "queued event"})
+
+    await rt.fire("l1", source="channel", origin={"thread": "t1", "channel": "test"})
+
+    out = await tool.execute(action="status", name="l1")
+    assert "1 waiting_info" in out
+    assert "Queued events: 1" in out
+
+
 async def test_status_unknown_loop_returns_readable_error(tmp_path):
     rt = _runtime(tmp_path, [])
     tool = LoopsTool.create(_ctx(tmp_path, runtime=rt))
