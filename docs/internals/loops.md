@@ -126,7 +126,7 @@ turns a workflow's terminal status into a loop-run status:
 | goal verification raised | `error` | A judge/provider failure during `verify_goal` must not strand a `completed` run — it is recorded as `error`, not left `running`. |
 
 `_post_finish` runs for the `done`, `no_goal`, and `error` outcomes: it checks
-for **escalation** (§4e), emits `loops.run_finished` telemetry, and prunes old
+for **escalation** (§4g), emits `loops.run_finished` telemetry, and prunes old
 runs. The `needs_input` → `needs_operator` branch returns from `_interpret`
 before `_post_finish` runs, so a `needs_operator` run emits no
 `loops.run_finished` event and is not pruned — it only reaches `_post_finish`
@@ -301,7 +301,7 @@ retrying on its own triggers, but a human now knows it isn't converging.
   `durin/telemetry/schema.py`.
 - **Web dashboard:** a **Loops** section with two panes — **Activity** (the
   global run feed, `needs_operator` runs surfaced first with an inline
-  answer box) and **Definitions** (create/edit/delete, with a form for
+  answer box) and **Definitions** (create/edit/delete/run-now, with a form for
   triggers, goal intent + checks, the workflow to run, concurrency, stuck
   threshold, and operator contact). See [the user guide](../guide/loops.md)
   for the walkthrough.
