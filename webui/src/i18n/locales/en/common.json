@@ -1160,6 +1160,10 @@
     "recCopyFailed": "Could not copy to the clipboard.",
     "recStructural": "structural",
     "recStructuralHint": "Out of the dream's prompt-only scope — never auto-applied; treat it in a session",
+    "recCurrent": "current",
+    "recProposed": "proposed",
+    "recScriptFile": "script file",
+    "recManualOnly": "gate edit — needs your review",
     "kind": {
       "work": "work",
       "script": "script",
