@@ -73,6 +73,10 @@ class NodeRunRequest:
     # left: a FAIL verdict now ends the run as 'exhausted' instead of looping. The
     # runner tells the gate so its last verdict is definitive, not another loop turn.
     fail_would_exhaust: bool = False
+    # The engine's own cooperative-cancel poll, handed only to a script node so its
+    # runner can check it mid-subprocess (an agent turn has no equivalent mid-turn
+    # hook, so it stays None there — unchanged, between-nodes-only cancellation).
+    cancel_check: Callable[[], bool] | None = None
 
 
 @dataclass
@@ -143,6 +147,13 @@ _SHARED_CONTEXT_MAX_MESSAGES = 200
 class WorkflowConfigError(RuntimeError):
     """The workflow is wired wrong (e.g. a subworkflow node but no subworkflow runner). A
     programmer/config error — it fails fast rather than being swallowed as a run abort."""
+
+
+class ScriptCancelled(RuntimeError):
+    """A script node's subprocess was killed mid-run by a cooperative cancel (as
+    opposed to timing out or exiting non-zero). Raised by the script runner and
+    carried as a NodeExecutionError's cause so run() can end the run 'cancelled'
+    rather than 'aborted'."""
 
 
 class NodeExecutionError(RuntimeError):
@@ -275,14 +286,23 @@ class WorkflowEngine:
                 effective_root, started_at, parent_run_id)
             raise
         except NodeExecutionError as exc:
-            # A named node failure: the walk already appended its node_failed NodeRun.
-            # Carry the node identity into the aborted result so the abort names it.
-            result = WorkflowResult(
-                status="aborted",
-                final_output=f"workflow aborted: node {exc.node_id!r} (iteration {exc.iteration}) failed: {exc.cause}",
-                runs=runs, run_id=run_id,
-                failed_node=exc.node_id, failed_iteration=exc.iteration,
-            )
+            if isinstance(exc.cause, ScriptCancelled):
+                # A running script was killed by a cooperative cancel: end the run
+                # 'cancelled' (not 'aborted'), carrying the partial trace the walk
+                # already built. The walk's node_failed NodeRun for this node stays
+                # as-is (an honest per-node record); only the run-level status changes.
+                result = WorkflowResult(
+                    status="cancelled", final_output="run cancelled", runs=runs, run_id=run_id,
+                )
+            else:
+                # A named node failure: the walk already appended its node_failed NodeRun.
+                # Carry the node identity into the aborted result so the abort names it.
+                result = WorkflowResult(
+                    status="aborted",
+                    final_output=f"workflow aborted: node {exc.node_id!r} (iteration {exc.iteration}) failed: {exc.cause}",
+                    runs=runs, run_id=run_id,
+                    failed_node=exc.node_id, failed_iteration=exc.iteration,
+                )
         except Exception as exc:  # noqa: BLE001 - a node failure becomes a typed aborted result
             result = WorkflowResult(
                 status="aborted", final_output=f"workflow error: {exc}",
@@ -509,6 +529,9 @@ class WorkflowEngine:
                     output_dir=out_dir,
                     budget=budget,
                     fail_would_exhaust=fail_would_exhaust,
+                    # Only a script node gets the poll hook — an agent node's
+                    # cancellation stays between-nodes-only (unchanged).
+                    cancel_check=self._cancel_check if isinstance(node, ScriptNode) else None,
                 )
 
                 # Run a full agent turn; for a multi-way node the verdict is a matched

@@ -3,16 +3,17 @@ import time
 
 import pytest
 
-from durin.workflow.engine import NodeExecutionError, NodeRunRequest
+from durin.workflow.engine import NodeExecutionError, NodeRunRequest, ScriptCancelled
 from durin.workflow.script_runner import _MAX_TASK_ENV_CHARS, ScriptNodeRunner
 from durin.workflow.spec import ScriptNode
 
 
-def _req(node, upstream=None, tmp_path=None, iteration=1):
+def _req(node, upstream=None, tmp_path=None, iteration=1, cancel_check=None):
     return NodeRunRequest(
         node=node, task="the task", upstream_output=upstream, shared_context=[],
         run_id="r1", iteration=iteration, root_session_key=None,
         output_dir=str(tmp_path) if tmp_path else None,
+        cancel_check=cancel_check,
     )
 
 
@@ -89,6 +90,21 @@ def test_timeout_kills_process_group(tmp_path):
     with pytest.raises(NodeExecutionError, match="timed out"):
         runner(tmp_path)(_req(node, tmp_path=tmp_path))
     assert time.time() - t0 < 10
+
+
+def test_cancel_check_kills_running_process_before_timeout(tmp_path):
+    # timeout is generous (30s) so only the cancel flag — not the deadline — can
+    # end this run; the flag flips true after ~0.5-1s, well inside the timeout.
+    node = ScriptNode(id="slow", command="sleep 30", timeout=30, next=None)
+    t0 = time.monotonic()
+
+    def cancel_check():
+        return time.monotonic() - t0 > 0.5
+
+    with pytest.raises(NodeExecutionError) as exc:
+        runner(tmp_path)(_req(node, tmp_path=tmp_path, cancel_check=cancel_check))
+    assert isinstance(exc.value.cause, ScriptCancelled)
+    assert time.monotonic() - t0 < 10
 
 
 def test_stdout_capped_with_notice(tmp_path):

@@ -1,3 +1,6 @@
+import os
+import time
+
 import pytest
 
 from durin.workflow import run_log
@@ -193,3 +196,38 @@ def test_shared_buffer_passes_through_script(tmp_path):
     assert result.status == "completed"
     # b (shared) still received a's turns — the script did not consume or reset the buffer
     assert any("turn-a" in str(m) for m in reqs[1].shared_context)
+
+
+def test_cancel_kills_a_running_script_node(tmp_path):
+    # The script writes its own pid to a file in its working folder (the engine's
+    # output_dir for a script node) before sleeping — so the test can confirm the
+    # subprocess actually died, not just that run() returned early.
+    wf = parse_workflow({"name": "t", "start": "s", "nodes": [
+        {"id": "s", "kind": "script", "command": "echo $$ > pid.txt; sleep 30",
+         "timeout": 30, "next": None},
+    ]})
+    t0 = time.monotonic()
+
+    def cancel_check():
+        return time.monotonic() - t0 > 1.0
+
+    eng = WorkflowEngine(node_runner=fake_agent_runner([]),
+                         script_runner=ScriptNodeRunner(str(tmp_path)),
+                         workspace=str(tmp_path),
+                         cancel_check=cancel_check)
+    result = eng.run(wf, "task")
+    assert time.monotonic() - t0 < 10
+    assert result.status == "cancelled"
+
+    work_dir = artifact_dir(tmp_path, result.run_id, "work", None)
+    pid = int((work_dir / "pid.txt").read_text().strip())
+    deadline = time.time() + 5
+    dead = False
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            dead = True
+            break
+        time.sleep(0.1)
+    assert dead, "script subprocess is still alive after the cancel"
