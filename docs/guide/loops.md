@@ -131,10 +131,11 @@ either resolves it or asks for more information.
 
 ### A customer email arrives
 
-The moment a matching email lands, the loop fires — no polling delay, no
-schedule to wait out. The run shows up in the Activity feed with `source:
-channel` and the email's subject as its task, running the loop's workflow
-against the ticket.
+Mail is picked up on the next IMAP poll (`poll_interval_seconds`), not
+instantly — once a matching email is seen, the loop fires. The run shows up
+in the Activity feed with `source: channel` and the full email context
+(subject and body, as the channel formats it) as its task, running the
+loop's workflow against the ticket.
 
 ### The workflow needs more information — and the customer's reply wakes it
 

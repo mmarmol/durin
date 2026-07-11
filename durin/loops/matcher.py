@@ -12,13 +12,13 @@ Determinism: loops are evaluated in ascending ``name`` order; the first loop
 whose channel trigger fully matches (structural filters, then optional
 semantic condition) wins.
 
-Queueing seam: the queue module (a later task) hasn't landed yet. The
-constructor accepts an ``enqueue: Callable[[str, dict], None] | None``
-callback. When it is ``None`` and the decision would be "queue" (single
-concurrency, an active run already exists), the matcher does NOT consume
-the message — nothing would ever drain a queue that doesn't exist — it
-logs a warning and lets the message fall through as a normal turn instead.
-Wiring the real queue means passing ``enqueue``.
+Queueing seam: the constructor accepts an optional
+``enqueue: Callable[[str, dict], None] | None`` callback, wired to the real
+queue module in normal operation. When it is ``None`` and the decision would
+be "queue" (single concurrency, an active run already exists), the matcher
+does NOT consume the message — nothing would drain a queue that doesn't
+exist — it logs a warning and lets the message fall through as a normal turn
+instead.
 """
 
 from __future__ import annotations

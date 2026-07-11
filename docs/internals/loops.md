@@ -357,11 +357,14 @@ whoever it is corresponding with. Parking a run this way also **registers a
 claim**: an entry in `<workspace>/loops/claims.json`
 (`durin/loops/claims.py`) mapping the thread key to `{loop, run_id}`, so the
 next inbound message on that thread is recognized by the matcher's claim
-wake (§4h step 1) instead of being evaluated as a fresh trigger match. If the
-run's origin has no thread to correlate against (a cron or manual fire has
-no counterpart to reply to), the counterpart-bound ask degrades to the
-normal `needs_operator` lane instead, with a note appended so the question
-is never silently lost.
+wake (§4h step 1) instead of being evaluated as a fresh trigger match. The
+claim lookup keys on the thread alone (`durin/loops/matcher.py`'s
+`_try_wake`), with no sender check: any allowlisted sender replying into a
+claimed thread wakes the run — the thread is the correlation key, not the
+original sender. If the run's origin has no thread to correlate against (a
+cron or manual fire has no counterpart to reply to), the counterpart-bound
+ask degrades to the normal `needs_operator` lane instead, with a note
+appended so the question is never silently lost.
 
 Claims are a single JSON file, atomically rewritten under a cross-process
 lock so the gateway, a cron process, and any future surface can register and
