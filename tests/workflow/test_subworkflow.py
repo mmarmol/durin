@@ -90,14 +90,14 @@ def test_parent_run_id_defaults_to_none(tmp_path):
 
 
 def test_subworkflow_runs_script_nodes(tmp_path):
-    # "echo -n ABC" (not something reading stdin) so the assertion exercises only
-    # wiring — a script node whose own command produces output deterministically,
+    # "tr a-z A-Z" reads stdin, proving the parent's task text ("abc") flows
+    # through as the script node's stdin at the start of the child workflow —
     # with no agent node runner involved at all (the sentinel below would raise).
     from durin.workflow.script_runner import ScriptNodeRunner
 
     _write(tmp_path, "child", {
         "name": "child", "start": "s",
-        "nodes": [{"id": "s", "kind": "script", "command": "echo -n ABC", "next": None}],
+        "nodes": [{"id": "s", "kind": "script", "command": "tr a-z A-Z", "next": None}],
     })
     runner = SubworkflowRunner(
         tmp_path,

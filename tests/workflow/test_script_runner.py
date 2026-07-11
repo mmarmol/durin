@@ -28,6 +28,12 @@ def test_stdin_carries_upstream_and_stdout_is_output(tmp_path):
     assert resp.session_key is None and not resp.persist_failed and resp.messages == []
 
 
+def test_stdin_falls_back_to_task_at_chain_start(tmp_path):
+    node = ScriptNode(id="s", command="tr a-z A-Z")
+    resp = runner(tmp_path)(_req(node, upstream=None, tmp_path=tmp_path))
+    assert resp.output.strip() == "THE TASK"
+
+
 def test_env_vars_and_cwd(tmp_path):
     work = tmp_path / "work"
     node = ScriptNode(id="mynode", command='echo "$DURIN_NODE_ID $DURIN_RUN_ID $DURIN_ITERATION"; pwd; echo "$DURIN_TASK"')
