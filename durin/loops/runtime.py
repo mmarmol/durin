@@ -1,8 +1,23 @@
 """Lifecycle interpreter: fires a loop's workflow, reads the terminal status,
-verifies the goal, and decides done / no_goal / needs_operator / escalated.
+verifies the goal, and decides done / no_goal / needs_operator / waiting_info /
+escalated.
 
 Iterates on new information only — a fire happens because a trigger delivered
-one (cron tick, manual/chat request); there is no timer-based blind retry."""
+one (cron tick, manual/chat request); there is no timer-based blind retry.
+
+Audience tagging convention: a workflow's needs_input ask (``final_output``)
+that starts with the literal tag ``[TO:counterpart]`` is directed at the
+external party the loop is corresponding with, not at the operator. The tag
+is stripped before the ask is stored or delivered. A tagged ask resolves
+against the run's origin (the trigger context recorded at fire time via
+``run_log.start_run``'s ``origin`` param): if ``origin["thread"]`` is set, the
+run parks as ``waiting_info``, a claim is registered (thread key -> loop/run)
+so a later inbound message on that thread can find its way back to this run,
+and the question is handed to ``on_counterpart_ask`` for delivery. If there is
+no origin thread (e.g. a cron or manual fire with nobody to reply to), the ask
+degrades to the normal ``needs_operator`` lane with a note appended so the
+question is never lost. An untagged ask is always operator-bound — exactly
+V1 behavior."""
 
 from __future__ import annotations
 
@@ -10,11 +25,21 @@ import uuid
 from pathlib import Path
 
 from durin.agent.tools._telemetry import emit_tool_event
-from durin.loops import run_log
+from durin.loops import claims, run_log
 from durin.loops.checks import verify_goal
 from durin.loops.spec import LoopSpec
 from durin.loops.store import load_loop
 from durin.telemetry.logger import bind_telemetry, current_telemetry, get_session_logger, reset_telemetry
+
+_COUNTERPART_TAG = "[TO:counterpart]"
+_COUNTERPART_UNAVAILABLE_NOTE = " (counterpart channel unavailable — answer here)"
+
+
+def _parse_ask(text: str) -> tuple[bool, str]:
+    """Split a workflow ask into (is_counterpart_bound, stripped_text)."""
+    if text.startswith(_COUNTERPART_TAG):
+        return True, text[len(_COUNTERPART_TAG):].lstrip()
+    return False, text
 
 
 class LoopBusy(Exception):
@@ -40,27 +65,30 @@ def _bind_loop_telemetry(name: str):
 
 class LoopsRuntime:
     def __init__(self, workspace, *, workflow_exec, judge, keep_runs: int,
-                 check_timeout_s: int, on_operator_ask=None, run_id_factory=None):
+                 check_timeout_s: int, on_operator_ask=None, on_counterpart_ask=None,
+                 run_id_factory=None):
         self._ws = Path(workspace)
         self._exec = workflow_exec
         self._judge = judge
         self._keep_runs = keep_runs
         self._timeout = check_timeout_s
         self._notify = on_operator_ask
+        self._notify_counterpart = on_counterpart_ask
         self._run_id = run_id_factory or (lambda: uuid.uuid4().hex[:12])
 
-    async def fire(self, name: str, *, source: str, task: str | None = None) -> dict:
+    async def fire(self, name: str, *, source: str, task: str | None = None,
+                    origin: dict | None = None) -> dict:
         token = _bind_loop_telemetry(name)
         try:
             spec = load_loop(self._ws, name)
             if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
                 raise LoopBusy(f"loop '{name}' already has an active run")
-            return await self._run(spec, source=source, task=task)
+            return await self._run(spec, source=source, task=task, origin=origin)
         finally:
             if token is not None:
                 reset_telemetry(token)
 
-    async def try_fire(self, name: str, *, source: str) -> dict | None:
+    async def try_fire(self, name: str, *, source: str, origin: dict | None = None) -> dict | None:
         token = _bind_loop_telemetry(name)
         try:
             spec = load_loop(self._ws, name)
@@ -69,7 +97,7 @@ class LoopsRuntime:
             if spec.concurrency == "single" and run_log.active_runs(self._ws, name):
                 emit_tool_event("loops.fired", {"loop": name, "source": source, "skipped": True})
                 return None
-            return await self._run(spec, source=source, task=None)
+            return await self._run(spec, source=source, task=None, origin=origin)
         finally:
             if token is not None:
                 reset_telemetry(token)
@@ -79,22 +107,29 @@ class LoopsRuntime:
         try:
             spec = load_loop(self._ws, name)
             record = run_log.read_run(self._ws, name, run_id)
-            if not record or record.get("status") != "needs_operator":
+            if not record or record.get("status") not in ("needs_operator", "waiting_info"):
                 raise ValueError(f"run '{run_id}' of loop '{name}' is not awaiting an answer")
             run_log.update_run(self._ws, name, run_id, status="running")
             try:
-                result = await self._exec(spec.workflow, answer, resume_run_id=record["workflow_run_id"])
-            except Exception as exc:  # noqa: BLE001 — any failure ends the run honestly
-                return await self._finish(spec, run_id, "error", None, detail=str(exc))
-            return await self._interpret(spec, run_id, result)
+                try:
+                    result = await self._exec(spec.workflow, answer, resume_run_id=record["workflow_run_id"])
+                except Exception as exc:  # noqa: BLE001 — any failure ends the run honestly
+                    return await self._finish(spec, run_id, "error", None, detail=str(exc))
+                return await self._interpret(spec, run_id, result)
+            finally:
+                # Unconditional and idempotent: a needs_operator run held no
+                # claim (no-op), a waiting_info run's claim must never survive
+                # its resume regardless of how the resume ended.
+                claims.release_run(self._ws, name, run_id)
         finally:
             if token is not None:
                 reset_telemetry(token)
 
-    async def _run(self, spec: LoopSpec, *, source: str, task: str | None) -> dict:
+    async def _run(self, spec: LoopSpec, *, source: str, task: str | None,
+                    origin: dict | None = None) -> dict:
         run_id = self._run_id()
         effective_task = task or spec.goal_intent
-        run_log.start_run(self._ws, spec.name, run_id, source=source, task=effective_task)
+        run_log.start_run(self._ws, spec.name, run_id, source=source, task=effective_task, origin=origin)
         emit_tool_event("loops.fired", {"loop": spec.name, "source": source, "skipped": False})
         try:
             result = await self._exec(spec.workflow, effective_task, resume_run_id=None)
@@ -105,8 +140,19 @@ class LoopsRuntime:
     async def _interpret(self, spec: LoopSpec, run_id: str, result) -> dict:
         wf_run_id = result.run_id or None
         if result.status == "needs_input":
+            is_counterpart, ask = _parse_ask(result.final_output or "")
+            if is_counterpart:
+                origin = (run_log.read_run(self._ws, spec.name, run_id) or {}).get("origin")
+                thread = origin.get("thread") if isinstance(origin, dict) else None
+                if thread:
+                    record = run_log.finalize_run(self._ws, spec.name, run_id, status="waiting_info",
+                                                  workflow_run_id=wf_run_id, ask=ask)
+                    claims.register(self._ws, key=thread, loop=spec.name, run_id=run_id)
+                    await self._say_counterpart(spec, run_id, origin, ask)
+                    return record
+                ask += _COUNTERPART_UNAVAILABLE_NOTE
             record = run_log.finalize_run(self._ws, spec.name, run_id, status="needs_operator",
-                                          workflow_run_id=wf_run_id, ask=result.final_output or "")
+                                          workflow_run_id=wf_run_id, ask=ask)
             await self._say(spec, run_id, "ask", f"[{spec.name} · {run_id}] {record.get('ask') or ''}")
             return record
         if result.status == "completed":
@@ -152,4 +198,11 @@ class LoopsRuntime:
             try:
                 await self._notify(spec.name, run_id, kind, text)
             except Exception:  # noqa: BLE001 — notification is best-effort
+                pass
+
+    async def _say_counterpart(self, spec: LoopSpec, run_id: str, origin: dict, text: str) -> None:
+        if self._notify_counterpart:
+            try:
+                await self._notify_counterpart(spec.name, run_id, origin, text)
+            except Exception:  # noqa: BLE001 — delivery is best-effort, mirrors _say
                 pass
