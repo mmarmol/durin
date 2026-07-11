@@ -2168,6 +2168,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workflows/scripts/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one script file's content (the editor's script file viewer). */
+        get: operations["workflows_get_script"];
+        /** Create or replace a script file (the editor's script create/edit action). */
+        put: operations["workflows_put_script"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows/{name}": {
         parameters: {
             query?: never;
@@ -5385,6 +5403,30 @@ export interface components {
         };
         /** WorkflowSaveResult */
         WorkflowSaveResult: {
+            /** Name */
+            name: string;
+        };
+        /** WorkflowScriptGetQuery */
+        WorkflowScriptGetQuery: {
+            /** Name */
+            name: string;
+        };
+        /** WorkflowScriptGetResult */
+        WorkflowScriptGetResult: {
+            /** Content */
+            content: string;
+            /** Name */
+            name: string;
+        };
+        /** WorkflowScriptPutCommand */
+        WorkflowScriptPutCommand: {
+            /** Content */
+            content: string;
+            /** Name */
+            name: string;
+        };
+        /** WorkflowScriptPutResult */
+        WorkflowScriptPutResult: {
             /** Name */
             name: string;
         };
@@ -8976,6 +9018,54 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowScriptsResult"];
+                };
+            };
+        };
+    };
+    workflows_get_script: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowScriptGetQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowScriptGetResult"];
+                };
+            };
+        };
+    };
+    workflows_put_script: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowScriptPutCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowScriptPutResult"];
                 };
             };
         };

@@ -63,6 +63,21 @@ def test_timeout_and_max_visits_validated():
     assert wf.nodes["s"].timeout == 30 and wf.nodes["s"].max_visits == 2
 
 
+def test_env_defaults_to_clean():
+    wf = parse_workflow(_wf([{"id": "s", "kind": "script", "command": "x"}]))
+    assert wf.nodes["s"].env == "clean"
+
+
+def test_env_accepts_inherit():
+    wf = parse_workflow(_wf([{"id": "s", "kind": "script", "command": "x", "env": "inherit"}]))
+    assert wf.nodes["s"].env == "inherit"
+
+
+def test_env_rejects_other_values():
+    with pytest.raises(WorkflowError, match="env"):
+        parse_workflow(_wf([{"id": "s", "kind": "script", "command": "x", "env": "full"}]))
+
+
 def test_script_node_rejected_in_parallel_positions():
     with pytest.raises(WorkflowError, match="must be a work node"):
         parse_workflow(_wf([

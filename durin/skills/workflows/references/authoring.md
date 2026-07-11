@@ -93,10 +93,11 @@ on **stdin** (a start-position node receives the run's task instead — the work
 the start node's incoming edge; an upstream that printed nothing yields empty stdin); its
 **stdout** (capped) becomes the edge text to the next node; **stderr** is diagnostics only.
 It executes with **cwd = the run's shared working folder**, so it reads earlier steps'
-files and its writes are visible downstream, and it inherits the gateway environment plus
-`DURIN_TASK` (capped), `DURIN_RUN_ID`, `DURIN_NODE_ID`, `DURIN_ITERATION`, `DURIN_WORK_DIR`.
-A script node has no session and never reads the shared-context buffer (the buffer passes
-through it untouched).
+files and its writes are visible downstream, and it gets `DURIN_TASK` (capped),
+`DURIN_RUN_ID`, `DURIN_NODE_ID`, `DURIN_ITERATION`, `DURIN_WORK_DIR` plus the rest of
+its environment per the `env` field below (default: a minimal allowlist, not the full
+gateway environment). A script node has no session and never reads the shared-context
+buffer (the buffer passes through it untouched).
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
@@ -104,6 +105,7 @@ through it untouched).
 | `command` | string | `""` | Inline command, run via `bash -c` (pipes and redirects work). **Exactly one of `command` / `script`.** |
 | `script` | string | `""` | A file under `<workspace>/workflows/scripts/` (relative path, no `..`): `.py` runs with durin's Python, `.sh` with bash, anything else must be executable with a shebang. Missing file = the run aborts pre-flight, before any node runs. |
 | `timeout` | int ≥ 1 \| null | `workflow.script_timeout` config (300s) | On expiry the whole process group is killed and the node fails — a timeout is an error, never a FAIL verdict. |
+| `env` | `"clean"` \| `"inherit"` | `"clean"` | `"clean"` = a minimal allowlist (`PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR`, `DURIN_HOME`, only those present) plus `DURIN_*`. `"inherit"` = the full gateway process environment (opt in only if the script needs an ambient var durin doesn't forward). |
 | `next` / `on_pass`-`on_fail` / `cases` | — | — | Same three edge shapes and exclusivity as a `work` node. |
 | `max_visits` | int ≥ 1 \| null | inherit envelope | Per-node loop cap override. |
 

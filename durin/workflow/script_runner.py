@@ -6,8 +6,11 @@ node (no upstream) receives the run's task instead, since the run's input text i
 the incoming edge of the start node. Upstream producers that emit an empty string
 produce empty stdin (no fallback). Small run metadata in DURIN_* env vars, cwd is
 the run's shared working folder (the file channel), stdout (capped) becomes the
-edge text to the next node. Routing is derived deterministically — exit code for
-a binary gate (0 = PASS), the last non-empty stdout line for a multi-way node —
+edge text to the next node. The subprocess environment is a minimal allowlist plus
+DURIN_* by default (the node's ``env: "clean"``); a node opting into
+``env: "inherit"`` gets the full gateway process environment instead. Routing is
+derived deterministically — exit code for a binary gate (0 = PASS), the last
+non-empty stdout line for a multi-way node —
 and returned as ``route_label`` so the engine's routing path is identical to an
 agent node's. A non-zero exit on a NON-gate node is an error (NodeExecutionError
 → aborted run), not a verdict. A script node has no session: session_key is None
@@ -20,14 +23,29 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
-from durin.workflow.engine import NodeExecutionError, NodeRunRequest, NodeRunResponse
+from durin.workflow.engine import NodeExecutionError, NodeRunRequest, NodeRunResponse, ScriptCancelled
 from durin.workflow.verdict import parse_label
 
 # Env values have platform size limits (unlike stdin); the task is a hint, not data.
 _MAX_TASK_ENV_CHARS = 8000
 _STDERR_TAIL_CHARS = 2000
+# How often the run loop wakes up to check the overall deadline and the cooperative
+# cancel flag while a script is still running. Small enough that a cancel takes
+# effect promptly; large enough not to busy-poll.
+_POLL_SLICE_SECONDS = 0.5
+
+# "clean" env (the node default): just enough of the gateway environment for a
+# script to behave normally (PATH-resolved binaries, locale, a writable tmp dir)
+# without forwarding ambient provider keys or other secrets the gateway process holds.
+# DURIN_HOME passes through so a script invoking the `durin` CLI targets the same
+# home the running gateway uses (it is durin's own pointer, not a secret).
+_CLEAN_ENV_ALLOWLIST = (
+    "PATH", "HOME", "USER", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR",
+    "DURIN_HOME",
+)
 
 
 class ScriptNodeRunner:
@@ -63,6 +81,22 @@ class ScriptNodeRunner:
         return (text[: self._max_output_chars].rstrip()
                 + f"\n[output truncated at {self._max_output_chars} chars]")
 
+    def _base_env(self, node) -> dict[str, str]:
+        if node.env == "inherit":
+            return dict(os.environ)
+        return {k: os.environ[k] for k in _CLEAN_ENV_ALLOWLIST if k in os.environ}
+
+    @staticmethod
+    def _killpg(proc: subprocess.Popen) -> None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        # Drain and close the pipes rather than a bare wait() — per the subprocess
+        # docs, communicate() after a kill is what reaps the process AND closes
+        # stdout/stderr, avoiding an fd leak.
+        proc.communicate()
+
     def __call__(self, req: NodeRunRequest) -> NodeRunResponse:
         node = req.node
         argv = self._argv(req)
@@ -70,7 +104,7 @@ class ScriptNodeRunner:
         cwd = req.output_dir
         if cwd:
             Path(cwd).mkdir(parents=True, exist_ok=True)
-        env = dict(os.environ)
+        env = self._base_env(node)
         env.update({
             "DURIN_TASK": (req.task or "")[:_MAX_TASK_ENV_CHARS],
             "DURIN_RUN_ID": req.run_id,
@@ -88,21 +122,34 @@ class ScriptNodeRunner:
             )
         except (FileNotFoundError, PermissionError, OSError) as exc:
             raise NodeExecutionError(node.id, req.iteration, None, exc) from exc
+        stdin_data = (req.upstream_output if req.upstream_output is not None else req.task) or ""
+        deadline = time.monotonic() + timeout
         try:
-            stdout, stderr = proc.communicate(
-                input=(req.upstream_output if req.upstream_output is not None else req.task) or "", timeout=timeout)
+            stdout, stderr = proc.communicate(input=stdin_data, timeout=min(_POLL_SLICE_SECONDS, timeout))
         except subprocess.TimeoutExpired:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                proc.kill()
-            # Drain and close the pipes rather than a bare wait() — per the
-            # subprocess docs, communicate() after a kill is what reaps the
-            # process AND closes stdout/stderr, avoiding an fd leak.
-            proc.communicate()
-            raise NodeExecutionError(
-                node.id, req.iteration, None,
-                TimeoutError(f"script timed out after {timeout}s")) from None
+            # Retry communicate() after a TimeoutExpired — the documented-safe
+            # pattern (the input has already been sent, so later calls take no
+            # `input`). Each slice re-checks the overall deadline (unchanged
+            # timeout semantics) and, only for a script node, the cooperative
+            # cancel flag — letting a cancel kill a running subprocess instead of
+            # only taking effect between nodes.
+            stdout = stderr = None
+            while stdout is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._killpg(proc)
+                    raise NodeExecutionError(
+                        node.id, req.iteration, None,
+                        TimeoutError(f"script timed out after {timeout}s")) from None
+                if req.cancel_check is not None and req.cancel_check():
+                    self._killpg(proc)
+                    raise NodeExecutionError(
+                        node.id, req.iteration, None,
+                        ScriptCancelled("cancelled by user")) from None
+                try:
+                    stdout, stderr = proc.communicate(timeout=min(_POLL_SLICE_SECONDS, remaining))
+                except subprocess.TimeoutExpired:
+                    continue
         rc = proc.returncode
         stderr_tail = (stderr or "").strip()[-_STDERR_TAIL_CHARS:]
 

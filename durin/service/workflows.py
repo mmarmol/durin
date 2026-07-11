@@ -28,7 +28,28 @@ from durin.utils.file_lock import cross_process_lock
 from durin.workflow import run_log
 from durin.workflow.loader import WorkflowNotFound, load_workflow, workflows_dir
 from durin.workflow.spec import WorkflowError, parse_workflow
-from durin.workflow.version_store import version_lock_target
+from durin.workflow.version_store import WorkflowVersionStore, version_lock_target
+
+# A script file's content cap for the PUT .../scripts/{name} editor route — generous
+# for a deterministic node script, small enough to keep the JSON body and the atomic
+# write cheap.
+_MAX_SCRIPT_CONTENT_BYTES = 256 * 1024
+
+
+def _validate_script_name(name: str) -> None:
+    """Reject anything but a single relative path segment.
+
+    Stricter than the workflow parser's script-path rule (which allows nested
+    paths under ``workflows/scripts/``): the editor's create/edit door only ever
+    writes a flat filename, so '/' (nesting, absolute paths on POSIX), '\\'
+    (Windows-style nesting), and '..' are all rejected outright.
+    """
+    if not name or not name.strip():
+        raise ValidationFailedError("script name must not be empty")
+    if name in (".", ".."):
+        raise ValidationFailedError(f"script name {name!r} is not a valid filename")
+    if "/" in name or "\\" in name or "\x00" in name:
+        raise ValidationFailedError(f"script name {name!r} must be a single path segment (no '/')")
 
 
 class WorkflowsListQuery(Query):
@@ -87,7 +108,7 @@ class WorkflowRunResult(Result):
     final_output: str
     final_output_node: str = ""       # which node's output became final_output
     run_id: str                       # the run's manifest id — the key for the read routes below
-    runs: list[dict[str, Any]]        # per-node trace: node_id/iteration/passed/session_key/worker_index/branch_id/budget/status/route_label/output
+    runs: list[dict[str, Any]]        # per-node trace: node_id/iteration/passed/session_key/worker_index/branch_id/budget/status/route_label/exit_code/output
     output_dir: str = ""
     exhausted_node: str = ""
     needs_input_node: str = ""        # set when status=="needs_input": the node that asked
@@ -126,6 +147,24 @@ class WorkflowScriptsResult(Result):
     scripts: list[str]   # sorted filenames under <workspace>/workflows/scripts/, for script-node file pickers
 
 
+class WorkflowScriptGetQuery(Query):
+    name: str
+
+
+class WorkflowScriptGetResult(Result):
+    name: str
+    content: str
+
+
+class WorkflowScriptPutCommand(Command):
+    name: str
+    content: str
+
+
+class WorkflowScriptPutResult(Result):
+    name: str
+
+
 class WorkflowRecsQuery(Query):
     name: str
 
@@ -152,6 +191,9 @@ class WorkflowsService:
 
     def _dir(self) -> Path:
         return workflows_dir(self._workspace)
+
+    def _scripts_dir(self) -> Path:
+        return self._dir() / "scripts"
 
     def _lock_target(self) -> Path:
         # Lock beside the workflows dir on the same target the version store uses, so a
@@ -182,6 +224,48 @@ class WorkflowsService:
         d = self._workspace / "workflows" / "scripts"
         names = sorted(p.name for p in d.iterdir() if p.is_file()) if d.is_dir() else []
         return WorkflowScriptsResult(scripts=names)
+
+    @route(
+        "GET", "/api/v1/workflows/scripts/{name}",
+        scope=Scope.WORKFLOWS_READ.value,
+        request_model=WorkflowScriptGetQuery, response_model=WorkflowScriptGetResult,
+        summary="Read one script file's content (the editor's script file viewer).",
+    )
+    async def get_script(self, query: WorkflowScriptGetQuery, principal: Principal) -> WorkflowScriptGetResult:
+        principal.require(Scope.WORKFLOWS_READ)
+        _validate_script_name(query.name)
+        path = self._scripts_dir() / query.name
+        if not path.is_file():
+            raise NotFoundError(f"script {query.name!r} not found")
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ValidationFailedError(f"script {query.name!r} is unreadable: {exc}")
+        return WorkflowScriptGetResult(name=query.name, content=content)
+
+    @route(
+        "PUT", "/api/v1/workflows/scripts/{name}",
+        scope=Scope.WORKFLOWS_WRITE.value,
+        request_model=WorkflowScriptPutCommand, response_model=WorkflowScriptPutResult,
+        summary="Create or replace a script file (the editor's script create/edit action).",
+    )
+    async def put_script(self, cmd: WorkflowScriptPutCommand, principal: Principal) -> WorkflowScriptPutResult:
+        principal.require(Scope.WORKFLOWS_WRITE)
+        _validate_script_name(cmd.name)
+        if len(cmd.content.encode("utf-8")) > _MAX_SCRIPT_CONTENT_BYTES:
+            raise ValidationFailedError(
+                f"script content exceeds the {_MAX_SCRIPT_CONTENT_BYTES}-byte cap"
+            )
+        d = self._scripts_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / cmd.name
+        with cross_process_lock(self._lock_target()):
+            atomic_write_text(path, cmd.content)
+        # Snapshot into the workflow version history: scripts/ lives inside the
+        # git-versioned workflows dir, so a script edit lands in the same history as a
+        # workflow definition edit. Best-effort: never blocks the write above.
+        WorkflowVersionStore(self._dir()).snapshot(f"script {cmd.name}")
+        return WorkflowScriptPutResult(name=cmd.name)
 
     @route(
         "GET", "/api/v1/workflows/{name}",
@@ -335,6 +419,7 @@ class WorkflowsService:
                  "session_key": r.session_key, "worker_index": r.worker_index,
                  "branch_id": r.branch_id, "budget": r.budget,
                  "status": r.status, "route_label": r.route_label,
+                 "exit_code": getattr(r, "exit_code", None),
                  "output": (r.output or "")[:2000]}
                 for r in result.runs
             ],

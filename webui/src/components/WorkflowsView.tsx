@@ -39,12 +39,14 @@ import {
   getWorkflow,
   getWorkflowRecommendations,
   getWorkflowRunManifest,
+  getWorkflowScript,
   listWorkflowRuns,
   listWorkflows,
   listWorkflowScripts,
   listPersonas,
   runWorkflow,
   saveWorkflow,
+  saveWorkflowScript,
   type PersonaItem,
   type WorkflowRecommendation,
   type WorkflowRunResult,
@@ -438,9 +440,113 @@ function RoutingFields({
   );
 }
 
+// Inline create/edit form for one script file under workflows/scripts/, used by
+// ScriptFields' "New script…" and "Edit" affordances. `mode: "new"` starts with an
+// empty name+content (name is user-typed, checked against the backend's single-
+// path-segment rule client-side as a hint — the server re-validates regardless);
+// `mode: "edit"` fetches `initialName`'s current content and keeps the name fixed.
+// Deliberately no modal/dialog: it renders inline in the node config panel, like
+// the rest of this file's edit affordances (see the "duplicate" inline form above).
+function ScriptFileEditor({
+  mode,
+  token,
+  initialName,
+  t,
+  onCancel,
+  onSaved,
+}: {
+  mode: "new" | "edit";
+  token: string;
+  initialName: string;
+  t: (k: string, opts?: Record<string, unknown>) => string;
+  onCancel: () => void;
+  onSaved: (name: string) => void;
+}) {
+  const [name, setName] = useState(mode === "new" ? "" : initialName);
+  const [content, setContent] = useState("");
+  const [original, setOriginal] = useState("");
+  const [loading, setLoading] = useState(mode === "edit");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (mode !== "edit") return;
+    let alive = true;
+    getWorkflowScript(token, initialName)
+      .then((c) => {
+        if (!alive) return;
+        setContent(c);
+        setOriginal(c);
+      })
+      .catch(() => { if (alive) setError(t("workflows.scriptLoadError")); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [mode, initialName, token, t]);
+
+  const trimmedName = name.trim();
+  // Mirrors the server's containment rule (single relative path segment) so the
+  // button disables before a doomed request round-trips; the server still re-checks.
+  const nameValid = mode === "edit" || (
+    trimmedName !== "" && trimmedName !== "." && trimmedName !== ".."
+    && !trimmedName.includes("/") && !trimmedName.includes("\\")
+  );
+  const unchanged = mode === "edit" && content === original;
+  const canSave = nameValid && content.trim() !== "" && !saving && !loading && !unchanged;
+
+  async function handleSave() {
+    setSaving(true);
+    setError("");
+    const target = mode === "new" ? trimmedName : initialName;
+    try {
+      await saveWorkflowScript(token, target, content);
+      onSaved(target);
+    } catch (e) {
+      setError(e instanceof ApiError ? (e.detail || e.message) : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded border p-2">
+      {mode === "new" && (
+        <Field label={t("workflows.scriptNewName")}>
+          <Input
+            autoFocus
+            value={name}
+            placeholder={t("workflows.scriptNamePlaceholder")}
+            onChange={(e) => setName(e.target.value)}
+            className="h-8"
+          />
+        </Field>
+      )}
+      <span className="text-[11px] text-muted-foreground">{t("workflows.scriptNameHint")}</span>
+      <Field label={t("workflows.scriptContent")}>
+        <Textarea
+          className="min-h-[10rem] resize-y font-mono text-sm"
+          value={content}
+          disabled={loading}
+          placeholder={loading ? t("workflows.scriptLoading") : undefined}
+          onChange={(e) => setContent(e.target.value)}
+        />
+      </Field>
+      {error && <p className="text-[11px] text-destructive">{error}</p>}
+      <div className="flex items-center gap-2">
+        <Button size="sm" className="h-8" onClick={() => void handleSave()} disabled={!canSave}>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : t("workflows.save")}
+        </Button>
+        <Button size="sm" variant="ghost" className="h-8" onClick={onCancel}>
+          {t("workflows.cancel")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // Config fields for a "script" node: source (inline command vs. a file under
 // workflows/scripts/ — exactly one applies, mirroring the backend's contract),
-// an optional timeout, the shared routing controls, and the per-node visit budget.
+// an optional timeout, the subprocess env knob (clean allowlist default vs. full
+// gateway env), the shared routing controls, and the per-node visit budget.
 // Agent-only fields (model/persona/context/session/prompt/mode/tools/skills/mcps/
 // max_turns) are deliberately never rendered here — the backend parser rejects them
 // on a script node.
@@ -460,13 +566,24 @@ function ScriptFields({
   workflowMaxVisits?: number;
 }) {
   const [scriptFiles, setScriptFiles] = useState<string[]>([]);
-  useEffect(() => {
-    listWorkflowScripts(token).then(setScriptFiles).catch(() => setScriptFiles([]));
+  const refreshScripts = useCallback(() => {
+    return listWorkflowScripts(token).then(setScriptFiles).catch(() => setScriptFiles([]));
   }, [token]);
+  useEffect(() => { void refreshScripts(); }, [refreshScripts]);
+
+  // "none": no editor open. "new"/"edit" mirror ScriptFileEditor's modes.
+  const [editorMode, setEditorMode] = useState<"none" | "new" | "edit">("none");
 
   // Detect by key presence, not truthiness: an empty `script: ""` (file mode, no file
   // picked yet) must still show the file picker, not fall back to the inline command.
   const isFileMode = node.script !== undefined;
+  const selectedScript = String(node.script ?? "");
+
+  function handleEditorSaved(name: string) {
+    setEditorMode("none");
+    onChange({ script: name });
+    void refreshScripts();
+  }
 
   return (
     <>
@@ -475,6 +592,7 @@ function ScriptFields({
           className={selectCls}
           value={isFileMode ? "file" : "inline"}
           onChange={(e) => {
+            setEditorMode("none");
             if (e.target.value === "file") onChange({ command: undefined, script: "" });
             else onChange({ script: undefined, command: "" });
           }}
@@ -485,18 +603,50 @@ function ScriptFields({
       </Field>
 
       {isFileMode ? (
-        <Field label={t("workflows.scriptFile")}>
-          <select
-            className={selectCls}
-            value={String(node.script ?? "")}
-            onChange={(e) => onChange({ script: e.target.value })}
-          >
-            <option value="">{t("workflows.scriptFileNone")}</option>
-            {scriptFiles.map((f) => (
-              <option key={f} value={f}>{f}</option>
-            ))}
-          </select>
-        </Field>
+        <>
+          <Field label={t("workflows.scriptFile")}>
+            <select
+              className={selectCls}
+              value={selectedScript}
+              onChange={(e) => { setEditorMode("none"); onChange({ script: e.target.value }); }}
+            >
+              <option value="">{t("workflows.scriptFileNone")}</option>
+              {scriptFiles.map((f) => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </select>
+          </Field>
+
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              className="text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => setEditorMode(editorMode === "new" ? "none" : "new")}
+            >
+              {t("workflows.scriptNew")}
+            </button>
+            {selectedScript && (
+              <button
+                type="button"
+                className="text-xs text-muted-foreground hover:text-foreground"
+                onClick={() => setEditorMode(editorMode === "edit" ? "none" : "edit")}
+              >
+                {t("workflows.scriptEditAction")}
+              </button>
+            )}
+          </div>
+
+          {editorMode !== "none" && (
+            <ScriptFileEditor
+              mode={editorMode}
+              token={token}
+              initialName={selectedScript}
+              t={t}
+              onCancel={() => setEditorMode("none")}
+              onSaved={handleEditorSaved}
+            />
+          )}
+        </>
       ) : (
         <Field label={t("workflows.command")}>
           <Textarea
@@ -520,6 +670,17 @@ function ScriptFields({
           }}
           className="h-8"
         />
+      </Field>
+
+      <Field label={t("workflows.scriptEnv")}>
+        <select
+          className={selectCls}
+          value={node.env === "inherit" ? "inherit" : "clean"}
+          onChange={(e) => onChange({ env: e.target.value === "inherit" ? "inherit" : undefined })}
+        >
+          <option value="clean">{t("workflows.scriptEnvClean")}</option>
+          <option value="inherit">{t("workflows.scriptEnvInherit")}</option>
+        </select>
       </Field>
 
       <RoutingFields node={node} nodes={allNodes} patch={onChange} t={t} />
@@ -1924,6 +2085,7 @@ export function WorkflowsView() {
         {selectedNode && (
           <aside className="w-96 shrink-0 flex flex-col h-full border-l p-3 overflow-y-auto">
             <NodeConfigPanel
+              key={selectedNode.id}
               node={selectedNode}
               nodeIds={nodeIds}
               isStart={def?.start === selectedNode.id}

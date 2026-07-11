@@ -122,9 +122,11 @@ run's task instead, since the run's task is the incoming edge of the start node;
 upstream node that produced an empty string stays empty (no fallback). Small run
 metadata rides in `DURIN_TASK`/`DURIN_RUN_ID`/`DURIN_NODE_ID`/`DURIN_ITERATION`/
 `DURIN_WORK_DIR` env vars (`DURIN_TASK` is capped — env values have platform size
-limits that stdin does not). The subprocess otherwise inherits the gateway
-process's own environment unchanged — it is not scrubbed down to a safe set the
-way the agent's shell tool is (see [security.md](security.md)). **cwd** is the
+limits that stdin does not). The rest of the subprocess environment is controlled
+by the node's `env` field: `"clean"` (the default) starts from a minimal allowlist
+(`PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR` —
+only those present); `"inherit"` is the full gateway process environment, opt-in
+per node (see [security.md](security.md)). **cwd** is the
 run's shared working folder, so a script reads earlier steps' files and writes
 its own the same way a `tools: "default"` work node does. **stdout** (capped
 at `workflow.script_output_max_chars`, truncated with a
@@ -495,13 +497,15 @@ working folder.
 
 **Cooperative cancellation.** `tasks(action='stop', …)` marks the `run_id` in a
 process-global registry (`durin/workflow/cancellation.py`); the engine polls it
-via a `cancel_check` callback at the top of its node walk. A cancel therefore
-takes effect **between** nodes — a node already executing finishes first
-(best-effort, the same contract as cancelling a sub-agent). For a script node
-this means the subprocess runs to completion or to its own timeout — `/stop`
-cannot interrupt it mid-run. The run ends with the
-terminal status `cancelled`, carrying the partial per-node trace, and its result
-is still injected back like any other completion. A **foreground** run
+via a `cancel_check` callback at the top of its node walk. For an agent node a
+cancel takes effect **between** nodes — a node already executing finishes first
+(best-effort, the same contract as cancelling a sub-agent). A script node gets
+the same callback threaded into its subprocess wait, polled every slice while
+the process runs: a cancel there kills the subprocess's process group directly
+(the same group-kill path a timeout uses) instead of waiting for it to finish
+or time out. Either way the run ends with the terminal status `cancelled`,
+carrying the partial per-node trace, and its result is still injected back
+like any other completion. A **foreground** run
 (`background=false`) is bridged to the same mechanism: if `/stop` cancels the
 turn awaiting it, `run_workflow` signals the run's cooperative flag — asyncio
 cancellation cannot reach the engine's worker thread — so the engine stops
@@ -644,7 +648,12 @@ End-to-end for a single `run_workflow` call:
   /api/v1/workflows/scripts`, which lists the filenames under
   `<workspace>/workflows/scripts/` available to script nodes (empty when the
   directory is absent) — the source for the visual editor's script-file picker.
-  This is the surface the webui visual editor uses.
+  `GET /api/v1/workflows/scripts/{name}` and `PUT /api/v1/workflows/scripts/{name}`
+  (body `{content}`) read and create-or-replace one script file — the editor's
+  file-mode "New script…" and "Edit" actions — with the same containment rule as
+  the parser (single relative filename, no `..`), a 256 KB content cap, an atomic
+  write, and a best-effort version-store snapshot. This is the surface the webui
+  visual editor uses.
 - **Lineage:** node sessions reuse the lineage metadata on the open session document
   (`durin/session/lineage.py`), so no schema migration is involved.
 - **Self-improvement** (per-workflow `improvement_mode`, two states like a skill's:
@@ -690,7 +699,7 @@ End-to-end for a single `run_workflow` call:
   | `research-to-answer` | plan → dynamic fan-out (search × N) → synthesize → verify, a **tolerant** per-claim grounding gate (multi-way: GROUNDED ends — a summary intro and minor gaps are acceptable / MISSING → re-plan / MISUSED → re-synthesize) |
   | `brainstorming` | clarify gate (routes `NEED_INFO` to the reserved `__needs_input__` terminal → asks the caller for info) → frame angles → parallel explore → synthesize a design **spec** |
   | `writing-plans` | intake gate (`__needs_input__` on a thin brief) → draft a step-by-step plan → parallel critique (gaps / risks / verifiability / scope) → revise → a tolerant verifiability gate (GAPS loops back) → a `/build`-ready plan with a `## Verification` section |
-  | `build-specs` | intake gate (`__needs_input__` on an underspecified slice) → frame the independent components → dynamic fan-out (a detailed spec per component) → assemble one handoff spec |
+  | `build-specs` | intake gate (`__needs_input__` on an underspecified slice) → frame the independent components (also writes `components.json`) → dynamic fan-out (a detailed spec per component) → assemble one handoff spec → a deterministic **script** coverage gate (exit 0 = every component name present in the assembled spec; a miss loops back to assemble with the missing names as feedback) |
   | `execute-plan` | intake gate (critically reviews the plan; `__needs_input__` on a blocking gap) → implement (build, **self-loop** on `MORE`/`DONE`, one plan step per turn; `BLOCKED` → `__needs_input__` when it cannot proceed rather than guessing or exhausting) → review; the shared working folder lets each step build on the last (subagent-driven execution of a plan) |
   | `debug` | reproduce a failing check → diagnose the root cause → fix in place → verify gate (`PASS` ends / `FAIL` loops back to diagnose); the steps collaborate on the shared working folder (reproduction, code, and fix together) |
   | `review-changes` | frame the review lenses that matter for this diff → dynamic fan-out (one reviewer per lens) → synthesize a severity-grouped review |
