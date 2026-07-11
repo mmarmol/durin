@@ -650,3 +650,30 @@ def test_legacy_pending_without_kind_reverts_as_prompt_edit(tmp_path):
 
     from durin.workflow.workflow_improve_dream import _read_pending
     assert _read_pending(tmp_path, "wf") is None
+
+
+def test_alias_reference_in_sibling_gate_forces_manual(tmp_path, monkeypatch):
+    """A sibling workflow referencing the same file via "./name" spelling must
+    still force manual_only — the parser normalizes aliases so string
+    comparisons cannot be evaded."""
+    from durin.workflow.spec import parse_workflow
+    a = parse_workflow({"name": "a", "start": "s", "nodes": [
+        {"id": "s", "kind": "script", "script": "shared.sh", "next": None}]})
+    b = parse_workflow({"name": "b", "start": "g", "nodes": [
+        {"id": "g", "kind": "script", "script": "./shared.sh", "on_pass": None, "on_fail": None}]})
+    assert b.nodes["g"].script == "shared.sh"          # normalized at parse time
+    assert b.nodes["g"].script == a.nodes["s"].script  # aliases collapse to one form
+
+
+def test_unparseable_sibling_referencing_script_forces_manual(tmp_path):
+    """A sibling definition that fails to parse fails SAFE: its raw JSON is
+    scanned for the filename and the reference still forces review."""
+    import json as _j
+    from durin.workflow.workflow_improve_dream import _script_referenced_outside
+    wfdir = tmp_path / "workflows"
+    (wfdir / "scripts").mkdir(parents=True)
+    (wfdir / "a.json").write_text(_j.dumps({
+        "name": "a", "start": "s",
+        "nodes": [{"id": "s", "kind": "script", "script": "shared.sh", "next": None}]}))
+    (wfdir / "broken.json").write_text('{"name": "broken", "start": "g", "nodes": [{"id": "g", "kind": "script", "script": "shared.sh", "on_pass"')
+    assert _script_referenced_outside(tmp_path, "a", "shared.sh") is True

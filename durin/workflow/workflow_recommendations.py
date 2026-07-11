@@ -311,20 +311,25 @@ def apply_recommendation(workspace: str | Path, name: str, rec_id: str,
             return {"ok": True, "script": script_name, "commit": commit,
                     "previous_content": previous_content}
         wf_path = workflows_dir(workspace) / f"{name}.json"
-        try:
-            data = _json.loads(wf_path.read_text(encoding="utf-8"))
-        except (OSError, _json.JSONDecodeError) as exc:
-            return {"ok": False, "error": f"cannot read workflow {name!r}: {exc}"}
-        node = next((n for n in data.get("nodes", []) if n.get("id") == rec["target_id"]), None)
-        if node is None:
-            return {"ok": False, "error": f"node {rec['target_id']!r} no longer exists in {name!r}"}
-        previous = node.get(rec["field"], "")
-        node[rec["field"]] = rec["proposed"]
-        saved = save_workflow_definition(
-            workspace, name, data,
-            reason=f"apply recommendation {rec_id}: {rec.get('reason', '')}",
-            actor=actor, must_exist=True,
-        )
+        # Read-modify-save under the version lock (reentrant — save re-acquires it),
+        # so a concurrent editor save cannot land between our read and our write and
+        # be silently clobbered, and `previous` is the true pre-apply value.
+        from durin.workflow.version_store import version_lock_target
+        with cross_process_lock(version_lock_target(workflows_dir(workspace))):
+            try:
+                data = _json.loads(wf_path.read_text(encoding="utf-8"))
+            except (OSError, _json.JSONDecodeError) as exc:
+                return {"ok": False, "error": f"cannot read workflow {name!r}: {exc}"}
+            node = next((n for n in data.get("nodes", []) if n.get("id") == rec["target_id"]), None)
+            if node is None:
+                return {"ok": False, "error": f"node {rec['target_id']!r} no longer exists in {name!r}"}
+            previous = node.get(rec["field"], "")
+            node[rec["field"]] = rec["proposed"]
+            saved = save_workflow_definition(
+                workspace, name, data,
+                reason=f"apply recommendation {rec_id}: {rec.get('reason', '')}",
+                actor=actor, must_exist=True,
+            )
         if not saved.get("ok"):
             return {"ok": False, "error": saved.get("error", "save failed")}
         rec["status"] = "applied"

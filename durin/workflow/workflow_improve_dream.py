@@ -112,14 +112,26 @@ def _script_referenced_outside(workspace, name: str, script: str) -> bool:
     file. A proposal classified against only the PROPOSING workflow's nodes
     cannot see damage a same-named-file edit would do to a sibling workflow,
     so any reference from outside forces the proposal to ``manual_only``
-    regardless of whether that sibling reference itself routes. Reuses
-    ``_improvable_workflows`` so a malformed sibling definition is tolerated
-    (skipped), never raises out of this scan."""
+    regardless of whether that sibling reference itself routes. A sibling
+    definition that fails to parse fails SAFE: its raw JSON is substring-scanned
+    for the filename, because a broken sibling may be repaired later and its
+    gate would then run the edited file — "cannot inspect" must never read as
+    "not referenced". Never raises out of this scan."""
+    parsed_names: set[str] = set()
     for other_name, other_wf in _improvable_workflows(workspace):
+        parsed_names.add(other_name)
         if other_name == name:
             continue
         if any(isinstance(n, ScriptNode) and n.script == script for n in other_wf.nodes.values()):
             return True
+    for f in sorted(workflows_dir(workspace).glob("*.json")):
+        if f.stem == name or f.stem in parsed_names:
+            continue
+        try:
+            if script in f.read_text(encoding="utf-8", errors="replace"):
+                return True
+        except OSError:
+            return True   # unreadable sibling: fail safe, force review
     return False
 
 
