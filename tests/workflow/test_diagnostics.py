@@ -84,7 +84,7 @@ def test_failure_samples_deduped_capped_newest_first():
         _rec("r4", [{"node_id": "s", "iteration": 1, "status": "node_failed", "error": "err_z"}]),
     ]
     d = compute_diagnostics(recs)
-    # newest run (r4) first; r3's "err_y" is a duplicate of r2's and is skipped;
+    # newest run (r4) first; walking newest-first keeps r3's "err_y" and skips r2's duplicate;
     # r0's "err_w" is dropped once the cap of 3 distinct errors is reached
     assert d.failure_samples == {"s": ["err_z", "err_y", "err_x"]}
 

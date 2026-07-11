@@ -55,6 +55,10 @@ def _node_records(result) -> list[dict]:
             "status": r.status,
             "route_label": r.route_label,
             "exit_code": getattr(r, "exit_code", None),
+            # Failure detail (stderr tail / exception text) for node_failed rows —
+            # the evidence the improve pass's script-repair lane reads. Capped so a
+            # pathological error cannot bloat every manifest rewrite.
+            "error": (r.error or "")[:2000] or None,
         }
         for r in result.runs
     ]

@@ -282,6 +282,7 @@ The per-node entries in the manifest's `runs` array carry:
 | `route_label` | matched case label for multi-way nodes (`null` otherwise) |
 | `budget` | the node's effective visit budget at this pass (`null` for parallel branches/workers, which are not loop targets) |
 | `exit_code` | a script node's subprocess exit code (`null` for agent nodes, which have no exit code) |
+| `error` | failure detail (stderr tail / exception text, capped) for `node_failed`/`persist_failed` rows — the evidence the improve pass's script-repair lane reads (`null` otherwise) |
 
 The finalized manifest also carries top-level fields: `needs_input_node` — the node
 that routed to `__needs_input__` (`null` otherwise), the resume re-entry point;
