@@ -34,6 +34,12 @@ def test_stdin_falls_back_to_task_at_chain_start(tmp_path):
     assert resp.output.strip() == "THE TASK"
 
 
+def test_empty_upstream_output_stays_empty_on_stdin(tmp_path):
+    node = ScriptNode(id="s", command="cat")
+    resp = runner(tmp_path)(_req(node, upstream="", tmp_path=tmp_path))
+    assert resp.output == ""
+
+
 def test_env_vars_and_cwd(tmp_path):
     work = tmp_path / "work"
     node = ScriptNode(id="mynode", command='echo "$DURIN_NODE_ID $DURIN_RUN_ID $DURIN_ITERATION"; pwd; echo "$DURIN_TASK"')

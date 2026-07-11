@@ -1,17 +1,17 @@
 """The script node runner: run a deterministic subprocess for a ScriptNode.
 
 Plugs into WorkflowEngine as the ``script_runner``, the peer of AgentNodeRunner.
-The contract is Unix-plain: the upstream edge text arrives on stdin — falling
-back to the run's task when there is no upstream output (a chain-start node,
-or an upstream producer that emitted nothing), since the run's input text is
-the incoming edge of the start node — small run metadata in DURIN_* env vars,
-cwd is the run's shared working folder (the file channel), stdout (capped)
-becomes the edge text to the next node. Routing is
-derived deterministically — exit code for a binary gate (0 = PASS), the last
-non-empty stdout line for a multi-way node — and returned as ``route_label`` so
-the engine's routing path is identical to an agent node's. A non-zero exit on a
-NON-gate node is an error (NodeExecutionError → aborted run), not a verdict.
-A script node has no session: session_key is None and messages are empty.
+The contract is Unix-plain: stdin carries the upstream edge text. A start-position
+node (no upstream) receives the run's task instead, since the run's input text is
+the incoming edge of the start node. Upstream producers that emit an empty string
+produce empty stdin (no fallback). Small run metadata in DURIN_* env vars, cwd is
+the run's shared working folder (the file channel), stdout (capped) becomes the
+edge text to the next node. Routing is derived deterministically — exit code for
+a binary gate (0 = PASS), the last non-empty stdout line for a multi-way node —
+and returned as ``route_label`` so the engine's routing path is identical to an
+agent node's. A non-zero exit on a NON-gate node is an error (NodeExecutionError
+→ aborted run), not a verdict. A script node has no session: session_key is None
+and messages are empty.
 """
 
 from __future__ import annotations
@@ -90,7 +90,7 @@ class ScriptNodeRunner:
             raise NodeExecutionError(node.id, req.iteration, None, exc) from exc
         try:
             stdout, stderr = proc.communicate(
-                input=req.upstream_output or req.task or "", timeout=timeout)
+                input=(req.upstream_output if req.upstream_output is not None else req.task) or "", timeout=timeout)
         except subprocess.TimeoutExpired:
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
