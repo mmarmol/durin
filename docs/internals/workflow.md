@@ -122,9 +122,12 @@ run's task instead, since the run's task is the incoming edge of the start node;
 upstream node that produced an empty string stays empty (no fallback). Small run
 metadata rides in `DURIN_TASK`/`DURIN_RUN_ID`/`DURIN_NODE_ID`/`DURIN_ITERATION`/
 `DURIN_WORK_DIR` env vars (`DURIN_TASK` is capped — env values have platform size
-limits that stdin does not). **cwd** is the run's shared working folder, so a script
-reads earlier steps' files and writes its own the same way a `tools: "default"` work
-node does. **stdout** (capped at `workflow.script_output_max_chars`, truncated with a
+limits that stdin does not). The subprocess otherwise inherits the gateway
+process's own environment unchanged — it is not scrubbed down to a safe set the
+way the agent's shell tool is (see [security.md](security.md)). **cwd** is the
+run's shared working folder, so a script reads earlier steps' files and writes
+its own the same way a `tools: "default"` work node does. **stdout** (capped
+at `workflow.script_output_max_chars`, truncated with a
 notice past the cap) becomes the edge text to the next node; **stderr** is
 diagnostic-only — never part of the edge text, though a failing binary gate folds a
 tail of it into the loop-back feedback (below). Output is decoded with
@@ -492,7 +495,9 @@ working folder.
 process-global registry (`durin/workflow/cancellation.py`); the engine polls it
 via a `cancel_check` callback at the top of its node walk. A cancel therefore
 takes effect **between** nodes — a node already executing finishes first
-(best-effort, the same contract as cancelling a sub-agent). The run ends with the
+(best-effort, the same contract as cancelling a sub-agent). For a script node
+this means the subprocess runs to completion or to its own timeout — `/stop`
+cannot interrupt it mid-run. The run ends with the
 terminal status `cancelled`, carrying the partial per-node trace, and its result
 is still injected back like any other completion. A **foreground** run
 (`background=false`) is bridged to the same mechanism: if `/stop` cancels the

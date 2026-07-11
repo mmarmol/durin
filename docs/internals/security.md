@@ -256,8 +256,13 @@ externally-sourced content — the same trust model as the agent's shell tool
 (`ExecTool`): executing them is equivalent to the user running them directly. A
 script node's subprocess does **not** go through `ExecTool`'s guard pipeline (deny
 patterns, workspace boundary, SSRF URL detection) or a sandbox — there is no
-sandboxing at all. Importing remote or third-party workflow definitions (and the
-scripts they reference) is not supported in this scope.
+sandboxing at all. It also does not go through `_build_env()`'s scrubbing: the
+subprocess inherits the full gateway process environment (`dict(os.environ)`),
+including any ambient provider keys, rather than the minimal set `ExecTool`
+constructs — consistent with the same local-trust model, but worth calling out
+since it differs from the adjacent `ExecTool` paragraph above. Importing remote
+or third-party workflow definitions (and the scripts they reference) is not
+supported in this scope.
 
 ### SSRF network guard
 

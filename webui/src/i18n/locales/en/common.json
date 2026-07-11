@@ -1215,7 +1215,7 @@
     "scriptFile": "Script file",
     "scriptFileNone": "— select a file —",
     "timeout": "Timeout (seconds)",
-    "timeoutHint": "default 300",
+    "timeoutHint": "uses the configured default",
     "parallelMode": "mode",
     "parallelStatic": "static (fixed branches)",
     "parallelDynamic": "dynamic (×N worker)",

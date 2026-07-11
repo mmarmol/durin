@@ -1913,7 +1913,7 @@
     "scriptFile": "Archivo de script",
     "scriptFileNone": "— elegí un archivo —",
     "timeout": "Tiempo límite (segundos)",
-    "timeoutHint": "por defecto 300",
+    "timeoutHint": "usa el valor por defecto configurado",
     "parallelMode": "modo",
     "parallelStatic": "estático (ramas fijas)",
     "parallelDynamic": "dinámico (worker ×N)",
