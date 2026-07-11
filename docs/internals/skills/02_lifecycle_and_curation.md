@@ -134,11 +134,17 @@ afterward. Authorship must always be in English, with descriptions stating that
 their triggers apply regardless of the conversation's language, even when the
 mined conversation was not in English.
 
-The prompt also embeds the **composition doctrine** and the workspace's
-**workflow catalog** (`durin/agent/skills_doctrine.py`). The doctrine is not a
-paraphrase: `composition_doctrine()` loads the "Before building: is a skill
-even the right tool?" section of the builtin `skill-creator` skill verbatim at
-assembly time, so every authoring surface reads the same single source. The
+The prompt also embeds the **composition doctrine**, the workspace's
+**workflow catalog**, and the **workflow authoring reference**
+(`durin/agent/skills_doctrine.py`). None of these are paraphrases:
+`composition_doctrine()` loads the "Before building: is a skill even the right
+tool?" section of the builtin `skill-creator` skill verbatim at assembly time,
+and `workflow_authoring_reference()` loads the builtin `workflows` skill's
+authoring schema (every node kind, including the deterministic `script` node)
+the same way — the sub-agents' file tools are workspace/staging-scoped and
+cannot read the packaged skill, so the schema travels in the prompt instead of
+as an unreachable pointer. Both authoring surfaces (the skill-extract pass and
+the agentic restructure) read the same single source. The
 instruction it carries: a step an existing workflow automates must be
 *delegated* (the skill contributes the domain layer and calls `run_workflow`);
 a recurring orchestration no workflow covers is authored with `workflow_write`
