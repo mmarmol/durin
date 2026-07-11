@@ -132,6 +132,12 @@ right there; a failing run (any other exit code) routes back to `implement` with
 the test output as loop-back feedback, bounded by the workflow's usual
 `max_visits` loop guard.
 
+The same swap upgrades the development seeds: when you copy `debug` or
+`execute-plan` into your own workflow, replace their agent verify gate with a
+script node running *your* project's real check (`pytest -q`, `npm test`,
+`cargo test`) — the seeds ship with an agent gate only because they can't know
+your command.
+
 ## Routing: deciding what happens next
 
 A node can just hand off to the next node (`"next": "other_node"`), or it

@@ -46,6 +46,55 @@ marked FINAL). Use it whenever the looping node does incremental work.
 }
 ```
 
+## Script gate — a deterministic check routes the flow (`kind: "script"`)
+
+The producer is an agent; the gate is a **subprocess**: exit 0 routes `on_pass`, non-zero
+routes `on_fail` with the script's stderr threaded back as feedback. Zero tokens, immune to
+drift, exempt from the anti-Goodhart guard. The gate reads the producer's text on stdin and
+runs in the shared working folder, so it can check files the producer wrote. Prefer this
+over an agent gate whenever the criterion is a real command (tests, linters, validators).
+
+```json
+{
+  "name": "build-then-test",
+  "start": "implement",
+  "max_visits": 3,
+  "nodes": [
+    { "id": "implement", "kind": "work", "mode": "build", "tools": "default",
+      "session": "persistent",
+      "prompt": "Implement the change in the working folder.", "next": "gate" },
+    { "id": "gate", "kind": "script", "command": "test -f result.md && grep -qi done result.md",
+      "timeout": 120, "on_pass": null, "on_fail": "implement" }
+  ]
+}
+```
+
+## Script steps — deterministic transforms and fan-out lists
+
+A linear script node transforms the edge (stdin → stdout); a non-zero exit aborts the run
+(in a linear step it is an error, not a verdict). A script as the `list_from` source makes
+the fan-out list deterministic — no more malformed JSON from a model. Use `script` (a file
+under `<workspace>/workflows/scripts/`) instead of `command` when the logic outgrows one line.
+
+```json
+{
+  "name": "each-file-reviewed",
+  "start": "list",
+  "input": { "file": true, "description": "the files to review" },
+  "nodes": [
+    { "id": "list", "kind": "script",
+      "command": "find . -maxdepth 1 -type f | sed 's|^./||' | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().split()))'",
+      "next": "fan" },
+    { "id": "fan", "kind": "parallel", "worker": "review", "list_from": "list",
+      "max_concurrency": 3, "next": "merge" },
+    { "id": "review", "kind": "work", "mode": "read", "tools": "default",
+      "prompt": "Review the one file you were given; report findings." },
+    { "id": "merge", "kind": "work", "mode": "read",
+      "prompt": "Combine the findings into one report.", "next": null }
+  ]
+}
+```
+
 ## Multi-way routing + `__needs_input__` (`cases`)
 
 A node ends with exactly one declared label; the engine follows that edge. `null` ends the

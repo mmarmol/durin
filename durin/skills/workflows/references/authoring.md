@@ -86,6 +86,39 @@ follows `next` or **routes** on a verdict.
 - **Case labels must be distinct after normalization** (case- and punctuation-insensitive):
   `"PASS"` and `"pass."` collide and are rejected.
 
+### `script` — one deterministic subprocess (zero tokens)
+
+Runs a command or a script file instead of an agent turn. The upstream edge text arrives
+on **stdin** (a start-position node receives the run's task instead — the workflow input is
+the start node's incoming edge; an upstream that printed nothing yields empty stdin); its
+**stdout** (capped) becomes the edge text to the next node; **stderr** is diagnostics only.
+It executes with **cwd = the run's shared working folder**, so it reads earlier steps'
+files and its writes are visible downstream, and it inherits the gateway environment plus
+`DURIN_TASK` (capped), `DURIN_RUN_ID`, `DURIN_NODE_ID`, `DURIN_ITERATION`, `DURIN_WORK_DIR`.
+A script node has no session and never reads the shared-context buffer (the buffer passes
+through it untouched).
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `kind` | `"script"` | — | Required to select this node type. |
+| `command` | string | `""` | Inline command, run via `bash -c` (pipes and redirects work). **Exactly one of `command` / `script`.** |
+| `script` | string | `""` | A file under `<workspace>/workflows/scripts/` (relative path, no `..`): `.py` runs with durin's Python, `.sh` with bash, anything else must be executable with a shebang. Missing file = the run aborts pre-flight, before any node runs. |
+| `timeout` | int ≥ 1 \| null | `workflow.script_timeout` config (300s) | On expiry the whole process group is killed and the node fails — a timeout is an error, never a FAIL verdict. |
+| `next` / `on_pass`-`on_fail` / `cases` | — | — | Same three edge shapes and exclusivity as a `work` node. |
+| `max_visits` | int ≥ 1 \| null | inherit envelope | Per-node loop cap override. |
+
+**Routing semantics (all deterministic):**
+- **Binary** (`on_pass`/`on_fail`): **exit 0 = PASS, non-zero = FAIL**; on FAIL the loop-back
+  feedback is the script's output plus its stderr tail and exit code, so the producer knows
+  what to fix. `command: "run-my-tests"` as a gate is the canonical use.
+- **Multi-way** (`cases`): requires exit 0; the **last non-empty stdout line** is the label.
+  A non-zero exit on a `cases` node is a node failure, not a route.
+- **Linear** (`next`): exit 0 continues with stdout as the edge; **non-zero aborts the run**
+  naming the node and exit code — in a gate a non-zero exit is a verdict, in a linear step
+  it is an error.
+- Agent-only fields (`model`, `persona`, `prompt`, `mode`, `tools`, `context`, `session`,
+  `skills`, `mcps`, `max_turns`) are **rejected** on a script node.
+
 ### `parallel` — concurrent branches
 
 Runs branches concurrently and merges their text outputs into the `next` node's input. Two
@@ -130,9 +163,15 @@ The parser rejects a definition (with a clear message) when:
 - `session: "persistent"` is combined with `context: "shared"` (two competing continuity
   mechanisms), or set on a node referenced as a parallel `branches` member or `worker`.
 - Two `cases` labels normalize to the same form.
-- A `parallel` branch id points to a node that is not a `work` node.
+- A `parallel` branch or `worker` id points to a node that is not a `work` node (script
+  nodes are rejected there on purpose: a script iterates or parallelizes *inside* the
+  script — `for`, `xargs -P` — so fan-out adds nothing; a script node CAN be the
+  `list_from` source, which makes the fan-out list deterministic).
+- A `script` node sets both or neither of `command`/`script`, uses an absolute or
+  `..`-escaping `script` path, or sets any agent-only field.
 - A `choose`-reconcile parallel node has no `criteria`.
 - **Anti-Goodhart guard:** a routing node is *structurally identical* (same `model`, `mode`,
   and `prompt`) to a producer that feeds it. Vary at least one — the verdict must come from a
   genuinely independent reviewer. (Routing nodes default to a read-only mode and producers to
-  `build`, so this only fires when you make them identical on purpose.)
+  `build`, so this only fires when you make them identical on purpose. Script gates are
+  naturally exempt: an exit code cannot be sycophantic.)
