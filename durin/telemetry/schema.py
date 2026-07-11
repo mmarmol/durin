@@ -1468,7 +1468,8 @@ class LoopsEventMatchedEvent(TypedDict):
     fired (a trigger matched and a new run was started), queued (a trigger
     matched but the loop was busy and the event was queued), passed_busy
     (a trigger matched, the loop was busy, and no queue was wired so the
-    message fell through as a normal turn instead).
+    message fell through as a normal turn instead), drained (a run finished
+    and the loop's queue had a fresh event, which was fired next).
     """
 
     loop: str

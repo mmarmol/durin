@@ -1,5 +1,9 @@
+import asyncio
+import time
+
 import pytest
 from durin.loops import claims
+from durin.loops import queue as loop_queue
 from durin.loops import run_log as rl
 from durin.loops.runtime import LoopBusy, LoopsRuntime
 from durin.loops.spec import parse_loop
@@ -20,7 +24,7 @@ def _isolate_telemetry_dir(tmp_path, monkeypatch):
     return telemetry_dir
 
 
-def _mk_runtime(tmp_path, results, judge_verdict=None, asks=None, counterpart_asks=None):
+def _mk_runtime(tmp_path, results, judge_verdict=None, asks=None, counterpart_asks=None, queue_ttl_s=3600):
     calls = {"exec": []}
 
     async def workflow_exec(name, task, *, resume_run_id=None):
@@ -39,8 +43,14 @@ def _mk_runtime(tmp_path, results, judge_verdict=None, asks=None, counterpart_as
     ids = iter([f"lr{i}" for i in range(100)])
     rt = LoopsRuntime(tmp_path, workflow_exec=workflow_exec, judge=judge, keep_runs=20,
                       check_timeout_s=5, on_operator_ask=on_ask, on_counterpart_ask=on_counterpart_ask,
-                      run_id_factory=lambda: next(ids))
+                      run_id_factory=lambda: next(ids), queue_ttl_s=queue_ttl_s)
     return rt, calls
+
+
+async def _drain():
+    """Let a `_post_finish`-scheduled asyncio.create_task drain fire run."""
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
 
 
 def _save(tmp_path, **over):
@@ -339,3 +349,65 @@ async def test_answer_releases_claim_even_when_resumed_exec_raises(tmp_path):
     assert m2["status"] == "error"
     assert m2["detail"] == "boom"
     assert claims.lookup(tmp_path, "thread-boom") is None
+
+
+async def test_post_finish_drains_next_fresh_queued_event(tmp_path):
+    """single-concurrency loop: a run finishing (freeing the slot) must fire
+    the oldest fresh queued event next, via a scheduled asyncio task."""
+    _save(tmp_path)
+    origin = {"channel": "email", "thread": "t1"}
+    loop_queue.push(tmp_path, "l1", {"content": "queued task", "origin": origin})
+    rt, calls = _mk_runtime(tmp_path, [_wr("completed"), _wr("completed")])
+
+    m = await rt.fire("l1", source="manual")
+    assert m["status"] == "done"
+    await _drain()
+
+    assert len(calls["exec"]) == 2
+    assert calls["exec"][1] == ("w1", "queued task", None)
+    assert loop_queue.pending(tmp_path, "l1") == 0
+
+
+async def test_post_finish_skips_drain_when_queue_only_has_expired_events(tmp_path):
+    _save(tmp_path)
+    origin = {"channel": "email"}
+    loop_queue.push(tmp_path, "l1", {"content": "stale task", "origin": origin,
+                                     "queued_at": time.time() - 3600})
+    rt, calls = _mk_runtime(tmp_path, [_wr("completed")], queue_ttl_s=60)
+
+    m = await rt.fire("l1", source="manual")
+    assert m["status"] == "done"
+    await _drain()
+
+    assert len(calls["exec"]) == 1  # no second (drained) fire
+    assert loop_queue.pending(tmp_path, "l1") == 0  # expired entry still dropped
+
+
+async def test_post_finish_skips_drain_when_loop_disabled(tmp_path):
+    _save(tmp_path, enabled=False)
+    origin = {"channel": "email"}
+    loop_queue.push(tmp_path, "l1", {"content": "queued task", "origin": origin})
+    rt, calls = _mk_runtime(tmp_path, [_wr("completed")])
+
+    # fire() itself doesn't gate on `enabled` (only try_fire does); the drain
+    # hook inside _post_finish is what must respect it.
+    m = await rt.fire("l1", source="manual")
+    assert m["status"] == "done"
+    await _drain()
+
+    assert len(calls["exec"]) == 1
+    assert loop_queue.pending(tmp_path, "l1") == 1  # event left untouched
+
+
+async def test_post_finish_skips_drain_for_parallel_concurrency(tmp_path):
+    _save(tmp_path, concurrency="parallel")
+    origin = {"channel": "email"}
+    loop_queue.push(tmp_path, "l1", {"content": "queued task", "origin": origin})
+    rt, calls = _mk_runtime(tmp_path, [_wr("completed")])
+
+    m = await rt.fire("l1", source="manual")
+    assert m["status"] == "done"
+    await _drain()
+
+    assert len(calls["exec"]) == 1
+    assert loop_queue.pending(tmp_path, "l1") == 1  # event left untouched

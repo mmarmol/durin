@@ -21,11 +21,12 @@ V1 behavior."""
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from pathlib import Path
 
 from durin.agent.tools._telemetry import emit_tool_event
-from durin.loops import claims, run_log
+from durin.loops import claims, queue, run_log
 from durin.loops.checks import verify_goal
 from durin.loops.spec import LoopSpec
 from durin.loops.store import load_loop
@@ -66,7 +67,7 @@ def _bind_loop_telemetry(name: str):
 class LoopsRuntime:
     def __init__(self, workspace, *, workflow_exec, judge, keep_runs: int,
                  check_timeout_s: int, on_operator_ask=None, on_counterpart_ask=None,
-                 run_id_factory=None):
+                 run_id_factory=None, queue_ttl_s: int = 3600):
         self._ws = Path(workspace)
         self._exec = workflow_exec
         self._judge = judge
@@ -75,6 +76,7 @@ class LoopsRuntime:
         self._notify = on_operator_ask
         self._notify_counterpart = on_counterpart_ask
         self._run_id = run_id_factory or (lambda: uuid.uuid4().hex[:12])
+        self._queue_ttl_s = queue_ttl_s
 
     async def fire(self, name: str, *, source: str, task: str | None = None,
                     origin: dict | None = None) -> dict:
@@ -192,6 +194,22 @@ class LoopsRuntime:
                                                "status": record["status"],
                                                "goal_reached": bool(record.get("goal_reached"))})
         run_log.prune_runs(self._ws, spec.name, self._keep_runs)
+        # The run that just finished held the only concurrency slot a
+        # `single` loop allows; if a channel event piled up in the queue
+        # while it ran, fire it now instead of waiting for the next inbound
+        # message. Scheduled via create_task (never awaited here) so a slow
+        # drained run can't delay returning this record to the caller.
+        if spec.enabled and spec.concurrency == "single":
+            event = queue.pop_fresh(self._ws, spec.name, self._queue_ttl_s)
+            if event is not None:
+                origin = event.get("origin")
+                emit_tool_event("loops.event_matched", {
+                    "loop": spec.name,
+                    "source_channel": (origin or {}).get("channel", ""),
+                    "action": "drained",
+                })
+                asyncio.create_task(self.fire(spec.name, source="channel",
+                                              task=event.get("content"), origin=origin))
         return record
 
     async def _say(self, spec: LoopSpec, run_id: str, kind: str, text: str) -> None:

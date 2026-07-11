@@ -979,6 +979,7 @@ class LoopsConfig(Base):
 
     keep_runs: int = Field(default=20, ge=1, description="Finalized loop-run manifests kept per loop (needs_operator runs are never pruned).")
     check_timeout_s: int = Field(default=60, ge=1, le=3600, description="Timeout in seconds for a single script goal check.")
+    queue_ttl_s: int = Field(default=3600, ge=60, description="How long a queued channel event stays fresh before the drain hook drops it unfired.")
 
 
 class GatewayConfig(Base):
