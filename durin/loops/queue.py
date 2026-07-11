@@ -23,6 +23,7 @@ import json
 import time
 from pathlib import Path
 
+from durin.utils.atomic_write import atomic_write_text
 from durin.utils.file_lock import cross_process_lock
 
 
@@ -57,7 +58,7 @@ def _write_events(p: Path, events: list[dict]) -> None:
         return
     p.parent.mkdir(parents=True, exist_ok=True)
     text = "\n".join(json.dumps(e) for e in events) + "\n"
-    p.write_text(text, encoding="utf-8")
+    atomic_write_text(p, text, encoding="utf-8")
 
 
 def push(workspace: str | Path, loop: str, event: dict) -> None:

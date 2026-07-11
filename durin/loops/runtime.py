@@ -25,6 +25,8 @@ import asyncio
 import uuid
 from pathlib import Path
 
+from loguru import logger
+
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.loops import claims, queue, run_log
 from durin.loops.checks import verify_goal
@@ -208,8 +210,8 @@ class LoopsRuntime:
                     "source_channel": (origin or {}).get("channel", ""),
                     "action": "drained",
                 })
-                asyncio.create_task(self.fire(spec.name, source="channel",
-                                              task=event.get("content"), origin=origin))
+                asyncio.create_task(self._drain_fire(spec.name,
+                                                     task=event.get("content"), origin=origin))
         return record
 
     async def _say(self, spec: LoopSpec, run_id: str, kind: str, text: str) -> None:
@@ -225,3 +227,23 @@ class LoopsRuntime:
                 await self._notify_counterpart(spec.name, run_id, origin, text)
             except Exception:  # noqa: BLE001 — delivery is best-effort, mirrors _say
                 pass
+
+    async def _drain_fire(self, loop_name: str, task: str | None, origin: dict | None) -> None:
+        """Fire a drained event, re-enqueueing and logging if the loop is busy.
+
+        Called via create_task from _post_finish, so unhandled exceptions
+        are logged by asyncio as task exceptions. On LoopBusy, push the event
+        BACK via queue.push and log a warning (mirrors how matcher._fire
+        handles the race). Other exceptions are logged (run-level failures are
+        already finalized by fire itself).
+        """
+        try:
+            await self.fire(loop_name, source="channel", task=task, origin=origin)
+        except LoopBusy:
+            queue.push(self._ws, loop_name, {"content": task, "origin": origin})
+            logger.warning(
+                "loops: drained event for loop '{}' lost the fire race (now busy); "
+                "re-queued for next available slot", loop_name
+            )
+        except Exception:  # noqa: BLE001 — run-level errors already finalized by fire
+            logger.exception("loops: drained event for loop '{}' raised an unhandled exception", loop_name)

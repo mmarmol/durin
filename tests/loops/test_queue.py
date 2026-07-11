@@ -1,5 +1,6 @@
 import json
 import time
+from unittest.mock import patch
 
 from durin.loops import queue
 
@@ -90,3 +91,22 @@ def test_different_loops_are_independent(tmp_path):
     assert queue.pending(tmp_path, "l2") == 1
     assert queue.pop_fresh(tmp_path, "l1", 3600)["content"] == "for-l1"
     assert queue.pending(tmp_path, "l2") == 1
+
+
+def test_write_events_uses_atomic_write(tmp_path):
+    """_write_events must use atomic_write_text, not plain Path.write_text,
+    to ensure a crash mid-write doesn't truncate the queue file."""
+    with patch("durin.loops.queue.atomic_write_text") as mock_atomic:
+        queue.push(tmp_path, "l1", _ev("first"))
+        queue.push(tmp_path, "l1", _ev("second"))
+        mock_atomic.reset_mock()
+
+        queue.pop_fresh(tmp_path, "l1", 3600)
+
+        mock_atomic.assert_called_once()
+        args, kwargs = mock_atomic.call_args
+        # Verify the file content is valid JSONL after pop
+        remaining_lines = args[1].strip().split("\n") if args[1].strip() else []
+        for line in remaining_lines:
+            if line:
+                json.loads(line)  # Must parse as valid JSON

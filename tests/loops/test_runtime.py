@@ -411,3 +411,36 @@ async def test_post_finish_skips_drain_for_parallel_concurrency(tmp_path):
 
     assert len(calls["exec"]) == 1
     assert loop_queue.pending(tmp_path, "l1") == 1  # event left untouched
+
+
+async def test_post_finish_drain_re_queues_on_loop_busy(tmp_path, monkeypatch):
+    """When the drained fire raises LoopBusy (loop became busy between
+    pop_fresh and the fire attempt), the event must be re-enqueued."""
+    _save(tmp_path)
+    origin = {"channel": "email", "thread": "t1"}
+    loop_queue.push(tmp_path, "l1", {"content": "drained task", "origin": origin})
+    rt, calls = _mk_runtime(tmp_path, [_wr("completed")])
+
+    # Patch fire to raise LoopBusy on the drained (second) call.
+    original_fire = rt.fire
+    fire_calls = [0]
+
+    async def fire_with_busy(*args, **kwargs):
+        fire_calls[0] += 1
+        if fire_calls[0] == 2:  # second call is the drain
+            raise LoopBusy("loop is busy")
+        return await original_fire(*args, **kwargs)
+
+    monkeypatch.setattr(rt, "fire", fire_with_busy)
+
+    m = await rt.fire("l1", source="manual")
+    assert m["status"] == "done"
+    await _drain()
+
+    # Verify: the first (manual) fire executed, but the drained fire was re-queued
+    assert len(calls["exec"]) == 1  # only the first fire executed
+    assert loop_queue.pending(tmp_path, "l1") == 1  # event back in the queue
+    # Verify the re-queued event has the same content and origin
+    requeued = loop_queue.pop_fresh(tmp_path, "l1", 3600)
+    assert requeued["content"] == "drained task"
+    assert requeued["origin"] == origin
