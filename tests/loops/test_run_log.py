@@ -36,3 +36,41 @@ def test_prune_keeps_needs_operator(tmp_path):
     rl.prune_runs(tmp_path, "a", keep=2)
     left = {m["run_id"] for m in rl.list_runs(tmp_path, "a", limit=50)}
     assert "r0" in left and len(left) == 3  # 2 kept + the needs_operator one
+
+
+def test_update_run_on_missing_file_keeps_required_keys(tmp_path):
+    """update_run on a nonexistent run should seed required manifest keys."""
+    m = rl.update_run(tmp_path, "x", "ghost", status="running")
+    assert m["schema"] == rl.SCHEMA
+    assert m["run_id"] == "ghost"
+    assert m["loop"] == "x"
+    assert m["status"] == "running"
+    # Verify it round-trips correctly
+    m2 = rl.read_run(tmp_path, "x", "ghost")
+    assert m2["schema"] == rl.SCHEMA and m2["run_id"] == "ghost" and m2["loop"] == "x" and m2["status"] == "running"
+
+
+def test_sort_is_deterministic_on_started_at_ties(tmp_path):
+    """Runs with equal started_at should sort deterministically by run_id descending."""
+    # Create three runs with the same started_at
+    run_ids = ["r1", "r2", "r3"]
+    shared_started_at = 1000.0
+    for run_id in run_ids:
+        rl.start_run(tmp_path, "a", run_id, source="cron", task="t")
+
+    # Rewrite them to share the same started_at
+    for run_id in run_ids:
+        rl.update_run(tmp_path, "a", run_id, started_at=shared_started_at)
+
+    # Call list_runs twice and verify same order both times
+    runs1 = rl.list_runs(tmp_path, "a")
+    runs2 = rl.list_runs(tmp_path, "a")
+
+    order1 = [m["run_id"] for m in runs1]
+    order2 = [m["run_id"] for m in runs2]
+
+    assert order1 == order2, f"Orders differ: {order1} vs {order2}"
+
+    # Verify order is deterministic (should be sorted by run_id descending for ties)
+    expected = sorted(run_ids, reverse=True)
+    assert order1 == expected, f"Expected {expected}, got {order1}"

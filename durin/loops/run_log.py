@@ -46,7 +46,7 @@ def start_run(ws, loop: str, run_id: str, *, source: str, task: str) -> dict:
 
 
 def update_run(ws, loop: str, run_id: str, **fields) -> dict:
-    record = read_run(ws, loop, run_id) or {}
+    record = read_run(ws, loop, run_id) or {"schema": SCHEMA, "run_id": run_id, "loop": loop}
     record.update(fields)
     return _write(ws, loop, run_id, record)
 
@@ -82,7 +82,7 @@ def _load_dir(d: Path) -> list[dict]:
             out.append(json.loads(p.read_text(encoding="utf-8")))
         except Exception:
             continue
-    out.sort(key=lambda m: m.get("started_at") or 0, reverse=True)
+    out.sort(key=lambda m: (m.get("started_at") or 0, m.get("run_id") or ""), reverse=True)
     return out
 
 
