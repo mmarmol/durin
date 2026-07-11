@@ -139,6 +139,7 @@ async def test_script_node_runs_end_to_end(tmp_path):
 @pytest.mark.asyncio
 async def test_run_anchors_node_sessions_to_invoking_session(tmp_path):
     from unittest.mock import AsyncMock
+
     from durin.agent.runner import AgentRunResult
     from durin.agent.tools.context import RequestContext
     _write_workflow(tmp_path, "w", {"name": "w", "start": "a",

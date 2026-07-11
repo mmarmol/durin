@@ -1,4 +1,5 @@
 import pytest
+
 from durin.workflow.spec import ScriptNode, WorkflowError, node_label, parse_workflow
 
 

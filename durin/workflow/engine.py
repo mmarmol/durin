@@ -31,7 +31,15 @@ from loguru import logger
 from durin.workflow import run_log, workspace_fork
 from durin.workflow.artifacts import artifact_dir, prune_runs
 from durin.workflow.result import NodeRun, WorkflowResult
-from durin.workflow.spec import NEEDS_INPUT_TARGET, ParallelNode, ScriptNode, SubworkflowNode, WorkNode, Workflow, node_label
+from durin.workflow.spec import (
+    NEEDS_INPUT_TARGET,
+    ParallelNode,
+    ScriptNode,
+    SubworkflowNode,
+    Workflow,
+    WorkNode,
+    node_label,
+)
 from durin.workflow.verdict import parse_label, parse_verdict, strip_label_line, strip_verdict_line
 
 
