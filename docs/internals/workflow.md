@@ -541,15 +541,19 @@ End-to-end for a single `run_workflow` call:
    file returns an error string (it does not raise).
 2. **Wire.** It resolves the user's default model preset
    (`DurinConfig.resolve_default_preset`), builds the provider (`make_provider`), and
-   wires `AgentRunner` → `AgentNodeRunner` (passing the user's real `cfg.tools`), an
-   `AgentJudgeRunner` (used only to **pick** a winner for parallel `choose`), and a
-   `SubworkflowRunner` (for sub-workflow nodes) into the `WorkflowEngine`.
-3. **Run.** The engine runs under `asyncio.to_thread`. It walks the graph: a node runs
-   its body (an agent turn — persisting a lineage'd node session) and its output threads
-   to the next node; a **routing** node branches on the `PASS`/`FAIL` verdict in its own
-   agent output (threading the feedback into the loop-back on fail); a sub-workflow node
-   runs a nested workflow; a failed gate loops back, re-running the target node as the
-   next iteration (a sibling node session), capped by `max_visits`.
+   wires `AgentRunner` → `AgentNodeRunner` (passing the user's real `cfg.tools`), a
+   `ScriptNodeRunner` (for script nodes), an `AgentJudgeRunner` (used only to **pick** a
+   winner for parallel `choose`), and a `SubworkflowRunner` (for sub-workflow nodes)
+   into the `WorkflowEngine`.
+3. **Run.** The engine runs under `asyncio.to_thread`. It walks the graph: an agent node
+   runs its body as an agent turn (persisting a lineage'd node session), a script node
+   runs its `command`/`script` as a subprocess via the `ScriptNodeRunner` instead (no
+   session), and either way the output threads to the next node; a **routing** node
+   branches on a `PASS`/`FAIL` verdict — from the agent's own output for a work node, or
+   the subprocess exit code for a script node (threading the feedback into the loop-back
+   on fail); a sub-workflow node runs a nested workflow; a failed gate loops back,
+   re-running the target node as the next iteration (a sibling node session for a work
+   node), capped by `max_visits`.
 4. **Return.** The run produces a typed `WorkflowResult` (status + final output +
    per-node trace, including each node's `session_key`). The engine finalizes the run
    manifest before returning; neither the tool nor the service writes an additional
@@ -703,9 +707,11 @@ End-to-end for a single `run_workflow` call:
   the current files and reconcile back, read branches and dynamic workers share it directly);
   per-node **work mode** (`build`/`read` neutral postures for nodes; `plan`/`explore` carry interactive framing) / **model or persona** (SOUL + model,
   mutually exclusive) / context / tools; **optional routing** in two shapes — **binary**
-  (`on_pass`/`on_fail`: `PASS`/`FAIL` verdict from the agent, feedback-threaded loop-back)
-  and **multi-way** (`cases`: agent emits one of N declared labels, last-line match,
-  `default` fallback, aborts clearly when no label matched), with an anti-Goodhart guard
+  (`on_pass`/`on_fail`: a `PASS`/`FAIL` verdict from the agent — or, on a script node,
+  from the exit code — feedback-threaded loop-back)
+  and **multi-way** (`cases`: one of N declared labels from the agent — or, on a script
+  node, from the last stdout line — last-line match, `default` fallback, aborts clearly
+  when no label matched), with an anti-Goodhart guard
   that a routing node not be structurally identical to its producer; a terminal routing node's
   own output (minus its verdict/label line) becomes the run's final output when non-empty, so a
   gate that produces real content is not silently discarded; a multi-way case may
