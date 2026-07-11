@@ -65,6 +65,10 @@ class TriggerMatcher:
         # task's `finally`. Single-threaded asyncio event loop — no lock
         # needed, the add/check are never interleaved with the task start.
         self._pending_fires: set[str] = set()
+        # Strong refs to in-flight fire/answer tasks: asyncio.create_task only
+        # holds a weak reference, so an unreferenced task can be garbage
+        # collected mid-run. Discarded via the done callback once finished.
+        self._tasks: set[asyncio.Task] = set()
 
     async def handle_inbound(self, msg: Any) -> bool:
         """Return True when the message was consumed by a loop (claim wake
@@ -99,7 +103,7 @@ class TriggerMatcher:
         record = run_log.read_run(self._ws, loop_name, run_id) if loop_name and run_id else None
         if record and record.get("status") == "waiting_info":
             self._emit(loop_name, msg.channel, "woke")
-            asyncio.create_task(self._answer(loop_name, run_id, msg.content))
+            self._track(asyncio.create_task(self._answer(loop_name, run_id, msg.content)))
             return True
         # Stale claim: the run moved on (or vanished) without releasing it.
         claims.release(self._ws, thread)
@@ -148,7 +152,7 @@ class TriggerMatcher:
         )
         if not busy:
             self._pending_fires.add(spec.name)
-            asyncio.create_task(self._fire(spec.name, msg.channel, msg.content, origin))
+            self._track(asyncio.create_task(self._fire(spec.name, msg.channel, msg.content, origin)))
             return True
         if self._enqueue is not None:
             self._emit(spec.name, msg.channel, "queued")
@@ -160,6 +164,10 @@ class TriggerMatcher:
         )
         self._emit(spec.name, msg.channel, "passed_busy")
         return False
+
+    def _track(self, task: asyncio.Task) -> None:
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     def _queue_event(self, content: str, origin: dict) -> dict:
         now = time.time()

@@ -429,6 +429,23 @@ async def test_fired_telemetry_emitted_after_successful_fire(tmp_path):
     assert events == ["fired"]
 
 
+async def test_fire_task_is_tracked_then_discarded_on_completion(tmp_path):
+    """The matcher must hold a strong ref to the scheduled fire task (an
+    unreferenced asyncio.create_task can be GC'd mid-run) and release it once
+    the task finishes."""
+    _save(tmp_path, triggers=[{"source": "channel", "channel": "email", "filters": {}}])
+    rt = FakeRuntime()
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+
+    consumed = await matcher.handle_inbound(_email_msg())
+    assert consumed is True
+    assert len(matcher._tasks) == 1  # tracked synchronously before the task ran
+
+    await _drain()
+
+    assert matcher._tasks == set()  # discarded once the task completed
+
+
 async def test_first_match_wins_in_alphabetical_order(tmp_path):
     _save(tmp_path, name="a-loop", triggers=[{"source": "channel", "channel": "email", "filters": {}}])
     _save(tmp_path, name="z-loop", triggers=[{"source": "channel", "channel": "email", "filters": {}}])

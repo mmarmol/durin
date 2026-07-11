@@ -696,6 +696,7 @@ class AuxModelsConfig(Base):
     # Resolved fresh at each spawn, so a hot-reloaded change takes effect
     # immediately.
     subagents: AuxModelConfig | None = Field(default=None, description="Model for spawned subagents (background spawn/tasks runs); unset = the subagent inherits the parent session's model")
+    loops: AuxModelConfig | None = Field(default=None, description="Model for loops' goal judge and semantic trigger filter calls; unset = those calls ride the agent's live default model")
 
 
 class ModelPresetConfig(Base):

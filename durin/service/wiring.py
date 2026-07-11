@@ -153,4 +153,17 @@ def build_service_registry(
         loops_run_log.reconcile_running(_workspace(), now=time.time())
     except Exception:  # noqa: BLE001 - crash reconciliation is best-effort
         pass
+
+    # Sweep stale claims (a thread-to-waiting-run mapping released on the
+    # normal answer path) that were never released, e.g. the process died
+    # before a run reached waiting_info's release or the counterpart just
+    # never replied. Claims are conversation-scoped, not tied to any
+    # queue_ttl_s config knob, so a flat week-long constant bounds them
+    # instead.
+    try:
+        from durin.loops import claims as loops_claims
+
+        loops_claims.prune(_workspace(), max_age_s=7 * 24 * 3600)
+    except Exception:  # noqa: BLE001 - best-effort sweep
+        pass
     return registry

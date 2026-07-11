@@ -39,6 +39,7 @@ class MessageBus:
         self.inbound: asyncio.Queue[InboundMessage] = asyncio.Queue(maxsize=_maxsize)
         self.outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue(maxsize=_maxsize)
         self._inbound_authorizer = None
+        self._inbound_interceptors: list = []
 
     def set_inbound_authorizer(self, fn) -> None:
         """Install a gate run on every inbound message before it is enqueued.
@@ -48,12 +49,29 @@ class MessageBus:
         """
         self._inbound_authorizer = fn
 
+    def add_inbound_interceptor(self, fn) -> None:
+        """Register a handler run on every authorized inbound message, before
+        it is enqueued.
+
+        fn(msg) returns truthy when it has consumed the message (e.g. loops'
+        TriggerMatcher routing it to a claim wake or a fired run) — the
+        message is then NOT enqueued. Interceptors run in registration order;
+        the first truthy return wins and later interceptors are skipped. May
+        be sync or async.
+        """
+        self._inbound_interceptors.append(fn)
+
     async def publish_inbound(self, msg: InboundMessage) -> None:
         """Publish a message from a channel to the agent."""
         if self._inbound_authorizer is not None:
             res = self._inbound_authorizer(msg)
             allowed = await res if inspect.isawaitable(res) else res
             if not allowed:
+                return
+        for interceptor in self._inbound_interceptors:
+            res = interceptor(msg)
+            consumed = await res if inspect.isawaitable(res) else res
+            if consumed:
                 return
         await self.inbound.put(msg)
 

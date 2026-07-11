@@ -1,12 +1,14 @@
-"""Reap stale per-run cron and loop-judge sessions.
+"""Reap stale per-run cron and loop-judge/filter sessions.
 
 Every agent_turn cron execution records into a fresh session keyed
-``cron:{id}:run:{ms}`` (see ``CronService._execute_job``), and every loop
-judge call records into a fresh session keyed ``loop:judge:run:{ms}`` (see
-the ``_loop_judge`` closure in ``durin.cli.commands``). These accumulate
-forever; ``config.cron.run_session_retention_hours`` bounds how long they are
-kept. The selection logic lives here as a pure function so it is testable
-without a live ``SessionManager``; the daily ``memory_dream`` cron pass calls
+``cron:{id}:run:{ms}`` (see ``CronService._execute_job``), every loop goal
+judge call records into a fresh session keyed ``loop:judge:run:{ms}``, and
+every loop semantic trigger filter call records into ``loop:filter:run:{ms}``
+(see the ``_loop_judge`` / ``_loop_semantic_judge`` closures in
+``durin.cli.commands``). These accumulate forever;
+``config.cron.run_session_retention_hours`` bounds how long they are kept.
+The selection logic lives here as a pure function so it is testable without a
+live ``SessionManager``; the daily ``memory_dream`` cron pass calls
 ``reap_expired_run_sessions`` to do the deletions.
 """
 
@@ -18,9 +20,9 @@ from typing import Any
 
 from loguru import logger
 
-# cron:{id}:run:{ms} or loop:judge:run:{ms}  — the run timestamp is the
-# trailing all-digits segment.
-_RUN_KEY_RE = re.compile(r"^(?:cron:[^:]+|loop:judge):run:(\d+)$")
+# cron:{id}:run:{ms}, loop:judge:run:{ms}, or loop:filter:run:{ms} — the run
+# timestamp is the trailing all-digits segment.
+_RUN_KEY_RE = re.compile(r"^(?:cron:[^:]+|loop:judge|loop:filter):run:(\d+)$")
 
 
 def _now_ms() -> int:
