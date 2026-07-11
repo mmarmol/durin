@@ -202,6 +202,14 @@ async def test_answer_without_a_runtime_is_unavailable(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_answer_missing_loop_raises_not_found(tmp_path):
+    rt, _ = _runtime(tmp_path, [])
+    svc, p = _svc(tmp_path, runtime=rt), Principal.local()
+    with pytest.raises(NotFoundError):
+        await svc.answer(LoopAnswerCommand(name="ghost", run_id="r1", answer="yes"), p)
+
+
+@pytest.mark.asyncio
 async def test_runs_list_and_global_feed_shape(tmp_path):
     rt, _ = _runtime(tmp_path, [_wr("completed"), _wr("completed")])
     svc, p = _svc(tmp_path, runtime=rt), Principal.local()

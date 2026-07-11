@@ -203,6 +203,8 @@ class LoopsService:
             raise UnavailableError("answering a loop run is not available on this surface")
         try:
             record = await self._runtime.answer(cmd.name, cmd.run_id, cmd.answer)
+        except LoopNotFound as exc:
+            raise NotFoundError(str(exc))
         except ValueError as exc:
             raise ValidationFailedError(str(exc))
         return LoopAnswerResult(run=record)
