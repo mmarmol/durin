@@ -59,7 +59,7 @@ def test_parse_full_roundtrip():
         lambda d: d.__setitem__("stuck_after", True),
         lambda d: d["goal"].__setitem__("checks", [{"kind": "script", "required": True}]),  # no command
         lambda d: d["goal"].__setitem__("checks", [{"kind": "assertion", "required": True}]),  # no text
-        lambda d: d.__setitem__("triggers", [{"source": "mail"}]),  # V1: cron only
+        lambda d: d.__setitem__("triggers", [{"source": "mail"}]),  # unsupported source
         lambda d: d.__setitem__("triggers", [{"source": "cron", "schedule": {"kind": "nope"}}]),
     ],
 )
@@ -97,6 +97,78 @@ def test_parse_rejects_every_without_every_ms():
 def test_parse_accepts_valid_cron_with_tz():
     spec = parse_loop(_with_trigger({"kind": "cron", "expr": "0 8 * * 1-5", "tz": "UTC"}))
     assert spec.triggers[0].schedule == {"kind": "cron", "expr": "0 8 * * 1-5", "tz": "UTC"}
+
+
+def test_parse_channel_trigger_roundtrip():
+    data = _minimal()
+    data["triggers"] = [
+        {
+            "source": "channel",
+            "channel": "email",
+            "filters": {"from_contains": "boss@example.com", "subject_contains": "urgent"},
+            "semantic": "customer sounds upset",
+            "match": "always_new",
+        }
+    ]
+    spec = parse_loop(data)
+    trig = spec.triggers[0]
+    assert trig.source == "channel"
+    assert trig.channel == "email"
+    assert trig.filters == {"from_contains": "boss@example.com", "subject_contains": "urgent"}
+    assert trig.semantic == "customer sounds upset"
+    assert trig.match == "always_new"
+    assert trig.schedule == {}
+    assert parse_loop(loop_to_dict(spec)) == spec
+
+
+def test_parse_channel_trigger_defaults():
+    data = _minimal()
+    data["triggers"] = [{"source": "channel", "channel": "email"}]
+    spec = parse_loop(data)
+    trig = spec.triggers[0]
+    assert trig.filters == {}
+    assert trig.semantic is None
+    assert trig.match == "wake_or_new"
+    assert parse_loop(loop_to_dict(spec)) == spec
+
+
+def test_parse_rejects_unknown_filter_key():
+    data = _minimal()
+    data["triggers"] = [{"source": "channel", "channel": "email", "filters": {"body_contains": "x"}}]
+    with pytest.raises(LoopError):
+        parse_loop(data)
+
+
+def test_parse_rejects_bad_channel():
+    data = _minimal()
+    data["triggers"] = [{"source": "channel", "channel": "slack"}]
+    with pytest.raises(LoopError):
+        parse_loop(data)
+
+
+def test_parse_rejects_cron_with_filters():
+    data = _minimal()
+    data["triggers"] = [
+        {"source": "cron", "schedule": {"kind": "cron", "expr": "0 8 * * *"}, "filters": {"from_contains": "x"}}
+    ]
+    with pytest.raises(LoopError):
+        parse_loop(data)
+
+
+def test_parse_rejects_channel_with_schedule():
+    data = _minimal()
+    data["triggers"] = [
+        {"source": "channel", "channel": "email", "schedule": {"kind": "cron", "expr": "0 8 * * *"}}
+    ]
+    with pytest.raises(LoopError):
+        parse_loop(data)
+
+
+def test_parse_rejects_empty_string_filter_value():
+    data = _minimal()
+    data["triggers"] = [{"source": "channel", "channel": "email", "filters": {"from_contains": "  "}}]
+    with pytest.raises(LoopError):
+        parse_loop(data)
 
 
 def test_checks_sufficient_defaults_false():

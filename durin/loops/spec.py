@@ -22,6 +22,11 @@ _SCHEDULE_ALLOWED_KEYS = {
     "every": {"kind", "every_ms"},
     "at": {"kind", "at_ms"},
 }
+# Fields that only make sense on a channel trigger. Rejected outright on a
+# cron trigger (and vice versa for "schedule") so the two shapes never mix.
+_CHANNEL_ONLY_FIELDS = {"channel", "filters", "semantic", "match"}
+_CHANNEL_FILTER_ALLOWED_KEYS = {"from_contains", "subject_contains"}
+_CHANNEL_MATCH_MODES = {"wake_or_new", "always_new"}
 
 
 class LoopError(ValueError):
@@ -42,8 +47,12 @@ class GoalCheck:
 
 @dataclass(frozen=True)
 class LoopTrigger:
-    source: Literal["cron"]  # V1; channel/webhook sources arrive in V2/V4
+    source: Literal["cron", "channel"]  # webhook sources arrive in V4
     schedule: dict = field(default_factory=dict)  # CronSchedule-shaped: kind/at_ms/every_ms/expr/tz
+    channel: str | None = None  # channel trigger only; V2: only "email"
+    filters: dict = field(default_factory=dict)  # channel trigger only: from_contains/subject_contains
+    semantic: str | None = None  # channel trigger only: optional model-judged condition
+    match: Literal["wake_or_new", "always_new"] = "wake_or_new"  # channel trigger only
 
 
 @dataclass(frozen=True)
@@ -76,8 +85,15 @@ def _parse_check(raw: dict, i: int) -> GoalCheck:
 
 
 def _parse_trigger(raw: dict, i: int) -> LoopTrigger:
-    if raw.get("source") != "cron":
-        raise LoopError(f"trigger[{i}]: only source 'cron' is supported")
+    source = raw.get("source")
+    if source not in ("cron", "channel"):
+        raise LoopError(f"trigger[{i}]: source must be 'cron' or 'channel'")
+    if source == "channel":
+        return _parse_channel_trigger(raw, i)
+
+    present = _CHANNEL_ONLY_FIELDS & set(raw)
+    if present:
+        raise LoopError(f"trigger[{i}]: cron trigger cannot set {sorted(present)}")
     sched = raw.get("schedule") or {}
     kind = sched.get("kind")
     if kind not in _SCHEDULE_KINDS:
@@ -119,6 +135,36 @@ def _parse_trigger(raw: dict, i: int) -> LoopTrigger:
         if not isinstance(at_ms, int) or isinstance(at_ms, bool) or at_ms < 1:
             raise LoopError(f"trigger[{i}]: 'at' schedule requires integer at_ms >= 1")
     return LoopTrigger(source="cron", schedule=dict(sched))
+
+
+def _parse_channel_trigger(raw: dict, i: int) -> LoopTrigger:
+    if "schedule" in raw:
+        raise LoopError(f"trigger[{i}]: channel trigger cannot set 'schedule'")
+    channel = raw.get("channel")
+    if channel != "email":
+        raise LoopError(f"trigger[{i}]: channel must be 'email'")
+    filters = raw.get("filters") or {}
+    if not isinstance(filters, dict):
+        raise LoopError(f"trigger[{i}]: filters must be an object")
+    unknown = set(filters) - _CHANNEL_FILTER_ALLOWED_KEYS
+    if unknown:
+        raise LoopError(f"trigger[{i}]: unknown filter key(s) {sorted(unknown)}")
+    for key, value in filters.items():
+        if not isinstance(value, str) or not value.strip():
+            raise LoopError(f"trigger[{i}]: filter {key!r} must be a non-empty string")
+    semantic = raw.get("semantic")
+    if semantic is not None and not (isinstance(semantic, str) and semantic.strip()):
+        raise LoopError(f"trigger[{i}]: semantic must be a non-empty string if set")
+    match = raw.get("match", "wake_or_new")
+    if match not in _CHANNEL_MATCH_MODES:
+        raise LoopError(f"trigger[{i}]: match must be one of {sorted(_CHANNEL_MATCH_MODES)}")
+    return LoopTrigger(
+        source="channel",
+        channel=channel,
+        filters=dict(filters),
+        semantic=semantic,
+        match=match,
+    )
 
 
 def parse_loop(data: dict) -> LoopSpec:
@@ -169,6 +215,15 @@ def parse_loop(data: dict) -> LoopSpec:
     )
 
 
+def _trigger_to_dict(t: LoopTrigger) -> dict:
+    if t.source == "cron":
+        return {"source": "cron", "schedule": t.schedule}
+    entry = {"source": "channel", "channel": t.channel, "filters": t.filters, "match": t.match}
+    if t.semantic is not None:
+        entry["semantic"] = t.semantic
+    return entry
+
+
 def loop_to_dict(spec: LoopSpec) -> dict:
     return {
         "name": spec.name,
@@ -182,7 +237,7 @@ def loop_to_dict(spec: LoopSpec) -> dict:
             ],
             "checks_sufficient": spec.checks_sufficient,
         },
-        "triggers": [{"source": t.source, "schedule": t.schedule} for t in spec.triggers],
+        "triggers": [_trigger_to_dict(t) for t in spec.triggers],
         "concurrency": spec.concurrency,
         "stuck_after": spec.stuck_after,
         "operator_channel": spec.operator_channel,
