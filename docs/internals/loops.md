@@ -46,7 +46,10 @@ is a second, independent gate: a run can pass every check and still be
 a workflow that pauses (`needs_input`) becomes a loop run parked at
 `needs_operator`; a human (or the agent) answers it and the loop resumes the
 same workflow run via `resume_run_id`, exactly the way a paused workflow is
-normally resumed (see [workflow.md](workflow.md)).
+normally resumed (see [workflow.md](workflow.md)). An ask tagged for the
+other party in the conversation instead parks at `waiting_info` and waits on
+a reply from that channel thread — see §4j — but the resume mechanics are
+the same either way.
 
 ## 3. Diagram
 
@@ -118,7 +121,7 @@ turns a workflow's terminal status into a loop-run status:
 
 | Workflow (`WorkflowResult.status`) | Loop-run status | Notes |
 |---|---|---|
-| `needs_input` | `needs_operator` | The workflow's output becomes the run's `ask`; the operator is notified (kind `ask`). |
+| `needs_input` | `needs_operator` or `waiting_info` | The workflow's output becomes the run's `ask`. An untagged ask goes to `needs_operator` and notifies the operator (kind `ask`); a `[TO:counterpart]`-tagged ask on a run with a channel thread instead parks at `waiting_info` and is delivered to the counterpart — see §4j. |
 | `completed` | `done` or `no_goal` | Goal verification runs (§4c); `done` iff the goal was reached, `no_goal` otherwise. |
 | `exhausted` | `no_goal` | The node-visit budget ran out before completion; no goal verification is attempted — `goal_reached` is `False`. |
 | `aborted` / `cancelled` | `error` | The workflow ended abnormally. |
@@ -126,12 +129,14 @@ turns a workflow's terminal status into a loop-run status:
 | goal verification raised | `error` | A judge/provider failure during `verify_goal` must not strand a `completed` run — it is recorded as `error`, not left `running`. |
 
 `_post_finish` runs for the `done`, `no_goal`, and `error` outcomes: it checks
-for **escalation** (§4g), emits `loops.run_finished` telemetry, and prunes old
-runs. The `needs_input` → `needs_operator` branch returns from `_interpret`
-before `_post_finish` runs, so a `needs_operator` run emits no
-`loops.run_finished` event and is not pruned — it only reaches `_post_finish`
-once it is answered, the workflow is resumed, and the result is re-interpreted
-to a `done`/`no_goal`/`error` outcome.
+for **escalation** (§4g), emits `loops.run_finished` telemetry, prunes old
+runs, and — for a `single`-concurrency loop — drains one fresh event off the
+loop's queue if one is waiting (§4k). The `needs_input` → `needs_operator` /
+`waiting_info` branches both return from `_interpret` before `_post_finish`
+runs, so neither status emits a `loops.run_finished` event nor is pruned — a
+run only reaches `_post_finish` once it is answered, the workflow is
+resumed, and the result is re-interpreted to a `done`/`no_goal`/`error`
+outcome.
 
 ### 4c. Goal verification
 
@@ -247,7 +252,12 @@ state.
 The production wiring (in the gateway's startup path) resolves the loop's
 `operator_channel`/`operator_to` and delivers the text as an
 `OutboundMessage` on that channel; a loop with no `operator_channel`
-configured simply receives no push notification. Either way, every
+configured simply receives no push notification. A `waiting_info` ask is
+delivered separately, through its own injected `on_counterpart_ask(loop,
+run_id, origin, text)` callback — best-effort in the same way — which sends
+the question back into the originating channel thread (§4j) rather than to
+`operator_channel`; the operator's own contact settings are unrelated to
+that delivery. Either way, every
 `needs_operator` (and any other) run is still visible and answerable without
 a configured channel: the webui's Activity view and the `loops` tool's
 `status`/`list` actions read the run log directly, independent of the notify
@@ -266,6 +276,157 @@ status is rewritten to `escalated`, `loops.escalated` telemetry is emitted,
 and the operator is notified (`kind="escalation"`) — the loop keeps
 retrying on its own triggers, but a human now knows it isn't converging.
 
+### 4h. Channel triggers and the inbound matcher
+
+Besides `cron`, a `LoopTrigger` can have `source: "channel"` — today only
+`channel: "email"`. A channel trigger is matched against every inbound
+message on that channel by `TriggerMatcher.handle_inbound`
+(`durin/loops/matcher.py`), which is installed as a bus inbound interceptor
+(§4i) rather than polled or scheduled: routing happens the moment a message
+arrives. Each message is resolved through a fixed decision order:
+
+1. **Claim wake.** If the message carries an email thread that has a
+   registered claim (§4j) pointing at a run currently in `waiting_info`, the
+   message is handed straight to that run as its answer — no loop or trigger
+   is evaluated at all for that message. A claim whose run has moved past
+   `waiting_info` (or vanished) is stale and is released instead of acted on.
+2. **Trigger match.** Absent a claim wake, every *enabled* loop is checked in
+   ascending `name` order, and the first one whose channel trigger fully
+   matches wins — deterministic, first-match-wins. A trigger match is two
+   gates in sequence: **structural filters** first (`from_contains` /
+   `subject_contains`, case-insensitive substring checks against the sender
+   address and subject; either, both, or neither may be set), and only if
+   those pass, an **optional semantic condition** — a sentence graded by an
+   LLM call against a short summary of the message (sender, subject, and the
+   start of the body), using the `loops` aux-model purpose (§6). A semantic
+   condition with no judge configured, or whose judge call raises, is treated
+   as a non-match rather than blocking the message: a broken judge fails
+   closed for that trigger, not open.
+3. **Concurrency action.** A trigger match then resolves to fire, queue, or
+   pass through, the same concurrency logic as a manual/chat fire (§4e): a
+   `parallel` loop always starts a new run; a `single` loop fires only if no
+   run is currently active, otherwise the event is pushed onto that loop's
+   event queue (§4k) if one is wired, or — with no queue wired — the match is
+   logged and the message falls through to a normal agent turn rather than
+   being silently dropped.
+
+Firing and answering both run as background tasks (`asyncio.create_task`):
+the matcher's return value reflects only the routing decision, not the
+eventual run outcome, so a slow workflow run never blocks bus dispatch. A
+`pending_fires` set closes the race window this creates for a `single`
+loop — two messages landing back-to-back would otherwise both see "no active
+run" and both decide to fire before the first fire's own manifest write
+lands; a loop name is added to the set the instant a fire is scheduled and
+removed once that task finishes, so the second message's concurrency check
+sees it as busy.
+
+### 4i. The bus interceptor seam
+
+`MessageBus.add_inbound_interceptor` (`durin/bus/queue.py`) registers a
+handler run on every inbound message that has already passed the bus's
+inbound authorizer — the channel-level allow/deny and pairing gate — but
+before the message is enqueued for the normal agent turn. The matcher's
+`handle_inbound` is registered here. An interceptor returning a truthy value
+has **consumed** the message: it is not enqueued, and no later interceptor
+runs. An interceptor that raises is treated as a pass-through, not a drop —
+the exception is logged and the message still reaches the normal inbound
+queue, so a bug in loop routing degrades to "the agent handles the message
+directly" rather than losing it. Because the authorizer runs first, every
+message a channel trigger ever sees has already cleared that channel's own
+sender allowlist and pairing gate — a loop cannot be triggered by a sender
+the channel itself would reject; an unpaired sender gets a pairing reply
+(or is silently denied for a group message) and never reaches the matcher
+at all.
+
+### 4j. Claims index and the counterpart lane
+
+Some workflow asks are meant for the other party in the conversation, not
+the operator. A workflow's `needs_input` text that starts with the literal
+tag `[TO:counterpart]` (case-sensitive, stripped before display) is that
+signal (`durin/loops/runtime.py`). When such an ask fires on a run whose
+origin has a thread — e.g. the loop was triggered by an inbound email — the
+run parks at a new status, `waiting_info`, distinct from `needs_operator`:
+the loop is not stuck waiting on a human, it is waiting on a reply from
+whoever it is corresponding with. Parking a run this way also **registers a
+claim**: an entry in `<workspace>/loops/claims.json`
+(`durin/loops/claims.py`) mapping the thread key to `{loop, run_id}`, so the
+next inbound message on that thread is recognized by the matcher's claim
+wake (§4h step 1) instead of being evaluated as a fresh trigger match. If the
+run's origin has no thread to correlate against (a cron or manual fire has
+no counterpart to reply to), the counterpart-bound ask degrades to the
+normal `needs_operator` lane instead, with a note appended so the question
+is never silently lost.
+
+Claims are a single JSON file, atomically rewritten under a cross-process
+lock so the gateway, a cron process, and any future surface can register and
+release claims concurrently without colliding. The policy on a key collision
+is **last claim wins**: registering a claim on a thread that already has one
+for a *different* loop or run silently overwrites it, and that overwrite is
+logged as a warning — a thread can only ever correlate to one waiting run at
+a time.
+
+A claim's lifecycle is **release-before-resume**: when an answer arrives
+(from the matcher's claim wake, or an operator's override answer through the
+same `answer` call — see below), `LoopsRuntime.answer` releases the run's
+claim *before* resuming the workflow, not after. The old claim is stale the
+moment the answer is in hand, and releasing first means that if the resumed
+workflow immediately asks another counterpart-bound question, the fresh
+claim it registers is never wiped by a trailing release from the answer that
+just resolved. Claims are also released wholesale whenever a run leaves
+`waiting_info` for any other reason.
+
+Because a claim can otherwise live forever if a counterpart never replies (a
+crashed process, an abandoned thread), the gateway prunes claims older than
+seven days at startup (`durin/service/wiring.py`) — a flat, conversation-scoped
+constant independent of `loops.queue_ttl_s`, which bounds a different thing
+(queued channel events, §4k).
+
+**Operator override.** A `waiting_info` run is not exclusively answerable by
+the counterpart: it accepts the same `answer` call (webui, API, or the
+`loops` tool) as a `needs_operator` run — `LoopsRuntime.answer` treats
+`needs_operator` and `waiting_info` as the same answerable state. The webui's
+Activity view surfaces this as an explicit "answer as operator" toggle on a
+`waiting_info` row, so a human can step in and resolve a run the counterpart
+never got back to, without waiting out the claim's prune window.
+
+`waiting_info`, like `needs_operator`, is an **active** status
+(`durin/loops/run_log.py`'s `ACTIVE_STATUSES`): a run parked there emits no
+`loops.run_finished` telemetry and is never pruned by `prune_runs`,
+regardless of the loop's `keep_runs` setting — it only reaches `_post_finish`
+(§4b/4g) once it is answered, resumed, and re-interpreted to a terminal
+status.
+
+### 4k. The per-loop event queue
+
+When a channel trigger matches a `single`-concurrency loop that already has
+an active run, the event is not dropped — it is appended to that loop's
+queue file, `<workspace>/loops/queue/<loop>.jsonl`
+(`durin/loops/queue.py`), one append-only file per loop, push/pop/pending all
+serialized under the same per-loop cross-process lock. The queue is a
+holding area, not a workflow: nothing in it is running.
+
+Freshness (`loops.queue_ttl_s`, §6) is evaluated **at pop time**, against the
+event's stamped arrival time, not baked into the event when it was queued —
+a change to `queue_ttl_s` takes effect immediately for events already
+sitting in the queue, and an event popped after its window has passed is
+dropped rather than fired.
+
+The queue is drained **one event per run completion**: `LoopsRuntime._post_finish`
+(§4b) pops at most one fresh event for the loop that just freed its
+concurrency slot and fires it in the background. If several events piled up
+while the loop was busy, each subsequent run's own completion drains the
+next one — the backlog empties one fire at a time, not all at once.
+
+A drained event can still lose the fire race (another trigger or a manual
+fire took the slot first): that raises `LoopBusy`, and the event is pushed
+back onto the queue rather than dropped. This re-queue is a fresh `push`,
+which stamps a new arrival time — the event's TTL clock restarts from the
+moment it was re-queued, not from when it was first received. An event that
+keeps losing the race can in principle keep resetting its own clock and
+outlive what its original `queue_ttl_s` window would suggest; in practice
+this only matters for a loop that is busy often enough to keep losing races
+against its own queue.
+
 ## 5. Key types & entry points
 
 | Symbol | File | Role |
@@ -277,8 +438,11 @@ retrying on its own triggers, but a human now knows it isn't converging.
 | `build_prompt`, `parse_verdict` | `durin/loops/judge.py` | The judge prompt template and its strict-JSON verdict parser. |
 | `LoopsRuntime`, `LoopBusy` | `durin/loops/runtime.py` | The lifecycle interpreter: fires a loop's workflow, reads the terminal status, verifies the goal, decides the loop-run status, and drives escalation. |
 | `sync_loop_jobs`, `remove_loop_jobs`, `sync_all`, `loop_job_id` | `durin/loops/cron_sync.py` | Keeps `loop:<name>:<idx>` cron jobs in sync with stored loop definitions; the boot-time self-healing pass. |
-| `LoopsService` | `durin/service/loops.py` | The HTTP surface: list/get/save/delete definitions, fire a run, answer a run awaiting an operator, read run feeds. |
+| `LoopsService` | `durin/service/loops.py` | The HTTP surface: list/get/save/delete definitions, fire a run, answer a run awaiting an operator or a counterpart, read run feeds. |
 | `LoopsTool` | `durin/agent/tools/loops.py` | The `loops` LLM tool (core scope): the same operations as `LoopsService`, available in chat when a live `LoopsRuntime` is wired onto `ToolContext`. |
+| `TriggerMatcher` | `durin/loops/matcher.py` | Routes an inbound channel message to a claim wake, a fired/queued trigger match, or a pass-through to the normal agent turn; installed as a bus inbound interceptor. |
+| `register`, `release`, `release_run`, `lookup`, `prune` | `durin/loops/claims.py` | The thread-to-waiting-run index backing the counterpart lane: one JSON file, cross-process locked. |
+| `push`, `pop_fresh`, `pending` | `durin/loops/queue.py` | The per-loop event queue for a `single`-concurrency loop's channel triggers: one JSONL file per loop, TTL evaluated at pop time. |
 
 ## 6. Configuration & surfaces
 
@@ -286,11 +450,20 @@ retrying on its own triggers, but a human now knows it isn't converging.
   git-versioned — see §4a).
 - **Engine settings:** `loops.keep_runs` (default `20`) bounds how many
   finalized run records are kept per loop — pruning is best-effort and a
-  `needs_operator` run is never pruned, since it is an actionable pause
-  point exactly like a workflow run stuck on `needs_input`.
-  `loops.check_timeout_s` (default `60`, range `1`–`3600`) bounds how long a
-  single script goal check may run before it counts as a failure. Both live
-  under `DurinConfig.loops` (`LoopsConfig`, `durin/config/schema.py`).
+  `needs_operator` or `waiting_info` run is never pruned, since both are
+  actionable pause points exactly like a workflow run stuck on
+  `needs_input`. `loops.check_timeout_s` (default `60`, range `1`–`3600`)
+  bounds how long a single script goal check may run before it counts as a
+  failure. `loops.queue_ttl_s` (default `3600`, minimum `60`) bounds how long
+  a channel-triggered event sits in a busy loop's queue (§4k) before the
+  drain hook drops it unfired. All three live under `DurinConfig.loops`
+  (`LoopsConfig`, `durin/config/schema.py`).
+- **Aux model:** `agents.aux_models.loops` (`AuxModelConfig`, under
+  `AuxModelsConfig`, `durin/config/schema.py`) picks the model used for both
+  goal-judge calls (§4c) and channel triggers' semantic-condition calls
+  (§4h). It is the one aux purpose that does not fall back to a separately
+  resolved default preset when unset — those calls simply ride whatever
+  model the agent is already configured with.
 - **Service:** `LoopsService` (`durin/service/loops.py`) exposes the
   `/api/v1/loops*` routes and is registered under the `"loops"` service name
   — see the route table generated from the OpenAPI contract for the exact
@@ -298,7 +471,9 @@ retrying on its own triggers, but a human now knows it isn't converging.
   (save, delete, fire, answer) require `Scope.LOOPS_WRITE`. Firing and
   answering are only available when the service is constructed with a live
   `LoopsRuntime` (the gateway daemon); other surfaces get an
-  `UnavailableError` for those two routes.
+  `UnavailableError` for those two routes. The list response includes each
+  loop's live counts: `active_runs`, `needs_operator`, `waiting_info`, and
+  `pending_events` (the loop's queue depth, §4k).
 - **Tool:** the `loops` LLM tool (core scope, `durin/agent/tools/loops.py`)
   — `list` / `status` / `fire` / `answer` / `enable` / `pause` / `create` —
   goes through the exact same `durin.loops.store` + `durin.loops.run_log` +
@@ -306,15 +481,25 @@ retrying on its own triggers, but a human now knows it isn't converging.
   indistinguishable from one managed through the webui. Only registered
   when the surface wires a `LoopsRuntime` onto `ToolContext.loops_runtime`.
 - **Telemetry:** `loops.fired` (`loop`, `source`, `skipped`),
-  `loops.run_finished` (`loop`, `run_id`, `status`, `goal_reached`), and
-  `loops.escalated` (`loop`, `run_id`, `consecutive_no_goal`) — catalogued in
-  `durin/telemetry/schema.py`.
+  `loops.run_finished` (`loop`, `run_id`, `status`, `goal_reached`),
+  `loops.escalated` (`loop`, `run_id`, `consecutive_no_goal`), and
+  `loops.event_matched` (`loop`, `source_channel`, `action`) — catalogued in
+  `durin/telemetry/schema.py`. `action` on `loops.event_matched` is one of
+  `woke` (a claim wake resumed a `waiting_info` run), `fired` (a trigger
+  match started a new run), `queued` (a trigger matched a busy loop and the
+  event went onto its queue), `passed_busy` (a trigger matched a busy loop
+  with no queue wired, so the message fell through as a normal turn), or
+  `drained` (a run finished and its loop's queue had a fresh event, fired
+  next).
 - **Web dashboard:** a **Loops** section with two panes — **Activity** (the
   global run feed, `needs_operator` runs surfaced first with an inline
-  answer box) and **Definitions** (create/edit/delete/run-now, with a form for
-  triggers, goal intent + checks, the workflow to run, concurrency, stuck
-  threshold, and operator contact). See [the user guide](../guide/loops.md)
-  for the walkthrough.
+  answer box, `waiting_info` runs shown read-only with an "answer as
+  operator" override) and **Definitions** (create/edit/delete/run-now, with
+  a form for triggers — cron or channel, each channel trigger's filters and
+  optional semantic condition — goal intent + checks, the workflow to run,
+  concurrency, stuck threshold, and operator contact; a loop with events
+  waiting in its queue shows a count badge). See
+  [the user guide](../guide/loops.md) for the walkthrough.
 - **Security.** A loop's workflow and checks are local, user-authored
   content — a script check runs a shell command with the same trust model as
   the workflow engine itself (see [security.md](security.md)); there is no
