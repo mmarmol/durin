@@ -57,8 +57,8 @@ def build_service_registry(
     the catalog falls back to loader discovery (core built-ins only).
 
     ``loops_runtime`` is optional: the unified gateway passes the live
-    ``LoopsRuntime`` so a future loops service can fire/answer runs; surfaces
-    without one leave it ``None``. Stored on the registry, not yet consumed here.
+    ``LoopsRuntime`` so ``LoopsService`` can fire/answer runs; surfaces
+    without one leave it ``None`` and those two routes report unavailable.
     """
     from durin.security.api_tokens import ApiTokenStore
     from durin.service.auth import AuthService
@@ -71,6 +71,7 @@ def build_service_registry(
     from durin.service.config import ConfigService
     from durin.service.cron import CronService
     from durin.service.health import HealthService
+    from durin.service.loops import LoopsService
     from durin.service.mcp import McpService
     from durin.service.memory import MemoryService
     from durin.service.modes import ModesService
@@ -125,6 +126,8 @@ def build_service_registry(
     registry.register("tasks", TasksService(
         workspace=_workspace(), subagent_manager=subagent_manager,
         sessions=session_manager))
+    registry.register("loops", LoopsService(
+        workspace=_workspace(), cron_service=cron_service, runtime=loops_runtime))
 
     # Crash recovery: the gateway is the long-lived process, so its boot is the natural
     # point to reconcile run manifests still "running" from a previous process that died

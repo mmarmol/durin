@@ -45,6 +45,8 @@ class Scope(str, Enum):
     MCP_WRITE = "mcp:write"
     WORKFLOWS_READ = "workflows:read"
     WORKFLOWS_WRITE = "workflows:write"
+    LOOPS_READ = "loops:read"
+    LOOPS_WRITE = "loops:write"
     SYSTEM_READ = "system:read"
     SYSTEM_WRITE = "system:write"
 
