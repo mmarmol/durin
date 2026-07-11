@@ -102,12 +102,34 @@ class TriggerMatcher:
         run_id = claim.get("run_id")
         record = run_log.read_run(self._ws, loop_name, run_id) if loop_name and run_id else None
         if record and record.get("status") == "waiting_info":
+            if not self._wants_wake(loop_name, msg.channel):
+                # The claim-holder loop declared match: "always_new" on this
+                # channel — it wants every matching message to open its own
+                # run, not resume this one. Leave the claim in place (the run
+                # is still genuinely waiting) and let the message fall
+                # through to normal trigger matching instead.
+                return False
             self._emit(loop_name, msg.channel, "woke")
-            self._track(asyncio.create_task(self._answer(loop_name, run_id, msg.content)))
+            self._track(asyncio.create_task(self._answer(loop_name, run_id, msg.content, thread)))
             return True
         # Stale claim: the run moved on (or vanished) without releasing it.
         claims.release(self._ws, thread)
         return False
+
+    def _wants_wake(self, loop_name: str, channel: str) -> bool:
+        """False only when the claim-holder loop's own channel trigger for
+        this channel explicitly declares match: "always_new". A missing loop
+        spec or missing matching trigger (deleted loop, cron-only loop)
+        defaults to True — the claim exists, so honoring it is the safe
+        default."""
+        try:
+            spec = store.load_loop(self._ws, loop_name)
+        except Exception:
+            return True
+        for trigger in spec.triggers:
+            if trigger.source == "channel" and trigger.channel == channel:
+                return trigger.match != "always_new"
+        return True
 
     async def _trigger_matches(self, spec: LoopSpec, sender: str, subject: str, msg: Any) -> bool:
         for trigger in spec.triggers:
@@ -196,11 +218,18 @@ class TriggerMatcher:
         finally:
             self._pending_fires.discard(name)
 
-    async def _answer(self, loop_name: str, run_id: str, content: str) -> None:
+    async def _answer(self, loop_name: str, run_id: str, content: str, thread: str) -> None:
         try:
             await self._runtime.answer(loop_name, run_id, content)
         except Exception:
-            logger.exception("loops: answer('{}', '{}') failed", loop_name, run_id)
+            # runtime.answer() releases the claim itself once it gets far
+            # enough (release-before-resume), but a failure before that
+            # point — e.g. the loop spec was deleted between the wake
+            # decision and this task running — leaves it stuck otherwise.
+            # release() is idempotent, so this is a no-op in the common case
+            # where the claim is already gone.
+            logger.exception("loops: answer('{}', '{}') failed; releasing claim", loop_name, run_id)
+            claims.release(self._ws, thread)
 
     def _emit(self, loop_name: str, channel: str, action: str) -> None:
         token = None

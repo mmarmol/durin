@@ -288,8 +288,13 @@ arrives. Each message is resolved through a fixed decision order:
 1. **Claim wake.** If the message carries an email thread that has a
    registered claim (§4j) pointing at a run currently in `waiting_info`, the
    message is handed straight to that run as its answer — no loop or trigger
-   is evaluated at all for that message. A claim whose run has moved past
-   `waiting_info` (or vanished) is stale and is released instead of acted on.
+   is evaluated at all for that message — except the claim-holder loop's own
+   channel trigger `match` policy, which the matcher checks first: a loop
+   declaring `match: "always_new"` does not want thread replies resuming its
+   parked runs, so the wake is skipped (the claim is left in place) and the
+   message falls through to step 2 instead; a missing loop spec or trigger
+   defaults to waking. A claim whose run has moved past `waiting_info` (or
+   vanished) is stale and is released instead of acted on.
 2. **Trigger match.** Absent a claim wake, every *enabled* loop is checked in
    ascending `name` order, and the first one whose channel trigger fully
    matches wins — deterministic, first-match-wins. A trigger match is two

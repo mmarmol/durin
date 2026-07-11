@@ -177,7 +177,11 @@ what you want for a back-and-forth like a support ticket, where a reply
 should continue the same conversation rather than start a fresh one.
 **"Always open a new run"** is for triggers where every matching message is
 its own independent unit of work — a notification inbox where each email is
-a separate item to process, not a thread to converse in.
+a separate item to process, not a thread to converse in. One consequence:
+an "always open a new run" loop that asks the customer a counterpart
+question will not have that run woken by their thread reply — it stays
+**waiting reply** until you answer it yourself through the **Answer as
+operator** override.
 
 ### When to use a semantic condition
 

@@ -292,6 +292,66 @@ async def test_claim_wake_answers_waiting_run(tmp_path):
     assert rt.fire_calls == []
 
 
+async def test_claim_wake_skipped_for_always_new_loop(tmp_path):
+    """A loop whose channel trigger declares match: "always_new" does not
+    want thread replies resuming its parked runs — each matching message
+    should open its own new run instead. The claim stays in place (the run
+    really is still waiting) and the message falls through to normal
+    trigger matching."""
+    _save(tmp_path, concurrency="parallel",
+          triggers=[{"source": "channel", "channel": "email",
+                     "filters": {}, "match": "always_new"}])
+    rl.start_run(tmp_path, "l1", "run1", source="channel", task="t")
+    rl.finalize_run(tmp_path, "l1", "run1", status="waiting_info", ask="what's the PO number?")
+    claims.register(tmp_path, key="digest-1", loop="l1", run_id="run1")
+    rt = FakeRuntime()
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    msg = _email_msg(content="PO-4521")
+
+    consumed = await matcher.handle_inbound(msg)
+    await _drain()
+
+    assert consumed is True  # fell through and fired a fresh run
+    assert rt.answer_calls == []
+    claim = claims.lookup(tmp_path, "digest-1")
+    assert claim is not None and claim["loop"] == "l1" and claim["run_id"] == "run1"
+    assert len(rt.fire_calls) == 1
+    assert rt.fire_calls[0][0] == "l1"
+    assert rt.fire_calls[0][2] == "PO-4521"
+
+
+async def test_claim_wake_default_when_spec_missing(tmp_path):
+    """A claim can outlive its loop's spec file (the loop was deleted while
+    a run it started was still parked waiting on a reply). With no spec to
+    check a match policy against, the matcher defaults to honoring the
+    claim and attempts the wake — mirroring current behavior rather than
+    silently dropping a message a human might be counting on. If the
+    wake itself then fails (runtime.answer needs the same spec and raises
+    LoopNotFound), the matcher must not leave the claim stuck: it releases
+    it so a later message on that thread isn't captured by a dead claim
+    forever."""
+    rl.start_run(tmp_path, "ghost", "run1", source="channel", task="t")
+    rl.finalize_run(tmp_path, "ghost", "run1", status="waiting_info", ask="what's the PO number?")
+    claims.register(tmp_path, key="digest-1", loop="ghost", run_id="run1")
+
+    class MissingSpecRuntime(FakeRuntime):
+        async def answer(self, name, run_id, answer):
+            self.answer_calls.append((name, run_id, answer))
+            from durin.loops.spec import LoopNotFound
+            raise LoopNotFound(f"loop '{name}' not found")
+
+    rt = MissingSpecRuntime()
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    msg = _email_msg(content="PO-4521")
+
+    consumed = await matcher.handle_inbound(msg)
+    assert consumed is True  # wake attempted synchronously (no spec = default wake)
+    await _drain()
+
+    assert rt.answer_calls == [("ghost", "run1", "PO-4521")]
+    assert claims.lookup(tmp_path, "digest-1") is None  # released after the failed wake
+
+
 async def test_stale_claim_is_released_and_falls_through_to_trigger_match(tmp_path):
     _save(tmp_path, triggers=[{"source": "channel", "channel": "email", "filters": {}}])
     rl.start_run(tmp_path, "l1", "run1", source="channel", task="t")
