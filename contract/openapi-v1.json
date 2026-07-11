@@ -2265,6 +2265,79 @@
         "title": "LoopSaveResult",
         "type": "object"
       },
+      "LoopStatsQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LoopStatsQuery",
+        "type": "object"
+      },
+      "LoopStatsResult": {
+        "properties": {
+          "convergence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Convergence"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "escalation_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Escalation Rate"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "outcomes": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Outcomes",
+            "type": "array"
+          },
+          "pending_events": {
+            "title": "Pending Events",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "outcomes",
+          "convergence",
+          "escalation_rate",
+          "counts",
+          "pending_events"
+        ],
+        "title": "LoopStatsResult",
+        "type": "object"
+      },
       "LoopsListQuery": {
         "additionalProperties": false,
         "description": "No inputs \u2014 lists every loop, each with its live run counts.",
@@ -8564,6 +8637,35 @@
         },
         "summary": "Answer a loop run awaiting an operator or a counterpart reply.",
         "x-required-scope": "loops:write"
+      }
+    },
+    "/api/v1/loops/{name}/stats": {
+      "get": {
+        "operationId": "loops_stats",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopStatsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopStatsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Outcome stats for one loop: recent terminal runs, convergence, escalation rate.",
+        "x-required-scope": "loops:read"
       }
     },
     "/api/v1/mcp/registry/describe": {

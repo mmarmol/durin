@@ -484,7 +484,13 @@ against its own queue.
   `LoopsRuntime` (the gateway daemon); other surfaces get an
   `UnavailableError` for those two routes. The list response includes each
   loop's live counts: `active_runs`, `needs_operator`, `waiting_info`, and
-  `pending_events` (the loop's queue depth, §4k).
+  `pending_events` (the loop's queue depth, §4k). `GET
+  /api/v1/loops/{name}/stats` reports outcome stats computed over every
+  retained run: the last 20 terminal-status runs newest-first, per-status
+  counts across all seven statuses, `convergence` (`done` over all terminal
+  runs) and `escalation_rate` (`escalated` over all terminal runs) — both
+  `null` when the loop has no terminal runs yet — and the loop's current
+  `pending_events` depth.
 - **Tool:** the `loops` LLM tool (core scope, `durin/agent/tools/loops.py`)
   — `list` / `status` / `fire` / `answer` / `enable` / `pause` / `create` —
   goes through the exact same `durin.loops.store` + `durin.loops.run_log` +
