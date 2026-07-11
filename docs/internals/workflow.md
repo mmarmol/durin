@@ -666,12 +666,14 @@ End-to-end for a single `run_workflow` call:
   recurring run diagnostics); a **webui Workflows pane** (React Flow) with an editor that
   has clickable Input/Output canvas objects (toggle text and/or files plus a free-text
   description; file input is supplied as paths in the run bar), a palette that adds
-  work / parallel / subflow nodes (a routing node is a work node — shown by its pass/fail
-  edges, never a separate type), draggable nodes with a persisted layout, a **"runs as"**
-  picker (model or persona), body/mode/context/routing config (including the session
-  fresh/persistent choice, shown only for `context: "own"`), static and dynamic fan-out
-  authoring with a concurrency cap, a subflow target picker that excludes cycle-creating
-  workflows, and a recommendations banner. Self-improvement applies directly in
+  work / script / parallel / subflow nodes (a routing node is a work or script node —
+  shown by its pass/fail edges, never a separate type), draggable nodes with a persisted
+  layout, a **"runs as"** picker (model or persona) for work nodes, body/mode/context/routing
+  config (including the session fresh/persistent choice, shown only for `context: "own"`),
+  a script node's inline-command-or-file source picker (backed by the script-file listing
+  endpoint) with an optional timeout and the same routing config as a work node, static and
+  dynamic fan-out authoring with a concurrency cap, a subflow target picker that excludes
+  cycle-creating workflows, and a recommendations banner. Self-improvement applies directly in
   `auto` mode behind an external auto-revert anchor (`manual` mode leaves
   recommendations for review). Not yet built — auto-merge of conflicting parallel
   writes.
