@@ -31,6 +31,7 @@ class FakeMsg:
     chat_id: str = "alice@example.com"
     content: str = "hello there"
     metadata: dict = field(default_factory=dict)
+    is_dm: bool = False
 
 
 def _email_msg(*, sender="alice@example.com", subject="Re: quarterly report",
@@ -38,6 +39,35 @@ def _email_msg(*, sender="alice@example.com", subject="Re: quarterly report",
     return FakeMsg(
         channel=channel, sender_id=sender, chat_id=sender, content=content,
         metadata={"sender_email": sender, "subject": subject, "email": {"thread": thread}},
+    )
+
+
+def _telegram_msg(*, sender="alice", chat_id="grp1", content="hello there",
+                   message_thread_id=None, message_id=None, is_forum=False, is_dm=False):
+    metadata = {}
+    if is_forum:
+        metadata["is_forum"] = True
+    if message_thread_id is not None:
+        metadata["message_thread_id"] = message_thread_id
+    if message_id is not None:
+        metadata["message_id"] = message_id
+    return FakeMsg(
+        channel="telegram", sender_id=sender, chat_id=chat_id, content=content,
+        metadata=metadata, is_dm=is_dm,
+    )
+
+
+def _slack_msg(*, sender="alice", chat_id="C1", content="hello there", thread_ts=None):
+    metadata = {}
+    if thread_ts is not None:
+        metadata["slack"] = {"thread_ts": thread_ts}
+    return FakeMsg(channel="slack", sender_id=sender, chat_id=chat_id, content=content, metadata=metadata)
+
+
+def _whatsapp_msg(*, sender="alice", chat_id="12345", content="hello there", is_group=False):
+    return FakeMsg(
+        channel="whatsapp", sender_id=sender, chat_id=chat_id, content=content,
+        metadata={"is_group": is_group}, is_dm=not is_group,
     )
 
 
@@ -115,7 +145,7 @@ async def test_structural_match_fires_with_origin(tmp_path):
     assert name == "l1" and source == "channel" and task == "hello there"
     assert origin == {
         "channel": "email", "sender": "alice@example.com", "chat_id": "alice@example.com",
-        "thread": "digest-1", "subject": "Re: quarterly report",
+        "thread": "digest-1", "subject": "Re: quarterly report", "reply": {"thread": "digest-1"},
     }
 
 
@@ -517,3 +547,156 @@ async def test_first_match_wins_in_alphabetical_order(tmp_path):
 
     assert consumed is True
     assert rt.fire_calls[0][0] == "a-loop"
+
+
+# --- V4: channel-agnostic matching + custom correlation -------------------
+
+
+async def test_telegram_topic_message_fires_with_prefixed_thread_and_reply(tmp_path):
+    _save(tmp_path, triggers=[{"source": "channel", "channel": "telegram", "filters": {}}])
+    rt = FakeRuntime()
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    msg = _telegram_msg(chat_id="grp1", message_thread_id=42, message_id="m1", is_forum=True)
+
+    consumed = await matcher.handle_inbound(msg)
+    await _drain()
+
+    assert consumed is True
+    name, source, task, origin = rt.fire_calls[0]
+    assert name == "l1" and source == "channel"
+    assert origin["thread"] == "telegram:grp1:topic:42"
+    assert origin["reply"] == {"message_thread_id": 42, "message_id": "m1"}
+
+
+async def test_slack_thread_reply_wakes_claimed_run(tmp_path):
+    _save(tmp_path, triggers=[{"source": "channel", "channel": "slack", "filters": {}}])
+    rl.start_run(tmp_path, "l1", "run1", source="channel", task="t")
+    rl.finalize_run(tmp_path, "l1", "run1", status="waiting_info", ask="which channel?")
+    claims.register(tmp_path, key="slack:C1:1690000000.000100", loop="l1", run_id="run1")
+    rt = FakeRuntime()
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    msg = _slack_msg(chat_id="C1", thread_ts="1690000000.000100", content="the #general channel")
+
+    consumed = await matcher.handle_inbound(msg)
+    await _drain()
+
+    assert consumed is True
+    assert rt.answer_calls == [("l1", "run1", "the #general channel")]
+    assert rt.fire_calls == []
+
+
+async def test_whatsapp_group_message_has_no_thread(tmp_path):
+    _save(tmp_path, triggers=[{"source": "channel", "channel": "whatsapp", "filters": {}}])
+    rt = FakeRuntime()
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    msg = _whatsapp_msg(chat_id="120363", is_group=True)
+
+    consumed = await matcher.handle_inbound(msg)
+    await _drain()
+
+    assert consumed is True
+    origin = rt.fire_calls[0][3]
+    assert origin["thread"] is None
+
+
+async def test_text_contains_and_sender_contains_filters_both_pass(tmp_path):
+    _save(tmp_path, triggers=[{"source": "channel", "channel": "telegram",
+                                "filters": {"sender_contains": "ali", "text_contains": "invoice"}}])
+    rt = FakeRuntime()
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    msg = _telegram_msg(sender="alice", content="please send the invoice today")
+
+    consumed = await matcher.handle_inbound(msg)
+    await _drain()
+
+    assert consumed is True
+    assert len(rt.fire_calls) == 1
+
+
+async def test_text_contains_filter_rejects_when_text_does_not_match(tmp_path):
+    _save(tmp_path, triggers=[{"source": "channel", "channel": "telegram",
+                                "filters": {"sender_contains": "ali", "text_contains": "invoice"}}])
+    rt = FakeRuntime()
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    msg = _telegram_msg(sender="alice", content="just saying hi")
+
+    consumed = await matcher.handle_inbound(msg)
+
+    assert consumed is False
+    assert rt.fire_calls == []
+
+
+async def test_correlate_fire_sets_origin_thread_but_registers_no_claim(tmp_path):
+    """Matching a correlate pattern on a fresh (non-wake) message must not
+    itself register a claim — that is the runtime's job once the run
+    actually parks waiting for a reply (Task 4)."""
+    _save(tmp_path, triggers=[{"source": "channel", "channel": "telegram",
+                                "filters": {}, "correlate": r"TICKET-(\d+)"}])
+    rt = FakeRuntime()
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    msg = _telegram_msg(chat_id="grp1", content="please help with TICKET-123 today")
+
+    consumed = await matcher.handle_inbound(msg)
+    await _drain()
+
+    assert consumed is True
+    origin = rt.fire_calls[0][3]
+    assert origin["thread"] == "custom:l1:123"
+    assert claims.lookup(tmp_path, "custom:l1:123") is None
+
+
+async def test_correlate_wakes_claim_from_a_different_thread(tmp_path):
+    """A run parked under a custom correlate key must be woken by any later
+    message whose correlate match captures the same id, even if that
+    message arrives on a completely different thread/chat."""
+    _save(tmp_path, triggers=[{"source": "channel", "channel": "telegram",
+                                "filters": {}, "correlate": r"TICKET-(\d+)"}])
+    rl.start_run(tmp_path, "l1", "run1", source="channel", task="t")
+    rl.finalize_run(tmp_path, "l1", "run1", status="waiting_info", ask="more details?")
+    claims.register(tmp_path, key="custom:l1:123", loop="l1", run_id="run1")
+    rt = FakeRuntime()
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    # A different chat/thread entirely, no forum/topic — only the captured
+    # ticket id ties it back to the parked run.
+    msg = _telegram_msg(chat_id="unrelated-chat", content="update on TICKET-123: shipped")
+
+    consumed = await matcher.handle_inbound(msg)
+    await _drain()
+
+    assert consumed is True
+    assert rt.answer_calls == [("l1", "run1", "update on TICKET-123: shipped")]
+    assert rt.fire_calls == []
+
+
+async def test_correlate_key_takes_precedence_over_thread_key(tmp_path):
+    """When both a custom correlate key and the message's plain thread_key
+    have claims registered, the custom key wins."""
+    _save(tmp_path, triggers=[{"source": "channel", "channel": "telegram",
+                                "filters": {}, "correlate": r"TICKET-(\d+)"}])
+    rl.start_run(tmp_path, "l1", "run-custom", source="channel", task="t")
+    rl.finalize_run(tmp_path, "l1", "run-custom", status="waiting_info", ask="a?")
+    rl.start_run(tmp_path, "l1", "run-thread", source="channel", task="t")
+    rl.finalize_run(tmp_path, "l1", "run-thread", status="waiting_info", ask="b?")
+    claims.register(tmp_path, key="custom:l1:123", loop="l1", run_id="run-custom")
+    claims.register(tmp_path, key="telegram:dm:bob", loop="l1", run_id="run-thread")
+    rt = FakeRuntime()
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    msg = _telegram_msg(chat_id="bob", is_dm=True, content="re TICKET-123: any update?")
+
+    consumed = await matcher.handle_inbound(msg)
+    await _drain()
+
+    assert consumed is True
+    assert rt.answer_calls == [("l1", "run-custom", "re TICKET-123: any update?")]
+
+
+async def test_unsupported_channel_is_passthrough(tmp_path):
+    _save(tmp_path)
+    rt = FakeRuntime()
+    matcher = TriggerMatcher(tmp_path, runtime=rt)
+    msg = FakeMsg(channel="websocket", sender_id="alice", chat_id="alice", content="hi")
+
+    consumed = await matcher.handle_inbound(msg)
+
+    assert consumed is False
+    assert rt.fire_calls == []
