@@ -266,6 +266,62 @@ acquired before `.git-worktree`, and the prune paths only ever take
 `.git-worktree` (never calling back into the writers), so there is no
 opposite-order edge.
 
+### Loops
+
+The [loops](loops.md) subsystem adds its own on-disk artifacts under
+`<workspace>/loops/` and `<workspace>/loops-runs/`, each locked at the
+narrowest scope that needs it:
+
+- **Loop definitions** (`loops/<name>.json`, `durin/loops/store.py`) follow the
+  same per-name `cross_process_lock` model as workflow definitions — the
+  webui, the agent tool, and the CLI may write concurrently, so `save_loop`/
+  `delete_loop` lock on the loop's own name. Writers touching different loops
+  never block each other; only same-name writers serialize.
+- **Claims index** (`loops/claims.json`, `durin/loops/claims.py`) is a single
+  JSON file mapping a correlation/thread key to the loop run waiting on it,
+  rewritten atomically under one `cross_process_lock` on the whole file (not
+  sharded per key). Registering a claim on a key that already holds a
+  different run's claim overwrites it and logs the clobber — last write wins.
+  `LoopsRuntime.answer()` releases a run's claim *before* resuming it
+  (release-before-resume): the claim is stale the instant the answer arrives,
+  and releasing early means a fresh claim registered by a follow-up question
+  inside that same resume is never wiped by a stale trailing release. At
+  gateway boot, a best-effort sweep prunes claims older than seven days, so a
+  run that never got a reply (crash, or a counterpart that never answered)
+  does not hold its key forever.
+- **Per-loop event queue** (`loops/queue/<loop>.jsonl`, `durin/loops/queue.py`)
+  holds inbound channel events a `single`-concurrency loop could not fire on
+  immediately because a run was already active. `push`/`pop_fresh`/`pending`
+  all take the same per-loop `cross_process_lock` (keyed on the loop's queue
+  path — independent of the claims lock and of other loops' queue locks) and
+  rewrite the file atomically. Freshness is decided at pop time against the
+  caller's TTL, not baked in at enqueue time, so a `queue_ttl_s` config change
+  takes effect immediately for events already sitting in the queue.
+  `LoopsRuntime._post_finish` drains at most one event per completed run,
+  scheduled via `asyncio.create_task` so a slow drained run cannot delay
+  returning the just-finished run's own record to its caller.
+- **Single-concurrency pending-fires guard** (`TriggerMatcher._pending_fires`,
+  `durin/loops/matcher.py`) is in-process only, not a file lock. The busy
+  decision for a `single`-concurrency loop reads `run_log.active_runs`
+  synchronously, but the actual `runtime.fire()` call happens later, inside an
+  `asyncio.create_task`'d coroutine — two channel messages arriving
+  back-to-back would otherwise both read "not active" and both decide to
+  fire. `_pending_fires` closes that window: the loop's name is added to the
+  set synchronously, before the fire task is scheduled, and removed in the
+  task's `finally`. No lock is needed because there is no `await` between the
+  check and the add — a single-threaded asyncio event loop cannot interleave
+  another message's decision in between.
+
+Run manifests (`loops-runs/<loop>/<run_id>.json`, `durin/loops/run_log.py`) are
+the one loops artifact with no lock at all: each run file has a single owning
+writer (the runtime that fired it), so a full-file atomic rewrite is enough —
+the same reasoning as workflow run logs. That single-writer assumption breaks
+across a gateway restart mid-run, which can strand a manifest in `running`
+status forever (a `single`-concurrency loop's `active_runs` check would then
+refuse to fire again); a boot-time reconciliation sweep flips any `running`
+manifest older than six hours to `error` to close that window, mirroring the
+equivalent sweep for workflow run manifests.
+
 ### The SQLite index
 
 The FTS5 index (`fts.sqlite`) is the one place durin opens a SQLite database with
@@ -344,6 +400,10 @@ without a restart (see [loop](loop.md)).
 | `git_worktree_lock_path` | `durin/memory/memory_writer.py` | Canonical `.git-worktree` lock target shared by writers and the indexer/vector prune paths. |
 | `_root_write_lock` (RLock dict) | `durin/memory/memory_writer.py` | In-process per-repo `threading.RLock`; outermost memory lock around the whole read-apply-CAS-reset section. |
 | `sqlite_util.connect` / `execute_write` | `durin/utils/sqlite_util.py` | WAL + `busy_timeout` connection and `BEGIN IMMEDIATE` + retry write wrapper, for the derived FTS5 index only. |
+| `loops.store.save_loop` / `.delete_loop` | `durin/loops/store.py` | Per-loop-name `cross_process_lock` around the atomic full-file rewrite of a loop definition. |
+| `loops.claims` (`register`/`release`/`release_run`/`prune`) | `durin/loops/claims.py` | Single `cross_process_lock` over the whole `claims.json` file; last-claim-on-a-key wins. |
+| `loops.queue` (`push`/`pop_fresh`/`pending`) | `durin/loops/queue.py` | Per-loop `cross_process_lock` over that loop's `queue/<loop>.jsonl`, independent of other loops' queues and of the claims lock. |
+| `TriggerMatcher._pending_fires` | `durin/loops/matcher.py` | In-process-only `set`, not a file lock; closes the check-then-fire race for a `single`-concurrency loop between two back-to-back channel messages. |
 
 ## 6. Configuration & surfaces
 

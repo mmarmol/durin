@@ -798,7 +798,9 @@ End-to-end for a single `run_workflow` call:
   own output (minus its verdict/label line) becomes the run's final output when non-empty, so a
   gate that produces real content is not silently discarded; a multi-way case may
   route to the reserved **`__needs_input__`** terminal, ending the run with status
-  `needs_input` and the node's output carrying the questions — the human-in-the-loop lives
+  `needs_input` and the node's output (minus its label line, same normalization
+  as the terminal-completion case, falling back to the raw output if the label
+  was the only line) carrying the questions — the human-in-the-loop lives
   in the agent that invoked the workflow (it asks the user and re-runs with the answers),
   so the engine never blocks for input; a run that ends `needs_input` can be **resumed**
   instead of restarted, re-entering the graph at the asking node with the same run id,
