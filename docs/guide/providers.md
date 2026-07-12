@@ -86,8 +86,9 @@ for any unset field:
 ```
 
 The `ModelEntry` class (see `durin/config/schema.py`) accepts `max_tokens`,
-`context_window_tokens`, `temperature`, and `reasoning_effort`. Any field
-left `null` falls back to the catalog, then to `agents.defaults`.
+`context_window_tokens`, `temperature`, `reasoning_effort`, `request_timeout_s`,
+`top_p`, `top_k`, and `repeat_penalty`. Any field left `null` falls back to the
+catalog, then to `agents.defaults`.
 
 ## API keys and the secret store
 
@@ -144,7 +145,7 @@ providers, or the connect card in the dashboard's Providers settings.
 
 `openrouter` remains a normal API-key provider, but the key can be obtained
 via OpenRouter's OAuth PKCE flow instead of copy-pasting: run
-`durin oauth login openrouter`, or click "Conectar con OpenRouter" in the
+`durin oauth login openrouter`, or click "Connect with OpenRouter" in the
 dashboard's provider row. Approving in the browser hands durin a
 user-controlled API key, stored exactly like a manual paste (secret store +
 `${secret:}` reference in `providers.openrouter.api_key`). The flow is
@@ -230,8 +231,10 @@ refinement, skill-signal detection). Resolution order: `aux_models.memory` →
 faster model keeps dream passes cheap without changing your chat model.
 
 The **skill judge** (`skills.security.llm_judge.model`) is a plain model-name
-string, not an `AuxModelConfig`. It resolves the same way: the named model is
-looked up against the default provider; set it empty to use the default preset.
+string, not an `AuxModelConfig`. It pairs with its own
+`skills.security.llm_judge.provider` field (default `"auto"`, which autodetects
+the provider from the model name among your configured providers); leave `model`
+empty to fall back to the default.
 
 None of the aux-model fields hardcode a specific provider or model. Resolution
 always falls back to the user's configured default, so leaving them unset

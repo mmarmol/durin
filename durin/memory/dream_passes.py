@@ -3,10 +3,13 @@
 There is ONE dream cron — ``memory_dream`` (daily, ``memory.dream.cron``) — plus
 the reactive triggers (post-compaction / session-close, ``ReactiveDreamGate``),
 which run the extract pass only. The daily cron runs, in order: extract →
-skill-extract → refine → always_on → curate_catalog. This module hosts
-``run_extract_pass``, ``run_skill_extract_pass`` and ``run_refine_pass``;
-``run_always_on_pass`` lives in ``always_on_dream`` and ``curate_catalog`` in
-``agent.skill_curation``.
+derived_from → distill_reference → seed_entities → curate_topics → skill-extract →
+refine → consolidate_relations → always_on, then a workflow-improve pass and skill
+curation (``curate_catalog`` + manual-skill suggestions). This module hosts
+``run_extract_pass``, ``run_derived_from_pass``, ``run_skill_extract_pass`` and
+``run_refine_pass``; ``run_always_on_pass`` lives in ``always_on_dream``, the
+document passes in ``distill_dream``, ``run_consolidate_relations_pass`` in
+``relation_hygiene``, and ``curate_catalog`` in ``agent.skill_curation``.
 
 These replace the removed legacy consolidator (which
 consolidated episodic entries into pages via JSON-Patch + working-tree writes —

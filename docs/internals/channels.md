@@ -260,8 +260,8 @@ next interceptor, and eventually to the normal inbound queue, unconsumed. An
 interceptor may be sync or async. An exception raised by an interceptor is
 caught and logged; the message is never dropped on that error, it simply
 continues past the interceptor as if it had returned falsy. The [loops](loops.md)
-subsystem's `TriggerMatcher.handle_inbound` is the first (and, as of this
-writing, only) consumer: it wakes a claim-waiting loop run or fires a newly
+subsystem's `TriggerMatcher.handle_inbound` is the only consumer: it wakes a
+claim-waiting loop run or fires a newly
 matched loop trigger, consuming the message so it never reaches the agent as a
 normal turn.
 
@@ -318,21 +318,15 @@ own, so the persistent cache's marginal value is defense in depth against
 clock skew rather than closing the gap — it can never false-drop a message,
 since Matrix event ids are unique.
 
-**Adoption by channel.** Slack, WhatsApp, WeCom, Weixin, and QQ migrated
-their pre-existing ad hoc caches onto the shared helper in memory-only mode,
-preserving each channel's prior cache size. Slack already had a 300s TTL,
-carried over unchanged; WhatsApp, WeCom, Weixin, and QQ previously had no
-TTL at all (an `OrderedDict` or `deque` pruned by size alone), so the shared
-helper's 300s TTL is new for them — a deliberate loosening, not a
-preservation: realistic redelivery windows for these transports are
-seconds, and bounding by TTL *and* size cap is strictly safer than the
-unbounded-age retention the old size-only caches allowed. DingTalk and MS
-Teams gained dedup they didn't have before, also in memory-only mode:
-DingTalk's stream SDK re-pushes a message when the gateway acks slowly, and
-Bot Framework retries a webhook delivery under the same condition — both
-are same-connection replays, not crash recovery, so memory-only is
-sufficient. Feishu and Matrix use the persistent mode described above,
-since only they need to survive a gateway restart.
+**Adoption by channel.** Slack, WhatsApp, WeCom, Weixin, and QQ use the
+shared helper in memory-only mode, each with its own cache size and a 300s
+TTL — bounding by TTL *and* size cap suits these transports, whose realistic
+redelivery windows are seconds. DingTalk and MS Teams also dedup in
+memory-only mode: DingTalk's stream SDK re-pushes a message when the gateway
+acks slowly, and Bot Framework retries a webhook delivery under the same
+condition — both are same-connection replays, not crash recovery, so
+memory-only is sufficient. Feishu and Matrix use the persistent mode
+described above, since only they need to survive a gateway restart.
 
 Weixin deliberately does not layer a content fingerprint (hashing
 sender+text, as some other bot frameworks do) on top of id-based dedup:
@@ -773,18 +767,23 @@ A channel renders a typed, grouped settings form when its class overrides
 `json_schema_extra` or is marked `secret`. Channels that expose no fields fall
 back to a single credential box.
 
-Telegram, Slack and Discord additionally have a service module
+Telegram, Slack, Discord, and WhatsApp additionally have a service module
 (`durin/service/channels_<name>.py`) backing a guided panel. Each registers in
 **both** `durin/service/catalog.py` and `durin/service/wiring.py` — a service
 present in only one is served to tooling and silently 405s on the live gateway,
-and a test freezes that invariant. All three expose a token `test` plus the
-pairing quartet (list / approve / deny / revoke) over the channel-agnostic
-pairing store. Slack adds workspace-channel listing and joining; Discord adds
-guild-and-channel listing and a least-privilege OAuth invite URL. The Discord
-service is REST-only against the configured token, so its panel keeps working
-while the channel is stopped, and its `test` reports whether the bot may read
-message content as `enabled | limited | disabled | unknown` — `limited` is the
-normal state of an unverified app, which works until it passes 100 guilds.
+and a test freezes that invariant. Telegram, Slack, and Discord expose a token
+`test` plus the pairing quartet (list / approve / deny / revoke) over the
+channel-agnostic pairing store. Slack adds workspace-channel listing and
+joining; Discord adds guild-and-channel listing and a least-privilege OAuth
+invite URL. The Discord service is REST-only against the configured token, so
+its panel keeps working while the channel is stopped, and its `test` reports
+whether the bot may read message content as `enabled | limited | disabled |
+unknown` — `limited` is the normal state of an unverified app, which works until
+it passes 100 guilds. WhatsApp's service instead backs a browser-based
+**QR-pairing** wizard: `POST /api/v1/channels/whatsapp/login/start` runs the
+bridge in QR mode and streams the code while the webui polls `…/login/poll`
+until the phone links, so the user pairs from the dashboard without touching the
+terminal.
 
 Adding or changing a route means regenerating the contract
 (`PYTHONPATH=<worktree> python scripts/gen_openapi.py`, then
@@ -797,7 +796,9 @@ stale contract.
 The webui sidebar lists sessions from all channels (Telegram, CLI, subagent,
 etc.). Historically, clicking one returned a 404 because the rich per-session
 JSONL transcript used by the thread endpoint is written only by the websocket
-channel (`append_transcript_object` in `durin/channels/websocket.py`).
+channel (via `append_transcript_object`, defined in
+`durin/utils/webui_transcript.py` and called only from
+`durin/channels/websocket.py`).
 
 The thread endpoint (`GET /api/v1/sessions/{key}/webui-thread`) now falls back
 to the **universal session history** when no JSONL exists: it reads the

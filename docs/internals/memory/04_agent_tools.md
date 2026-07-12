@@ -203,6 +203,11 @@ as-is. The storage model has three steps, all in a single call:
 Steps 2 and 3 are best-effort: a failure does not roll back the verbatim copy.
 When memory is disabled (no embedding model), only step 1 runs.
 
+To read a document's text **without** persisting it to the Library, the agent
+uses the separate `convert_to_markdown` tool
+(`durin/agent/tools/convert_to_markdown.py`) instead — a transient conversion
+with no storage or indexing.
+
 The `id` is a `sha256` of `filename + content` (raw original bytes for a
 converted document), truncated to 12 chars — re-ingesting the same file with
 the same name is idempotent. Renaming the file before re-ingest produces a new
@@ -444,7 +449,7 @@ future re-enable starts from a correct implementation.
 | `memory.search.sectioning.max_per_source` | 3 | Per-source cap: at most this many chunks from one ingested document per search result. |
 | `memory.index_skills` | `true` | Include `skills/<name>/SKILL.md` in FTS + vector index. Flipping to `false` immediately suppresses skill hits at the tool boundary. |
 | `memory.dream.enabled` | `true` | Master switch for cron + reactive Dream triggers. |
-| `memory.dream.cron` | `0 3 * * *` | Daily schedule for all five Dream passes. |
+| `memory.dream.cron` | `0 3 * * *` | Daily schedule for the dream consolidation run. |
 | `memory.dream.post_compaction` | `true` | Reactive extract trigger after session compaction. |
 | `memory.dream.on_session_close` | `true` | Reactive extract trigger on session close. |
 
@@ -473,7 +478,7 @@ These are for human operators, not agent tools.
 | Command | Purpose |
 |---|---|
 | `durin memory reindex [--target lancedb\|fts\|all]` | Wipe `.durin/index/` and rebuild from `.md` files. |
-| `durin memory dream [entity] [--dry-run]` | Manually trigger all five Dream passes. `entity` is an optional positional arg (e.g. `person:marcelo`); per-entity filtering is not yet applied by the passes. |
+| `durin memory dream [entity] [--dry-run]` | Manually trigger the core consolidation passes. `entity` is an optional positional arg (e.g. `person:marcelo`); per-entity filtering is not yet applied by the passes. |
 | `durin memory absorb <canonical> <absorbed> [--reason/-r TEXT] [--yes/-y]` | Merge two entity pages: `canonical` survives, `absorbed` moves to archive. |
 | `durin memory absorb-suggest` | List candidate pairs that share at least one alias (merge hints). |
 | `durin memory stats [--days N] [--json]` | Aggregate memory telemetry and filesystem counts. |

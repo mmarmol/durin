@@ -47,7 +47,7 @@ Every tag also produces a GitHub Release with the wheel + sdist
 attached:
 
 ```bash
-pipx install https://github.com/mmarmol/durin/releases/latest/download/durin_agent-0.1.0a10-py3-none-any.whl
+pipx install https://github.com/mmarmol/durin/releases/latest/download/durin_agent-0.1.0b4-py3-none-any.whl
 ```
 
 Replace the version in the URL with the release you want.
@@ -95,10 +95,12 @@ pip install -e ".[memory,mcp,web]"
 | `web` | `ddgs`, `readability-lxml` | The web-search and reader tools. |
 | `slack` | `slack-sdk`, `slackify-markdown` | Slack channel. |
 | `discord` | `discord.py` | Discord channel. |
+| `matrix` | `matrix-nio`, `mistune`, `nh3` | Matrix channel (unencrypted rooms only). |
 | `oauth` | `oauth-cli-kit` | OAuth login (`durin oauth login …`). |
 | `local` | `llama-cpp-python`, `huggingface-hub` | Local GGUF model serving. |
 | `stt` | `sherpa-onnx`, `av` (PyAV), `numpy` | Local audio transcription. PyAV bundles ffmpeg — no system ffmpeg required. Two engines selectable via config (see below). Models download on first use and are cached under `<durin_home>/models/stt/`. Prebuilt wheels for macOS arm64, Linux x86_64/aarch64, Windows x86_64. |
 | `voice` | `sounddevice` (PortAudio) | TUI microphone recording (`/voice`). macOS/Windows bundle PortAudio; Linux needs `apt install libportaudio2` (or your distro's equivalent). |
+| `tts` | `supertonic`, `onnxruntime` | Local on-CPU text-to-speech (Supertonic, ONNX). Self-downloads the model (~260 MB) on first use. |
 | `dev` | `pytest`, `ruff`, … | Run the test suite + lint. |
 
 #### Audio transcription

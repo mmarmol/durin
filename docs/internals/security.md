@@ -245,7 +245,7 @@ parent-process environment variables are not inherited unless explicitly listed 
 `allowed_env_keys`. Scoped secrets from `collect_for("exec")` are added last.
 
 After the guard pipeline, the command is optionally wrapped by a sandbox
-(chroot, Landlock, or another configured mechanism) before spawning.
+(`bwrap`, `docker`, or `testbed`; empty for none) before spawning.
 
 ### Workflow script nodes
 
@@ -311,7 +311,8 @@ a token. Remote callers receive a `Principal` built from the verified token's
 stored scopes. `principal.require(Scope.X)` raises `ForbiddenError` if the
 principal lacks the scope (or `ADMIN`). The scope catalog is declared in the
 `Scope` enum and covers paired read/write scopes for every service domain:
-settings, secrets, skills, cron, sessions, config, memory, MCP, and system.
+settings, secrets, skills, cron, sessions, config, memory, MCP, workflows,
+loops, and system.
 
 `AuthService` (`durin/service/auth.py`) owns token lifecycle routes; it calls
 `principal.require(Scope.SYSTEM_WRITE)` before issuing or revoking tokens, so
@@ -348,13 +349,13 @@ only callers with system-write authority can manage other tokens.
 
 | Key | Default | Description |
 |---|---|---|
-| `exec.enable` | `true` | Master switch for shell execution via `ExecTool` |
-| `exec.timeout` | `60` | Subprocess timeout in seconds (max 600) |
-| `exec.sandbox` | `""` | Sandbox mechanism (`chroot`, `landlock`, or empty for none) |
-| `exec.allowed_env_keys` | `[]` | Ambient `os.environ` keys to forward to the subprocess; all others are excluded |
-| `exec.allow_patterns` | `[]` | Regex patterns; when non-empty, become an allowlist (commands not matching any pattern are blocked) |
-| `exec.deny_patterns` | `[]` | Regex patterns appended to the hardcoded deny list |
-| `exec.path_append` | `""` | Directory prepended to `PATH` inside the subprocess |
+| `tools.exec.enable` | `true` | Master switch for shell execution via `ExecTool` |
+| `tools.exec.timeout` | `60` | Subprocess timeout in seconds (max 600) |
+| `tools.exec.sandbox` | `""` | Sandbox backend (`bwrap`, `docker`, `testbed`, or empty for none) |
+| `tools.exec.allowed_env_keys` | `[]` | Ambient `os.environ` keys to forward to the subprocess; all others are excluded |
+| `tools.exec.allow_patterns` | `[]` | Regex patterns; when non-empty, become an allowlist (commands not matching any pattern are blocked) |
+| `tools.exec.deny_patterns` | `[]` | Regex patterns appended to the hardcoded deny list |
+| `tools.exec.path_append` | `""` | Directory prepended to `PATH` inside the subprocess |
 | `tools.restrict_to_workspace` | `false` | When true, absolute paths in exec commands and the `working_dir` parameter are blocked outside the configured workspace root |
 | `tools.ssrf_whitelist` | `[]` | CIDR ranges (e.g. `100.64.0.0/10` for Tailscale) to exempt from the SSRF private-address block |
 | `skills.security.allowlist` | (vendor defaults) | Source-ref prefixes (e.g. `github:anthropics/`) that skip the source confirmation step; verdict and code gates have no opt-out |

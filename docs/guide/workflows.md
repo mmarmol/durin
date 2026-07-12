@@ -171,8 +171,9 @@ questions) as the result — see **Asking for more information**, below.
 
 durin's own seed workflows show both shapes: `research-to-answer`'s verify
 step is multi-way (`GROUNDED` ends the run, `MISSING` loops back to
-re-plan, `MISUSED` loops back to re-synthesize); `debug`'s verify step is
-binary (`PASS` ends, `FAIL` loops back to diagnose).
+re-plan, `MISUSED` loops back to re-synthesize); `build-specs`'s `gate`
+step is binary (`on_pass`/`on_fail`) — a script node whose exit code ends
+the run on pass or loops back to re-assemble on fail.
 
 ## Nested workflows (subflows)
 

@@ -12,7 +12,7 @@ The problem it solves: MCP servers are external processes (or remote services) w
 
 **Discovery and install are decoupled from runtime.** Users browse a durin-owned catalog (a vendored floor JSON plus a periodically refreshed overlay) to find servers. Once a server is chosen, install converts registry metadata into a persisted `MCPServerConfig`. At the next gateway start (or immediately via the runtime control surface), the server connects and its tools register. The install step — including secret collection and OAuth capability probing — happens independently of the connection lifecycle.
 
-**OAuth is headless.** During agent runs, durin never opens a browser. The mcp SDK's `OAuthClientProvider` handles RFC 9728 Dynamic Client Registration, PKCE, and token refresh. durin supplies `SecretsTokenStorage` to persist tokens across restarts and raises `NeedsInteractiveAuthError` when interactive sign-in is required — prompting the user to run `durin mcp login <server>` out of band.
+**OAuth is headless.** During agent runs, durin never opens a browser. The mcp SDK's `OAuthClientProvider` handles RFC 7591 Dynamic Client Registration, PKCE, and token refresh. Server discovery follows the RFC 9728 Protected Resource Metadata challenge (the `resource_metadata` pointer in the `WWW-Authenticate` header). durin supplies `SecretsTokenStorage` to persist tokens across restarts and raises `NeedsInteractiveAuthError` when interactive sign-in is required — prompting the user to run `durin mcp login <server>` out of band.
 
 ## 3. Diagram
 
@@ -31,7 +31,7 @@ flowchart TD
 
     subgraph PerCall["Per-Tool Call"]
         J["Agent calls mcp_server_tool_name"] --> K["MCPToolWrapper.execute"]
-        K --> L["MCPServerConnection.call_tool\n(breaker check → _rpc_lock → session resolve)"]
+        K --> L["MCPServerConnection.call_tool\n(breaker check → session resolve → _rpc_lock)"]
         L --> M{"transient\nerror?"}
         M -- "yes (once)" --> N["_recover_and_retry_tool\n(request reconnect, await fresh session)"]
         M -- "no" --> O["SDK ClientSession.call_tool\n(idle-timeout loop)"]
@@ -60,7 +60,7 @@ flowchart TD
 
     subgraph OAuth["OAuth Auto-Detect (headless)"]
         AF["MCPServerConfig.oauth set"] --> AG["_build_oauth_provider\n(OAuthClientProvider + SecretsTokenStorage)"]
-        AG --> AH["SDK DCR flow on connect\n(RFC 9728)"]
+        AG --> AH["SDK DCR flow on connect\n(RFC 7591; discovery via RFC 9728)"]
         AH --> AI{"token\nstored?"}
         AI -- "yes" --> AJ["connect succeeds\n(SDK refreshes silently)"]
         AI -- "no" --> AK["NeedsInteractiveAuthError\n→ 'Run: durin mcp login SERVER'"]
@@ -87,7 +87,7 @@ After all servers have connected (or timed out), `maybe_defer_mcp_tools()` check
 
 ### Capability registration
 
-`_register_capabilities` calls `session.list_tools()`, `session.list_resources()`, and `session.list_prompts()` on the live session. Each item is wrapped in an `MCPToolWrapper`, `MCPResourceWrapper`, or `MCPPromptWrapper` and registered in the `ToolRegistry` under the name `mcp_<server>_<tool>` (sanitized: non-alphanumeric characters become underscores, runs of underscores collapsed). The `enabled_tools` allowlist filters which tools are registered; `["*"]` (the default) registers all.
+`_register_capabilities` calls `session.list_tools()`, `session.list_resources()`, and `session.list_prompts()` on the live session. Each item is wrapped in an `MCPToolWrapper`, `MCPResourceWrapper`, or `MCPPromptWrapper` and registered in the `ToolRegistry` under the name `mcp_<server>_<tool>` (sanitized: characters outside `[a-zA-Z0-9_-]` become underscores — hyphens and underscores are preserved — and runs of underscores collapse). The `enabled_tools` allowlist filters which tools are registered; `["*"]` (the default) registers all.
 
 Input schemas are normalized for model API compatibility: array `type` fields with `null` members become nullable scalars; `anyOf`/`oneOf` patterns with a null branch are unwrapped; `$defs` rewrites `definitions` references. Output schema validation is disabled wholesale — durin passes `structuredContent` to the model as a JSON appendix and never validates its shape.
 
@@ -120,7 +120,7 @@ Idle keepalive: every `keepalive_interval` seconds (default 180), `_wait_for_lif
 
 ### Discovery and install
 
-The durin-owned catalog lives in `durin/agent/data/mcp_catalog.json` (the vendored floor). A periodically refreshed overlay (`mcp_catalog_cache.json`) replaces the floor when its `generated_at` timestamp is newer. `mcp_catalog_store.search` queries the active list with substring and fuzzy (SequenceMatcher ratio > 0.8) matching against name, owner, description, and topics. Results are ranked with verified (GitHub-curated) tier first, then by stars descending within each tier.
+The durin-owned catalog lives in `durin/agent/data/mcp_catalog.json` (the vendored floor). A periodically refreshed overlay (`mcp_catalog_cache.json`) replaces the floor when its `generated_at` timestamp is at least as recent as the floor's (a tie goes to the overlay). `mcp_catalog_store.search` queries the active list with substring matching against name, owner, description, and topics, plus a SequenceMatcher ratio > 0.8 fuzzy fallback against the name segment only. Results are ranked with verified (GitHub-curated) tier first, then by stars descending within each tier.
 
 For install, `McpRegistryDescribeQuery` retrieves full `McpServerDetail` from a registry adapter. `build_server_config_from_detail` selects a local package (stdio via npx/uvx/docker) or a remote endpoint, pins the package version, and builds an `MCPServerConfig`. Secret environment variables are stored in durin's secret store under `${secret:NAME}` references — resolved to plaintext at spawn time, never persisted in config. For remote servers with no declared auth header, `autodetect_oauth` probes the endpoint with an unauthenticated MCP `initialize` request; a `401 Bearer` response sets `oauth=True` on the config so the SDK's sign-in flow takes over.
 
@@ -128,7 +128,7 @@ Agent-side, this path is exposed through `mcp_search` (read-only) and `mcp_manag
 
 ### OAuth flow
 
-The `OAuthClientProvider` is built once per `MCPServerConnection` in `__init__`, so DCR state and refresh tokens persist across reconnects within the same process lifetime. `SecretsTokenStorage` backs the SDK's `TokenStorage` protocol: tokens and client registration are serialized as JSON into durin's secret store, keyed by a per-server hash of `(server_name, server_url)`.
+The `OAuthClientProvider` is built once per `MCPServerConnection` in `__init__`, so DCR state and refresh tokens persist across reconnects within the same process lifetime. `SecretsTokenStorage` backs the SDK's `TokenStorage` protocol: tokens and client registration are serialized as JSON into durin's secret store, keyed by the server name (in plaintext) plus a short hash of the server URL.
 
 In agent runs (`headless=True`), the redirect handler raises `NeedsInteractiveAuthError` the moment the SDK would open a browser — surfacing the `durin mcp login <server>` instruction to the user. The `durin mcp login` command spins up a `LoopbackCallback` server on localhost, builds an interactive provider, opens the authorization URL in a browser, and waits for the OAuth code. On success, tokens are stored and the next connection attempt succeeds without any user interaction.
 
@@ -184,6 +184,11 @@ MCP servers can request sampling (asking durin's LLM to generate text), declare 
 | `tools.mcp_servers` | `dict[str, MCPServerConfig]` | `{}` | Configured servers; keyed by server name |
 | `tools.mcp_deferral.enabled` | `bool` | `True` | Gate for tool deferral behind bridge tools |
 | `tools.mcp_deferral.threshold_tokens` | `int` | `20000` | Hide MCP tool definitions when aggregate schema exceeds this; 0 disables |
+| `tools.mcp_discovery.install_policy` | `str` | `"approve"` | Gate on installing a discovered server: `never` / `approve` (per-install confirm) / `auto` |
+| `tools.mcp_discovery.quality` | `str` | `"official"` | Discovery view: `official` (star/first-party gate) or `all` (full registry) |
+| `tools.mcp_discovery.min_stars` | `int` | `100` | Star floor for the `official` gate |
+| `tools.mcp_discovery.registries` | `list` | `[official]` | MCP registries to search, in order |
+| `tools.mcp_discovery.search_limit` | `int` | `10` | Max results per catalog search |
 | `tools.ssrf_whitelist` | `list[str]` | `[]` | CIDR ranges exempt from SSRF blocking (e.g. `["100.64.0.0/10"]` for Tailscale) |
 
 ### MCPServerConfig fields
@@ -209,7 +214,7 @@ MCP servers can request sampling (asking durin's LLM to generate text), declare 
 ### CLI verbs
 
 ```
-durin mcp list                   # list configured servers with live status
+durin mcp status                 # OAuth-token presence for oauth-marked servers
 durin mcp search <query>         # search the catalog
 durin mcp install <ref>          # install from the catalog
 durin mcp login <server>         # interactive OAuth sign-in (opens browser)

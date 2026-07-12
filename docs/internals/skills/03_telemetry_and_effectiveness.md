@@ -144,12 +144,13 @@ volume specifically).
 Emitted once per action `curate_catalog` (`durin/agent/skill_curation.py`)
 processes, including the deterministic frontmatter backfill that runs before
 the LLM judge is invoked. The `action` field takes one of: `backfill`,
-`evolve`, `fuse`, `retire`, `principle`, `retire_principle`. `applied` is a
-boolean — a judge-proposed action that fails validation (an out-of-scope
-skill name, a fuse with a manual source, a principle proposal past the cap) is
-still emitted with `applied=false`, so the event stream captures judge
-proposals that didn't stick, not only successful mutations. `skill` names the
-target when the action has one (absent for a bare `principle` add).
+`evolve`, `restructure`, `fuse`, `retire`, `principle`, `retire_principle`.
+`applied` is a boolean — a judge-proposed action that fails validation (an
+out-of-scope skill name, a fuse with a manual source, a principle proposal
+past the cap) is still emitted with `applied=false`, so the event stream
+captures judge proposals that didn't stick, not only successful mutations.
+`skill` names the target when the action has one (absent for a bare `principle`
+add).
 
 ### Judge parse failures — `memory.dream.parse_failure` with `stage=curation|suggestions`
 
@@ -256,11 +257,17 @@ them — there is no separate skills-specific telemetry sink.
   skill last touched." The webui surfaces this honestly: the "last used" label
   carries a tooltip (`skills.lastUsedApprox`) rather than presenting the value
   as an exact timestamp.
-- **`skill.suggestion_resolved`** and the four other `skill.*` events have no
-  dedicated webui reader as of this writing — they exist as a queryable
-  telemetry stream (local JSONL) for offline analysis of the loop's
-  effectiveness, the same as many `memory.*` events that predate any webui
-  surface for them.
+- **`skill.curation_action`** *does* have a dedicated reader: it is a member of
+  `dream_digest.DREAM_ACTIVITY_TYPES`, and `map_dream_event` turns each
+  *applied* action into a Dream-feed item — `kind: "retired"` for a `retire`,
+  `kind: "improved"` for every other verb — deep-linked to the named skill and
+  surfaced through the same `GET /api/v1/memory/dream/digest` path as the
+  `memory.dream.*` events above. The other four `skill.*` events —
+  `skill.used`, `skill.observation_logged`, `skill.curation_run`, and
+  `skill.suggestion_resolved` — have no dedicated webui reader as of this
+  writing; they exist as a queryable telemetry stream (local JSONL) for offline
+  analysis of the loop's effectiveness, the same as many `memory.*` events that
+  predate any webui surface for them.
 
 ## 5. Key types & entry points
 

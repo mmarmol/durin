@@ -241,7 +241,7 @@ URL signing (`get_or_create_media_secret()`), stored base64-encoded in the same
 | `BoundRoute` | `durin/service/registry.py` | `RouteSpec` + `service_name` + handler callable; iterated by the ASGI adapter and the generator |
 | `route` | `durin/service/registry.py` | Decorator that attaches a `RouteSpec` under `__route_spec__` and returns the method unchanged |
 | `Principal` | `durin/service/principal.py` | Frozen dataclass: `subject`, `scopes: frozenset[str]`, `kind`; `Principal.local()` → `{ADMIN}`, `Principal.remote(subject, scopes)` → token-derived |
-| `Scope` | `durin/service/principal.py` | String enum of permission values: `admin` plus `<domain>:<read\|write>` pairs (settings, secrets, skills, cron, sessions, config, memory, mcp, system) |
+| `Scope` | `durin/service/principal.py` | String enum of permission values: `admin` plus `<domain>:<read\|write>` pairs (settings, secrets, skills, cron, sessions, config, memory, mcp, workflows, loops, system) |
 | `ServiceModel` / `Command` / `Query` / `Result` | `durin/service/types.py` | Pydantic DTO bases: camelCase wire aliases via `to_camel`; `Command`/`Query` forbid extra fields, `Result` allows them |
 | `DomainError` + subclasses | `durin/service/types.py` | Transport-agnostic error hierarchy: `UnauthenticatedError` (401), `ForbiddenError` (403), `NotFoundError` (404), `ConflictError` (409), `ValidationFailedError` (422), `TooManyRequestsError` (429), `UnavailableError` (503) |
 | `build_service_registry` | `durin/service/wiring.py` | Factory for the functional registry: wires all services to real `config`, `session_manager`, `cron_service`, `bus`, optional `mcp_runtime` |
@@ -276,7 +276,8 @@ carries no `@route` decorator on any method). Its configuration
 The route table is the authoritative source; the current operation set spans
 secrets, cron, sessions, settings, config, skills, memory, MCP servers, health,
 commands, agent modes (`/api/v1/modes`), OAuth flows, auth tokens,
-personas/souls (`/api/v1/souls`, `/api/v1/personas`), and background tasks
+personas/souls (`/api/v1/souls`, `/api/v1/personas`), workflows
+(`/api/v1/workflows`), loops (`/api/v1/loops`), and background tasks
 (`/api/v1/tasks`). Verbs in use: GET, POST, DELETE, and PATCH (used by
 `McpService.update` and `CronService` for partial updates).
 

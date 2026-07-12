@@ -36,7 +36,7 @@ summaries). The FTS5 SQLite index (`fts.sqlite`) and the LanceDB vector table ar
 built from those files, never the reverse. A corrupted index is a recoverable
 condition — rebuild from the files.
 
-**One loop, many surfaces.** All ~14 chat channels (Telegram, Discord, Slack,
+**One loop, many surfaces.** All chat channels (Telegram, Discord, Slack,
 Email, WebSocket, DingTalk, Feishu, Matrix, WeCom, and others), plus the CLI/TUI
 and the HTTP API, converge on the same `AgentLoop`. Each surface posts an
 `InboundMessage` to the `MessageBus`; the loop processes it identically regardless
@@ -68,8 +68,9 @@ indexes.
 ## 4. Subsystem dependencies
 
 The agent loop is the hub. The runner executes LLM and tool iterations for it;
-tools, MCP, memory, and skills are the capabilities it reaches. Channels and the
-loop are decoupled by the message bus. Providers feed the runner. The API wraps a
+tools, MCP, memory, skills, and user-defined workflows and loops are the
+capabilities it reaches (voice adds a spoken I/O path over the websocket surface).
+Channels and the loop are decoupled by the message bus. Providers feed the runner. The API wraps a
 service layer that talks to the same core. Cron and dream are cold-path services
 that read and write sessions and memory off the request path. Concurrency,
 security, and observability are cross-cutting concerns every subsystem touches.
@@ -91,6 +92,7 @@ flowchart TB
         MCP["mcp client"]
         MEM["memory"]
         SKILLS["skills"]
+        WF["workflow / loops"]
     end
 
     subgraph coldpath["Cold path"]
@@ -113,6 +115,7 @@ flowchart TB
     RUNNER --> MCP
     RUNNER --> MEM
     LOOP --> SKILLS
+    RUNNER --> WF
     CRON --> BUS
     DREAM --> MEM
     DREAM -."skill_extract pass".-> SKILLS
@@ -144,10 +147,11 @@ End-to-end flow for a single inbound message:
 4. **Loop → bus → surface.** The loop appends the completed turn to the session
    transcript, posts an `OutboundMessage` to `MessageBus.outbound`, and the
    originating channel adapter delivers the reply.
-5. **Cold path.** The dream cron job reads session transcripts, runs five
-   consolidation passes (extract → derived_from → skill_extract → refine →
-   always_on), and writes results back to `memory/` and skills files. The cron
-   scheduler posts inbound messages for agent tasks and manages per-run sessions.
+5. **Cold path.** The dream cron job reads session transcripts, runs a sequence of
+   consolidation passes (extract → derived_from → the document passes → skill_extract
+   → refine → consolidate_relations → always_on), then curates skills, and writes
+   results back to `memory/` and skills files. The cron scheduler posts inbound
+   messages for agent tasks and manages per-run sessions.
 
 ## 6. Core entry points
 
@@ -167,13 +171,13 @@ End-to-end flow for a single inbound message:
 | Tools | [tools.md](tools.md) | Tool registry, built-in tools, schemas, result budgets and spill, sandbox boundaries. |
 | MCP client | [mcp.md](mcp.md) | Connecting Model Context Protocol servers, exposing their tools, discovery and OAuth. |
 | Cron | [cron.md](cron.md) | Scheduled work: reminders and agent tasks, per-run isolated sessions, run history. |
-| Workflow engine | [workflow.md](workflow.md) | User-defined flow graphs: work/decision nodes, routing, loop-back, per-node model/context/tools, the `run_workflow` tool. |
+| Workflow engine | [workflow.md](workflow.md) | User-defined flow graphs: work/script/subworkflow/parallel nodes, routing, loop-back, per-node model/context/tools, the `run_workflow` tool. |
 | Loops | [loops.md](loops.md) | Goal-driven recurring work: firing a workflow on a trigger, verifying the result against a goal, escalation, and the `loops` tool. |
 | Channels & bus | [channels.md](channels.md) | Chat surfaces, the async message bus, inbound/outbound routing and session keys. |
 | Voice | [voice.md](voice.md) | Conversational speech: gateway voice sessions, the STT→agent→TTS loop, spoken-rendition, the browser thin client. |
 | Providers | [providers.md](providers.md) | LLM provider adapters, model presets, capability resolution, per-turn snapshots. |
 | Memory | [memory/00_overview.md](memory/00_overview.md) | Entity-centric memory: markdown storage, vector + lexical indexes, search pipeline. |
-| Dream | [memory/05_dream_cold_path.md](memory/05_dream_cold_path.md) | The five-pass cold-path consolidation that grows the entity graph and skills. |
+| Dream | [memory/05_dream_cold_path.md](memory/05_dream_cold_path.md) | The cold-path consolidation that grows the entity graph and skills. |
 | Skills | [skills/00_overview.md](skills/00_overview.md) | Skill authoring, vetting, discovery, three-tier surfacing, curation. |
 | Security | [security.md](security.md) | Defense in depth: skill/MCP scanning, secrets, SSRF guard, permission gates. |
 | API | [api.md](api.md) | Service core, the unified ASGI gateway, the OpenAPI contract, persisted auth. |

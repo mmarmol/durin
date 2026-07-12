@@ -36,7 +36,7 @@ memory tracks, and Dream operates on only one of them.
 |---|---|---|
 | Storage | `memory/entities/<type>/<slug>.md` | `memory/episodic/*.md` + references in `memory/references/` |
 | Producer | the agent authors name / aliases / relations / body via `memory_upsert_entity`; **Dream extracts attributes** | `/remember` (user-written facts) + session-close summaries |
-| Consolidated by Dream? | **yes** — five passes refine and dedup the graph | **no** — fragments are never folded into pages |
+| Consolidated by Dream? | **yes** — the dream passes refine and dedup the graph | **no** — fragments are never folded into pages |
 | Lifecycle | pages evolve via CAS writes; duplicates merged via absorb | append-only; removed only by explicit `memory_forget` / webui |
 
 Both tracks are searchable from write time (vector + lexical + grep — see
@@ -45,12 +45,14 @@ does not gate recall of either. See `design_rationale.md` for why fragments stay
 raw.
 
 **2. Sequential passes, three trigger paths.** Dream runs passes in a fixed
-order — **extract → derived_from → distill → skill-extract → refine →
-always_on** — each reading sessions, reference documents, or entity pages and
-applying structured updates. They are reached three ways: the **daily cron**
-runs the full sequence; the two
-**reactive hooks** (post-compaction / session-close) run the extract pass only,
-throttled; the **manual** `durin memory dream` runs all five on demand.
+order — **extract → derived_from → distill → seed-entities → curate-topics →
+skill-extract → refine → consolidate-relations → always_on** — each reading
+sessions, reference documents, or entity pages and applying structured updates.
+They are reached three ways: the **daily cron** runs the full sequence (and then
+a workflow-improve pass and skill curation); the two **reactive hooks**
+(post-compaction / session-close) run the extract pass only, throttled; the
+**manual** `durin memory dream` runs a smaller core — extract → derived_from →
+skill-extract → refine → always_on.
 
 **3. Per-session cursor → idempotent, lossless.** The extract pass tracks
 progress with a single integer **per-session cursor** (turns already processed).
@@ -72,14 +74,16 @@ flowchart TD
     GATE["ReactiveDreamGate (in-process lock + throttle)"]
     REACT --> GATE
 
-    subgraph Passes["Five passes (fixed order)"]
+    subgraph Passes["Passes (fixed order)"]
         direction TB
         EX["1. extract: sessions to entity attributes (Stage 1 agent-upserted refs, Stage 2 discovered entities)"]
         DF["2. derived_from: link entities to ingested reference docs"]
-        SK["3. skill-extract: agentic sub-agent mines reusable procedures"]
-        RF["4. refine: alias-overlap candidates to judge_pair to auto-merge (gated by auto_absorb.enabled)"]
-        AO["5. always_on: rank feedback entities, fit token budget, flip flags"]
-        EX --> DF --> SK --> RF --> AO
+        DOC["3. documents: distill outlines, seed entities, curate the topic map"]
+        SK["4. skill-extract: agentic sub-agent mines reusable procedures"]
+        RF["5. refine: alias-overlap candidates to judge_pair to auto-merge (gated by auto_absorb.enabled)"]
+        REL["6. relations: canonicalise the edge vocabulary"]
+        AO["7. always_on: rank feedback entities, fit token budget, flip flags"]
+        EX --> DF --> DOC --> SK --> RF --> REL --> AO
     end
 
     CRON --> EX
@@ -100,9 +104,11 @@ flowchart TD
 
 ## 4. How it works
 
-The five entry points live in `durin/memory/dream_passes.py`
+The pass entry points live in `durin/memory/dream_passes.py`
 (`run_extract_pass`, `run_derived_from_pass`, `run_skill_extract_pass`,
-`run_refine_pass`) and `durin/memory/always_on_dream.py` (`run_always_on_pass`).
+`run_refine_pass`), `durin/memory/always_on_dream.py` (`run_always_on_pass`),
+`durin/memory/distill_dream.py` (the document passes), and
+`durin/memory/relation_hygiene.py` (`run_consolidate_relations_pass`).
 Each pass reads from `<workspace>/sessions/*.jsonl` or from `memory/entities/`,
 writes through the shared CAS write path, and is best-effort per item: one bad
 session or pair never aborts the whole pass.
@@ -264,8 +270,9 @@ each document's slug + chunk_count). Gated by `memory.dream.curate_topics_enable
 
 `run_skill_extract_pass(workspace, *, provider, model, max_sessions=3)` is the
 **only agentic pass**: it spins up an `AgentRunner` sub-agent with
-`ReadFileTool`, `EditFileTool`, `SkillWriteTool`, `SkillSearchTool`, and
-`SkillAcquireSeedTool`, mining the newest sessions (plus any logged skill gaps)
+`ReadFileTool`, `EditFileTool`, `SkillWriteTool`, `SkillSearchTool`,
+`SkillAcquireSeedTool`, `ListWorkflowsTool`, and `WorkflowWriteTool`, mining the
+newest sessions (plus any logged skill gaps)
 for a recurring step-by-step **procedure**. When it finds one it prefers
 acquiring a published skill (search a registry, pull a safe allowlisted seed)
 over authoring from scratch, then calls `skill_write`. It does nothing on a
@@ -492,7 +499,7 @@ All knobs live under `memory.dream.*` in `durin/config/schema.py`
 |---|---|---|
 | `memory.dream.enabled` | `true` | Master switch for the cron + both reactive triggers. Manual `durin memory dream` works regardless. |
 | `agents.defaults.compaction_learnings_enabled` | `true` | Gates the compaction backstop that distils durable learnings at compaction time. When false, no LLM call is made and no learning entities are written during consolidation. |
-| `memory.dream.cron` | `0 3 * * *` | Daily schedule for the full five-pass run. |
+| `memory.dream.cron` | `0 3 * * *` | Daily schedule for the full consolidation run. |
 | `memory.dream.post_compaction` | `true` | Arm the reactive extract trigger after a session is compacted. |
 | `memory.dream.on_session_close` | `true` | Arm the reactive extract trigger when a session closes. |
 | `memory.dream.discover_enabled` | `true` | Enable Stage 2 mention-based entity discovery in the extract pass. |
@@ -518,9 +525,9 @@ on the default provider (see `docs/internals/providers.md`).
 **Surfaces.**
 
 - **Cron** — the daily run is registered as the system job `memory_dream`
-  (`durin/cli/commands.py`), which runs all five passes in order (each offloaded
-  to a thread so the cron loop stays responsive), then the skill-curation step.
-  A failure logs and never crashes the cron loop.
+  (`durin/cli/commands.py`), which runs all the passes in order (each offloaded
+  to a thread so the cron loop stays responsive), plus a workflow-improve pass,
+  then the skill-curation step. A failure logs and never crashes the cron loop.
 - **Reactive hooks** — `agent.consolidator.on_post_compaction` and
   `agent.on_session_close` (wired in `durin/cli/commands.py`) call a closure that
   runs the **extract pass only** through the shared `ReactiveDreamGate`.
@@ -533,8 +540,9 @@ on the default provider (see `docs/internals/providers.md`).
   during the session. It is best-effort — a failure never breaks consolidation —
   and dedup is delegated to the dream's refine pass. The backstop is gated by
   `agents.defaults.compaction_learnings_enabled` (default true).
-- **CLI** — `durin memory dream` (`durin/cli/memory_cmd.py`) runs the full
-  five-pass sequence on demand and prints a one-line summary. Related recovery
+- **CLI** — `durin memory dream` (`durin/cli/memory_cmd.py`) runs the core
+  consolidation sequence (extract → derived_from → skill-extract → refine →
+  always_on) on demand and prints a one-line summary. Related recovery
   commands: `durin memory absorb-suggest`, `durin memory absorb`,
   `durin memory revert`, `durin memory history`.
 - **WebUI** — the **Dream** section (`/dream` route, `DreamView` +
@@ -605,7 +613,7 @@ latency and tokens for a benefit the user does not see in the moment. Batching i
 asynchronously means the user pays nothing at write time, and the entity graph
 still converges toward a clean state in the background.
 
-**Why five passes instead of one.** Each pass has a distinct input shape and
+**Why a sequence of passes instead of one.** Each pass has a distinct input shape and
 distinct write target — sessions to attributes, entities to source documents,
 sessions to skills, pages to merges, feedback to flags. Folding them into one
 prompt would blur those concerns, make failures all-or-nothing, and make each
