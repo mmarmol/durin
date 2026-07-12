@@ -121,8 +121,8 @@
       "cancel": "キャンセル"
     },
     "byok": {
-      "description": "自分の provider キーを使います。durin は現在の config から値を読み込み、設定済みの provider だけを一般設定で選択できます。",
-      "webSearchDescription": "web search の provider と認証情報を設定します。影響するのは web search ツールのみです。",
+      "description": "自分のプロバイダーキーを使います。durin は現在の設定から値を読み込み、設定済みのプロバイダーだけを一般設定で選択できます。",
+      "webSearchDescription": "ウェブ検索のプロバイダーと認証情報を設定します。影響するのはウェブ検索ツールのみです。",
       "configured": "設定済み",
       "notConfigured": "未設定",
       "configuredSection": "設定済み",
@@ -134,12 +134,12 @@
       "apiKeyPlaceholder": "API key を入力",
       "apiKeyConfiguredPlaceholder": "空欄のままなら現在の key を保持",
       "configuredKeyHint": "設定済み key",
-      "apiBasePlaceholder": "provider の既定値を使用",
-      "apiKeyRequired": "この provider を設定するには API key が必要です。",
+      "apiBasePlaceholder": "プロバイダーの既定値を使用",
+      "apiKeyRequired": "このプロバイダーを設定するには API key が必要です。",
       "showApiKey": "API key を表示",
       "hideApiKey": "API key を隠す",
       "noConfiguredProviders": "設定済み provider がありません",
-      "configureFirst": "先に BYOK で provider を設定してください。",
+      "configureFirst": "先に BYOK でプロバイダーを設定してください。",
       "openByok": "BYOK を開く",
       "tabs": {
         "ariaLabel": "BYOK 認証情報タイプ",
@@ -147,9 +147,9 @@
         "webSearch": "Web Search"
       },
       "webSearch": {
-        "provider": "検索 provider",
-        "providerHelp": "web search ツールで使うバックエンドを選択します。",
-        "selectProvider": "provider を選択",
+        "provider": "検索プロバイダー",
+        "providerHelp": "ウェブ検索ツールで使うバックエンドを選択します。",
+        "selectProvider": "プロバイダーを選択",
         "credentials": "認証情報",
         "noCredentialRequired": "key は不要",
         "noCredentialHelp": "DuckDuckGo は API key を保存せずに使えます。",
@@ -157,15 +157,15 @@
         "baseUrl": "Base URL",
         "baseUrlHelp": "SearXNG には自分のインスタンス URL が必要です。",
         "baseUrlPlaceholder": "https://search.example.com",
-        "apiKeyRequired": "この検索 provider には API key が必要です。",
+        "apiKeyRequired": "この検索プロバイダーには API key が必要です。",
         "baseUrlRequired": "SearXNG には Base URL が必要です。",
         "missingCredential": "保存する前に必要な認証情報を入力してください。",
-        "saveHint": "変更は新しい web search リクエストに適用されます。"
+        "saveHint": "変更は新しいウェブ検索リクエストに適用されます。"
       }
     },
     "secrets": {
       "title": "シークレット",
-      "description": "API キーやトークンは config.json とは別に、~/.durin/secrets.json（mode 0600）に保存されます。値はここには表示されません。",
+      "description": "API キーやトークンは config.json とは別に、~/.durin/secrets.json（モード 0600）に保存されます。値はここには表示されません。",
       "empty": "まだシークレットが保存されていません。",
       "loadError": "シークレットを読み込めませんでした。",
       "addTitle": "シークレットを追加",
@@ -228,7 +228,7 @@
       "memory": "Dream モデル",
       "memoryHint": "Dream（保存されたメモリを統合・整理するバックグラウンド処理）で使用されます。未設定の場合はメインモデルにフォールバックします。",
       "judge": "審査モデル",
-      "judgeHint": "スキルセキュリティの LLM 審査（およびスキル構成ゲート）が使用するモデルと provider です。この2つは常にペアで扱われ、未設定の場合はデフォルトモデルが実行されます。",
+      "judgeHint": "スキルセキュリティの LLM 審査（およびスキル構成ゲート）が使用するモデルとプロバイダーです。この2つは常にペアで扱われ、未設定の場合はデフォルトモデルが実行されます。",
       "modelPlaceholder": "モデル ID",
       "providerPlaceholder": "プロバイダー",
       "save": "保存",
@@ -247,7 +247,7 @@
       "capsAudio": "音声",
       "capsContext": "コンテキスト {{tokens}}",
       "capsUnknown": "モデルを選択すると対応機能が表示されます。",
-      "pickProvider": "provider を選択",
+      "pickProvider": "プロバイダーを選択",
       "testRow": "テスト",
       "testRowHint": "設定済みのモデルへの実リクエストです — API key とモデル ID の組み合わせが機能するか確認します。",
       "saving": "保存中…",
@@ -263,7 +263,7 @@
       "enabled": "有効",
       "disabled": "無効",
       "defaultModel": "デフォルトモデル",
-      "defaultModelHint": "新しいリクエストすべてに使われる provider とモデルです。"
+      "defaultModelHint": "新しいリクエストすべてに使われるプロバイダーとモデルです。"
     },
     "channels": {
       "description": "durin をチャットプラットフォームに橋渡しします。チャンネルを有効にして認証情報を設定してください — トークンは config.json ではなくシークレットストアに保存されます。",
@@ -606,7 +606,7 @@
         "judgeTrigger": "オフ: オンデマンドのみ（各スキルの「LLMで審査」ボタン）。不確実なとき: ゲートが既に判断に迷っている場合（コード / 注意 / 許可リスト外）のみ自動実行。常に: すべてのインポートで実行。モデルが利用できない場合は静かにスキップされます。",
         "judgeMaxSeverity": "審査が判定をどこまで引き上げられるかです。「注意」は確認を必須にしますがそれ自体でブロックはしません。「危険」はブロックできます（上書きが必要）。",
         "judgeModel": "審査に使用するモデル名です。空欄の場合はデフォルト（メイン）モデルを使用します。",
-        "tokenSecret": "GitHub トークンを保持している durin のシークレットです。「None」= 匿名リクエスト（レート制限が低く、プライベートリポジトリにはアクセスできません）。"
+        "tokenSecret": "GitHub トークンを保持している durin のシークレットです。「なし」= 匿名リクエスト（レート制限が低く、プライベートリポジトリにはアクセスできません）。"
       },
       "severity": {
         "caution": "注意（確認）",
@@ -623,7 +623,7 @@
       "addPattern": "追加",
       "removePattern": "パターンを削除",
       "tokenDescription": "GitHub トークンを設定すると API レート制限が緩和され、プライベートリポジトリにもアクセスできます。トークンを保持するシークレットを選択してください（Secrets セクションで作成できます）。",
-      "tokenNone": "None（匿名）",
+      "tokenNone": "なし（匿名）",
       "testToken": "テスト",
       "tokenOk": "トークンは有効です — 残り {{remaining}} 回の API リクエストが可能です。",
       "tokenTestError": "トークンのテストに失敗しました。",
@@ -669,8 +669,8 @@
       "fieldChannel": "チャンネル",
       "fieldChannelPlaceholder": "チャンネルを選択",
       "fieldTo": "宛先",
-      "fieldToPlaceholder": "チャット ID、電話番号、または @user",
-      "fieldToHelp": "選択したチャンネルの宛先 ID です（チャット ID、電話番号、@user など、チャンネルにより異なります）。",
+      "fieldToPlaceholder": "チャット ID、電話番号、または @ユーザー",
+      "fieldToHelp": "選択したチャンネルの宛先 ID です（チャット ID、電話番号、@ユーザーなど、チャンネルにより異なります）。",
       "save": "保存",
       "cancel": "キャンセル",
       "history": "実行履歴",
@@ -777,7 +777,7 @@
     "providerModels": {
       "title": "モデル",
       "loading": "モデルを読み込み中…",
-      "empty": "この provider にはモデルがありません",
+      "empty": "このプロバイダーにはモデルがありません",
       "addPlaceholder": "モデル ID を追加（例: my-model）",
       "add": "追加",
       "edit": "編集",
@@ -803,7 +803,7 @@
       "capOverrideInherit": "継承",
       "capOverrideYes": "はい",
       "capOverrideNo": "いいえ",
-      "emptyTeach": "この provider のカタログモデルはまだありません。以下からカスタムモデルを追加してください。",
+      "emptyTeach": "このプロバイダーのカタログモデルはまだありません。以下からカスタムモデルを追加してください。",
       "loadError": "モデルを読み込めませんでした。"
     },
     "providers": {
@@ -821,7 +821,7 @@
     },
     "github": {
       "title": "GitHub",
-      "usedBy": "スキル、MCP 検出、provider で使用されます",
+      "usedBy": "スキル、MCP 検出、プロバイダーで使用されます",
       "viaGh": "gh CLI 経由",
       "viaEnv": "環境変数経由",
       "connect": "接続",
@@ -860,7 +860,7 @@
         "connect": "ChatGPT で接続",
         "stepOpen": "1. 開く",
         "stepCode": "2. コードを入力:",
-        "deviceCodeHint": "「device code authorization」エラーが表示された場合は、ChatGPT のセキュリティ設定で有効にしてから再試行してください。",
+        "deviceCodeHint": "「デバイスコード認可」エラーが表示された場合は、ChatGPT のセキュリティ設定で有効にしてから再試行してください。",
         "notWorking": "うまくいきませんか？",
         "useDeviceCode": "デバイスコードを使う",
         "notWorkingUseDeviceCode": "うまくいきませんか？ デバイスコードを使う",
@@ -889,11 +889,11 @@
       "fieldArgs": "引数",
       "hintArgs": "1行につき1つ。",
       "fieldEnv": "環境変数",
-      "hintEnv": "KEY=value 形式で1行につき1つ。",
+      "hintEnv": "KEY=値 形式で1行につき1つ。",
       "fieldUrl": "URL",
       "hintUrl": "HTTP/SSE エンドポイントの URL。",
       "fieldHeaders": "ヘッダー",
-      "hintHeaders": "KEY=value 形式で1行につき1つ。",
+      "hintHeaders": "KEY=値 形式で1行につき1つ。",
       "fieldEnabled": "有効",
       "advanced": "詳細設定",
       "fieldToolTimeout": "ツールタイムアウト（秒）",
@@ -993,7 +993,7 @@
       }
     },
     "voice": {
-      "intro": "音声を添付または録音すると、エージェントに届く前に durin がテキストに書き起こします。デフォルトは sherpa-onnx によるローカル STT（オフライン）です。必要に応じてクラウド provider や OpenAI 互換の HTTP サーバーに切り替えられます。",
+      "intro": "音声を添付または録音すると、エージェントに届く前に durin がテキストに書き起こします。デフォルトは sherpa-onnx によるローカル STT（オフライン）です。必要に応じてクラウドプロバイダーや OpenAI 互換の HTTP サーバーに切り替えられます。",
       "loadError": "音声設定を読み込めませんでした。",
       "saveError": "変更を保存できませんでした。",
       "section": {
@@ -1003,7 +1003,7 @@
         "conversational": "会話モード",
         "spokenRendition": "読み上げ方式"
       },
-      "providerTitle": "文字起こし provider",
+      "providerTitle": "文字起こしプロバイダー",
       "providerDesc": "ローカル STT には [stt] エクストラが必要です。クラウド provider には API key が必要です。",
       "provider": {
         "local": "ローカル STT（sherpa-onnx）",
@@ -1017,7 +1017,7 @@
         "sensevoice": "SenseVoice"
       },
       "engineDesc": {
-        "parakeet": "Parakeet TDT v3 — スペイン語・英語を含む25のヨーロッパ言語に対応、最速です。日本語・中国語には SenseVoice かクラウド provider を使用してください。",
+        "parakeet": "Parakeet TDT v3 — スペイン語・英語を含む25のヨーロッパ言語に対応、最速です。日本語・中国語には SenseVoice かクラウドプロバイダーを使用してください。",
         "sensevoice": "SenseVoice — 中国語、日本語、韓国語、広東語、英語に最適化されています。"
       },
       "localStt": {
@@ -1049,7 +1049,7 @@
       "enabledTitle": "有効",
       "enabledDesc": "マスタースイッチです — オフの場合、音声は書き起こされません。",
       "modeTitle": "モード",
-      "modeDesc": "Auto は編集可能なテキストを挿入します。Preview は明示的な承認が必要です。Off は音声をそのまま添付します。",
+      "modeDesc": "Auto は編集可能なテキストを挿入します。プレビューは明示的な承認が必要です。Off は音声をそのまま添付します。",
       "mode": {
         "auto": "Auto",
         "preview": "プレビュー",
@@ -1193,21 +1193,21 @@
     "runsAsModel": "特定のモデル…",
     "runsAsPersonasGroup": "Personas",
     "modelId": "モデル ID",
-    "modelPlaceholder": "例: provider model-id",
+    "modelPlaceholder": "例: プロバイダー model-id",
     "mode": "モード",
     "context": "コンテキスト",
     "session": "セッション",
     "context_own": "own（分離 — 直前のステップのみ参照）",
     "context_shared": "shared（共有コンテキストを読み書き）",
-    "session_fresh": "fresh（パスごとに新規）",
-    "session_persistent": "persistent（ループの各パスをまたいで記憶）",
+    "session_fresh": "新規（パスごとに新規）",
+    "session_persistent": "永続（ループの各パスをまたいで記憶）",
     "prompt": "プロンプト",
     "routes": "ルート",
     "routingShape": "ルーティング形式",
-    "routingShapeBinary": "binary（pass / fail）",
-    "routingShapeMultiway": "multi-way（カスタムラベル）",
-    "onPass": "pass 時",
-    "onFail": "fail 時",
+    "routingShapeBinary": "バイナリ（pass / fail）",
+    "routingShapeMultiway": "複数（カスタムラベル）",
+    "onPass": "成功時",
+    "onFail": "失敗時",
     "cases": "ケース",
     "caseLabelPlaceholder": "ラベル",
     "caseTargetEnd": "（終了）",
@@ -1232,11 +1232,11 @@
     "timeout": "タイムアウト（秒）",
     "timeoutHint": "設定済みのデフォルトを使用",
     "scriptEnv": "環境変数",
-    "scriptEnvClean": "Clean（最小限 + DURIN_*）",
+    "scriptEnvClean": "クリーン（最小限 + DURIN_*）",
     "scriptEnvInherit": "全環境変数を継承",
     "parallelMode": "モード",
-    "parallelStatic": "static（固定ブランチ）",
-    "parallelDynamic": "dynamic（×N ワーカー）",
+    "parallelStatic": "静的（固定ブランチ）",
+    "parallelDynamic": "動的（×N ワーカー）",
     "parallelBranches": "ブランチ",
     "parallelWorker": "ワーカーテンプレート",
     "parallelListFrom": "リストの取得元",
@@ -1294,7 +1294,7 @@
     "passOf": "パス {{iteration}} / {{budget}}",
     "finalPass": "最終パス",
     "continuesSession": "セッションを継続",
-    "persistentInParallelWarning": "このノードは {{parallelId}} のブランチです — 並列ユニットでは persistent セッションを使用できません。保存に失敗します。",
+    "persistentInParallelWarning": "このノードは {{parallelId}} のブランチです — 並列ユニットでは永続セッションを使用できません。保存に失敗します。",
     "runStatus": {
       "ok": "ok",
       "no_session": "セッションなし",
@@ -1691,7 +1691,7 @@
       "send": "メッセージを送信",
       "stop": "応答を停止",
       "queued": "次のターンにキュー済み",
-      "steer": "Steer — ターン中にガイダンスを注入",
+      "steer": "誘導 — ターン中にガイダンスを注入",
       "attachImage": "画像を添付",
       "attachDocument": "ドキュメントを添付",
       "modelPicker": {
@@ -1761,7 +1761,7 @@
           },
           "status": {
             "title": "ステータスを表示",
-            "description": "ランタイム、provider、channel の状態を表示します。"
+            "description": "ランタイム、プロバイダー、チャンネルの状態を表示します。"
           },
           "effort": {
             "title": "推論エフォート",
@@ -1854,7 +1854,7 @@
     "copyReply": "返信をコピー",
     "edit": "メッセージを編集",
     "retry": "再試行",
-    "errorTitle": "provider がエラーを返しました",
+    "errorTitle": "プロバイダーがエラーを返しました",
     "copiedReply": "返信をコピーしました",
     "turnLatencyTitle": "応答時間（全行程）",
     "todos": {
@@ -1927,7 +1927,7 @@
     "retrying": "再試行中 · {{attemptLabel}}",
     "givingUpBody": "エラーの内容は下のチャットに表示されます。メッセージを再送すると再試行できます。",
     "exhaustedBody": "同じエラーが連続しすぎたため、無限ループを避けて中止しました。",
-    "transientBody": "一時的な provider エラーです。リクエストは自動的に再送されます。"
+    "transientBody": "一時的なプロバイダーエラーです。リクエストは自動的に再送されます。"
   },
   "logs": {
     "title": "ログ",
