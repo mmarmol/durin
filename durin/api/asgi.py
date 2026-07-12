@@ -576,7 +576,14 @@ def build_gateway_http_app(
 
         header_secret = request.headers.get("x-durin-hook-secret", "")
         expected_secret = ApiTokenStore().get_or_create_hooks_secret()
-        if not header_secret or not hmac.compare_digest(header_secret, expected_secret):
+        # isascii() first: compare_digest raises TypeError on non-ASCII str,
+        # which would turn a garbage header into a 500 on this
+        # unauthenticated route instead of a 401.
+        if (
+            not header_secret
+            or not header_secret.isascii()
+            or not hmac.compare_digest(header_secret, expected_secret)
+        ):
             return _problem_response(UnauthenticatedError("missing or invalid hook secret"))
         if hook_dispatcher is None:
             return _problem_response(

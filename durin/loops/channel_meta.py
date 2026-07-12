@@ -110,11 +110,20 @@ def build_reply(origin: dict, text: str) -> OutboundMessage:
     reply = _dict(origin.get("reply"))
 
     if channel == "email":
+        # Pre-adapter run manifests carry no "reply" dict — their origin
+        # recorded the thread digest at the top level only. Fall back to it
+        # so a run parked before an upgrade still answers in-thread (a new
+        # thread could never wake it). Only when "reply" is absent: a present
+        # reply dict with thread=None means the origin genuinely had no
+        # thread, and inventing one from other fields would be wrong.
+        thread = reply.get("thread")
+        if "reply" not in origin:
+            thread = origin.get("thread")
         return OutboundMessage(
             channel=channel,
             chat_id=chat_id,
             content=text,
-            metadata={"email": {"thread": reply.get("thread")}, "force_send": True},
+            metadata={"email": {"thread": thread}, "force_send": True},
         )
 
     if channel == "slack":

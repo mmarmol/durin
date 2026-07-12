@@ -125,6 +125,23 @@ def test_wrong_secret_is_401(tmp_path, monkeypatch, loops_ws):
     assert resp.status_code == 401
 
 
+def test_non_ascii_secret_is_401_not_500(tmp_path, monkeypatch, loops_ws):
+    # hmac.compare_digest raises TypeError on non-ASCII str — a garbage
+    # header must still read as "invalid secret", never a 500.
+    _save_loop(loops_ws)
+    dispatcher = HookDispatcher(TriggerMatcher(loops_ws, runtime=_runtime(loops_ws, [_wr("completed")])))
+    app, data_dir = _build_app(tmp_path, monkeypatch, hook_dispatcher=dispatcher)
+    _hooks_secret(data_dir)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resp = client.post(
+        "/api/v1/hooks/orders",
+        json={"text": "hi"},
+        headers={HEADER.encode("latin-1"): "sécrét-ñô".encode("latin-1")},
+    )
+    assert resp.status_code == 401
+
+
 def test_missing_secret_header_is_401(tmp_path, monkeypatch, loops_ws):
     _save_loop(loops_ws)
     dispatcher = HookDispatcher(TriggerMatcher(loops_ws, runtime=_runtime(loops_ws, [_wr("completed")])))

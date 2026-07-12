@@ -56,6 +56,28 @@ def test_email_build_reply():
     assert out.metadata == {"email": {"thread": "digest-1"}, "force_send": True}
 
 
+def test_email_build_reply_pre_adapter_manifest_falls_back_to_origin_thread():
+    # A run parked as waiting_info before the adapter existed has no "reply"
+    # dict in its origin — only the top-level thread digest. The reply must
+    # still land in-thread or the counterpart's answer can never wake it.
+    origin = {"channel": "email", "chat_id": "alice@example.com", "thread": "digest-old"}
+    out = build_reply(origin, "reply text")
+    assert out.metadata == {"email": {"thread": "digest-old"}, "force_send": True}
+
+
+def test_email_build_reply_present_reply_without_thread_stays_threadless():
+    # reply present but thread=None = the origin genuinely had no thread;
+    # the top-level field must NOT override it.
+    origin = {
+        "channel": "email",
+        "chat_id": "alice@example.com",
+        "thread": "custom:loop:42",
+        "reply": {"thread": None},
+    }
+    out = build_reply(origin, "reply text")
+    assert out.metadata == {"email": {"thread": None}, "force_send": True}
+
+
 # --- slack ---
 
 
