@@ -252,9 +252,10 @@ status and timestamps already visible in the row, it shows:
   reason behind a `no goal`, `escalated`, or `error` outcome.
 - **Checks** — a table of every goal check the run was graded against: what
   kind it was (script or assertion), the command or assertion text, and
-  whether it passed, with any extra detail the check produced. A run that
-  hasn't reached goal verification yet (still running, or paused on a
-  question) shows no checks table.
+  whether it passed, with any extra detail the check produced. A run shows no checks table
+  when goal verification never ran: still running, paused on a question,
+  or finished without reaching verification (it ran out of passes, or
+  failed before completing).
 - **Workflow run** — a copyable reference to the underlying workflow run,
   for cross-checking in the Workflows tab.
 
@@ -273,7 +274,8 @@ finished.
 Next to the dots, a percentage shows **convergence** — the share of this
 loop's finished runs that reached their goal — and, only when there have
 been any, an **esc** percentage for how many of those runs were escalated.
-Both percentages are computed over all of the loop's finished runs, not just
+Both percentages are computed over the loop's retained finished runs (older
+runs are pruned over time), not just
 the ten dots shown, so a loop with a long history can show a stable
 percentage even while the dots themselves only cover its most recent runs.
 The strip stays empty until a loop has at least one finished run.
