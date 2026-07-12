@@ -279,7 +279,6 @@ Text-to-speech for spoken replies in conversational voice mode. See
 | `engine` | `supertonic` | Local engine identifier |
 | `voice` | `F4` | Preset voice: `F1`–`F5` or `M1`–`M5` |
 | `model_dir` | `null` | Model directory; `null` = auto-download (~260 MB) |
-| `quality` | `normal` | `normal` (8 steps) or `high` (20 steps) |
 
 **`tts.openai`** — cloud TTS credentials:
 

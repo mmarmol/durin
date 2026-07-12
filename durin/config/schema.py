@@ -119,7 +119,6 @@ class TtsLocalConfig(Base):
     engine: Literal["supertonic"] = Field(default="supertonic", description="Local TTS engine identifier (only Supertonic)")
     voice: str = Field(default="F4", description="Preset voice: F1-F5 (female) or M1-M5 (male)")
     model_dir: str | None = Field(default=None, description="Model directory; None lets supertonic auto-download (~260 MB)")
-    quality: Literal["normal", "high"] = Field(default="normal", description='Synthesis quality: "normal" = 8 diffusion steps, "high" = 20')
 
 
 class TtsConfig(Base):
