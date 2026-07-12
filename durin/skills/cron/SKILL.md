@@ -7,6 +7,11 @@ description: Schedule work to run later or on a repeating cadence — either a r
 
 Use the `cron` tool to schedule reminders or recurring tasks.
 
+> **Boundary:** cron *executes on a clock*. If the recurring work must pursue a
+> **verifiable goal** — verify an outcome each firing, park for replies, wake on
+> matching messages or webhooks, escalate when stuck — that is a **loop**, not a
+> cron job: read the `loops` skill.
+
 ## Mode: reminder vs task
 
 The `mode` parameter (default `reminder`) controls what happens when the job fires:
