@@ -148,7 +148,7 @@
       },
       "webSearch": {
         "provider": "Fournisseur de recherche",
-        "providerHelp": "Choisissez le backend utilisé par l'outil web search.",
+        "providerHelp": "Choisissez le backend utilisé par l'outil de recherche web.",
         "selectProvider": "Choisir un fournisseur",
         "credentials": "Identifiants",
         "noCredentialRequired": "Aucune key requise",
@@ -160,7 +160,7 @@
         "apiKeyRequired": "Ce fournisseur de recherche nécessite une API key.",
         "baseUrlRequired": "SearXNG nécessite une Base URL.",
         "missingCredential": "Ajoutez l'identifiant requis avant d'enregistrer.",
-        "saveHint": "Les changements s'appliquent aux nouvelles requêtes web search."
+        "saveHint": "Les changements s'appliquent aux nouvelles requêtes de recherche web."
       }
     },
     "secrets": {
@@ -603,7 +603,7 @@
         "maxFileMb": "Max par fichier (Mo)"
       },
       "help": {
-        "judgeTrigger": "Désactivé : uniquement à la demande (bouton « Auditer avec le LLM » par skill). Incertain : exécution automatique uniquement lorsque le contrôle est déjà incertain (code / caution / out-of-allowlist). Toujours : à chaque import. Se dégrade silencieusement si aucun modèle n’est disponible.",
+        "judgeTrigger": "Désactivé : uniquement à la demande (bouton « Auditer avec le LLM » par skill). Incertain : exécution automatique uniquement lorsque le contrôle est déjà incertain (code / prudence / hors liste de confiance). Toujours : à chaque import. Se dégrade silencieusement si aucun modèle n’est disponible.",
         "judgeMaxSeverity": "Jusqu’où le juge peut élever un verdict. « Prudence » impose une confirmation mais ne bloque jamais à elle seule ; « Dangereux » permet un blocage (contournement requis).",
         "judgeModel": "Nom du modèle pour le juge. Laisser vide utilise le modèle par défaut (principal).",
         "tokenSecret": "Le secret durin contenant votre token GitHub. « Aucun » = requêtes anonymes (limite de débit plus basse, pas de dépôts privés)."
@@ -669,8 +669,8 @@
       "fieldChannel": "Canal",
       "fieldChannelPlaceholder": "Sélectionner un canal",
       "fieldTo": "À",
-      "fieldToPlaceholder": "ID de chat, numéro de téléphone ou @user",
-      "fieldToHelp": "L’ID de destination pour le canal choisi (ex. un ID de chat, un numéro de téléphone ou @user — selon le canal).",
+      "fieldToPlaceholder": "ID de chat, numéro de téléphone ou @utilisateur",
+      "fieldToHelp": "L’ID de destination pour le canal choisi (ex. un ID de chat, un numéro de téléphone ou @utilisateur — selon le canal).",
       "save": "Enregistrer",
       "cancel": "Annuler",
       "history": "Historique des exécutions",
@@ -684,7 +684,7 @@
       "systemJobs": {
         "memory_dream": {
           "name": "Consolidation de la mémoire d’entités",
-          "note": "Passe quotidienne (3h heure locale) plus des déclencheurs réactifs (post-compaction / session-close) qui traite les sessions récentes — extrait les attributs des entités, identifie des skills, déduplique les entités et distille l’épingle permanente."
+          "note": "Passe quotidienne (3h heure locale) plus des déclencheurs réactifs (post-compaction / fin de session) qui traite les sessions récentes — extrait les attributs des entités, identifie des skills, déduplique les entités et distille l’épingle permanente."
         }
       }
     },
@@ -746,7 +746,7 @@
       "editSoul": "Modifier le soul",
       "fieldSlug": "Slug",
       "fieldBody": "Corps",
-      "slugPlaceholder": "p. ex. concise-analyst",
+      "slugPlaceholder": "p. ex. analyste-concis",
       "defaultBadge": "par défaut",
       "personasTitle": "Personas",
       "personasDescription": "Préréglages nommés associant un SOUL à un modèle et une description optionnels. Le persona par défaut est utilisé pour les nouvelles sessions.",
@@ -778,7 +778,7 @@
       "title": "modèles",
       "loading": "Chargement des modèles…",
       "empty": "Aucun modèle pour ce fournisseur",
-      "addPlaceholder": "Ajouter un ID de modèle (p. ex. my-model)",
+      "addPlaceholder": "Ajouter un ID de modèle (p. ex. mon-modèle)",
       "add": "Ajouter",
       "edit": "Modifier",
       "save": "Enregistrer",
@@ -860,7 +860,7 @@
         "connect": "Connecter avec ChatGPT",
         "stepOpen": "1. Ouvrir",
         "stepCode": "2. Saisir le code :",
-        "deviceCodeHint": "Si vous voyez une erreur « device code authorization », activez cette option dans les paramètres de sécurité de votre compte ChatGPT et réessayez.",
+        "deviceCodeHint": "Si vous voyez une erreur « autorisation par code d’appareil », activez cette option dans les paramètres de sécurité de votre compte ChatGPT et réessayez.",
         "notWorking": "Ça ne fonctionne pas ?",
         "useDeviceCode": "Utiliser le code d’appareil",
         "notWorkingUseDeviceCode": "Ça ne fonctionne pas ? Utiliser le code d’appareil",
@@ -889,11 +889,11 @@
       "fieldArgs": "Arguments",
       "hintArgs": "Un par ligne.",
       "fieldEnv": "Environnement",
-      "hintEnv": "KEY=value, une par ligne.",
+      "hintEnv": "KEY=valeur, une par ligne.",
       "fieldUrl": "URL",
       "hintUrl": "URL du point de terminaison HTTP/SSE.",
       "fieldHeaders": "En-têtes",
-      "hintHeaders": "KEY=value, une par ligne.",
+      "hintHeaders": "KEY=valeur, une par ligne.",
       "fieldEnabled": "Activé",
       "advanced": "Avancé",
       "fieldToolTimeout": "Délai d’attente de l’outil (s)",
