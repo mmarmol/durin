@@ -438,6 +438,45 @@ outlive what its original `queue_ttl_s` window would suggest; in practice
 this only matters for a loop that is busy often enough to keep losing races
 against its own queue.
 
+### 4l. Outcome stats (the stats route)
+
+`GET /api/v1/loops/{name}/stats` (`LoopsService.stats`, backed by `_stats` in
+`durin/service/loops.py`) is computed fresh on every request from the loop's
+run manifests (`run_log.list_runs`) — nothing about it is persisted or
+cached; the numbers only ever reflect whatever runs are still on disk
+(subject to `keep_runs` pruning, §4a/§6). Four fields carry the actual
+stats:
+
+- **`outcomes`** — the loop's terminal runs (`done`, `no_goal`, `escalated`,
+  `error` — never `running`, `needs_operator`, or `waiting_info`), newest
+  first, capped to the most recent 20: `{run_id, status, goal_reached,
+  started_at, finished_at}` each.
+- **`convergence`** — `counts["done"] / terminal`, where `terminal` is the
+  total count of retained terminal runs (not just the 20 returned in
+  `outcomes`). `None` when the loop has no terminal runs yet, rather than
+  dividing by zero.
+- **`escalation_rate`** — `counts["escalated"] / terminal`, the same
+  null-safety and the same `terminal` denominator as `convergence`.
+- **`counts`** — a full tally across all seven statuses (`running`,
+  `needs_operator`, `waiting_info`, `done`, `no_goal`, `escalated`,
+  `error`), each starting at zero.
+- **`pending_events`** — the loop's current queue depth (`queue.pending`,
+  §4k), the same number the Definitions list's queued-count badge shows.
+
+`counts` walks every retained run regardless of status; `outcomes`,
+`convergence`, and `escalation_rate` only ever look at the terminal subset —
+a loop with many retained runs but few terminal ones shows all of them
+(up to the 20 cap) in `outcomes`, and computes the two rates over that same
+terminal set, not over `counts`' full total.
+
+The webui's Activity **board** view is a presentation-only layout over the
+same run feed the List view uses (`GET /api/v1/loops/runs`), not the stats
+route: a run's column is derived from its own `status` (five fixed columns —
+see §6), so placement is system-owned and there is no drag-and-drop. The
+sidebar's Loops badge is a third, narrower read of that same feed: it counts
+only `needs_operator` runs, not `waiting_info` — a run waiting on its
+counterpart (§4j) is not waiting on the operator.
+
 ## 5. Key types & entry points
 
 | Symbol | File | Role |
@@ -485,12 +524,8 @@ against its own queue.
   `UnavailableError` for those two routes. The list response includes each
   loop's live counts: `active_runs`, `needs_operator`, `waiting_info`, and
   `pending_events` (the loop's queue depth, §4k). `GET
-  /api/v1/loops/{name}/stats` reports outcome stats computed over every
-  retained run: the last 20 terminal-status runs newest-first, per-status
-  counts across all seven statuses, `convergence` (`done` over all terminal
-  runs) and `escalation_rate` (`escalated` over all terminal runs) — both
-  `null` when the loop has no terminal runs yet — and the loop's current
-  `pending_events` depth.
+  /api/v1/loops/{name}/stats` reports outcome stats — see §4l for the exact
+  field definitions.
 - **Tool:** the `loops` LLM tool (core scope, `durin/agent/tools/loops.py`)
   — `list` / `status` / `fire` / `answer` / `enable` / `pause` / `create` —
   goes through the exact same `durin.loops.store` + `durin.loops.run_log` +
@@ -509,14 +544,18 @@ against its own queue.
   `drained` (a run finished and its loop's queue had a fresh event, fired
   next).
 - **Web dashboard:** a **Loops** section with two panes — **Activity** (the
-  global run feed, `needs_operator` runs surfaced first with an inline
-  answer box, `waiting_info` runs shown read-only with an "answer as
-  operator" override) and **Definitions** (create/edit/delete/run-now, with
-  a form for triggers — cron or channel, each channel trigger's filters and
-  optional semantic condition — goal intent + checks, the workflow to run,
-  concurrency, stuck threshold, and operator contact; a loop with events
-  waiting in its queue shows a count badge). See
-  [the user guide](../guide/loops.md) for the walkthrough.
+  global run feed, switchable between a **List** view — `needs_operator`
+  runs surfaced first with an inline answer box, `waiting_info` runs shown
+  read-only with an "answer as operator" override — and a **Board** view of
+  five fixed columns, §4l; the choice persists in `localStorage`) and
+  **Definitions** (create/edit/delete/run-now, with a form for triggers —
+  cron or channel, each channel trigger's filters and optional semantic
+  condition — goal intent + checks, the workflow to run, concurrency, stuck
+  threshold, and operator contact; a loop with events waiting in its queue
+  shows a count badge, and each row shows an outcome strip sourced from
+  §4l's stats route). The sidebar's **Loops** nav item carries a needs-you
+  badge — the same `needs_operator` count described in §4l, polled every 30s.
+  See [the user guide](../guide/loops.md) for the walkthrough.
 - **Security.** A loop's workflow and checks are local, user-authored
   content — a script check runs a shell command with the same trust model as
   the workflow engine itself (see [security.md](security.md)); there is no
