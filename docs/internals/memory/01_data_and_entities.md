@@ -38,7 +38,7 @@ flowchart TD
 
         subgraph ingested_dir ["ingested/"]
             IS["&lt;ingest_id&gt;/source.*\noriginal file"]
-            IM["&lt;ingest_id&gt;/metadata.json"]
+            IM["&lt;ingest_id&gt;/meta.json"]
         end
 
         subgraph memory_dir ["memory/"]
@@ -73,7 +73,7 @@ flowchart TD
 ├── ingested/
 │   └── <ingest_id>/
 │       ├── source.<ext>             original file (PDF, HTML, TXT, …)
-│       └── metadata.json            origin, ingest_time, mime_type
+│       └── meta.json                origin, ingest_time, mime_type
 │
 └── memory/
     ├── episodic/<id>.md             raw atomic observations
@@ -109,7 +109,7 @@ flowchart TD
 
 ### Fragment schema (MemoryEntry)
 
-Episodic, stable, corpus, and pending all share one Pydantic model (`durin/memory/schema.py::MemoryEntry`):
+Episodic, stable, corpus, pending, and session summaries all share one Pydantic model (`durin/memory/schema.py::MemoryEntry`):
 
 ```yaml
 ---
@@ -172,7 +172,7 @@ All references have the form `<type>:<value>`:
 
 - `type` matches `[a-z][a-z0-9_]*`. The vocabulary is **open** — any well-formed type is accepted at runtime.
 - Only the first `:` separates type from value; values may themselves contain colons (`file:src/auth.ts`).
-- Eight broad types are suggested as a starter set (`SUGGESTED_TYPES` in `entities.py`): `person`, `place`, `project`, `topic`, `event`, `artifact`, `stance`, `practice`. These are hints for the dream prompt, not an enforced enum.
+- Broad types are suggested as a starter set (`SUGGESTED_TYPES` in `entities.py`): `person`, `place`, `project`, `topic`, `organization`, `event`, `artifact`, `stance`, `practice`. These are hints for the dream prompt, not an enforced enum.
 
 ```python
 ENTITY_REF_PATTERN = re.compile(r"^[a-z][a-z0-9_]*:[^\s].*$")
@@ -251,7 +251,7 @@ Archive is excluded from all default search paths: the vector index, FTS5, the g
 
 | Symbol | File | Role |
 |---|---|---|
-| `MemoryEntry` | `durin/memory/schema.py` | Pydantic model for episodic / stable / corpus / pending. Validates `<type>:<value>` entity refs at construction. |
+| `MemoryEntry` | `durin/memory/schema.py` | Pydantic model for episodic / stable / corpus / pending / session_summary. Validates `<type>:<value>` entity refs at construction. |
 | `ingest_reference` | `durin/memory/reference.py` | Writes an ingested document whole to `memory/references/<slug>.md` and a token-aware `.chunks.jsonl` sidecar. Returns `ReferenceResult(ref, path, chunk_count)`. |
 | `EntityPage` | `durin/memory/entity_page.py` | Dataclass for `memory/entities/<type>/<slug>.md`. Lenient on read (`from_text`), strict on write (`to_markdown` + `_validate`). Holds `extra` dict for emergent fields. |
 | `Author` | `durin/memory/provenance.py` | `Literal["user_authored", "agent_created"]`. Used in both `MemoryEntry.author` and `EntityPage.author`. |
@@ -261,7 +261,7 @@ Archive is excluded from all default search paths: the vector index, FTS5, the g
 | `parse_entity_ref` | `durin/memory/entities.py` | Parses a ref into `ParsedEntityRef(type, value)`. Only the first `:` separates. |
 | `slugify_name` | `durin/memory/entities.py` | NFC → unidecode → lowercase → punct-to-underscore → truncate-64 pipeline. |
 | `resolve_slug_collision` | `durin/memory/entities.py` | Appends `_2`, `_3`, … suffix to avoid collisions in both live and archived paths. |
-| `SUGGESTED_TYPES` | `durin/memory/entities.py` | `frozenset` of 8 broad types as hints for the dream prompt. Not an enforced enum. |
+| `SUGGESTED_TYPES` | `durin/memory/entities.py` | `frozenset` of broad types as hints for the dream prompt. Not an enforced enum. |
 | `FieldPatch` | `durin/memory/field_patch.py` | Dataclass for one structured entity edit: `(kind, key, value, author, source_ref, at)`. Applied by `write_entity` in order, under per-field authorship precedence. |
 | `write_entity` | `durin/memory/memory_writer.py` | Single entity write path: read@HEAD → apply patches (precedence) → dulwich commit → CAS → fast-forward. Retries up to 30× on conflict. |
 | `build_entity_manifest` | `durin/memory/entity_manifest.py` | Compact existing-entity list that seeds the discover/learnings extraction prompts. Type-enumerate mode walks small canonical sets (feedback/stance/practice) exhaustively; search-retrieve mode calls the search pipeline for large sets (person/place/topic). |
@@ -288,7 +288,7 @@ Archive is excluded from all default search paths: the vector index, FTS5, the g
 - `durin memory reindex` — wipe `.durin/index/` and rebuild from all `.md` files.
 - `durin memory absorb <ref1> <ref2>` — manually merge two entity pages via the absorb-judge.
 - `durin memory expand <ref>` — render a canonical entity page plus its archived predecessors.
-- `durin memory dream` — run all five dream passes manually.
+- `durin memory dream` — run the core dream consolidation passes manually.
 
 **Agent tool surfaces:** `memory_upsert_entity` writes entity pages; `memory_store` writes fragments (currently disabled — replaced by `memory_upsert_entity`); `memory_forget` archives a fragment or entity page.
 
@@ -298,7 +298,7 @@ Archive is excluded from all default search paths: the vector index, FTS5, the g
 
 Markdown as source of truth, with derived indices, means the user can open any file in any editor and the system will catch up via the file watcher or a manual reindex. This is intentional: the memory workspace should be auditable by a human with standard tools, not locked in a binary format.
 
-The open vocabulary for entity types (`<type>:<value>`) avoids the need for a central registry. Types like `bug:`, `deal:`, or `org:` emerge naturally in specific workspaces without any schema change. The eight suggested types are grounded in cognitive memory literature (Tulving's episodic/semantic split, CoALA) and cover the most common cases, but they are hints — not constraints.
+The open vocabulary for entity types (`<type>:<value>`) avoids the need for a central registry. Types like `bug:`, `deal:`, or `org:` emerge naturally in specific workspaces without any schema change. The suggested types are grounded in cognitive memory literature (Tulving's episodic/semantic split, CoALA) and cover the most common cases, but they are hints — not constraints.
 
 The `user_authored` default on `EntityPage.author` when the field is absent means a hand-written page that predates the authorship field is always treated as user content. This is the conservative direction: the cost of incorrectly protecting a page is that the dream misses one update; the cost of incorrectly auto-managing a user-authored page is destroying stated intent.
 

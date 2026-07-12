@@ -16,11 +16,12 @@ Two coexisting tracks run through the same workspace:
   summaries. Appended and surfaced by search; never automatically folded into
   entity pages.
 
-A cold-path Dream process (daily cron or reactive hook) runs five sequential
-passes — extract, derived_from, skill-extract, refine, always_on — that grow the
-entity graph, link knowledge to source documents, mine reusable skills, deduplicate
-near-duplicate entities, and curate guidance pins. Crucially, Dream never blocks
-the agent; all user turns see the most recent completed pass.
+A cold-path Dream process (daily cron or reactive hook) runs a sequence of
+consolidation passes — extract, derived_from, document distillation, skill-extract,
+refine, relation hygiene, always_on — that grow the entity graph, link knowledge to
+source documents, mine reusable skills, deduplicate near-duplicate entities, and
+curate guidance pins. Crucially, Dream never blocks the agent; all user turns see
+the most recent completed pass.
 
 ---
 
@@ -56,6 +57,7 @@ flowchart TD
         direction TB
         MD_ENTITIES["memory/entities/&lt;type&gt;/&lt;slug&gt;.md\nEntity pages (typed, canonical)"]
         MD_FRAGS["memory/episodic/ stable/ corpus/\npending/ session_summary/\nRaw fragments"]
+        LIBRARY["memory/references/&lt;slug&gt;.md\n(+ .chunks.jsonl / .outline.json)\nIngested Library documents"]
         SESSIONS["sessions/&lt;key&gt;.jsonl\nRaw session transcripts"]
         INGESTED["ingested/&lt;id&gt;/\nSource document chunks"]
         ARCHIVE["memory/archive/&lt;class&gt;/&lt;id&gt;.md\nAbsorbed entities (recoverable)"]
@@ -83,12 +85,14 @@ flowchart TD
         UPSERT["VectorIndex.upsert\nFTSIndex.reindex_one_file"]
     end
 
-    subgraph DREAM["Dream — five passes, cron + reactive"]
+    subgraph DREAM["Dream — cold-path passes, cron + reactive"]
         D_EXTRACT["1. Extract\nper-session cursor · entity discovery\n(agent upserts + mention-based)"]
         D_DERIVED["2. derived_from\nlink entities to ingested docs"]
-        D_SKILL["3. Skill-extract\nagentic sub-agent · skill_write"]
-        D_REFINE["4. Refine\nalias-overlap · absorb-judge · EntityAbsorption"]
-        D_ALWAYS["5. always_on\nrank feedback entities · token budget\npinned context every turn"]
+        D_DOCS["3. Documents\ndistill outlines · seed entities · curate topics"]
+        D_SKILL["4. Skill-extract\nagentic sub-agent · skill_write"]
+        D_REFINE["5. Refine\nalias-overlap · absorb-judge · EntityAbsorption"]
+        D_REL["6. Relations\ncanonicalise edge vocabulary"]
+        D_ALWAYS["7. always_on\nrank feedback entities · token budget\npinned context every turn"]
     end
 
     AGENT_WRITE --> MW
@@ -101,6 +105,7 @@ flowchart TD
     MD_FRAGS --> LANCE
     SESSIONS --> FTS
     INGESTED --> MD_FRAGS
+    LIBRARY --> D_DOCS
 
     LANCE --> VEC
     FTS --> LEX
@@ -116,10 +121,12 @@ flowchart TD
     SESSIONS --> D_EXTRACT
     D_EXTRACT -->|"memory_writer CAS"| MD_ENTITIES
     D_EXTRACT --> D_DERIVED
-    D_DERIVED --> D_SKILL
+    D_DERIVED --> D_DOCS
+    D_DOCS --> D_SKILL
     D_SKILL --> D_REFINE
     D_REFINE -->|"absorb"| ARCHIVE
-    D_REFINE --> D_ALWAYS
+    D_REFINE --> D_REL
+    D_REL --> D_ALWAYS
 
     style STORAGE fill:#1a1a2e,color:#e0e0e0
     style INDICES fill:#162032,color:#e0e0e0
@@ -145,13 +152,14 @@ Everything lives under a single workspace directory (default `~/.durin/`):
 │   ├── episodic/           atomic observations
 │   ├── stable/             durable notes and stable facts
 │   ├── corpus/             chunks extracted from ingested documents
+│   ├── references/         ingested Library documents (+ .chunks.jsonl / .outline.json)
 │   ├── session_summary/    one .md per session (first-class indexed class)
 │   ├── pending/            intake buffer — never indexed
 │   └── archive/            absorbed or retired entries (not searched by default)
 └── .durin/index/
     ├── lance/              LanceDB vector table (memory_entries)
     ├── fts.sqlite          FTS5 lexical index
-    └── meta.json           IndexMeta (CURRENT_SCHEMA_VERSION = 7)
+    └── meta.json           IndexMeta (schema_version, embedding model)
 ```
 
 The `pending` class is an intake buffer; the indexer and walker skip it entirely.
@@ -177,8 +185,8 @@ Session turns are indexed one row per turn (uri `sessions/<key>.md#turn-N`),
 so BM25 scores are not diluted by transcript length. Sessions are never
 vector-indexed; `session_summary/` entries cover the semantic layer.
 
-Schema version 7 (`CURRENT_SCHEMA_VERSION` in `durin/memory/index_meta.py`)
-added Porter stemming to `memory_fts`. A schema version mismatch triggers an
+`memory_fts` uses Porter stemming. The index records its schema version
+(`CURRENT_SCHEMA_VERSION` in `durin/memory/index_meta.py`); a mismatch triggers an
 automatic rebuild on startup.
 
 ### Search pipeline
@@ -230,11 +238,11 @@ Agent and user writes both go through `memory_writer.write_entity`:
 
 The `pending` class bypasses this path; it is a raw buffer that the indexer skips.
 
-### Dream cold-path (five passes)
+### Dream cold-path
 
-The `memory_dream` cron (default `0 3 * * *`) runs five sequential passes. Reactive
-triggers (session compaction, session close) run only the extract pass, throttled by
-`ReactiveDreamGate`.
+The `memory_dream` cron (default `0 3 * * *`) runs a sequence of consolidation
+passes; the core ones are listed below. Reactive triggers (session compaction,
+session close) run only the extract pass, throttled by `ReactiveDreamGate`.
 
 1. **Extract** (`dream_passes.run_extract_pass`): iterate sessions ordered by name.
    For each session with turns beyond the stored `extract_cursor`, scan tool calls
@@ -265,6 +273,12 @@ triggers (session compaction, session close) run only the extract pass, throttle
    Only the flag changes; no entities are ever deleted by this pass. The principal
    resolver injects always_on entities into the pinned context on every agent turn.
 
+The daily cron runs more passes than the core five above: three **document passes**
+(distill outlines, seed entities, curate the topic map) after derived_from, and a
+**relation-hygiene** pass after refine, plus a workflow-improve pass and skill
+curation. The **manual** `durin memory dream` runs only the core five. See
+[05_dream_cold_path.md](05_dream_cold_path.md) for every pass in order.
+
 ---
 
 ## 5. Key types and entry points
@@ -272,7 +286,7 @@ triggers (session compaction, session close) run only the extract pass, throttle
 | Symbol | File | Role |
 |---|---|---|
 | `EntityPage` | `durin/memory/entity_page.py` | Parsed representation of `memory/entities/<type>/<slug>.md`. Frontmatter: `type`, `name`, `aliases`, `attributes`, `relations`, `derived_from`, `author`, `created_at`, `updated_at`. Lenient on read; strict validation on `save()`. |
-| `MemoryEntry` | `durin/memory/schema.py` | Pydantic model for fragment entries (`episodic`, `stable`, `corpus`, `session_summary`). Fields: `id`, `headline`, `summary`, `source_refs`, `related`, `entities`, `author`, `valid_from`, `body`. Validates entity refs as strict `<type>:<value>`. |
+| `MemoryEntry` | `durin/memory/schema.py` | Pydantic model for fragment entries (`episodic`, `stable`, `corpus`, `session_summary`, plus the `pending` intake buffer). Fields: `id`, `headline`, `summary`, `source_refs`, `related`, `entities`, `author`, `valid_from`, `body`. Validates entity refs as strict `<type>:<value>`. |
 | `VectorIndex` | `durin/memory/vector_index.py` | LanceDB wrapper at `<workspace>/.durin/index/lance/`. Table `memory_entries`. Incremental `upsert` and full `rebuild_from_workspace`. L2 distance search. |
 | `FTSIndex` | `durin/memory/fts_index.py` | SQLite FTS5 at `<workspace>/.durin/index/fts.sqlite`. Two virtual tables (`memory_fts` porter-unicode61, `memory_fts_trigram`) plus `fts_meta` bookkeeping. |
 | `FastembedProvider` | `durin/memory/embedding.py` | ONNX embedding provider. Default `intfloat/multilingual-e5-small` (384-dim, 100+ languages). Lazy load; applies `passage:` / `query:` E5 prefix automatically. |
@@ -280,7 +294,7 @@ triggers (session compaction, session close) run only the extract pass, throttle
 | `RoutingDecision` | `durin/memory/query_router.py` | Output of `decide_lexical_route`: `normalized_query`, `route` (UNICODE61 / TRIGRAM / LIKE_SUBSTRING), `cjk_chars`, `keywords`, `auto_keywords`. Pure deterministic function. |
 | `EntityAbsorption` | `durin/memory/absorption.py` | Detects merge candidates (shared aliases) and absorbs: canonical receives merged content, loser moved to `memory/archive/entities/<type>/<slug>.md` with `archived_into` frontmatter. |
 | `memory_writer.write_entity` | `durin/memory/memory_writer.py` | Single entity write path: read at HEAD → apply `FieldPatch` objects by precedence → dulwich plumbing commit → CAS via `refs.set_if_equals` → retry on conflict → fast-forward working tree. |
-| `IndexMeta` | `durin/memory/index_meta.py` | Frozen dataclass persisted at `<workspace>/.durin/index/meta.json`. Tracks `schema_version` (currently 7), `embedding_model_id`, `last_full_rebuild`, `previous_models`. Schema mismatch triggers auto-rebuild. |
+| `IndexMeta` | `durin/memory/index_meta.py` | Frozen dataclass persisted at `<workspace>/.durin/index/meta.json`. Tracks `schema_version`, `embedding_model_id`, `last_full_rebuild`, `previous_models`. Schema mismatch triggers auto-rebuild. |
 | `SectionedHit` | `durin/memory/sectioned_output.py` | Result wrapper carrying `uri`, `type`, `path`, `score`, `ts`, `snippet`, `summary`, `entities`. Grouped into CANONICAL / FRAGMENT / SESSION / INGESTED sections by the renderer. |
 | `run_extract_for_session` | `durin/memory/extract_runner.py` | Per-session extract orchestrator: loads session JSONL, reads `extract_cursor` from `session.meta.json`, processes new turns, calls `extract_entity` + `discover_entities`, advances cursor. |
 | `ReactiveDreamGate` | `durin/memory/dream_passes.py` | In-process lock + throttle for reactive extract triggers. `try_begin` is non-blocking; returns skip reason (`"locked"` / `"throttled"`) or empty string when the caller may proceed. |
@@ -291,7 +305,7 @@ For deeper coverage of individual subsystems, see the sibling docs:
 - [02_indexing.md](02_indexing.md) — LanceDB table schema, FTS5 tables, incremental vs. full rebuild, schema version lifecycle
 - [03_search_pipeline.md](03_search_pipeline.md) — query analysis, RRF weights, entity-aware rerank, cross-encoder, sectioning
 - [04_agent_tools.md](04_agent_tools.md) — `memory_search`, `memory_upsert_entity`, `memory_ingest`, `memory_drill`, `memory_forget`
-- [05_dream_cold_path.md](05_dream_cold_path.md) — five passes in depth, cursor mechanics, absorb-judge, always_on
+- [05_dream_cold_path.md](05_dream_cold_path.md) — the dream passes in depth, cursor mechanics, absorb-judge, always_on
 - [06_prompts_and_instructions.md](06_prompts_and_instructions.md) — LLM-facing tool descriptions, result markers, identity context injection
 - [07_telemetry_and_observability.md](07_telemetry_and_observability.md) — telemetry events, health check, webui dashboards
 - [design_rationale.md](design_rationale.md) — decisions not taken and why
@@ -316,7 +330,7 @@ For deeper coverage of individual subsystems, see the sibling docs:
 | `memory.health_check.enabled` | `true` | Periodic consistency probe between the markdown source and the derived indices. |
 | `memory.health_check.interval_seconds` | `900` | How often the health check probe runs. |
 | `memory.dream.enabled` | `true` | Master switch for cron and reactive dream triggers. Manual `durin memory dream` always works. |
-| `memory.dream.cron` | `0 3 * * *` | Schedule for the daily five-pass dream run. |
+| `memory.dream.cron` | `0 3 * * *` | Schedule for the daily dream consolidation run. |
 | `memory.dream.post_compaction` | `true` | Run extract pass after a session is compacted. |
 | `memory.dream.on_session_close` | `true` | Run extract pass when a session closes. |
 | `memory.dream.discover_enabled` | `true` | Enable Stage 2 mention-based entity discovery in the extract pass. |
@@ -339,7 +353,7 @@ For deeper coverage of individual subsystems, see the sibling docs:
 
 ```
 durin memory search <query>         run a search (same pipeline as memory_search tool)
-durin memory dream [--passes ...]   run all five dream passes manually
+durin memory dream [entity] [--dry-run]   run the dream consolidation manually
 durin memory reindex                rebuild all indices from markdown
 durin memory absorb-suggest         show alias-overlap candidates for manual review
 durin memory absorb <ref> <into>    manually merge two entity pages
@@ -385,7 +399,7 @@ information is current given the question's intent. Pre-filtering by age without
 knowing the question's temporal context produced incorrect results on factual,
 atemporal queries.
 
-**Five passes, not one monolithic consolidation.** Each dream pass has a bounded,
+**A sequence of passes, not one monolithic consolidation.** Each dream pass has a bounded,
 independent scope. Extract is idempotent (per-session cursors). Derived_from is a
 catch-and-repair pass that runs after extract. Skill-extract is the only agentic pass
 (spins its own runner). Refine is opt-in and conservative. Always_on only flips flags.

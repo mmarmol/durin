@@ -184,14 +184,15 @@ Prompts are guidance; the **composition gate** (`judge_composition`,
 `durin/agent/skills_doctrine.py`) is the enforced invariant — the same pattern
 as the plan-verification lint and the import scan gate. At create time
 (`dream_create_skill`), a judge model (the `judge` aux preset; injectable in
-tests) answers one question about the body: is it a prose-only narration of a
-workflow-shaped procedure — manual multi-source fan-out, gathering, synthesis
-or a verification loop — with nothing delegated and nothing bundled? A
-`NARRATION` verdict rejects the save and returns the judge's reason, so the
-author retries with feedback. The gate is deliberately narrow (it errs toward
-accepting judgment-heavy bodies) and **failure-open**: no judge configured, a
-judge error, or an unparseable reply all accept — infrastructure trouble must
-never cost a skill.
+tests) checks the body for the two doctrine violations: a prose-only
+`NARRATION` of a workflow-shaped procedure — manual multi-source fan-out,
+gathering, synthesis or a verification loop — with nothing delegated and
+nothing bundled, or `INLINE_CODE`, a deterministic transformation inlined into
+the body that should be a bundled script. Either verdict rejects the save and
+returns the judge's reason, so the author retries with feedback. The gate is
+deliberately narrow (it errs toward accepting judgment-heavy bodies) and
+**failure-open**: no judge configured, a judge error, or an unparseable reply
+all accept — infrastructure trouble must never cost a skill.
 
 Who may override differs by door. The in-session `SkillWriteTool` runs in
 `override` mode: after a rejection, the agent surfaces the reason, and if the
@@ -278,7 +279,7 @@ a time.
 ### Curation: the daily delta judge
 
 `curate_catalog` (`durin/agent/skill_curation.py`) runs as the final step of
-the daily dream cron, after all five Dream passes. It reviews only
+the daily dream cron, after the consolidation passes. It reviews only
 `mode="auto"` **workspace** skills — dream-created and forked-from-builtin
 skills, never pristine builtins and never `manual` skills (those go through
 the suggestion path below).
@@ -511,9 +512,9 @@ decisions about external content are never made silently.
 
 **Surfaces.**
 
-- **Cron** — the daily `memory_dream` system job runs all five Dream passes
-  (including skill-extract), then `curate_catalog` and `suggest_manual_skills`
-  as the final steps. See `../memory/05_dream_cold_path.md` for the cron/
+- **Cron** — the daily `memory_dream` system job runs the dream consolidation
+  passes (including skill-extract), then `curate_catalog` and
+  `suggest_manual_skills` as the final steps. See `../memory/05_dream_cold_path.md` for the cron/
   reactive/manual trigger paths shared with the rest of Dream.
 - **In-session tool** — `skill_observe` (`scope="core"`) is the only
   in-loop entry point that writes to the observation queue directly; it logs
@@ -524,7 +525,7 @@ decisions about external content are never made silently.
   layout. The Skills panel (`SkillsView`) shows each skill's open-observation
   count as a badge and 30-day usage summary (see
   `03_telemetry_and_effectiveness.md` for what feeds those numbers).
-- **CLI** — `durin memory dream` runs the five Dream passes but **not**
+- **CLI** — `durin memory dream` runs the core consolidation passes but **not**
   `curate_catalog` / `suggest_manual_skills` — those run only from the cron
   job, matching the note already in `00_overview.md`'s CLI surfaces table.
 
@@ -566,5 +567,5 @@ principle the import gate enforces for external content.
 For how skills reach the agent's context (always/hot/searchable tiers) and how
 the security gate is enforced in code, see `00_overview.md`. For the
 underlying Dream trigger machinery (cron/reactive/manual, cursor semantics,
-telemetry conventions) shared across all five passes, see
+telemetry conventions) shared across the dream passes, see
 `../memory/05_dream_cold_path.md`.

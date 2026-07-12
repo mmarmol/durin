@@ -69,7 +69,7 @@ Direct jumps to the most-read component docs:
 Three things to hold in your head:
 
 1. **One agent loop, many surfaces.** Every message — from the terminal, the TUI,
-   the web dashboard, Telegram, Slack, or any of the ~14 supported chat channels —
+   the web dashboard, Telegram, Slack, or any of the supported chat channels —
    arrives as an `InboundMessage` on the message bus and goes through the same
    `AgentLoop`. Channels differ only in I/O; the agent behaves identically
    regardless of origin.
@@ -118,7 +118,7 @@ flowchart TB
 
     subgraph cold["Cold-path side-services"]
         CRON["Cron<br/>(reminders + agent tasks)"]
-        DREAM["Dream<br/>(five consolidation passes)"]
+        DREAM["Dream<br/>(consolidation passes)"]
     end
 
     SESS["sessions/&lt;key&gt;.jsonl<br/>(append-only transcripts)"]
