@@ -308,7 +308,7 @@ format each channel produces, straight out of `channel_meta.extract`:
 |---|---|---|
 | `email` | the thread digest itself, e.g. `a1b2c3d4e5f6a7b8` — no channel prefix (see "email bare-digest compat" below) | the message carries no thread metadata |
 | `slack` | `slack:<chat_id>:<thread_ts>` | the message has no `thread_ts` (not a threaded reply) |
-| `telegram` | `telegram:<chat_id>:topic:<message_thread_id>` for a forum-topic message, else `telegram:dm:<chat_id>` for a DM | a non-forum group message with no topic |
+| `telegram` | `telegram:<chat_id>:topic:<message_thread_id>` for a forum-topic message, else `telegram:dm:<chat_id>` for a DM | a group message with no `message_thread_id` (non-forum groups, and a forum group's General topic) |
 | `discord` | `discord:thread:<chat_id>` inside a thread, else `discord:dm:<chat_id>` for a DM | a plain (non-thread) channel message |
 | `whatsapp` | `whatsapp:dm:<chat_id>` for a DM | the message is a group message (`is_group`) |
 
@@ -340,9 +340,9 @@ field is a regex, validated at parse time (`spec._parse_correlate`) to
 compile and have **exactly one capture group** — anything else is a
 `LoopError` at save time, not a silent no-op at match time. When set, the
 matcher derives a custom claim key before ever looking at the plain
-`thread_key`: `_correlate_key` searches `facts.title + "\n" + facts.text`,
-capped at the first **2000 characters** so an arbitrarily long message can't
-inflate match cost, and on a match returns `custom:<loop>:<captured-group>`
+`thread_key`: `_correlate_key` searches the title plus the first **2000
+characters** of the message text (the cap keeps an arbitrarily long body
+from inflating match cost), and on a match returns `custom:<loop>:<captured-group>`
 (e.g. a loop matching `TICKET-(\d+)` against a message mentioning
 `TICKET-42` derives `custom:my-loop:42`). This lets an operator-defined
 correlation id — a ticket number mentioned anywhere in the text — reunite
