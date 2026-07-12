@@ -69,6 +69,13 @@ def test_sync_channel_only_loop_registers_no_jobs(tmp_path):
     assert cron.list_jobs(include_disabled=True) == []
 
 
+def test_sync_webhook_only_loop_registers_no_jobs(tmp_path):
+    cron = _cron(tmp_path)
+    spec = _spec(triggers=[{"source": "webhook", "hook": "deploy-done"}])
+    sync_loop_jobs(cron, spec)
+    assert cron.list_jobs(include_disabled=True) == []
+
+
 def test_sync_disable_removes_mixed_trigger_jobs(tmp_path):
     cron = _cron(tmp_path)
     mixed_triggers = [
