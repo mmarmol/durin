@@ -1148,6 +1148,8 @@
       "answerSent": "Respuesta enviada",
       "retry": "Reintentar",
       "answerAsOperator": "Responder como operador",
+      "viewList": "Lista",
+      "viewBoard": "Tablero",
       "status": {
         "running": "en curso",
         "needs_operator": "te necesita",
@@ -1155,8 +1157,23 @@
         "done": "listo",
         "no_goal": "sin objetivo",
         "escalated": "escalado",
-        "error": "error"
+        "error": "error",
+        "attention": "Atención"
       }
+    },
+    "runDetail": {
+      "started": "iniciado {{when}}",
+      "finished": "finalizado {{when}}",
+      "taskLabel": "Tarea",
+      "showMore": "Mostrar más",
+      "showLess": "Mostrar menos",
+      "askLabel": "Pregunta",
+      "detailLabel": "Detalle",
+      "checksTitle": "Verificaciones",
+      "noChecks": "No hay verificaciones definidas",
+      "workflowRunLabel": "Ejecución del workflow",
+      "copyWorkflowRun": "Copiar id de ejecución del workflow",
+      "workflowRunCopied": "Id de ejecución del workflow copiado"
     },
     "definitions": {
       "loading": "Cargando…",
@@ -1174,12 +1191,14 @@
       "countLabel_other": "{{count}} loops",
       "deleteTitle": "¿Eliminar el loop {{title}}?",
       "queuedChip": "{{n}} en cola",
+      "escLabel": "escal. {{pct}}%",
       "columns": {
         "name": "Nombre",
         "workflow": "Workflow",
         "triggers": "Disparadores",
         "active": "Activos",
-        "needsOperator": "Te necesitan"
+        "needsOperator": "Te necesitan",
+        "outcomes": "Resultados"
       }
     },
     "form": {

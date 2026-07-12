@@ -99,6 +99,24 @@ class LoopsRunsResult(Result):
     runs: list[dict[str, Any]]   # newest-first manifests across every loop
 
 
+class LoopStatsQuery(Query):
+    name: str
+
+
+class LoopStatsResult(Result):
+    name: str
+    outcomes: list[dict[str, Any]]   # last 20 terminal runs, newest-first: {run_id, status, goal_reached, started_at, finished_at}
+    convergence: float | None        # done / terminal over ALL retained runs; None when no terminal runs
+    escalation_rate: float | None    # escalated / terminal over ALL retained runs; None when no terminal runs
+    counts: dict[str, int]           # {running, needs_operator, waiting_info, done, no_goal, escalated, error}
+    pending_events: int
+
+
+_TERMINAL_STATUSES = ("done", "no_goal", "escalated", "error")
+_ALL_STATUSES = run_log.ACTIVE_STATUSES + _TERMINAL_STATUSES
+_OUTCOMES_LIMIT = 20
+
+
 def _counts(workspace: Path, name: str) -> dict[str, int]:
     active = run_log.active_runs(workspace, name)
     needs_operator = sum(1 for r in active if r.get("status") == "needs_operator")
@@ -107,6 +125,33 @@ def _counts(workspace: Path, name: str) -> dict[str, int]:
         "active_runs": len(active),
         "needs_operator": needs_operator,
         "waiting_info": waiting_info,
+        "pending_events": queue.pending(workspace, name),
+    }
+
+
+def _stats(workspace: Path, name: str) -> dict[str, Any]:
+    runs = run_log.list_runs(workspace, name, limit=None)   # newest-first
+    counts = {status: 0 for status in _ALL_STATUSES}
+    for r in runs:
+        status = r.get("status")
+        if status in counts:
+            counts[status] += 1
+    terminal = sum(counts[s] for s in _TERMINAL_STATUSES)
+    convergence = counts["done"] / terminal if terminal else None
+    escalation_rate = counts["escalated"] / terminal if terminal else None
+    outcomes = [
+        {
+            "run_id": r.get("run_id"), "status": r.get("status"),
+            "goal_reached": r.get("goal_reached"),
+            "started_at": r.get("started_at"), "finished_at": r.get("finished_at"),
+        }
+        for r in runs if r.get("status") in _TERMINAL_STATUSES
+    ][:_OUTCOMES_LIMIT]
+    return {
+        "outcomes": outcomes,
+        "convergence": convergence,
+        "escalation_rate": escalation_rate,
+        "counts": counts,
         "pending_events": queue.pending(workspace, name),
     }
 
@@ -233,3 +278,17 @@ class LoopsService:
     async def runs_list(self, query: LoopRunsQuery, principal: Principal) -> LoopRunsResult:
         principal.require(Scope.LOOPS_READ)
         return LoopRunsResult(runs=run_log.list_runs(self._workspace, query.name, query.limit))
+
+    @route(
+        "GET", "/api/v1/loops/{name}/stats",
+        scope=Scope.LOOPS_READ.value,
+        request_model=LoopStatsQuery, response_model=LoopStatsResult,
+        summary="Outcome stats for one loop: recent terminal runs, convergence, escalation rate.",
+    )
+    async def stats(self, query: LoopStatsQuery, principal: Principal) -> LoopStatsResult:
+        principal.require(Scope.LOOPS_READ)
+        try:
+            load_loop(self._workspace, query.name)
+        except LoopNotFound:
+            raise NotFoundError(f"loop {query.name!r} not found")
+        return LoopStatsResult(name=query.name, **_stats(self._workspace, query.name))

@@ -200,10 +200,12 @@ save the call.
 ## Reading the Activity view
 
 The **Activity** tab is a live feed of every run, across every loop, newest
-first — with anything waiting on you pinned to the top. Each run shows the
-loop name, what it was asked to do, its status, where it came from
-(`cron`, `manual`, `chat`, `channel`), and when it started. The statuses
-you'll see:
+first — with anything waiting on you pinned to the top. A toggle in the
+top-right corner switches between a **List** view (the default) and a
+**Board** view — see **Reading the board** below — and your choice is
+remembered the next time you open the tab. Each run shows the loop name,
+what it was asked to do, its status, where it came from (`cron`, `manual`,
+`chat`, `channel`), and when it started. The statuses you'll see:
 
 | Status | Meaning |
 |---|---|
@@ -211,13 +213,82 @@ you'll see:
 | needs you | Paused, waiting on an answer from you (see below). |
 | waiting reply | Paused, waiting on a reply from whoever triggered it (e.g. the customer on a channel-triggered loop) — you can still answer it yourself. |
 | done | Completed and the goal was verified reached. |
-| no goal | Completed (or ran out of steps) but the goal wasn't reached. |
+| no goal | Completed (or ran out of passes) but the goal wasn't reached. |
 | escalated | Missed the goal too many times in a row — an operator has been notified. |
 | error | The run failed outright (a tool/provider error, or the run was aborted). |
 
 Each loop's row in the **Definitions** tab also shows how many runs are
 currently active and how many need you, plus a queued-count badge when
 channel events are waiting for their turn (see **Channel triggers** above).
+
+## Reading the board
+
+Switch the Activity tab to **Board** and the same runs are laid out as five
+fixed columns instead of one list: **Needs you**, **Waiting reply**,
+**Running**, **Done**, and **Attention**. The first four match the statuses
+above one-to-one; **Attention** is where `no goal`, `escalated`, and `error`
+runs all land together — three different reasons a run didn't reach its
+goal, grouped into the one place that means "look at this." Each column
+header shows a live count, and cards within a column are sorted newest
+first. Clicking a card expands the same run detail described below, right
+in place.
+
+A run's column follows its status, not the other way around — you can't
+drag a card to a different column. The board is a different way of looking
+at the same feed the List view shows, not a separate way of managing runs.
+
+## The run detail panel
+
+Click any run — in List or Board — to expand its detail inline. Beyond the
+status and timestamps already visible in the row, it shows:
+
+- **Origin** — where the run came from: the channel (e.g. `email`), the
+  sender, and, for a channel-triggered run, the subject and a short
+  reference to the conversation thread.
+- **Task** — the full instruction the run's workflow was given, truncated
+  with a **Show more** toggle when it's long.
+- **Ask** — the question the run is currently paused on, if any.
+- **Detail** — an error message, shown when there's a specific failure
+  reason behind a `no goal`, `escalated`, or `error` outcome.
+- **Checks** — a table of every goal check the run was graded against: what
+  kind it was (script or assertion), the command or assertion text, and
+  whether it passed, with any extra detail the check produced. A run shows no checks table
+  when goal verification never ran: still running, paused on a question,
+  or finished without reaching verification (it ran out of passes, or
+  failed before completing).
+- **Workflow run** — a copyable reference to the underlying workflow run,
+  for cross-checking in the Workflows tab.
+
+This is the evidence behind a run's status: instead of just knowing a run
+was marked `no goal`, you can see exactly which check failed, or read the
+error that sent it to `error`.
+
+## Outcomes at a glance
+
+Each loop's row in the **Definitions** tab also carries a compact outcome
+strip: up to ten dots, oldest to newest left to right, one per recent
+finished run. A filled dot is a `done` run, a muted dot is `no goal`, and a
+red dot is `escalated` or `error`. Hover a dot to see its status and when it
+finished.
+
+Next to the dots, a percentage shows **convergence** — the share of this
+loop's finished runs that reached their goal — and, only when there have
+been any, an **esc** percentage for how many of those runs were escalated.
+Both percentages are computed over the loop's retained finished runs (older
+runs are pruned over time), not just
+the ten dots shown, so a loop with a long history can show a stable
+percentage even while the dots themselves only cover its most recent runs.
+The strip stays empty until a loop has at least one finished run.
+
+## The needs-you badge
+
+The **Loops** entry in the sidebar carries a small badge whenever any run,
+across every loop, is paused on **needs you**. It's a quick way to tell —
+without opening the tab — whether something is waiting on you right now,
+and it updates on the same refresh cycle as the Activity feed. A run
+waiting on a **reply** from its counterpart (e.g. the customer on a
+channel-triggered loop) doesn't count toward this badge — it isn't waiting
+on you unless you choose to step in with **Answer as operator**.
 
 ## Answering an ask
 
