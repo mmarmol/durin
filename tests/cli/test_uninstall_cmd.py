@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,6 +17,7 @@ from durin.cli.uninstall import (
     default_target_groups,
     run_uninstall,
 )
+from durin.cli.upgrade import PYPI_DIST_NAME
 
 runner = CliRunner()
 
@@ -146,7 +148,14 @@ def test_run_uninstall_purge_spawns_pip(fake_home: Path) -> None:
     assert rc == 0
     mock_popen.assert_called_once()
     cmd = mock_popen.call_args.args[0]
-    assert "pip" in cmd and "uninstall" in cmd and "durin" in cmd
+    # Must target the real PyPI distribution name (`durin-agent`), not the
+    # bare import/CLI name `durin`: `durin` isn't an installed distribution,
+    # so `pip uninstall -y durin` is a silent no-op and --purge leaves the
+    # package on disk.
+    assert cmd[:5] == [sys.executable, "-m", "pip", "uninstall", "-y"]
+    assert cmd[-1] == PYPI_DIST_NAME
+    assert PYPI_DIST_NAME == "durin-agent"
+    assert "durin" not in cmd
 
 
 def test_run_uninstall_aborts_when_prompt_declined(fake_home: Path) -> None:
