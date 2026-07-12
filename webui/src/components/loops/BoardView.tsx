@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import { AnswerInput, RetryButton, WaitingAnswerToggle } from "@/components/loops/RunControls";
+import { AnswerInput, expandableRowProps, RetryButton, WaitingAnswerToggle } from "@/components/loops/RunControls";
 import { RunDetail } from "@/components/loops/RunDetail";
 import type { LoopRun } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
@@ -60,7 +60,7 @@ function BoardCard({
   return (
     <div
       className="flex flex-col gap-1.5 rounded-md border border-border bg-background px-3 py-2 text-xs"
-      onClick={onToggle}
+      {...expandableRowProps(onToggle)}
     >
       <div className="flex flex-col gap-0.5">
         <span className="font-mono font-medium">{run.loop}</span>
