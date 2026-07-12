@@ -336,6 +336,7 @@ class CronService:
                                 "error": r.error,
                                 "sessionKey": r.session_key,
                                 "model": r.model,
+                                "persona": r.persona,
                                 "summary": r.summary,
                             }
                             for r in j.state.run_history
