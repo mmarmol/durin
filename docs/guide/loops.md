@@ -213,7 +213,7 @@ what it was asked to do, its status, where it came from (`cron`, `manual`,
 | needs you | Paused, waiting on an answer from you (see below). |
 | waiting reply | Paused, waiting on a reply from whoever triggered it (e.g. the customer on a channel-triggered loop) — you can still answer it yourself. |
 | done | Completed and the goal was verified reached. |
-| no goal | Completed (or ran out of steps) but the goal wasn't reached. |
+| no goal | Completed (or ran out of passes) but the goal wasn't reached. |
 | escalated | Missed the goal too many times in a row — an operator has been notified. |
 | error | The run failed outright (a tool/provider error, or the run was aborted). |
 

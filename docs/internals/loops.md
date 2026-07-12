@@ -444,7 +444,7 @@ against its own queue.
 `durin/service/loops.py`) is computed fresh on every request from the loop's
 run manifests (`run_log.list_runs`) — nothing about it is persisted or
 cached; the numbers only ever reflect whatever runs are still on disk
-(subject to `keep_runs` pruning, §4a/§6). Four fields carry the actual
+(subject to `keep_runs` pruning, §4a/§6). Five fields carry the actual
 stats:
 
 - **`outcomes`** — the loop's terminal runs (`done`, `no_goal`, `escalated`,
