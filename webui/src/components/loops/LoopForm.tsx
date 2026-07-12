@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Plus, Trash2 } from "lucide-react";
+import { Check, Copy, Loader2, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import {
   ApiError,
+  getHooksSecret,
   listWorkflows,
   saveLoop,
   type LoopCheck,
@@ -14,16 +15,28 @@ import {
   type LoopTrigger,
 } from "@/lib/api";
 
+const CHANNEL_KINDS = ["email", "telegram", "slack", "discord", "whatsapp"] as const;
+type ChannelKind = (typeof CHANNEL_KINDS)[number];
+
 interface TriggerRow {
-  source: "cron" | "channel";
+  // Stable identity for this row, independent of its position in the array.
+  // removeTrigger() shifts array indices, so any state keyed by index (e.g.
+  // revealedSecretRows) would desync after a removal — key by rowId instead.
+  rowId: string;
+  source: "cron" | "channel" | "webhook";
   scheduleKind: "cron" | "every";
   expr: string;
   tz: string;
   everySeconds: string;
+  channel: ChannelKind;
   fromContains: string;
   subjectContains: string;
+  senderContains: string;
+  textContains: string;
   semantic: string;
   match: "wake_or_new" | "always_new";
+  correlate: string;
+  hook: string;
 }
 
 interface CheckRow {
@@ -46,16 +59,26 @@ interface FormState {
   operatorTo: string;
 }
 
-const EMPTY_TRIGGER: TriggerRow = {
+// Monotonic counter for TriggerRow.rowId — unique within a form session,
+// which is all that's needed since rows never persist across mounts.
+let rowIdCounter = 0;
+const nextRowId = () => `trigger-${rowIdCounter++}`;
+
+const EMPTY_TRIGGER: Omit<TriggerRow, "rowId"> = {
   source: "cron",
   scheduleKind: "cron",
   expr: "",
   tz: "",
   everySeconds: "",
+  channel: "email",
   fromContains: "",
   subjectContains: "",
+  senderContains: "",
+  textContains: "",
   semantic: "",
   match: "wake_or_new",
+  correlate: "",
+  hook: "",
 };
 const EMPTY_CHECK: CheckRow = { kind: "script", required: true, command: "", text: "" };
 
@@ -87,25 +110,42 @@ function defToForm(def: LoopDef): FormState {
     // The schedule-kind select only offers "cron" and "every". A one-shot
     // "at" trigger (not creatable here) falls back to "cron" so the row
     // still renders instead of crashing.
-    triggers: def.triggers.map((trig) =>
-      trig.source === "channel"
-        ? {
-            ...EMPTY_TRIGGER,
-            source: "channel",
-            fromContains: trig.filters.from_contains ?? "",
-            subjectContains: trig.filters.subject_contains ?? "",
-            semantic: trig.semantic ?? "",
-            match: trig.match,
-          }
-        : {
-            ...EMPTY_TRIGGER,
-            source: "cron",
-            scheduleKind: trig.schedule.kind === "every" ? "every" : "cron",
-            expr: trig.schedule.expr ?? "",
-            tz: trig.schedule.tz ?? "",
-            everySeconds: trig.schedule.every_ms != null ? String(trig.schedule.every_ms / 1000) : "",
-          },
-    ),
+    triggers: def.triggers.map((trig) => {
+      if (trig.source === "channel") {
+        return {
+          ...EMPTY_TRIGGER,
+          rowId: nextRowId(),
+          source: "channel",
+          channel: trig.channel,
+          fromContains: trig.filters.from_contains ?? "",
+          subjectContains: trig.filters.subject_contains ?? "",
+          senderContains: trig.filters.sender_contains ?? "",
+          textContains: trig.filters.text_contains ?? "",
+          semantic: trig.semantic ?? "",
+          match: trig.match,
+          correlate: trig.correlate ?? "",
+        };
+      }
+      if (trig.source === "webhook") {
+        return {
+          ...EMPTY_TRIGGER,
+          rowId: nextRowId(),
+          source: "webhook",
+          hook: trig.hook,
+          semantic: trig.semantic ?? "",
+          correlate: trig.correlate ?? "",
+        };
+      }
+      return {
+        ...EMPTY_TRIGGER,
+        rowId: nextRowId(),
+        source: "cron",
+        scheduleKind: trig.schedule.kind === "every" ? "every" : "cron",
+        expr: trig.schedule.expr ?? "",
+        tz: trig.schedule.tz ?? "",
+        everySeconds: trig.schedule.every_ms != null ? String(trig.schedule.every_ms / 1000) : "",
+      };
+    }),
     concurrency: def.concurrency,
     stuckAfter: String(def.stuck_after),
     operatorChannel: def.operator_channel ?? "",
@@ -121,15 +161,35 @@ function formToDef(form: FormState, enabled: boolean): LoopDef {
   );
   const triggers: LoopTrigger[] = form.triggers.map((row): LoopTrigger => {
     if (row.source === "channel") {
-      const filters: { from_contains?: string; subject_contains?: string } = {};
+      const filters: {
+        from_contains?: string;
+        subject_contains?: string;
+        sender_contains?: string;
+        text_contains?: string;
+      } = {};
+      // from/subject inputs are only shown in the UI for email, but the
+      // backend accepts them on any channel — an out-of-band definition
+      // (API/tool-authored) may already carry them on a non-email row, and
+      // re-saving from the webui must not silently drop them.
       if (row.fromContains.trim()) filters.from_contains = row.fromContains.trim();
       if (row.subjectContains.trim()) filters.subject_contains = row.subjectContains.trim();
+      if (row.senderContains.trim()) filters.sender_contains = row.senderContains.trim();
+      if (row.textContains.trim()) filters.text_contains = row.textContains.trim();
       return {
         source: "channel",
-        channel: "email",
+        channel: row.channel,
         filters,
         match: row.match,
         ...(row.semantic.trim() ? { semantic: row.semantic.trim() } : {}),
+        ...(row.correlate.trim() ? { correlate: row.correlate.trim() } : {}),
+      };
+    }
+    if (row.source === "webhook") {
+      return {
+        source: "webhook",
+        hook: row.hook.trim(),
+        ...(row.semantic.trim() ? { semantic: row.semantic.trim() } : {}),
+        ...(row.correlate.trim() ? { correlate: row.correlate.trim() } : {}),
       };
     }
     return {
@@ -179,6 +239,14 @@ export function LoopForm({
   const enabledOnSubmitRef = useRef(true);
   const formRef = useRef<HTMLFormElement>(null);
 
+  // Webhook ingress secret: shared across every webhook row, fetched at most
+  // once and only on demand (never on mount) — a secret must stay hidden
+  // until the user explicitly asks to see it.
+  const [hooksSecret, setHooksSecret] = useState<string | null>(null);
+  const [secretLoading, setSecretLoading] = useState(false);
+  const [revealedSecretRows, setRevealedSecretRows] = useState<Set<string>>(new Set());
+  const [copiedSecret, setCopiedSecret] = useState(false);
+
   useEffect(() => {
     listWorkflows(token).then(setWorkflows).catch(() => {});
   }, [token]);
@@ -198,13 +266,40 @@ export function LoopForm({
       checks: f.checks.map((row, idx) => (idx === i ? { ...row, [key]: value } : row)),
     }));
 
-  const addTrigger = () => setForm((f) => ({ ...f, triggers: [...f.triggers, { ...EMPTY_TRIGGER }] }));
+  const addTrigger = () =>
+    setForm((f) => ({ ...f, triggers: [...f.triggers, { ...EMPTY_TRIGGER, rowId: nextRowId() }] }));
   const removeTrigger = (i: number) =>
     setForm((f) => ({ ...f, triggers: f.triggers.filter((_, idx) => idx !== i) }));
 
   const addCheck = () => setForm((f) => ({ ...f, checks: [...f.checks, { ...EMPTY_CHECK }] }));
   const removeCheck = (i: number) =>
     setForm((f) => ({ ...f, checks: f.checks.filter((_, idx) => idx !== i) }));
+
+  const showSecret = async (rowId: string) => {
+    setRevealedSecretRows((prev) => new Set(prev).add(rowId));
+    if (hooksSecret !== null) return;
+    setSecretLoading(true);
+    try {
+      const res = await getHooksSecret(token);
+      setHooksSecret(res.secret);
+    } catch {
+      // leave hooksSecret null — the row shows nothing further to click; the
+      // "Show secret" affordance already reflects nothing was revealed.
+    } finally {
+      setSecretLoading(false);
+    }
+  };
+
+  const copySecret = async () => {
+    if (!hooksSecret) return;
+    try {
+      await navigator.clipboard.writeText(hooksSecret);
+      setCopiedSecret(true);
+      setTimeout(() => setCopiedSecret(false), 2500);
+    } catch {
+      // clipboard failure — the value is still visible to select/copy manually.
+    }
+  };
 
   // Native "press Enter to submit" is unreliable here: the form's default
   // button is nested a few DOM levels down inside the actions row, and the
@@ -293,7 +388,7 @@ export function LoopForm({
         ) : (
           <div className="space-y-2">
             {form.triggers.map((row, i) => (
-              <div key={i} className="flex flex-wrap items-end gap-2 rounded-md border border-border/40 p-2">
+              <div key={row.rowId} className="flex flex-wrap items-end gap-2 rounded-md border border-border/40 p-2">
                 <div className="w-36">
                   <label htmlFor={`loop-trigger-source-${i}`} className={rowLabelClass}>
                     {t("loops.form.source")}
@@ -305,9 +400,29 @@ export function LoopForm({
                     onChange={(e) => setTrigger(i, "source", e.target.value as TriggerRow["source"])}
                   >
                     <option value="cron">{t("loops.form.sourceCron")}</option>
-                    <option value="channel">{t("loops.form.sourceChannelEmail")}</option>
+                    <option value="channel">{t("loops.form.sourceChannel")}</option>
+                    <option value="webhook">{t("loops.form.sourceWebhook")}</option>
                   </select>
                 </div>
+                {row.source === "channel" ? (
+                  <div className="w-32">
+                    <label htmlFor={`loop-trigger-channel-${i}`} className={rowLabelClass}>
+                      {t("loops.form.channel")}
+                    </label>
+                    <select
+                      id={`loop-trigger-channel-${i}`}
+                      className={selectClass}
+                      value={row.channel}
+                      onChange={(e) => setTrigger(i, "channel", e.target.value as ChannelKind)}
+                    >
+                      {CHANNEL_KINDS.map((c) => (
+                        <option key={c} value={c}>
+                          {t(`loops.form.channel_${c}`)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
                 {row.source === "cron" ? (
                   <>
                     <div className="w-28">
@@ -370,28 +485,54 @@ export function LoopForm({
                       </div>
                     )}
                   </>
-                ) : (
+                ) : row.source === "channel" ? (
                   <>
+                    {row.channel === "email" ? (
+                      <>
+                        <div className="min-w-[140px] flex-1">
+                          <label htmlFor={`loop-trigger-from-${i}`} className={rowLabelClass}>
+                            {t("loops.form.fromContains")}
+                          </label>
+                          <input
+                            id={`loop-trigger-from-${i}`}
+                            className={inputClass}
+                            value={row.fromContains}
+                            onChange={(e) => setTrigger(i, "fromContains", e.target.value)}
+                          />
+                        </div>
+                        <div className="min-w-[140px] flex-1">
+                          <label htmlFor={`loop-trigger-subject-${i}`} className={rowLabelClass}>
+                            {t("loops.form.subjectContains")}
+                          </label>
+                          <input
+                            id={`loop-trigger-subject-${i}`}
+                            className={inputClass}
+                            value={row.subjectContains}
+                            onChange={(e) => setTrigger(i, "subjectContains", e.target.value)}
+                          />
+                        </div>
+                      </>
+                    ) : null}
                     <div className="min-w-[140px] flex-1">
-                      <label htmlFor={`loop-trigger-from-${i}`} className={rowLabelClass}>
-                        {t("loops.form.fromContains")}
+                      <label htmlFor={`loop-trigger-sender-${i}`} className={rowLabelClass}>
+                        {t("loops.form.senderContains")}
                       </label>
                       <input
-                        id={`loop-trigger-from-${i}`}
+                        id={`loop-trigger-sender-${i}`}
                         className={inputClass}
-                        value={row.fromContains}
-                        onChange={(e) => setTrigger(i, "fromContains", e.target.value)}
+                        value={row.senderContains}
+                        onChange={(e) => setTrigger(i, "senderContains", e.target.value)}
                       />
                     </div>
                     <div className="min-w-[140px] flex-1">
-                      <label htmlFor={`loop-trigger-subject-${i}`} className={rowLabelClass}>
-                        {t("loops.form.subjectContains")}
+                      <label htmlFor={`loop-trigger-text-${i}`} className={rowLabelClass}>
+                        {t("loops.form.textContains")}
                       </label>
                       <input
-                        id={`loop-trigger-subject-${i}`}
+                        id={`loop-trigger-text-${i}`}
                         className={inputClass}
-                        value={row.subjectContains}
-                        onChange={(e) => setTrigger(i, "subjectContains", e.target.value)}
+                        value={row.textContains}
+                        onChange={(e) => setTrigger(i, "textContains", e.target.value)}
                       />
                     </div>
                     <div className="min-w-[200px] flex-[2]">
@@ -406,6 +547,18 @@ export function LoopForm({
                       />
                       <p className="mt-1 text-[10.5px] text-muted-foreground">{t("loops.form.semanticHint")}</p>
                     </div>
+                    <div className="min-w-[200px] flex-1">
+                      <label htmlFor={`loop-trigger-correlate-${i}`} className={rowLabelClass}>
+                        {t("loops.form.correlate")}
+                      </label>
+                      <input
+                        id={`loop-trigger-correlate-${i}`}
+                        className={inputClass}
+                        value={row.correlate}
+                        onChange={(e) => setTrigger(i, "correlate", e.target.value)}
+                      />
+                      <p className="mt-1 text-[10.5px] text-muted-foreground">{t("loops.form.correlateHint")}</p>
+                    </div>
                     <div className="w-56">
                       <label htmlFor={`loop-trigger-match-${i}`} className={rowLabelClass}>
                         {t("loops.form.match")}
@@ -419,6 +572,96 @@ export function LoopForm({
                         <option value="wake_or_new">{t("loops.form.matchWakeOrNew")}</option>
                         <option value="always_new">{t("loops.form.matchAlwaysNew")}</option>
                       </select>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="min-w-[140px] flex-1">
+                      <label htmlFor={`loop-trigger-hook-${i}`} className={rowLabelClass}>
+                        {t("loops.form.hookName")}
+                      </label>
+                      <input
+                        id={`loop-trigger-hook-${i}`}
+                        className={inputClass}
+                        value={row.hook}
+                        onChange={(e) => setTrigger(i, "hook", e.target.value)}
+                        required
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div className="min-w-[200px] flex-1">
+                      <label htmlFor={`loop-trigger-hook-url-${i}`} className={rowLabelClass}>
+                        {t("loops.form.hookUrlLabel")}
+                      </label>
+                      <input
+                        id={`loop-trigger-hook-url-${i}`}
+                        className={cn(inputClass, "font-mono")}
+                        value={`/api/v1/hooks/${row.hook}`}
+                        readOnly
+                      />
+                    </div>
+                    <div className="min-w-[200px] flex-[2]">
+                      <label htmlFor={`loop-trigger-webhook-semantic-${i}`} className={rowLabelClass}>
+                        {t("loops.form.semantic")}
+                      </label>
+                      <input
+                        id={`loop-trigger-webhook-semantic-${i}`}
+                        className={inputClass}
+                        value={row.semantic}
+                        onChange={(e) => setTrigger(i, "semantic", e.target.value)}
+                      />
+                      <p className="mt-1 text-[10.5px] text-muted-foreground">{t("loops.form.semanticHint")}</p>
+                    </div>
+                    <div className="min-w-[200px] flex-1">
+                      <label htmlFor={`loop-trigger-webhook-correlate-${i}`} className={rowLabelClass}>
+                        {t("loops.form.correlate")}
+                      </label>
+                      <input
+                        id={`loop-trigger-webhook-correlate-${i}`}
+                        className={inputClass}
+                        value={row.correlate}
+                        onChange={(e) => setTrigger(i, "correlate", e.target.value)}
+                      />
+                      <p className="mt-1 text-[10.5px] text-muted-foreground">{t("loops.form.correlateHint")}</p>
+                    </div>
+                    <div className="min-w-[160px]">
+                      <span className={rowLabelClass}>{t("loops.form.hookSecret")}</span>
+                      {revealedSecretRows.has(row.rowId) ? (
+                        hooksSecret !== null ? (
+                          <div className="flex items-center gap-1.5">
+                            <code className="flex-1 truncate rounded-md border border-border/60 bg-background px-2 py-1.5 font-mono text-[12px]">
+                              {hooksSecret}
+                            </code>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => void copySecret()}
+                              aria-label={t("loops.form.copySecret")}
+                              className="h-8 w-8 shrink-0 p-0 text-muted-foreground"
+                            >
+                              {copiedSecret ? (
+                                <Check className="h-3.5 w-3.5" aria-hidden />
+                              ) : (
+                                <Copy className="h-3.5 w-3.5" aria-hidden />
+                              )}
+                            </Button>
+                          </div>
+                        ) : (
+                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden />
+                        )
+                      ) : (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={secretLoading}
+                          onClick={() => void showSecret(row.rowId)}
+                          className="h-8 text-[11px]"
+                        >
+                          {t("loops.form.showSecret")}
+                        </Button>
+                      )}
                     </div>
                   </>
                 )}

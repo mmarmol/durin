@@ -24,7 +24,8 @@ registry.  Each class's dep handling:
 - ``OAuthService``     — no deps.
 - ``AuthService``      — ``store=None`` → creates a default ``ApiTokenStore`` (safe to do).
 - ``TasksService``     — ``workspace=Path("/")`` (stored, never touched), ``subagent_manager=None``.
-- ``LoopsService``     — ``workspace=Path("/")``, ``cron_service=None``, ``runtime=None`` (stored, never called here).
+- ``LoopsService``     — ``workspace=Path("/")``, ``cron_service=None``, ``runtime=None``,
+  ``hooks_secret=None`` (stored, never called here).
 - ``DiscordService``       — no deps.
 - ``TelegramService``      — no deps.
 - ``SlackService``         — no deps (slack_sdk imported lazily per call).

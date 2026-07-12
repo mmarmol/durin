@@ -760,18 +760,34 @@ export interface LoopTriggerCron {
   };
 }
 
-// V2: only "email" — durin/loops/spec.py's _parse_channel_trigger rejects
-// any other value. filters/match are always emitted by loop_to_dict (never
-// omitted, filters may be {}); semantic is omitted when unset.
+// durin/loops/spec.py's _parse_channel_trigger accepts any of these five
+// channel kinds. filters/match are always emitted by loop_to_dict (never
+// omitted, filters may be {}); semantic/correlate are omitted when unset.
 export interface LoopTriggerChannel {
   source: "channel";
-  channel: "email";
-  filters: { from_contains?: string; subject_contains?: string };
+  channel: "email" | "telegram" | "slack" | "discord" | "whatsapp";
+  filters: {
+    from_contains?: string;
+    subject_contains?: string;
+    sender_contains?: string;
+    text_contains?: string;
+  };
   semantic?: string;
   match: "wake_or_new" | "always_new";
+  correlate?: string;
 }
 
-export type LoopTrigger = LoopTriggerCron | LoopTriggerChannel;
+// A webhook trigger fires on POST /api/v1/hooks/{hook} (see
+// durin/loops/spec.py's _parse_webhook_trigger). semantic/correlate are
+// omitted when unset, same as the channel shape.
+export interface LoopTriggerWebhook {
+  source: "webhook";
+  hook: string;
+  semantic?: string;
+  correlate?: string;
+}
+
+export type LoopTrigger = LoopTriggerCron | LoopTriggerChannel | LoopTriggerWebhook;
 
 export interface LoopDef {
   name: string;
@@ -861,6 +877,20 @@ export async function saveLoop(
     token,
     { definition: def },
   );
+}
+
+export interface HooksSecret {
+  secret: string;
+  path_template: string;
+}
+
+/** The shared webhook ingress secret (LOOPS_WRITE-scoped) — fetch only on
+ *  explicit user action (a "show secret" click), never on mount. */
+export async function getHooksSecret(
+  token: string,
+  base: string = "",
+): Promise<HooksSecret> {
+  return request<HooksSecret>(`${base}/api/v1/loops/hooks-secret`, token);
 }
 
 export async function deleteLoop(

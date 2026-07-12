@@ -3,7 +3,7 @@ import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { BoardView } from "@/components/loops/BoardView";
-import { AnswerInput, RetryButton, WaitingAnswerToggle } from "@/components/loops/RunControls";
+import { AnswerInput, expandableRowProps, RetryButton, WaitingAnswerToggle } from "@/components/loops/RunControls";
 import { RunDetail } from "@/components/loops/RunDetail";
 import { ApiError, answerLoopRun, fireLoop, listAllLoopRuns, type LoopRun } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
@@ -41,7 +41,7 @@ function AnswerRow({
   return (
     <div
       className="flex flex-col gap-1.5 rounded-md border border-accent bg-accent/40 px-3 py-2 text-accent-foreground"
-      onClick={onToggle}
+      {...expandableRowProps(onToggle)}
     >
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
         <span className="font-mono font-medium">{run.loop}</span>
@@ -72,7 +72,7 @@ function WaitingInfoRow({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-col gap-1.5 rounded-md border border-border px-3 py-2 text-xs" onClick={onToggle}>
+    <div className="flex flex-col gap-1.5 rounded-md border border-border px-3 py-2 text-xs" {...expandableRowProps(onToggle)}>
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="font-mono font-medium">{run.loop}</span>
         <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", statusTone(run.status))}>
@@ -103,7 +103,7 @@ function RunRow({
   const { t } = useTranslation();
   const label = run.task || run.run_id.slice(0, 8);
   return (
-    <div className="flex flex-col gap-0.5 rounded-md border border-border px-3 py-2 text-xs" onClick={onToggle}>
+    <div className="flex flex-col gap-0.5 rounded-md border border-border px-3 py-2 text-xs" {...expandableRowProps(onToggle)}>
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="font-mono font-medium">{run.loop}</span>
         <span className="text-muted-foreground">·</span>

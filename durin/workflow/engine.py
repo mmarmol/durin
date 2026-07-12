@@ -601,9 +601,13 @@ class WorkflowEngine:
                         # The gate routed to the reserved needs-input terminal: end the run
                         # asking the caller for more information. The node's output carries
                         # the questions; the invoking agent (which owns the user channel)
-                        # asks the user and re-runs the workflow with the answers.
+                        # asks the user and re-runs the workflow with the answers. The
+                        # routing label is transport metadata, not part of the question —
+                        # strip it like the terminal-completion path does (falling back to
+                        # the raw output if the label was the only line).
                         return WorkflowResult(
-                            status="needs_input", final_output=output,
+                            status="needs_input",
+                            final_output=strip_label_line(output, node.cases) or output,
                             runs=runs, run_id=run_id, needs_input_node=node.id,
                             final_output_node=node.id,
                         )

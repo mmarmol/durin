@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, type KeyboardEvent } from "react";
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -10,6 +10,27 @@ import { cn } from "@/lib/utils";
 // Interactive controls shared by ActivityView's list rows and BoardView's
 // cards, so the two presentations never fork how an answer gets sent or a
 // run gets retried.
+
+/** Accessibility props for an expandable row/card container: focusable and
+ *  toggleable with Enter/Space. Deliberately no role="button" — the rows
+ *  contain real buttons and inputs (nested interactive controls are invalid
+ *  inside a button role, and the row's accessible name would swallow
+ *  theirs). The keydown guard only reacts to keys on the container itself,
+ *  so typing (or pressing Enter) inside an inner control like the answer
+ *  input never collapses the row. */
+export function expandableRowProps(onToggle: () => void) {
+  return {
+    tabIndex: 0,
+    onClick: onToggle,
+    onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
+      if (e.target !== e.currentTarget) return;
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onToggle();
+      }
+    },
+  };
+}
 
 /** The answer text box + send button — used directly by needs_operator rows
  *  (list AnswerRow, board cards) and revealed by WaitingAnswerToggle for

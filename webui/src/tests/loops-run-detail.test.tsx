@@ -186,4 +186,26 @@ describe("loops RunDetail (ActivityView drill-in)", () => {
     await user.click(screen.getByText(RUN_NEEDS_OPERATOR.ask!));
     expect(await screen.findByText("Task")).toBeInTheDocument();
   });
+
+  it("rows are keyboard-expandable but keys inside inner controls are ignored", async () => {
+    vi.mocked(api.listAllLoopRuns).mockResolvedValue([RUN_NEEDS_OPERATOR]);
+    const user = userEvent.setup();
+    render(wrap(<ActivityView />));
+
+    const input = await screen.findByPlaceholderText(/answer/i);
+    const row = input.closest("[tabindex='0']") as HTMLElement;
+    expect(row).not.toBeNull();
+
+    // Enter on the focused row toggles the detail panel open and closed.
+    row.focus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByText("Task")).toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    expect(screen.queryByText("Task")).not.toBeInTheDocument();
+
+    // Enter while typing in the answer input must not toggle the panel.
+    await user.click(input);
+    await user.keyboard("{Enter}");
+    expect(screen.queryByText("Task")).not.toBeInTheDocument();
+  });
 });

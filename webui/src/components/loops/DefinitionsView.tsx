@@ -68,7 +68,8 @@ function OutcomeStrip({ stats }: { stats: LoopStats | null | undefined }) {
 }
 
 // One-line row summary: cron shows its schedule, channel shows
-// "email · from:… · subject:…" with only the filters that are set.
+// "email · from:… · subject:…" with only the filters that are set, webhook
+// shows "webhook · <hook name>".
 function summarizeTrigger(trig: LoopTrigger): string {
   if (trig.source === "cron") {
     const s = trig.schedule;
@@ -77,9 +78,14 @@ function summarizeTrigger(trig: LoopTrigger): string {
     if (s.kind === "at") return "at";
     return s.kind;
   }
+  if (trig.source === "webhook") {
+    return ["webhook", trig.hook].join(" · ");
+  }
   const parts: string[] = [trig.channel];
   if (trig.filters.from_contains) parts.push(`from:${trig.filters.from_contains}`);
   if (trig.filters.subject_contains) parts.push(`subject:${trig.filters.subject_contains}`);
+  if (trig.filters.sender_contains) parts.push(`sender:${trig.filters.sender_contains}`);
+  if (trig.filters.text_contains) parts.push(`text:${trig.filters.text_contains}`);
   return parts.join(" · ");
 }
 

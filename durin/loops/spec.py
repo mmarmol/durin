@@ -22,11 +22,18 @@ _SCHEDULE_ALLOWED_KEYS = {
     "every": {"kind", "every_ms"},
     "at": {"kind", "at_ms"},
 }
-# Fields that only make sense on a channel trigger. Rejected outright on a
-# cron trigger (and vice versa for "schedule") so the two shapes never mix.
-_CHANNEL_ONLY_FIELDS = {"channel", "filters", "semantic", "match"}
-_CHANNEL_FILTER_ALLOWED_KEYS = {"from_contains", "subject_contains"}
+# Fields that only make sense on a channel or webhook trigger. Rejected
+# outright on a cron trigger (and vice versa for "schedule") so the shapes
+# never mix.
+_CHANNEL_ONLY_FIELDS = {"channel", "filters", "semantic", "match", "hook", "correlate"}
+_CHANNEL_KINDS = {"email", "telegram", "slack", "discord", "whatsapp"}
+_CHANNEL_FILTER_ALLOWED_KEYS = {"from_contains", "subject_contains", "sender_contains", "text_contains"}
 _CHANNEL_MATCH_MODES = {"wake_or_new", "always_new"}
+# Fields exclusive to the webhook shape, rejected on a channel trigger.
+_WEBHOOK_ONLY_FIELDS = {"hook"}
+# Fields exclusive to the channel shape, rejected on a webhook trigger
+# (besides "schedule", which every non-cron source already forbids).
+_WEBHOOK_FORBIDDEN_FIELDS = {"schedule", "channel", "filters", "match"}
 
 
 class LoopError(ValueError):
@@ -47,12 +54,14 @@ class GoalCheck:
 
 @dataclass(frozen=True)
 class LoopTrigger:
-    source: Literal["cron", "channel"]  # webhook sources arrive in V4
+    source: Literal["cron", "channel", "webhook"]
     schedule: dict = field(default_factory=dict)  # CronSchedule-shaped: kind/at_ms/every_ms/expr/tz
-    channel: str | None = None  # channel trigger only; V2: only "email"
-    filters: dict = field(default_factory=dict)  # channel trigger only: from_contains/subject_contains
-    semantic: str | None = None  # channel trigger only: optional model-judged condition
+    channel: str | None = None  # channel trigger only: email/telegram/slack/discord/whatsapp
+    filters: dict = field(default_factory=dict)  # channel trigger only: from_contains/subject_contains/sender_contains/text_contains
+    semantic: str | None = None  # channel or webhook trigger: optional model-judged condition
     match: Literal["wake_or_new", "always_new"] = "wake_or_new"  # channel trigger only
+    hook: str | None = None  # webhook trigger only: the hook name that fires this trigger
+    correlate: str | None = None  # channel or webhook trigger: optional single-capture-group regex
 
 
 @dataclass(frozen=True)
@@ -86,10 +95,12 @@ def _parse_check(raw: dict, i: int) -> GoalCheck:
 
 def _parse_trigger(raw: dict, i: int) -> LoopTrigger:
     source = raw.get("source")
-    if source not in ("cron", "channel"):
-        raise LoopError(f"trigger[{i}]: source must be 'cron' or 'channel'")
+    if source not in ("cron", "channel", "webhook"):
+        raise LoopError(f"trigger[{i}]: source must be 'cron', 'channel', or 'webhook'")
     if source == "channel":
         return _parse_channel_trigger(raw, i)
+    if source == "webhook":
+        return _parse_webhook_trigger(raw, i)
 
     present = _CHANNEL_ONLY_FIELDS & set(raw)
     if present:
@@ -137,12 +148,30 @@ def _parse_trigger(raw: dict, i: int) -> LoopTrigger:
     return LoopTrigger(source="cron", schedule=dict(sched))
 
 
+def _parse_correlate(raw: dict, i: int) -> str | None:
+    correlate = raw.get("correlate")
+    if correlate is None:
+        return None
+    if not isinstance(correlate, str) or not correlate.strip():
+        raise LoopError(f"trigger[{i}]: correlate must be a non-empty string if set")
+    try:
+        pattern = re.compile(correlate)
+    except re.error:
+        raise LoopError(f"trigger[{i}]: correlate must be a regex with exactly one capture group") from None
+    if pattern.groups != 1:
+        raise LoopError(f"trigger[{i}]: correlate must be a regex with exactly one capture group")
+    return correlate
+
+
 def _parse_channel_trigger(raw: dict, i: int) -> LoopTrigger:
     if "schedule" in raw:
         raise LoopError(f"trigger[{i}]: channel trigger cannot set 'schedule'")
+    present = _WEBHOOK_ONLY_FIELDS & set(raw)
+    if present:
+        raise LoopError(f"trigger[{i}]: channel trigger cannot set {sorted(present)}")
     channel = raw.get("channel")
-    if channel != "email":
-        raise LoopError(f"trigger[{i}]: channel must be 'email'")
+    if channel not in _CHANNEL_KINDS:
+        raise LoopError(f"trigger[{i}]: channel must be one of {sorted(_CHANNEL_KINDS)}")
     filters = raw.get("filters") or {}
     if not isinstance(filters, dict):
         raise LoopError(f"trigger[{i}]: filters must be an object")
@@ -158,13 +187,29 @@ def _parse_channel_trigger(raw: dict, i: int) -> LoopTrigger:
     match = raw.get("match", "wake_or_new")
     if match not in _CHANNEL_MATCH_MODES:
         raise LoopError(f"trigger[{i}]: match must be one of {sorted(_CHANNEL_MATCH_MODES)}")
+    correlate = _parse_correlate(raw, i)
     return LoopTrigger(
         source="channel",
         channel=channel,
         filters=dict(filters),
         semantic=semantic,
         match=match,
+        correlate=correlate,
     )
+
+
+def _parse_webhook_trigger(raw: dict, i: int) -> LoopTrigger:
+    present = _WEBHOOK_FORBIDDEN_FIELDS & set(raw)
+    if present:
+        raise LoopError(f"trigger[{i}]: webhook trigger cannot set {sorted(present)}")
+    hook = raw.get("hook")
+    if not isinstance(hook, str) or not _NAME_RE.match(hook):
+        raise LoopError(f"trigger[{i}]: hook must match ^[a-z0-9][a-z0-9_-]{{0,63}}$")
+    semantic = raw.get("semantic")
+    if semantic is not None and not (isinstance(semantic, str) and semantic.strip()):
+        raise LoopError(f"trigger[{i}]: semantic must be a non-empty string if set")
+    correlate = _parse_correlate(raw, i)
+    return LoopTrigger(source="webhook", hook=hook, semantic=semantic, correlate=correlate)
 
 
 def parse_loop(data: dict) -> LoopSpec:
@@ -218,9 +263,18 @@ def parse_loop(data: dict) -> LoopSpec:
 def _trigger_to_dict(t: LoopTrigger) -> dict:
     if t.source == "cron":
         return {"source": "cron", "schedule": t.schedule}
+    if t.source == "webhook":
+        entry: dict = {"source": "webhook", "hook": t.hook}
+        if t.semantic is not None:
+            entry["semantic"] = t.semantic
+        if t.correlate is not None:
+            entry["correlate"] = t.correlate
+        return entry
     entry = {"source": "channel", "channel": t.channel, "filters": t.filters, "match": t.match}
     if t.semantic is not None:
         entry["semantic"] = t.semantic
+    if t.correlate is not None:
+        entry["correlate"] = t.correlate
     return entry
 
 

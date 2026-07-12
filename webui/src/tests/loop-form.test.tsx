@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { LoopForm } from "@/components/loops/LoopForm";
 import type { LoopDef } from "@/lib/api";
@@ -10,10 +10,11 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ...actual,
     saveLoop: vi.fn(),
     listWorkflows: vi.fn(),
+    getHooksSecret: vi.fn(),
   };
 });
 
-import { listWorkflows, saveLoop } from "@/lib/api";
+import { getHooksSecret, listWorkflows, saveLoop } from "@/lib/api";
 
 const EXISTING: LoopDef = {
   name: "digest",
@@ -50,10 +51,77 @@ const EXISTING_CHANNEL: LoopDef = {
   operator_to: null,
 };
 
+const EXISTING_WEBHOOK: LoopDef = {
+  name: "ingest",
+  enabled: true,
+  workflow: "digest-wf",
+  goal: { intent: "process the payload", checks: [] },
+  triggers: [
+    { source: "webhook", hook: "stripe-events", semantic: "the payload is a refund", correlate: "id=(\\w+)" },
+  ],
+  concurrency: "single",
+  stuck_after: 3,
+  operator_channel: null,
+  operator_to: null,
+};
+
+const EXISTING_TELEGRAM: LoopDef = {
+  name: "chatbot",
+  enabled: true,
+  workflow: "digest-wf",
+  goal: { intent: "answer the question", checks: [] },
+  triggers: [
+    {
+      source: "channel",
+      channel: "telegram",
+      filters: { sender_contains: "@alice", text_contains: "help" },
+      semantic: "user needs support",
+      match: "wake_or_new",
+      correlate: "ticket-(\\d+)",
+    },
+  ],
+  concurrency: "single",
+  stuck_after: 3,
+  operator_channel: null,
+  operator_to: null,
+};
+
+// A telegram trigger carrying from_contains/subject_contains — those fields
+// are only editable via the UI for email, but an out-of-band definition
+// (API/tool-authored) may already have them set on another channel.
+const EXISTING_TELEGRAM_WITH_EMAIL_FILTERS: LoopDef = {
+  name: "chatbot",
+  enabled: true,
+  workflow: "digest-wf",
+  goal: { intent: "answer the question", checks: [] },
+  triggers: [
+    {
+      source: "channel",
+      channel: "telegram",
+      filters: {
+        from_contains: "@bob",
+        subject_contains: "urgent",
+        sender_contains: "@alice",
+        text_contains: "help",
+      },
+      semantic: "user needs support",
+      match: "wake_or_new",
+      correlate: "ticket-(\\d+)",
+    },
+  ],
+  concurrency: "single",
+  stuck_after: 3,
+  operator_channel: null,
+  operator_to: null,
+};
+
 describe("LoopForm", () => {
   beforeEach(() => {
     vi.mocked(listWorkflows).mockReset().mockResolvedValue(["digest-wf"]);
     vi.mocked(saveLoop).mockReset().mockResolvedValue(undefined);
+    vi.mocked(getHooksSecret)
+      .mockReset()
+      .mockResolvedValue({ secret: "whsec_abc123", path_template: "/api/v1/hooks/{hook}" });
   });
 
   it("renders an empty form with a no-triggers hint and fetched workflow options", async () => {
@@ -214,7 +282,7 @@ describe("LoopForm", () => {
     ]);
   });
 
-  it("switching a trigger row's source drops the other shape's keys entirely", async () => {
+  it("switching a trigger row's source (cron/channel/webhook) drops the other shapes' keys entirely", async () => {
     render(<LoopForm token="tok" editLoop={null} onDone={vi.fn()} onCancel={vi.fn()} />);
 
     await screen.findByRole("option", { name: "digest-wf" });
@@ -229,9 +297,14 @@ describe("LoopForm", () => {
     expect(screen.queryByLabelText(/cron expression/i)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/match policy/i)).toBeInTheDocument();
 
-    // channel -> cron: channel fields disappear, schedule fields come back.
-    fireEvent.change(screen.getByLabelText(/^source$/i), { target: { value: "cron" } });
+    // channel -> webhook: channel fields disappear, hook fields appear.
+    fireEvent.change(screen.getByLabelText(/^source$/i), { target: { value: "webhook" } });
     expect(screen.queryByLabelText(/match policy/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/hook name/i)).toBeInTheDocument();
+
+    // webhook -> cron: hook fields disappear, schedule fields come back.
+    fireEvent.change(screen.getByLabelText(/^source$/i), { target: { value: "cron" } });
+    expect(screen.queryByLabelText(/hook name/i)).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/cron expression/i), { target: { value: "0 9 * * *" } });
 
     fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
@@ -239,6 +312,216 @@ describe("LoopForm", () => {
     await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
     const [, def] = vi.mocked(saveLoop).mock.calls[0];
     expect(def.triggers).toEqual([{ source: "cron", schedule: { kind: "cron", expr: "0 9 * * *" } }]);
+  });
+
+  it("a telegram channel trigger row omits from/subject but includes sender/text/correlate", async () => {
+    render(<LoopForm token="tok" editLoop={null} onDone={vi.fn()} onCancel={vi.fn()} />);
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "chatbot" } });
+    fireEvent.change(screen.getByLabelText(/workflow/i), { target: { value: "digest-wf" } });
+    fireEvent.change(screen.getByLabelText(/^intent/i), { target: { value: "answer the question" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /add trigger/i }));
+    fireEvent.change(screen.getByLabelText(/^source$/i), { target: { value: "channel" } });
+
+    const row = screen.getByLabelText(/^source$/i).closest(".flex-wrap") as HTMLElement;
+    fireEvent.change(within(row).getByLabelText(/^channel$/i), { target: { value: "telegram" } });
+
+    // from/subject only make sense for email — hidden once the channel is telegram.
+    expect(screen.queryByLabelText(/from contains/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/subject contains/i)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/sender contains/i), { target: { value: "@alice" } });
+    fireEvent.change(screen.getByLabelText(/text contains/i), { target: { value: "help" } });
+    fireEvent.change(screen.getByLabelText(/^correlate$/i), { target: { value: "ticket-(\\d+)" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
+
+    await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveLoop).mock.calls[0];
+    expect(def.triggers).toEqual([
+      {
+        source: "channel",
+        channel: "telegram",
+        filters: { sender_contains: "@alice", text_contains: "help" },
+        match: "wake_or_new",
+        correlate: "ticket-(\\d+)",
+      },
+    ]);
+  });
+
+  it("a webhook trigger row submits {source, hook} only when semantic/correlate are empty", async () => {
+    render(<LoopForm token="tok" editLoop={null} onDone={vi.fn()} onCancel={vi.fn()} />);
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "ingest" } });
+    fireEvent.change(screen.getByLabelText(/workflow/i), { target: { value: "digest-wf" } });
+    fireEvent.change(screen.getByLabelText(/^intent/i), { target: { value: "process the payload" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /add trigger/i }));
+    fireEvent.change(screen.getByLabelText(/^source$/i), { target: { value: "webhook" } });
+    fireEvent.change(screen.getByLabelText(/hook name/i), { target: { value: "stripe-events" } });
+
+    expect((screen.getByLabelText(/webhook url/i) as HTMLInputElement).value).toBe(
+      "/api/v1/hooks/stripe-events",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
+
+    await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveLoop).mock.calls[0];
+    expect(def.triggers).toEqual([{ source: "webhook", hook: "stripe-events" }]);
+  });
+
+  it("a webhook trigger row includes semantic and correlate only when filled", async () => {
+    render(<LoopForm token="tok" editLoop={null} onDone={vi.fn()} onCancel={vi.fn()} />);
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "ingest" } });
+    fireEvent.change(screen.getByLabelText(/workflow/i), { target: { value: "digest-wf" } });
+    fireEvent.change(screen.getByLabelText(/^intent/i), { target: { value: "process the payload" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /add trigger/i }));
+    fireEvent.change(screen.getByLabelText(/^source$/i), { target: { value: "webhook" } });
+    fireEvent.change(screen.getByLabelText(/hook name/i), { target: { value: "stripe-events" } });
+    fireEvent.change(screen.getByLabelText(/semantic condition/i), {
+      target: { value: "the payload is a refund" },
+    });
+    fireEvent.change(screen.getByLabelText(/^correlate$/i), { target: { value: "id=(\\w+)" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
+
+    await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveLoop).mock.calls[0];
+    expect(def.triggers).toEqual([
+      {
+        source: "webhook",
+        hook: "stripe-events",
+        semantic: "the payload is a refund",
+        correlate: "id=(\\w+)",
+      },
+    ]);
+  });
+
+  it("prefills a webhook trigger from an existing LoopDef and round-trips on save", async () => {
+    render(<LoopForm token="tok" editLoop={EXISTING_WEBHOOK} onDone={vi.fn()} onCancel={vi.fn()} />);
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    expect((screen.getByLabelText(/^source$/i) as HTMLSelectElement).value).toBe("webhook");
+    expect((screen.getByLabelText(/hook name/i) as HTMLInputElement).value).toBe("stripe-events");
+    expect((screen.getByLabelText(/webhook url/i) as HTMLInputElement).value).toBe(
+      "/api/v1/hooks/stripe-events",
+    );
+    expect((screen.getByLabelText(/semantic condition/i) as HTMLInputElement).value).toBe(
+      "the payload is a refund",
+    );
+    expect((screen.getByLabelText(/^correlate$/i) as HTMLInputElement).value).toBe("id=(\\w+)");
+
+    fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
+    await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveLoop).mock.calls[0];
+    expect(def.triggers).toEqual(EXISTING_WEBHOOK.triggers);
+  });
+
+  it("prefills a telegram channel trigger (sender/text/correlate) from an existing LoopDef and round-trips on save", async () => {
+    render(<LoopForm token="tok" editLoop={EXISTING_TELEGRAM} onDone={vi.fn()} onCancel={vi.fn()} />);
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    expect((screen.getByLabelText(/^source$/i) as HTMLSelectElement).value).toBe("channel");
+    const row = screen.getByLabelText(/^source$/i).closest(".flex-wrap") as HTMLElement;
+    expect((within(row).getByLabelText(/^channel$/i) as HTMLSelectElement).value).toBe("telegram");
+    expect(screen.queryByLabelText(/from contains/i)).not.toBeInTheDocument();
+    expect((screen.getByLabelText(/sender contains/i) as HTMLInputElement).value).toBe("@alice");
+    expect((screen.getByLabelText(/text contains/i) as HTMLInputElement).value).toBe("help");
+    expect((screen.getByLabelText(/^correlate$/i) as HTMLInputElement).value).toBe("ticket-(\\d+)");
+
+    fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
+    await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveLoop).mock.calls[0];
+    expect(def.triggers).toEqual(EXISTING_TELEGRAM.triggers);
+  });
+
+  it("fetches the hooks secret only when Show secret is clicked, and only once", async () => {
+    render(<LoopForm token="tok" editLoop={EXISTING_WEBHOOK} onDone={vi.fn()} onCancel={vi.fn()} />);
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    expect(getHooksSecret).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /show secret/i }));
+
+    await screen.findByText("whsec_abc123");
+    expect(getHooksSecret).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps revealed-secret state pinned to its row identity after removing an earlier row", async () => {
+    render(<LoopForm token="tok" editLoop={null} onDone={vi.fn()} onCancel={vi.fn()} />);
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "n" } });
+    fireEvent.change(screen.getByLabelText(/workflow/i), { target: { value: "digest-wf" } });
+    fireEvent.change(screen.getByLabelText(/^intent/i), { target: { value: "do it" } });
+
+    // Three webhook rows, each switched from the default "cron" source.
+    fireEvent.click(screen.getByRole("button", { name: /add trigger/i }));
+    fireEvent.click(screen.getByRole("button", { name: /add trigger/i }));
+    fireEvent.click(screen.getByRole("button", { name: /add trigger/i }));
+    screen
+      .getAllByLabelText(/^source$/i)
+      .forEach((sel) => fireEvent.change(sel, { target: { value: "webhook" } }));
+
+    const hookInputs = screen.getAllByLabelText(/hook name/i);
+    fireEvent.change(hookInputs[0], { target: { value: "hook1" } });
+    fireEvent.change(hookInputs[1], { target: { value: "hook2" } });
+    fireEvent.change(hookInputs[2], { target: { value: "hook3" } });
+
+    const rowOf = (hookValue: string) =>
+      (screen.getByDisplayValue(hookValue) as HTMLElement).closest(".flex-wrap") as HTMLElement;
+
+    // Reveal the secret on row 2 only.
+    fireEvent.click(within(rowOf("hook2")).getByRole("button", { name: /show secret/i }));
+    await within(rowOf("hook2")).findByText("whsec_abc123");
+
+    // Remove row 1 — row2 and row3 each shift one array index to the left.
+    fireEvent.click(within(rowOf("hook1")).getByRole("button", { name: /remove trigger/i }));
+    expect(screen.queryByDisplayValue("hook1")).not.toBeInTheDocument();
+
+    // The row that was #3 must NOT have inherited row2's revealed state.
+    expect(within(rowOf("hook3")).getByRole("button", { name: /show secret/i })).toBeInTheDocument();
+    expect(within(rowOf("hook3")).queryByText("whsec_abc123")).not.toBeInTheDocument();
+
+    // The row that was actually revealed (originally row2) must still show the secret.
+    expect(within(rowOf("hook2")).getByText("whsec_abc123")).toBeInTheDocument();
+  });
+
+  it("prefills a telegram trigger carrying from_contains/subject_contains and round-trips them on save", async () => {
+    render(
+      <LoopForm
+        token="tok"
+        editLoop={EXISTING_TELEGRAM_WITH_EMAIL_FILTERS}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    // The from/subject inputs stay hidden for a non-email channel — the
+    // filters are carried in form state without a visible field.
+    expect(screen.queryByLabelText(/from contains/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/subject contains/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
+    await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveLoop).mock.calls[0];
+    expect(def.triggers).toEqual(EXISTING_TELEGRAM_WITH_EMAIL_FILTERS.triggers);
   });
 
   it("pressing Enter in the name input submits via Save & enable", async () => {

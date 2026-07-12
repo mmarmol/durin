@@ -173,6 +173,19 @@ call `channel._augment_media_urls()` or `build_webui_thread_response()` to
 rewrite raw on-disk paths to HMAC-signed `/api/media/{sig}/{payload}` URLs. The
 service never touches media URLs.
 
+### Webhook trigger ingress
+
+`POST /api/v1/hooks/{hook}` is the other non-bearer route: rather than
+`Authorization: Bearer`, it is gated by an `X-Durin-Hook-Secret` header
+compared (timing-safe) against a secret minted and persisted through the same
+`ApiTokenStore` as regular API tokens (`get_or_create_hooks_secret()`).
+External services calling in as webhook callers are not webui/CLI principals,
+so there is no `Principal` to resolve on this route. A missing, non-ASCII, or
+mismatched secret returns 401 before the request body is even parsed. On a
+surface with no `hook_dispatcher` wired the route reports 503 rather than 404,
+the same "not available here" shape the loops runtime's other routes use. See
+[loops.md](loops.md) for what the dispatcher does with a matched request.
+
 ### WebSocket chat
 
 The WebSocket route calls `chat_ws_endpoint`, which authenticates via
@@ -305,6 +318,7 @@ Every error response is RFC 9457 `application/problem+json` with
 |---|---|
 | `GET /webui/bootstrap` | Mints an admin-scoped token; gated by peer IP or `token_issue_secret` header |
 | `GET /api/media/{sig}/{payload}` | HMAC-signed media fetch; signature verified against the per-process media secret |
+| `POST /api/v1/hooks/{hook}` | Webhook trigger ingress for [loops](loops.md); gated by `X-Durin-Hook-Secret`, not a bearer token |
 | WebSocket at `channel._expected_path()` | Chat endpoint; auth via query-param token before `accept()`; backed by `StarletteConnectionAdapter` |
 | `Mount /` | SPA static files with `index.html` fallback for history-mode routing |
 

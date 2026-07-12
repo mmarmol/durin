@@ -639,6 +639,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/loops/hooks-secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Return the shared webhook ingress secret and its path template. */
+        get: operations["loops_hooks_secret"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/loops/runs": {
         parameters: {
             query?: never;
@@ -3455,6 +3472,18 @@ export interface components {
             }[];
             /** Pending Events */
             pending_events: number;
+        };
+        /**
+         * LoopsHooksSecretQuery
+         * @description No inputs — returns the shared webhook ingress secret.
+         */
+        LoopsHooksSecretQuery: Record<string, never>;
+        /** LoopsHooksSecretResult */
+        LoopsHooksSecretResult: {
+            /** Path Template */
+            path_template: string;
+            /** Secret */
+            secret: string;
         };
         /**
          * LoopsListQuery
@@ -6762,6 +6791,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LoopsListResult"];
+                };
+            };
+        };
+    };
+    loops_hooks_secret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoopsHooksSecretQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopsHooksSecretResult"];
                 };
             };
         };

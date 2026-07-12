@@ -250,6 +250,21 @@ gate at construction time. `publish_inbound` is the only path that enqueues to
 `bus.inbound`, so any message that reaches the bus is gated and the gate cannot
 be bypassed once a message is published.
 
+**Inbound interceptors.** After the authorizer gate passes a message and
+before it is enqueued, `publish_inbound` runs it through a list of
+interceptors registered via `bus.add_inbound_interceptor(fn)`. Each
+interceptor is called in registration order with the message; a truthy return
+means the interceptor consumed the message — it is **not** enqueued and later
+interceptors are skipped. A falsy return lets the message fall through to the
+next interceptor, and eventually to the normal inbound queue, unconsumed. An
+interceptor may be sync or async. An exception raised by an interceptor is
+caught and logged; the message is never dropped on that error, it simply
+continues past the interceptor as if it had returned falsy. The [loops](loops.md)
+subsystem's `TriggerMatcher.handle_inbound` is the first (and, as of this
+writing, only) consumer: it wakes a claim-waiting loop run or fires a newly
+matched loop trigger, consuming the message so it never reaches the agent as a
+normal turn.
+
 The channel contract is to be **pure transport**: publish unconditionally with
 `is_dm` set and let the gate authorize — a channel should NOT re-implement
 `is_allowed`/pairing in its handlers. **Telegram, Slack, Discord, and
