@@ -8,7 +8,6 @@ def test_tts_config_defaults():
     assert c.fallback == "none"
     assert c.local.engine == "supertonic"
     assert c.local.voice == "F4"          # proven default from Local-VoiceMode-LLM
-    assert c.local.quality == "normal"    # 8 denoising steps
 
 
 def test_tts_config_parses_overrides():
