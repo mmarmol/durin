@@ -455,6 +455,29 @@ describe("LoopsView", () => {
     expect(screen.getByText(/esc 25%/)).toBeInTheDocument();
   });
 
+  it("shows 0% convergence (zero is not hidden, only null is)", async () => {
+    vi.mocked(api.listLoops).mockResolvedValue([LOOP_DEF]);
+    vi.mocked(api.getLoopStats).mockResolvedValue({
+      name: "digest",
+      outcomes: [
+        { run_id: "r1", status: "no_goal", goal_reached: false, started_at: 1000, finished_at: 1100 },
+      ],
+      convergence: 0,
+      escalation_rate: 0,
+      counts: {},
+      pending_events: 0,
+    });
+    const user = userEvent.setup();
+    render(wrap(<LoopsView />));
+
+    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await screen.findByText("digest");
+    await screen.findAllByTestId("outcome-dot");
+
+    expect(screen.getByText(/0%/)).toBeInTheDocument();
+    expect(screen.queryByText(/esc 0%/)).not.toBeInTheDocument();
+  });
+
   it("hides the escalation percentage when the rate is zero", async () => {
     vi.mocked(api.listLoops).mockResolvedValue([LOOP_DEF]);
     vi.mocked(api.getLoopStats).mockResolvedValue({
