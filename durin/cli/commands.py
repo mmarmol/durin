@@ -1774,6 +1774,14 @@ def _run_gateway(
         """Deliver a waiting_info question back to the channel that triggered
         the run (e.g. the same email thread), so a reply into that thread
         wakes the run via the matcher's claim lookup."""
+        if origin.get("channel") == "webhook":
+            # By design, not an error: a webhook origin has no reply channel
+            # to deliver into (build_reply has no webhook case and would
+            # raise). The question stays visible in the run's Activity feed;
+            # a counterpart resumes the run via a correlate-matched wake POST
+            # instead of a channel reply.
+            logger.debug("loop counterpart ask: webhook origin has no reply channel; ask remains in Activity")
+            return
         try:
             await bus.publish_outbound(_loop_channel_meta.build_reply(origin, text))
         except Exception:

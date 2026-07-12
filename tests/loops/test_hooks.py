@@ -271,6 +271,52 @@ async def test_semantic_judge_error_is_no_match(tmp_path):
     assert rt.fire_calls == []
 
 
+async def test_correlate_wakes_even_when_semantic_would_reject(tmp_path):
+    """Reproduces the wake-unreachable bug: a webhook trigger with both
+    ``correlate`` and ``semantic`` set must still resume a waiting run when
+    the correlate key matches an active claim — the semantic condition gates
+    NEW fires only, never a wake, mirroring matcher.py's own claim-wake pass
+    (matcher.py:106-118), which never evaluates ``semantic`` either."""
+    _save(tmp_path, triggers=[{"source": "webhook", "hook": "orders",
+                                "correlate": r"ORDER-(\d+)", "semantic": "is urgent"}])
+    rl.start_run(tmp_path, "l1", "run1", source="channel", task="t")
+    rl.finalize_run(tmp_path, "l1", "run1", status="waiting_info", ask="confirm?")
+    claims.register(tmp_path, key="custom:l1:42", loop="l1", run_id="run1")
+    rt = FakeRuntime()
+
+    async def judge(condition, summary):
+        return False  # would reject a NEW fire, but must not block the wake
+
+    dispatcher = _dispatcher(tmp_path, rt, semantic_judge=judge)
+
+    result = await dispatcher.dispatch("orders", {"text": "update for ORDER-42: shipped"})
+    await _drain()
+
+    assert result == {"result": "woken", "loop": "l1", "run_id": "run1"}
+    assert rt.answer_calls == [("l1", "run1", "update for ORDER-42: shipped")]
+    assert rt.fire_calls == []
+
+
+async def test_no_claim_and_semantic_false_is_no_match(tmp_path):
+    """Companion to the wake-bypasses-semantic fix above: with no claim to
+    wake, the semantic condition must still gate a fresh fire."""
+    _save(tmp_path, triggers=[{"source": "webhook", "hook": "orders",
+                                "correlate": r"ORDER-(\d+)", "semantic": "is urgent"}])
+    rt = FakeRuntime()
+
+    async def judge(condition, summary):
+        return False
+
+    dispatcher = _dispatcher(tmp_path, rt, semantic_judge=judge)
+
+    result = await dispatcher.dispatch("orders", {"text": "update for ORDER-42: shipped"})
+    await _drain()
+
+    assert result == {"result": "no_match"}
+    assert rt.fire_calls == []
+    assert rt.answer_calls == []
+
+
 async def test_first_matching_loop_wins_alphabetically(tmp_path):
     _save(tmp_path, name="a-loop")
     _save(tmp_path, name="b-loop")

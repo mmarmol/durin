@@ -36,11 +36,12 @@ instead.
 
 ``durin.loops.hooks.HookDispatcher`` (webhook trigger ingress) shares this
 matcher's wake and fire/queue decision instead of re-implementing the
-pending-fires race guard: it calls ``_try_wake`` and ``_dispatch_match``
-directly on a live ``TriggerMatcher`` instance with a synthetic
-``InboundMessage``/``InboundFacts`` pair (``channel="webhook"``). Both
-methods are private by convention, not by package boundary — a change to
-either one's contract must be checked against ``durin/loops/hooks.py`` too.
+pending-fires race guard: it calls ``_correlate_key``, ``_try_wake``,
+``_semantic_match`` and ``_dispatch_match``, and reads ``_ws``, directly on a
+live ``TriggerMatcher`` instance with a synthetic ``InboundMessage``/
+``InboundFacts`` pair (``channel="webhook"``). All are private by
+convention, not by package boundary — a change to any of their contracts
+must be checked against ``durin/loops/hooks.py`` too.
 """
 
 from __future__ import annotations
