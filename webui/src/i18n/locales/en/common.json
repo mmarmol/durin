@@ -1329,6 +1329,8 @@
       "answerSent": "Answer sent",
       "retry": "Retry",
       "answerAsOperator": "Answer as operator",
+      "viewList": "List",
+      "viewBoard": "Board",
       "status": {
         "running": "running",
         "needs_operator": "needs you",
@@ -1336,8 +1338,23 @@
         "done": "done",
         "no_goal": "no goal",
         "escalated": "escalated",
-        "error": "error"
+        "error": "error",
+        "attention": "Attention"
       }
+    },
+    "runDetail": {
+      "started": "started {{when}}",
+      "finished": "finished {{when}}",
+      "taskLabel": "Task",
+      "showMore": "Show more",
+      "showLess": "Show less",
+      "askLabel": "Ask",
+      "detailLabel": "Detail",
+      "checksTitle": "Checks",
+      "noChecks": "No checks defined",
+      "workflowRunLabel": "Workflow run",
+      "copyWorkflowRun": "Copy workflow run id",
+      "workflowRunCopied": "Workflow run id copied"
     },
     "definitions": {
       "loading": "Loading…",
@@ -1355,12 +1372,14 @@
       "countLabel_other": "{{count}} loops",
       "deleteTitle": "Delete loop {{title}}?",
       "queuedChip": "{{n}} queued",
+      "escLabel": "esc {{pct}}%",
       "columns": {
         "name": "Name",
         "workflow": "Workflow",
         "triggers": "Triggers",
         "active": "Active",
-        "needsOperator": "Needs you"
+        "needsOperator": "Needs you",
+        "outcomes": "Outcomes"
       }
     },
     "form": {

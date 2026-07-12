@@ -726,6 +726,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/loops/{name}/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Outcome stats for one loop: recent terminal runs, convergence, escalation rate. */
+        get: operations["loops_stats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mcp/registry/describe": {
         parameters: {
             query?: never;
@@ -3414,6 +3431,30 @@ export interface components {
         LoopSaveResult: {
             /** Name */
             name: string;
+        };
+        /** LoopStatsQuery */
+        LoopStatsQuery: {
+            /** Name */
+            name: string;
+        };
+        /** LoopStatsResult */
+        LoopStatsResult: {
+            /** Convergence */
+            convergence: number | null;
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Escalation Rate */
+            escalation_rate: number | null;
+            /** Name */
+            name: string;
+            /** Outcomes */
+            outcomes: {
+                [key: string]: unknown;
+            }[];
+            /** Pending Events */
+            pending_events: number;
         };
         /**
          * LoopsListQuery
@@ -6889,6 +6930,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LoopAnswerResult"];
+                };
+            };
+        };
+    };
+    loops_stats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoopStatsQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoopStatsResult"];
                 };
             };
         };

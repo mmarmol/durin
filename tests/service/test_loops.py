@@ -1,4 +1,4 @@
-"""Tests for LoopsService (list / get / save / delete / fire / answer / runs)."""
+"""Tests for LoopsService (list / get / save / delete / fire / answer / runs / stats)."""
 
 from pathlib import Path
 
@@ -6,6 +6,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from durin.cron.service import CronService
+from durin.loops import run_log
 from durin.loops.runtime import LoopsRuntime
 from durin.service.loops import (
     LoopAnswerCommand,
@@ -17,6 +18,7 @@ from durin.service.loops import (
     LoopsListQuery,
     LoopsRunsQuery,
     LoopsService,
+    LoopStatsQuery,
 )
 from durin.service.principal import Principal
 from durin.service.types import NotFoundError, ValidationFailedError
@@ -51,6 +53,15 @@ def _runtime(tmp_path, results, judge_verdict=None):
 
 def _wr(status, **kw):
     return WorkflowResult(status=status, final_output=kw.pop("out", "output"), run_id=kw.pop("run_id", "wf1"), **kw)
+
+
+def _seed_run(tmp_path, loop: str, run_id: str, status: str, started_at: float, *, goal_reached=None) -> None:
+    """Write a run manifest directly to run_log, bypassing the runtime, so tests
+    can seed an arbitrary mix of statuses/timestamps for stats math."""
+    run_log.start_run(tmp_path, loop, run_id, source="manual", task="t")
+    if status != "running":
+        run_log.finalize_run(tmp_path, loop, run_id, status=status, goal_reached=goal_reached)
+    run_log.update_run(tmp_path, loop, run_id, started_at=started_at)
 
 
 @pytest.mark.asyncio
@@ -248,6 +259,118 @@ async def test_runs_list_and_global_feed_shape(tmp_path):
     assert len(feed.runs) == 2
 
 
+@pytest.mark.asyncio
+async def test_stats_math_covers_every_status(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(LoopSaveCommand(name="l1", definition=_VALID), p)
+
+    _seed_run(tmp_path, "l1", "r1", "running", 1.0)
+    _seed_run(tmp_path, "l1", "r2", "needs_operator", 2.0)
+    _seed_run(tmp_path, "l1", "r3", "waiting_info", 3.0)
+    _seed_run(tmp_path, "l1", "r4", "done", 4.0, goal_reached=True)
+    _seed_run(tmp_path, "l1", "r5", "no_goal", 5.0, goal_reached=False)
+    _seed_run(tmp_path, "l1", "r6", "escalated", 6.0, goal_reached=False)
+    _seed_run(tmp_path, "l1", "r7", "error", 7.0, goal_reached=None)
+
+    stats = await svc.stats(LoopStatsQuery(name="l1"), p)
+    assert stats.name == "l1"
+    assert stats.counts == {
+        "running": 1, "needs_operator": 1, "waiting_info": 1,
+        "done": 1, "no_goal": 1, "escalated": 1, "error": 1,
+    }
+    # terminal = done + no_goal + escalated + error = 4
+    assert stats.convergence == pytest.approx(1 / 4)
+    assert stats.escalation_rate == pytest.approx(1 / 4)
+    assert stats.pending_events == 0
+
+    assert [o["run_id"] for o in stats.outcomes] == ["r7", "r6", "r5", "r4"]
+    assert stats.outcomes[0] == {
+        "run_id": "r7", "status": "error", "goal_reached": None,
+        "started_at": 7.0, "finished_at": pytest.approx(stats.outcomes[0]["finished_at"]),
+    }
+    assert stats.outcomes[-1]["run_id"] == "r4"
+    assert stats.outcomes[-1]["goal_reached"] is True
+
+
+@pytest.mark.asyncio
+async def test_stats_null_when_no_runs_at_all(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(LoopSaveCommand(name="l1", definition=_VALID), p)
+
+    stats = await svc.stats(LoopStatsQuery(name="l1"), p)
+    assert stats.convergence is None
+    assert stats.escalation_rate is None
+    assert stats.outcomes == []
+    assert stats.counts == {
+        "running": 0, "needs_operator": 0, "waiting_info": 0,
+        "done": 0, "no_goal": 0, "escalated": 0, "error": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_stats_null_when_only_active_runs(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(LoopSaveCommand(name="l1", definition=_VALID), p)
+    _seed_run(tmp_path, "l1", "r1", "running", 1.0)
+    _seed_run(tmp_path, "l1", "r2", "needs_operator", 2.0)
+    _seed_run(tmp_path, "l1", "r3", "waiting_info", 3.0)
+
+    stats = await svc.stats(LoopStatsQuery(name="l1"), p)
+    assert stats.convergence is None
+    assert stats.escalation_rate is None
+    assert stats.outcomes == []
+    assert stats.counts["running"] == 1
+    assert stats.counts["needs_operator"] == 1
+    assert stats.counts["waiting_info"] == 1
+
+
+@pytest.mark.asyncio
+async def test_stats_outcomes_capped_at_last_20_terminal_runs_newest_first(tmp_path):
+    svc, p = _svc(tmp_path), Principal.local()
+    await svc.save(LoopSaveCommand(name="l1", definition=_VALID), p)
+    for i in range(25):
+        _seed_run(tmp_path, "l1", f"r{i}", "done", float(i), goal_reached=True)
+
+    stats = await svc.stats(LoopStatsQuery(name="l1"), p)
+    assert stats.counts["done"] == 25
+    assert len(stats.outcomes) == 20
+    assert [o["run_id"] for o in stats.outcomes] == [f"r{i}" for i in range(24, 4, -1)]
+
+
+@pytest.mark.asyncio
+async def test_stats_missing_loop_raises_not_found(tmp_path):
+    with pytest.raises(NotFoundError):
+        await _svc(tmp_path).stats(LoopStatsQuery(name="ghost"), Principal.local())
+
+
+def test_stats_route_http_roundtrip(tmp_path):
+    client = _http_client(tmp_path)
+    headers = {"Authorization": "Bearer test-token"}
+    resp = client.put("/api/v1/loops/l1", json={"definition": _VALID}, headers=headers)
+    assert resp.status_code == 200
+
+    _seed_run(tmp_path, "l1", "r1", "done", 1.0, goal_reached=True)
+    _seed_run(tmp_path, "l1", "r2", "error", 2.0)
+
+    resp = client.get("/api/v1/loops/l1/stats", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "l1"
+    assert body["convergence"] == pytest.approx(0.5)
+    assert body["escalation_rate"] == pytest.approx(0.0)
+    assert body["pending_events"] == 0
+    assert [o["run_id"] for o in body["outcomes"]] == ["r2", "r1"]
+    assert body["counts"]["done"] == 1
+    assert body["counts"]["error"] == 1
+
+
+def test_stats_route_missing_loop_returns_404(tmp_path):
+    client = _http_client(tmp_path)
+    headers = {"Authorization": "Bearer test-token"}
+    resp = client.get("/api/v1/loops/ghost/stats", headers=headers)
+    assert resp.status_code == 404
+
+
 # --- route-order: /api/v1/loops/runs must not be shadowed by /api/v1/loops/{name} ---
 
 
@@ -286,6 +409,35 @@ def test_global_runs_feed_route_is_not_shadowed_by_loop_name_route(tmp_path):
     assert "runs" in body
     assert body["runs"] == []   # the global feed (no runs fired yet), not a loop-get 404/definition shape
     assert "definition" not in body
+
+
+def test_loop_named_runs_stats_route_resolves_to_the_loop_not_the_feed(tmp_path):
+    """A loop literally named 'runs' must still resolve GET /loops/runs/stats
+    to its own per-loop stats — the {name}/stats route (5 segments) is
+    distinct from the literal /loops/runs feed (4 segments), but this proves
+    it end-to-end rather than by segment-count reasoning alone."""
+    client = _http_client(tmp_path)
+    headers = {"Authorization": "Bearer test-token"}
+    resp = client.put(
+        "/api/v1/loops/runs",
+        json={"definition": {**_VALID, "name": "runs"}},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    _seed_run(tmp_path, "runs", "r1", "done", 1.0, goal_reached=True)
+
+    stats = client.get("/api/v1/loops/runs/stats", headers=headers)
+    assert stats.status_code == 200
+    body = stats.json()
+    assert body["name"] == "runs"
+    assert body["counts"]["done"] == 1
+    assert "runs" not in body   # not the global feed's {runs: [...]} shape
+
+    feed = client.get("/api/v1/loops/runs", headers=headers)
+    assert feed.status_code == 200
+    feed_body = feed.json()
+    assert "definition" not in feed_body   # still the global feed shape, not a loop-get
+    assert [r["run_id"] for r in feed_body["runs"]] == ["r1"]
 
 
 def test_save_route_accepts_an_enabled_loop_with_a_channel_trigger(tmp_path):

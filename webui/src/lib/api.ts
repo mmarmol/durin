@@ -803,6 +803,15 @@ export interface LoopRunOrigin {
   subject: string;
 }
 
+// One goal check's verdict, from the run's manifest (durin.loops.checks.verify_goal).
+export interface LoopRunCheck {
+  kind: "script" | "assertion";
+  required: boolean;
+  ref: string;
+  passed: boolean;
+  detail: string;
+}
+
 export interface LoopRun {
   run_id: string;
   loop: string;
@@ -815,6 +824,8 @@ export interface LoopRun {
   finished_at: number | null;
   detail: string | null;
   origin: LoopRunOrigin | null;
+  checks: LoopRunCheck[] | null;
+  workflow_run_id: string | null;
 }
 
 export async function listLoops(
@@ -916,6 +927,38 @@ export async function listAllLoopRuns(
     token,
   );
   return body.runs;
+}
+
+// One terminal run's outcome, from a loop's stats route (durin.service.loops._stats).
+export interface LoopStatsOutcome {
+  run_id: string;
+  status: LoopRun["status"];
+  goal_reached: boolean | null;
+  started_at: number;
+  finished_at: number | null;
+}
+
+export interface LoopStats {
+  name: string;
+  // Last 20 terminal runs, newest-first.
+  outcomes: LoopStatsOutcome[];
+  // done / terminal over all retained runs; null when no terminal runs yet.
+  convergence: number | null;
+  // escalated / terminal over all retained runs; null when no terminal runs yet.
+  escalation_rate: number | null;
+  counts: Record<string, number>;
+  pending_events: number;
+}
+
+export async function getLoopStats(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<LoopStats> {
+  return request<LoopStats>(
+    `${base}/api/v1/loops/${encodeURIComponent(name)}/stats`,
+    token,
+  );
 }
 
 export async function getConfig(
