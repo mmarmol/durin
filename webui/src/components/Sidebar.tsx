@@ -37,6 +37,7 @@ interface SidebarProps {
   strandedRunsCount?: number;
   onOpenLoops?: () => void;
   loopsActive?: boolean;
+  loopsNeedsYouCount?: number;
   onOpenDream?: () => void;
   dreamActive?: boolean;
   onCollapse: () => void;
@@ -257,6 +258,11 @@ export function Sidebar(props: SidebarProps) {
           >
             <Repeat className="h-3.5 w-3.5" aria-hidden />
             {t("loops.title")}
+            {!!props.loopsNeedsYouCount && (
+              <span className="ml-auto rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-medium text-accent-foreground">
+                {props.loopsNeedsYouCount}
+              </span>
+            )}
           </Button>
         </div>
       ) : null}

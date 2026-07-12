@@ -20,7 +20,7 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { useSessions } from "@/hooks/useSessions";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
-import { listAllWorkflowRuns, setApiReauthHandler } from "@/lib/api";
+import { listAllLoopRuns, listAllWorkflowRuns, setApiReauthHandler } from "@/lib/api";
 import { deriveWsUrl, fetchBootstrap, signout } from "@/lib/bootstrap";
 import { DurinClient } from "@/lib/durin-client";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
@@ -328,6 +328,7 @@ function Shell({
   const [restartToast, setRestartToast] = useState<string | null>(null);
   const [isRestarting, setIsRestarting] = useState(false);
   const [strandedRunsCount, setStrandedRunsCount] = useState(0);
+  const [loopsNeedsYouCount, setLoopsNeedsYouCount] = useState(0);
 
   useEffect(() => {
     try {
@@ -535,6 +536,32 @@ function Shell({
     };
   }, [token]);
 
+  // Poll the global loop run feed for the Loops sidebar button's needs-you
+  // badge count. Only needs_operator counts — waiting_info is a run paused
+  // for its own trigger source (e.g. a channel reply), not the operator.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      listAllLoopRuns(token)
+        .then((runs) => {
+          if (!cancelled) {
+            setLoopsNeedsYouCount(
+              runs.filter((run) => run.status === "needs_operator").length,
+            );
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setLoopsNeedsYouCount(0);
+        });
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [token]);
+
   useEffect(() => {
     return client.onStatus((status) => {
       let startedAt = 0;
@@ -620,6 +647,7 @@ function Shell({
     strandedRunsCount,
     onOpenLoops,
     loopsActive: view === "loops",
+    loopsNeedsYouCount,
     onOpenDream,
     dreamActive: view === "dream",
   };

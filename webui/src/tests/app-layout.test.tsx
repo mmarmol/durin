@@ -3,6 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatSummary } from "@/lib/types";
 
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  return {
+    ...actual,
+    listAllLoopRuns: vi.fn().mockResolvedValue([]),
+  };
+});
+
 const connectSpy = vi.fn();
 const refreshSpy = vi.fn();
 const createChatSpy = vi.fn().mockResolvedValue("chat-1");
@@ -79,6 +87,7 @@ vi.mock("@/lib/durin-client", () => {
 });
 
 import App from "@/App";
+import { listAllLoopRuns } from "@/lib/api";
 
 describe("App layout", () => {
   beforeEach(() => {
@@ -88,6 +97,7 @@ describe("App layout", () => {
     createChatSpy.mockClear();
     deleteChatSpy.mockReset();
     toggleThemeSpy.mockReset();
+    (listAllLoopRuns as unknown as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue([]);
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -479,5 +489,59 @@ describe("App layout", () => {
     render(<App />);
     await screen.findByText(/durin/i);
     expect(await screen.findByRole("button", { name: /voice|start voice/i })).toBeInTheDocument();
+  });
+
+  it("shows the loops needs-you badge when a run needs the operator", async () => {
+    (listAllLoopRuns as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        run_id: "run-1",
+        loop: "loop-a",
+        status: "needs_operator",
+        source: "manual",
+        task: "task",
+        ask: null,
+        goal_reached: null,
+        started_at: 0,
+        finished_at: null,
+        detail: null,
+        origin: null,
+        checks: null,
+        workflow_run_id: null,
+      },
+      {
+        run_id: "run-2",
+        loop: "loop-a",
+        status: "waiting_info",
+        source: "manual",
+        task: "task",
+        ask: null,
+        goal_reached: null,
+        started_at: 0,
+        finished_at: null,
+        detail: null,
+        origin: null,
+        checks: null,
+        workflow_run_id: null,
+      },
+    ]);
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    const loopsButton = within(sidebar).getByRole("button", { name: /Loops/ });
+    await waitFor(() => expect(within(loopsButton).getByText("1")).toBeInTheDocument());
+  });
+
+  it("hides the loops needs-you badge when no run needs the operator", async () => {
+    (listAllLoopRuns as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    render(<App />);
+
+    await waitFor(() => expect(connectSpy).toHaveBeenCalled());
+    const sidebar = screen.getByRole("navigation", { name: "Sidebar navigation" });
+    const loopsButton = within(sidebar).getByRole("button", { name: /Loops/ });
+    await waitFor(() => expect(listAllLoopRuns).toHaveBeenCalled());
+    expect(within(loopsButton).queryByText(/^\d+$/)).not.toBeInTheDocument();
   });
 });
