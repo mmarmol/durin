@@ -121,7 +121,7 @@
       "cancel": "取消"
     },
     "byok": {
-      "description": "自帶 provider key。durin 會從目前 config 讀取這些值，只有已設定的 provider 才能在一般設定中選擇。",
+      "description": "自帶提供者 key。durin 會從目前設定讀取這些值，只有已設定的提供者才能在一般設定中選擇。",
       "webSearchDescription": "設定網路搜尋的提供者與其憑證。此設定僅影響網路搜尋工具。",
       "configured": "已設定",
       "notConfigured": "未設定",
@@ -134,12 +134,12 @@
       "apiKeyPlaceholder": "輸入 API key",
       "apiKeyConfiguredPlaceholder": "留空則保留目前 key",
       "configuredKeyHint": "已設定的 key",
-      "apiBasePlaceholder": "使用 provider 預設地址",
-      "apiKeyRequired": "需要 API key 才能設定此 provider。",
+      "apiBasePlaceholder": "使用提供者預設地址",
+      "apiKeyRequired": "需要 API key 才能設定此提供者。",
       "showApiKey": "顯示 API key",
       "hideApiKey": "隱藏 API key",
       "noConfiguredProviders": "沒有已設定的 provider",
-      "configureFirst": "請先在 BYOK 設定 provider。",
+      "configureFirst": "請先在 BYOK 設定提供者。",
       "openByok": "開啟 BYOK",
       "tabs": {
         "ariaLabel": "BYOK 憑證類型",
@@ -147,9 +147,9 @@
         "webSearch": "Web Search"
       },
       "webSearch": {
-        "provider": "搜尋 provider",
-        "providerHelp": "選擇 web search 工具使用的後端。",
-        "selectProvider": "選擇 provider",
+        "provider": "搜尋提供者",
+        "providerHelp": "選擇網路搜尋工具使用的後端。",
+        "selectProvider": "選擇提供者",
         "credentials": "憑證",
         "noCredentialRequired": "不需要 key",
         "noCredentialHelp": "DuckDuckGo 不需要儲存 API key。",
@@ -157,10 +157,10 @@
         "baseUrl": "Base URL",
         "baseUrlHelp": "SearXNG 需要你自己的實例網址。",
         "baseUrlPlaceholder": "https://search.example.com",
-        "apiKeyRequired": "此搜尋 provider 需要 API key。",
+        "apiKeyRequired": "此搜尋提供者需要 API key。",
         "baseUrlRequired": "SearXNG 需要 Base URL。",
         "missingCredential": "填寫必要憑證後才能儲存。",
-        "saveHint": "變更會套用到新的 web search 請求。"
+        "saveHint": "變更會套用到新的網路搜尋請求。"
       }
     },
     "secrets": {
@@ -226,7 +226,7 @@
       "audio": "音訊模型",
       "audioHint": "由 interpret_audio 工具使用。",
       "memory": "Dream 模型",
-      "memoryHint": "由 memory dream 使用——這是負責整理與篩選已儲存記憶的背景處理程序。未設定時會回退使用主要模型。",
+      "memoryHint": "由記憶 dream 使用——這是負責整理與篩選已儲存記憶的背景處理程序。未設定時會回退使用主要模型。",
       "judge": "評判模型",
       "judgeHint": "技能安全 LLM 評判（以及技能組合守門）所使用的模型與提供者。兩者會成對套用；未設定時會使用預設模型。",
       "modelPlaceholder": "模型 ID",
@@ -249,7 +249,7 @@
       "capsUnknown": "選擇一個模型以檢視其支援項目。",
       "pickProvider": "選擇提供者",
       "testRow": "測試",
-      "testRowHint": "對已設定的模型執行實際往返測試——驗證 API key 與 model id 是否能搭配運作。",
+      "testRowHint": "對已設定的模型執行實際往返測試——驗證 API key 與模型 ID 是否能搭配運作。",
       "saving": "儲存中…",
       "advanced": "進階",
       "contextWindow": "上下文視窗",
@@ -345,7 +345,7 @@
         "errors": {
           "swapped_tokens": "token 似乎放反了——xoxb- 應填入 bot 欄位，xapp- 應填入 app 欄位",
           "expected_bot_token": "應為 bot token（xoxb-…）",
-          "expected_app_token": "應為 app-level token（xapp-…）",
+          "expected_app_token": "應為應用程式層級 token（xapp-…）",
           "not_allowed_token_type": "此欄位的 token 類型錯誤",
           "invalid_auth": "Slack 拒絕了此 token（無效或已撤銷）",
           "missing_scope": "此 token 缺少必要範圍——請從 manifest 重新建立應用程式",
@@ -444,7 +444,7 @@
         "starting": "正在啟動配對階段…",
         "scanInstruction": "在手機上開啟 WhatsApp → 設定 → 已連結的裝置 → 連結裝置，然後掃描這個代碼。在掃描前會自動重新整理。",
         "finishing": "正在完成設定…",
-        "timeout": "QR code 已過期且尚未被掃描。",
+        "timeout": "QR 碼已過期且尚未被掃描。",
         "retry": "重試",
         "paired": "已與 WhatsApp 配對",
         "relink": "重新配對",
@@ -459,7 +459,7 @@
         "email": "透過 IMAP（收件）與 SMTP（寄件）接收並回覆電子郵件。",
         "slack": "透過 Socket Mode 在 Slack 的私訊、頻道與討論串中與 durin 對話——不需要公開網址。",
         "discord": "在 Discord 伺服器與私訊中與 durin 對話。",
-        "whatsapp": "透過掃描 QR code 配對電話號碼，在 WhatsApp 上與 durin 對話。"
+        "whatsapp": "透過掃描 QR 碼配對電話號碼，在 WhatsApp 上與 durin 對話。"
       },
       "field": {
         "consent_granted": "同意",
@@ -571,7 +571,7 @@
         "dreamMaxSeconds": "每次擷取處理程序的實際時間上限。達到上限時，處理程序會在目前會話後讓出，並在下次觸發時從該會話的游標繼續處理剩餘部分。0 = 無上限。",
         "dreamAlwaysOnBudget": "固定在每個提示中的「常駐」指引所使用的 token 預算。Dream 會為回饋排序（立場／作法）、捨棄矛盾之處，並將優先度最高的項目放入此預算內。0 會停用此固定內容。"
       },
-      "crossEncoderModelPlaceholder": "model id（例如 BAAI/bge-reranker-base）",
+      "crossEncoderModelPlaceholder": "模型 ID（例如 BAAI/bge-reranker-base）",
       "crossEncoderTest": "測試",
       "dreamDescription": "Dream 會將會話整理為實體頁面與技能，並移除重複的實體。除了每日 cron 排程外，也可搭配選用的反應式觸發。"
     },
@@ -778,7 +778,7 @@
       "title": "模型",
       "loading": "正在載入模型…",
       "empty": "此提供者沒有模型",
-      "addPlaceholder": "新增 model id（例如 my-model）",
+      "addPlaceholder": "新增模型 ID（例如 my-model）",
       "add": "新增",
       "edit": "編輯",
       "save": "儲存",
@@ -860,7 +860,7 @@
         "connect": "透過 ChatGPT 連線",
         "stepOpen": "1. 開啟",
         "stepCode": "2. 輸入這組代碼：",
-        "deviceCodeHint": "如果看到「device code authorization」錯誤，請在你的 ChatGPT 安全性設定中啟用它，然後再試一次。",
+        "deviceCodeHint": "如果看到「裝置代碼授權」錯誤，請在你的 ChatGPT 安全性設定中啟用它，然後再試一次。",
         "notWorking": "無法使用？",
         "useDeviceCode": "使用裝置代碼",
         "notWorkingUseDeviceCode": "無法使用？改用裝置代碼",
@@ -889,11 +889,11 @@
       "fieldArgs": "參數",
       "hintArgs": "一行一個。",
       "fieldEnv": "環境變數",
-      "hintEnv": "KEY=value，一行一個。",
+      "hintEnv": "KEY=值，一行一個。",
       "fieldUrl": "URL",
       "hintUrl": "HTTP/SSE 端點網址。",
       "fieldHeaders": "標頭",
-      "hintHeaders": "KEY=value，一行一個。",
+      "hintHeaders": "KEY=值，一行一個。",
       "fieldEnabled": "已啟用",
       "advanced": "進階",
       "fieldToolTimeout": "工具逾時（秒）",
@@ -1042,7 +1042,7 @@
         "baseUrlTitle": "伺服器基礎網址",
         "baseUrlDesc": "例如 http://localhost:8080/v1（whisper.cpp、mlx-asr、vLLM）",
         "modelTitle": "伺服器模型名稱",
-        "modelDesc": "伺服器提供的 model id（選填）。",
+        "modelDesc": "伺服器提供的模型 ID（選填）。",
         "keyTitle": "伺服器 API key",
         "keyDesc": "僅在伺服器需要驗證時才需填寫。"
       },
@@ -1193,7 +1193,7 @@
     "runsAsModel": "指定模型…",
     "runsAsPersonasGroup": "人設",
     "modelId": "模型 ID",
-    "modelPlaceholder": "例如 provider model-id",
+    "modelPlaceholder": "例如提供者 model-id",
     "mode": "模式",
     "context": "脈絡",
     "session": "會話",
@@ -1761,7 +1761,7 @@
           },
           "status": {
             "title": "查看狀態",
-            "description": "顯示執行環境、provider 和 channel 狀態。"
+            "description": "顯示執行環境、provider 和頻道狀態。"
           },
           "effort": {
             "title": "推理強度",
