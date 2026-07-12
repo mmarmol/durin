@@ -181,9 +181,9 @@ without asking the model).
 
 ### 4d. Cron integration
 
-Cron is one of the two trigger sources (`LoopTrigger.source`, alongside
-`channel` — see the inbound matcher section); webhook sources arrive later.
-A cron trigger's `schedule`
+Cron is one of the three trigger sources (`LoopTrigger.source`: `cron`,
+`channel`, or `webhook` — see §4h and §4m for the other two). A cron trigger's
+`schedule`
 is shaped exactly like a `CronSchedule` (`kind: at | every | cron`, plus the
 matching fields), so the same schedule vocabulary cron jobs use applies to
 loop triggers.
@@ -277,37 +277,115 @@ status is rewritten to `escalated`, `loops.escalated` telemetry is emitted,
 and the operator is notified (`kind="escalation"`) — the loop keeps
 retrying on its own triggers, but a human now knows it isn't converging.
 
-### 4h. Channel triggers and the inbound matcher
+### 4h. Channel triggers, the adapter layer, and the inbound matcher
 
-Besides `cron`, a `LoopTrigger` can have `source: "channel"` — today only
-`channel: "email"`. A channel trigger is matched against every inbound
-message on that channel by `TriggerMatcher.handle_inbound`
-(`durin/loops/matcher.py`), which is installed as a bus inbound interceptor
-(§4i) rather than polled or scheduled: routing happens the moment a message
-arrives. Each message is resolved through a fixed decision order:
+Besides `cron`, a `LoopTrigger` can have `source: "channel"`, with
+`channel` one of `email`, `telegram`, `slack`, `discord`, or `whatsapp`. A
+channel trigger is matched against every inbound message on that channel by
+`TriggerMatcher.handle_inbound` (`durin/loops/matcher.py`), which is
+installed as a bus inbound interceptor (§4i) rather than polled or
+scheduled: routing happens the moment a message arrives.
 
-1. **Claim wake.** If the message carries an email thread that has a
-   registered claim (§4j) pointing at a run currently in `waiting_info`, the
-   message is handed straight to that run as its answer — no loop or trigger
-   is evaluated at all for that message — except the claim-holder loop's own
-   channel trigger `match` policy, which the matcher checks first: a loop
-   declaring `match: "always_new"` does not want thread replies resuming its
-   parked runs, so the wake is skipped (the claim is left in place) and the
-   message falls through to step 2 instead; a missing loop spec or trigger
-   defaults to waking. A claim whose run has moved past `waiting_info` (or
-   vanished) is stale and is released instead of acted on.
+**The adapter layer.** `durin/loops/channel_meta.py` isolates the matcher
+from each channel's own metadata shape. `extract(msg)` turns a bus
+`InboundMessage` into a channel-neutral `InboundFacts` (`sender`, `text`,
+`title` — the email subject, `None` on every chat channel, `thread_key`, and
+a raw `reply` dict carrying whatever channel-specific pieces `build_reply`
+will need later, e.g. Slack's `thread_ts` or Telegram's `message_id`); a
+channel `extract` doesn't recognize (`cli`, `websocket`, `cron`, …) returns `None`
+and the message passes through untouched, never reaching the matcher at all.
+`build_reply(origin, text)` is the inverse: given a captured reply origin
+(built by `_dispatch_match`, stored on the run, and threaded through the
+counterpart lane, §4j) it builds the `OutboundMessage` for that channel's
+own reply contract — raising `ValueError` for a channel with no known reply
+contract, a case the caller guards against.
+
+**Per-channel thread-key semantics.** `thread_key` is the correlation key a
+plain (non-`correlate`) claim wakes on — see the table below for the exact
+format each channel produces, straight out of `channel_meta.extract`:
+
+| Channel | `thread_key` when set | `thread_key` is `None` when |
+|---|---|---|
+| `email` | the thread digest itself, e.g. `a1b2c3d4e5f6a7b8` — no channel prefix (see "email bare-digest compat" below) | the message carries no thread metadata |
+| `slack` | `slack:<chat_id>:<thread_ts>` | the message has no `thread_ts` (not a threaded reply) |
+| `telegram` | `telegram:<chat_id>:topic:<message_thread_id>` for a forum-topic message, else `telegram:dm:<chat_id>` for a DM | a non-forum group message with no topic |
+| `discord` | `discord:thread:<chat_id>` inside a thread, else `discord:dm:<chat_id>` for a DM | a plain (non-thread) channel message |
+| `whatsapp` | `whatsapp:dm:<chat_id>` for a DM | the message is a group message (`is_group`) |
+
+**Email bare-digest compat.** Every non-email channel's key is prefixed with
+its channel name (`slack:…`, `telegram:…`, `discord:…`, `whatsapp:…`) so keys
+from different channels can never collide. Email is the one exception: its
+key is the bare thread digest (`durin.channels.email_threads.thread_digest`,
+16 hex chars) with no `email:` prefix, matching the key shape email-triggered
+loops have always used — changing it would silently orphan every claim
+registered by a pre-`channel_meta` deployment.
+
+**Claim-key prefixes.** A `correlate`-derived claim key (below) is always
+`custom:<loop-name>:<captured-group>`, regardless of channel or trigger
+source — the `custom:` prefix can never collide with a plain `thread_key`,
+since none of the per-channel formats above start with it.
+
+**Filter keys per source.** A channel trigger's `filters` accepts
+`from_contains` / `sender_contains` (aliases — both test `facts.sender`,
+case-insensitive substring), `subject_contains` (tests `facts.title`; always
+false on a chat channel, since only email ever sets a title), and
+`text_contains` (tests `facts.text`). Any, all, or none may be set, and they
+apply identically regardless of which channel the trigger names — there is
+no per-channel filter vocabulary. A `webhook` trigger has no `filters` field
+at all (rejected at parse time, §4m) — its only structural narrowing is the
+`hook` name itself plus an optional `correlate`/`semantic`.
+
+**Correlate: custom correlation keys.** A trigger's optional `correlate`
+field is a regex, validated at parse time (`spec._parse_correlate`) to
+compile and have **exactly one capture group** — anything else is a
+`LoopError` at save time, not a silent no-op at match time. When set, the
+matcher derives a custom claim key before ever looking at the plain
+`thread_key`: `_correlate_key` searches `facts.title + "\n" + facts.text`,
+capped at the first **2000 characters** so an arbitrarily long message can't
+inflate match cost, and on a match returns `custom:<loop>:<captured-group>`
+(e.g. a loop matching `TICKET-(\d+)` against a message mentioning
+`TICKET-42` derives `custom:my-loop:42`). This lets an operator-defined
+correlation id — a ticket number mentioned anywhere in the text — reunite
+replies that land in unrelated threads (different email threads, different
+Slack channels, a webhook payload with no channel thread at all), instead of
+being confined to whatever thread the first message happened to arrive on.
+
+Each message is resolved through a fixed decision order:
+
+1. **Claim wake — custom keys before the plain thread key.** For every
+   enabled loop's channel trigger matching this message's channel that
+   declares a `correlate` pattern, its derived custom key is tried first,
+   in loop-`name` order; only if none of those wake a claim does the matcher
+   fall back to the message's plain `thread_key`. This precedence means a
+   loop using `correlate` is never accidentally woken by an unrelated
+   thread-only match, and a thread-scoped reply still wakes a loop that
+   never set `correlate`. If the resolved key has a registered claim (§4j)
+   pointing at a run currently in `waiting_info`, the message is handed
+   straight to that run as its answer — no loop or trigger is evaluated at
+   all for that message — except the claim-holder loop's own channel
+   trigger `match` policy, which the matcher checks first: a loop declaring
+   `match: "always_new"` does not want thread replies resuming its parked
+   runs, so the wake is skipped (the claim is left in place) and the message
+   falls through to step 2 instead; a missing loop spec or trigger defaults
+   to waking. A claim whose run has moved past `waiting_info` (or vanished)
+   is stale and is released instead of acted on. **A trigger's `semantic`
+   condition is never evaluated during claim wake** — it gates whether a
+   *new* run opens in step 2, not whether an already-waiting run may resume;
+   a claim that exists means a run is genuinely waiting, and any message
+   correlating to it wakes it regardless of what `semantic` would have said.
 2. **Trigger match.** Absent a claim wake, every *enabled* loop is checked in
    ascending `name` order, and the first one whose channel trigger fully
    matches wins — deterministic, first-match-wins. A trigger match is two
-   gates in sequence: **structural filters** first (`from_contains` /
-   `subject_contains`, case-insensitive substring checks against the sender
-   address and subject; either, both, or neither may be set), and only if
-   those pass, an **optional semantic condition** — a sentence graded by an
-   LLM call against a short summary of the message (sender, subject, and the
-   start of the body), using the `loops` aux-model purpose (§6). A semantic
-   condition with no judge configured, or whose judge call raises, is treated
-   as a non-match rather than blocking the message: a broken judge fails
-   closed for that trigger, not open.
+   gates in sequence: **structural filters** first (the per-source keys
+   above), and only if those pass, an **optional semantic condition** — a
+   sentence graded by an LLM call against a short summary of the message
+   (sender, subject, and the start of the body), using the `loops` aux-model
+   purpose (§6). A semantic condition with no judge configured, or whose
+   judge call raises, is treated as a non-match rather than blocking the
+   message: a broken judge fails closed for that trigger, not open. The
+   matched trigger's own `correlate` (if any) is re-derived here and, when
+   present, becomes the new run's origin thread in place of the plain
+   `thread_key` — see step 3.
 3. **Concurrency action.** A trigger match then resolves to fire, queue, or
    pass through, the same concurrency logic as a manual/chat fire (§4e): a
    `parallel` loop always starts a new run; a `single` loop fires only if no
@@ -350,8 +428,9 @@ Some workflow asks are meant for the other party in the conversation, not
 the operator. A workflow's `needs_input` text that starts with the literal
 tag `[TO:counterpart]` (case-sensitive, stripped before display) is that
 signal (`durin/loops/runtime.py`). When such an ask fires on a run whose
-origin has a thread — e.g. the loop was triggered by an inbound email — the
-run parks at a new status, `waiting_info`, distinct from `needs_operator`:
+origin has a thread — e.g. the loop was triggered by an inbound email, a
+Slack thread reply, or a `correlate`-matched webhook payload — the run parks
+at a new status, `waiting_info`, distinct from `needs_operator`:
 the loop is not stuck waiting on a human, it is waiting on a reply from
 whoever it is corresponding with. Parking a run this way also **registers a
 claim**: an entry in `<workspace>/loops/claims.json`
@@ -477,6 +556,86 @@ sidebar's Loops badge is a third, narrower read of that same feed: it counts
 only `needs_operator` runs, not `waiting_info` — a run waiting on its
 counterpart (§4j) is not waiting on the operator.
 
+### 4m. Webhook trigger ingress
+
+A `LoopTrigger` with `source: "webhook"` (`hook`, plus optional `semantic`
+and `correlate`; no `filters`, `channel`, `match`, or `schedule` — rejected
+at parse time, §4h) fires off an external HTTP POST instead of a channel
+message or a clock tick. `POST /api/v1/hooks/{hook}` is the ingress route
+(`durin/api/asgi.py`'s `hooks_handler`), registered outside the generic
+`/api/v1/*` service-registry table because its authentication is different:
+external webhook callers aren't a webui/CLI/API principal, so the route is
+gated on a shared secret header, `X-Durin-Hook-Secret`, compared against the
+one secret every hook shares (`ApiTokenStore.get_or_create_hooks_secret`,
+generated once and persisted — there is no per-hook secret). A missing or
+wrong header is `401`; a request body that isn't valid JSON, or is valid
+JSON but not an object, is `400`; a surface with no `HookDispatcher` wired
+(e.g. a non-gateway process) is `503`.
+
+Once authenticated, the body is handed to `durin.loops.hooks.HookDispatcher`
+(`durin/loops/hooks.py`), which reuses `TriggerMatcher`'s own wake and
+fire/queue decision rather than reimplementing the pending-fires race guard:
+it builds a synthetic `InboundMessage`/`InboundFacts` pair with
+`channel="webhook"` (`sender`/`title` set to the hook name, `thread_key`
+always `None` — a webhook trigger only ever correlates via `correlate`, never
+a plain thread) and calls the matcher's wake, semantic-match, and
+dispatch-match logic directly. The payload text used for matching, the
+semantic-judge summary, and the correlate search is `payload["text"]` when
+it's a non-empty string, else the whole payload compacted to JSON — either
+way capped at **4000 characters**.
+
+**Two-pass dispatch, wake before fire.** Loops are evaluated in ascending
+`name` order in each pass — first-match-alphabetical, same as the channel
+matcher:
+
+1. **Wake pass.** Every enabled loop's webhook trigger for this hook that
+   declares a `correlate` is tried, purely structurally: `semantic` is never
+   evaluated here, the same "semantic gates fires, never wakes" rule §4h
+   describes for channel triggers — a claim already existing means a run is
+   genuinely waiting, and `semantic` only gates whether a *new* run should
+   open. `match: "always_new"` has no webhook equivalent (the field doesn't
+   exist on a webhook trigger), so a webhook-origin message always wakes a
+   matching claim when one exists.
+2. **Fire pass.** Only if nothing woke, every enabled loop's webhook trigger
+   for this hook is tried in order; `semantic` (fail-closed when unconfigured
+   or erroring, same as channel triggers) gates entry, then the same
+   fire/queue/pass-through concurrency decision as §4h step 3 runs, with the
+   trigger's `correlate` (if any) becoming the new run's origin thread.
+
+The response body reports the outcome, `202` on any of the three ways a
+webhook POST is consumed:
+
+| `result` | Meaning | HTTP status |
+|---|---|---|
+| `fired` | A new run was started; `loop` names it. | `202` |
+| `queued` | A `single`-concurrency loop matched while already busy; the event was pushed onto its queue (§4k). | `202` |
+| `woken` | A correlate-derived key matched a claim on a `waiting_info` run; `loop` and `run_id` identify it. | `202` |
+| `no_match` | No enabled loop's webhook trigger matches this hook, or the one that structurally matches is busy with no queue wired (the same `passed_busy` outcome §4h describes, reported identically to no-match rather than as a fifth value). | `404` |
+
+**A `[TO:counterpart]`-tagged ask on a webhook-origin run degrades quietly.**
+`channel_meta.build_reply` has no webhook case — there is no address to POST
+a reply to — so the production wiring (`durin/cli/commands.py`'s
+`on_counterpart_ask` callback) special-cases `origin["channel"] ==
+"webhook"` and skips calling it entirely rather than letting the `ValueError`
+propagate: the run still parks at `waiting_info` and a claim is still
+registered against its `correlate` key exactly as §4j describes, but no
+outbound message is sent anywhere. The question is visible in the run's
+Activity feed row like any other, and the counterpart "replies" the only way
+a webhook counterpart can: another `POST` to the same hook whose payload
+correlates to the same key, which the wake pass above resolves as `woken`.
+
+### 4n. The hooks-secret route
+
+`GET /api/v1/loops/hooks-secret` (`LoopsService.hooks_secret`,
+`durin/service/loops.py`) is how an operator retrieves the shared ingress
+secret to configure an external webhook sender — it returns `{secret,
+path_template: "/api/v1/hooks/{hook}"}`, the caller substitutes the actual
+hook name into the template. It requires `Scope.LOOPS_WRITE`, not the read
+scope a `GET` would normally carry: exposing the credential that lets anyone
+fire loops is a more sensitive read than a normal listing. The service is
+constructed with the secret getter only on surfaces that have one (the
+gateway); elsewhere the route raises `UnavailableError`.
+
 ## 5. Key types & entry points
 
 | Symbol | File | Role |
@@ -491,6 +650,8 @@ counterpart (§4j) is not waiting on the operator.
 | `LoopsService` | `durin/service/loops.py` | The HTTP surface: list/get/save/delete definitions, fire a run, answer a run awaiting an operator or a counterpart, read run feeds. |
 | `LoopsTool` | `durin/agent/tools/loops.py` | The `loops` LLM tool (core scope): the same operations as `LoopsService`, available in chat when a live `LoopsRuntime` is wired onto `ToolContext`. |
 | `TriggerMatcher` | `durin/loops/matcher.py` | Routes an inbound channel message to a claim wake, a fired/queued trigger match, or a pass-through to the normal agent turn; installed as a bus inbound interceptor. |
+| `InboundFacts`, `extract`, `build_reply` | `durin/loops/channel_meta.py` | The per-channel adapter: turns an inbound bus message into channel-neutral facts the matcher can match/wake on, and turns a captured reply origin back into an outbound message. |
+| `HookDispatcher` | `durin/loops/hooks.py` | Matches a `POST /api/v1/hooks/{hook}` payload against enabled loops' webhook triggers, reusing `TriggerMatcher`'s wake and fire/queue decision. |
 | `register`, `release`, `release_run`, `lookup`, `prune` | `durin/loops/claims.py` | The thread-to-waiting-run index backing the counterpart lane: one JSON file, cross-process locked. |
 | `push`, `pop_fresh`, `pending` | `durin/loops/queue.py` | The per-loop event queue for a `single`-concurrency loop's channel triggers: one JSONL file per loop, TTL evaluated at pop time. |
 
@@ -509,11 +670,12 @@ counterpart (§4j) is not waiting on the operator.
   drain hook drops it unfired. All three live under `DurinConfig.loops`
   (`LoopsConfig`, `durin/config/schema.py`).
 - **Aux model:** `agents.aux_models.loops` (`AuxModelConfig`, under
-  `AuxModelsConfig`, `durin/config/schema.py`) picks the model used for both
-  goal-judge calls (§4c) and channel triggers' semantic-condition calls
-  (§4h). It is the one aux purpose that does not fall back to a separately
-  resolved default preset when unset — those calls simply ride whatever
-  model the agent is already configured with.
+  `AuxModelsConfig`, `durin/config/schema.py`) picks the model used for
+  goal-judge calls (§4c) and both channel and webhook triggers'
+  semantic-condition calls (§4h, §4m — the same `TriggerMatcher._semantic_match`
+  serves both). It is the one aux purpose that does not fall back to a
+  separately resolved default preset when unset — those calls simply ride
+  whatever model the agent is already configured with.
 - **Service:** `LoopsService` (`durin/service/loops.py`) exposes the
   `/api/v1/loops*` routes and is registered under the `"loops"` service name
   — see the route table generated from the OpenAPI contract for the exact
@@ -525,7 +687,11 @@ counterpart (§4j) is not waiting on the operator.
   loop's live counts: `active_runs`, `needs_operator`, `waiting_info`, and
   `pending_events` (the loop's queue depth, §4k). `GET
   /api/v1/loops/{name}/stats` reports outcome stats — see §4l for the exact
-  field definitions.
+  field definitions. `GET /api/v1/loops/hooks-secret` (§4n) is also served
+  from this registry, but the webhook ingress route itself,
+  `POST /api/v1/hooks/{hook}` (§4m), is registered directly on the gateway
+  ASGI app, not through the service registry — it authenticates on the
+  shared secret header instead of a bearer-token principal.
 - **Tool:** the `loops` LLM tool (core scope, `durin/agent/tools/loops.py`)
   — `list` / `status` / `fire` / `answer` / `enable` / `pause` / `create` —
   goes through the exact same `durin.loops.store` + `durin.loops.run_log` +
@@ -549,12 +715,16 @@ counterpart (§4j) is not waiting on the operator.
   read-only with an "answer as operator" override — and a **Board** view of
   five fixed columns, §4l; the choice persists in `localStorage`) and
   **Definitions** (create/edit/delete/run-now, with a form for triggers —
-  cron or channel, each channel trigger's filters and optional semantic
-  condition — goal intent + checks, the workflow to run, concurrency, stuck
-  threshold, and operator contact; a loop with events waiting in its queue
-  shows a count badge, and each row shows an outcome strip sourced from
-  §4l's stats route). The sidebar's **Loops** nav item carries a needs-you
-  badge — the same `needs_operator` count described in §4l, polled every 30s.
+  cron, channel (any of the five supported channels, with filters, match
+  policy, and optional semantic condition and correlate pattern), or webhook
+  (hook name, the resulting `/api/v1/hooks/{hook}` path shown read-only,
+  optional semantic condition and correlate pattern, and a per-row "show
+  secret" reveal that fetches the shared ingress secret, §4n, on first use)
+  — goal intent + checks, the workflow to run, concurrency, stuck threshold,
+  and operator contact; a loop with events waiting in its queue shows a
+  count badge, and each row shows an outcome strip sourced from §4l's stats
+  route). The sidebar's **Loops** nav item carries a needs-you badge — the
+  same `needs_operator` count described in §4l, polled every 30s.
   See [the user guide](../guide/loops.md) for the walkthrough.
 - **Security.** A loop's workflow and checks are local, user-authored
   content — a script check runs a shell command with the same trust model as
