@@ -12,6 +12,11 @@ description: OPTIONAL deeper guidance for long_task / complete_goal — project-
 
 Use these tools when the user wants **multi-turn sustained work** on **one** clear objective (same runner, ordinary tools). Not for trivial one-shot questions.
 
+> **Boundary:** `long_task` keeps a goal visible **inside this conversation** — the user is
+> present and collaborating. If the objective should live **outside** any chat — fire on
+> events, verify a goal per run, wait for external replies, escalate when stuck — that is a
+> **loop** (read the `loops` skill), not a `long_task`.
+
 ## Start fast
 
 `long_task` is a lightweight marker. Calling it tells durin: "this thread has a sustained objective; keep that objective visible across turns and surface it in the UI."

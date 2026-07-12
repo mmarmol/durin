@@ -95,6 +95,26 @@ System jobs (those with `payload.kind == "system_event"`) are protected: `remove
 
 The canonical system job is `memory_dream`, registered at gateway start when `memory.dream.enabled` is true. Its execution path in the gateway runs all five Dream passes (extract, derived-from, skill-extract, refine, always-on) and then the session reaper (`reap_expired_run_sessions`) that deletes per-run sessions older than `cron.run_session_retention_hours`.
 
+### Loop trigger jobs
+
+The [loops](loops.md) subsystem materializes each loop's `cron`-source
+triggers as ordinary cron jobs, one per trigger, with `payload.kind ==
+"loop_trigger"` and a deterministic id (`loop:<loop-name>:<trigger-index>`).
+`sync_loop_jobs` (`durin/loops/cron_sync.py`) diffs the wanted set against the
+loop's existing `loop:`-prefixed jobs and calls `register_system_job`/
+`remove_job` to reconcile; this runs on every loop save and delete, and
+`sync_all` re-runs it for every stored loop at gateway boot, additionally
+pruning any `loop:` job whose loop no longer exists. A disabled loop, or a
+trigger whose `source` is not `cron`, contributes no job. Loop trigger jobs are
+not `system_event` jobs, so they are not protected from `remove_job`/
+`update_job` — the cron sync (not an operator edit) is the only thing expected
+to add or remove them.
+
+When a `loop_trigger` job fires, the gateway's `on_job` callback dispatches
+straight to the loops runtime instead of building an `agent_turn` prompt: the
+loop runtime owns its own prompt, judge, and run bookkeeping. See
+[loops](loops.md) for what happens after that call.
+
 ### Session retention
 
 Every `agent_turn` execution creates a session keyed `cron:{id}:run:{timestamp_ms}`. These accumulate over time. The `memory_dream` cron pass runs `reap_expired_run_sessions` (in `durin/cron/reaper.py`) at the end of its execution, scanning session keys matching that pattern and deleting those older than `config.cron.run_session_retention_hours` (default 48 hours).
@@ -105,7 +125,7 @@ Every `agent_turn` execution creates a session keyed `cron:{id}:run:{timestamp_m
 |---|---|---|
 | `CronJob` | `durin/cron/types.py` | Root job record: id (8-char uuid), name, enabled, schedule, payload, state, timestamps, `delete_after_run` |
 | `CronSchedule` | `durin/cron/types.py` | Schedule descriptor: kind (`at`/`every`/`cron`), `at_ms`, `every_ms`, `expr`, `tz` |
-| `CronPayload` | `durin/cron/types.py` | Execution spec: kind (`agent_turn`/`system_event`), mode (`reminder`/`task`), message, model **or** persona override (mutually exclusive), deliver flag, channel routing, session key |
+| `CronPayload` | `durin/cron/types.py` | Execution spec: kind (`agent_turn`/`system_event`/`loop_trigger`), mode (`reminder`/`task`), message, model **or** persona override (mutually exclusive), deliver flag, channel routing, session key, loop name (set when kind is `loop_trigger`) |
 | `CronJobState` | `durin/cron/types.py` | Run state: `next_run_at_ms`, `last_run_at_ms`, `last_status`, `last_error`, `run_history` |
 | `CronRunRecord` | `durin/cron/types.py` | One execution record: `run_at_ms`, status, `duration_ms`, error, `session_key`, model, persona, summary |
 | `CronStore` | `durin/cron/types.py` | Persistent container: version, jobs list. Serialized to JSON at `store_path` |

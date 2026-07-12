@@ -1710,6 +1710,7 @@ def _run_gateway(
     # this point — build_service_registry constructs its own further down).
     import time
 
+    from durin.loops import channel_meta as _loop_channel_meta
     from durin.loops import queue as _loops_queue
     from durin.loops.judge import build_filter_prompt as _loop_build_filter_prompt
     from durin.loops.judge import build_prompt as _loop_build_prompt
@@ -1773,13 +1774,16 @@ def _run_gateway(
         """Deliver a waiting_info question back to the channel that triggered
         the run (e.g. the same email thread), so a reply into that thread
         wakes the run via the matcher's claim lookup."""
+        if origin.get("channel") == "webhook":
+            # By design, not an error: a webhook origin has no reply channel
+            # to deliver into (build_reply has no webhook case and would
+            # raise). The question stays visible in the run's Activity feed;
+            # a counterpart resumes the run via a correlate-matched wake POST
+            # instead of a channel reply.
+            logger.debug("loop counterpart ask: webhook origin has no reply channel; ask remains in Activity")
+            return
         try:
-            await bus.publish_outbound(OutboundMessage(
-                channel=origin.get("channel"),
-                chat_id=origin.get("chat_id"),
-                content=text,
-                metadata={"email": {"thread": origin.get("thread")}, "force_send": True},
-            ))
+            await bus.publish_outbound(_loop_channel_meta.build_reply(origin, text))
         except Exception:
             logger.exception("loop counterpart delivery (non-fatal) failed")
 
@@ -1806,6 +1810,13 @@ def _run_gateway(
         enqueue=lambda loop, ev: _loops_queue.push(config.workspace_path, loop, ev),
     )
     bus.add_inbound_interceptor(_loops_matcher.handle_inbound)
+
+    # Webhook trigger ingress (POST /api/v1/hooks/{hook}, wired into the
+    # unified gateway app below): shares the matcher's wake/fire/queue
+    # decision instead of duplicating it — see durin/loops/hooks.py.
+    from durin.loops.hooks import HookDispatcher
+
+    loops_hook_dispatcher = HookDispatcher(_loops_matcher)
 
     def _webui_runtime_model_name() -> str | None:
         model = getattr(agent, "model", None)
@@ -2173,6 +2184,7 @@ def _run_gateway(
                     auth=_unified_registry.get("auth"),
                     static_token=_static_token_u,
                     static_dist_path=_ws_channel._static_dist_path,
+                    hook_dispatcher=loops_hook_dispatcher,
                 )
                 _ws_port = _ws_channel.config.port  # type: ignore[attr-defined]
                 _ws_host = _ws_channel.config.host  # type: ignore[attr-defined]

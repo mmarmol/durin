@@ -72,6 +72,7 @@ class ApiTokenStore:
         except (json.JSONDecodeError, OSError):
             return {"media_secret": None, "tokens": {}}
         data.setdefault("media_secret", None)
+        data.setdefault("hooks_secret", None)
         data.setdefault("tokens", {})
         return data
 
@@ -215,3 +216,21 @@ class ApiTokenStore:
             data["media_secret"] = base64.b64encode(raw).decode()
             self._save(data)
             return raw
+
+    def get_or_create_hooks_secret(self) -> str:
+        """Return the webhook ingress secret, generating it on first call.
+
+        Unlike the media secret (raw HMAC signing bytes, base64-wrapped),
+        this is compared verbatim against the ``X-Durin-Hook-Secret`` header
+        on ``POST /api/v1/hooks/{hook}`` and shown directly to operators via
+        ``GET /api/v1/loops/hooks-secret``, so it is generated and stored as
+        a plain URL-safe token string.
+        """
+        with _LOCK, cross_process_lock(self._path):
+            data = self._load()
+            if data.get("hooks_secret"):
+                return data["hooks_secret"]
+            token = secrets.token_urlsafe(32)
+            data["hooks_secret"] = token
+            self._save(data)
+            return token

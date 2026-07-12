@@ -255,6 +255,32 @@ describe("LoopsView", () => {
     expect(screen.getByText("digest-wf")).toBeInTheDocument();
   });
 
+  it("summarizes telegram text_contains and webhook triggers in the definitions list", async () => {
+    vi.mocked(api.listAllLoopRuns).mockResolvedValue([]);
+    vi.mocked(api.listLoops).mockResolvedValue([
+      {
+        ...LOOP_DEF,
+        name: "multi",
+        triggers: [
+          {
+            source: "channel",
+            channel: "telegram",
+            filters: { text_contains: "urgent" },
+            match: "wake_or_new",
+          },
+          { source: "webhook", hook: "my-hook" },
+        ],
+      },
+    ]);
+    const user = userEvent.setup();
+    render(wrap(<LoopsView />));
+
+    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await screen.findByText("multi");
+    expect(screen.getByText("telegram · text:urgent")).toBeInTheDocument();
+    expect(screen.getByText("webhook · my-hook")).toBeInTheDocument();
+  });
+
   it("clicking Run now calls fireLoop with the loop name and refreshes", async () => {
     vi.mocked(api.listLoops).mockResolvedValue([LOOP_DEF]);
     vi.mocked(api.fireLoop).mockResolvedValue({ ...DONE, loop: "digest" });

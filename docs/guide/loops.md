@@ -38,9 +38,10 @@ you what to do.
   and it's unavailable once you add an assertion check (an assertion always
   needs the judge to grade it).
 - **Triggers** — what fires the loop: a schedule (a cron expression or a
-  repeating interval), an inbound email that matches conditions you set, or
-  a manual/chat request. See **Channel triggers** below for the email case,
-  and **Current boundaries** for what's not there yet.
+  repeating interval), an inbound message on a channel (email, Telegram,
+  Slack, Discord, or WhatsApp) that matches conditions you set, a webhook
+  call from an external service, or a manual/chat request. See **Channel
+  triggers** and **Webhook triggers** below.
 - **Escalation** — if a loop fails to reach its goal several times in a row
   (configurable, default 3), it stops quietly retrying and instead notifies
   an operator — you — that it's stuck.
@@ -53,9 +54,11 @@ tab, and click **New loop**. The form has these sections:
 - **Name** — the loop's identifier (locked once you're editing an existing
   loop).
 - **Triggers** — add zero or more. Each is either a **Cron** expression
-  (with an optional timezone), a plain **Interval** in seconds, or a
-  **Channel: email** trigger that fires on an inbound email matching
-  conditions you set — see **Channel triggers** below. A loop with no
+  (with an optional timezone), a plain **Interval** in seconds, a
+  **Channel** trigger (pick email, Telegram, Slack, Discord, or WhatsApp)
+  that fires on an inbound message matching conditions you set — see
+  **Channel triggers** below — or a **Webhook** trigger that fires on an
+  external HTTP call — see **Webhook triggers** below. A loop with no
   triggers isn't scheduled — it only runs when fired manually or from chat.
 - **Goal** — the **Intent** (what "done" means, in your own words), then
   any number of **Checks**: pick **Script** (a shell command) or
@@ -104,27 +107,36 @@ build visually. The same tool also has `list`, `status`, `fire`, `answer`,
 daily-digest loop now" or "pause daily-digest" without opening the
 dashboard at all.
 
-## Channel triggers: an email-triggered loop, end to end
+## Channel triggers: a support-ticket loop, end to end
 
 A channel trigger fires a loop off an inbound message instead of a clock —
-today that's email. Walking through a support-ticket loop end to end covers
-everything a channel trigger can do.
+email, Telegram, Slack, Discord, or WhatsApp. The mechanics are the same on
+every channel (filters, an optional semantic condition, a match policy, a
+run that can pause and wait for a reply); email happens to have the richest
+example (a subject line, a durable thread) so it's the one walked through
+below. See **What wakes a run, per channel** for how the "waiting on a
+reply" part looks on each channel specifically.
 
 ### Creating the trigger
 
-Add a trigger, switch its source to **Channel: email**, and set:
+Add a trigger, switch its source to **Channel**, pick a channel, and set:
 
-- **From contains** / **Subject contains** — plain substring filters (either,
-  both, or neither), checked without regard to case. A support loop might
-  filter to `From contains: support@` so only mail sent to the support alias
-  matches.
+- **From contains** / **Subject contains** — email only: plain substring
+  filters, checked without regard to case. A support loop might filter to
+  `From contains: support@` so only mail sent to the support alias matches.
+- **Sender contains** / **Text contains** — available on every channel:
+  substring filters against the sender identity and the message text,
+  respectively. Any, all, or none of the filters on a trigger may be set.
 - **Semantic condition** (optional) — a sentence describing what the message
   should be about, e.g. "the customer is reporting a problem with the
-  product, not asking a sales question." Every email that passes the
+  product, not asking a sales question." Every message that passes the
   filters above is summarized and handed to the model to grade against this
   sentence; only a match fires the loop. See **When to use a semantic
   condition** below before reaching for this.
 - **Match policy** — see **Match policies** below.
+- **Correlate** (optional) — a way to reunite a reply with its run by
+  something *mentioned in the message* instead of which thread it landed in.
+  See **Correlating by content** below.
 
 Save the loop enabled, and point it at a workflow that reads the ticket and
 either resolves it or asks for more information.
@@ -149,6 +161,34 @@ resumes the same paused run with the customer's answer, exactly where it
 left off. This works across however long the customer takes to reply; the
 loop isn't holding a connection open, it's just waiting for the next message
 on that thread.
+
+### What wakes a run, per channel
+
+"The same email thread" above is the email version of a more general idea:
+every channel has its own notion of a *thread*, and that's what a paused run
+waits on. What counts as a thread — and what doesn't — differs by channel:
+
+- **Email** — the thread the original message belongs to (durin tracks this
+  the same way your mail client does).
+- **Telegram** — a forum **topic**, if the group has topics enabled;
+  otherwise a **direct message** conversation. A reply in a plain
+  (non-topic) group chat has no thread to wait on.
+- **Slack** — a **thread reply** (the little "N replies" thread under a
+  message). A reply that isn't threaded — just another message posted to
+  the channel — doesn't wake anything.
+- **Discord** — a **thread** channel, or a **direct message** conversation.
+  A plain message posted to a regular text channel isn't threaded.
+- **WhatsApp** — a **direct message** conversation only. WhatsApp has no
+  thread concept inside a group, so a group chat can never wake a paused
+  run this way.
+
+The practical rule: **a group or channel conversation without a thread can't
+wake a run.** If your workflow asks the customer something on one of those,
+the run still pauses — it just goes to **needs you** instead of **waiting
+reply**, with a note that the counterpart channel wasn't available, and the
+question comes to you to answer or relay yourself. A DM or an actual thread
+(a Slack thread, a Telegram topic, a Discord thread, an email thread) always
+has somewhere to wait, so the reply finds its way back on its own.
 
 ### Answering for the customer
 
@@ -197,6 +237,87 @@ address with similar subjects. If a filter on sender or subject would
 already narrow things down well enough, skip the semantic condition and
 save the call.
 
+## Correlating by content: the TICKET-42 example
+
+**Match policy** and threads (above) reunite a reply with its run by *where*
+the message landed. **Correlate** reunites it by *something the message
+says*, no matter where it lands — useful when the same conversation can
+arrive on more than one thread (or on none at all, e.g. a plain group chat
+or a webhook payload) within the channel or hook this trigger watches.
+
+Say you run a ticketing loop that opens a run per ticket, sends the customer
+a question tagged for them, and wants any later message that mentions that
+ticket number to resume the same run — even if the customer's reply comes in
+as a fresh message instead of an actual thread reply. Set **Correlate** to:
+
+```
+TICKET-(\d+)
+```
+
+A regex with **exactly one capture group** — durin rejects anything else
+when you save the loop. Here's what that buys you, end to end:
+
+1. A message arrives mentioning `TICKET-42` somewhere in its subject or
+   body, and matches this trigger's filters (and semantic condition, if
+   any). The loop fires a new run, and durin remembers `42` as this run's
+   correlation value — not the thread it arrived on.
+2. The workflow asks the customer something. The run parks at **waiting
+   reply**, correlated to `42` rather than to a thread.
+3. Any later message on this trigger's channel — on any thread, or on none
+   at all — that mentions `TICKET-42` again resumes this exact run, before
+   durin even checks whether it landed on the "right" thread.
+
+Correlate keys take priority over thread matching: if a message matches both
+a correlate value and happens to land on a thread claimed by a different
+run, the correlate match wins. Only the first 2000 characters of the message
+are searched, so put the identifier somewhere near the top if your messages
+run long.
+
+## Webhook triggers: firing a loop from another service
+
+A **Webhook** trigger fires a loop from an HTTP call made by something
+outside durin entirely — a CI pipeline, a monitoring alert, another internal
+service — instead of a channel message or a clock.
+
+### Creating the trigger
+
+Add a trigger and switch its source to **Webhook**, then set:
+
+- **Hook name** — a short identifier (letters, digits, `-`/`_`) that becomes
+  part of the URL. More than one loop can listen on the same hook name; if
+  they do, the first one (alphabetically, by loop name) whose filters and
+  semantic condition match the call is the one that fires.
+- **Semantic condition** and **Correlate** (both optional) — work exactly as
+  they do for a channel trigger (see above), graded against the webhook
+  payload's `text` field (or the whole JSON body, if there's no `text`).
+
+The form shows the resulting path, `/api/v1/hooks/<hook name>`, read-only —
+append it to your gateway's own base URL (the same host and port you use to
+open the dashboard) to get the full URL an external service should call.
+
+### Getting the secret
+
+Every webhook call must carry a shared secret in an `X-Durin-Hook-Secret`
+header — one secret, shared by every hook on your durin instance, not a
+secret per hook. Click **Show secret** on the trigger row to reveal it (and
+**Copy** to copy it); the same value is reused for every hook you create, so
+you only ever need to fetch it once and reuse it in whatever system will
+call the webhook.
+
+### Calling it
+
+```bash
+curl -X POST https://your-durin-host:8765/api/v1/hooks/orders \
+  -H "X-Durin-Hook-Secret: <the secret from the form>" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "new order #42 needs review"}'
+```
+
+A missing or wrong secret gets a `401`; a body that isn't a JSON object gets
+a `400`; a call to a hook name no enabled loop is listening for gets a
+`404`. Otherwise the loop fires (or queues, or wakes a waiting run — same
+rules as a channel trigger) and the response reports which.
+
 ## Reading the Activity view
 
 The **Activity** tab is a live feed of every run, across every loop, newest
@@ -242,9 +363,10 @@ at the same feed the List view shows, not a separate way of managing runs.
 Click any run — in List or Board — to expand its detail inline. Beyond the
 status and timestamps already visible in the row, it shows:
 
-- **Origin** — where the run came from: the channel (e.g. `email`), the
-  sender, and, for a channel-triggered run, the subject and a short
-  reference to the conversation thread.
+- **Origin** — where the run came from: the channel (e.g. `email`, or
+  `webhook` for a webhook-triggered run, with the hook name as the sender),
+  and, for a channel-triggered run, the subject and a short reference to the
+  conversation thread.
 - **Task** — the full instruction the run's workflow was given, truncated
   with a **Show more** toggle when it's long.
 - **Ask** — the question the run is currently paused on, if any.
@@ -311,9 +433,6 @@ first); past run history is unaffected.
 
 ## Current boundaries
 
-- **Channel triggers today are email only.** A loop that should react to a
-  message in a specific chat channel (Telegram, Slack, …) isn't triggerable
-  that way yet; schedule it or fire it yourself instead.
 - **Firing on demand works from the dashboard, chat, or the API.** Each
   loop's row in the Definitions tab has a **Run now** button; you can also
   ask the agent to fire a loop, or use the `loops` tool's `fire` action.

@@ -252,6 +252,60 @@ async def test_counterpart_ask_with_thread_origin_becomes_waiting_info(tmp_path)
     assert counterpart_asks == [("l1", m["run_id"], origin, "confirm the invoice?")]
 
 
+async def test_counterpart_ask_with_channel_origin_becomes_waiting_info(tmp_path):
+    """Full channel-shaped origin (as the matcher now builds it, with a
+    channel-appropriate thread key and captured reply pieces) registers a
+    claim under origin['thread'] and hands the origin through to the
+    counterpart callback intact — the runtime never inspects channel/reply,
+    only thread."""
+    _save(tmp_path)
+    counterpart_asks = []
+    rt, _ = _mk_runtime(
+        tmp_path,
+        [_wr("needs_input", out="[TO:counterpart] confirm the invoice?", needs_input_node="gate")],
+        counterpart_asks=counterpart_asks,
+    )
+    origin = {
+        "channel": "telegram",
+        "sender": "user1",
+        "chat_id": "123",
+        "thread": "telegram:123:topic:7",
+        "subject": None,
+        "reply": {"message_thread_id": 7, "message_id": 42},
+    }
+    m = await rt.fire("l1", source="channel", origin=origin)
+    assert m["status"] == "waiting_info"
+
+    claim = claims.lookup(tmp_path, "telegram:123:topic:7")
+    assert claim is not None
+    assert claim["loop"] == "l1"
+    assert claim["run_id"] == m["run_id"]
+
+    assert counterpart_asks == [("l1", m["run_id"], origin, "confirm the invoice?")]
+
+
+async def test_counterpart_ask_with_custom_correlate_key_embeds_own_loop_name(tmp_path):
+    """A custom correlate key (as the matcher derives it: custom:<loop>:<x>)
+    always embeds the SAME loop name as the one registering the claim — the
+    matcher only ever derives a custom key while iterating that loop's own
+    triggers, so the loop firing here and the loop named in the key can never
+    diverge. Uses a non-default loop name to prove this isn't hardcoded."""
+    _save(tmp_path, name="ticket-loop")
+    rt, _ = _mk_runtime(
+        tmp_path,
+        [_wr("needs_input", out="[TO:counterpart] which ticket?", needs_input_node="gate")],
+    )
+    origin = {"channel": "email", "thread": "custom:ticket-loop:TCK-9001", "reply": {"thread": "t1"}}
+    m = await rt.fire("ticket-loop", source="channel", origin=origin)
+    assert m["status"] == "waiting_info"
+
+    claim = claims.lookup(tmp_path, "custom:ticket-loop:TCK-9001")
+    assert claim is not None
+    # The loop name embedded in the custom key equals the registering loop.
+    key_loop_segment = "custom:ticket-loop:TCK-9001".split(":")[1]
+    assert claim["loop"] == key_loop_segment == "ticket-loop"
+
+
 async def test_counterpart_ask_without_origin_degrades_to_needs_operator(tmp_path):
     _save(tmp_path)
     asks = []

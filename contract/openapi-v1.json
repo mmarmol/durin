@@ -2338,6 +2338,31 @@
         "title": "LoopStatsResult",
         "type": "object"
       },
+      "LoopsHooksSecretQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 returns the shared webhook ingress secret.",
+        "properties": {},
+        "title": "LoopsHooksSecretQuery",
+        "type": "object"
+      },
+      "LoopsHooksSecretResult": {
+        "properties": {
+          "path_template": {
+            "title": "Path Template",
+            "type": "string"
+          },
+          "secret": {
+            "title": "Secret",
+            "type": "string"
+          }
+        },
+        "required": [
+          "secret",
+          "path_template"
+        ],
+        "title": "LoopsHooksSecretResult",
+        "type": "object"
+      },
       "LoopsListQuery": {
         "additionalProperties": false,
         "description": "No inputs \u2014 lists every loop, each with its live run counts.",
@@ -8438,6 +8463,35 @@
         },
         "summary": "List all loop definitions, with live run counts.",
         "x-required-scope": "loops:read"
+      }
+    },
+    "/api/v1/loops/hooks-secret": {
+      "get": {
+        "operationId": "loops_hooks_secret",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopsHooksSecretQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopsHooksSecretResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Return the shared webhook ingress secret and its path template.",
+        "x-required-scope": "loops:write"
       }
     },
     "/api/v1/loops/runs": {

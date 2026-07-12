@@ -136,6 +136,7 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `aux_models.vision` | `null` | Aux model for vision inputs (`preset` or `model`+`provider`) |
 | `aux_models.audio` | `null` | Aux model for audio inputs |
 | `aux_models.memory` | `null` | Highest-priority model for memory dream passes; overrides `dream.model_override` and the bundled default |
+| `aux_models.loops` | `null` | Model for [loops'](../internals/loops.md) goal-judge and semantic trigger-filter calls; unset rides the agent's own live model instead of falling back to a separate default preset |
 
 **`model_presets`** — named sets of model + generation parameters for quick switching.
 Each entry under `model_presets` is a `ModelPresetConfig`:

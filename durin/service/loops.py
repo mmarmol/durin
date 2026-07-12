@@ -10,7 +10,7 @@ trigger jobs in sync via ``durin.loops.cron_sync``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from durin.loops import queue, run_log
 from durin.loops.cron_sync import remove_loop_jobs, sync_loop_jobs
@@ -112,6 +112,15 @@ class LoopStatsResult(Result):
     pending_events: int
 
 
+class LoopsHooksSecretQuery(Query):
+    """No inputs — returns the shared webhook ingress secret."""
+
+
+class LoopsHooksSecretResult(Result):
+    secret: str
+    path_template: str   # "/api/v1/hooks/{hook}" — the caller substitutes {hook}
+
+
 _TERMINAL_STATUSES = ("done", "no_goal", "escalated", "error")
 _ALL_STATUSES = run_log.ACTIVE_STATUSES + _TERMINAL_STATUSES
 _OUTCOMES_LIMIT = 20
@@ -157,10 +166,14 @@ def _stats(workspace: Path, name: str) -> dict[str, Any]:
 
 
 class LoopsService:
-    def __init__(self, workspace: Path, cron_service: Any = None, runtime: Any = None) -> None:
+    def __init__(
+        self, workspace: Path, cron_service: Any = None, runtime: Any = None,
+        hooks_secret: Callable[[], str] | None = None,
+    ) -> None:
         self._workspace = Path(workspace)
         self._cron_service = cron_service   # durin.cron.service.CronService — keeps trigger jobs in sync
         self._runtime = runtime             # durin.loops.runtime.LoopsRuntime — None on surfaces without one
+        self._hooks_secret = hooks_secret   # () -> str, e.g. ApiTokenStore().get_or_create_hooks_secret
 
     @route(
         "GET", "/api/v1/loops",
@@ -292,3 +305,15 @@ class LoopsService:
         except LoopNotFound:
             raise NotFoundError(f"loop {query.name!r} not found")
         return LoopStatsResult(name=query.name, **_stats(self._workspace, query.name))
+
+    @route(
+        "GET", "/api/v1/loops/hooks-secret",
+        scope=Scope.LOOPS_WRITE.value,
+        request_model=LoopsHooksSecretQuery, response_model=LoopsHooksSecretResult,
+        summary="Return the shared webhook ingress secret and its path template.",
+    )
+    async def hooks_secret(self, query: LoopsHooksSecretQuery, principal: Principal) -> LoopsHooksSecretResult:
+        principal.require(Scope.LOOPS_WRITE)
+        if self._hooks_secret is None:
+            raise UnavailableError("the webhook ingress secret is not available on this surface")
+        return LoopsHooksSecretResult(secret=self._hooks_secret(), path_template="/api/v1/hooks/{hook}")
