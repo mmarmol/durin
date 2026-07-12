@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { RunDetail } from "@/components/loops/RunDetail";
 import { ApiError, answerLoopRun, fireLoop, listAllLoopRuns, type LoopRun } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
 import { useClient } from "@/providers/ClientProvider";
@@ -59,7 +60,10 @@ function AnswerInput({
     return <div className="text-xs text-muted-foreground">{t("loops.activity.answerSent")}</div>;
   }
   return (
-    <div className="flex gap-1.5">
+    // Stops the click from bubbling to the row's onToggle — this input sits
+    // inside rows that expand/collapse the run detail on body click, and
+    // clicking into the answer box must not toggle that panel.
+    <div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
       <Input
         value={answer}
         onChange={(e) => setAnswer(e.target.value)}
@@ -81,13 +85,18 @@ function AnswerRow({
   run,
   onAnswer,
   answering,
+  onToggle,
 }: {
   run: LoopRun;
   onAnswer: (run: LoopRun, answer: string) => Promise<boolean>;
   answering: boolean;
+  onToggle: () => void;
 }) {
   return (
-    <div className="flex flex-col gap-1.5 rounded-md border border-accent bg-accent/40 px-3 py-2 text-accent-foreground">
+    <div
+      className="flex flex-col gap-1.5 rounded-md border border-accent bg-accent/40 px-3 py-2 text-accent-foreground"
+      onClick={onToggle}
+    >
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
         <span className="font-mono font-medium">{run.loop}</span>
         <span className="text-[10px] opacity-70">{run.source}</span>
@@ -108,15 +117,17 @@ function WaitingInfoRow({
   run,
   onAnswer,
   answering,
+  onToggle,
 }: {
   run: LoopRun;
   onAnswer: (run: LoopRun, answer: string) => Promise<boolean>;
   answering: boolean;
+  onToggle: () => void;
 }) {
   const { t } = useTranslation();
   const [showAnswer, setShowAnswer] = useState(false);
   return (
-    <div className="flex flex-col gap-1.5 rounded-md border border-border px-3 py-2 text-xs">
+    <div className="flex flex-col gap-1.5 rounded-md border border-border px-3 py-2 text-xs" onClick={onToggle}>
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="font-mono font-medium">{run.loop}</span>
         <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", statusTone(run.status))}>
@@ -135,7 +146,10 @@ function WaitingInfoRow({
           size="sm"
           variant="ghost"
           className="h-6 w-fit gap-1 px-2 text-[11px] text-muted-foreground"
-          onClick={() => setShowAnswer(true)}
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowAnswer(true);
+          }}
         >
           {t("loops.activity.answerAsOperator")}
         </Button>
@@ -148,15 +162,17 @@ function RunRow({
   run,
   onRetry,
   retrying,
+  onToggle,
 }: {
   run: LoopRun;
   onRetry: (run: LoopRun) => void;
   retrying: boolean;
+  onToggle: () => void;
 }) {
   const { t } = useTranslation();
   const label = run.task || run.run_id.slice(0, 8);
   return (
-    <div className="flex flex-col gap-0.5 rounded-md border border-border px-3 py-2 text-xs">
+    <div className="flex flex-col gap-0.5 rounded-md border border-border px-3 py-2 text-xs" onClick={onToggle}>
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="font-mono font-medium">{run.loop}</span>
         <span className="text-muted-foreground">·</span>
@@ -174,7 +190,10 @@ function RunRow({
             variant="ghost"
             className="ml-auto h-6 gap-1 px-2 text-[11px]"
             disabled={retrying}
-            onClick={() => onRetry(run)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRetry(run);
+            }}
           >
             {retrying ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
             {t("loops.activity.retry")}
@@ -193,6 +212,7 @@ export function ActivityView() {
   const [error, setError] = useState<string | null>(null);
   const [answeringId, setAnsweringId] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -239,6 +259,10 @@ export function ActivityView() {
     [token, refresh],
   );
 
+  const onToggle = useCallback((runId: string) => {
+    setExpandedId((prev) => (prev === runId ? null : runId));
+  }, []);
+
   const onRetry = useCallback(
     async (run: LoopRun) => {
       setRetryingId(run.run_id);
@@ -271,30 +295,37 @@ export function ActivityView() {
           ) : sorted.length === 0 ? (
             <p className="text-xs text-muted-foreground">{t("loops.activity.empty")}</p>
           ) : (
-            sorted.map((run) =>
-              run.status === "needs_operator" ? (
-                <AnswerRow
-                  key={run.run_id}
-                  run={run}
-                  onAnswer={onAnswer}
-                  answering={answeringId === run.run_id}
-                />
-              ) : run.status === "waiting_info" ? (
-                <WaitingInfoRow
-                  key={run.run_id}
-                  run={run}
-                  onAnswer={onAnswer}
-                  answering={answeringId === run.run_id}
-                />
-              ) : (
-                <RunRow
-                  key={run.run_id}
-                  run={run}
-                  onRetry={onRetry}
-                  retrying={retryingId === run.run_id}
-                />
-              ),
-            )
+            sorted.map((run) => (
+              <div key={run.run_id} className="flex flex-col gap-0.5">
+                {run.status === "needs_operator" ? (
+                  <AnswerRow
+                    run={run}
+                    onAnswer={onAnswer}
+                    answering={answeringId === run.run_id}
+                    onToggle={() => onToggle(run.run_id)}
+                  />
+                ) : run.status === "waiting_info" ? (
+                  <WaitingInfoRow
+                    run={run}
+                    onAnswer={onAnswer}
+                    answering={answeringId === run.run_id}
+                    onToggle={() => onToggle(run.run_id)}
+                  />
+                ) : (
+                  <RunRow
+                    run={run}
+                    onRetry={onRetry}
+                    retrying={retryingId === run.run_id}
+                    onToggle={() => onToggle(run.run_id)}
+                  />
+                )}
+                {expandedId === run.run_id && (
+                  <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2">
+                    <RunDetail run={run} />
+                  </div>
+                )}
+              </div>
+            ))
           )}
         </div>
       </div>

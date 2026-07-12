@@ -803,6 +803,15 @@ export interface LoopRunOrigin {
   subject: string;
 }
 
+// One goal check's verdict, from the run's manifest (durin.loops.checks.verify_goal).
+export interface LoopRunCheck {
+  kind: "script" | "assertion";
+  required: boolean;
+  ref: string;
+  passed: boolean;
+  detail: string;
+}
+
 export interface LoopRun {
   run_id: string;
   loop: string;
@@ -815,6 +824,8 @@ export interface LoopRun {
   finished_at: number | null;
   detail: string | null;
   origin: LoopRunOrigin | null;
+  checks: LoopRunCheck[] | null;
+  workflow_run_id: string | null;
 }
 
 export async function listLoops(

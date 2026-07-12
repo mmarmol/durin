@@ -1154,6 +1154,20 @@
         "error": "error"
       }
     },
+    "runDetail": {
+      "started": "iniciado {{when}}",
+      "finished": "finalizado {{when}}",
+      "taskLabel": "Tarea",
+      "showMore": "Mostrar más",
+      "showLess": "Mostrar menos",
+      "askLabel": "Pregunta",
+      "detailLabel": "Detalle",
+      "checksTitle": "Verificaciones",
+      "noChecks": "No hay verificaciones definidas",
+      "workflowRunLabel": "Ejecución del workflow",
+      "copyWorkflowRun": "Copiar id de ejecución del workflow",
+      "workflowRunCopied": "Id de ejecución del workflow copiado"
+    },
     "definitions": {
       "loading": "Cargando…",
       "empty": "Todavía no hay loops — hacé clic en Nuevo loop para crear uno.",

@@ -54,6 +54,8 @@ const NEEDS_OPERATOR: api.LoopRun = {
   started_at: 1000,
   finished_at: null,
   origin: null,
+  checks: null,
+  workflow_run_id: null,
 };
 
 const ESCALATED: api.LoopRun = {
@@ -68,6 +70,8 @@ const ESCALATED: api.LoopRun = {
   started_at: 3000,
   finished_at: 3100,
   origin: null,
+  checks: null,
+  workflow_run_id: null,
 };
 
 const DONE: api.LoopRun = {
@@ -82,6 +86,8 @@ const DONE: api.LoopRun = {
   started_at: 2000,
   finished_at: 2100,
   origin: null,
+  checks: null,
+  workflow_run_id: null,
 };
 
 const WAITING_INFO: api.LoopRun = {
@@ -96,6 +102,8 @@ const WAITING_INFO: api.LoopRun = {
   started_at: 4000,
   finished_at: null,
   origin: { channel: "email", sender: "user@example.com", chat_id: "user@example.com", thread: "t1", subject: "Help" },
+  checks: null,
+  workflow_run_id: null,
 };
 
 const LOOP_DEF: api.LoopSummary = {

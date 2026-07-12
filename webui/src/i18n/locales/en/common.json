@@ -1336,6 +1336,20 @@
         "error": "error"
       }
     },
+    "runDetail": {
+      "started": "started {{when}}",
+      "finished": "finished {{when}}",
+      "taskLabel": "Task",
+      "showMore": "Show more",
+      "showLess": "Show less",
+      "askLabel": "Ask",
+      "detailLabel": "Detail",
+      "checksTitle": "Checks",
+      "noChecks": "No checks defined",
+      "workflowRunLabel": "Workflow run",
+      "copyWorkflowRun": "Copy workflow run id",
+      "workflowRunCopied": "Workflow run id copied"
+    },
     "definitions": {
       "loading": "Loading…",
       "empty": "No loops yet — click New loop to create one.",
