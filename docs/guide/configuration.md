@@ -25,7 +25,7 @@ single directory called the **durin home**. By default that is `~/.durin`. Set
 the environment variable `DURIN_HOME` to any path to use a different location:
 
 ```
-DURIN_HOME=/path/to/my-instance durin chat
+DURIN_HOME=/path/to/my-instance durin agent
 ```
 
 Each value of `DURIN_HOME` is a fully independent instance: its own config, its
@@ -102,12 +102,15 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `model` | `anthropic/claude-opus-4-5` | Active model (`provider/name` form) |
 | `provider` | `auto` | Provider name or `"auto"` for auto-detection |
 | `model_preset` | `null` | Named preset from `model_presets`; takes precedence over `model` + `provider` |
+| `persona` | `null` | Default persona name for interactive chats; `null` = the workspace SOUL + default model |
 | `max_tokens` | `8192` | Maximum output tokens per turn |
 | `context_window_tokens` | `65536` | Context window size hint (tokens) |
 | `temperature` | `0.4` | Generation temperature |
 | `reasoning_effort` | `null` | `low` / `medium` / `high` / `adaptive` / `none`; `null` preserves the provider default |
 | `max_tool_iterations` | `200` | Tool call iterations cap per turn |
 | `max_concurrent_subagents` | `3` | Parallel sub-agent concurrency cap (set `1` to force serial) |
+| `max_concurrent_interactive` | `4` | Interactive-lane cap: human-facing turns running at once across all sessions (env `DURIN_MAX_CONCURRENT_REQUESTS` overrides at runtime) |
+| `concurrency_ceiling` | `12` | Global ceiling on total in-flight turns + subagents across all lanes; keep `>=` the interactive cap |
 | `max_tool_result_chars` | `16000` | Truncation limit on individual tool results |
 | `provider_retry_mode` | `standard` | `standard` or `persistent` retry strategy |
 | `fallback_models` | `[]` | Ordered list of preset names or inline model specs to try on provider failure |
@@ -123,6 +126,7 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `consolidation_ratio` | `0.5` | Target ratio of context budget retained after compaction |
 | `preemptive_compact_ratio` | `0.5` | Fraction of context window that triggers pre-emptive compaction |
 | `decision_log_enabled` | `true` | Record key decisions/findings across compaction boundaries |
+| `compaction_learnings_enabled` | `true` | Distil durable user learnings (preferences, corrections) at compaction time |
 | `decision_log_max_entries` | `10` | Cap on decision-log entries re-injected each turn |
 | `decision_log_max_chars` | `1500` | Total character cap on the decision log |
 | `parallel_tool_calls` | `{}` | Per-model substring → bool map for the `parallel_tool_calls` request flag |
@@ -155,6 +159,35 @@ Each entry under `model_presets` is a `ModelPresetConfig`:
 (bare or `provider/model`). Provider-qualified keys win over bare names. Any field
 left `null` falls through to the vendored snapshot. Useful for local fine-tunes or
 when the snapshot is wrong for your deployment.
+
+---
+
+### `personas`
+
+Named personas — a SOUL plus an optional model — selectable for a chat or a cron
+job. Each entry under `personas` is keyed by persona name and is a `PersonaConfig`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `soul` | `default` | SoulStore slug for the persona's SOUL; `default` = the workspace `SOUL.md` |
+| `model` | `null` | Model picker ref (a preset name or a `provider model` pair); `null` uses the global default model |
+| `description` | `null` | Human-readable description shown in the persona picker |
+
+---
+
+### `agent_modes`
+
+User-defined agent modes, registered into the mode registry at startup alongside
+the built-ins (`build` / `plan` / `explore`, which cannot be overridden here). Each
+entry under `agent_modes` is keyed by mode name and is a `ModeConfig`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `description` | `""` | Human-readable description shown in the mode picker |
+| `allowed` | `null` | Tool names allowed while the mode is active; `null` = full access (every tool) unless denied |
+| `denied` | `[]` | Tool names denied while the mode is active; denied always wins over allowed |
+| `prompt_suffix` | `""` | Text appended to the system prompt while the mode is active |
+| `icon` | `null` | Optional glyph name for the UI; the picker falls back to a generic glyph when unset |
 
 ---
 
@@ -312,8 +345,14 @@ background file watching, and health checks. See
 | `post_compaction` | `true` | Run a dream pass after a session is compacted |
 | `on_session_close` | `true` | Run a dream pass when a session ends |
 | `discover_enabled` | `true` | Grow the entity graph from agent-mentioned facts (mention-based entity discovery) |
+| `distill_references_enabled` | `true` | Distil each ingested reference document into an outline sidecar (abstract + per-section summaries) |
+| `seed_entities_from_docs_enabled` | `true` | Seed candidate entity pages from each distilled document's outline (the refine pass dedups them) |
+| `curate_topics_enabled` | `true` | Curate the Library's topic index from the distilled abstracts into stable theme labels |
+| `consolidate_relations_enabled` | `true` | Canonicalise entity-relation type labels to one surface form so graph edges line up |
 | `skill_signals_enabled` | `true` | Extract skill corrections/gaps from session turns and feed the observation queue |
-| `model_override` | `null` | Dream model; `null` falls through to the bundled default (resolution order: `agents.aux_models.memory` → `memory.dream.model_override` → bundled default) |
+| `learnings_sweep_enabled` | `true` | Mine each session's new turns for corrections, preferences, and project facts and write them as feedback entities |
+| `skill_suggestions_enabled` | `true` | Also evaluate manual workspace skills in the daily curation and enqueue proposed edits as suggestions (never auto-applied) |
+| `model_override` | `null` | Dream model (deprecated — prefer `agents.aux_models.memory`); `null` falls through to the bundled default (resolution order: `agents.aux_models.memory` → `memory.dream.model_override` → bundled default) |
 | `min_seconds_between_runs` | `300` | Throttle for reactive triggers; `0` disables throttle (daily cron is never throttled) |
 | `max_seconds_per_run` | `600` | Wall-clock cap per extract pass; `0` = run to completion |
 | `always_on_token_budget` | `1500` | Token budget for the always-on guidance pin injected into every prompt; `0` disables |
@@ -397,7 +436,7 @@ Each `SkillRegistryConfig`:
 | `api_key_secret` | `""` | Durin secret name for the API key (empty = anonymous) |
 | `taps` | `[]` | GitHub-only: list of repos to search |
 
-**`skills.discovery.skills_hot_tier`** (under `agents.defaults`) — working-set skill injection:
+**`agents.defaults.skills_hot_tier`** — working-set skill injection:
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -636,9 +675,34 @@ Scheduled-work (cron) lifecycle settings.
 
 ---
 
+### `workflow`
+
+Workflow-engine lifecycle: node-visit caps and run-folder retention.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `max_node_visits` | `25` | Cap on total node visits per workflow run (bounds loops) |
+| `keep_runs` | `20` | Recent run working-folders (`.workflow/<run_id>/`) kept on disk |
+| `script_timeout` | `300` | Default per-node timeout (seconds) for script nodes; a node's own `timeout` overrides it |
+| `script_output_max_chars` | `16000` | Cap on a script node's captured stdout (the edge text); excess is truncated |
+
+---
+
+### `loops`
+
+Loops subsystem lifecycle.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `keep_runs` | `20` | Finalized loop-run manifests kept per loop (`needs_operator` runs are never pruned) |
+| `check_timeout_s` | `60` | Timeout in seconds for a single script goal check |
+| `queue_ttl_s` | `3600` | How long a queued channel event stays fresh before the drain hook drops it unfired |
+
+---
+
 ### `telemetry`
 
-Local telemetry is always written to JSONL under `<durin_home>/telemetry/`.
+Local telemetry is always written to JSONL under `~/.cache/durin/telemetry/`.
 The `push` sub-section enables optional fan-out to an HTTPS endpoint.
 
 **`telemetry.push`**:

@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-This document specifies every LLM-facing text the memory system produces: the agent's identity prompt Memory sections, tool descriptions, the Dream pass prompts (extract, discover, always-on rank, skill-extract sub-agent), the absorb-judge template, the onboarding wizard text, and the structural marker conventions.
+This document specifies every LLM-facing text the memory system produces: the agent's identity prompt Memory sections, tool descriptions, the Dream pass prompts (extract, discover, document passes, always-on rank, skill-extract sub-agent), the absorb-judge template, the onboarding wizard text, and the structural marker conventions.
 
 The goal of this catalog is a single source of truth so that changes to the live strings in code and template files are verified against a reference, and so that the design principles behind the choices are recoverable. Drift from code is a bug; the sync test (`tests/memory/test_tool_description_sync.py`) guards the tool descriptions.
 
@@ -16,7 +16,7 @@ Three principles shape every LLM-facing string in the memory system.
 
 **Declarative over imperative.** Agent-facing strings describe what the memory system holds and how results are organized, not commands to follow. Dream-pass prompts state what to extract and in what format; they do not embed decision trees. The absorb-judge prompt is adversarial by design: it defaults to `"different"` and demands content evidence beyond alias overlap.
 
-**In-code prompts for passes, template file only for the judge.** The five Dream passes build their prompts in Python code (`extract_dream.py`, `dream_passes.py`, `always_on_dream.py`); only the absorb-judge prompt lives in a standalone template (`durin/templates/dream/absorb_judge.md`). This distinction reflects scope: the pass prompts are tightly coupled to the data they build and parse, while the judge prompt benefits from being a standalone inspectable document because a merge decision that goes wrong is traceable via `durin memory history`.
+**In-code prompts for passes, template files for the judge and the learnings sweep.** The Dream passes build their prompts in Python code (`extract_dream.py`, `dream_passes.py`, `always_on_dream.py`, `distill_dream.py`); the exceptions are the absorb-judge prompt (`durin/templates/dream/absorb_judge.md`) and the learnings-sweep prompt (`durin/templates/agent/consolidator_learnings.md`), which live in standalone template files. This distinction reflects scope: the pass prompts are tightly coupled to the data they build and parse, while the judge and learnings prompts benefit from being standalone inspectable documents.
 
 ---
 
@@ -193,7 +193,7 @@ The active memory tools and their descriptions:
 
 ### 5.3 Dream pass prompts
 
-The five Dream passes each build their prompt in Python. No pass uses a multi-file template assembly; only the absorb-judge retains a standalone template file.
+The Dream passes each build their prompt in Python. No pass uses a multi-file template assembly; the absorb-judge and the learnings sweep are the exceptions that use standalone template files.
 
 **Extract pass** (`build_extract_prompt` in `extract_dream.py`): Takes an entity page and rendered conversation turns. Asks the LLM to produce a bare JSON object mapping `attribute_key → scalar/list`. Uses an `EXISTING ATTRIBUTE KEYS` block to drive key-reuse and prevent schema drift. Slots: `{ref}`, `{name}`, `{existing}` (sorted keys or `(none)`), `{body}` (truncated to 4 000 chars), `{turns}` (truncated to 12 000 chars). Output parsed by `parse_attributes`: strips code fences, runs `json_repair`, keeps only scalar/list-of-scalar values.
 
@@ -209,6 +209,8 @@ The discover prompt is seeded with an `EXISTING ENTITIES` block (built by `build
 **Skill-extract pass** (`_SKILL_EXTRACT_PROMPT` in `dream_passes.py`): A system prompt for an agentic sub-agent that spins up an `AgentRunner` with `ReadFileTool`, `EditFileTool`, `SkillWriteTool` (composition gate in `hard` mode), `SkillSearchTool`, `SkillAcquireSeedTool`, `ListWorkflowsTool`, and `WorkflowWriteTool`. The sub-agent receives recent sessions as the user turn, optionally including logged gap observations. It decides whether to call `skill_write` based on whether the conversation reveals a genuinely reusable procedure. It may call `skill_search` first to acquire an existing published skill rather than authoring from scratch. The prompt embeds the composition doctrine (loaded verbatim from the builtin `skill-creator` skill via `durin/agent/skills_doctrine.py`) and the workspace's workflow catalog, so an orchestration an existing workflow automates is delegated — or a missing workflow authored with `workflow_write` — instead of narrated as prose steps. All skills must be authored in English regardless of conversation language.
 
 **Learnings sweep** (`mine_learnings` in `extract_dream.py`, template `durin/templates/agent/consolidator_learnings.md`): A Jinja2 template rendered once per session span. It asks the LLM to extract durable preferences, corrections, standing constraints, and stable personal facts as `feedback`/`stance`/`practice` entities. The template's `Exclude:` list includes a **durability exclusion clause**: content the user merely SHOWED, not asserted — third-party quotes/reviews, advertisements or marketing copy, transcribed audio samples, and pasted documents — must not be captured as a learning.
+
+**Document passes** (`distill_dream.py`): three single-call prompts carry ingested-document knowledge into the graph — `build_outline_prompt` (a whole-document abstract plus per-section summaries), `build_seed_prompt` (the key entities a document is about), and `build_topics_prompt` (the library's curated topic map). Each is built in Python from the document's chunks or distilled abstracts.
 
 ### 5.4 Absorb-judge template
 
@@ -297,7 +299,7 @@ Sections with zero hits are omitted entirely.
 | `memory.enabled` | `true` | Master gate for all memory I/O including Dream prompts and hot-layer injection |
 | `agents.defaults.compaction_learnings_enabled` | `true` | Gates the compaction backstop (`extract_learnings`); when false, no LLM call is made at compaction time for durable learnings |
 | `memory.dream.enabled` | `true` | Gates cron and reactive Dream triggers; `durin memory dream` (manual) always runs |
-| `memory.dream.cron` | `"0 3 * * *"` | Daily schedule for all five passes |
+| `memory.dream.cron` | `"0 3 * * *"` | Daily schedule for the dream consolidation run |
 | `memory.dream.discover_enabled` | `true` | Enables the discover pass (Stage 2 entity discovery) within the extract pass |
 | `memory.dream.skill_signals_enabled` | `true` | Enables skill-signal detection during the extract pass |
 | `memory.dream.always_on_token_budget` | `1500` | Hard token ceiling for always-on pinned guidance; `0` disables the pin |
@@ -310,7 +312,7 @@ Sections with zero hits are omitted entirely.
 | `memory.search.cross_encoder.model` | `BAAI/bge-reranker-base` | Cross-encoder model for reranking |
 
 **CLI surfaces:**
-- `durin memory dream` — run all five passes immediately (bypasses `ReactiveDreamGate`)
+- `durin memory dream` — run the core consolidation passes immediately (bypasses `ReactiveDreamGate`)
 - `durin memory absorb-suggest` — surface alias-overlap candidates without auto-merging
 - `durin memory absorb <ref-a> <ref-b>` — merge two entities manually
 - `durin memory history` — show memory write history including absorb reasoning

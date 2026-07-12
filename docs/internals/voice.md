@@ -81,7 +81,7 @@ The assistant reply reaches the WebSocket channel as a stream of deltas, not a s
 
 `speakable_transform` (in `durin/voice/rendition.py`) is a pure, always-on pass that replaces non-speakable markdown with short descriptions: fenced code → "the code is on screen", tables → "a table", images/links → their alt text or "a link", and it strips headings, horizontal rules, emphasis markers, and list bullets. The descriptive phrases live in a `SpeakableLabels` dataclass so they can be localized.
 
-`build_spoken_rendition` then applies the long-reply policy. A reply at or under `voice.spoken_render.long_threshold_words` is always spoken in full. Above that, `mode` decides: `verbatim` speaks the entire speakable text; `model_led` speaks the first paragraph and appends the `pointer` sentence, leaving the rest on screen. The result records whether it summarized and whether a usable lead was found, for telemetry. (An earlier `aux_summary` mode that called a separate model was removed; a config persisted with that value is coerced to `model_led` on load.)
+`build_spoken_rendition` then applies the long-reply policy. A reply at or under `voice.spoken_render.long_threshold_words` is always spoken in full. Above that, `mode` decides: `verbatim` speaks the entire speakable text; `model_led` speaks the first paragraph and appends the `pointer` sentence, leaving the rest on screen. The result records whether it summarized and whether a usable lead was found, for telemetry. (An earlier `aux_summary` mode was never wired — it always degraded to `model_led` — so a config persisted with that value is coerced to `model_led` on load.)
 
 ### Barge-in, read-all, and preview
 
@@ -116,7 +116,7 @@ The assistant reply reaches the WebSocket channel as a stream of deltas, not a s
 | `_schedule_voice_cleanup` | `durin/channels/websocket.py` | Deferred (grace-window) session teardown on disconnect; cancelled by a reconnect's `_attach` |
 | `useVoiceSession` | `webui/src/components/voice/useVoiceSession.ts` | Browser thin client: VAD capture, playback, audio-reactive amplitude |
 | `prefetchVoiceAssets` | `webui/src/lib/voiceAssets.ts` | Idle-time warm of the VAD model + ONNX WASM so the first session is fast |
-| `VoiceOrb` | `webui/src/components/voice/` | Animated orb component and the `OrbState` type; the voice UI (flat entry orb + active-call status strip) lives in the composer |
+| `OrbState` | `webui/src/components/voice/VoiceOrb.tsx` | The voice-UI state type imported by the composer; the shipping voice indicator is a span-based dot in `VoiceInputControl`/`ThreadComposer` (the `VoiceOrb` component in this file is not rendered in the app) |
 
 ## 6. Configuration and surfaces
 
@@ -133,7 +133,7 @@ The assistant reply reaches the WebSocket channel as a stream of deltas, not a s
 | `tts.local.engine` | `"supertonic"` | Local engine identifier |
 | `tts.local.voice` | `"F4"` | Preset voice (`F1`–`F5`, `M1`–`M5`) |
 | `tts.local.model_dir` | `null` | Override the model location; `null` = self-download (~260 MB) |
-| `tts.local.quality` | `"normal"` | `normal` (8 steps) or `high` (20 steps) |
+| `tts.local.quality` | `"normal"` | `normal`/`high` — defined in schema but currently inert (no provider reads it) |
 | `tts.openai.api_key` / `api_base` | `null` | Cloud TTS credentials |
 | `voice.enabled` | `true` | Master toggle for hands-free conversational mode |
 | `voice.barge_in` | `true` | Allow interrupting playback by speaking over it |
@@ -167,7 +167,7 @@ Gateway → client:
 
 ### Extras and the webui
 
-Local STT needs the `[stt]` extra; local TTS needs `[tts]` (the `supertonic` package + `onnxruntime`). Both are opt-in — installed during `durin onboard` if the user enables voice, or from the settings pane's install button. Cloud providers need only an API key. The "Voz" settings pane configures provider, engine/voice, language, the conversational toggles, and the long-reply mode, and shows whether each extra is installed. Voice is entered from a flat **orb button in the composer** (next to the mic, which does dictation); the voice session is owned by the app shell. While a call is active the composer shows a **status strip** (`listening / thinking / speaking` plus a barge-in hint) — there is no separate floating panel — and the orb itself is the on/off toggle, so there is no second stop button competing with the turn-stop. It binds to the active chat's `chat_id`, closes itself after the idle timeout, and re-establishes its session automatically after a socket reconnect (the gateway holds the session through a short grace window so a brief drop never ends the call). (The active-call indicator lives in the chat composer, so it is not shown while another view is open; the call keeps running.)
+Local STT needs the `[stt]` extra; local TTS needs `[tts]` (the `supertonic` package + `onnxruntime`). Both are opt-in — installed during `durin onboard` if the user enables voice, or from the settings pane's install button. Cloud providers need only an API key. The "Voz" settings pane configures provider, engine/voice, language, the conversational toggles, and the long-reply mode, and shows whether each extra is installed. Voice is entered from a **chevron dropdown next to the mic** in the composer — its **hands-free** menu item starts the call, while the mic itself does dictation; the voice session is owned by the app shell. While a call is active (or when dictation is unavailable) the control collapses to a single **orb dot** that is the on/off toggle, and the composer shows a **status strip** (`listening / thinking / speaking` plus a barge-in hint) — there is no separate floating panel — so there is no second stop button competing with the turn-stop. It binds to the active chat's `chat_id`, closes itself after the idle timeout, and re-establishes its session automatically after a socket reconnect (the gateway holds the session through a short grace window so a brief drop never ends the call). (The active-call indicator lives in the chat composer, so it is not shown while another view is open; the call keeps running.)
 
 ## 7. Rationale
 

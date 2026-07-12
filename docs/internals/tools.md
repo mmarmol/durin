@@ -272,7 +272,7 @@ grants access to the tool that produced the result.
 | `tools.restrict_to_workspace` | `bool` | `false` | Prevents all file and shell tools from accessing paths outside the session workspace |
 | `tools.exec.enable` | `bool` | `true` | Enables/disables the `exec` shell tool |
 | `tools.exec.timeout` | `int` | `60` | Default subprocess timeout in seconds (max 600) |
-| `tools.exec.sandbox` | `str` | `""` | Sandbox backend (`firejail`, `bubblewrap`, or empty for none) |
+| `tools.exec.sandbox` | `str` | `""` | Sandbox backend (`bwrap`, `docker`, `testbed`, or empty for none) |
 | `tools.exec.deny_patterns` | `list[str]` | (hardcoded set) | Regex patterns that block matching commands before execution |
 | `tools.exec.allow_patterns` | `list[str]` | `[]` | Regex patterns that exempt matching commands from the deny list |
 | `tools.exec.allowed_env_keys` | `list[str]` | `[]` | Extra env vars forwarded to subprocesses (beyond the minimal curated set) |
@@ -311,11 +311,11 @@ controls which MCP tools are registered.
 | Search | `grep`, `repo_overview` |
 | Shell | `exec`, `process` |
 | Web | `web_search`, `web_fetch` |
-| Memory | `memory_search`, `memory_store`, `memory_forget`, `memory_ingest`, `memory_drill`, `memory_upsert_entity` |
+| Memory | `memory_search`, `memory_store`, `memory_forget`, `memory_ingest`, `memory_drill`, `memory_upsert_entity`, `memory_read_entity`, `memory_entity_lineage`, `memory_source_session` |
 | Session & planning | `session_search`, `todo_write`, `enter_plan_mode`, `exit_plan_mode`, `note_decision` |
 | Agent control | `ask_user_question`, `long_task`, `complete_goal`, `sleep`, `message` |
 | Background work | `spawn`, `run_workflow`, `list_workflows`, `workflow_write`, `workflow_edit`, `tasks` (list / status / stop, over sub-agents + workflow runs), `subagent_monitor`, `subagent_output` |
-| Skills | `skills_list`, `skill_search`, `skill_import`, `skill_write`, `skill_edit`, `skill_audit`, `skill_observe`, `skill_acquire_seed`, `skill_install_deps` |
+| Skills | `skills_list`, `skill_view`, `skill_search`, `skill_import`, `skill_write`, `skill_edit`, `skill_audit`, `skill_observe`, `skill_acquire_seed`, `skill_install_deps` |
 | MCP management | `mcp_manage`, `mcp_search` |
 | Capability bridges | `interpret_image`, `interpret_audio`, `execute_code`, `notebook_edit` |
 | Secrets | `list_secrets`, `request_secret` |

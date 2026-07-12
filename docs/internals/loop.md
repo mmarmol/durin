@@ -393,9 +393,13 @@ The active persona for a turn is resolved once in `_state_build` by
 2. **Per-conversation** — `session.metadata["persona"]`, set by `/persona
    <name>` and cleared by `/persona durin` (`default`/`none` also work as reset
    keywords).
-3. **Global default** — `agents.defaults.persona` in config (applies to every
+3. **Channel** — the inbound message's channel section:
+   `channels.<name>.chat_personas[chat_id]` (per-chat) first, then
+   `channels.<name>.persona` (the channel-wide default), so a transport can
+   carry its own identity and refine it per conversation.
+4. **Global default** — `agents.defaults.persona` in config (applies to every
    new conversation until overridden).
-4. **No persona** — default `SOUL.md` and global default model, unchanged from
+5. **No persona** — default `SOUL.md` and global default model, unchanged from
    pre-persona behavior.
 
 The resolved persona's soul body replaces the default SOUL in the stable system-
@@ -579,7 +583,7 @@ messages back to the bus and clears the per-session latency entry.
 | `SoulStore` | [`durin/souls/store.py`](../../durin/souls/store.py) | File-backed SOUL library: `default` → `SOUL.md`, named souls → `souls/<slug>.md`. |
 | `PersonaConfig` | [`durin/config/schema.py`](../../durin/config/schema.py) | A soul + optional model + description; lives in the `personas` config map. |
 | `resolve_persona` / `persona_names` | [`durin/config/schema.py`](../../durin/config/schema.py) | Resolver (by name from the `personas` map) and listing method on `Config`. |
-| `resolve_active_persona_name` | [`durin/personas/resolve.py`](../../durin/personas/resolve.py) | Precedence resolver: per-conversation metadata → global default → None. |
+| `resolve_active_persona_name` | [`durin/personas/resolve.py`](../../durin/personas/resolve.py) | Precedence resolver: cron → per-conversation metadata → channel (chat map, then channel default) → global default → None. |
 | `SEED_PERSONAS` / `seed_example_personas` | [`durin/personas/builtin.py`](../../durin/personas/builtin.py) | Example personas (`researcher`, `engineer`, `tutor-feynman`, `tutor-socratic`) seeded once into config on first run as ordinary editable/deletable entries. |
 | `AgentMode` | [`durin/agent/agent_mode.py`](../../durin/agent/agent_mode.py) | Permission-as-data tool filter (build / plan / explore / read). |
 | `AgentHook` / `CompositeHook` | [`durin/agent/hook.py`](../../durin/agent/hook.py) | Per-iteration lifecycle callbacks with fan-out and error isolation. |

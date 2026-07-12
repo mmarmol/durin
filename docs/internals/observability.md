@@ -205,6 +205,15 @@ Check categories and representative checks:
 - **services** — when `gateway.daemon=true`, the PID file points at a live
   process; when `gateway.webui_enabled=true`, the dashboard HTTP endpoint
   returns 2xx.
+- **models** — every configured specific-model knob (`skills.security.llm_judge`,
+  `memory.dream.model_override`, `agents.aux_models.*`) resolves to a servable
+  `(provider, model)`; an unservable knob silently falls back to the default preset.
+- **tools** — external tool binaries durin relies on (e.g. `git`) resolve on `PATH`.
+- **channels** — channel runtime dependencies are present (e.g. the WhatsApp
+  bridge binary is cached).
+- **stt** — speech-to-text engine importable; local model cached or cloud-provider
+  keys present; a transcription round-trip succeeds.
+- **tts** — text-to-speech engine importable and its model cached.
 - **opt-in** — `--ping`: HTTP GET to provider's `api_base`; `--ping-model`: a
   real 3-token round-trip to the configured model.
 

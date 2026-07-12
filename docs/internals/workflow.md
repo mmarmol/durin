@@ -124,8 +124,8 @@ metadata rides in `DURIN_TASK`/`DURIN_RUN_ID`/`DURIN_NODE_ID`/`DURIN_ITERATION`/
 `DURIN_WORK_DIR` env vars (`DURIN_TASK` is capped — env values have platform size
 limits that stdin does not). The rest of the subprocess environment is controlled
 by the node's `env` field: `"clean"` (the default) starts from a minimal allowlist
-(`PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR` —
-only those present); `"inherit"` is the full gateway process environment, opt-in
+(`PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, `TMPDIR`,
+`DURIN_HOME` — only those present); `"inherit"` is the full gateway process environment, opt-in
 per node (see [security.md](security.md)). **cwd** is the
 run's shared working folder, so a script reads earlier steps' files and writes
 its own the same way a `tools: "default"` work node does. **stdout** (capped
@@ -643,7 +643,8 @@ End-to-end for a single `run_workflow` call:
   at `/api/v1/workflows[/{name}]` and in the OpenAPI contract: list / load / save / delete
   (save validates via `parse_workflow` and writes atomically under the version lock — the
   same lock target the version store snapshots under, beside the dir, so a write and a
-  snapshot never interleave); **run** (`…/{name}/run` — executes the workflow on a task and
+  snapshot never interleave); **duplicate** (`…/{name}/duplicate` — copy a definition to a
+  new name to use as a starting point); **run** (`…/{name}/run` — executes the workflow on a task and
   returns the per-node trace); the **recommendations** queue (`…/recommendations`,
   `…/recommendations/{id}/apply`, `…/recommendations/{id}/dismiss`); and `GET
   /api/v1/workflows/scripts`, which lists the filenames under

@@ -53,7 +53,7 @@ flowchart TD
 
 ### Startup
 
-`CronService.__init__` accepts a `store_path` (pointing to `$DURIN_HOME/cron/jobs.json`), an `on_job` async callback, `max_sleep_ms` (default `300_000` ms), and `run_history_max` (driven by `config.cron.run_history_max`, default `50`). Two `filelock.FileLock` instances are created: `_lock` guarding all store reads and writes, and `_tick_lock` guarding the timer tick itself. Both lock files live in the store's parent directory.
+`CronService.__init__` accepts a `store_path` (pointing to `$DURIN_HOME/cron/jobs.json`), an `on_job` async callback, `max_sleep_ms` (default `300_000` ms), and `run_history_max` (driven by `config.cron.run_history_max`, default `50`). Two `filelock.FileLock` instances are created: `_lock` guarding all store reads and writes, and `_tick_lock` guarding the timer tick itself. `_tick_lock` lives inside the store's parent directory; `_lock` is a sibling of that directory (`<parent>.lock`).
 
 `start()` acquires `_lock`, loads the store (or raises on an unrecoverable corrupt store — see below), calls `_recompute_next_runs()` to recover jobs that fired while the service was down (jobs with a still-future `next_run_at_ms` are left untouched to preserve elapsed interval progress), saves, releases, and calls `_arm_timer()`.
 
@@ -74,7 +74,7 @@ Each due job passes through `_execute_job`. The `_executing` set provides an in-
 1. Sets `job.payload.session_key` to a fresh `cron:{id}:run:{timestamp_ms}` key.
 2. Wraps `job.payload.message` with `build_cron_turn_prompt(mode, message)`. In `reminder` mode the prompt instructs the agent to deliver a brief user-facing message; in `task` mode the raw message is passed as-is and the agent executes it with full tools.
 3. Marks the `cron` tool's `_in_cron_context` ContextVar so the agent cannot schedule new jobs from within an execution.
-4. Dispatches through the agent loop with an optional per-job persona (`job.payload.persona`) or model override (`job.payload.model`) — the two are mutually exclusive (set one or the other). The persona is threaded as the cron-level persona, which wins over any conversation or global default.
+4. Dispatches through the agent loop with an optional per-job persona (`job.payload.persona`) and/or model override (`job.payload.model`) — if both are set, the explicit model wins (nothing rejects setting both). The persona is threaded as the cron-level persona, which wins over any conversation or global default.
 5. If `job.payload.deliver` is true, delivers the result to the configured channel and recipient.
 
 After `on_job` completes (or raises), `_execute_job` records `last_run_at_ms`, `last_status`, `last_error`, and appends a `CronRunRecord` to `run_history`. The history list is trimmed to `_run_history_max` (the newest entries are kept). For one-shot `at` jobs, `delete_after_run=True` removes the job from the store; `delete_after_run=False` sets `enabled=False`.
@@ -93,7 +93,7 @@ After all due jobs finish, `_on_timer` acquires `_lock` again, reloads the store
 
 System jobs (those with `payload.kind == "system_event"`) are protected: `remove_job` and `update_job` return `"protected"` without mutating the store. Only `register_system_job` and `prune_orphaned_system_jobs` manage them.
 
-The canonical system job is `memory_dream`, registered at gateway start when `memory.dream.enabled` is true. Its execution path in the gateway runs all five Dream passes (extract, derived-from, skill-extract, refine, always-on) and then the session reaper (`reap_expired_run_sessions`) that deletes per-run sessions older than `cron.run_session_retention_hours`.
+The canonical system job is `memory_dream`, registered at gateway start when `memory.dream.enabled` is true. Its execution path in the gateway runs the dream consolidation passes (the sequence in the `memory_dream` handler in `durin/cli/commands.py`), a workflow-improve pass and skill curation, and then the session reaper (`reap_expired_run_sessions`) that deletes per-run sessions older than `cron.run_session_retention_hours`.
 
 ### Loop trigger jobs
 
@@ -117,7 +117,7 @@ loop runtime owns its own prompt, judge, and run bookkeeping. See
 
 ### Session retention
 
-Every `agent_turn` execution creates a session keyed `cron:{id}:run:{timestamp_ms}`. These accumulate over time. The `memory_dream` cron pass runs `reap_expired_run_sessions` (in `durin/cron/reaper.py`) at the end of its execution, scanning session keys matching that pattern and deleting those older than `config.cron.run_session_retention_hours` (default 48 hours).
+Every `agent_turn` execution creates a session keyed `cron:{id}:run:{timestamp_ms}`. These accumulate over time. The `memory_dream` cron pass runs `reap_expired_run_sessions` (in `durin/cron/reaper.py`) at the end of its execution, scanning for expired per-run session keys — cron runs (`cron:{id}:run:{ms}`) plus loops' judge and filter runs — and deleting those older than `config.cron.run_session_retention_hours` (default 48 hours).
 
 ## 5. Key types and entry points
 
@@ -125,7 +125,7 @@ Every `agent_turn` execution creates a session keyed `cron:{id}:run:{timestamp_m
 |---|---|---|
 | `CronJob` | `durin/cron/types.py` | Root job record: id (8-char uuid), name, enabled, schedule, payload, state, timestamps, `delete_after_run` |
 | `CronSchedule` | `durin/cron/types.py` | Schedule descriptor: kind (`at`/`every`/`cron`), `at_ms`, `every_ms`, `expr`, `tz` |
-| `CronPayload` | `durin/cron/types.py` | Execution spec: kind (`agent_turn`/`system_event`/`loop_trigger`), mode (`reminder`/`task`), message, model **or** persona override (mutually exclusive), deliver flag, channel routing, session key, loop name (set when kind is `loop_trigger`) |
+| `CronPayload` | `durin/cron/types.py` | Execution spec: kind (`agent_turn`/`system_event`/`loop_trigger`), mode (`reminder`/`task`), message, model and/or persona override (an explicit model wins over the persona), deliver flag, channel routing, session key, loop name (set when kind is `loop_trigger`) |
 | `CronJobState` | `durin/cron/types.py` | Run state: `next_run_at_ms`, `last_run_at_ms`, `last_status`, `last_error`, `run_history` |
 | `CronRunRecord` | `durin/cron/types.py` | One execution record: `run_at_ms`, status, `duration_ms`, error, `session_key`, model, persona, summary |
 | `CronStore` | `durin/cron/types.py` | Persistent container: version, jobs list. Serialized to JSON at `store_path` |
@@ -150,7 +150,7 @@ Every `agent_turn` execution creates a session keyed `cron:{id}:run:{timestamp_m
 | `cron.run_session_retention_hours` | `48` | How long per-run cron sessions are kept before the reaper deletes them; `0` disables reaping |
 | `memory.dream.enabled` | `true` | Controls whether the `memory_dream` system job is registered on gateway start |
 | `memory.dream.cron` | `"0 3 * * *"` | Cron expression for the daily Dream pass (evaluated in `agents.defaults.timezone`) |
-| `memory.dream.model_override` | `null` | Optional model preset for Dream LLM calls; falls back to `agents.defaults` |
+| `memory.dream.model_override` | `null` | Deprecated — prefer `agents.aux_models.memory`. Dream LLM calls resolve `agents.aux_models.memory` first, then this key, then the default preset. |
 | `memory.dream.min_seconds_between_runs` | `300` | Throttle window for reactive Dream triggers (post-compaction, session-close); independent of the cron schedule |
 | `memory.dream.max_seconds_per_run` | `600` | Wall-clock cap for the Dream extract pass; the pass yields after the current session if exceeded |
 
@@ -158,7 +158,7 @@ Every `agent_turn` execution creates a session keyed `cron:{id}:run:{timestamp_m
 
 The `cron` tool (in `durin/agent/tools/cron.py`) is available to the agent when `cron_service` is wired in the tool context. It exposes four actions:
 
-- **`add`** — requires `message` and exactly one of `every_seconds`, `cron_expr`, or `at`. Optional: `name`, `tz`, `deliver`, `mode` (`reminder`/`task`), and either `model` or `persona` (mutually exclusive).
+- **`add`** — requires `message` and exactly one of `every_seconds`, `cron_expr`, or `at`. Optional: `name`, `tz`, `deliver`, `mode` (`reminder`/`task`), and an optional `model` and/or `persona` (an explicit model overrides the persona).
 - **`list`** — lists all enabled jobs with schedule, last/next run, and status.
 - **`remove`** — removes a non-system job by `job_id`.
 - **`update`** — updates name, message, schedule, deliver, mode, model, or persona on an existing non-system job.
@@ -182,7 +182,7 @@ All write routes require `CRON_WRITE` scope; the list route requires `CRON_READ`
 
 ### Webui
 
-The webui exposes a dedicated cron panel at the `/cron` route, showing each job's schedule label, mode, the persona or model it runs as, last/next run times, status badge, and run history. The panel provides a form to create new jobs, toggle, edit, remove, and manually trigger a run. System jobs are shown for inspection but their remove and edit actions are disabled.
+The webui exposes a dedicated cron panel in Settings (the **Cron** section), showing each job's schedule label, mode, the persona or model it runs as, last/next run times, status badge, and run history. The panel provides a form to create new jobs, toggle, edit, remove, and manually trigger a run. System jobs are shown for inspection but their remove and edit actions are disabled.
 
 ## 7. Rationale
 

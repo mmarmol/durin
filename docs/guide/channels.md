@@ -24,7 +24,7 @@ These keys apply across all channels. Set them at the top level of
 | `send_tool_hints` | `false` | Also stream tool-call hints (e.g. "reading file …") as text |
 | `show_reasoning` | `true` | Surface model reasoning when the channel implements it |
 | `send_max_retries` | `3` | Total delivery attempts per message (initial send included) |
-| `transcription_provider` | _(inherits)_ | Per-channel override for the transcription backend (e.g. `"groq"`, `"openai"`, `"local"`) |
+| `transcription_provider` | `"groq"` | Transcription backend for channel audio (`"groq"` or `"openai"`); override per channel in its own table |
 | `transcription_language` | _(inherits)_ | Per-channel ISO 639-1 override (e.g. `"en"`) for the transcription engine |
 
 Per-channel sections can override `send_progress`, `send_tool_hints`, and
@@ -298,6 +298,85 @@ attachments and passed to the agent as `[quoted]` / `[shared]` context lines.
 
 ---
 
+## Discord
+
+Discord connects with a **bot application** you create in the Discord Developer
+Portal. durin derives its gateway intents from the events it handles — there is
+no raw bitfield to configure by hand.
+
+The bot token is **always stored as a durin secret**, never as plaintext in
+`config.toml`. Both the guided and manual setup paths write a `${secret:…}`
+reference into the config automatically.
+
+### Guided setup (recommended)
+
+Open the dashboard **Channels** tab, expand the Discord section, and follow the
+three steps:
+
+1. **Create the application** — follow the link to the
+   [Discord Developer Portal](https://discord.com/developers/applications),
+   create an application, and add a bot to it.
+2. **Validate the token** — paste the bot token into the panel. durin checks it
+   live against Discord, shows the bot's username, and reports whether the
+   **Message Content** privileged intent is on — without it the bot connects but
+   can't read message text. Nothing is written at this step.
+3. **Invite the bot** — copy the least-privilege invite URL durin builds (View
+   Channels, Send Messages, Send Messages in Threads, Embed Links, Attach Files,
+   Read Message History, Add Reactions — never Administrator), or open it in
+   Discord, to add the bot to a server. Then click **Save & enable**: the token
+   is stored as `${secret:DISCORD_TOKEN}`, and the channel is enabled and
+   started.
+
+Once connected, the same panel re-checks the token and permission live, shows
+whether the channel is running, and manages the rest:
+
+- **DM pairing** — any Discord user who DMs the bot triggers pairing mode
+  unless their user ID is already in `allow_from`; approve, deny, or revoke
+  senders directly from the panel (or from any active channel with the
+  `/pairing` commands).
+- **Where durin answers** — reply everywhere the bot can see, or narrow it to a
+  chosen allowlist of channels picked by name from the servers the bot is in
+  (writes `allow_channels`).
+
+A **Manual** toggle exposes every config field for advanced setups; both modes
+write the same config keys.
+
+### Manual setup
+
+Store the token in the secret store first, then write the config entry
+referencing it:
+
+```sh
+durin secret set DISCORD_TOKEN
+```
+
+```toml
+[channels.discord]
+enabled = true
+token = "${secret:DISCORD_TOKEN}"
+allow_from = []          # empty = pairing mode for DMs; or list Discord user IDs
+group_policy = "mention" # "open" or "mention"
+```
+
+Discord requires the `discord` pip extra; durin installs it automatically and
+logs a restart note if it was missing.
+
+**Key fields (from `DiscordConfig`):**
+
+| Key | Default | Notes |
+|---|---|---|
+| `token` | _(required)_ | Bot token from the Developer Portal; always stored as a durin secret |
+| `allow_from` | `[]` | Discord user IDs allowed to DM durin; `["*"]` allows anyone. Empty = pairing mode for DMs |
+| `allow_channels` | `[]` | Routing, not auth: empty = every channel the bot can see; a non-empty list is a closed allowlist of channel IDs |
+| `group_policy` | `"mention"` | `"open"` (reply to all) or `"mention"` (reply only when @-mentioned) |
+| `read_receipt_emoji` | `"👀"` | Reaction added on receipt |
+| `working_emoji` | `"🔧"` | Reaction added while processing |
+| `working_emoji_delay` | `2.0` | Seconds to wait before adding the working reaction |
+| `streaming` | `true` | Edit the message in-place as the model streams |
+| `proxy` | _(none)_ | Proxy URL for outbound connections (`proxy_username` / `proxy_password` for auth) |
+
+---
+
 ## WhatsApp
 
 WhatsApp connects through a bundled Go bridge process (built on
@@ -314,7 +393,18 @@ Business API account, webhook, or app to register.
 
 ### Setup
 
-Enable the channel in config:
+You can pair from the **dashboard** (guided, browser QR) or the **terminal**
+(`durin channels login whatsapp`). Both link the same device and persist the
+session identically.
+
+**Guided (dashboard).** Open the **Channels** tab, expand WhatsApp, and click
+**Connect**. durin launches the bridge and renders the pairing QR code right in
+the browser; scan it from your phone (**WhatsApp → Linked devices → Link a
+device**) and durin enables and starts the channel automatically once the phone
+confirms. A **Relink** action shows a fresh QR to move to a different number.
+The ban-risk caution above is shown before you scan.
+
+**Terminal.** Enable the channel in config:
 
 ```toml
 [channels.whatsapp]
@@ -464,7 +554,6 @@ interactively.
 
 | Channel | Module | Notes |
 |---|---|---|
-| Discord | `discord.py` | Requires the `discord` pip extra (auto-installed) |
 | Matrix | `matrix.py` | Requires the `matrix` pip extra (auto-installed) |
 | Microsoft Teams | `msteams.py` | |
 | Feishu | `feishu.py` | |

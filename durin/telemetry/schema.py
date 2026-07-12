@@ -1358,7 +1358,7 @@ class SkillObservationLoggedEvent(TypedDict):
 class SkillCurationActionEvent(TypedDict):
     """One curation action was applied (or attempted) during a curation run."""
 
-    action: str  # "evolve" | "fuse" | "retire" | "principle" | "retire_principle" | "backfill"
+    action: str  # "evolve" | "restructure" | "fuse" | "retire" | "principle" | "retire_principle" | "backfill"
     skill: NotRequired[str]
     applied: bool
 

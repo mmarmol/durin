@@ -12,7 +12,7 @@ The indexer sits between the write path (tools, Dream, the file watcher) and the
 
 **Per-type embedding composers.** The text fed to the embedding model differs by document type. Entity pages embed `name + aliases + rendered frontmatter + body`. Memory entries embed `headline + summary + entities + body`. Session turns are FTS-only (not vector-indexed). Each type has exactly one composer function; there is no shared generic path.
 
-**Schema version as an integrity contract.** `index_meta.py` tracks `CURRENT_SCHEMA_VERSION` (currently `7`). On startup, `ensure_index_fresh` compares the on-disk schema version against the code's expected version. A mismatch triggers an automatic rebuild. This prevents the search pipeline from operating silently against a structurally stale index after an upgrade.
+**Schema version as an integrity contract.** `index_meta.py` tracks `CURRENT_SCHEMA_VERSION`. On startup, `ensure_index_fresh` compares the on-disk schema version against the code's expected version. A mismatch triggers an automatic rebuild. This prevents the search pipeline from operating silently against a structurally stale index after an upgrade.
 
 ---
 
@@ -50,7 +50,7 @@ flowchart TD
     end
 
     subgraph Meta[".durin/index/meta.json"]
-        MJ["IndexMeta\nschema_version=7\nembedding_model_id\nlast_full_rebuild\nprevious_models"]
+        MJ["IndexMeta\nschema_version\nembedding_model_id\nlast_full_rebuild\nprevious_models"]
     end
 
     EP --> CE --> EP2 --> VT
@@ -137,7 +137,7 @@ The indexer's third pass in `rebuild_fts_index` walks `sessions/*.md` and yields
 
 ### Auto-rebuild on schema mismatch
 
-`ensure_index_fresh` (called at startup) checks the on-disk `meta.json` schema version against `CURRENT_SCHEMA_VERSION = 7`. When they differ, it calls `rebuild_fts_index` and (if the embedding model also changed) `VectorIndex.rebuild_from_workspace`. After the rebuild, it saves a fresh `meta.json` recording the new schema version and model. Previous model identifiers are preserved in `previous_models` as a migration history.
+`ensure_index_fresh` (called at startup) checks the on-disk `meta.json` schema version against `CURRENT_SCHEMA_VERSION`. When they differ, it calls `rebuild_fts_index` and (if the embedding model also changed) `VectorIndex.rebuild_from_workspace`. After the rebuild, it saves a fresh `meta.json` recording the new schema version and model. Previous model identifiers are preserved in `previous_models` as a migration history.
 
 ### File watcher integration
 
@@ -158,7 +158,7 @@ The indexer's third pass in `rebuild_fts_index` walks `sessions/*.md` and yields
 | `EmbeddingProvider` | `durin/memory/embedding.py` | Abstract base: `embed`, `embed_passages`, `embed_query`. Semantic surface for storage vs. retrieval contexts. |
 | `FastembedProvider` | `durin/memory/embedding.py` | ONNX in-process embedding via fastembed. Validates model at construction. Applies E5 prefix in `embed_passages` / `embed_query` when `_is_e5_family` is true. Lazy load on first call, held for process lifetime. |
 | `IndexMeta` | `durin/memory/index_meta.py` | Frozen dataclass: `schema_version`, `embedding_model_id`, `last_full_rebuild`, `previous_models`. Persisted atomically to `<workspace>/.durin/index/meta.json`. |
-| `CURRENT_SCHEMA_VERSION` | `durin/memory/index_meta.py` | Integer constant, currently `7`. Bumped when indexer row shape or derivation rules change incompatibly. |
+| `CURRENT_SCHEMA_VERSION` | `durin/memory/index_meta.py` | Integer constant. Bumped when indexer row shape or derivation rules change incompatibly. |
 | `rebuild_fts_index` | `durin/memory/indexer.py` | Wipes and re-derives the entire FTS5 database from `walk_memory` + skill walk + session turn walk. Returns `IndexStats(indexed, errors)`. |
 | `reindex_one_file` | `durin/memory/indexer.py` | Synchronous per-file FTS upsert (or delete) called by the file watcher and Dream apply. Skips archive and pending; symmetric vector delete on file vanish. |
 | `reindex_one_file_vector` | `durin/memory/indexer.py` | Reactive entity-page vector upsert called by the file watcher. Covers `memory/entities/<type>/<slug>.md` only; other types are embedded at write time. Internal — not in `__all__`. |
@@ -182,7 +182,7 @@ The indexer's third pass in `rebuild_fts_index` walks `sessions/*.md` and yields
 | `memory.health_check.enabled` | `true` | Enables the periodic health-check that runs staleness detection and orphan pruning. |
 | `memory.health_check.interval_seconds` | `900` | How often the health-check tick runs. |
 
-The schema version `CURRENT_SCHEMA_VERSION = 7` is a code constant, not a config key. Model migration history is tracked in `previous_models` inside `meta.json`.
+The schema version `CURRENT_SCHEMA_VERSION` is a code constant, not a config key. Model migration history is tracked in `previous_models` inside `meta.json`.
 
 ### CLI surfaces
 

@@ -71,7 +71,7 @@ Multilingual cross-encoder models add 300–1500 ms latency on CPU and additiona
 
 `memory_ingest` accepts only local file paths. URL and inline content variants were proposed and removed.
 
-URL fetch would duplicate `web_fetch`, which already handles URL-to-markdown extraction with Jina Reader, a readability fallback, SSRF protection, content-type sniffing, and timeout handling. Reimplementing those policies inside `memory_ingest` would either duplicate the code and drift, or call `web_fetch` internally — at which point the parameter just hides a two-step workflow behind a flag. Inline content is `memory_store(class_name="corpus")`: when the agent already has text in context, persisting it goes through `memory_store` directly. The only `memory_ingest`-exclusive capability is preserving the original artifact on disk by content hash and chunking it — both meaningful only for local files.
+URL fetch would duplicate `web_fetch`, which already handles URL-to-markdown extraction with Jina Reader, a readability fallback, SSRF protection, content-type sniffing, and timeout handling. Reimplementing those policies inside `memory_ingest` would either duplicate the code and drift, or call `web_fetch` internally — at which point the parameter just hides a two-step workflow behind a flag. Inline content was the province of `memory_store(class_name="corpus")`, though that tool is now disabled at load, so persisting text the agent already has in context is not a live agent operation. The only `memory_ingest`-exclusive capability is preserving the original artifact on disk by content hash and chunking it — both meaningful only for local files.
 
 The composition rule:
 
@@ -80,6 +80,11 @@ The composition rule:
 | Local file on disk | `memory_ingest(path=...)` |
 | Article found on the web | `web_fetch(url=...)` → `memory_store(content=markdown, class_name="corpus")` |
 | Text already in context | `memory_store(content=..., class_name="corpus")` |
+
+Both `memory_store` rows describe the conceptual data path, not a live call:
+`memory_store` is disabled at load, so today the agent reads with `web_fetch` /
+`convert_to_markdown` and persists durable knowledge via `memory_ingest` (local
+files) or `memory_upsert_entity` (entities).
 
 **Lesson:** when spec parameters are "synced" from a doc to code, verify the schema actually implements the promised parameters. String comparison tests pass even when the behavior they describe is absent.
 
@@ -199,7 +204,7 @@ Exposing a search mode enum (like cognee's `GRAPH_COMPLETION | RAG_COMPLETION | 
 
 Replacing the current dense bi-encoder + BM25 hybrid with SPLADE (learned vocabulary expansion) or ColBERT (multi-vector late interaction) was proposed and decided against.
 
-durin already runs a dense + sparse hybrid: MiniLM-L12-v2 fused via RRF with FTS5 BM25. SPLADE and ColBERT are paradigm shifts: SPLADE requires a sparse vector store (LanceDB stores dense vectors), ColBERT stores one vector per token (10–100× storage growth per document) and requires a specialized PLAID index. Both break the current LanceDB-and-FTS5 setup the rest of the system is built around. The operator-accessible response if a recall plateau surfaces is to swap the embedding model via config (`MemoryEmbeddingConfig.model`) — a five-minute operation with no schema change. Mainstream LLM-in-the-loop systems ship with dense bi-encoder + BM25.
+durin already runs a dense + sparse hybrid: multilingual-E5 dense vectors fused via RRF with FTS5 BM25. SPLADE and ColBERT are paradigm shifts: SPLADE requires a sparse vector store (LanceDB stores dense vectors), ColBERT stores one vector per token (10–100× storage growth per document) and requires a specialized PLAID index. Both break the current LanceDB-and-FTS5 setup the rest of the system is built around. The operator-accessible response if a recall plateau surfaces is to swap the embedding model via config (`MemoryEmbeddingConfig.model`) — a five-minute operation with no schema change. Mainstream LLM-in-the-loop systems ship with dense bi-encoder + BM25.
 
 ### Versioning as a separate agent tool
 
@@ -392,6 +397,5 @@ has to be justified by measurement, not intuition.
 
 ## 7. Cross-references
 
-- Architectural decisions per module: each module's decisions table (§10 or §14 or §16).
-- Cross-corpus decisions: `00_overview.md` §10.
+- Per-subsystem rationale: the **Curated rationale** section at the end of each memory doc (e.g. `00_overview.md`, `05_dream_cold_path.md`).
 - For the active backlog (work planned or in progress), see the project roadmap.

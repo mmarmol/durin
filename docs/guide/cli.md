@@ -33,6 +33,23 @@ The browser dashboard is served by `durin gateway` when
 `config.gateway.webui_enabled` is true (default). `durin gateway status`
 prints the URL.
 
+## Secrets & memory
+
+```bash
+durin secret set NAME             # store a secret (API keys, channel tokens)
+durin secret list                 # list stored secrets, values masked
+durin secret show NAME --reveal   # print the actual value
+durin memory show <entity>        # inspect an entity page (e.g. person:marcelo)
+durin memory history <entity>     # its git history; `diff` / `revert` to inspect or undo
+durin memory dream                # run a memory consolidation (dream) pass now
+durin memory stats                # recall / telemetry summary
+durin memory forget <uri>         # delete one memory entry
+```
+
+`durin workflow recommendations` / `durin workflow apply <name> <id>` review and
+apply workflow self-improvement suggestions; `durin mcp search|install|status`
+manage MCP servers. Append `--help` to any group for its full command list.
+
 ## Inside the TUI
 
 - `/sessions` — modal picker over saved sessions (Esc to cancel)

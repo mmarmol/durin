@@ -54,7 +54,7 @@ flowchart TD
         WP --> IW[memory.index.write\nper FTS row]
     end
 
-    subgraph DreamPath["Dream cold path (five passes)"]
+    subgraph DreamPath["Dream cold path"]
         DS[Dream trigger\ncron / reactive / manual]
         DS --> DST["memory.dream.start\nkind=extract | derived_from | refine"]
         DST --> PA[memory.dream.patch_applied\nper entity written]
@@ -119,11 +119,11 @@ Each `memory_search` call emits:
 - **`memory.upsert_entity`** — one per `memory_upsert_entity` tool write. Fields: `ref`, `committed`, `retries`.
 - **`memory.index.write`** — one per FTS row written. `trigger` is `watcher` (file-watcher steady state), `dream_apply` (post-dream re-index), or `drift_repair` (health-check repair).
 
-### Dream events (cold path — five passes)
+### Dream events (cold path)
 
 The dream runs outside the agent loop, so nothing binds the telemetry `ContextVar` for it automatically. The cron handler and each reactive trigger therefore bind their own `TelemetryLogger` (`get_session_logger("cron_dream" | "reactive_dream")`) for the duration of the run — without that bind, `emit_tool_event` resolves no logger and every dream event is silently dropped (the digest then stays empty even after a real run). The cron run additionally registers a `DreamProgressSink` on that logger to tee activity events to the webui live (see §6).
 
-Three of the five dream passes are wrapped with a `memory.dream.start` / `memory.dream.end` pair. The remaining two emit their own named events directly, with no start/end envelope.
+Three dream passes are wrapped with a `memory.dream.start` / `memory.dream.end` pair (extract, derived_from, refine). The skill-extract and always_on passes emit their own named events directly, with no start/end envelope. The document passes (distill, seed-entities, curate-topics) and the relation-hygiene pass log to the cron log without `memory.dream.*` telemetry.
 
 **Passes that use `dream.start` / `dream.end`:**
 
@@ -222,7 +222,7 @@ The following events exist in the catalog without dedicated sections above — c
 |---|---|
 | `durin memory stats [--days N] [--json]` | Reads `~/.cache/durin/telemetry/*.jsonl` and produces aggregated metrics (hot-path latency, dream counts, absorb rates). |
 | `durin memory reindex [--target fts\|lancedb\|all]` | Triggers `memory.index.rebuild`. |
-| `durin memory dream` | Runs all five passes manually; emits the full `memory.dream.*` event set. |
+| `durin memory dream` | Runs the core consolidation passes manually; emits the `memory.dream.*` event set. |
 | `durin memory absorb-suggest` | Finds alias-overlap candidates without merging; useful when `auto_absorb.enabled=false`. |
 | `durin memory revert <sha>` | Reverts an auto-merge commit; emits `memory.absorb.reverted`. |
 
