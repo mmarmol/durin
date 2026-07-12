@@ -1111,7 +1111,10 @@
     },
     "concurrency": {
       "description": "How many turns and sub-agents run at once. Changes apply immediately, no restart.",
-      "sections": { "caps": "Limits", "live": "Live" },
+      "sections": {
+        "caps": "Limits",
+        "live": "Live"
+      },
       "rows": {
         "interactive": "Interactive turns",
         "ceiling": "Global ceiling",
@@ -1627,7 +1630,8 @@
           "title": "Edit an image",
           "prompt": "Help me edit an image. Ask me to upload or reference the image first, then generate the edited result."
         }
-      }
+      },
+      "description": "Ask questions, continue your local work, or start a new thread."
     },
     "header": {
       "toggleSidebar": "Toggle sidebar",
