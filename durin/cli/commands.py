@@ -1710,6 +1710,7 @@ def _run_gateway(
     # this point — build_service_registry constructs its own further down).
     import time
 
+    from durin.loops import channel_meta as _loop_channel_meta
     from durin.loops import queue as _loops_queue
     from durin.loops.judge import build_filter_prompt as _loop_build_filter_prompt
     from durin.loops.judge import build_prompt as _loop_build_prompt
@@ -1774,12 +1775,7 @@ def _run_gateway(
         the run (e.g. the same email thread), so a reply into that thread
         wakes the run via the matcher's claim lookup."""
         try:
-            await bus.publish_outbound(OutboundMessage(
-                channel=origin.get("channel"),
-                chat_id=origin.get("chat_id"),
-                content=text,
-                metadata={"email": {"thread": origin.get("thread")}, "force_send": True},
-            ))
+            await bus.publish_outbound(_loop_channel_meta.build_reply(origin, text))
         except Exception:
             logger.exception("loop counterpart delivery (non-fatal) failed")
 
