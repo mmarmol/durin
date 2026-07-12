@@ -19,6 +19,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from durin.cli.upgrade import PYPI_DIST_NAME
+
 console = Console()
 
 
@@ -168,8 +170,13 @@ def _render_plan(targets: list[tuple[TargetGroup, Path, int]]) -> None:
 
 
 def _pip_uninstall_spawn() -> None:
-    """Spawn `pip uninstall -y durin` in the background so the parent exits first."""
-    cmd = [sys.executable, "-m", "pip", "uninstall", "-y", "durin"]
+    """Spawn `pip uninstall -y durin-agent` in the background so the parent exits first.
+
+    Targets the PyPI distribution name (``durin-agent``), not the import/CLI
+    name ``durin``: ``durin`` isn't an installed distribution, so uninstalling
+    it would be a silent no-op that leaves the package on disk.
+    """
+    cmd = [sys.executable, "-m", "pip", "uninstall", "-y", PYPI_DIST_NAME]
     console.print(f"[dim]Scheduling: {' '.join(cmd)}[/dim]")
     subprocess.Popen(  # noqa: S603 — args are constants, not user input
         cmd,
@@ -243,7 +250,7 @@ def register(app: typer.Typer) -> None:
     @app.command("uninstall")
     def uninstall(
         yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
-        purge: bool = typer.Option(False, "--purge", help="Also `pip uninstall durin` afterwards."),
+        purge: bool = typer.Option(False, "--purge", help="Also `pip uninstall durin-agent` afterwards."),
         keep_config: bool = typer.Option(False, "--keep-config", help="Preserve config.json and pairing.json."),
         keep_workspace: bool = typer.Option(False, "--keep-workspace", help="Preserve ~/.durin/workspace/."),
         keep_cache: bool = typer.Option(False, "--keep-cache", help="Preserve ~/.cache/durin/."),

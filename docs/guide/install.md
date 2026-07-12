@@ -292,15 +292,16 @@ touching anything:
 ```bash
 durin uninstall                 # dry-run by default: lists what would be deleted
 durin uninstall --yes           # delete user data (~/.durin, ~/.cache/durin)
-durin uninstall --purge --yes   # also `pip uninstall durin` afterwards
+durin uninstall --purge --yes   # also `pip uninstall durin-agent` afterwards
 durin uninstall --keep-config   # remove caches/workspace, preserve config.json
 ```
 
 Flags:
 
 - `--yes` / `-y` — skip the interactive confirmation.
-- `--purge` — additionally run `pip uninstall durin`. Self-uninstalls in a
-  subprocess so the running command finishes cleanly first.
+- `--purge` — additionally run `pip uninstall durin-agent` (the PyPI
+  distribution name). Self-uninstalls in a subprocess so the running command
+  finishes cleanly first.
 - `--keep-config` — preserve `~/.durin/config.json` and `pairing.json`;
   everything else still goes.
 - `--keep-cache` — preserve `~/.cache/durin/`.
