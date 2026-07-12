@@ -302,6 +302,39 @@ def test_add_job_mode_model_persisted_and_reloaded(tmp_path: Path) -> None:
     assert job.payload.model == "m1"
 
 
+def test_run_record_persona_persisted_and_reloaded(tmp_path: Path) -> None:
+    """A run record's ``persona`` must survive save → reload. It is set when a
+    job executes and read back on load, so dropping it from ``_save_store``'s
+    run-history serialization silently loses each historical run's persona on
+    the next restart."""
+    from durin.cron.types import CronRunRecord
+
+    store_path = tmp_path / "cron" / "jobs.json"
+    s1 = CronService(store_path)
+    s1.add_job(
+        name="persona job",
+        schedule=CronSchedule(kind="every", every_ms=60_000),
+        message="do it",
+    )
+    s1._running = True
+    try:
+        s1._load_store()
+    finally:
+        s1._running = False
+
+    job = s1._store.jobs[0]
+    job.state.run_history.append(
+        CronRunRecord(run_at_ms=1, status="ok", duration_ms=5, persona="researcher")
+    )
+    s1._save_store()
+
+    s2 = CronService(store_path)
+    s2._load_store()
+    assert s2._store is not None
+    record = s2._store.jobs[0].state.run_history[-1]
+    assert record.persona == "researcher"
+
+
 def test_run_history_cap_respected(tmp_path: Path) -> None:
     """run_history_max=3 keeps at most 3 records after 4 runs."""
     import asyncio
