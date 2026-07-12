@@ -78,7 +78,8 @@
       "cron": "Cron",
       "logs": "Registros",
       "mcp": "MCP",
-      "concurrency": "Concurrencia"
+      "concurrency": "Concurrencia",
+      "personas": "Personas"
     },
     "sections": {
       "interface": "Interfaz",
@@ -1110,7 +1111,10 @@
     },
     "concurrency": {
       "description": "Cuántos turnos y sub-agentes se ejecutan a la vez. Los cambios se aplican de inmediato, sin reiniciar.",
-      "sections": { "caps": "Límites", "live": "En vivo" },
+      "sections": {
+        "caps": "Límites",
+        "live": "En vivo"
+      },
       "rows": {
         "interactive": "Turnos interactivos",
         "ceiling": "Techo global",
@@ -1342,7 +1346,10 @@
       "blockedTitle": "¿Instalar {{name}}?",
       "blockedDesc": "Algunas dependencias no se pueden autoinstalar. Podés resolverlas después.",
       "depsInstalled": "{{count}} dependencias instaladas",
-      "depsPartial": "{{ok}} instaladas, {{failed}} fallaron"
+      "depsPartial": "{{ok}} instaladas, {{failed}} fallaron",
+      "alreadyInstalled": "{{name}} ya está instalada — reinstala para reemplazar.",
+      "installedOk": "{{name}} instalada.",
+      "reinstall": "Reinstalar"
     },
     "requirements": {
       "title": "Requisitos",
@@ -1370,9 +1377,14 @@
       "showMore": "Mostrar más",
       "noDescription": "Sin descripción disponible.",
       "acquireExplainer": "Skills del registro público. Al importar, la skill queda en Pendientes para tu aprobación.",
-      "importByRef": "Importar por referencia"
+      "importByRef": "Importar por referencia",
+      "installed": "Instalada"
     },
-    "title": "Skills"
+    "title": "Skills",
+    "preview": {
+      "back": "← Volver a resultados",
+      "unavailable": "Vista previa no disponible — igual podés importar."
+    }
   },
   "chat": {
     "fallbackTitle": "Chat {{id}}",
