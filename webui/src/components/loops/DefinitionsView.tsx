@@ -8,17 +8,63 @@ import {
   ApiError,
   deleteLoop,
   fireLoop,
+  getLoopStats,
   listLoops,
   type LoopDef,
+  type LoopStats,
   type LoopSummary,
   type LoopTrigger,
 } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
+import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 function errMsg(e: unknown): string {
   if (e instanceof ApiError) return e.detail ? `HTTP ${e.status}: ${e.detail}` : `HTTP ${e.status}`;
   return (e as Error).message;
+}
+
+// Theme-token tone for one outcome dot. Outcomes from the stats route are
+// always terminal (done/no_goal/escalated/error — see LoopsService._stats),
+// so no "active" case is needed here.
+function outcomeTone(status: LoopStats["outcomes"][number]["status"]): string {
+  if (status === "done") return "bg-primary";
+  if (status === "escalated" || status === "error") return "bg-destructive";
+  return "bg-muted-foreground/40"; // no_goal
+}
+
+// Compact per-loop sparkline: last 10 outcomes as dots plus convergence/
+// escalation percentages. Hidden entirely when there's nothing to show —
+// this is decorative context, not a load-bearing status, so a missing or
+// failed stats fetch just renders nothing rather than an error banner.
+function OutcomeStrip({ stats }: { stats: LoopStats | null | undefined }) {
+  const { t } = useTranslation();
+  if (!stats || stats.outcomes.length === 0) return null;
+  // The route returns outcomes newest-first; reverse so the strip reads
+  // oldest -> newest left-to-right, like a sparkline.
+  const dots = stats.outcomes.slice(0, 10).reverse();
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex items-center gap-0.5">
+        {dots.map((o) => (
+          <span
+            key={o.run_id}
+            data-testid="outcome-dot"
+            title={`${t(`loops.activity.status.${o.status}`, o.status)} · ${relativeTime((o.finished_at ?? o.started_at) * 1000)}`}
+            className={cn("h-2 w-2 rounded-full", outcomeTone(o.status))}
+          />
+        ))}
+      </div>
+      {stats.convergence != null && (
+        <span className="whitespace-nowrap text-[10px] text-muted-foreground">
+          {Math.round(stats.convergence * 100)}%
+          {stats.escalation_rate != null && stats.escalation_rate > 0 && (
+            <> · {t("loops.definitions.escLabel", { pct: Math.round(stats.escalation_rate * 100) })}</>
+          )}
+        </span>
+      )}
+    </div>
+  );
 }
 
 // One-line row summary: cron shows its schedule, channel shows
@@ -49,6 +95,7 @@ export function DefinitionsView({
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<LoopSummary | null>(null);
   const [runningLoop, setRunningLoop] = useState<string | null>(null);
+  const [stats, setStats] = useState<Record<string, LoopStats | null>>({});
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -65,6 +112,34 @@ export function DefinitionsView({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Fetch every loop's outcome stats in one batched Promise.all pass rather
+  // than lazily per row: loop counts are human-scale (a handful to a few
+  // dozen), so firing them all at once keeps row rendering simple and avoids
+  // per-row loading states for what's decorative context. Stats are
+  // best-effort — a failed fetch just leaves that row's strip hidden.
+  useEffect(() => {
+    if (loops.length === 0) {
+      setStats({});
+      return;
+    }
+    let cancelled = false;
+    void Promise.all(
+      loops.map(async (def) => {
+        try {
+          return [def.name, await getLoopStats(token, def.name)] as const;
+        } catch (e) {
+          console.debug(`loop stats fetch failed for ${def.name}`, e);
+          return [def.name, null] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (!cancelled) setStats(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loops, token]);
 
   const onRunNow = useCallback(
     async (name: string) => {
@@ -127,6 +202,7 @@ export function DefinitionsView({
                   <th className="px-2 py-1.5 font-medium">{t("loops.definitions.columns.triggers")}</th>
                   <th className="px-2 py-1.5 font-medium">{t("loops.definitions.columns.active")}</th>
                   <th className="px-2 py-1.5 font-medium">{t("loops.definitions.columns.needsOperator")}</th>
+                  <th className="px-2 py-1.5 font-medium">{t("loops.definitions.columns.outcomes")}</th>
                   <th className="px-2 py-1.5" />
                 </tr>
               </thead>
@@ -171,6 +247,9 @@ export function DefinitionsView({
                     </td>
                     <td className="px-2 py-2 text-muted-foreground">{def.active_runs}</td>
                     <td className="px-2 py-2 text-muted-foreground">{def.needs_operator}</td>
+                    <td className="px-2 py-2">
+                      <OutcomeStrip stats={stats[def.name]} />
+                    </td>
                     <td className="px-2 py-2">
                       <div className="flex items-center justify-end gap-1">
                         <Button

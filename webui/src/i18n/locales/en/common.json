@@ -1369,12 +1369,14 @@
       "countLabel_other": "{{count}} loops",
       "deleteTitle": "Delete loop {{title}}?",
       "queuedChip": "{{n}} queued",
+      "escLabel": "esc {{pct}}%",
       "columns": {
         "name": "Name",
         "workflow": "Workflow",
         "triggers": "Triggers",
         "active": "Active",
-        "needsOperator": "Needs you"
+        "needsOperator": "Needs you",
+        "outcomes": "Outcomes"
       }
     },
     "form": {

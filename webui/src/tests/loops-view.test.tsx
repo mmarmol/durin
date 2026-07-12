@@ -16,6 +16,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     answerLoopRun: vi.fn(),
     deleteLoop: vi.fn(),
     fireLoop: vi.fn(),
+    getLoopStats: vi.fn(),
   };
 });
 
@@ -27,6 +28,16 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.listAllLoopRuns).mockResolvedValue([]);
   vi.mocked(api.listLoops).mockResolvedValue([]);
+  // Empty outcomes by default so the strip stays hidden in tests that don't
+  // care about it (only the tests below assert on its content).
+  vi.mocked(api.getLoopStats).mockResolvedValue({
+    name: "digest",
+    outcomes: [],
+    convergence: null,
+    escalation_rate: null,
+    counts: {},
+    pending_events: 0,
+  });
   window.confirm = vi.fn();
   localStorage.removeItem("durin.loops.activityView");
 });
@@ -410,5 +421,94 @@ describe("LoopsView", () => {
     await waitFor(() =>
       expect(api.answerLoopRun).toHaveBeenCalledWith("tok", "digest", "run-waiting", "staging"),
     );
+  });
+
+  it("renders the outcome strip oldest→newest with correct tone classes and percentages", async () => {
+    vi.mocked(api.listLoops).mockResolvedValue([LOOP_DEF]);
+    // Newest-first from the route: r3 (escalated) is newest, r1 (done) oldest.
+    vi.mocked(api.getLoopStats).mockResolvedValue({
+      name: "digest",
+      outcomes: [
+        { run_id: "r3", status: "escalated", goal_reached: false, started_at: 3000, finished_at: 3100 },
+        { run_id: "r2", status: "no_goal", goal_reached: false, started_at: 2000, finished_at: 2100 },
+        { run_id: "r1", status: "done", goal_reached: true, started_at: 1000, finished_at: 1100 },
+      ],
+      convergence: 0.75,
+      escalation_rate: 0.25,
+      counts: {},
+      pending_events: 0,
+    });
+    const user = userEvent.setup();
+    render(wrap(<LoopsView />));
+
+    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await screen.findByText("digest");
+
+    const dots = await screen.findAllByTestId("outcome-dot");
+    expect(dots).toHaveLength(3);
+    // Oldest → newest left-to-right: done, no_goal, escalated.
+    expect(dots[0]).toHaveClass("bg-primary");
+    expect(dots[1]).toHaveClass("bg-muted-foreground/40");
+    expect(dots[2]).toHaveClass("bg-destructive");
+
+    expect(screen.getByText(/75%/)).toBeInTheDocument();
+    expect(screen.getByText(/esc 25%/)).toBeInTheDocument();
+  });
+
+  it("hides the escalation percentage when the rate is zero", async () => {
+    vi.mocked(api.listLoops).mockResolvedValue([LOOP_DEF]);
+    vi.mocked(api.getLoopStats).mockResolvedValue({
+      name: "digest",
+      outcomes: [
+        { run_id: "r1", status: "done", goal_reached: true, started_at: 1000, finished_at: 1100 },
+      ],
+      convergence: 1,
+      escalation_rate: 0,
+      counts: {},
+      pending_events: 0,
+    });
+    const user = userEvent.setup();
+    render(wrap(<LoopsView />));
+
+    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await screen.findByText("digest");
+
+    await screen.findByText("100%");
+    expect(screen.queryByText(/esc/)).not.toBeInTheDocument();
+  });
+
+  it("hides the outcome strip entirely when there are no outcomes", async () => {
+    vi.mocked(api.listLoops).mockResolvedValue([LOOP_DEF]);
+    vi.mocked(api.getLoopStats).mockResolvedValue({
+      name: "digest",
+      outcomes: [],
+      convergence: null,
+      escalation_rate: null,
+      counts: {},
+      pending_events: 0,
+    });
+    const user = userEvent.setup();
+    render(wrap(<LoopsView />));
+
+    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await screen.findByText("digest");
+
+    expect(screen.queryByTestId("outcome-dot")).not.toBeInTheDocument();
+  });
+
+  it("a failed stats fetch renders the row without a strip and without crashing", async () => {
+    vi.mocked(api.listLoops).mockResolvedValue([LOOP_DEF]);
+    vi.mocked(api.getLoopStats).mockRejectedValue(new api.ApiError(500, "HTTP 500"));
+    const consoleDebug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    const user = userEvent.setup();
+    render(wrap(<LoopsView />));
+
+    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await screen.findByText("digest");
+
+    await waitFor(() => expect(api.getLoopStats).toHaveBeenCalledWith("tok", "digest"));
+    expect(screen.queryByTestId("outcome-dot")).not.toBeInTheDocument();
+    expect(consoleDebug).toHaveBeenCalled();
+    consoleDebug.mockRestore();
   });
 });

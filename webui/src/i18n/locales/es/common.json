@@ -1187,12 +1187,14 @@
       "countLabel_other": "{{count}} loops",
       "deleteTitle": "¿Eliminar el loop {{title}}?",
       "queuedChip": "{{n}} en cola",
+      "escLabel": "esc {{pct}}%",
       "columns": {
         "name": "Nombre",
         "workflow": "Workflow",
         "triggers": "Disparadores",
         "active": "Activos",
-        "needsOperator": "Te necesitan"
+        "needsOperator": "Te necesitan",
+        "outcomes": "Resultados"
       }
     },
     "form": {
