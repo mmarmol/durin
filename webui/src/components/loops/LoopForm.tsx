@@ -19,6 +19,10 @@ const CHANNEL_KINDS = ["email", "telegram", "slack", "discord", "whatsapp"] as c
 type ChannelKind = (typeof CHANNEL_KINDS)[number];
 
 interface TriggerRow {
+  // Stable identity for this row, independent of its position in the array.
+  // removeTrigger() shifts array indices, so any state keyed by index (e.g.
+  // revealedSecretRows) would desync after a removal — key by rowId instead.
+  rowId: string;
   source: "cron" | "channel" | "webhook";
   scheduleKind: "cron" | "every";
   expr: string;
@@ -55,7 +59,12 @@ interface FormState {
   operatorTo: string;
 }
 
-const EMPTY_TRIGGER: TriggerRow = {
+// Monotonic counter for TriggerRow.rowId — unique within a form session,
+// which is all that's needed since rows never persist across mounts.
+let rowIdCounter = 0;
+const nextRowId = () => `trigger-${rowIdCounter++}`;
+
+const EMPTY_TRIGGER: Omit<TriggerRow, "rowId"> = {
   source: "cron",
   scheduleKind: "cron",
   expr: "",
@@ -105,6 +114,7 @@ function defToForm(def: LoopDef): FormState {
       if (trig.source === "channel") {
         return {
           ...EMPTY_TRIGGER,
+          rowId: nextRowId(),
           source: "channel",
           channel: trig.channel,
           fromContains: trig.filters.from_contains ?? "",
@@ -119,6 +129,7 @@ function defToForm(def: LoopDef): FormState {
       if (trig.source === "webhook") {
         return {
           ...EMPTY_TRIGGER,
+          rowId: nextRowId(),
           source: "webhook",
           hook: trig.hook,
           semantic: trig.semantic ?? "",
@@ -127,6 +138,7 @@ function defToForm(def: LoopDef): FormState {
       }
       return {
         ...EMPTY_TRIGGER,
+        rowId: nextRowId(),
         source: "cron",
         scheduleKind: trig.schedule.kind === "every" ? "every" : "cron",
         expr: trig.schedule.expr ?? "",
@@ -155,11 +167,12 @@ function formToDef(form: FormState, enabled: boolean): LoopDef {
         sender_contains?: string;
         text_contains?: string;
       } = {};
-      // from/subject only make sense for email; sender/text apply to any channel.
-      if (row.channel === "email") {
-        if (row.fromContains.trim()) filters.from_contains = row.fromContains.trim();
-        if (row.subjectContains.trim()) filters.subject_contains = row.subjectContains.trim();
-      }
+      // from/subject inputs are only shown in the UI for email, but the
+      // backend accepts them on any channel — an out-of-band definition
+      // (API/tool-authored) may already carry them on a non-email row, and
+      // re-saving from the webui must not silently drop them.
+      if (row.fromContains.trim()) filters.from_contains = row.fromContains.trim();
+      if (row.subjectContains.trim()) filters.subject_contains = row.subjectContains.trim();
       if (row.senderContains.trim()) filters.sender_contains = row.senderContains.trim();
       if (row.textContains.trim()) filters.text_contains = row.textContains.trim();
       return {
@@ -231,7 +244,7 @@ export function LoopForm({
   // until the user explicitly asks to see it.
   const [hooksSecret, setHooksSecret] = useState<string | null>(null);
   const [secretLoading, setSecretLoading] = useState(false);
-  const [revealedSecretRows, setRevealedSecretRows] = useState<Set<number>>(new Set());
+  const [revealedSecretRows, setRevealedSecretRows] = useState<Set<string>>(new Set());
   const [copiedSecret, setCopiedSecret] = useState(false);
 
   useEffect(() => {
@@ -253,7 +266,8 @@ export function LoopForm({
       checks: f.checks.map((row, idx) => (idx === i ? { ...row, [key]: value } : row)),
     }));
 
-  const addTrigger = () => setForm((f) => ({ ...f, triggers: [...f.triggers, { ...EMPTY_TRIGGER }] }));
+  const addTrigger = () =>
+    setForm((f) => ({ ...f, triggers: [...f.triggers, { ...EMPTY_TRIGGER, rowId: nextRowId() }] }));
   const removeTrigger = (i: number) =>
     setForm((f) => ({ ...f, triggers: f.triggers.filter((_, idx) => idx !== i) }));
 
@@ -261,8 +275,8 @@ export function LoopForm({
   const removeCheck = (i: number) =>
     setForm((f) => ({ ...f, checks: f.checks.filter((_, idx) => idx !== i) }));
 
-  const showSecret = async (i: number) => {
-    setRevealedSecretRows((prev) => new Set(prev).add(i));
+  const showSecret = async (rowId: string) => {
+    setRevealedSecretRows((prev) => new Set(prev).add(rowId));
     if (hooksSecret !== null) return;
     setSecretLoading(true);
     try {
@@ -374,7 +388,7 @@ export function LoopForm({
         ) : (
           <div className="space-y-2">
             {form.triggers.map((row, i) => (
-              <div key={i} className="flex flex-wrap items-end gap-2 rounded-md border border-border/40 p-2">
+              <div key={row.rowId} className="flex flex-wrap items-end gap-2 rounded-md border border-border/40 p-2">
                 <div className="w-36">
                   <label htmlFor={`loop-trigger-source-${i}`} className={rowLabelClass}>
                     {t("loops.form.source")}
@@ -612,7 +626,7 @@ export function LoopForm({
                     </div>
                     <div className="min-w-[160px]">
                       <span className={rowLabelClass}>{t("loops.form.hookSecret")}</span>
-                      {revealedSecretRows.has(i) ? (
+                      {revealedSecretRows.has(row.rowId) ? (
                         hooksSecret !== null ? (
                           <div className="flex items-center gap-1.5">
                             <code className="flex-1 truncate rounded-md border border-border/60 bg-background px-2 py-1.5 font-mono text-[12px]">
@@ -642,7 +656,7 @@ export function LoopForm({
                           size="sm"
                           variant="outline"
                           disabled={secretLoading}
-                          onClick={() => void showSecret(i)}
+                          onClick={() => void showSecret(row.rowId)}
                           className="h-8 text-[11px]"
                         >
                           {t("loops.form.showSecret")}

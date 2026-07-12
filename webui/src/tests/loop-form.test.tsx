@@ -86,6 +86,35 @@ const EXISTING_TELEGRAM: LoopDef = {
   operator_to: null,
 };
 
+// A telegram trigger carrying from_contains/subject_contains — those fields
+// are only editable via the UI for email, but an out-of-band definition
+// (API/tool-authored) may already have them set on another channel.
+const EXISTING_TELEGRAM_WITH_EMAIL_FILTERS: LoopDef = {
+  name: "chatbot",
+  enabled: true,
+  workflow: "digest-wf",
+  goal: { intent: "answer the question", checks: [] },
+  triggers: [
+    {
+      source: "channel",
+      channel: "telegram",
+      filters: {
+        from_contains: "@bob",
+        subject_contains: "urgent",
+        sender_contains: "@alice",
+        text_contains: "help",
+      },
+      semantic: "user needs support",
+      match: "wake_or_new",
+      correlate: "ticket-(\\d+)",
+    },
+  ],
+  concurrency: "single",
+  stuck_after: 3,
+  operator_channel: null,
+  operator_to: null,
+};
+
 describe("LoopForm", () => {
   beforeEach(() => {
     vi.mocked(listWorkflows).mockReset().mockResolvedValue(["digest-wf"]);
@@ -429,6 +458,70 @@ describe("LoopForm", () => {
 
     await screen.findByText("whsec_abc123");
     expect(getHooksSecret).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps revealed-secret state pinned to its row identity after removing an earlier row", async () => {
+    render(<LoopForm token="tok" editLoop={null} onDone={vi.fn()} onCancel={vi.fn()} />);
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "n" } });
+    fireEvent.change(screen.getByLabelText(/workflow/i), { target: { value: "digest-wf" } });
+    fireEvent.change(screen.getByLabelText(/^intent/i), { target: { value: "do it" } });
+
+    // Three webhook rows, each switched from the default "cron" source.
+    fireEvent.click(screen.getByRole("button", { name: /add trigger/i }));
+    fireEvent.click(screen.getByRole("button", { name: /add trigger/i }));
+    fireEvent.click(screen.getByRole("button", { name: /add trigger/i }));
+    screen
+      .getAllByLabelText(/^source$/i)
+      .forEach((sel) => fireEvent.change(sel, { target: { value: "webhook" } }));
+
+    const hookInputs = screen.getAllByLabelText(/hook name/i);
+    fireEvent.change(hookInputs[0], { target: { value: "hook1" } });
+    fireEvent.change(hookInputs[1], { target: { value: "hook2" } });
+    fireEvent.change(hookInputs[2], { target: { value: "hook3" } });
+
+    const rowOf = (hookValue: string) =>
+      (screen.getByDisplayValue(hookValue) as HTMLElement).closest(".flex-wrap") as HTMLElement;
+
+    // Reveal the secret on row 2 only.
+    fireEvent.click(within(rowOf("hook2")).getByRole("button", { name: /show secret/i }));
+    await within(rowOf("hook2")).findByText("whsec_abc123");
+
+    // Remove row 1 — row2 and row3 each shift one array index to the left.
+    fireEvent.click(within(rowOf("hook1")).getByRole("button", { name: /remove trigger/i }));
+    expect(screen.queryByDisplayValue("hook1")).not.toBeInTheDocument();
+
+    // The row that was #3 must NOT have inherited row2's revealed state.
+    expect(within(rowOf("hook3")).getByRole("button", { name: /show secret/i })).toBeInTheDocument();
+    expect(within(rowOf("hook3")).queryByText("whsec_abc123")).not.toBeInTheDocument();
+
+    // The row that was actually revealed (originally row2) must still show the secret.
+    expect(within(rowOf("hook2")).getByText("whsec_abc123")).toBeInTheDocument();
+  });
+
+  it("prefills a telegram trigger carrying from_contains/subject_contains and round-trips them on save", async () => {
+    render(
+      <LoopForm
+        token="tok"
+        editLoop={EXISTING_TELEGRAM_WITH_EMAIL_FILTERS}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("option", { name: "digest-wf" });
+
+    // The from/subject inputs stay hidden for a non-email channel — the
+    // filters are carried in form state without a visible field.
+    expect(screen.queryByLabelText(/from contains/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/subject contains/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /save & enable/i }));
+    await waitFor(() => expect(saveLoop).toHaveBeenCalledTimes(1));
+    const [, def] = vi.mocked(saveLoop).mock.calls[0];
+    expect(def.triggers).toEqual(EXISTING_TELEGRAM_WITH_EMAIL_FILTERS.triggers);
   });
 
   it("pressing Enter in the name input submits via Save & enable", async () => {
