@@ -133,7 +133,6 @@ The assistant reply reaches the WebSocket channel as a stream of deltas, not a s
 | `tts.local.engine` | `"supertonic"` | Local engine identifier |
 | `tts.local.voice` | `"F4"` | Preset voice (`F1`–`F5`, `M1`–`M5`) |
 | `tts.local.model_dir` | `null` | Override the model location; `null` = self-download (~260 MB) |
-| `tts.local.quality` | `"normal"` | `normal`/`high` — defined in schema but currently inert (no provider reads it) |
 | `tts.openai.api_key` / `api_base` | `null` | Cloud TTS credentials |
 | `voice.enabled` | `true` | Master toggle for hands-free conversational mode |
 | `voice.barge_in` | `true` | Allow interrupting playback by speaking over it |
