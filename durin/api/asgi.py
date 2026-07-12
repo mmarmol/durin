@@ -189,11 +189,16 @@ def resolve_principal_from_headers(
 
 
 def _is_read_route(bound: BoundRoute) -> bool:
-    """True for GET routes whose scope ends in ``:read`` (or have no scope)."""
-    if bound.spec.verb != "GET":
-        return False
-    scope = bound.spec.scope
-    return scope is None or scope.endswith(":read")
+    """True for every GET route — query/path params, no request body.
+
+    Classification is by HTTP verb alone, not by the route's declared scope:
+    a GET route's scope is usually ``:read`` but need not be (e.g. the loops
+    hooks-secret route is GET with a ``:write`` scope, since exposing the
+    webhook ingress secret is a more sensitive read than a normal listing);
+    the scope only gates access via ``principal.require()`` inside the
+    handler, it does not change which handler builder parses the request.
+    """
+    return bound.spec.verb == "GET"
 
 
 def _is_write_route(bound: BoundRoute) -> bool:
@@ -477,6 +482,7 @@ def build_gateway_http_app(
     auth: AuthService,
     static_token: str = "",
     static_dist_path: Path | None = None,
+    hook_dispatcher: Any = None,
 ) -> Starlette:
     """Build a Starlette ASGI app serving the full gateway HTTP surface.
 
@@ -488,6 +494,7 @@ def build_gateway_http_app(
     - ``/api/v1/*``                    — service front door (build_api_app routes).
     - ``GET /webui/bootstrap``         — token mint + session metadata.
     - ``GET /api/media/{sig}/{payload}`` — signed media fetch.
+    - ``POST /api/v1/hooks/{hook}``    — webhook trigger ingress, secret-header gated.
     - Static SPA files at ``/``        — served from ``static_dist_path`` if provided,
                                          with SPA history-mode fallback to index.html.
 
@@ -502,6 +509,10 @@ def build_gateway_http_app(
         static_token:     Static bearer token for ``/api/v1/*``.
         static_dist_path: If provided, serve the built SPA from this directory.
                           Falls back to ``channel._static_dist_path`` if None.
+        hook_dispatcher:  ``durin.loops.hooks.HookDispatcher`` for the webhook
+                          ingress route. ``None`` on surfaces without one (the
+                          route then reports 503 for any hook, same shape as
+                          the loops runtime's "not available" routes).
     """
     resolved_static = static_dist_path or channel._static_dist_path
 
@@ -555,6 +566,39 @@ def build_gateway_http_app(
         except DomainError as exc:
             return _problem_response(exc)
         return Response(body, media_type=media_type, headers=dict(headers))
+
+    # -- POST /api/v1/hooks/{hook} -------------------------------------------
+    # Secret-header gated (not bearer-token auth, like the rest of /api/v1):
+    # webhook callers are external services, not webui/CLI principals.
+
+    async def hooks_handler(request: Request) -> Response:
+        from durin.security.api_tokens import ApiTokenStore
+
+        header_secret = request.headers.get("x-durin-hook-secret", "")
+        expected_secret = ApiTokenStore().get_or_create_hooks_secret()
+        if not header_secret or not hmac.compare_digest(header_secret, expected_secret):
+            return _problem_response(UnauthenticatedError("missing or invalid hook secret"))
+        if hook_dispatcher is None:
+            return _problem_response(
+                UnavailableError("webhook ingress is not available on this surface")
+            )
+
+        body_bytes = await request.body()
+        try:
+            payload = json.loads(body_bytes) if body_bytes else None
+        except (json.JSONDecodeError, ValueError):
+            payload = None
+        if not isinstance(payload, dict):
+            return JSONResponse(
+                {"error": "request body must be a JSON object"}, status_code=400
+            )
+
+        result = await hook_dispatcher.dispatch(request.path_params["hook"], payload)
+        if result.get("result") == "no_match":
+            return _problem_response(
+                NotFoundError(f"no enabled loop matches hook {request.path_params['hook']!r}")
+            )
+        return JSONResponse(result, status_code=202)
 
     # -- signed v1 session reads --------------------------------------------
     # Media-URL signing (and the webui-thread build) needs this channel's
@@ -700,6 +744,8 @@ def build_gateway_http_app(
             media_handler,
             methods=["GET"],
         ),
+        # /api/v1/hooks/{hook} — webhook trigger ingress, secret-header gated.
+        Route("/api/v1/hooks/{hook}", hooks_handler, methods=["POST"]),
     ]
 
     # SPA static files (optional).

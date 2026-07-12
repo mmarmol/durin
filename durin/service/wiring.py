@@ -127,7 +127,8 @@ def build_service_registry(
         workspace=_workspace(), subagent_manager=subagent_manager,
         sessions=session_manager))
     registry.register("loops", LoopsService(
-        workspace=_workspace(), cron_service=cron_service, runtime=loops_runtime))
+        workspace=_workspace(), cron_service=cron_service, runtime=loops_runtime,
+        hooks_secret=lambda: ApiTokenStore().get_or_create_hooks_secret()))
 
     # Crash recovery: the gateway is the long-lived process, so its boot is the natural
     # point to reconcile run manifests still "running" from a previous process that died

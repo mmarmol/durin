@@ -33,6 +33,14 @@ be "queue" (single concurrency, an active run already exists), the matcher
 does NOT consume the message — nothing would drain a queue that doesn't
 exist — it logs a warning and lets the message fall through as a normal turn
 instead.
+
+``durin.loops.hooks.HookDispatcher`` (webhook trigger ingress) shares this
+matcher's wake and fire/queue decision instead of re-implementing the
+pending-fires race guard: it calls ``_try_wake`` and ``_dispatch_match``
+directly on a live ``TriggerMatcher`` instance with a synthetic
+``InboundMessage``/``InboundFacts`` pair (``channel="webhook"``). Both
+methods are private by convention, not by package boundary — a change to
+either one's contract must be checked against ``durin/loops/hooks.py`` too.
 """
 
 from __future__ import annotations
@@ -120,7 +128,7 @@ class TriggerMatcher:
                 continue
             custom_key = self._correlate_key(spec.name, trigger, facts)
             thread = custom_key if custom_key is not None else facts.thread_key
-            return self._dispatch_match(spec, facts, thread, msg)
+            return self._dispatch_match(spec, facts, thread, msg) != "passed_busy"
 
         return False
 
@@ -221,7 +229,16 @@ class TriggerMatcher:
             logger.warning("loops: semantic_judge raised for condition {!r}; treating as no-match", condition)
             return False
 
-    def _dispatch_match(self, spec: LoopSpec, facts: InboundFacts, thread: str | None, msg: Any) -> bool:
+    def _dispatch_match(self, spec: LoopSpec, facts: InboundFacts, thread: str | None, msg: Any) -> str:
+        """Decide fire vs queue for a matched trigger and schedule/enqueue it.
+
+        Returns the action taken: "fired" (a fire task was scheduled — the
+        actual runtime.fire() outcome isn't known yet), "queued" (single
+        concurrency, an active/pending run already exists, event pushed to
+        the per-loop queue), or "passed_busy" (busy AND no queue wired — the
+        message was NOT consumed). See the module docstring for
+        ``HookDispatcher``'s reuse of this method.
+        """
         origin = {"channel": msg.channel, "sender": facts.sender, "chat_id": msg.chat_id,
                   "thread": thread, "subject": facts.title, "reply": facts.reply}
         busy = spec.concurrency != "parallel" and (
@@ -230,17 +247,17 @@ class TriggerMatcher:
         if not busy:
             self._pending_fires.add(spec.name)
             self._track(asyncio.create_task(self._fire(spec.name, msg.channel, msg.content, origin)))
-            return True
+            return "fired"
         if self._enqueue is not None:
             self._emit(spec.name, msg.channel, "queued")
             self._enqueue(spec.name, self._queue_event(msg.content, origin))
-            return True
+            return "queued"
         logger.warning(
             "loops: loop '{}' matched but is busy (single-concurrency) and no queue "
             "is wired; passing the message through as a normal turn", spec.name,
         )
         self._emit(spec.name, msg.channel, "passed_busy")
-        return False
+        return "passed_busy"
 
     def _track(self, task: asyncio.Task) -> None:
         self._tasks.add(task)

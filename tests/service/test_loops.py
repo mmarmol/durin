@@ -500,3 +500,91 @@ def test_answer_route_accepts_a_waiting_info_run(tmp_path):
     )
     assert resp.status_code == 200
     assert resp.json()["run"]["status"] == "done"
+
+
+# --- GET /api/v1/loops/hooks-secret -----------------------------------------
+
+
+def _http_client_with_hooks_secret(tmp_path, secret: str | None = "s3cr3t"):
+    from durin.api.asgi import build_api_app
+    from durin.security.api_tokens import ApiTokenStore
+    from durin.service.auth import AuthService
+    from durin.service.registry import ServiceRegistry
+
+    store = ApiTokenStore(path=tmp_path / "tokens.json")
+    auth = AuthService(store=store)
+    registry = ServiceRegistry()
+    hooks_secret = (lambda: secret) if secret is not None else None
+    registry.register("loops", LoopsService(
+        workspace=tmp_path, cron_service=_cron(tmp_path), hooks_secret=hooks_secret))
+    registry.register("auth", auth)
+    app = build_api_app(registry, auth=auth, static_token="test-token")
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_hooks_secret_route_returns_secret_and_path_template(tmp_path):
+    client = _http_client_with_hooks_secret(tmp_path, secret="s3cr3t")
+    headers = {"Authorization": "Bearer test-token"}
+
+    resp = client.get("/api/v1/loops/hooks-secret", headers=headers)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"secret": "s3cr3t", "path_template": "/api/v1/hooks/{hook}"}
+
+
+def test_hooks_secret_route_unavailable_without_an_accessor(tmp_path):
+    client = _http_client_with_hooks_secret(tmp_path, secret=None)
+    headers = {"Authorization": "Bearer test-token"}
+
+    resp = client.get("/api/v1/loops/hooks-secret", headers=headers)
+
+    assert resp.status_code == 503
+
+
+def test_hooks_secret_route_requires_loops_write_scope(tmp_path):
+    from durin.api.asgi import build_api_app
+    from durin.security.api_tokens import ApiTokenStore
+    from durin.service.auth import AuthService
+    from durin.service.principal import Scope
+    from durin.service.registry import ServiceRegistry
+
+    store = ApiTokenStore(path=tmp_path / "tokens.json")
+    auth = AuthService(store=store)
+    _, read_only_token = store.issue([Scope.LOOPS_READ.value], label="read-only")
+    registry = ServiceRegistry()
+    registry.register("loops", LoopsService(
+        workspace=tmp_path, cron_service=_cron(tmp_path), hooks_secret=lambda: "s3cr3t"))
+    registry.register("auth", auth)
+    app = build_api_app(registry, auth=auth, static_token="")
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resp = client.get(
+        "/api/v1/loops/hooks-secret", headers={"Authorization": f"Bearer {read_only_token}"}
+    )
+    assert resp.status_code == 403
+
+
+def test_hooks_secret_literal_route_is_not_shadowed_by_a_loop_named_hooks_secret(tmp_path):
+    """A loop literally named "hooks-secret" must not steal the literal
+    GET /api/v1/loops/hooks-secret route (mirrors the "runs" shadow tests
+    above — a {name} param route must never win over a literal segment)."""
+    client = _http_client_with_hooks_secret(tmp_path, secret="s3cr3t")
+    headers = {"Authorization": "Bearer test-token"}
+
+    resp = client.put(
+        "/api/v1/loops/hooks-secret",
+        json={"definition": {**_VALID, "name": "hooks-secret"}},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+    secret_resp = client.get("/api/v1/loops/hooks-secret", headers=headers)
+    assert secret_resp.status_code == 200
+    body = secret_resp.json()
+    assert body == {"secret": "s3cr3t", "path_template": "/api/v1/hooks/{hook}"}
+    assert "definition" not in body   # not a loop-get response for the loop named hooks-secret
+
+    # The loop itself is still reachable by its own name, unaffected.
+    got = client.get("/api/v1/loops/hooks-secret/stats", headers=headers)
+    assert got.status_code == 200
+    assert got.json()["name"] == "hooks-secret"

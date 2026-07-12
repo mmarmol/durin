@@ -1803,6 +1803,13 @@ def _run_gateway(
     )
     bus.add_inbound_interceptor(_loops_matcher.handle_inbound)
 
+    # Webhook trigger ingress (POST /api/v1/hooks/{hook}, wired into the
+    # unified gateway app below): shares the matcher's wake/fire/queue
+    # decision instead of duplicating it — see durin/loops/hooks.py.
+    from durin.loops.hooks import HookDispatcher
+
+    loops_hook_dispatcher = HookDispatcher(_loops_matcher)
+
     def _webui_runtime_model_name() -> str | None:
         model = getattr(agent, "model", None)
         if isinstance(model, str):
@@ -2169,6 +2176,7 @@ def _run_gateway(
                     auth=_unified_registry.get("auth"),
                     static_token=_static_token_u,
                     static_dist_path=_ws_channel._static_dist_path,
+                    hook_dispatcher=loops_hook_dispatcher,
                 )
                 _ws_port = _ws_channel.config.port  # type: ignore[attr-defined]
                 _ws_host = _ws_channel.config.host  # type: ignore[attr-defined]
