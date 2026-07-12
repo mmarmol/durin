@@ -1144,6 +1144,8 @@
       "answerSent": "Respuesta enviada",
       "retry": "Reintentar",
       "answerAsOperator": "Responder como operador",
+      "viewList": "Lista",
+      "viewBoard": "Tablero",
       "status": {
         "running": "en curso",
         "needs_operator": "te necesita",
@@ -1151,7 +1153,8 @@
         "done": "listo",
         "no_goal": "sin objetivo",
         "escalated": "escalado",
-        "error": "error"
+        "error": "error",
+        "attention": "Atención"
       }
     },
     "runDetail": {

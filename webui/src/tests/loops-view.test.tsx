@@ -28,6 +28,7 @@ beforeEach(() => {
   vi.mocked(api.listAllLoopRuns).mockResolvedValue([]);
   vi.mocked(api.listLoops).mockResolvedValue([]);
   window.confirm = vi.fn();
+  localStorage.removeItem("durin.loops.activityView");
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -102,6 +103,22 @@ const WAITING_INFO: api.LoopRun = {
   started_at: 4000,
   finished_at: null,
   origin: { channel: "email", sender: "user@example.com", chat_id: "user@example.com", thread: "t1", subject: "Help" },
+  checks: null,
+  workflow_run_id: null,
+};
+
+const RUNNING: api.LoopRun = {
+  run_id: "run-running",
+  loop: "sync",
+  status: "running",
+  source: "cron",
+  task: "sync inventory",
+  ask: null,
+  detail: null,
+  goal_reached: null,
+  started_at: 5000,
+  finished_at: null,
+  origin: null,
   checks: null,
   workflow_run_id: null,
 };
@@ -321,5 +338,77 @@ describe("LoopsView", () => {
     await user.click(screen.getByRole("button", { name: /Definitions/i }));
     await screen.findByText("digest");
     expect(screen.getByText(/3 queued/i)).toBeInTheDocument();
+  });
+
+  it("the list/board toggle switches views and persists the choice in localStorage", async () => {
+    vi.mocked(api.listAllLoopRuns).mockResolvedValue([DONE]);
+    const user = userEvent.setup();
+    const { unmount } = render(wrap(<LoopsView />));
+
+    await screen.findByText("cleanup old files");
+    const listBtn = screen.getByRole("button", { name: "List" });
+    const boardBtn = screen.getByRole("button", { name: "Board" });
+    expect(listBtn).toHaveAttribute("aria-pressed", "true");
+    expect(boardBtn).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("group", { name: "done" })).not.toBeInTheDocument();
+
+    await user.click(boardBtn);
+    expect(await screen.findByRole("group", { name: "done" })).toBeInTheDocument();
+    expect(boardBtn).toHaveAttribute("aria-pressed", "true");
+    expect(localStorage.getItem("durin.loops.activityView")).toBe("board");
+
+    // Re-render (simulating a reload) should read the persisted preference
+    // and default straight into board mode.
+    unmount();
+    render(wrap(<LoopsView />));
+    expect(await screen.findByRole("group", { name: "done" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Board" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("board view places each run under its correct column", async () => {
+    vi.mocked(api.listAllLoopRuns).mockResolvedValue([
+      NEEDS_OPERATOR,
+      WAITING_INFO,
+      RUNNING,
+      DONE,
+      ESCALATED,
+    ]);
+    const user = userEvent.setup();
+    render(wrap(<LoopsView />));
+
+    await user.click(await screen.findByRole("button", { name: "Board" }));
+
+    const needsGroup = await screen.findByRole("group", { name: "needs you" });
+    const waitingGroup = screen.getByRole("group", { name: "waiting reply" });
+    const runningGroup = screen.getByRole("group", { name: "running" });
+    const doneGroup = screen.getByRole("group", { name: "done" });
+    const attentionGroup = screen.getByRole("group", { name: "Attention" });
+
+    expect(within(needsGroup).getByText("daily digest")).toBeInTheDocument();
+    expect(within(waitingGroup).getByText("Help")).toBeInTheDocument();
+    expect(within(runningGroup).getByText("sync inventory")).toBeInTheDocument();
+    expect(within(doneGroup).getByText("cleanup old files")).toBeInTheDocument();
+    expect(within(attentionGroup).getByText("daily digest")).toBeInTheDocument();
+
+    // Cross-column placement should not bleed: the escalated run's card is
+    // only under Attention, not under needs you.
+    expect(within(needsGroup).queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+    expect(within(attentionGroup).getByRole("button", { name: /retry/i })).toBeInTheDocument();
+  });
+
+  it("answering from a board card calls answerLoopRun", async () => {
+    vi.mocked(api.listAllLoopRuns).mockResolvedValue([NEEDS_OPERATOR]);
+    vi.mocked(api.answerLoopRun).mockResolvedValue({ ...NEEDS_OPERATOR, status: "running" });
+    const user = userEvent.setup();
+    render(wrap(<LoopsView />));
+
+    await user.click(await screen.findByRole("button", { name: "Board" }));
+    const input = await screen.findByPlaceholderText(/answer/i);
+    await user.type(input, "staging");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() =>
+      expect(api.answerLoopRun).toHaveBeenCalledWith("tok", "digest", "run-waiting", "staging"),
+    );
   });
 });

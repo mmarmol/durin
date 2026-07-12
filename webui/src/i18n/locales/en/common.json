@@ -1326,6 +1326,8 @@
       "answerSent": "Answer sent",
       "retry": "Retry",
       "answerAsOperator": "Answer as operator",
+      "viewList": "List",
+      "viewBoard": "Board",
       "status": {
         "running": "running",
         "needs_operator": "needs you",
@@ -1333,7 +1335,8 @@
         "done": "done",
         "no_goal": "no goal",
         "escalated": "escalated",
-        "error": "error"
+        "error": "error",
+        "attention": "Attention"
       }
     },
     "runDetail": {
