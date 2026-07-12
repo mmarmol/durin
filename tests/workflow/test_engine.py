@@ -816,6 +816,20 @@ def test_needs_input_result_names_the_asking_node():
     assert result.status == "needs_input"
     assert result.needs_input_node == "gate"
     assert result.final_output_node == "gate"
+    # The routing label is transport metadata, not part of the question.
+    assert result.final_output == "what env?"
+
+
+def test_needs_input_keeps_output_when_label_is_the_only_line():
+    wf = parse_workflow({
+        "name": "d", "start": "gate",
+        "nodes": [{"id": "gate", "kind": "work", "prompt": "clarify?",
+                   "cases": {"OK": None, "NEED_INFO": "__needs_input__"}}],
+    })
+    eng, _ = _engine({"gate": "NEED_INFO"})
+    result = eng.run(wf, "t")
+    assert result.status == "needs_input"
+    assert result.final_output == "NEED_INFO"
 
 
 def test_resume_reenters_at_the_asking_node_with_carried_visits(tmp_path):
