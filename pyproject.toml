@@ -1,10 +1,11 @@
 [project]
 name = "durin-agent"
-version = "0.2.0b2"
+version = "0.2.0b3"
 description = "Personal AI agent with daily-driver CLI, modal TUI, and graph-based memory"
-# Upper bound = highest Python line durin is tested/known-good on. uv and pip
-# honor it to pick a compatible interpreter, so a too-new system default Python
-# doesn't pull unbuildable wheels for the heavy extras (e.g. llama-cpp-python).
+# Upper bound = highest Python line durin is tested/known-good on, keeping the
+# heavy extras (e.g. llama-cpp-python) off too-new Pythons that lack wheels.
+# uv reads this and fetches a compatible interpreter on its own; pip/pipx do
+# NOT auto-select, so with those pass --python to an in-range interpreter.
 requires-python = ">=3.11,<3.14"
 license = {text = "MIT"}
 authors = [

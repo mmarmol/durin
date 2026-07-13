@@ -103,6 +103,10 @@ over time — without you lifting a finger.
 
 ## Quick start
 
+durin installs with [uv](https://docs.astral.sh/uv/), which fetches a compatible
+Python for you — nothing on your system has to match. Don't have uv yet?
+`curl -LsSf https://astral.sh/uv/install.sh | sh`
+
 ```bash
 uv tool install --prerelease allow durin-agent   # PyPI (uv picks a compatible Python)
 durin onboard                    # interactive setup wizard
