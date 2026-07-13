@@ -23,7 +23,7 @@ on any model.
 
 Left to itself, an LLM agent improvises a different path every time — great for
 open-ended chat, unreliable for work you need done *a specific way*. durin lets you
-pin it to **adaptable workflows**: visual graphs of nodes with routing, loops,
+pin it to **adaptable workflows**: visual graphs of nodes with routing, loop-backs,
 parallel branches, sub-flows, and human checkpoints. A task then runs the way you
 designed it — every time. The agent can pause to ask you, resume exactly where it
 stopped, and even **edit and improve a workflow on its own** (with an auto-revert
@@ -32,6 +32,20 @@ gets done.
 
 <p align="center">
   <img src="docs/assets/mockup-workflow.svg" alt="A durin workflow: nodes, a router, parallel branches, a human checkpoint, and a loop-back" width="860">
+</p>
+
+### Loops that chase a goal, not a clock
+
+A workflow runs once; a **loop** runs one *over and over until a goal is actually
+met*. You give it a plain-language goal — plus optional **checks** (a shell command
+that must exit `0`, or an assertion an LLM judge grades) — and durin takes it from
+there: it fires on a **trigger** (a schedule, an inbound message, a webhook, or you
+just asking), runs the workflow, checks the result against the goal, and either
+closes out or tries again next time. And when it keeps missing after a few
+attempts, it doesn't spin forever — it **stops and asks you**.
+
+<p align="center">
+  <img src="docs/assets/mockup-loops.svg" alt="durin's Loops panel: goal-seeking loops with status, checks, and an escalation that pauses to ask you" width="860">
 </p>
 
 ### A memory that's actually yours
@@ -115,6 +129,7 @@ commands, see the [CLI reference](docs/guide/cli.md).
 - [Channels](docs/guide/channels.md) — Telegram, Slack, Discord, email, and more
 - [Documents & your knowledge](docs/guide/documents.md)
 - [Workflows](docs/guide/workflows.md)
+- [Loops](docs/guide/loops.md) — workflows that repeat until a goal is met
 - [How it works (internals)](docs/internals/README.md)
 
 ## License
