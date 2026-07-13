@@ -2,7 +2,10 @@
 name = "durin-agent"
 version = "0.2.0b1"
 description = "Personal AI agent with daily-driver CLI, modal TUI, and graph-based memory"
-requires-python = ">=3.11"
+# Upper bound = highest Python line durin is tested/known-good on. uv and pip
+# honor it to pick a compatible interpreter, so a too-new system default Python
+# doesn't pull unbuildable wheels for the heavy extras (e.g. llama-cpp-python).
+requires-python = ">=3.11,<3.14"
 license = {text = "MIT"}
 authors = [
     {name = "Marcelo Marmol"}
