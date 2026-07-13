@@ -9,7 +9,7 @@ For everyday usage, see [README.md](../README.md).
 
 | Requirement | Notes |
 |---|---|
-| Python 3.11+ | `pyproject.toml` pins `requires-python = ">=3.11"`. |
+| Python 3.11–3.13 | `pyproject.toml` pins `requires-python = ">=3.11,<3.14"`. `uv` reads this and picks a compatible interpreter automatically. |
 | `pip` (or `uv`) | Editable installs use `pip install -e .`. |
 | `git` | For cloning + `durin upgrade` on editable installs. |
 | `bun` *or* `npm` (only for source builds) | The hatch build hook compiles the webui. Skip via `DURIN_SKIP_WEBUI_BUILD=1` if you only need the CLI. |
@@ -28,18 +28,31 @@ The distribution name on PyPI is **`durin-agent`** — the CLI command stays
 
 ### From PyPI (recommended for users)
 
-```bash
-# Alpha / pre-releases require --pre
-pipx install --pre durin-agent
-# or, plain pip into the current environment:
-pip install --pre durin-agent
+durin supports **Python 3.11–3.13** (`requires-python = ">=3.11,<3.14"`).
+Its heavy extras (`local`, `memory`, `cross-encoder`) pull packages whose
+prebuilt wheels lag new Python releases, so installing under a too-new
+interpreter can fail or silently compile from source. **`uv` handles that
+for you** — it reads `requires-python` and picks (or downloads) a
+compatible Python automatically:
 
-# Once we cut a stable release:
-pipx install durin-agent
+```bash
+# uv (recommended) — selects a compatible Python on its own
+uv tool install --prerelease allow durin-agent
+# with extras:
+uv tool install --prerelease allow 'durin-agent[memory,mcp,web]'
 ```
 
-`pipx` is preferred for CLI installs because it isolates durin's
-dependency tree from anything else on your Python.
+Don't have `uv`? Get it from <https://docs.astral.sh/uv/> (or `brew
+install uv`). Or use `pipx` — but pin an in-range interpreter, because
+`pipx` builds its venv on whatever `python3` is the current default:
+
+```bash
+pipx install --pre --python python3.13 durin-agent
+# plain pip works too, into an environment already on Python 3.11–3.13:
+pip install --pre durin-agent
+```
+
+Once a stable release is out, drop `--prerelease allow` / `--pre`.
 
 ### From a GitHub Release wheel (no PyPI required)
 
@@ -80,8 +93,8 @@ The wheel build normally calls `bun` (preferred) or `npm` to bundle
 `pyproject.toml` exposes opt-in dependency groups. Combine with brackets:
 
 ```bash
-# Installed from PyPI
-pipx install --pre 'durin-agent[memory,mcp,web]'
+# Installed from PyPI (uv picks a compatible Python)
+uv tool install --prerelease allow 'durin-agent[memory,mcp,web]'
 
 # Editable from a checkout
 pip install -e ".[memory,mcp,web]"
