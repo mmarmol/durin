@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="docs/assets/durin-banner.svg" alt="durin" width="820">
+  <img src="https://raw.githubusercontent.com/mmarmol/durin/main/docs/assets/durin-banner.svg" alt="durin" width="820">
 </p>
 
 <p align="center">
   <a href="https://pypi.org/project/durin-agent/"><img alt="PyPI" src="https://img.shields.io/pypi/v/durin-agent?color=57b6e6&label=pypi"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-57b6e6">
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-57b6e6"></a>
+  <a href="https://github.com/mmarmol/durin/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-57b6e6"></a>
 </p>
 
 **The problem with AI agents isn't that they forget — it's that they improvise.**
@@ -31,7 +31,7 @@ safety net). Few personal agents give you this much control over *how* the work
 gets done.
 
 <p align="center">
-  <img src="docs/assets/mockup-workflow.svg" alt="A durin workflow: nodes, a router, parallel branches, a human checkpoint, and a loop-back" width="860">
+  <img src="https://raw.githubusercontent.com/mmarmol/durin/main/docs/assets/mockup-workflow.svg" alt="A durin workflow: nodes, a router, parallel branches, a human checkpoint, and a loop-back" width="860">
 </p>
 
 ### Loops that chase a goal, not a clock
@@ -45,7 +45,7 @@ closes out or tries again next time. And when it keeps missing after a few
 attempts, it doesn't spin forever — it **stops and asks you**.
 
 <p align="center">
-  <img src="docs/assets/mockup-loops.svg" alt="durin's Loops panel: goal-seeking loops with status, checks, and an escalation that pauses to ask you" width="860">
+  <img src="https://raw.githubusercontent.com/mmarmol/durin/main/docs/assets/mockup-loops.svg" alt="durin's Loops panel: goal-seeking loops with status, checks, and an escalation that pauses to ask you" width="860">
 </p>
 
 ### A memory that's actually yours
@@ -59,7 +59,7 @@ source of truth; the search indexes are derived and rebuildable. (Benchmarked at
 LoCoMo ≈ 0.79.)
 
 <p align="center">
-  <img src="docs/assets/mockup-memory.svg" alt="durin's memory as a typed entity graph with labelled relations" width="860">
+  <img src="https://raw.githubusercontent.com/mmarmol/durin/main/docs/assets/mockup-memory.svg" alt="durin's memory as a typed entity graph with labelled relations" width="860">
 </p>
 
 ### A skills ecosystem with guardrails
@@ -78,7 +78,7 @@ with per-step detail, status, and the model used. Nothing happens in a black box
 watch a run, open a paused checkpoint, and pick up right where it stopped.
 
 <p align="center">
-  <img src="docs/assets/mockup-runs.svg" alt="durin's Runs panel: live task list with per-step progress" width="860">
+  <img src="https://raw.githubusercontent.com/mmarmol/durin/main/docs/assets/mockup-runs.svg" alt="durin's Runs panel: live task list with per-step progress" width="860">
 </p>
 
 ### And more
@@ -120,21 +120,21 @@ Run the gateway for the browser dashboard plus chat channels:
 durin gateway start              # dashboard at http://127.0.0.1:8765
 ```
 
-See the [install guide](docs/guide/install.md) for prerequisites, optional extras
+See the [install guide](https://github.com/mmarmol/durin/blob/main/docs/guide/install.md) for prerequisites, optional extras
 (memory, local models, audio), and platform notes. For everyday and in-session
-commands, see the [CLI reference](docs/guide/cli.md).
+commands, see the [CLI reference](https://github.com/mmarmol/durin/blob/main/docs/guide/cli.md).
 
 ## Documentation
 
-- [Install · configure · uninstall](docs/guide/install.md)
-- [CLI & in-session commands](docs/guide/cli.md)
-- [Configuration reference](docs/guide/configuration.md)
-- [Providers & models](docs/guide/providers.md)
-- [Channels](docs/guide/channels.md) — Telegram, Slack, Discord, email, and more
-- [Documents & your knowledge](docs/guide/documents.md)
-- [Workflows](docs/guide/workflows.md)
-- [Loops](docs/guide/loops.md) — workflows that repeat until a goal is met
-- [How it works (internals)](docs/internals/README.md)
+- [Install · configure · uninstall](https://github.com/mmarmol/durin/blob/main/docs/guide/install.md)
+- [CLI & in-session commands](https://github.com/mmarmol/durin/blob/main/docs/guide/cli.md)
+- [Configuration reference](https://github.com/mmarmol/durin/blob/main/docs/guide/configuration.md)
+- [Providers & models](https://github.com/mmarmol/durin/blob/main/docs/guide/providers.md)
+- [Channels](https://github.com/mmarmol/durin/blob/main/docs/guide/channels.md) — Telegram, Slack, Discord, email, and more
+- [Documents & your knowledge](https://github.com/mmarmol/durin/blob/main/docs/guide/documents.md)
+- [Workflows](https://github.com/mmarmol/durin/blob/main/docs/guide/workflows.md)
+- [Loops](https://github.com/mmarmol/durin/blob/main/docs/guide/loops.md) — workflows that repeat until a goal is met
+- [How it works (internals)](https://github.com/mmarmol/durin/blob/main/docs/internals/README.md)
 
 ## License
 

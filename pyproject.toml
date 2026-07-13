@@ -2,6 +2,7 @@
 name = "durin-agent"
 version = "0.2.0b3"
 description = "Personal AI agent with daily-driver CLI, modal TUI, and graph-based memory"
+readme = "README.md"
 # Upper bound = highest Python line durin is tested/known-good on, keeping the
 # heavy extras (e.g. llama-cpp-python) off too-new Pythons that lack wheels.
 # uv reads this and fetches a compatible interpreter on its own; pip/pipx do
@@ -171,6 +172,12 @@ dev = [
     "pytest-cov>=6.0.0,<8.0.0",
     "ruff>=0.1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mmarmol/durin"
+Repository = "https://github.com/mmarmol/durin"
+Documentation = "https://github.com/mmarmol/durin/blob/main/docs/README.md"
+Issues = "https://github.com/mmarmol/durin/issues"
 
 [project.scripts]
 durin = "durin.cli.commands:app"
