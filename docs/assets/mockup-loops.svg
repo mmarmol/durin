@@ -1,0 +1,60 @@
+<svg width="1160" height="560" viewBox="0 0 1160 560" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" role="img" aria-label="durin Loops activity mockup: goal-seeking loops with status, checks, and an escalation that asks you">
+<rect x="0.5" y="0.5" width="1159" height="559" rx="14" fill="#fafbfc" stroke="#e3e5e8"/>
+<!-- segmented control: Activity (active) | Loops -->
+<rect x="30" y="17" width="184" height="30" rx="11" fill="#eceef0"/>
+<rect x="34" y="21" width="94" height="22" rx="8" fill="#ffffff" stroke="#e6e8ea"/>
+<text x="81" y="36" font-size="12.5" font-weight="500" text-anchor="middle" fill="#151719">Activity</text>
+<text x="172" y="36" font-size="12.5" font-weight="500" text-anchor="middle" fill="#6c7175">Loops</text>
+<!-- header divider -->
+<line x1="16" y1="58" x2="1144" y2="58" stroke="#eceef0"/>
+<!-- summary row -->
+<text x="40" y="92" font-size="13" fill="#6c7175">4 loops · <tspan fill="#b07d1e">1 needs you</tspan></text>
+<rect x="980" y="78" width="140" height="26" rx="8" fill="#ffffff" stroke="#e3e5e8"/>
+<text x="996" y="95" font-size="12" fill="#151719">all statuses</text>
+<path d="M1096,90 l5,5 l5,-5" fill="none" stroke="#9aa0a6" stroke-width="1.4"/>
+
+<!-- card 1: running -->
+<rect x="40" y="120" width="1080" height="84" rx="11" fill="#ffffff" stroke="#e3e5e8"/>
+<text x="60" y="148" font-size="13.5" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#151719">weekly-regressions</text>
+<rect x="224" y="135" width="64" height="19" rx="5" fill="none" stroke="#2ba5d4" stroke-opacity="0.55"/>
+<text x="256" y="148" font-size="11" text-anchor="middle" fill="#2ba5d4">running</text>
+<text x="302" y="148" font-size="12" fill="#9aa0a6">09:00 · today</text>
+<circle cx="1052" cy="143" r="5" fill="#3a9d5d"/>
+<circle cx="1070" cy="143" r="5" fill="#3a9d5d"/>
+<circle cx="1088" cy="143" r="5" fill="none" stroke="#cfd3d7"/>
+<text x="60" y="172" font-size="12.5" fill="#6c7175">Goal — the weekly report names this week's top 3 regressions</text>
+<text x="60" y="193" font-size="11.5" fill="#9aa0a6">cron · every Mon 09:00    ·    attempt 2 of 3    ·    2 of 3 checks passed</text>
+
+<!-- card 2: needs you (escalated) -->
+<rect x="40" y="220" width="1080" height="84" rx="11" fill="#fffaf3" stroke="#eaddc6"/>
+<text x="60" y="248" font-size="13.5" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#151719">inbox-triage</text>
+<rect x="173" y="235" width="78" height="19" rx="5" fill="none" stroke="#b07d1e" stroke-opacity="0.6"/>
+<text x="212" y="248" font-size="11" text-anchor="middle" fill="#b07d1e">needs you</text>
+<text x="265" y="248" font-size="12" fill="#9aa0a6">12m ago</text>
+<text x="1090" y="245" font-size="11" text-anchor="end" fill="#b07d1e">escalated 3 of 3</text>
+<rect x="980" y="253" width="110" height="6" rx="3" fill="#efe1cd"/>
+<rect x="980" y="253" width="110" height="6" rx="3" fill="#b07d1e"/>
+<text x="60" y="272" font-size="12.5" fill="#6c7175">Goal — every support email is answered or escalated</text>
+<text x="60" y="293" font-size="11.5" fill="#b07d1e">stuck after 3 tries — paused, asking you what to do next</text>
+
+<!-- card 3: done -->
+<rect x="40" y="320" width="1080" height="84" rx="11" fill="#ffffff" stroke="#e3e5e8"/>
+<text x="60" y="348" font-size="13.5" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#151719">service-health</text>
+<rect x="189" y="335" width="50" height="19" rx="5" fill="none" stroke="#3a9d5d" stroke-opacity="0.55"/>
+<text x="214" y="348" font-size="11" text-anchor="middle" fill="#3a9d5d">done</text>
+<text x="253" y="348" font-size="12" fill="#9aa0a6">2m ago</text>
+<circle cx="1088" cy="343" r="5" fill="#3a9d5d"/>
+<text x="60" y="372" font-size="12.5" fill="#6c7175">Goal — the /health endpoint returns 200</text>
+<text x="60" y="393" font-size="11.5" fill="#9aa0a6">every 5 min · checks sufficient — no judge · 1 of 1 checks passed</text>
+
+<!-- card 4: running -->
+<rect x="40" y="420" width="1080" height="84" rx="11" fill="#ffffff" stroke="#e3e5e8"/>
+<text x="60" y="448" font-size="13.5" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" fill="#151719">docs-freshness</text>
+<rect x="189" y="435" width="64" height="19" rx="5" fill="none" stroke="#2ba5d4" stroke-opacity="0.55"/>
+<text x="221" y="448" font-size="11" text-anchor="middle" fill="#2ba5d4">running</text>
+<text x="267" y="448" font-size="12" fill="#9aa0a6">just now</text>
+<circle cx="1070" cy="443" r="5" fill="#3a9d5d"/>
+<circle cx="1088" cy="443" r="5" fill="none" stroke="#cfd3d7"/>
+<text x="60" y="472" font-size="12.5" fill="#6c7175">Goal — every guide page still matches the code</text>
+<text x="60" y="493" font-size="11.5" fill="#9aa0a6">webhook · on merge to main · attempt 1 of 3 · 1 of 2 checks passed</text>
+</svg>
