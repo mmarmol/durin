@@ -104,7 +104,7 @@ over time — without you lifting a finger.
 ## Quick start
 
 ```bash
-pipx install --pre durin-agent   # PyPI
+uv tool install --prerelease allow durin-agent   # PyPI (uv picks a compatible Python)
 durin onboard                    # interactive setup wizard
 durin doctor                     # confirm setup is healthy
 durin agent                      # launch the TUI
