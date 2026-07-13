@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-07-06T12:21:13+00:00",
+  "generated_at": "2026-07-13T09:52:05+00:00",
   "providers": {
     "huggingface": [
       {
@@ -385,6 +385,16 @@
       },
       {
         "id": "openai/gpt-oss-120b",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "openai/gpt-oss-20b",
         "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "supports_vision": false,
@@ -1232,6 +1242,16 @@
         "supports_function_calling": true
       },
       {
+        "id": "gemini-omni-flash-preview",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 65536,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": false
+      },
+      {
         "id": "gemma-4-26b-a4b-it",
         "max_input_tokens": 262144,
         "max_output_tokens": 32768,
@@ -1646,6 +1666,46 @@
         "supports_function_calling": true
       },
       {
+        "id": "gpt-5.6",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "gpt-5.6-sol",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "gpt-image-1",
         "max_input_tokens": 0,
         "max_output_tokens": 0,
@@ -1684,6 +1744,16 @@
         "supports_pdf_input": false,
         "supports_reasoning": false,
         "supports_function_calling": false
+      },
+      {
+        "id": "gpt-realtime-2.1",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 32000,
+        "supports_vision": true,
+        "supports_audio_input": true,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
       },
       {
         "id": "o1",
@@ -4526,7 +4596,7 @@
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_reasoning": true,
+        "supports_reasoning": false,
         "supports_function_calling": true
       },
       {
@@ -4536,7 +4606,7 @@
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_reasoning": true,
+        "supports_reasoning": false,
         "supports_function_calling": true
       },
       {
@@ -6188,26 +6258,6 @@
         "supports_function_calling": true
       },
       {
-        "id": "aion-labs/aion-1.0",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 32768,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": false
-      },
-      {
-        "id": "aion-labs/aion-1.0-mini",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 32768,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": false
-      },
-      {
         "id": "aion-labs/aion-2.0",
         "max_input_tokens": 131072,
         "max_output_tokens": 32768,
@@ -6215,7 +6265,27 @@
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": true,
-        "supports_function_calling": false
+        "supports_function_calling": true
+      },
+      {
+        "id": "aion-labs/aion-3.0",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "aion-labs/aion-3.0-mini",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
       },
       {
         "id": "aion-labs/aion-rp-llama-3.1-8b",
@@ -6289,7 +6359,7 @@
       },
       {
         "id": "anthracite-org/magnum-v4-72b",
-        "max_input_tokens": 16384,
+        "max_input_tokens": 32768,
         "max_output_tokens": 2048,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -6468,16 +6538,6 @@
         "supports_function_calling": true
       },
       {
-        "id": "arcee-ai/trinity-mini",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
         "id": "arcee-ai/virtuoso-large",
         "max_input_tokens": 131072,
         "max_output_tokens": 64000,
@@ -6489,7 +6549,7 @@
       },
       {
         "id": "baidu/ernie-4.5-vl-424b-a47b",
-        "max_input_tokens": 123000,
+        "max_input_tokens": 131072,
         "max_output_tokens": 16000,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -6542,6 +6602,16 @@
         "max_input_tokens": 128000,
         "max_output_tokens": 2048,
         "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": false,
+        "supports_function_calling": false
+      },
+      {
+        "id": "cognitivecomputations/dolphin-mistral-24b-venice-edition",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": false,
@@ -6619,7 +6689,7 @@
       },
       {
         "id": "deepseek/deepseek-chat",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 131072,
         "max_output_tokens": 16000,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -6649,7 +6719,7 @@
       },
       {
         "id": "deepseek/deepseek-r1",
-        "max_input_tokens": 64000,
+        "max_input_tokens": 163840,
         "max_output_tokens": 16000,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -6669,7 +6739,7 @@
       },
       {
         "id": "deepseek/deepseek-r1-distill-llama-70b",
-        "max_input_tokens": 8192,
+        "max_input_tokens": 128000,
         "max_output_tokens": 8192,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -6689,7 +6759,7 @@
       },
       {
         "id": "deepseek/deepseek-v3.2",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 131072,
         "max_output_tokens": 64000,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -6710,7 +6780,7 @@
       {
         "id": "deepseek/deepseek-v4-flash",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 384000,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -6749,16 +6819,6 @@
       },
       {
         "id": "google/gemini-2.5-flash-lite",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65535,
-        "supports_vision": true,
-        "supports_audio_input": true,
-        "supports_pdf_input": true,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "google/gemini-2.5-flash-lite-preview-09-2025",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65535,
         "supports_vision": true,
@@ -6889,7 +6949,7 @@
       },
       {
         "id": "google/gemini-3.1-pro-preview-customtools",
-        "max_input_tokens": 1048576,
+        "max_input_tokens": 1048756,
         "max_output_tokens": 65536,
         "supports_vision": true,
         "supports_audio_input": true,
@@ -6969,7 +7029,7 @@
       },
       {
         "id": "google/gemma-4-26b-a4b-it:free",
-        "max_input_tokens": 131072,
+        "max_input_tokens": 262144,
         "max_output_tokens": 32768,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -7118,16 +7178,6 @@
         "supports_function_calling": true
       },
       {
-        "id": "liquid/lfm-2-24b-a2b",
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
         "id": "liquid/lfm-2.5-1.2b-instruct:free",
         "max_input_tokens": 32768,
         "max_output_tokens": 32768,
@@ -7151,16 +7201,6 @@
         "id": "mancer/weaver",
         "max_input_tokens": 8000,
         "max_output_tokens": 2000,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": false,
-        "supports_function_calling": false
-      },
-      {
-        "id": "meta-llama/llama-3-8b-instruct",
-        "max_input_tokens": 8192,
-        "max_output_tokens": 8192,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -7199,7 +7239,7 @@
       },
       {
         "id": "meta-llama/llama-3.2-1b-instruct",
-        "max_input_tokens": 60000,
+        "max_input_tokens": 131072,
         "max_output_tokens": 60000,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -7209,8 +7249,8 @@
       },
       {
         "id": "meta-llama/llama-3.2-3b-instruct",
-        "max_input_tokens": 80000,
-        "max_output_tokens": 80000,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -7239,7 +7279,7 @@
       },
       {
         "id": "meta-llama/llama-3.3-70b-instruct:free",
-        "max_input_tokens": 65536,
+        "max_input_tokens": 131072,
         "max_output_tokens": 131072,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -7259,7 +7299,7 @@
       },
       {
         "id": "meta-llama/llama-4-scout",
-        "max_input_tokens": 327680,
+        "max_input_tokens": 10000000,
         "max_output_tokens": 16384,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -7289,7 +7329,7 @@
       },
       {
         "id": "microsoft/wizardlm-2-8x22b",
-        "max_input_tokens": 65535,
+        "max_input_tokens": 65536,
         "max_output_tokens": 8000,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -7349,7 +7389,7 @@
       },
       {
         "id": "minimax/minimax-m2.5",
-        "max_input_tokens": 196608,
+        "max_input_tokens": 204800,
         "max_output_tokens": 196608,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -7359,7 +7399,7 @@
       },
       {
         "id": "minimax/minimax-m2.7",
-        "max_input_tokens": 196608,
+        "max_input_tokens": 204800,
         "max_output_tokens": 196608,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -7369,8 +7409,8 @@
       },
       {
         "id": "minimax/minimax-m3",
-        "max_input_tokens": 524288,
-        "max_output_tokens": 512000,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -7599,7 +7639,7 @@
       },
       {
         "id": "moonshotai/kimi-k2.5",
-        "max_input_tokens": 256000,
+        "max_input_tokens": 262144,
         "max_output_tokens": 256000,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -7620,7 +7660,7 @@
       {
         "id": "moonshotai/kimi-k2.7-code",
         "max_input_tokens": 262144,
-        "max_output_tokens": 16384,
+        "max_output_tokens": 262144,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -7648,6 +7688,16 @@
         "supports_function_calling": false
       },
       {
+        "id": "nex-agi/nex-n2-mini",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "nex-agi/nex-n2-pro",
         "max_input_tokens": 262144,
         "max_output_tokens": 262144,
@@ -7655,7 +7705,7 @@
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_reasoning": true,
-        "supports_function_calling": false
+        "supports_function_calling": true
       },
       {
         "id": "nousresearch/hermes-3-llama-3.1-405b",
@@ -7749,7 +7799,7 @@
       },
       {
         "id": "nvidia/nemotron-3-super-120b-a12b",
-        "max_input_tokens": 262144,
+        "max_input_tokens": 1000000,
         "max_output_tokens": 16384,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -7759,7 +7809,7 @@
       },
       {
         "id": "nvidia/nemotron-3-super-120b-a12b:free",
-        "max_input_tokens": 262144,
+        "max_input_tokens": 1000000,
         "max_output_tokens": 262144,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -7769,7 +7819,7 @@
       },
       {
         "id": "nvidia/nemotron-3-ultra-550b-a55b",
-        "max_input_tokens": 262144,
+        "max_input_tokens": 1000000,
         "max_output_tokens": 16384,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -8258,6 +8308,66 @@
         "supports_function_calling": true
       },
       {
+        "id": "openai/gpt-5.6-luna",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "openai/gpt-5.6-luna-pro",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "openai/gpt-5.6-sol",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "openai/gpt-5.6-sol-pro",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "openai/gpt-5.6-terra",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "openai/gpt-5.6-terra-pro",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "openai/gpt-audio",
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
@@ -8588,28 +8698,8 @@
         "supports_function_calling": true
       },
       {
-        "id": "poolside/laguna-xs.2",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 32768,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
-        "id": "poolside/laguna-xs.2:free",
-        "max_input_tokens": 262144,
-        "max_output_tokens": 32768,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": true
-      },
-      {
         "id": "qwen/qwen-2.5-72b-instruct",
-        "max_input_tokens": 32768,
+        "max_input_tokens": 131072,
         "max_output_tokens": 16384,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -8619,7 +8709,7 @@
       },
       {
         "id": "qwen/qwen-2.5-7b-instruct",
-        "max_input_tokens": 32768,
+        "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -8629,7 +8719,7 @@
       },
       {
         "id": "qwen/qwen-2.5-coder-32b-instruct",
-        "max_input_tokens": 32768,
+        "max_input_tokens": 128000,
         "max_output_tokens": 32768,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -8669,7 +8759,7 @@
       },
       {
         "id": "qwen/qwen2.5-vl-72b-instruct",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 131072,
         "max_output_tokens": 128000,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -8679,7 +8769,7 @@
       },
       {
         "id": "qwen/qwen3-14b",
-        "max_input_tokens": 40960,
+        "max_input_tokens": 131702,
         "max_output_tokens": 40960,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -8709,7 +8799,7 @@
       },
       {
         "id": "qwen/qwen3-235b-a22b-thinking-2507",
-        "max_input_tokens": 131072,
+        "max_input_tokens": 262144,
         "max_output_tokens": 262144,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -8719,7 +8809,7 @@
       },
       {
         "id": "qwen/qwen3-30b-a3b",
-        "max_input_tokens": 40960,
+        "max_input_tokens": 131072,
         "max_output_tokens": 16384,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -8729,7 +8819,7 @@
       },
       {
         "id": "qwen/qwen3-30b-a3b-instruct-2507",
-        "max_input_tokens": 128000,
+        "max_input_tokens": 131072,
         "max_output_tokens": 32000,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -8739,7 +8829,7 @@
       },
       {
         "id": "qwen/qwen3-30b-a3b-thinking-2507",
-        "max_input_tokens": 81920,
+        "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -8749,7 +8839,7 @@
       },
       {
         "id": "qwen/qwen3-32b",
-        "max_input_tokens": 40960,
+        "max_input_tokens": 131072,
         "max_output_tokens": 16384,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -8769,7 +8859,7 @@
       },
       {
         "id": "qwen/qwen3-coder",
-        "max_input_tokens": 262144,
+        "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -8819,7 +8909,7 @@
       },
       {
         "id": "qwen/qwen3-coder:free",
-        "max_input_tokens": 262000,
+        "max_input_tokens": 1048576,
         "max_output_tokens": 262000,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -8869,7 +8959,7 @@
       },
       {
         "id": "qwen/qwen3-next-80b-a3b-thinking",
-        "max_input_tokens": 131072,
+        "max_input_tokens": 262144,
         "max_output_tokens": 32768,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -8899,7 +8989,7 @@
       },
       {
         "id": "qwen/qwen3-vl-30b-a3b-instruct",
-        "max_input_tokens": 131072,
+        "max_input_tokens": 262144,
         "max_output_tokens": 32768,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -8919,7 +9009,7 @@
       },
       {
         "id": "qwen/qwen3-vl-32b-instruct",
-        "max_input_tokens": 131072,
+        "max_input_tokens": 262144,
         "max_output_tokens": 32768,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -8929,7 +9019,7 @@
       },
       {
         "id": "qwen/qwen3-vl-8b-instruct",
-        "max_input_tokens": 131072,
+        "max_input_tokens": 256000,
         "max_output_tokens": 32768,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -8939,7 +9029,7 @@
       },
       {
         "id": "qwen/qwen3-vl-8b-thinking",
-        "max_input_tokens": 131072,
+        "max_input_tokens": 256000,
         "max_output_tokens": 32768,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -8979,7 +9069,7 @@
       },
       {
         "id": "qwen/qwen3.5-397b-a17b",
-        "max_input_tokens": 131072,
+        "max_input_tokens": 256000,
         "max_output_tokens": 64000,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -9029,7 +9119,7 @@
       },
       {
         "id": "qwen/qwen3.6-27b",
-        "max_input_tokens": 262140,
+        "max_input_tokens": 262144,
         "max_output_tokens": 262140,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -9208,16 +9298,6 @@
         "supports_function_calling": true
       },
       {
-        "id": "switchpoint/router",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
-        "supports_vision": false,
-        "supports_audio_input": false,
-        "supports_pdf_input": false,
-        "supports_reasoning": true,
-        "supports_function_calling": false
-      },
-      {
         "id": "tencent/hunyuan-a13b-instruct",
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
@@ -9228,7 +9308,27 @@
         "supports_function_calling": false
       },
       {
+        "id": "tencent/hy3",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 131072,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "tencent/hy3-preview",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "supports_vision": false,
+        "supports_audio_input": false,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "tencent/hy3:free",
         "max_input_tokens": 262144,
         "max_output_tokens": 262144,
         "supports_vision": false,
@@ -9249,8 +9349,8 @@
       },
       {
         "id": "thedrummer/rocinante-12b",
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
+        "max_input_tokens": 65536,
+        "max_output_tokens": 65536,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -9338,18 +9438,28 @@
         "supports_function_calling": true
       },
       {
+        "id": "x-ai/grok-4.5",
+        "max_input_tokens": 500000,
+        "max_output_tokens": 500000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
         "id": "x-ai/grok-build-0.1",
         "max_input_tokens": 256000,
         "max_output_tokens": 256000,
         "supports_vision": true,
         "supports_audio_input": false,
-        "supports_pdf_input": false,
+        "supports_pdf_input": true,
         "supports_reasoning": true,
         "supports_function_calling": true
       },
       {
         "id": "xiaomi/mimo-v2.5",
-        "max_input_tokens": 32000,
+        "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "supports_vision": true,
         "supports_audio_input": true,
@@ -9399,8 +9509,8 @@
       },
       {
         "id": "z-ai/glm-4.6",
-        "max_input_tokens": 202752,
-        "max_output_tokens": 131072,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 16384,
         "supports_vision": false,
         "supports_audio_input": false,
         "supports_pdf_input": false,
@@ -9459,7 +9569,7 @@
       },
       {
         "id": "z-ai/glm-5.1",
-        "max_input_tokens": 200000,
+        "max_input_tokens": 202752,
         "max_output_tokens": 128000,
         "supports_vision": false,
         "supports_audio_input": false,
@@ -9571,6 +9681,16 @@
         "id": "~openai/gpt-mini-latest",
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "~x-ai/grok-latest",
+        "max_input_tokens": 500000,
+        "max_output_tokens": 1000000,
         "supports_vision": true,
         "supports_audio_input": false,
         "supports_pdf_input": true,
@@ -10931,7 +11051,7 @@
       },
       {
         "id": "gemini-3.1-pro-preview",
-        "max_input_tokens": 200000,
+        "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
         "supports_vision": true,
         "supports_audio_input": true,
@@ -11001,7 +11121,7 @@
       },
       {
         "id": "gpt-5.4",
-        "max_input_tokens": 400000,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "supports_vision": true,
         "supports_audio_input": false,
@@ -11031,7 +11151,37 @@
       },
       {
         "id": "gpt-5.5",
-        "max_input_tokens": 400000,
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "gpt-5.6-sol",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "supports_vision": true,
+        "supports_audio_input": false,
+        "supports_pdf_input": true,
+        "supports_reasoning": true,
+        "supports_function_calling": true
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "supports_vision": true,
         "supports_audio_input": false,
