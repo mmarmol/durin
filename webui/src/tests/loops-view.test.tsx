@@ -159,7 +159,7 @@ describe("LoopsView", () => {
 
     await screen.findByText("cleanup old files");
     const activityTab = screen.getByRole("button", { name: "Activity" });
-    const definitionsTab = screen.getByRole("button", { name: "Definitions" });
+    const definitionsTab = screen.getByRole("button", { name: "Loops" });
     expect(activityTab).toHaveAttribute("aria-pressed", "true");
     expect(definitionsTab).toHaveAttribute("aria-pressed", "false");
 
@@ -250,7 +250,7 @@ describe("LoopsView", () => {
     const user = userEvent.setup();
     render(wrap(<LoopsView />));
 
-    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await user.click(screen.getByRole("button", { name: "Loops" }));
     await screen.findByText("digest");
     expect(screen.getByText("digest-wf")).toBeInTheDocument();
   });
@@ -275,7 +275,7 @@ describe("LoopsView", () => {
     const user = userEvent.setup();
     render(wrap(<LoopsView />));
 
-    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await user.click(screen.getByRole("button", { name: "Loops" }));
     await screen.findByText("multi");
     expect(screen.getByText("telegram · text:urgent")).toBeInTheDocument();
     expect(screen.getByText("webhook · my-hook")).toBeInTheDocument();
@@ -287,7 +287,7 @@ describe("LoopsView", () => {
     const user = userEvent.setup();
     render(wrap(<LoopsView />));
 
-    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await user.click(screen.getByRole("button", { name: "Loops" }));
     await screen.findByText("digest");
     await user.click(screen.getByRole("button", { name: /Run now/i }));
 
@@ -303,7 +303,7 @@ describe("LoopsView", () => {
     const user = userEvent.setup();
     render(wrap(<LoopsView />));
 
-    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await user.click(screen.getByRole("button", { name: "Loops" }));
     await screen.findByText("digest");
     await user.click(screen.getByRole("button", { name: /Run now/i }));
 
@@ -317,7 +317,7 @@ describe("LoopsView", () => {
     render(wrap(<LoopsView />));
 
     await screen.findByText(/No loop runs/i);
-    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await user.click(screen.getByRole("button", { name: "Loops" }));
     await screen.findByText(/No loops yet/i);
   });
 
@@ -327,7 +327,7 @@ describe("LoopsView", () => {
     const user = userEvent.setup();
     render(wrap(<LoopsView />));
 
-    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await user.click(screen.getByRole("button", { name: "Loops" }));
     await screen.findByText("digest");
     await user.click(screen.getByRole("button", { name: /Delete/i }));
 
@@ -372,7 +372,7 @@ describe("LoopsView", () => {
     const user = userEvent.setup();
     render(wrap(<LoopsView />));
 
-    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await user.click(screen.getByRole("button", { name: "Loops" }));
     await screen.findByText("digest");
     expect(screen.getByText(/3 queued/i)).toBeInTheDocument();
   });
@@ -467,7 +467,7 @@ describe("LoopsView", () => {
     const user = userEvent.setup();
     render(wrap(<LoopsView />));
 
-    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await user.click(screen.getByRole("button", { name: "Loops" }));
     await screen.findByText("digest");
 
     const dots = await screen.findAllByTestId("outcome-dot");
@@ -496,7 +496,7 @@ describe("LoopsView", () => {
     const user = userEvent.setup();
     render(wrap(<LoopsView />));
 
-    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await user.click(screen.getByRole("button", { name: "Loops" }));
     await screen.findByText("digest");
     await screen.findAllByTestId("outcome-dot");
 
@@ -519,7 +519,7 @@ describe("LoopsView", () => {
     const user = userEvent.setup();
     render(wrap(<LoopsView />));
 
-    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await user.click(screen.getByRole("button", { name: "Loops" }));
     await screen.findByText("digest");
 
     await screen.findByText("100%");
@@ -539,7 +539,7 @@ describe("LoopsView", () => {
     const user = userEvent.setup();
     render(wrap(<LoopsView />));
 
-    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await user.click(screen.getByRole("button", { name: "Loops" }));
     await screen.findByText("digest");
 
     expect(screen.queryByTestId("outcome-dot")).not.toBeInTheDocument();
@@ -552,7 +552,7 @@ describe("LoopsView", () => {
     const user = userEvent.setup();
     render(wrap(<LoopsView />));
 
-    await user.click(screen.getByRole("button", { name: /Definitions/i }));
+    await user.click(screen.getByRole("button", { name: "Loops" }));
     await screen.findByText("digest");
 
     await waitFor(() => expect(api.getLoopStats).toHaveBeenCalledWith("tok", "digest"));

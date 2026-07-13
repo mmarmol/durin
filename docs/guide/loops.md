@@ -48,7 +48,7 @@ you what to do.
 
 ## Creating a loop from the web dashboard
 
-Open the **Loops** section from the sidebar, switch to the **Definitions**
+Open the **Loops** section from the sidebar, switch to the **Loops**
 tab, and click **New loop**. The form has these sections:
 
 - **Name** — the loop's identifier (locked once you're editing an existing
@@ -204,7 +204,7 @@ If the loop's **Concurrency** is **Single** (the default) and a second
 matching email arrives while a run is already in flight, it isn't dropped
 and it isn't fired on top of the first: it's held until the loop frees up,
 then fired automatically — no need to resend it. You'll see the loop's row
-in the Definitions tab pick up a queued-count badge while events are
+in the Loops tab pick up a queued-count badge while events are
 waiting. A cron-triggered loop behaves differently in the same situation
 (it simply skips that tick, see **Current boundaries**) — an email trigger's
 match is never silently thrown away that way, because someone is waiting on
@@ -338,7 +338,7 @@ what it was asked to do, its status, where it came from (`cron`, `manual`,
 | escalated | Missed the goal too many times in a row — an operator has been notified. |
 | error | The run failed outright (a tool/provider error, or the run was aborted). |
 
-Each loop's row in the **Definitions** tab also shows how many runs are
+Each loop's row in the **Loops** tab also shows how many runs are
 currently active and how many need you, plus a queued-count badge when
 channel events are waiting for their turn (see **Channel triggers** above).
 
@@ -387,7 +387,7 @@ error that sent it to `error`.
 
 ## Outcomes at a glance
 
-Each loop's row in the **Definitions** tab also carries a compact outcome
+Each loop's row in the **Loops** tab also carries a compact outcome
 strip: up to ten dots, oldest to newest left to right, one per recent
 finished run. A filled dot is a `done` run, a muted dot is `no goal`, and a
 red dot is `escalated` or `error`. Hover a dot to see its status and when it
@@ -425,7 +425,7 @@ instead.
 
 ## Pausing and deleting a loop
 
-From the **Definitions** tab, **Edit** a loop and use **Save as paused**
+From the **Loops** tab, **Edit** a loop and use **Save as paused**
 to disable it without losing the definition — its triggers are removed
 from the schedule until you re-enable it. **Delete** removes the
 definition and its scheduled triggers entirely (with a confirmation
@@ -434,7 +434,7 @@ first); past run history is unaffected.
 ## Current boundaries
 
 - **Firing on demand works from the dashboard, chat, or the API.** Each
-  loop's row in the Definitions tab has a **Run now** button; you can also
+  loop's row in the Loops tab has a **Run now** button; you can also
   ask the agent to fire a loop, or use the `loops` tool's `fire` action.
   Either way, watch the result show up in the Activity feed.
 - **What happens when a `Single`-concurrency loop is already busy depends on
