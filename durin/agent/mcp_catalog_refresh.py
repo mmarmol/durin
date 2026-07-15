@@ -1,10 +1,16 @@
 """Weekly MCP catalog refresh → user-cache overlay.
 
-The vendored ``mcp_catalog.json`` is the offline floor; this writes a
-fresher ``mcp_catalog_cache.json`` under the data dir that
+The vendored ``mcp_catalog.json`` is the offline floor — a trimmed quality
+tier of the full catalog, so day-1 searches work without any network. This
+module writes the FULL ``mcp_catalog_cache.json`` under the data dir that
 ``mcp_catalog_store`` overlays on top. Any fetch/parse failure is swallowed
 so a network blip never breaks discovery (the prior cache / vendored floor
 stays).
+
+The overlay file's mtime records the last successful check, so the schedule
+survives process restarts: the scheduler's first wait is the time REMAINING
+until the overlay is due (zero when it is missing or overdue), not a fresh
+full interval.
 
 Mirrors ``durin/providers/catalog_refresh.py`` — structure and idioms are
 intentionally identical; only names and the newer-than guard differ.
@@ -13,7 +19,9 @@ intentionally identical; only names and the newer-than guard differ.
 from __future__ import annotations
 
 import json
+import os
 import threading
+import time
 import urllib.request
 from pathlib import Path
 
@@ -94,13 +102,24 @@ def refresh_catalog(data_dir: Path, *, url: str = _DEFAULT_URL, fetch=None) -> b
 
     remote_ts: str = data.get("generated_at", "")
     local_ts: str = _current_generated_at(data_dir)
+    cache_path = data_dir / "mcp_catalog_cache.json"
+    overlay_exists = cache_path.exists()
 
-    if not remote_ts or remote_ts <= local_ts:
-        # Not strictly newer — skip write
+    # Newer-than guard. When the overlay exists, only a strictly newer remote
+    # is worth a write — but a successful check still bumps the mtime so the
+    # scheduler's due time (derived from it) does not refetch on every
+    # restart. When the overlay is MISSING, an equal timestamp must still
+    # write: the vendored floor is a trimmed quality tier, so equal
+    # generated_at does not mean equal content.
+    if not remote_ts or remote_ts < local_ts or (overlay_exists and remote_ts == local_ts):
+        if overlay_exists and remote_ts and remote_ts >= local_ts:
+            try:
+                os.utime(cache_path)
+            except OSError:
+                pass
         return False
 
     try:
-        cache_path = data_dir / "mcp_catalog_cache.json"
         data_dir.mkdir(parents=True, exist_ok=True)
         with cross_process_lock(cache_path):
             atomic_write_text(cache_path, json.dumps(data, ensure_ascii=False))
@@ -117,9 +136,15 @@ class McpCatalogRefreshScheduler:
     """Weekly background refresh of the MCP server catalog.
 
     Mirrors ``CatalogRefreshScheduler`` from ``durin/providers/catalog_refresh.py``:
-    a single daemon thread waits ``interval_hours`` then refreshes, repeating
-    until ``stop()`` is called. The wait-first design keeps process startup
-    (and tests) free of any network call — the vendored floor is day-1 data.
+    a single daemon thread refreshes when the overlay is due, then waits
+    ``interval_hours`` between runs, until ``stop()`` is called.
+
+    The due time is derived from the overlay file's mtime, so it SURVIVES
+    process restarts: a missing or overdue overlay is fetched immediately (in
+    the background thread — startup itself never blocks on network), a fresh
+    one waits out only the remaining time. A wait-first design would restart
+    the full interval on every boot, and a deployment restarted more often
+    than the interval would never refresh at all.
     """
 
     def __init__(
@@ -127,10 +152,12 @@ class McpCatalogRefreshScheduler:
         data_dir: Path,
         url: str = _DEFAULT_URL,
         interval_hours: int = 168,
+        fetch=None,
     ) -> None:
         self._data_dir = data_dir
         self._url = url
         self._interval = max(1, interval_hours) * 3600
+        self._fetch = fetch
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -142,15 +169,25 @@ class McpCatalogRefreshScheduler:
         )
         self._thread.start()
 
+    def _initial_wait(self) -> float:
+        """Seconds until the overlay is due — 0.0 when missing or overdue."""
+        try:
+            mtime = (self._data_dir / "mcp_catalog_cache.json").stat().st_mtime
+        except OSError:
+            return 0.0
+        return max(0.0, mtime + self._interval - time.time())
+
     def _run(self) -> None:
-        # Wait first, THEN refresh: the vendored floor is the day-1 data, so
-        # this keeps process (and test) startup free of any network call.
-        # ``wait`` returns True the instant ``stop()`` fires → immediate shutdown.
-        while not self._stop.wait(self._interval):
+        # First wait = time remaining until due (0 → fetch right away); after
+        # each attempt, a full interval. ``wait`` returns True the instant
+        # ``stop()`` fires → immediate shutdown.
+        wait = self._initial_wait()
+        while not self._stop.wait(wait):
             try:
-                refresh_catalog(self._data_dir, url=self._url)
+                refresh_catalog(self._data_dir, url=self._url, fetch=self._fetch)
             except Exception:  # noqa: BLE001
                 pass
+            wait = self._interval
 
     def stop(self) -> None:
         self._stop.set()

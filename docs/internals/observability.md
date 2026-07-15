@@ -99,7 +99,7 @@ flowchart TD
         STAT["daemon_status:\nrunning / not_running / stale_pid"]
         GS --> SP
         SP -->|PID| PID
-        SP -->|DURIN_GATEWAY_LOG_FILE env| FG
+        SP --> FG
         FG --> GLOG
         GLOG --> GL
         STOP -->|reads| PID
@@ -224,17 +224,18 @@ state. Exit code 0 when `worst ∈ {ok, warn}`; exit 1 only when `worst == fail`
 ### Gateway daemon lifecycle
 
 `start_daemon` spawns a detached subprocess (`start_new_session=True`,
-`close_fds=True`) that re-invokes `durin gateway --foreground`. Before spawning,
-it injects `DURIN_GATEWAY_LOG_FILE` into the child's environment pointing at
-`~/.durin/logs/gateway.log`. The parent writes the child's PID to
-`~/.durin/gateway.pid` and exits.
+`close_fds=True`) that re-invokes `durin gateway --foreground`. The parent
+writes the child's PID to `~/.durin/gateway.pid` and exits.
 
-Inside the child, when `DURIN_GATEWAY_LOG_FILE` is set,
-`configure_gateway_file_logging` attaches a loguru JSONL file sink
+Every gateway run — daemon child, systemd `--foreground`, plain terminal —
+attaches the loguru JSONL file sink via `configure_gateway_file_logging`
 (`serialize=True`, `enqueue=True`) with size-based rotation (default 5 MB), gz
-compression of rotated segments, and age-based deletion (default 7 days). Raw
-stdout/stderr go to a separate `gateway.boot.log` safety net for catastrophic
-pre-loguru errors.
+compression of rotated segments, and age-based deletion (default 7 days), so
+the dashboard log viewer works regardless of how the process is supervised.
+The human-readable stderr sink stays alongside it (that is what journald or
+the terminal captures). Raw stdout/stderr additionally go to a
+`gateway.boot.log` safety net (daemon mode only) for catastrophic pre-loguru
+errors.
 
 Not every subsystem logs through loguru directly — many (memory, security,
 several tools, telemetry) use stdlib `logging.getLogger(__name__)`. At CLI
@@ -274,10 +275,10 @@ escalates to SIGKILL if needed, then removes the PID file.
 | `CheckResult` | `durin/cli/doctor.py` | Dataclass `(name, status, message, fix, category, extra, extras_list)`. `status ∈ {ok, warn, fail}`. Returned by every `check_*` function. |
 | `run_checks` | `durin/cli/doctor.py` | Orchestrator: calls all `check_*` functions in sequence, returns a `DoctorReport`. Supports opt-in `--ping` and `--ping-model` checks. |
 | `DaemonStatus` | `durin/cli/gateway_daemon.py` | Frozen dataclass `(state, pid, pid_file, log_file)`. `state ∈ {running, not_running, stale_pid}`. |
-| `start_daemon` | `durin/cli/gateway_daemon.py` | Spawns detached child subprocess, injects `DURIN_GATEWAY_LOG_FILE`, writes PID file, exits parent. Raises `AlreadyRunningError` on live daemon. |
+| `start_daemon` | `durin/cli/gateway_daemon.py` | Spawns detached child subprocess, writes PID file, exits parent. Raises `AlreadyRunningError` on live daemon. |
 | `daemon_status` | `durin/cli/gateway_daemon.py` | Reads PID file and probes liveness via `os.kill(pid, 0)`. |
 | `acquire_gateway_singleton` | `durin/cli/gateway_daemon.py` | Acquires exclusive flock on `~/.durin/gateway.lock`. Held for process lifetime; OS releases on exit. |
-| `configure_gateway_file_logging` | `durin/cli/gateway_logging.py` | Attaches loguru JSONL file sink (`serialize=True`, `enqueue=True`, rotation + gz + retention). Called when `DURIN_GATEWAY_LOG_FILE` env is set. |
+| `configure_gateway_file_logging` | `durin/cli/gateway_logging.py` | Attaches loguru JSONL file sink (`serialize=True`, `enqueue=True`, rotation + gz + retention). Called on every gateway run. |
 
 ---
 
@@ -313,9 +314,8 @@ battery with exit-code semantics. The two surfaces are deliberately distinct.
 ### WebUI
 
 The gateway Logs panel reads `~/.durin/logs/gateway.log` (the loguru JSONL
-sink). The panel only works in daemon mode; `gateway --foreground` writes boot
-output to `gateway.boot.log` but the loguru sink still writes `gateway.log`
-when `DURIN_GATEWAY_LOG_FILE` is set via the daemon's environment injection.
+sink). The sink is attached on every gateway run, so the panel works in daemon
+mode, under systemd (`gateway --foreground`), and in a plain terminal alike.
 
 The telemetry JSONL files are not surfaced in the webUI directly; they are
 intended for operator tooling (Grafana, Loki, Datadog, custom dashboards).

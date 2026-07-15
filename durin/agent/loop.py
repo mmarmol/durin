@@ -761,8 +761,9 @@ class AgentLoop:
     def _start_catalog_refresh(self) -> None:
         """Start the daily models.dev catalog refresh if enabled. Independent of
         the memory services; any failure here never affects the loop. The
-        scheduler waits one interval before its first fetch, so loop (and test)
-        startup stays network-free."""
+        scheduler fetches in its background thread when the cache is due
+        (immediately if missing/overdue), so loop startup never blocks on
+        network."""
         cfg = getattr(self.app_config, "catalog_refresh", None)
         if cfg is None or not getattr(cfg, "enabled", False):
             return
@@ -793,8 +794,9 @@ class AgentLoop:
 
     def _start_mcp_catalog_refresh(self) -> None:
         """Start the weekly MCP catalog refresh if enabled. Any failure here never
-        affects the loop. The scheduler waits one interval before its first fetch,
-        so loop (and test) startup stays network-free."""
+        affects the loop. The scheduler fetches in its background thread when the
+        overlay is due (immediately if missing/overdue), so loop startup never
+        blocks on network."""
         cfg = getattr(self.app_config, "mcp_catalog_refresh", None)
         if cfg is None or not getattr(cfg, "enabled", False):
             return
