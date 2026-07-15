@@ -1,9 +1,20 @@
 """Device-flow parse/state-machine + shared-secret round-trip."""
 
+import httpx
 import pytest
 
 from durin.security import github_device_auth as gda
 from durin.security.github_auth import resolve_github_token
+
+
+def _http_status_error(status: int, json_body=None, text: str = "") -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", gda.ACCESS_TOKEN_URL)
+    response = (
+        httpx.Response(status, json=json_body, request=request)
+        if json_body is not None
+        else httpx.Response(status, text=text, request=request)
+    )
+    return httpx.HTTPStatusError("boom", request=request, response=response)
 
 
 def test_start_parses_and_sends_client_id_and_scope():
@@ -60,6 +71,62 @@ def test_exchange_state_machine(payload, expected):
     if expected == "authorized":
         assert res.access_token == "gho_x"
         assert res.scope == "read:user"
+
+
+@pytest.mark.parametrize(
+    "raiser",
+    [
+        lambda u, d: (_ for _ in ()).throw(httpx.ConnectError("refused")),
+        lambda u, d: (_ for _ in ()).throw(httpx.ReadTimeout("slow")),
+        lambda u, d: (_ for _ in ()).throw(_http_status_error(503, text="unavailable")),
+        lambda u, d: (_ for _ in ()).throw(_http_status_error(429, text="rate limited")),
+        lambda u, d: (_ for _ in ()).throw(_http_status_error(400, text="<html>not json</html>")),
+    ],
+)
+def test_exchange_transient_failures_do_not_raise(raiser):
+    res = gda.exchange_device_code("dc", poster=raiser)
+    assert res.status == "transient"
+    assert res.error
+
+
+def test_exchange_maps_rfc8628_style_400_error_body():
+    # An OAuth error delivered as HTTP 400 + JSON must hit the state machine,
+    # not read as a retryable hiccup: a denied flow has to end.
+    def poster(u, d):
+        raise _http_status_error(400, json_body={"error": "access_denied"})
+
+    res = gda.exchange_device_code("dc", poster=poster)
+    assert res.status == "denied"
+
+
+def test_poll_flow_survives_transient_failure_then_authorizes():
+    ch = gda.request_device_code(
+        poster=lambda u, d: {
+            "device_code": "DC",
+            "user_code": "X",
+            "verification_uri": "u",
+            "interval": 5,
+            "expires_in": 900,
+        },
+        now=lambda: 1000.0,
+    )
+
+    def failing_poster(u, d):
+        raise httpx.ConnectError("refused")
+
+    r1 = gda.poll_flow(ch.flow_id, poster=failing_poster, now=lambda: 1001.0)
+    assert r1.status == "transient"
+
+    # the flow must still be alive after the hiccup
+    r2 = gda.poll_flow(
+        ch.flow_id,
+        poster=lambda u, d: {"access_token": "gho_OK2", "scope": "read:user"},
+        now=lambda: 1002.0,
+    )
+    assert r2.status == "authorized"
+    assert resolve_github_token(env={}, gh_runner=lambda: None) == "gho_OK2"
+    # clean up: the secret-store cache outlives this test's DURIN_HOME
+    assert gda.forget_github_token() is True
 
 
 def test_exchange_sends_device_grant():
