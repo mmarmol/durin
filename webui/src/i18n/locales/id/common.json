@@ -925,7 +925,7 @@
       "edit": "Edit",
       "delete": "Hapus",
       "confirmDelete": "Hapus server ini?",
-      "errorConflict": "Server itu sudah ada, atau proses masuk sedang berlangsung.",
+      "errorConflict": "Server itu sudah ada.",
       "errorInvalid": "Konfigurasi server tidak valid.",
       "errorNotFound": "Server tidak ditemukan.",
       "errorGeneric": "Terjadi kesalahan.",

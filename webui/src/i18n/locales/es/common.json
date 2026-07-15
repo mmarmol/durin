@@ -925,7 +925,7 @@
       "edit": "Editar",
       "delete": "Eliminar",
       "confirmDelete": "¿Eliminar este servidor?",
-      "errorConflict": "Ese servidor ya existe, o ya hay un inicio de sesión en curso.",
+      "errorConflict": "Ese servidor ya existe.",
       "errorInvalid": "Configuración de servidor inválida.",
       "errorNotFound": "Servidor no encontrado.",
       "errorGeneric": "Algo salió mal.",

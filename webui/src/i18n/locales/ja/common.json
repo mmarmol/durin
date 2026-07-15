@@ -925,7 +925,7 @@
       "edit": "編集",
       "delete": "削除",
       "confirmDelete": "このサーバーを削除しますか？",
-      "errorConflict": "そのサーバーは既に存在するか、サインインが進行中です。",
+      "errorConflict": "そのサーバーは既に存在します。",
       "errorInvalid": "サーバー設定が無効です。",
       "errorNotFound": "サーバーが見つかりません。",
       "errorGeneric": "問題が発生しました。",

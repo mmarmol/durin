@@ -925,7 +925,7 @@
       "edit": "편집",
       "delete": "삭제",
       "confirmDelete": "이 서버를 삭제할까요?",
-      "errorConflict": "이미 존재하는 서버이거나 로그인이 이미 진행 중입니다.",
+      "errorConflict": "이미 존재하는 서버입니다.",
       "errorInvalid": "서버 설정이 올바르지 않습니다.",
       "errorNotFound": "서버를 찾을 수 없습니다.",
       "errorGeneric": "문제가 발생했습니다.",

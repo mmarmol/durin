@@ -925,7 +925,7 @@
       "edit": "Modifier",
       "delete": "Supprimer",
       "confirmDelete": "Supprimer ce serveur ?",
-      "errorConflict": "Ce serveur existe déjà, ou une connexion est déjà en cours.",
+      "errorConflict": "Ce serveur existe déjà.",
       "errorInvalid": "Configuration de serveur invalide.",
       "errorNotFound": "Serveur introuvable.",
       "errorGeneric": "Une erreur s’est produite.",
