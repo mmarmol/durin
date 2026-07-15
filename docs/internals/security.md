@@ -152,6 +152,13 @@ the flow and stashes the poll secret server-side behind an opaque `flow_id` (the
 browser never holds the `device_code`); `poll_flow` exchanges it and, on success,
 writes the raw token to the `GITHUB_OAUTH` secret. Default scope is minimal
 (`read:user`); `repo` is requested only when private-repo access is needed. The
+flow is transient-tolerant: a failed poll (network hiccup, GitHub 5xx/429) maps
+to a `transient` status instead of an error — the flow stays pending on both
+sides and polling continues until the code expires — and the dashboard's poll
+loop likewise retries a bounded number of consecutive failures before aborting
+visibly. Flow lifecycle (start / authorized / expired / denied, plus transient
+poll failures) is logged, so a stuck connect can be diagnosed from the gateway
+log. The
 `OAuthService` exposes start / poll / status / disconnect (see [api.md](api.md)) —
 status is a live probe that reports **where the token came from** (`gh` / env /
 secret), the login, granted scopes, and rate budget, so the dashboard only offers a

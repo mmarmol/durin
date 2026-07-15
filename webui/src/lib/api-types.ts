@@ -3167,7 +3167,11 @@ export interface components {
         };
         /**
          * GithubPollResult
-         * @description ``status``: pending | slow_down | authorized | expired | denied | error.
+         * @description ``status``: pending | slow_down | transient | authorized | expired | denied | error.
+         *
+         *     ``transient`` means the poll itself failed for a retryable reason (network
+         *     hiccup, GitHub 5xx/429): the flow is still pending and the client should
+         *     simply keep polling.
          */
         GithubPollResult: {
             /**

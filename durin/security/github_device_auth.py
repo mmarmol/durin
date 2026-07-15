@@ -18,6 +18,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from secrets import token_urlsafe
 
+from loguru import logger
+
 from durin.security.github_auth import DURIN_GITHUB_CLIENT_ID as CLIENT_ID
 from durin.security.github_auth import SHARED_SECRET_NAME
 
@@ -57,7 +59,7 @@ class DeviceCode:
 
 @dataclass
 class Exchange:
-    status: str  # authorized | pending | slow_down | expired | denied | error
+    status: str  # authorized | pending | slow_down | transient | expired | denied | error
     access_token: str = ""
     scope: str = ""
     error: str = ""
@@ -91,13 +93,46 @@ def start_device_flow(*, scope: str = DEFAULT_SCOPE, poster: Poster | None = Non
     )
 
 
+def _oauth_error_body(exc: Exception) -> dict | None:
+    """The JSON body of a 4xx HTTP error, if it looks like an OAuth error reply.
+
+    GitHub answers device-flow polls with 200 + an ``error`` field, but OAuth
+    servers may also use RFC 8628's 400-with-error-JSON shape; a body like that
+    must reach the status state machine (``access_denied`` as a 400 must end the
+    flow, not read as a retryable hiccup).
+    """
+    resp = getattr(exc, "response", None)
+    status = getattr(resp, "status_code", 0)
+    if not 400 <= status < 500:
+        return None
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001 - non-JSON error page -> not an OAuth reply
+        return None
+    return body if isinstance(body, dict) else None
+
+
 def exchange_device_code(device_code: str, *, poster: Poster | None = None) -> Exchange:
-    """One poll of the token endpoint. Maps GitHub's reply to a status verb."""
+    """One poll of the token endpoint. Maps GitHub's reply to a status verb.
+
+    A network hiccup or a transient GitHub-side failure (timeout, 5xx/429,
+    malformed body) maps to status ``transient`` instead of raising: one flaky
+    poll must not kill a flow with a 15-minute lifetime, so callers keep the
+    flow pending and simply poll again.
+    """
     poster = poster or _default_poster
-    d = poster(
-        ACCESS_TOKEN_URL,
-        {"client_id": CLIENT_ID, "device_code": device_code, "grant_type": DEVICE_GRANT},
-    )
+    try:
+        d = poster(
+            ACCESS_TOKEN_URL,
+            {"client_id": CLIENT_ID, "device_code": device_code, "grant_type": DEVICE_GRANT},
+        )
+    except Exception as exc:  # noqa: BLE001 - transport/HTTP failures are retryable
+        body = _oauth_error_body(exc)
+        if body is not None and body.get("error"):
+            error = str(body["error"])
+            return Exchange(status=_ERROR_STATUS.get(error, "error"), error=error)
+        logger.warning("github device flow: transient poll failure: {}", exc)
+        return Exchange(status="transient", error=str(exc))
     access = d.get("access_token")
     if access:
         return Exchange(status="authorized", access_token=str(access), scope=str(d.get("scope") or ""))
@@ -131,6 +166,7 @@ def forget_github_token() -> bool:
     if removed:
         store.save()
         get_secret_store(reload=True)
+        logger.info("github device flow: shared {} secret removed", SHARED_SECRET_NAME)
     return removed
 
 
@@ -167,6 +203,10 @@ def request_device_code(
     flow_id = token_urlsafe(16)
     _prune(clock())
     _PENDING[flow_id] = (dc.device_code, clock() + dc.expires_in)
+    logger.info(
+        "github device flow started: flow={} scope={!r} expires_in={}s interval={}s",
+        flow_id[:8], scope, dc.expires_in, dc.interval,
+    )
     return Challenge(
         flow_id=flow_id,
         user_code=dc.user_code,
@@ -184,17 +224,26 @@ def poll_flow(
     clock = now or time.time
     entry = _PENDING.get(flow_id)
     if not entry:
+        logger.warning("github device flow: poll for unknown/expired flow {}", flow_id[:8])
         return Exchange(status="expired", error="unknown or expired flow")
     device_code, deadline = entry
     if clock() > deadline:
         _PENDING.pop(flow_id, None)
+        logger.info("github device flow expired (deadline): flow={}", flow_id[:8])
         return Exchange(status="expired", error="device code expired")
     res = exchange_device_code(device_code, poster=poster)
     if res.status == "authorized":
         store_github_token(res.access_token)
         _PENDING.pop(flow_id, None)
+        logger.info(
+            "github device flow authorized: flow={} scope={!r} -> {} secret stored",
+            flow_id[:8], res.scope, SHARED_SECRET_NAME,
+        )
     elif res.status in ("expired", "denied"):
         _PENDING.pop(flow_id, None)
+        logger.info("github device flow ended: flow={} status={}", flow_id[:8], res.status)
+    else:
+        logger.debug("github device flow poll: flow={} status={}", flow_id[:8], res.status)
     return res
 
 
