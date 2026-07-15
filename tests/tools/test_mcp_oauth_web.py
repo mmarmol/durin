@@ -11,7 +11,7 @@ import pytest
 
 from durin.agent.tools.mcp_oauth_web import McpOauthFlows
 from durin.config.schema import MCPServerConfig
-from durin.service.types import ConflictError, UnavailableError
+from durin.service.types import UnavailableError
 
 CFG = MCPServerConfig(url="https://o/mcp", oauth=True)
 
@@ -102,18 +102,52 @@ async def test_start_calls_on_success_after_token_stored() -> None:
     assert called == [True]  # fired after the driver completed (token stored)
 
 
-async def test_second_start_while_pending_is_conflict() -> None:
+async def test_second_start_while_pending_cancels_and_restarts() -> None:
+    """Retry is idempotent: a new start() aborts the stale pending flow and
+    begins a fresh one — an abandoned popup must never lock the server out."""
+    captured: dict = {}
+    urls = iter(["https://auth/first", "https://auth/second"])
+
+    async def driver(provider, cfg):
+        await captured["redirect"](next(urls))
+        await captured["callback"]()
+
+    flows, created = _build_flows(captured, driver)
+
+    url1, _ = await flows.start("o", CFG)
+    assert url1 == "https://auth/first"
+    first_task = flows._pending["o"].task
+
+    url2, _ = await flows.start("o", CFG)
+    assert url2 == "https://auth/second"
+
+    # The first flow was aborted: task cancelled, its loopback stopped.
+    with pytest.raises(asyncio.CancelledError):
+        await first_task
+    assert created[0].stopped is True
+
+    # The second flow is the live pending one.
+    assert flows.is_pending("o")
+    flows.cancel("o")
+
+
+async def test_flow_deadline_clears_wedged_pending() -> None:
+    """A driver that hangs (e.g. handshake against an unresponsive server)
+    cannot hold the pending slot forever: the flow deadline aborts it."""
     captured: dict = {}
 
     async def driver(provider, cfg):
         await captured["redirect"]("url")
-        await captured["callback"]()
+        await asyncio.sleep(3600)  # wedged — never reaches the callback
 
-    flows, _ = _build_flows(captured, driver)
+    flows, created = _build_flows(captured, driver, flow_deadline=0.05)
+
     await flows.start("o", CFG)
-    with pytest.raises(ConflictError):
-        await flows.start("o", CFG)
-    flows.cancel("o")
+    task = flows._pending["o"].task
+    await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=5)
+
+    assert not flows.is_pending("o")
+    assert created[0].stopped is True
 
 
 async def test_cancel_clears_pending_and_stops_loopback() -> None:

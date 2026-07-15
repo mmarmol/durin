@@ -925,7 +925,7 @@
       "edit": "Sửa",
       "delete": "Xóa",
       "confirmDelete": "Xóa máy chủ này?",
-      "errorConflict": "Máy chủ này đã tồn tại, hoặc đang có một lượt đăng nhập diễn ra.",
+      "errorConflict": "Máy chủ này đã tồn tại.",
       "errorInvalid": "Cấu hình máy chủ không hợp lệ.",
       "errorNotFound": "Không tìm thấy máy chủ.",
       "errorGeneric": "Đã xảy ra lỗi.",

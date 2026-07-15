@@ -247,7 +247,7 @@ All routes are under the gateway's service port:
 
 ### Webui
 
-The MCP management panel lists connected servers, shows per-server status (connected / needs_auth / failed / disabled), allows installing from the catalog with a form that collects secret inputs, and provides enable/disable/reconnect/logout controls. OAuth servers surface a sign-in button that opens the authorization URL in a popup and refreshes status on completion.
+The MCP management panel lists connected servers, shows per-server status (connected / needs_auth / failed / disabled), allows installing from the catalog with a form that collects secret inputs, and provides enable/disable/reconnect/logout controls. OAuth servers surface a sign-in button that opens the authorization URL in a popup and refreshes status on completion. One sign-in flow per server is in flight at a time, but retry is idempotent: clicking sign-in again aborts the stale flow and starts a fresh one (an abandoned popup never locks the server out), and every flow carries an overall deadline so a wedged handshake frees the slot on its own. The gateway-side loopback callback assumes the browser and the gateway share a host; on a remote gateway (webui over the network) the redirect needs an SSH tunnel to the callback port until a gateway-served callback exists.
 
 ## 7. Curated rationale
 
