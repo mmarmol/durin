@@ -101,6 +101,30 @@ def _test_default_author_scope():
 
 
 @pytest.fixture(autouse=True)
+def _ban_catalog_network_fetch(monkeypatch):
+    """Suite-wide ban on the catalog refreshers' real network fetch.
+
+    Both refresh schedulers (MCP + provider models) fetch IMMEDIATELY in
+    their background thread when the local cache is missing or overdue —
+    which in a test's throwaway DURIN_HOME is always. Any test that
+    constructs an AgentLoop with a real Config would therefore spawn threads
+    hitting github.com / models.dev. Replace each module's ``_default_fetch``
+    with a raiser (the failure is swallowed by the refreshers' keep-prior-data
+    contract); a test exercising refresh behavior injects its own fake fetch
+    or monkeypatches ``_default_fetch`` on top of this.
+    """
+
+    def _banned(url: str) -> bytes:
+        raise RuntimeError(f"catalog network fetch banned in tests (url={url})")
+
+    import durin.agent.mcp_catalog_refresh as _mcr
+    import durin.providers.catalog_refresh as _pcr
+
+    monkeypatch.setattr(_mcr, "_default_fetch", _banned)
+    monkeypatch.setattr(_pcr, "_default_fetch", _banned)
+
+
+@pytest.fixture(autouse=True)
 def _restore_loguru_durin_activation():
     """Keep loguru's ``durin`` namespace enabled across test boundaries.
 

@@ -534,3 +534,51 @@ def test_build_catalog_calls_fetch_repo_meta_with_keys_only():
     assert enriched, "fixture must include servers with a github repo"
     assert all(s["stars"] == 4242 for s in enriched)  # enrichment actually applied
     assert calls["keys"]  # fetch_repo_meta was invoked with the repo keys
+
+
+# ---------------------------------------------------------------------------
+# trim_to_quality_tier: the vendored-floor subset
+# ---------------------------------------------------------------------------
+
+
+def test_trim_to_quality_tier_keeps_default_gate_servers():
+    """The floor keeps exactly the servers the default search gate can show
+    (curated OR popular) and preserves the catalog envelope."""
+    from durin.agent.mcp_catalog_build import trim_to_quality_tier
+
+    catalog = {
+        "schema_version": 1,
+        "generated_at": "2026-07-13T08:43:19Z",
+        "servers": [
+            {"ref": "a/curated", "verified": True, "stars": 3},
+            {"ref": "b/popular", "verified": False, "stars": 5000},
+            {"ref": "c/obscure", "verified": False, "stars": 12},
+            {"ref": "d/no-stars"},
+        ],
+    }
+
+    trimmed = trim_to_quality_tier(catalog, min_stars=100)
+
+    refs = [s["ref"] for s in trimmed["servers"]]
+    assert refs == ["a/curated", "b/popular"]
+    assert trimmed["generated_at"] == "2026-07-13T08:43:19Z"
+    assert trimmed["schema_version"] == 1
+    # The input catalog is not mutated.
+    assert len(catalog["servers"]) == 4
+
+
+def test_trim_to_quality_tier_matches_store_gate():
+    """The trim predicate IS the store's default gate — a server kept by the
+    floor must be shown by search's default quality filter and vice versa."""
+    from durin.agent.mcp_catalog_build import trim_to_quality_tier
+    from durin.agent.mcp_catalog_store import _curated_or_popular
+
+    servers = [
+        {"ref": "x/one", "verified": False, "stars": 100},   # boundary: NOT > 100
+        {"ref": "x/two", "verified": False, "stars": 101},
+        {"ref": "x/three", "verified": True, "stars": 0},
+    ]
+    trimmed = trim_to_quality_tier({"generated_at": "t", "servers": servers}, min_stars=100)
+    kept = {s["ref"] for s in trimmed["servers"]}
+    expected = {s["ref"] for s in servers if _curated_or_popular(s, 100)}
+    assert kept == expected

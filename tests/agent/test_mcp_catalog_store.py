@@ -5,7 +5,37 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-FLOOR_SERVERS_COUNT = 5  # mcp_catalog.json currently has 5 entries
+import pytest
+
+FLOOR_TS = "2026-06-19T00:00:00Z"
+FLOOR_SERVERS_COUNT = 5  # entries in the pinned test floor below
+
+
+@pytest.fixture(autouse=True)
+def _pinned_floor(tmp_path_factory, monkeypatch):
+    """Pin the vendored floor to a known 5-server catalog.
+
+    The real floor's size and generated_at move with the weekly refresh PR;
+    these tests reason about floor-vs-overlay precedence, so they must not
+    read the actual vendored file."""
+    from durin.agent import mcp_catalog_store
+
+    floor = tmp_path_factory.mktemp("floor") / "mcp_catalog.json"
+    floor.write_text(
+        json.dumps({
+            "schema_version": 1,
+            "generated_at": FLOOR_TS,
+            "servers": [
+                {"name": f"floor-{i}", "ref": f"floor/server-{i}"}
+                for i in range(FLOOR_SERVERS_COUNT)
+            ],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mcp_catalog_store, "_FLOOR", floor)
+    mcp_catalog_store.cache_clear()
+    yield
+    mcp_catalog_store.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -25,7 +55,7 @@ def _write_overlay(path: Path, servers: list[dict], generated_at: str) -> None:
 
 class TestLoadServers:
     def test_floor_only_returns_floor_servers(self, monkeypatch):
-        """No overlay present → returns the 5 vendored floor servers."""
+        """No overlay present → returns the pinned floor servers."""
         from durin.agent import mcp_catalog_store
 
         monkeypatch.setattr(mcp_catalog_store, "_overlay_path", lambda: None)
@@ -58,11 +88,10 @@ class TestLoadServers:
         from durin.agent import mcp_catalog_store
 
         overlay_file = tmp_path / "mcp_catalog_cache.json"
-        # Floor timestamp is 2026-06-19T00:00:00Z — match it exactly
         _write_overlay(
             overlay_file,
             servers=[{"name": "equal-ts-server", "ref": "eq/server"}],
-            generated_at="2026-06-19T00:00:00Z",
+            generated_at=FLOOR_TS,
         )
         monkeypatch.setattr(mcp_catalog_store, "_overlay_path", lambda: overlay_file)
         mcp_catalog_store.cache_clear()
