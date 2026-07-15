@@ -18,6 +18,11 @@ import {
  * "test" that re-probes GitHub, and an inline-confirmed disconnect. Minimal scope
  * by default (`read:user`); private-repo access is requested only when needed.
  */
+
+// Consecutive poll failures tolerated before giving up on a device flow. Around
+// 30s of a hard-down gateway at the default 5s interval — long enough to ride
+// out a restart, short enough not to spin forever against a dead server.
+const MAX_POLL_FAILURES = 6;
 export function GitHubConnectionRow({ token, base = "" }: { token: string; base?: string }) {
   const { t } = useTranslation();
   const [status, setStatus] = useState<GithubStatus | null>(null);
@@ -49,9 +54,11 @@ export function GitHubConnectionRow({ token, base = "" }: { token: string; base?
       window.open(ch.verification_uri_complete, "_blank", "noopener");
       const deadline = Date.now() + ch.expires_in * 1000;
       let interval = ch.interval;
+      let failures = 0;
       const tick = async () => {
         try {
           const p = await pollGithubDeviceFlow(token, ch.flow_id, base);
+          failures = 0;
           if (p.status === "authorized") {
             setChallenge(null);
             setBusy(false);
@@ -64,18 +71,28 @@ export function GitHubConnectionRow({ token, base = "" }: { token: string; base?
             setError(p.error || t("settings.github.flowEnded"));
             return;
           }
+          // "pending" / "slow_down" / "transient" all mean: keep polling.
           if (p.status === "slow_down") interval += 5;
-          if (Date.now() >= deadline) {
+        } catch (e) {
+          // One failed poll (gateway restarting, network blip) must not kill a
+          // flow that stays valid for 15 minutes — retry, and only give up when
+          // the failures look permanent. Any abort must also clear the
+          // challenge, or the card keeps showing "waiting" with nothing polling.
+          failures += 1;
+          if (failures >= MAX_POLL_FAILURES) {
             setChallenge(null);
             setBusy(false);
-            setError(t("settings.github.timeout"));
+            setError((e as Error).message);
             return;
           }
-          pollTimer.current = window.setTimeout(tick, interval * 1000);
-        } catch (e) {
-          setError((e as Error).message);
-          setBusy(false);
         }
+        if (Date.now() >= deadline) {
+          setChallenge(null);
+          setBusy(false);
+          setError(t("settings.github.timeout"));
+          return;
+        }
+        pollTimer.current = window.setTimeout(tick, interval * 1000);
       };
       pollTimer.current = window.setTimeout(tick, interval * 1000);
     } catch (e) {
