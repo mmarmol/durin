@@ -2,9 +2,13 @@ name: MCP catalog
 
 # Weekly rebuild of the durin-owned MCP discovery catalog.
 # Builds the enriched catalog (registry + GitHub stars + first-party classification)
-# and publishes it as an ASSET on the rolling `catalog` release — NOT committed to
-# the repo, so the weekly rebuild never bloats git history and never touches the
-# protected `main` branch. Clients download it via mcp_catalog_refresh (weekly).
+# and ships it two ways:
+#   - FULL catalog → an ASSET on the rolling `catalog` release (never committed,
+#     so the 10+ MB weekly rebuild does not bloat git history). Clients download
+#     it via mcp_catalog_refresh.
+#   - QUALITY-TIER floor (curated-or-popular, ~0.5 MB) → an auto-PR updating the
+#     vendored durin/agent/data/mcp_catalog.json, so wheels ship a useful day-1
+#     catalog. Mirrors model-catalog.yml's refresh-PR pattern.
 
 on:
   schedule:
@@ -12,9 +16,11 @@ on:
   workflow_dispatch:
 
 # The default GITHUB_TOKEN: read public data for the GraphQL star enrichment +
-# contents:write so softprops can create/update the `catalog` release + asset.
+# contents:write so softprops can create/update the `catalog` release + asset +
+# pull-requests:write for the vendored-floor refresh PR.
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: mcp-catalog
@@ -41,7 +47,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: PYTHONPATH=. python scripts/build_mcp_catalog.py
 
-      - name: Publish catalog as a release asset
+      - name: Publish full catalog as a release asset
         uses: softprops/action-gh-release@v3
         with:
           tag_name: catalog
@@ -49,4 +55,28 @@ jobs:
           body: "Rolling durin-owned MCP discovery catalog. Rebuilt weekly; consumed by mcp_catalog_refresh."
           prerelease: true
           make_latest: false
-          files: durin/agent/data/mcp_catalog.json
+          files: dist/mcp_catalog.json
+
+      - name: Open or update the vendored-floor refresh PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # -I: the generated_at stamp changes on every run; without ignoring
+          # it, a zero-data week would still open a churn PR.
+          if git diff --quiet -I '"generated_at":' -- durin/agent/data/mcp_catalog.json; then
+            echo "No floor changes this week."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B bot/mcp-floor-refresh
+          git add durin/agent/data/mcp_catalog.json
+          git commit -m "data(mcp): weekly vendored floor refresh"
+          git push --force origin bot/mcp-floor-refresh
+          if ! gh pr list --head bot/mcp-floor-refresh --state open --json number --jq length | grep -qx 0; then
+            echo "Refresh PR already open — branch updated."
+            exit 0
+          fi
+          gh pr create \
+            --title "data(mcp): weekly vendored floor refresh" \
+            --body "Automated weekly refresh of the vendored MCP catalog floor (quality tier of the full rolling catalog). Close and reopen to trigger the required checks."

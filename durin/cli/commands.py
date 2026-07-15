@@ -1193,25 +1193,24 @@ def _run_gateway(
     open_browser_url: str | None = None,
 ) -> None:
     """Shared gateway runtime; ``open_browser_url`` opens a tab once channels are up."""
-    # When launched by the daemon supervisor (start_daemon sets the env
-    # flag), attach the JSONL rotating/compressing file sink to
-    # gateway.log so the dashboard log viewer has structured input. The
-    # human-readable stderr sink stays as-is for foreground/--verbose.
-    import os as _os
-
-    from durin.cli.gateway_daemon import GATEWAY_LOG_FILE_ENV, daemon_logs_path
+    # Attach the JSONL rotating/compressing file sink to gateway.log for
+    # EVERY gateway run — daemon and foreground alike — so the dashboard log
+    # viewer has structured input regardless of how the process is
+    # supervised (durin's own daemon, systemd with --foreground, a terminal).
+    # The human-readable stderr sink stays as-is: under systemd that is what
+    # journald captures; in a terminal it is what the operator sees.
+    from durin.cli.gateway_daemon import daemon_logs_path
     from durin.cli.gateway_logging import (
         configure_gateway_file_logging,
         install_excepthook,
     )
 
-    if _os.environ.get(GATEWAY_LOG_FILE_ENV):
-        configure_gateway_file_logging(
-            daemon_logs_path(),
-            max_file_mb=config.logging.max_file_mb,
-            retention_days=config.logging.retention_days,
-        )
-        install_excepthook()
+    configure_gateway_file_logging(
+        daemon_logs_path(),
+        max_file_mb=config.logging.max_file_mb,
+        retention_days=config.logging.retention_days,
+    )
+    install_excepthook()
     # When the webui is requested via config, ensure the websocket
     # channel (which serves the SPA static files + the WS endpoint) is
     # turned on at RUNTIME — without mutating the persisted config.

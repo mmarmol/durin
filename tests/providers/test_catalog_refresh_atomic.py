@@ -6,20 +6,6 @@ import json
 from pathlib import Path
 
 
-class _FakeResp:
-    def __init__(self, payload: dict) -> None:
-        self._data = json.dumps(payload).encode("utf-8")
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def read(self) -> bytes:
-        return self._data
-
-
 def test_refresh_creates_lock_file(tmp_path: Path, monkeypatch) -> None:
     from durin.providers import catalog_refresh
 
@@ -35,8 +21,7 @@ def test_refresh_creates_lock_file(tmp_path: Path, monkeypatch) -> None:
         }
     }
     monkeypatch.setattr(
-        catalog_refresh.urllib.request, "urlopen",
-        lambda *a, **k: _FakeResp(fake),
+        catalog_refresh, "_default_fetch", lambda url: json.dumps(fake).encode()
     )
     catalog_refresh.refresh_provider_models_cache(tmp_path)
     cache = tmp_path / "provider_models_cache.json"
@@ -59,8 +44,7 @@ def test_refresh_cache_is_valid_json(tmp_path: Path, monkeypatch) -> None:
         }
     }
     monkeypatch.setattr(
-        catalog_refresh.urllib.request, "urlopen",
-        lambda *a, **k: _FakeResp(fake),
+        catalog_refresh, "_default_fetch", lambda url: json.dumps(fake).encode()
     )
     catalog_refresh.refresh_provider_models_cache(tmp_path)
     data = json.loads((tmp_path / "provider_models_cache.json").read_text(encoding="utf-8"))

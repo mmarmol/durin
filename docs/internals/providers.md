@@ -270,7 +270,9 @@ capability fields attached per entry. Sources, in overlay order:
    `scripts/refresh_model_capabilities.py` from models.dev's per-provider index.
 2. **Daily user cache**: `catalog_refresh` re-fetches models.dev in the background and
    writes `provider_models_cache.json` under the data dir; a provider present in the
-   cache replaces its floor entry wholesale.
+   cache replaces its floor entry wholesale. The scheduler derives its due time from
+   the cache file's mtime (missing/overdue → immediate background fetch), so the
+   daily cadence survives process restarts.
 3. **Live listings** where the provider itself is authoritative: local providers
    (ollama, LM Studio, …) query their `/v1/models` at read time and fall back to the
    floor; `openai_codex` maps live codex slugs onto `openai` catalog caps.

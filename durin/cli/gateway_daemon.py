@@ -48,13 +48,7 @@ __all__ = [
     "daemon_pid_path",
     "daemon_logs_path",
     "daemon_boot_logs_path",
-    "GATEWAY_LOG_FILE_ENV",
 ]
-
-
-# Env flag set by start_daemon and read by the gateway run to decide
-# whether to attach the JSONL rotating file sink to gateway.log.
-GATEWAY_LOG_FILE_ENV = "DURIN_GATEWAY_LOG_FILE"
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +230,7 @@ def start_daemon(
     try:
         binary = durin_executable or _resolve_durin_binary()
         cmd = [binary, "gateway", "--foreground", *(extra_args or [])]
-        env = {**os.environ, GATEWAY_LOG_FILE_ENV: str(daemon_logs_path())}
+        env = {**os.environ}
         proc = subprocess.Popen(  # noqa: S603 — durin invokes its own binary; no shell
             cmd,
             stdin=subprocess.DEVNULL,

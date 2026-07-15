@@ -212,8 +212,30 @@ def build_catalog(
     }
 
 
+def trim_to_quality_tier(catalog: dict, *, min_stars: int = 100) -> dict:
+    """Return a copy of *catalog* trimmed to the vendored-floor quality tier.
+
+    The predicate is the store's default search gate (curated OR popular), so
+    default searches against the floor behave exactly like against the full
+    catalog; only ``include_all`` discovery of below-floor community servers
+    needs the downloaded overlay. Everything else in the envelope
+    (schema_version, generated_at, …) is preserved — generated_at especially,
+    since the refresher compares it against the remote's.
+    """
+    from durin.agent.mcp_catalog_store import _curated_or_popular
+
+    trimmed = dict(catalog)
+    trimmed["servers"] = [
+        s for s in catalog.get("servers", []) if _curated_or_popular(s, min_stars)
+    ]
+    return trimmed
+
+
 def main() -> None:
-    """Entry point for CI: paginates, enriches pooled, writes mcp_catalog.json."""
+    """Entry point for CI: paginates, enriches pooled, writes the full catalog
+    to ``dist/mcp_catalog.json`` (published as the rolling release asset) and
+    the quality-tier floor to ``durin/agent/data/mcp_catalog.json`` (committed
+    weekly via the auto-PR, ships in the wheel)."""
     import asyncio
     import sys
     from datetime import datetime, timezone
@@ -278,10 +300,19 @@ def main() -> None:
             fetch_verified=sync_fetch_verified,
         )
 
-    out_path = Path(__file__).parent / "data" / "mcp_catalog.json"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(catalog, indent=2), encoding="utf-8")
-    print(f"Wrote {len(catalog['servers'])} servers to {out_path}", file=sys.stderr)
+    # Full catalog → dist/ (release asset; the basename must stay
+    # mcp_catalog.json — it becomes the asset name the refresher downloads).
+    dist_path = Path("dist") / "mcp_catalog.json"
+    dist_path.parent.mkdir(parents=True, exist_ok=True)
+    dist_path.write_text(json.dumps(catalog, indent=2), encoding="utf-8")
+    print(f"Wrote {len(catalog['servers'])} servers to {dist_path}", file=sys.stderr)
+
+    # Quality tier → the vendored floor that ships in the wheel.
+    floor = trim_to_quality_tier(catalog)
+    floor_path = Path(__file__).parent / "data" / "mcp_catalog.json"
+    floor_path.parent.mkdir(parents=True, exist_ok=True)
+    floor_path.write_text(json.dumps(floor, indent=2), encoding="utf-8")
+    print(f"Wrote {len(floor['servers'])} floor servers to {floor_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":
