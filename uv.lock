@@ -797,7 +797,7 @@ wheels = [
 
 [[package]]
 name = "durin-agent"
-version = "0.2.0b3"
+version = "0.2.0b4"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -912,7 +912,7 @@ requires-dist = [
     { name = "litellm", specifier = ">=1.40.0" },
     { name = "llama-cpp-python", marker = "extra == 'local'", specifier = ">=0.3.0" },
     { name = "loguru", specifier = ">=0.7.3,<1.0.0" },
-    { name = "markdown-it-py", specifier = ">=3.0,<4.0" },
+    { name = "markdown-it-py", specifier = ">=3.0,<5.0" },
     { name = "markitdown", extras = ["docx", "pptx", "xlsx", "xls", "pdf"], specifier = ">=0.1.6,<0.2.0" },
     { name = "matrix-nio", marker = "extra == 'matrix'", specifier = ">=0.25,<0.26" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.26.0,<2.0.0" },
