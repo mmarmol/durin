@@ -139,7 +139,7 @@ export function ModelPicker({
         className="h-8 w-[280px] rounded-full text-[13px]"
       />
       {open && filtered.length > 0 ? (
-        <div className="absolute right-0 z-20 mt-1 max-h-[260px] w-[280px] overflow-y-auto rounded-[16px] border border-border/50 bg-popover p-1 shadow-[0_18px_50px_rgba(15,23,42,0.16)]">
+        <div className="absolute right-0 z-20 mt-1 max-h-[260px] w-[340px] overflow-y-auto rounded-[16px] border border-border/50 bg-popover p-1 shadow-[0_18px_50px_rgba(15,23,42,0.16)]">
           {filtered.map((o) => (
             <button
               key={o.id}
@@ -149,15 +149,15 @@ export function ModelPicker({
                 setOpen(false);
               }}
               className={cn(
-                "flex w-full items-center justify-between gap-2 rounded-[12px] px-2.5 py-1.5 text-left text-[12px] hover:bg-muted",
+                "flex w-full flex-col items-start gap-0.5 rounded-[12px] px-2.5 py-1.5 text-left text-[12px] hover:bg-muted",
                 o.id === value && "bg-muted",
               )}
             >
-              <span className="truncate">{o.id}</span>
+              <span className="break-all">{o.id}</span>
               {o.caps ? (
-                <span className="shrink-0 text-[10px] text-muted-foreground">{o.caps}</span>
+                <span className="text-[10px] text-muted-foreground">{o.caps}</span>
               ) : o.suggested ? (
-                <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
+                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   {t("settings.models.suggested")}
                 </span>
               ) : null}
