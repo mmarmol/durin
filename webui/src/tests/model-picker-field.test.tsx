@@ -46,4 +46,33 @@ describe("ModelPicker (settings field)", () => {
     expect(fetchProviderModels).not.toHaveBeenCalled();
     expect(listModels).toHaveBeenCalledWith("t", "auto", "");
   });
+
+  it("renders long model ids in full (no CSS truncation class)", async () => {
+    fetchProviderModels.mockResolvedValue([
+      {
+        id: "google/gemini-2.5-flash-lite-preview-06-17",
+        configured: false,
+        max_input_tokens: 1_000_000,
+        supports_vision: true,
+        supports_audio_input: true,
+      },
+      {
+        id: "google/gemini-2.5-flash",
+        configured: false,
+        max_input_tokens: 1_000_000,
+        supports_vision: true,
+        supports_audio_input: true,
+      },
+    ]);
+    render(<ModelPicker token="t" provider="openrouter" value="" onChange={() => {}} />);
+    fireEvent.focus(screen.getByRole("textbox"));
+    const long = await waitFor(() =>
+      screen.getByText("google/gemini-2.5-flash-lite-preview-06-17"),
+    );
+    // The id element must not carry `truncate` — it wraps instead.
+    expect(long.className).not.toContain("truncate");
+    expect(long.className).toContain("break-all");
+    // Both ids are present and distinct in the DOM.
+    expect(screen.getByText("google/gemini-2.5-flash")).toBeInTheDocument();
+  });
 });
