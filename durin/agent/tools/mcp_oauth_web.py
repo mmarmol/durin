@@ -9,7 +9,11 @@ and the gateway share a host (durin's normal webui deployment).
 
 A sign-in is a background task: ``start()`` kicks it off and returns the URL
 immediately; the task blocks on the loopback until the user authorizes, then the
-SDK stores the tokens. At most one flow per server is in flight.
+SDK stores the tokens. At most one flow per server is in flight — a new
+``start()`` for the same server aborts the stale flow and begins a fresh one
+(retry is idempotent: an abandoned popup must never lock the server out), and
+every flow carries an overall deadline so a wedged handshake cannot hold the
+slot until a gateway restart.
 """
 from __future__ import annotations
 
@@ -19,7 +23,7 @@ from typing import Any
 
 from loguru import logger
 
-from durin.service.types import ConflictError, UnavailableError
+from durin.service.types import UnavailableError
 
 
 async def _drive_auth(provider: Any, cfg: Any) -> None:
@@ -54,11 +58,17 @@ class McpOauthFlows:
         loopback_factory: Callable | None = None,
         driver: Callable[[Any, Any], Awaitable[None]] | None = None,
         url_timeout: float = 30.0,
+        flow_deadline: float = 600.0,
     ) -> None:
         self._provider_builder = provider_builder
         self._loopback_factory = loopback_factory
         self._driver = driver
         self._url_timeout = url_timeout
+        # Overall cap on one sign-in attempt. Must exceed the 5-minute loopback
+        # wait so a slow-but-live authorization still completes; its real job is
+        # aborting a handshake wedged BEFORE the loopback wait (the MCP session
+        # layers have no per-request timeouts of their own there).
+        self._flow_deadline = flow_deadline
         self._pending: dict[str, PendingFlow] = {}
 
     def is_pending(self, server: str) -> bool:
@@ -83,13 +93,16 @@ class McpOauthFlows:
         ``on_success`` (optional) is awaited once the token is stored — used to
         reconnect the live connection race-free (the webui can't, since the popup
         closes a beat before the SDK finishes the token exchange).
-        Raises ``ConflictError`` if a flow is already pending for the server, and
-        ``UnavailableError`` if the callback can't bind or no URL surfaces.
+        A flow already pending for the server is aborted and replaced — retry is
+        idempotent. Raises ``UnavailableError`` if the callback can't bind or no
+        URL surfaces.
         """
         if server in self._pending:
-            raise ConflictError(
-                "OAuth sign-in already in progress", details={"name": server}
+            logger.info(
+                "MCP '{}' OAuth sign-in restarted; aborting the stale pending flow",
+                server,
             )
+            self.cancel(server)
 
         builder = self._provider_builder
         factory = self._loopback_factory
@@ -134,7 +147,7 @@ class McpOauthFlows:
 
         async def _run() -> None:
             try:
-                await driver(provider, cfg)
+                await asyncio.wait_for(driver(provider, cfg), timeout=self._flow_deadline)
                 logger.info("MCP '{}' OAuth sign-in completed (token stored)", server)
                 if on_success is not None:
                     # Reconnect now that the token is stored — race-free, unlike
@@ -154,7 +167,12 @@ class McpOauthFlows:
                 )
             finally:
                 callback.stop()
-                self._pending.pop(server, None)
+                # Pop only OUR entry: a restarted sign-in replaces the pending
+                # slot while the aborted task is still unwinding — its cleanup
+                # must not evict the fresh flow.
+                current = self._pending.get(server)
+                if current is not None and current.task is asyncio.current_task():
+                    self._pending.pop(server, None)
 
         task = loop.create_task(_run())
         self._pending[server] = PendingFlow(task, callback)

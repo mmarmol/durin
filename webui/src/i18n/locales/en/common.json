@@ -925,7 +925,7 @@
       "edit": "Edit",
       "delete": "Delete",
       "confirmDelete": "Delete this server?",
-      "errorConflict": "That server already exists, or a sign-in is already in progress.",
+      "errorConflict": "That server already exists.",
       "errorInvalid": "Invalid server configuration.",
       "errorNotFound": "Server not found.",
       "errorGeneric": "Something went wrong.",

@@ -925,7 +925,7 @@
       "edit": "編輯",
       "delete": "刪除",
       "confirmDelete": "刪除這個伺服器？",
-      "errorConflict": "該伺服器已存在，或登入程序正在進行中。",
+      "errorConflict": "該伺服器已存在。",
       "errorInvalid": "伺服器設定無效。",
       "errorNotFound": "找不到伺服器。",
       "errorGeneric": "發生錯誤。",

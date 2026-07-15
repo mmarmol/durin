@@ -925,7 +925,7 @@
       "edit": "编辑",
       "delete": "删除",
       "confirmDelete": "删除此服务器？",
-      "errorConflict": "该服务器已存在，或登录操作正在进行中。",
+      "errorConflict": "该服务器已存在。",
       "errorInvalid": "服务器配置无效。",
       "errorNotFound": "未找到该服务器。",
       "errorGeneric": "出错了。",
