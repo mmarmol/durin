@@ -432,8 +432,10 @@ registers `skill_acquire_seed` directly — it is not loaded via `ToolLoader`.
 verdict, review overrides) to the web panel and CLI. Web routes:
 `GET /api/v1/skills` (inventory), `GET .../describe` (preview before import),
 `POST .../review` (user override for a flagged active skill),
-`DELETE .../review` (reopen review). Removal routes trigger `remove_skill` or
-revert-to-builtin.
+`DELETE .../review` (reopen review), `GET .../observations` (the OPEN
+observation backlog behind the panel's count badge, filterable by skill),
+`POST .../observations/{id}/resolve` (manual resolution: `applied` or
+`declined`). Removal routes trigger `remove_skill` or revert-to-builtin.
 
 ---
 

@@ -28,6 +28,7 @@ import {
   ApiError,
   approveSkill,
   describeSkill,
+  fetchSkillObservations,
   getSkill,
   getSkillFile,
   getSkillHistory,
@@ -37,6 +38,7 @@ import {
   listSkills,
   rejectSkill,
   removeSkill,
+  resolveSkillObservation,
   reviewSkill,
   saveSkillFile,
   searchSkills,
@@ -49,6 +51,7 @@ import {
   type SkillFile,
   type SkillFinding,
   type SkillHistory as SkillHistoryData,
+  type SkillObservation,
   type SkillRow,
   type SkillSearchHit,
   type SkillVerdict,
@@ -151,6 +154,108 @@ function ObservationsBadge({ count }: { count?: number }) {
     <span className="shrink-0 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium leading-none text-amber-600 dark:text-amber-400">
       {t("skills.openObservations", { count })}
     </span>
+  );
+}
+
+/** The records behind {@link ObservationsBadge}, with manual resolution.
+ * Fetches its own data (the list rows only carry the count) so the parent's
+ * state stays untouched; `onResolved` lets the parent refresh the badge. */
+function ObservationsPanel({
+  skill,
+  token,
+  onResolved,
+}: {
+  skill: string;
+  token: string;
+  onResolved: () => void | Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const [obs, setObs] = useState<SkillObservation[] | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setObs(await fetchSkillObservations(token, skill));
+    } catch (e) {
+      setErr(errMsg(e));
+    }
+  }, [token, skill]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const resolve = async (id: number, disposition: "applied" | "declined") => {
+    setBusyId(id);
+    setErr(null);
+    try {
+      await resolveSkillObservation(token, id, disposition);
+      await load();
+      await onResolved();
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (err) {
+    return (
+      <div className="shrink-0 border-b border-border/30 px-4 py-3 sm:px-6">
+        <p className="text-[12px] text-destructive">{err}</p>
+      </div>
+    );
+  }
+  if (!obs || obs.length === 0) return null;
+  return (
+    <div className="shrink-0 border-b border-border/30 bg-amber-500/5 px-4 py-3 sm:px-6">
+      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {t("skills.observations.title")}
+      </p>
+      <ul className="flex flex-col gap-3">
+        {obs.map((o) => (
+          <li key={o.id} className="flex flex-col gap-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium leading-none text-amber-600 dark:text-amber-400">
+                {t(`skills.observations.kinds.${o.kind}`, o.kind)}
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                {o.count > 1
+                  ? t("skills.observations.recurred", {
+                      count: o.count,
+                      date: o.last_seen,
+                    })
+                  : t("skills.observations.loggedOn", { date: o.first_seen })}
+              </span>
+            </div>
+            <p className="text-[13px] text-foreground">{o.issue}</p>
+            <p className="text-[12px] text-muted-foreground">
+              {t("skills.observations.proposal")}: {o.improvement}
+            </p>
+            <div className="mt-1 flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busyId === o.id}
+                onClick={() => void resolve(o.id, "applied")}
+              >
+                {t("skills.observations.resolve")}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busyId === o.id}
+                title={t("skills.observations.dismissHint")}
+                onClick={() => void resolve(o.id, "declined")}
+              >
+                {t("skills.observations.dismiss")}
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -1680,6 +1785,14 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                       </div>
                     )}
                   </div>
+                ) : null}
+
+                {(skillRow?.open_observations ?? 0) > 0 ? (
+                  <ObservationsPanel
+                    skill={detail.name}
+                    token={token}
+                    onResolved={refresh}
+                  />
                 ) : null}
 
                 {skillRow?.requirements && (

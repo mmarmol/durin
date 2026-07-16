@@ -255,13 +255,15 @@ provenance.
   existing record instead of creating a duplicate; `count >= 2` is the
   recurrence signal curation looks for.
 - **Lifecycle.** `OPEN` → `APPLIED` or `DECLINED`, set in bulk by
-  `apply_dispositions` from the curation judge's per-observation verdicts.
-  `DECLINED` records are kept **active** (not archived) — they are the judge's
-  memory against re-proposing something already rejected. `APPLIED` records
-  are moved to `.observations.archive.jsonl` by `archive_resolved`, called at
-  the **start** of the next curation pass so an applied record gets one full
-  cycle of visibility (e.g. in the webui backlog) before leaving the active
-  file.
+  `apply_dispositions` from the curation judge's per-observation verdicts, or
+  one at a time by `resolve_observation` when the user resolves a record by
+  hand (see the API surface below). `DECLINED` records are kept **active**
+  (not archived) — they are the judge's memory against re-proposing something
+  already rejected, and a user's manual decline feeds that same memory.
+  `APPLIED` records are moved to `.observations.archive.jsonl` by
+  `archive_resolved`, called at the **start** of the next curation pass so an
+  applied record gets one full cycle of visibility (e.g. in the webui backlog)
+  before leaving the active file.
 - **Skill-ref validity.** A `skill` value is either an existing skill name,
   the literal `"all"` (a cross-cutting record not scoped to one skill), or
   `new:<name>` (a coverage gap, consumed by skill-extract rather than
@@ -486,6 +488,7 @@ decisions about external content are never made silently.
 | `discover_skill_signals` | `durin/agent/skill_signals.py` | Hindsight pass: detects generalizing corrections/gaps from a session's turns, tail-truncated; logs via `log_observation`. |
 | `log_observation` / `open_observations` / `declined_observations` | `durin/agent/skill_observations.py` | Append-with-dedup, and read the OPEN/DECLINED views the curation judge consumes. |
 | `apply_dispositions` / `archive_resolved` | `durin/agent/skill_observations.py` | Bulk status transition from judge verdicts; move APPLIED records to the archive file at the next pass's start. |
+| `resolve_observation` | `durin/agent/skill_observations.py` | Single-record manual resolution (`applied`/`declined`) behind `POST /api/v1/skills/observations/{id}/resolve`; emits `skill.observation_resolved`. |
 | `add_principle` / `retire_principle` / `active_principles` | `durin/agent/skill_observations.py` | Cross-cutting principles store, capped at `PRINCIPLES_CAP`. |
 | `curate_catalog` | `durin/agent/skill_curation.py` | Daily delta curation over `auto` workspace skills: backfill, delta build, judge, apply, stamp. |
 | `suggest_manual_skills` | `durin/agent/skill_curation.py` | Parallel curation pass over `manual` skills that enqueues suggestions instead of applying them. |

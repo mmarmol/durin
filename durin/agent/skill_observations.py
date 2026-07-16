@@ -190,6 +190,33 @@ def open_observations(workspace: Path, skill: str | None = None) -> list[dict]:
     return recs
 
 
+def resolve_observation(workspace: Path, oid: int, disposition: str) -> dict:
+    """Resolve one OPEN observation by hand (webui/API path).
+
+    ``applied`` marks the underlying issue as handled (the record is archived
+    at the start of the next curation pass); ``declined`` keeps the record in
+    the active file as memory against the judge re-proposing the same change.
+    """
+    workspace = Path(workspace)
+    if disposition not in ("applied", "declined"):
+        return {"error": "disposition must be 'applied' or 'declined'"}
+    records = _read_records(_active_path(workspace))
+    for rec in records:
+        if int(rec.get("id", 0)) == int(oid) and rec.get("status") == "OPEN":
+            rec["status"] = "APPLIED" if disposition == "applied" else "DECLINED"
+            rec["resolved_at"] = _today()
+            _write_records(_active_path(workspace), records)
+            store = _store_init(workspace)
+            sha = store.auto_commit(
+                f"observation(#{rec['id']} {rec.get('skill', '')}): "
+                f"{disposition} by user")
+            _emit("skill.observation_resolved", skill=rec.get("skill", ""),
+                 kind=rec.get("kind", ""), disposition=disposition)
+            return {"ok": True, "id": int(oid), "disposition": disposition,
+                    "commit": sha}
+    return {"error": f"no open observation with id {oid}"}
+
+
 def declined_observations(workspace: Path) -> list[dict]:
     """DECLINED observations — kept active as memory against re-proposing."""
     return [r for r in _read_records(_active_path(Path(workspace)))

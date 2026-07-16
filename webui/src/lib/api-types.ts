@@ -1860,6 +1860,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/skills/observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Open skill observations awaiting curation or manual resolution */
+        get: operations["skills_observations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/skills/observations/{id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve an open observation (applied or declined) */
+        post: operations["skills_resolve_observation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/skills/quarantine": {
         parameters: {
             query?: never;
@@ -4790,6 +4824,16 @@ export interface components {
             ref_b: string;
         };
         /**
+         * ResolveObservationCommand
+         * @description Resolve one OPEN observation: ``applied`` (handled) or ``declined``.
+         */
+        ResolveObservationCommand: {
+            /** Disposition */
+            disposition: string;
+            /** Id */
+            id: number;
+        };
+        /**
          * ResolveResult
          * @description Outcome of a resolve action.
          */
@@ -5161,6 +5205,49 @@ export interface components {
             name: string;
             /** Value */
             value: string;
+        };
+        /**
+         * SkillObservation
+         * @description One OPEN in-session observation logged against a skill.
+         */
+        SkillObservation: {
+            /** Count */
+            count: number;
+            /** First Seen */
+            first_seen: string;
+            /** Id */
+            id: number;
+            /** Improvement */
+            improvement: string;
+            /** Issue */
+            issue: string;
+            /** Kind */
+            kind: string;
+            /** Last Seen */
+            last_seen: string;
+            /** Principle */
+            principle: string | null;
+            /** Skill */
+            skill: string;
+        };
+        /**
+         * SkillObservations
+         * @description All OPEN skill observations.
+         */
+        SkillObservations: {
+            /** Observations */
+            observations: components["schemas"]["SkillObservation"][];
+        };
+        /**
+         * SkillObservationsQuery
+         * @description OPEN observations, optionally filtered to one skill ref.
+         */
+        SkillObservationsQuery: {
+            /**
+             * Skill
+             * @default null
+             */
+            skill: string | null;
         };
         /** SkillRejectCommand */
         SkillRejectCommand: {
@@ -8851,6 +8938,54 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SkillsImportCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillsResult"];
+                };
+            };
+        };
+    };
+    skills_observations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillObservationsQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillObservations"];
+                };
+            };
+        };
+    };
+    skills_resolve_observation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveObservationCommand"];
             };
         };
         responses: {

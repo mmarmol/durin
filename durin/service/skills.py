@@ -163,6 +163,32 @@ class SkillSuggestions(Result):
     suggestions: list[SkillSuggestion]
 
 
+class SkillObservationsQuery(Query):
+    """OPEN observations, optionally filtered to one skill ref."""
+
+    skill: str | None = None
+
+
+class SkillObservation(Result):
+    """One OPEN in-session observation logged against a skill."""
+
+    id: int
+    skill: str
+    kind: str
+    issue: str
+    improvement: str
+    principle: str | None
+    count: int
+    first_seen: str
+    last_seen: str
+
+
+class SkillObservations(Result):
+    """All OPEN skill observations."""
+
+    observations: list[SkillObservation]
+
+
 # ---------------------------------------------------------------------------
 # Write DTOs
 # ---------------------------------------------------------------------------
@@ -209,6 +235,13 @@ class RejectSuggestionCommand(Command):
     """Reject a suggestion: write an expiring tombstone, then dequeue it."""
 
     id: str
+
+
+class ResolveObservationCommand(Command):
+    """Resolve one OPEN observation: ``applied`` (handled) or ``declined``."""
+
+    id: int
+    disposition: str
 
 
 class SkillInstallDepsCommand(Command):
@@ -705,6 +738,58 @@ class SkillsService:
                  skill=action.get("name") or action.get("target", ""),
                  action=action.get("type", ""), resolution="rejected")
         return _skills_result(200, {"ok": True})
+
+    @route(
+        "GET",
+        "/api/v1/skills/observations",
+        scope=Scope.SKILLS_READ.value,
+        request_model=SkillObservationsQuery,
+        response_model=SkillObservations,
+        summary="Open skill observations awaiting curation or manual resolution",
+    )
+    async def observations(
+        self, query: SkillObservationsQuery, principal: Principal
+    ) -> SkillObservations:
+        principal.require(Scope.SKILLS_READ)
+        from durin.agent import skill_observations as so
+
+        items = [
+            SkillObservation(
+                id=int(r.get("id", 0)),
+                skill=r.get("skill", ""),
+                kind=r.get("kind", ""),
+                issue=r.get("issue", ""),
+                improvement=r.get("improvement", ""),
+                principle=r.get("principle"),
+                count=int(r.get("count", 1)),
+                first_seen=r.get("first_seen", ""),
+                last_seen=r.get("last_seen", ""),
+            )
+            for r in so.open_observations(self._workspace, query.skill)
+        ]
+        return SkillObservations(observations=items)
+
+    @route(
+        "POST",
+        "/api/v1/skills/observations/{id}/resolve",
+        scope=Scope.SKILLS_WRITE.value,
+        request_model=ResolveObservationCommand,
+        response_model=SkillsResult,
+        summary="Resolve an open observation (applied or declined)",
+    )
+    async def resolve_observation(
+        self, cmd: ResolveObservationCommand, principal: Principal
+    ) -> SkillsResult:
+        principal.require(Scope.SKILLS_WRITE)
+        from durin.agent import skill_observations as so
+
+        if cmd.disposition not in ("applied", "declined"):
+            raise ValidationFailedError(
+                "disposition must be 'applied' or 'declined'")
+        res = so.resolve_observation(self._workspace, cmd.id, cmd.disposition)
+        if res.get("error"):
+            raise NotFoundError(str(res["error"]), details=res)
+        return _skills_result(200, res)
 
     @route(
         "DELETE",

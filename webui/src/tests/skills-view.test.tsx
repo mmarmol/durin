@@ -23,6 +23,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
     searchSkills: vi.fn(),
     judgeSkill: vi.fn(),
     describeSkill: vi.fn(),
+    fetchSkillObservations: vi.fn(),
+    resolveSkillObservation: vi.fn(),
   };
 });
 
@@ -49,6 +51,8 @@ beforeEach(() => {
   vi.mocked(api.listSkillFiles).mockReset();
   vi.mocked(api.reviewSkill).mockReset();
   vi.mocked(api.unreviewSkill).mockReset();
+  vi.mocked(api.fetchSkillObservations).mockReset();
+  vi.mocked(api.resolveSkillObservation).mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -582,5 +586,78 @@ describe("SkillsView security surface", () => {
     await user.click(await screen.findByRole("button", { name: "Reject" }));
 
     expect(api.rejectSkill).toHaveBeenCalledWith("tok", "sketchy");
+  });
+});
+
+describe("SkillsView open observations", () => {
+  function rowWithObservations() {
+    return [
+      {
+        name: "doc-sync",
+        source: "workspace",
+        mode: "auto" as const,
+        status: "active" as const,
+        verdict: "safe" as const,
+        findings: [],
+        open_observations: 1,
+      },
+    ];
+  }
+
+  it("shows the observation records with issue and improvement in the detail pane", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue(rowWithObservations());
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.getSkill).mockResolvedValue({ name: "doc-sync", mode: "auto", content: "body" });
+    vi.mocked(api.listSkillFiles).mockResolvedValue([{ path: "SKILL.md", text: true, size: 4 }]);
+    vi.mocked(api.fetchSkillObservations).mockResolvedValue([
+      {
+        id: 3,
+        skill: "doc-sync",
+        kind: "gap",
+        issue: "Step 2 misses the staging remote",
+        improvement: "Document the staging remote in step 2",
+        principle: null,
+        count: 2,
+        first_seen: "2026-07-10",
+        last_seen: "2026-07-15",
+      },
+    ]);
+
+    render(wrap(<SkillsView />));
+    fireEvent.click(await screen.findByText("doc-sync"));
+
+    expect(await screen.findByText("Step 2 misses the staging remote")).toBeInTheDocument();
+    expect(api.fetchSkillObservations).toHaveBeenCalledWith("tok", "doc-sync");
+    expect(screen.getByText(/Document the staging remote/)).toBeInTheDocument();
+    expect(screen.getByText(/seen 2×/)).toBeInTheDocument();
+  });
+
+  it("resolves and dismisses observations through the API", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue(rowWithObservations());
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.getSkill).mockResolvedValue({ name: "doc-sync", mode: "auto", content: "body" });
+    vi.mocked(api.listSkillFiles).mockResolvedValue([{ path: "SKILL.md", text: true, size: 4 }]);
+    vi.mocked(api.fetchSkillObservations)
+      .mockResolvedValueOnce([
+        { id: 3, skill: "doc-sync", kind: "gap", issue: "issue A", improvement: "fix A",
+          principle: null, count: 1, first_seen: "2026-07-10", last_seen: "2026-07-10" },
+        { id: 4, skill: "doc-sync", kind: "correction", issue: "issue B", improvement: "fix B",
+          principle: null, count: 1, first_seen: "2026-07-11", last_seen: "2026-07-11" },
+      ])
+      .mockResolvedValue([]);
+    vi.mocked(api.resolveSkillObservation).mockResolvedValue({ ok: true });
+
+    const user = userEvent.setup();
+    render(wrap(<SkillsView />));
+    fireEvent.click(await screen.findByText("doc-sync"));
+
+    const rowA = (await screen.findByText("issue A")).closest("li") as HTMLElement;
+    await user.click(within(rowA).getByRole("button", { name: "Mark handled" }));
+    expect(api.resolveSkillObservation).toHaveBeenCalledWith("tok", 3, "applied");
+
+    // after resolving, the panel refetches (now empty) and disappears
+    await waitFor(() =>
+      expect(screen.queryByText("Open observations")).not.toBeInTheDocument(),
+    );
   });
 });
