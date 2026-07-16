@@ -2032,8 +2032,9 @@
     "documentForgetBody": "Il est archivé et retiré de la recherche — l’agent ne le fera plus remonter. Vous pourrez l’ingérer à nouveau plus tard.",
     "documentForgetCancel": "Annuler",
     "documentForgetConfirm": "Oublier",
-    "documentOpenFull": "Texte intégral",
     "documentTab": "Document",
+    "documentFragmentsTab": "Fragments",
+    "documentFragmentsIntro": "Comment le document a été indexé pour la recherche — chaque fragment est un bloc récupérable avec le fil d'Ariane de sa section.",
     "documentOutline": "Plan",
     "documentPreamble": "Préambule",
     "documentNotDistilled": "Pas encore distillé — le dream nocturne le résumera et amorcera des entités.",
@@ -2044,7 +2045,6 @@
     "documentRelDistilledHint": "Le dream nocturne les a extraites du contenu du document — le document parle d’elles.",
     "documentRelReferencedTitle": "Font référence à ce document",
     "documentRelReferencedHint": "Ces entités ont cité le document comme source au cours d’une conversation — le document ne les décrit pas nécessairement (par exemple, un patient dont le bilan a utilisé cet article).",
-    "documentContent": "Contenu",
     "documentChunksMore": "Affichage de {{shown}} sur {{total}} fragments.",
     "entries": {
       "empty": "Aucune entrée ne référence cette entité pour le moment.",

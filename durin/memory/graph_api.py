@@ -1071,11 +1071,11 @@ def get_reference_detail(
 ) -> dict[str, Any] | None:
     """Full detail for one reference document, or ``None`` if it doesn't exist.
 
-    Metadata + the distilled outline (abstract + per-section summaries, when the
-    dream has run) + the entities seeded from it (``derived_from``) + a bounded
+    Metadata + the full raw body (sans frontmatter — the shelf's reading view)
+    + the distilled outline (abstract + per-section summaries, when the dream
+    has run) + the entities seeded from it (``derived_from``) + a bounded
     preview of its structure-aware chunks. Read-only; drives the Documents
-    shelf's per-document view. The whole raw document stays reachable via
-    :func:`get_entry_detail` (``reference:<slug>`` uri).
+    shelf's per-document view.
     """
     import json
 
@@ -1084,7 +1084,7 @@ def get_reference_detail(
     if not md_path.is_file():
         return None
     try:
-        fm, _ = _split_frontmatter(md_path.read_text(encoding="utf-8"))
+        fm, body = _split_frontmatter(md_path.read_text(encoding="utf-8"))
     except OSError:
         return None
     ref = f"reference:{slug}"
@@ -1132,6 +1132,7 @@ def get_reference_detail(
         "ingested_at": fm.get("ingested_at"),
         "chunk_count": int(fm.get("chunk_count") or len(chunks)),
         "chunks_total": len(chunks),
+        "body": body,
         "outline": outline,
         "entities": _entities_derived_from(Path(workspace) / "memory", ref),
         "chunks_preview": chunks_preview,

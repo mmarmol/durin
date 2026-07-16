@@ -25,6 +25,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import MarkdownTextRenderer from "@/components/MarkdownTextRenderer";
 import {
   ApiError,
   fetchMemoryDocument,
@@ -40,10 +41,9 @@ type DocEntity = ReferenceDocumentDetail["entities"][number];
 interface DocumentsShelfProps {
   token: string | null;
   active: boolean;
-  // Cross-navigation back into the graph: open a related entity's page, or the
-  // reference's whole raw document, in the existing side panels.
+  // Cross-navigation back into the graph: open a related entity's page in the
+  // existing side panel.
   onOpenEntity?: (ref: string) => void;
-  onOpenReference?: (ref: string) => void;
 }
 
 function hostOf(source: string): string {
@@ -52,6 +52,22 @@ function hostOf(source: string): string {
   } catch {
     return source.length > 44 ? `${source.slice(0, 44)}…` : source;
   }
+}
+
+/**
+ * Strip HTML comment markers (provenance metadata) from memory body text.
+ * Applies the removal repeatedly until the string is stable so that nested or
+ * overlapping ``<!-- -->`` sequences cannot leave a dangling ``<!--`` behind
+ * (a single pass over multi-character delimiters is not sufficient).
+ */
+function stripHtmlComments(text: string): string {
+  let prev: string;
+  let out = text;
+  do {
+    prev = out;
+    out = out.replace(/<!--[\s\S]*?-->/g, "");
+  } while (out !== prev);
+  return out;
 }
 
 /**
@@ -67,7 +83,6 @@ export function DocumentsShelf({
   token,
   active,
   onOpenEntity,
-  onOpenReference,
 }: DocumentsShelfProps) {
   const { t } = useTranslation();
   const [docs, setDocs] = useState<ReferenceDocumentSummary[] | null>(null);
@@ -268,7 +283,6 @@ export function DocumentsShelf({
             key={detail.slug}
             detail={detail}
             onOpenEntity={onOpenEntity}
-            onOpenReference={onOpenReference}
             onRequestDelete={setConfirmDeleteSlug}
           />
         ) : null}
@@ -305,17 +319,15 @@ export function DocumentsShelf({
   );
 }
 
-type DetailTab = "document" | "entities";
+type DetailTab = "document" | "fragments" | "entities";
 
 function DocumentDetailView({
   detail,
   onOpenEntity,
-  onOpenReference,
   onRequestDelete,
 }: {
   detail: ReferenceDocumentDetail;
   onOpenEntity?: (ref: string) => void;
-  onOpenReference?: (ref: string) => void;
   onRequestDelete: (slug: string) => void;
 }) {
   const { t } = useTranslation();
@@ -327,9 +339,16 @@ function DocumentDetailView({
   // text so a heading-less document doesn't render an almost-empty outline.
   const outlineSections =
     detail.outline?.sections.filter((s) => s.summary.trim()) ?? [];
+  const body = stripHtmlComments(detail.body).trim();
 
   const tabs: Array<{ id: DetailTab; label: string; icon: LucideIcon; count?: number }> = [
     { id: "document", label: t("memoryGraph.documentTab"), icon: FileText },
+    {
+      id: "fragments",
+      label: t("memoryGraph.documentFragmentsTab"),
+      icon: Layers,
+      count: detail.chunks_total,
+    },
     {
       id: "entities",
       label: t("memoryGraph.documentEntitiesShort"),
@@ -370,16 +389,6 @@ function DocumentDetailView({
             ) : null}
           </div>
         </div>
-        {onOpenReference ? (
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 shrink-0 gap-1 text-[11px]"
-            onClick={() => onOpenReference(detail.ref)}
-          >
-            <FileText className="h-3 w-3" /> {t("memoryGraph.documentOpenFull")}
-          </Button>
-        ) : null}
         <Button
           variant="ghost"
           size="icon"
@@ -451,37 +460,51 @@ function DocumentDetailView({
               </section>
             ) : null}
 
-            {detail.chunks_preview.length > 0 ? (
-              <section>
-                <h3 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  <FileText className="h-3.5 w-3.5" /> {t("memoryGraph.documentContent")}
-                </h3>
-                <ul className="space-y-2">
-                  {detail.chunks_preview.map((c) => (
-                    <li
-                      key={c.idx}
-                      className="rounded-lg border border-border/40 bg-background/40 p-2.5"
-                    >
-                      {c.breadcrumb ? (
-                        <div className="mb-1 font-mono text-[10.5px] text-muted-foreground">
-                          {c.breadcrumb}
-                        </div>
-                      ) : null}
-                      <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed">
-                        {c.text}
-                      </p>
-                    </li>
-                  ))}
-                </ul>
-                {detail.chunks_total > detail.chunks_preview.length ? (
-                  <p className="mt-2 text-[11px] text-muted-foreground">
-                    {t("memoryGraph.documentChunksMore", {
-                      shown: detail.chunks_preview.length,
-                      total: detail.chunks_total,
-                    })}
+            {body ? (
+              <div
+                className={cn(
+                  detail.outline || outlineSections.length > 0
+                    ? "border-t border-border/40 pt-4"
+                    : undefined,
+                )}
+              >
+                <MarkdownTextRenderer className="text-[12.5px] leading-relaxed">
+                  {body}
+                </MarkdownTextRenderer>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {tab === "fragments" ? (
+          <div className="flex flex-col gap-3">
+            <p className="text-[12px] text-muted-foreground">
+              {t("memoryGraph.documentFragmentsIntro")}
+            </p>
+            <ul className="space-y-2">
+              {detail.chunks_preview.map((c) => (
+                <li
+                  key={c.idx}
+                  className="rounded-lg border border-border/40 bg-background/40 p-2.5"
+                >
+                  {c.breadcrumb ? (
+                    <div className="mb-1 font-mono text-[10.5px] text-muted-foreground">
+                      {c.breadcrumb}
+                    </div>
+                  ) : null}
+                  <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed">
+                    {c.text}
                   </p>
-                ) : null}
-              </section>
+                </li>
+              ))}
+            </ul>
+            {detail.chunks_total > detail.chunks_preview.length ? (
+              <p className="text-[11px] text-muted-foreground">
+                {t("memoryGraph.documentChunksMore", {
+                  shown: detail.chunks_preview.length,
+                  total: detail.chunks_total,
+                })}
+              </p>
             ) : null}
           </div>
         ) : null}

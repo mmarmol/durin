@@ -2032,8 +2032,9 @@
     "documentForgetBody": "它会被归档并从搜索中移除——代理不会再展示它。你可以稍后重新导入。",
     "documentForgetCancel": "取消",
     "documentForgetConfirm": "忘记",
-    "documentOpenFull": "完整文本",
     "documentTab": "文档",
+    "documentFragmentsTab": "片段",
+    "documentFragmentsIntro": "文档为检索建立索引的方式——每个片段都是一个可检索的块，并带有其章节路径。",
     "documentOutline": "大纲",
     "documentPreamble": "前言",
     "documentNotDistilled": "尚未提炼——每夜 Dream 会对其进行摘要并生成种子实体。",
@@ -2044,7 +2045,6 @@
     "documentRelDistilledHint": "每夜 Dream 从文档内容中提取了这些实体——该文档正是围绕它们展开的。",
     "documentRelReferencedTitle": "引用此文档",
     "documentRelReferencedHint": "这些实体曾在对话中将此文档引用为来源——文档不一定是在描述它们本身（例如某位患者的检查使用了这篇论文作为参考）。",
-    "documentContent": "内容",
     "documentChunksMore": "显示 {{total}} 个分块中的 {{shown}} 个。",
     "entries": {
       "empty": "还没有条目引用此实体。",
