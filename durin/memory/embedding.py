@@ -340,10 +340,13 @@ class FastembedProvider(EmbeddingProvider):
     def warmup(cls, model: str | None = None) -> float:
         """Download (if missing) and load the model; return load duration ms.
 
-        Intended for the onboard wizard and for `AgentLoop` boot when
-        the user has just enabled memory: paying the ~18 s first-time
-        download here, while the user is actively waiting, is better
-        than paying it on the first tool call mid-conversation.
+        Intended for the onboard wizard (a one-shot process, so the
+        inline parent load is harmless there): paying the ~18 s
+        first-time download here, while the user is actively waiting,
+        is better than paying it on the first tool call
+        mid-conversation. Long-lived processes must warm up through
+        ``provider_from_config`` + ``embed()`` instead, so
+        ``isolation="process"`` keeps the model out of the parent.
 
         The loaded model is discarded — this is a side-effect call to
         populate the on-disk model cache. The next FastembedProvider
