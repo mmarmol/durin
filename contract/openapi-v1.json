@@ -5037,6 +5037,26 @@
         "title": "ResolveFlaggedRequest",
         "type": "object"
       },
+      "ResolveObservationCommand": {
+        "additionalProperties": false,
+        "description": "Resolve one OPEN observation: ``applied`` (handled) or ``declined``.",
+        "properties": {
+          "disposition": {
+            "title": "Disposition",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "disposition"
+        ],
+        "title": "ResolveObservationCommand",
+        "type": "object"
+      },
       "ResolveResult": {
         "description": "Outcome of a resolve action.",
         "properties": {
@@ -5824,6 +5844,104 @@
           "value"
         ],
         "title": "SkillModeCommand",
+        "type": "object"
+      },
+      "SkillObservation": {
+        "description": "One OPEN in-session observation logged against a skill.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "first_seen": {
+            "title": "First Seen",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "improvement": {
+            "title": "Improvement",
+            "type": "string"
+          },
+          "issue": {
+            "title": "Issue",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_seen": {
+            "title": "Last Seen",
+            "type": "string"
+          },
+          "principle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Principle"
+          },
+          "skill": {
+            "title": "Skill",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "skill",
+          "kind",
+          "issue",
+          "improvement",
+          "principle",
+          "count",
+          "first_seen",
+          "last_seen"
+        ],
+        "title": "SkillObservation",
+        "type": "object"
+      },
+      "SkillObservations": {
+        "description": "All OPEN skill observations.",
+        "properties": {
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/SkillObservation"
+            },
+            "title": "Observations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "observations"
+        ],
+        "title": "SkillObservations",
+        "type": "object"
+      },
+      "SkillObservationsQuery": {
+        "additionalProperties": false,
+        "description": "OPEN observations, optionally filtered to one skill ref.",
+        "properties": {
+          "skill": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Skill"
+          }
+        },
+        "title": "SkillObservationsQuery",
         "type": "object"
       },
       "SkillRejectCommand": {
@@ -10923,6 +11041,64 @@
           }
         },
         "summary": "Fetch one candidate to quarantine + scan",
+        "x-required-scope": "skills:write"
+      }
+    },
+    "/api/v1/skills/observations": {
+      "get": {
+        "operationId": "skills_observations",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillObservationsQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillObservations"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Open skill observations awaiting curation or manual resolution",
+        "x-required-scope": "skills:read"
+      }
+    },
+    "/api/v1/skills/observations/{id}/resolve": {
+      "post": {
+        "operationId": "skills_resolve_observation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveObservationCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Resolve an open observation (applied or declined)",
         "x-required-scope": "skills:write"
       }
     },

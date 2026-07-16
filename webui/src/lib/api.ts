@@ -2277,6 +2277,34 @@ export async function rejectSkillSuggestion(
   );
 }
 
+export type SkillObservation = components["schemas"]["SkillObservation"];
+
+export async function fetchSkillObservations(
+  token: string,
+  skill?: string,
+  base: string = "",
+): Promise<SkillObservation[]> {
+  const qs = skill ? `?skill=${encodeURIComponent(skill)}` : "";
+  const res = await request<{ observations: SkillObservation[] }>(
+    `${base}/api/v1/skills/observations${qs}`,
+    token,
+  );
+  return res.observations;
+}
+
+export async function resolveSkillObservation(
+  token: string,
+  id: number,
+  disposition: "applied" | "declined",
+  base: string = "",
+): Promise<{ ok: boolean }> {
+  return post<{ ok: boolean }>(
+    `${base}/api/v1/skills/observations/${id}/resolve`,
+    token,
+    { disposition },
+  );
+}
+
 export interface MemoryEdgeDetail {
   source: string;
   target: string;

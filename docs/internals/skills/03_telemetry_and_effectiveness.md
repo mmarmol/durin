@@ -250,7 +250,13 @@ them — there is no separate skills-specific telemetry sink.
   attributed to any installed skill). These read-model fields are *derived
   from* the skill-call and observation data the `skill.*` events also
   describe, not from the events themselves — the panel reads current sidecar
-  state rather than replaying the telemetry stream.
+  state rather than replaying the telemetry stream. Behind the count badge,
+  the skill detail pane lists the OPEN records themselves (issue, proposed
+  improvement, recurrence) from `GET /api/v1/skills/observations?skill=<name>`
+  and offers manual resolution via
+  `POST /api/v1/skills/observations/{id}/resolve` — `applied` marks the issue
+  handled, `declined` keeps the record as the curation judge's memory against
+  re-proposing it.
 - **`last_used_ms` is a disclosed approximation.** Session sidecars carry only
   an aggregated `derived.skill_calls` list, not a per-call timestamp, so the
   sidecar file's own mtime is the closest available signal for "when was this
@@ -262,10 +268,10 @@ them — there is no separate skills-specific telemetry sink.
   *applied* action into a Dream-feed item — `kind: "retired"` for a `retire`,
   `kind: "improved"` for every other verb — deep-linked to the named skill and
   surfaced through the same `GET /api/v1/memory/dream/digest` path as the
-  `memory.dream.*` events above. The other four `skill.*` events —
-  `skill.used`, `skill.observation_logged`, `skill.curation_run`, and
-  `skill.suggestion_resolved` — have no dedicated webui reader as of this
-  writing; they exist as a queryable telemetry stream (local JSONL) for offline
+  `memory.dream.*` events above. The other `skill.*` events —
+  `skill.used`, `skill.observation_logged`, `skill.curation_run`,
+  `skill.suggestion_resolved`, and `skill.observation_resolved` — have no
+  dedicated webui reader as of this writing; they exist as a queryable telemetry stream (local JSONL) for offline
   analysis of the loop's effectiveness, the same as many `memory.*` events that
   predate any webui surface for them.
 
@@ -278,6 +284,7 @@ them — there is no separate skills-specific telemetry sink.
 | `SkillCurationActionEvent` | `durin/telemetry/schema.py` | `{action, skill?, applied}` — one curation action attempt. |
 | `SkillCurationRunEvent` | `durin/telemetry/schema.py` | `{reviewed, applied, deferred, backfilled?}` — one curation pass summary. |
 | `SkillSuggestionResolvedEvent` | `durin/telemetry/schema.py` | `{skill, action, resolution}` — user's accept/reject of a manual-skill suggestion. |
+| `SkillObservationResolvedEvent` | `durin/telemetry/schema.py` | `{skill, kind, disposition}` — user's manual resolve/dismiss of an open observation. |
 | `MemoryDreamSkillExtractEvent` | `durin/telemetry/schema.py` | `{skills_touched, duration_ms?}` — pre-existing; one skill-extract pass summary. |
 | `MemoryDreamSkillSignalsEvent` | `durin/telemetry/schema.py` | `{proposed, logged, skills?}` — pre-existing; one hindsight-pass summary. |
 | `MemorySkillMissEvent` | `durin/telemetry/schema.py` | `{query, result_count, had_skill_candidate, iteration?, session_key?}` — pre-existing; a zero-result skill search. |
@@ -287,6 +294,7 @@ them — there is no separate skills-specific telemetry sink.
 | `curate_catalog` | `durin/agent/skill_curation.py` | Emits `skill.curation_action` per action and `skill.curation_run` once per pass. |
 | `_enrich_usage` | `durin/service/skills.py` | Server-side join of usage + observation counts onto the `GET /api/v1/skills` payload. |
 | `SkillsService.accept_suggestion` / `.reject_suggestion` | `durin/service/skills.py` | Emit `skill.suggestion_resolved` on user resolution of a Bandeja suggestion. |
+| `resolve_observation` | `durin/agent/skill_observations.py` | Emits `skill.observation_resolved` on the user's manual resolution of an observation. |
 | `discover_skill_signals` | `durin/agent/skill_signals.py` | Emits `memory.dream.skill_signals`; also drives `skill.observation_logged` via `log_observation`. |
 | `run_skill_extract_pass` | `durin/memory/dream_passes.py` | Emits `memory.dream.skill_extract`. |
 | `map_dream_event` | `durin/memory/dream_digest.py` | Maps `memory.dream.skill_extract` / `.skill_signals` (and other Dream events) into webui feed items. |

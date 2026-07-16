@@ -1481,6 +1481,21 @@
     "lastUsed": "dùng lần cuối {{when}}",
     "lastUsedApprox": "Ước tính — dựa trên hoạt động của phiên, không phải thời điểm gọi chính xác.",
     "openObservations": "{{count}} quan sát đang mở",
+    "observations": {
+      "title": "Quan sát đang mở",
+      "proposal": "Cải tiến đề xuất",
+      "recurred": "ghi nhận {{count}} lần · gần nhất {{date}}",
+      "loggedOn": "ghi nhận {{date}}",
+      "resolve": "Đánh dấu đã xử lý",
+      "dismiss": "Bỏ qua",
+      "dismissHint": "Các quan sát bị bỏ qua sẽ được ghi nhớ để quá trình giám tuyển không đề xuất lại.",
+      "kinds": {
+        "correction": "sửa lỗi",
+        "gap": "thiếu sót",
+        "improvement": "cải tiến",
+        "simplify": "đơn giản hóa"
+      }
+    },
     "security": "Bảo mật",
     "binaryFile": "Tệp nhị phân — không thể chỉnh sửa.",
     "lintError": "Lỗi cú pháp {{lang}} (dòng {{line}}): {{detail}}",

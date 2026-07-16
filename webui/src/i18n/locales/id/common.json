@@ -1481,6 +1481,21 @@
     "lastUsed": "terakhir dipakai {{when}}",
     "lastUsedApprox": "Perkiraan — berdasarkan aktivitas sesi, bukan waktu panggilan yang tepat.",
     "openObservations": "{{count}} observasi terbuka",
+    "observations": {
+      "title": "Observasi terbuka",
+      "proposal": "Perbaikan yang diusulkan",
+      "recurred": "tercatat {{count}}× · terakhir {{date}}",
+      "loggedOn": "dicatat {{date}}",
+      "resolve": "Tandai ditangani",
+      "dismiss": "Abaikan",
+      "dismissHint": "Observasi yang diabaikan akan diingat agar kurasi tidak mengusulkannya lagi.",
+      "kinds": {
+        "correction": "koreksi",
+        "gap": "celah",
+        "improvement": "perbaikan",
+        "simplify": "sederhanakan"
+      }
+    },
     "security": "Keamanan",
     "binaryFile": "File biner — tidak dapat diedit.",
     "lintError": "Kesalahan sintaks {{lang}} (baris {{line}}): {{detail}}",

@@ -1384,6 +1384,14 @@ class SkillSuggestionResolvedEvent(TypedDict):
     resolution: str  # "accepted" | "rejected"
 
 
+class SkillObservationResolvedEvent(TypedDict):
+    """An OPEN skill observation was resolved by hand (webui/API path)."""
+
+    skill: str
+    kind: str
+    disposition: str  # "applied" | "declined"
+
+
 class WorkflowImproveRecommendedEvent(TypedDict):
     """The improve pass queued a proposal (prompt / command / script_file) as
     a recommendation — either a MANUAL-mode workflow, or an AUTO-mode one where
@@ -1620,6 +1628,7 @@ EVENTS: dict[str, type] = {
     "loops.event_matched": LoopsEventMatchedEvent,
     "skill.curation_run": SkillCurationRunEvent,
     "skill.suggestion_resolved": SkillSuggestionResolvedEvent,
+    "skill.observation_resolved": SkillObservationResolvedEvent,
 }
 
 
@@ -1710,4 +1719,5 @@ __all__ = [
     "SkillCurationActionEvent",
     "SkillCurationRunEvent",
     "SkillSuggestionResolvedEvent",
+    "SkillObservationResolvedEvent",
 ]

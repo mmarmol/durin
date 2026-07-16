@@ -1481,6 +1481,21 @@
     "lastUsed": "last used {{when}}",
     "lastUsedApprox": "Approximate — based on session activity, not the exact call time.",
     "openObservations": "{{count}} open observation(s)",
+    "observations": {
+      "title": "Open observations",
+      "proposal": "Proposed improvement",
+      "recurred": "seen {{count}}× · last {{date}}",
+      "loggedOn": "logged {{date}}",
+      "resolve": "Mark handled",
+      "dismiss": "Dismiss",
+      "dismissHint": "Dismissed observations are remembered so curation won't re-propose them.",
+      "kinds": {
+        "correction": "correction",
+        "gap": "gap",
+        "improvement": "improvement",
+        "simplify": "simplify"
+      }
+    },
     "security": "Security",
     "binaryFile": "Binary file — not editable.",
     "lintError": "{{lang}} syntax error (line {{line}}): {{detail}}",

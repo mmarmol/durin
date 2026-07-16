@@ -1481,6 +1481,21 @@
     "lastUsed": "最終使用 {{when}}",
     "lastUsedApprox": "概算です — 正確な呼び出し時刻ではなく、セッションの活動を基にしています。",
     "openObservations": "未対応の指摘 {{count}} 件",
+    "observations": {
+      "title": "未対応の観察記録",
+      "proposal": "改善案",
+      "recurred": "{{count}}回記録 · 最終 {{date}}",
+      "loggedOn": "{{date}} に記録",
+      "resolve": "対応済みにする",
+      "dismiss": "却下",
+      "dismissHint": "却下した観察記録は記憶され、キュレーションが再提案しなくなります。",
+      "kinds": {
+        "correction": "修正",
+        "gap": "不足",
+        "improvement": "改善",
+        "simplify": "簡素化"
+      }
+    },
     "security": "セキュリティ",
     "binaryFile": "バイナリファイル — 編集できません。",
     "lintError": "{{lang}} 構文エラー（{{line}} 行目）: {{detail}}",

@@ -11,6 +11,7 @@ from durin.agent.skill_observations import (
     declined_observations,
     log_observation,
     open_observations,
+    resolve_observation,
     retire_principle,
 )
 
@@ -261,3 +262,59 @@ def test_log_observation_dedup_bump_emits_event(tmp_path, monkeypatch):
     assert len(logged) == 1
     assert logged[0] == {"skill": "deploy-gateway", "kind": "correction",
                           "dedup_bumped": True, "count": 2}
+
+
+def test_resolve_observation_applied_and_declined(tmp_path):
+    ws = tmp_path / "ws"
+    _log(ws, issue="a")
+    _log(ws, issue="b")
+    res = resolve_observation(ws, 1, "applied")
+    assert res["ok"] is True and res["id"] == 1 and res["commit"]
+    res = resolve_observation(ws, 2, "declined")
+    assert res["ok"] is True
+    assert open_observations(ws) == []
+    assert [r["id"] for r in declined_observations(ws)] == [2]
+
+
+def test_resolve_observation_stamps_resolved_at(tmp_path):
+    ws = tmp_path / "ws"
+    _log(ws)
+    resolve_observation(ws, 1, "applied")
+    from durin.agent.skill_observations import _active_path, _read_records
+    rec = _read_records(_active_path(ws))[0]
+    assert rec["status"] == "APPLIED"
+    assert rec["resolved_at"]
+
+
+def test_resolve_observation_unknown_id_errors(tmp_path):
+    ws = tmp_path / "ws"
+    _log(ws)
+    assert "error" in resolve_observation(ws, 99, "applied")
+    assert len(open_observations(ws)) == 1
+
+
+def test_resolve_observation_already_resolved_errors(tmp_path):
+    ws = tmp_path / "ws"
+    _log(ws)
+    resolve_observation(ws, 1, "declined")
+    assert "error" in resolve_observation(ws, 1, "applied")
+
+
+def test_resolve_observation_rejects_bad_disposition(tmp_path):
+    ws = tmp_path / "ws"
+    _log(ws)
+    assert "error" in resolve_observation(ws, 1, "keep")
+    assert len(open_observations(ws)) == 1
+
+
+def test_resolve_observation_emits_event(tmp_path, monkeypatch):
+    import durin.agent.tools._telemetry as tel
+    events = []
+    monkeypatch.setattr(tel, "emit_tool_event",
+                        lambda name, data: events.append((name, data)))
+    ws = tmp_path / "ws"
+    _log(ws)
+    resolve_observation(ws, 1, "declined")
+    resolved = [d for n, d in events if n == "skill.observation_resolved"]
+    assert resolved == [{"skill": "deploy-gateway", "kind": "correction",
+                         "disposition": "declined"}]

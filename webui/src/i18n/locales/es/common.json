@@ -1300,6 +1300,21 @@
     "lastUsed": "último uso {{when}}",
     "lastUsedApprox": "Aproximado — basado en actividad de sesión, no en el momento exacto de uso.",
     "openObservations": "{{count}} observación(es) abiertas",
+    "observations": {
+      "title": "Observaciones abiertas",
+      "proposal": "Mejora propuesta",
+      "recurred": "vista {{count}}× · última {{date}}",
+      "loggedOn": "registrada {{date}}",
+      "resolve": "Marcar atendida",
+      "dismiss": "Descartar",
+      "dismissHint": "Las observaciones descartadas se recuerdan para que la curación no vuelva a proponerlas.",
+      "kinds": {
+        "correction": "corrección",
+        "gap": "brecha",
+        "improvement": "mejora",
+        "simplify": "simplificar"
+      }
+    },
     "security": "Seguridad",
     "binaryFile": "Archivo binario — no editable.",
     "lintError": "Error de sintaxis {{lang}} (línea {{line}}): {{detail}}",
