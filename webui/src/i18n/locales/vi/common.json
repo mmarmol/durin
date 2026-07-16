@@ -1835,7 +1835,9 @@
       "saving": "Đang lưu…",
       "stored": "Đã lưu — giá trị không bao giờ đến mô hình",
       "alreadyStored": "Đã lưu sẵn — không cần làm gì thêm",
-      "hint": "Lưu thẳng vào kho secret của durin; giá trị không bao giờ đến mô hình hay cuộc trò chuyện."
+      "hint": "Lưu thẳng vào kho secret của durin; giá trị không bao giờ đến mô hình hay cuộc trò chuyện.",
+      "updateHint": "Thay thế giá trị đã lưu — service, scope và mô tả giữ nguyên.",
+      "replace": "Thay thế"
     },
     "toolSingle": "Đang dùng một công cụ",
     "toolMany": "Đã dùng {{count}} công cụ",

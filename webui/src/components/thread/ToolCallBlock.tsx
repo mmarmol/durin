@@ -283,6 +283,11 @@ export function RequestSecretPanel({ event }: { event: ToolProgressEvent }) {
   const service = argString(event.arguments, "service") ?? "";
   const purpose = argString(event.arguments, "purpose") ?? "";
   const alreadyStored = resultText(event.result).includes("already exists");
+  // Replace mode: the tool degrades update=true to the create flow when the
+  // secret does not exist — its create-flow result contains "is not stored".
+  const isUpdate =
+    (event.arguments as Record<string, unknown> | undefined)?.update === true &&
+    !resultText(event.result).includes("is not stored");
 
   const [value, setValue] = useState("");
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -293,7 +298,9 @@ export function RequestSecretPanel({ event }: { event: ToolProgressEvent }) {
     setState("saving");
     setError("");
     try {
-      await actions.storeSecret({ name, service, value, scope: ["exec"] });
+      await actions.storeSecret(
+        isUpdate ? { name, value, rotate: true } : { name, service, value, scope: ["exec"] },
+      );
       setValue("");
       setState("saved");
     } catch (err) {
@@ -310,6 +317,11 @@ export function RequestSecretPanel({ event }: { event: ToolProgressEvent }) {
       </div>
       {purpose && (
         <div className="text-[11.5px] text-muted-foreground">{purpose}</div>
+      )}
+      {isUpdate && !alreadyStored && (
+        <div className="text-[11.5px] text-muted-foreground">
+          {t("message.reqSecret.updateHint")}
+        </div>
       )}
       {alreadyStored ? (
         <div className="text-[11.5px] text-emerald-600/90 dark:text-emerald-400/90">
@@ -350,7 +362,9 @@ export function RequestSecretPanel({ event }: { event: ToolProgressEvent }) {
             >
               {state === "saving"
                 ? t("message.reqSecret.saving")
-                : t("message.reqSecret.save")}
+                : isUpdate
+                  ? t("message.reqSecret.replace")
+                  : t("message.reqSecret.save")}
             </button>
           </div>
           <div className="text-[10.5px] text-muted-foreground">
@@ -362,7 +376,9 @@ export function RequestSecretPanel({ event }: { event: ToolProgressEvent }) {
         </>
       ) : (
         <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] text-cyan-500/90">
-          $ durin secret set {name} --service {service} --scope exec
+          {isUpdate
+            ? `$ durin secret set ${name}`
+            : `$ durin secret set ${name} --service ${service} --scope exec`}
         </pre>
       )}
     </div>
