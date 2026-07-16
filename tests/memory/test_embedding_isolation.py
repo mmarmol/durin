@@ -61,3 +61,47 @@ def test_inline_default_batch_size_is_32_not_library_256():
         provider._model = fake
         provider.embed(["x"])
     assert fake.calls[0]["batch_size"] == 32
+
+
+def test_process_isolation_parity_with_inline():
+    """Same model, same texts → same vectors, whether embedded in-process
+    or in the worker subprocess. Downloads/loads the real model twice —
+    skipped wherever the [memory] extra is absent (CI)."""
+    pytest.importorskip("fastembed")
+    texts = ["hello world", "durin memory", "embedding parity"]
+    inline = FastembedProvider(isolation="inline")
+    proc = FastembedProvider(isolation="process", recycle_batches=64)
+    v_inline = inline.embed(texts)
+    v_proc = proc.embed(texts)
+    assert len(v_inline) == len(v_proc) == 3
+    for a, b in zip(v_inline, v_proc):
+        assert a == pytest.approx(b, abs=1e-6)
+
+
+def test_worker_recycles_after_max_batches():
+    """recycle_batches=1 → every embed call lands in a fresh child, which
+    is what bounds the arena ratchet."""
+    pytest.importorskip("fastembed")
+    from durin.memory import embedding_worker
+
+    provider = FastembedProvider(isolation="process", recycle_batches=1)
+    pool = provider._ensure_pool()
+    pid_a = pool.submit(embedding_worker.worker_pid).result()
+    pid_b = pool.submit(embedding_worker.worker_pid).result()
+    assert pid_a != pid_b
+
+
+def test_process_mode_falls_back_inline_on_pool_failure(monkeypatch, caplog):
+    with _inject_fake_fastembed():
+        provider = FastembedProvider(isolation="process")
+    fake = FakeModel()
+    provider._model = fake
+
+    def boom():
+        raise OSError("spawn refused")
+
+    monkeypatch.setattr(provider, "_ensure_pool", boom)
+    out = provider.embed(["a", "b"])
+    assert len(out) == 2
+    assert fake.calls and fake.calls[0]["batch_size"] == 32
+    assert provider._isolation == "inline"  # permanent for this process

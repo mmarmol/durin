@@ -33,11 +33,15 @@ than guessing.
 
 from __future__ import annotations
 
+import multiprocessing
 import threading
 import time
 import warnings
 from abc import ABC, abstractmethod
+from concurrent.futures import ProcessPoolExecutor
 from typing import Any
+
+from loguru import logger
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.extras import ensure_or_note
@@ -133,6 +137,22 @@ def _register_custom_models() -> None:
                 size_in_gb=kwargs.get("size_in_gb", 0.0),
             )
             _REGISTERED_CUSTOM.add(model_id)
+
+
+def _rss_bytes() -> int | None:
+    """Current RSS of this process (Linux); None where /proc is absent.
+
+    Deliberately not psutil — no new dependency for one gauge. macOS dev
+    machines just omit the field; the deploy target is Linux.
+    """
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return None
 
 
 # Cached catalog from fastembed.TextEmbedding.list_supported_models().
@@ -340,26 +360,73 @@ class FastembedProvider(EmbeddingProvider):
         """
         if not texts:
             return []
+        t0 = time.monotonic()
+        if self._isolation == "process":
+            try:
+                from durin.memory import embedding_worker
+
+                pool = self._ensure_pool()
+                out = pool.submit(
+                    embedding_worker.embed_batch, texts, self._batch_size
+                ).result()
+                self._emit_embed_event(len(texts), t0)
+                return out
+            except Exception:
+                # Worker unavailable (spawn refused, child OOM-killed,
+                # broken pool). Embedding must keep working — degrade to
+                # inline for the rest of this process and say so loudly:
+                # the operator loses arena containment, not the feature.
+                logger.exception(
+                    "embedding worker failed — falling back to inline for "
+                    "the life of this process"
+                )
+                self._isolation = "inline"
+                self._pool = None
         if self._model is None:
             with self._load_lock:
                 if self._model is None:
                     self._load()
         assert self._model is not None
-        t0 = time.monotonic()
-        # fastembed.embed() returns an iterator of numpy arrays.
         out = [
             list(map(float, vec))
             for vec in self._model.embed(texts, batch_size=self._batch_size)
         ]
+        self._emit_embed_event(len(texts), t0)
+        return out
+
+    def _emit_embed_event(self, n_texts: int, t0: float) -> None:
         emit_tool_event(
             "memory.embedding.embed",
             {
                 "model": self._model_name,
-                "batch_size": len(texts),
+                "batch_size": n_texts,
                 "duration_ms": (time.monotonic() - t0) * 1000.0,
+                "isolation": self._isolation,
+                "rss_bytes": _rss_bytes(),
             },
         )
-        return out
+
+    def _ensure_pool(self) -> ProcessPoolExecutor:
+        """Lazily create the single-worker embedding pool.
+
+        spawn (not fork): the gateway holds asyncio loops, sqlite handles
+        and loguru sinks a forked child must not inherit. One worker keeps
+        ONNX single-instance; max_tasks_per_child recycles it so the
+        arena's high-water mark is periodically returned to the OS.
+        """
+        if self._pool is None:
+            with self._load_lock:
+                if self._pool is None:
+                    from durin.memory import embedding_worker
+
+                    self._pool = ProcessPoolExecutor(
+                        max_workers=1,
+                        mp_context=multiprocessing.get_context("spawn"),
+                        initializer=embedding_worker.init_worker,
+                        initargs=(self._model_name,),
+                        max_tasks_per_child=self._recycle_batches,
+                    )
+        return self._pool
 
     def embed_passages(self, texts: list[str]) -> list[list[float]]:
         """Embed documents for storage. Applies ``passage: `` prefix
