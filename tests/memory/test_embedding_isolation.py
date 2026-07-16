@@ -170,3 +170,20 @@ def test_task_level_error_propagates_without_flipping_isolation():
     assert provider._isolation == "process"
     assert provider._pool is stub
     assert stub.shutdown_calls == []
+
+
+def test_provider_from_config_reads_all_knobs():
+    from durin.config.schema import Config
+    from durin.memory.embedding import provider_from_config
+
+    cfg = Config()
+    cfg.memory.embedding.batch_size = 8
+    cfg.memory.embedding.isolation = "inline"
+    cfg.memory.embedding.worker_recycle_batches = 5
+    p = provider_from_config(cfg)
+    assert p._batch_size == 8
+    assert p._isolation == "inline"
+    assert p._recycle_batches == 5
+    # explicit model override wins over cfg
+    p2 = provider_from_config(cfg, model=p.model_name)
+    assert p2.model_name == p.model_name

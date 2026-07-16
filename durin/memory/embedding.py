@@ -52,6 +52,7 @@ __all__ = [
     "FastembedProvider",
     "list_supported_models",
     "model_dimensions",
+    "provider_from_config",
 ]
 
 
@@ -499,3 +500,17 @@ class FastembedProvider(EmbeddingProvider):
                 "duration_ms": (time.monotonic() - t0) * 1000.0,
             },
         )
+
+
+def provider_from_config(cfg: Any, *, model: str | None = None) -> FastembedProvider:
+    """Build the provider from ``cfg.memory.embedding`` — the single place
+    production code picks up batch bounding and process isolation. Call
+    sites that already resolved a model name pass it via ``model``.
+    """
+    e = cfg.memory.embedding
+    return FastembedProvider(
+        model=model or e.model or None,
+        batch_size=e.batch_size,
+        isolation=e.isolation,
+        recycle_batches=e.worker_recycle_batches,
+    )

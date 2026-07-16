@@ -176,13 +176,14 @@ def _rebuild_vector_for_model_change(workspace: Path, model: str, meta) -> None:
         old, model,
     )
     try:
-        from durin.memory.embedding import FastembedProvider
+        from durin.config.loader import load_config
+        from durin.memory.embedding import provider_from_config
         from durin.memory.vector_index import VectorIndex, vector_index_available
     except ImportError:
         return
     if not vector_index_available():
         return
-    vi = VectorIndex(workspace, FastembedProvider(model=model))
+    vi = VectorIndex(workspace, provider_from_config(load_config(), model=model))
     count = vi.rebuild_from_workspace()
     _emit_rebuild(
         target="vector", indexed=count, errors=0, duration_ms=0.0,
