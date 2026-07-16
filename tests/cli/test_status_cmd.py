@@ -120,6 +120,24 @@ def test_status_shows_dashboard_url_and_web_token(config: Config, fake_home: Pat
     assert labels["Web token"] == "secret-token"
 
 
+def test_status_web_token_is_the_effective_bootstrap_secret(config: Config, fake_home: Path) -> None:
+    """The webui login gate accepts token_issue_secret WITH PRECEDENCE over the
+    static token (websocket bootstrap: `token_issue_secret or token`). Status
+    must show the value the login form actually accepts — showing the static
+    token on a deployment that also sets token_issue_secret hands the operator
+    a credential the gate rejects."""
+    config.gateway.webui_enabled = True
+    extra = config.channels.__pydantic_extra__
+    extra["websocket"] = {
+        "enabled": True,
+        "token": "static-token",
+        "token_issue_secret": "issue-secret-wins",
+    }
+
+    rows = _status_sections(config, _config_path(fake_home), None)
+    assert dict(rows)["Web token"] == "issue-secret-wins"
+
+
 def test_status_resolves_secret_ref_web_token(config: Config, fake_home: Path) -> None:
     """The websocket token may be stored as a ${secret:} reference (same as
     any channel credential) — status must resolve it for display the same

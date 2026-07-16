@@ -33,8 +33,9 @@ The browser dashboard is served by `durin gateway` when
 `config.gateway.webui_enabled` is true (default). `durin gateway status`
 prints the URL. `durin status` also shows a `Dashboard` row (the same URL —
 `gateway.public_url` when set, otherwise the websocket channel's host:port)
-and, when the websocket channel has a token configured, a `Web token` row for
-pasting into the webui login form.
+and, when the websocket channel has a login credential configured, a
+`Web token` row for pasting into the webui login form — the effective value
+the login gate accepts (`token_issue_secret` when set, otherwise `token`).
 
 ## Secrets & memory
 

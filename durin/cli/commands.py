@@ -2960,15 +2960,18 @@ def _status_data(
         from durin.utils.public_url import dashboard_url
 
         ws_section = getattr(config.channels, "websocket", None)
-        tok = (
-            (
-                ws_section.get("token")
-                if isinstance(ws_section, dict)
-                else getattr(ws_section, "token", None)
-            )
-            if ws_section is not None
-            else None
-        )
+
+        def _ws_value(key: str) -> Any:
+            if ws_section is None:
+                return None
+            if isinstance(ws_section, dict):
+                return ws_section.get(key)
+            return getattr(ws_section, key, None)
+
+        # The webui login gate accepts token_issue_secret with PRECEDENCE
+        # over the static token (`token_issue_secret or token` at bootstrap),
+        # so show the value the login form actually accepts.
+        tok = _ws_value("token_issue_secret") or _ws_value("token")
         if tok:
             # The stored config value may be a ${secret:NAME} reference (same
             # as any channel credential) — resolve it for display the same
