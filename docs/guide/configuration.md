@@ -648,6 +648,17 @@ HTTP gateway and embedded web dashboard settings.
 | `port` | `18790` | Gateway listen port |
 | `daemon` | `false` | Run detached with a PID file and log file; easier to debug when off |
 | `webui_enabled` | `true` | Auto-enable the websocket channel so the embedded web dashboard is served |
+| `public_url` | `null` | How this gateway is reached from the outside (e.g. `https://durin.tailXXXX.ts.net`) |
+
+Set `public_url` when the webui is reached over a tailnet, VPN, or public
+HTTPS domain rather than `localhost` or a plain `host:port`. It has two
+consumers: the redirect base for MCP OAuth sign-ins started from the webui
+(so the provider's callback lands back on a URL it can actually reach), and
+the `Dashboard` URL shown by `durin status`. Leaving it unset does not break
+either consumer — MCP OAuth sign-ins fall back to the browser's own origin,
+and the status dashboard URL falls back to the websocket channel's
+`host:port`. CLI `durin mcp login` is unaffected either way; it always uses
+its own `127.0.0.1` loopback callback.
 
 ---
 
