@@ -1,7 +1,10 @@
 """Embedding worker — the child-process side of isolation="process".
 
-Runs inside a single-worker ``ProcessPoolExecutor``. The parent never
-loads the ONNX model in this mode; the child loads it once in
+Runs inside a single-worker ``ProcessPoolExecutor``. In process mode the
+parent never loads the ONNX model — including gateway boot warmup, which
+routes through this worker via ``FastembedProvider.embed()``; the inline
+fallback (pool infrastructure failure) is the only path where the parent
+loads the model itself. The child loads the model once in
 ``init_worker`` and is recycled by the pool (``max_tasks_per_child``)
 so the ONNX CPU arena — which grows to the peak batch and never returns
 memory to the OS — is periodically reclaimed with the process.
