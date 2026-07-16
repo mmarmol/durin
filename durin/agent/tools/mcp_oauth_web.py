@@ -198,9 +198,13 @@ class McpOauthFlows:
                 ensure_registration_covers,
             )
 
-            await ensure_registration_covers(
-                SecretsTokenStorage(server, server_url=cfg.url or None), oc, redirect_uri
-            )
+            try:
+                await ensure_registration_covers(
+                    SecretsTokenStorage(server, server_url=cfg.url or None), oc, redirect_uri
+                )
+            except Exception:  # noqa: BLE001 — must not leak the registered callback state
+                callback.stop()
+                raise
 
         loop = asyncio.get_running_loop()
         url_future: asyncio.Future = loop.create_future()

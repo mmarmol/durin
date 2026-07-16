@@ -290,3 +290,30 @@ async def test_start_with_redirect_base_uses_gateway_callback() -> None:
     assert resolve_gateway_oauth_callback(state, code="c0de") is True
     await flows._pending["o"].task
     assert not flows.is_pending("o")
+
+
+async def test_start_gateway_registration_failure_does_not_leak_callback_state(
+    monkeypatch,
+) -> None:
+    """GatewayCallback.start() registers the state in the module registry
+    before ensure_registration_covers runs. If that check raises, the entry
+    must not leak in _gateway_callbacks for the rest of the process."""
+    import durin.agent.tools.mcp_oauth as mo
+    from durin.agent.tools.mcp_oauth_web import _gateway_callbacks
+
+    async def boom(storage, oc, redirect_uri):
+        raise RuntimeError("registration check failed")
+
+    monkeypatch.setattr(mo, "ensure_registration_covers", boom)
+
+    async def driver(provider, cfg):
+        raise AssertionError("driver must not run; registration check failed first")
+
+    flows = McpOauthFlows(driver=driver)
+
+    before = len(_gateway_callbacks)
+    with pytest.raises(RuntimeError, match="registration check failed"):
+        await flows.start("o", CFG, redirect_base="https://durin.tail9e5f5d.ts.net")
+
+    assert len(_gateway_callbacks) == before
+    assert not flows.is_pending("o")
