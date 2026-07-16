@@ -114,7 +114,8 @@ and never returns that memory to the OS. Two config knobs on
 
 Production code obtains the provider via
 `durin.memory.embedding.provider_from_config`, which reads these knobs;
-constructing `FastembedProvider` directly is reserved for tests.
+constructing `FastembedProvider` directly is reserved for tests and
+benchmark scripts.
 
 ### Embedding text composers
 
@@ -179,7 +180,7 @@ The indexer's third pass in `rebuild_fts_index` walks `sessions/*.md` and yields
 | `EmbeddingProvider` | `durin/memory/embedding.py` | Abstract base: `embed`, `embed_passages`, `embed_query`. Semantic surface for storage vs. retrieval contexts. |
 | `FastembedProvider` | `durin/memory/embedding.py` | ONNX embedding via fastembed. Validates model at construction. Applies E5 prefix in `embed_passages` / `embed_query` when `_is_e5_family` is true. With `isolation=process` (default), `embed()` runs in a recyclable `ProcessPoolExecutor` worker so the ONNX CPU arena — which never returns memory to the OS — is reclaimed when the worker recycles; falls back to `inline` (in-process, model held for process lifetime) for the rest of the process if the pool cannot start or breaks. |
 | `embedding_worker` | `durin/memory/embedding_worker.py` | Child-process side of `isolation=process`: `init_worker` loads the model once per worker, `embed_batch` embeds, `worker_pid` is a test/diagnostic hook. Module-level functions so they're picklable by the `spawn` start method. |
-| `provider_from_config` | `durin/memory/embedding.py` | Factory: builds `FastembedProvider` from `memory.embedding.*` config (`model`, `batch_size`, `isolation`, `worker_recycle_batches`). The production call-site pattern — direct `FastembedProvider(...)` construction is reserved for tests. |
+| `provider_from_config` | `durin/memory/embedding.py` | Factory: builds `FastembedProvider` from `memory.embedding.*` config (`model`, `batch_size`, `isolation`, `worker_recycle_batches`). The production call-site pattern — direct `FastembedProvider(...)` construction is reserved for tests and benchmark scripts. |
 | `IndexMeta` | `durin/memory/index_meta.py` | Frozen dataclass: `schema_version`, `embedding_model_id`, `last_full_rebuild`, `previous_models`. Persisted atomically to `<workspace>/.durin/index/meta.json`. |
 | `CURRENT_SCHEMA_VERSION` | `durin/memory/index_meta.py` | Integer constant. Bumped when indexer row shape or derivation rules change incompatibly. |
 | `rebuild_fts_index` | `durin/memory/indexer.py` | Wipes and re-derives the entire FTS5 database from `walk_memory` + skill walk + session turn walk. Returns `IndexStats(indexed, errors)`. |
