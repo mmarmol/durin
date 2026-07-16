@@ -63,16 +63,32 @@ class _FakeTextEmbedding:
 @contextmanager
 def _stub_fastembed():
     import durin.memory.embedding as embedding_module
+    from durin.config import loader as config_loader
 
     embedding_module._CATALOG_CACHE = None
     fake = types.ModuleType("fastembed")
     fake.TextEmbedding = _FakeTextEmbedding  # type: ignore[attr-defined]
     sys.modules["fastembed"] = fake
+
+    # MemoryStoreTool / MemorySearchTool build their provider via
+    # provider_from_config(load_config(), ...), which defaults isolation to
+    # "process" — a real subprocess that doesn't see this sys.modules stub
+    # (separate process) and would embed with the real fastembed model
+    # instead. Force inline so the fake stays authoritative end-to-end.
+    real_load_config = config_loader.load_config
+
+    def _inline_load_config(*args, **kwargs):
+        cfg = real_load_config(*args, **kwargs)
+        cfg.memory.embedding.isolation = "inline"
+        return cfg
+
+    config_loader.load_config = _inline_load_config
     try:
         yield
     finally:
         sys.modules.pop("fastembed", None)
         embedding_module._CATALOG_CACHE = None
+        config_loader.load_config = real_load_config
 
 
 # ---------------------------------------------------------------------------

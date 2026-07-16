@@ -180,10 +180,11 @@ def test_provider_from_config_reads_all_knobs():
     cfg.memory.embedding.batch_size = 8
     cfg.memory.embedding.isolation = "inline"
     cfg.memory.embedding.worker_recycle_batches = 5
-    p = provider_from_config(cfg)
-    assert p._batch_size == 8
-    assert p._isolation == "inline"
-    assert p._recycle_batches == 5
-    # explicit model override wins over cfg
-    p2 = provider_from_config(cfg, model=p.model_name)
-    assert p2.model_name == p.model_name
+    with _inject_fake_fastembed():
+        p = provider_from_config(cfg)
+        assert p._batch_size == 8
+        assert p._isolation == "inline"
+        assert p._recycle_batches == 5
+        # explicit model override wins over cfg
+        p2 = provider_from_config(cfg, model=p.model_name)
+        assert p2.model_name == p.model_name
