@@ -370,10 +370,10 @@ class HealthChecker:
             # path on next memory_store will handle it.
             return False
         from durin.config.loader import load_config
-        from durin.memory.embedding import FastembedProvider
+        from durin.memory.embedding import provider_from_config
 
         cfg = load_config()
-        provider = FastembedProvider(model=cfg.memory.embedding.model)
+        provider = provider_from_config(cfg)
         vi = VectorIndex(self._workspace, provider)
         n = vi.rebuild_from_workspace()
         logger.info(

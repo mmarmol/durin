@@ -860,10 +860,10 @@ def forget_entry(workspace: Path, uri: str) -> dict[str, Any]:
             and getattr(cfg.memory, "enabled", False)
             and cfg.memory.embedding.model
         ):
-            from durin.memory.embedding import FastembedProvider
+            from durin.memory.embedding import provider_from_config
             vi = VectorIndex(
                 workspace,
-                FastembedProvider(model=cfg.memory.embedding.model),
+                provider_from_config(cfg),
             )
             vi.delete_by_id(entry_id)
     except Exception:  # noqa: BLE001

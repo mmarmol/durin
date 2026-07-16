@@ -148,10 +148,11 @@ def cmd_reindex(
                 # a later model swap.
                 try:
                     from durin.config.loader import load_config
-                    from durin.memory.embedding import FastembedProvider
+                    from durin.memory.embedding import provider_from_config
                     from durin.memory.index_meta import record_built_model
-                    model = load_config().memory.embedding.model
-                    provider = FastembedProvider(model=model)
+                    cfg = load_config()
+                    model = cfg.memory.embedding.model
+                    provider = provider_from_config(cfg)
                     vi = VectorIndex(workspace, provider)
                     count = vi.rebuild_from_workspace()
                     record_built_model(workspace, model)
@@ -576,9 +577,9 @@ def _build_vector_index_optional() -> Any:
     cfg = load_config()
     try:
         if cfg.memory.enabled and vector_index_available():
-            from durin.memory.embedding import FastembedProvider
+            from durin.memory.embedding import provider_from_config
 
-            provider = FastembedProvider(model=cfg.memory.embedding.model)
+            provider = provider_from_config(cfg)
             return VectorIndex(_workspace_root(), provider)
     except Exception as exc:  # noqa: BLE001
         console.print(

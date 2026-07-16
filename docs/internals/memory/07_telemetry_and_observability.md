@@ -160,8 +160,8 @@ These fire during the refine pass and via the manual `durin memory` commands:
 
 ### Embedding events
 
-- **`memory.embedding.load`** — model loaded into memory, once per process lifetime. Fields: `model`, `duration_ms`.
-- **`memory.embedding.embed`** — one per embedding batch. Fields: `model`, `batch_size`, `duration_ms`.
+- **`memory.embedding.load`** — model loaded into memory, once per process lifetime. Fields: `model`, `duration_ms`. Fires only for inline (parent-process) loads; in process-isolation mode the child's model load is not individually observable from the parent.
+- **`memory.embedding.embed`** — one per embedding batch. Fields: `model`, `batch_size` (number of texts in the call, not the per-run bound), `duration_ms`, `isolation` (`process` | `inline`, reflecting the mode actually used after any fallback), `rss_bytes` (parent-process RSS at emit time; `null` off-Linux).
 
 ### Hot-layer failure
 

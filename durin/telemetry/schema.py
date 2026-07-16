@@ -673,6 +673,8 @@ class MemoryEmbeddingEmbedEvent(TypedDict):
     model: str
     batch_size: int
     duration_ms: float
+    isolation: str
+    rss_bytes: int | None
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 
