@@ -53,7 +53,7 @@ class _FakeTextEmbedding:
     def __init__(self, model_name=None, **_):
         self.model_name = model_name
 
-    def embed(self, texts):
+    def embed(self, texts, batch_size=256, **_kwargs):
         # Embed by first character so search results are predictable.
         for text in texts:
             seed = float(ord(text[0])) if text else 0.0

@@ -67,7 +67,7 @@ class _FakeTextEmbedding:
     def __init__(self, model_name=None, **_):
         self.model_name = model_name
 
-    def embed(self, texts):
+    def embed(self, texts, batch_size=256, **_kwargs):
         for text in texts:
             first = float(ord(text[0])) if text else 0.0
             length = float(len(text))
