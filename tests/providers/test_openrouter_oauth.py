@@ -10,6 +10,16 @@ import httpx
 from durin.providers import openrouter_oauth as oro
 
 
+def _state_from_authorize_url(url: str) -> str:
+    """Dig the gateway callback's ``state`` out of the (double-encoded)
+    authorize URL: the outer query carries ``callback_url``, whose own query
+    carries ``state``."""
+    outer = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    callback_url = outer["callback_url"][0]
+    inner = urllib.parse.parse_qs(urllib.parse.urlparse(callback_url).query)
+    return inner["state"][0]
+
+
 def _isolate_home(tmp_path, monkeypatch):
     """Point DURIN_HOME at tmp and drop the module-global secret-store cache
     so the test can't read a store loaded under a previous test's home."""
@@ -146,3 +156,70 @@ def test_disconnect_keeps_foreign_secret_refs(tmp_path, monkeypatch):
     assert load_config().providers.openrouter.api_key is None
     # The user's own secret is not durin-oauth-managed → left in the store.
     assert resolve_secret("${secret:MY_OWN_OR_KEY}") == "sk-or-v1-manual"
+
+
+# ---------------------------------------------------------------------------
+# Gateway callback login (remote one-click connect)
+# ---------------------------------------------------------------------------
+
+
+async def test_gateway_login_authorize_url_carries_state_in_callback_url(monkeypatch):
+    from durin.agent.tools.mcp_oauth_web import resolve_gateway_oauth_callback
+
+    monkeypatch.setattr(oro, "exchange_code", lambda code, verifier: "sk-or-v1-gw")
+    stored: list[str] = []
+    monkeypatch.setattr(oro, "store_key", stored.append)
+
+    url = await oro.start_gateway_login("https://durin.example.com", max_wait_s=5)
+    outer = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    callback_url = outer["callback_url"][0]
+    assert callback_url.startswith(
+        "https://durin.example.com/api/v1/mcp/oauth/callback?state="
+    )
+    state = _state_from_authorize_url(url)
+    assert state
+
+    # Resolving the state completes the flow: code exchanged, key stored
+    # exactly like the loopback path (via the shared store_key helper).
+    assert resolve_gateway_oauth_callback(state, code="c0de") is True
+    await oro._gateway_state["task"]
+    assert stored == ["sk-or-v1-gw"]
+
+
+async def test_gateway_login_timeout_deregisters_state(monkeypatch):
+    from durin.agent.tools.mcp_oauth_web import _gateway_callbacks
+
+    url = await oro.start_gateway_login("https://durin.example.com", max_wait_s=0.02)
+    state = _state_from_authorize_url(url)
+    assert state in _gateway_callbacks
+
+    await oro._gateway_state["task"]
+    assert state not in _gateway_callbacks
+
+
+async def test_gateway_login_stop_deregisters_state_on_provider_error(monkeypatch):
+    from durin.agent.tools.mcp_oauth_web import (
+        _gateway_callbacks,
+        resolve_gateway_oauth_callback,
+    )
+
+    url = await oro.start_gateway_login("https://durin.example.com", max_wait_s=5)
+    state = _state_from_authorize_url(url)
+    assert state in _gateway_callbacks
+
+    assert resolve_gateway_oauth_callback(state, error="access_denied") is True
+    await oro._gateway_state["task"]
+    assert state not in _gateway_callbacks
+
+
+async def test_gateway_login_in_flight_returns_same_url(monkeypatch):
+    from durin.agent.tools.mcp_oauth_web import resolve_gateway_oauth_callback
+
+    url1 = await oro.start_gateway_login("https://durin.example.com", max_wait_s=5)
+    url2 = await oro.start_gateway_login("https://durin.example.com", max_wait_s=5)
+    assert url1 == url2
+
+    # Clean up the in-flight task so it doesn't outlive the test.
+    state = _state_from_authorize_url(url1)
+    resolve_gateway_oauth_callback(state, error="test_cleanup")
+    await oro._gateway_state["task"]

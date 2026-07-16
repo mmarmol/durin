@@ -1,18 +1,21 @@
 """OAuthService — provider OAuth flows (Codex, OpenRouter).
 
 Codex: status + device-code / loopback endpoints wrapping
-``durin.providers.codex_device_auth``. OpenRouter: status + loopback +
-disconnect wrapping ``durin.providers.openrouter_oauth`` — loopback only
-(OpenRouter has no device-code flow; remote gateways paste the key
-manually), and the outcome is a plain API key stored like a manual paste,
-so the webui polls status until ``connected`` flips. Pure: no HTTP/WS
-imports, no request object.
+``durin.providers.codex_device_auth``. OpenRouter: status + start + disconnect
+wrapping ``durin.providers.openrouter_oauth`` — OpenRouter has no device-code
+flow, so remote connect instead routes through the gateway's own OAuth
+callback route when a public base URL resolves (config ``gateway.public_url``
+or the webui's origin); with neither, the loopback path stands, gated on
+``is_local`` as before. The outcome is always a plain API key stored like a
+manual paste, so the webui polls status until ``connected`` flips. Pure: no
+HTTP/WS imports, no request object.
 
 Locality
 --------
 ``is_local`` — whether the loopback OAuth flow can reach the caller's browser —
 is carried on the Command/Query and enforced by the service, which raises
-``ForbiddenError`` when a loopback start is attempted from a non-local context.
+``ForbiddenError`` when a loopback start is attempted from a non-local context
+and no public base URL resolves for the gateway-callback alternative.
 
 Scopes
 ------
@@ -164,6 +167,10 @@ class OpenRouterStartLoopbackCommand(Command):
     """Command for ``POST /api/v1/oauth/openrouter/start-loopback``."""
 
     is_local: bool = False
+    # The webui's window.location.origin — used (after validation) as the
+    # OAuth redirect base when no gateway.public_url is configured, routing
+    # the callback through the gateway's public route instead of loopback.
+    origin: str = ""
 
 
 class OpenRouterDisconnectCommand(Command):
@@ -416,15 +423,31 @@ class OAuthService:
         scope=Scope.SETTINGS_WRITE.value,
         request_model=OpenRouterStartLoopbackCommand,
         response_model=OAuthStartLoopbackResult,
-        summary="Start the OpenRouter loopback PKCE login (localhost-only)",
+        summary="Start the OpenRouter PKCE login (gateway callback when a "
+        "public base resolves, else loopback localhost-only)",
     )
     async def openrouter_start_loopback(
         self, cmd: OpenRouterStartLoopbackCommand, principal: Principal
     ) -> OAuthStartLoopbackResult:
         principal.require(Scope.SETTINGS_WRITE)
+        from durin.config.loader import load_config
+        from durin.utils.public_url import resolve_public_base_url, validate_origin
+
+        base = resolve_public_base_url(load_config()) or validate_origin(cmd.origin)
+        if base is not None:
+            try:
+                from durin.providers.openrouter_oauth import start_gateway_login
+
+                url = await start_gateway_login(base)
+            except Exception as exc:  # noqa: BLE001
+                raise UnavailableError(f"gateway login failed to start: {exc}") from exc
+            return OAuthStartLoopbackResult(authorize_url=url)
+
         if not cmd.is_local:
             raise ForbiddenError(
-                "loopback unavailable on a remote gateway; paste an API key instead"
+                "no public URL or valid browser origin resolved for the gateway "
+                "callback, and loopback is unavailable on a remote gateway; set "
+                "gateway.public_url or use an API key"
             )
         try:
             from durin.providers.openrouter_oauth import start_loopback_login

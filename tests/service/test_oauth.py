@@ -46,8 +46,25 @@ def _remote_read() -> Principal:
     return Principal.remote("t", frozenset({Scope.SETTINGS_READ.value}))
 
 
+def _remote_write() -> Principal:
+    return Principal.remote("t", frozenset({Scope.SETTINGS_WRITE.value}))
+
+
 def _remote_none() -> Principal:
     return Principal.remote("t", frozenset())
+
+
+@pytest.fixture()
+def config_path(tmp_path, monkeypatch):
+    """Point the config loader at a fresh tmp config (needed for the
+    OpenRouter gateway-path tests, which resolve ``gateway.public_url``)."""
+    from durin.config.loader import save_config
+    from durin.config.schema import Config
+
+    path = tmp_path / "config.json"
+    save_config(Config(), path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", path)
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +340,7 @@ async def test_openrouter_start_loopback_local_returns_url(monkeypatch):
 
 
 async def test_openrouter_start_loopback_non_local_forbidden():
-    with pytest.raises(ForbiddenError, match="loopback unavailable"):
+    with pytest.raises(ForbiddenError, match="loopback is unavailable"):
         await OAuthService().openrouter_start_loopback(
             OpenRouterStartLoopbackCommand(is_local=False), _local()
         )
@@ -357,4 +374,89 @@ async def test_openrouter_disconnect_requires_write_scope():
     with pytest.raises(ForbiddenError):
         await OAuthService().openrouter_disconnect(
             OpenRouterDisconnectCommand(), _remote_read()
+        )
+
+
+# ---------------------------------------------------------------------------
+# OpenRouter — gateway callback path (remote one-click connect)
+# ---------------------------------------------------------------------------
+
+
+def _set_public_url(url: str | None) -> None:
+    from durin.config.loader import get_config_path, load_config, save_config
+
+    cfg = load_config()
+    cfg.gateway.public_url = url
+    save_config(cfg, get_config_path())
+
+
+async def test_openrouter_start_gateway_via_origin_no_is_local_required(
+    config_path, monkeypatch
+):
+    """No config public_url, but a validated origin resolves a base: the
+    gateway-callback path is used and a non-local principal is NOT forbidden
+    (unlike the loopback-only branch)."""
+    captured: dict = {}
+
+    async def fake_start_gateway_login(base: str, **_kw) -> str:
+        captured["base"] = base
+        return "https://openrouter.ai/auth?callback_url=gw"
+
+    monkeypatch.setattr(oro, "start_gateway_login", fake_start_gateway_login)
+
+    result = await OAuthService().openrouter_start_loopback(
+        OpenRouterStartLoopbackCommand(
+            is_local=False, origin="https://durin.example.com"
+        ),
+        _remote_write(),
+    )
+    assert result.authorize_url == "https://openrouter.ai/auth?callback_url=gw"
+    assert captured["base"] == "https://durin.example.com"
+
+
+async def test_openrouter_start_gateway_config_public_url_wins_over_origin(
+    config_path, monkeypatch
+):
+    captured: dict = {}
+
+    async def fake_start_gateway_login(base: str, **_kw) -> str:
+        captured["base"] = base
+        return "https://openrouter.ai/auth?callback_url=gw"
+
+    monkeypatch.setattr(oro, "start_gateway_login", fake_start_gateway_login)
+    _set_public_url("https://durin.tail9e5f5d.ts.net")
+
+    result = await OAuthService().openrouter_start_loopback(
+        OpenRouterStartLoopbackCommand(
+            is_local=False, origin="https://durin.example.com"
+        ),
+        _remote_write(),
+    )
+    assert result.authorize_url == "https://openrouter.ai/auth?callback_url=gw"
+    assert captured["base"] == "https://durin.tail9e5f5d.ts.net"
+
+
+async def test_openrouter_start_gateway_failure_raises_unavailable(
+    config_path, monkeypatch
+):
+    async def _fail(base: str, **_kw) -> str:
+        raise RuntimeError("callback bind failed")
+
+    monkeypatch.setattr(oro, "start_gateway_login", _fail)
+
+    with pytest.raises(UnavailableError, match="gateway login failed"):
+        await OAuthService().openrouter_start_loopback(
+            OpenRouterStartLoopbackCommand(
+                is_local=False, origin="https://durin.example.com"
+            ),
+            _remote_write(),
+        )
+
+
+async def test_openrouter_start_no_base_non_local_still_forbidden(config_path):
+    """No config public_url and no (or invalid) origin: the gateway path
+    doesn't apply, so the original local-only loopback gate stands."""
+    with pytest.raises(ForbiddenError, match="loopback is unavailable"):
+        await OAuthService().openrouter_start_loopback(
+            OpenRouterStartLoopbackCommand(is_local=False, origin=""), _local()
         )

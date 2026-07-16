@@ -292,7 +292,10 @@ per-branch progress. See the generated OpenAPI contract
 (`contract/openapi-v1.json`) and `TasksService` (`durin/service/tasks.py`) for
 the authoritative field definitions.
 
-**`GET /api/v1/health`** is the only unauthenticated route: a liveness probe
+**`GET /api/v1/health`** is the only unauthenticated route *within the
+bearer-gated API surface* (the special routes outside it — webui bootstrap,
+signed media, the MCP OAuth callback — carry their own gating; see their
+table below): a liveness probe
 that also reports the running package `version` and process `uptime_s`
 (marked by the app factory via `durin/utils/process_runtime.py`). Local CLI
 tools use it to detect a gateway serving stale code after a reinstall —
@@ -318,6 +321,7 @@ Every error response is RFC 9457 `application/problem+json` with
 | Route | Description |
 |---|---|
 | `GET /webui/bootstrap` | Mints an admin-scoped token; gated by peer IP or `token_issue_secret` header |
+| `GET /api/v1/mcp/oauth/callback` | OAuth provider redirect for gateway-driven MCP sign-in; gated by a single-use state token, not a bearer token |
 | `GET /api/media/{sig}/{payload}` | HMAC-signed media fetch; signature verified against the per-process media secret |
 | `POST /api/v1/hooks/{hook}` | Webhook trigger ingress for [loops](loops.md); gated by `X-Durin-Hook-Secret`, not a bearer token |
 | WebSocket at `channel._expected_path()` | Chat endpoint; auth via query-param token before `accept()`; backed by `StarletteConnectionAdapter` |

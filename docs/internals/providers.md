@@ -479,8 +479,12 @@ Two shapes of provider OAuth live behind `/api/v1/oauth/*` (`OAuthService`,
   user-controlled API key (`durin/providers/openrouter_oauth.py`), stored like
   a manual paste — secret store + `${secret:}` reference in
   `providers.openrouter.api_key` — so the spec stays a normal api-key provider.
-  Loopback-only (OpenRouter has no device-code flow); remote gateways paste
-  the key manually.
+  OpenRouter has no device-code flow, but unlike Codex its `callback_url` is
+  caller-chosen, so the connect flow resolves a redirect base the same way MCP
+  OAuth does (config `gateway.public_url`, else the webui's own origin): with
+  a base it routes through the gateway's own OAuth callback route for a
+  one-click remote connect; without one, the loopback path stays local-only
+  and remote gateways paste the key manually.
 
 Loopback eligibility (`is_local`) is derived **server-side** from the transport
 peer by the ASGI glue for any request model declaring the field — a client

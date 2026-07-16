@@ -88,6 +88,14 @@ class McpServerNameCommand(Command):
     name: str
 
 
+class McpOauthLoginCommand(Command):
+    name: str
+    # The webui's window.location.origin — how the browser reaches this
+    # gateway. Used (after validation) as the OAuth redirect base when no
+    # gateway.public_url is configured.
+    origin: str = ""
+
+
 class McpOkResult(Result):
     ok: bool
 
@@ -892,17 +900,19 @@ class McpService:
         "POST",
         "/api/v1/mcp/servers/{name}/oauth/login",
         scope=Scope.MCP_WRITE.value,
-        request_model=McpServerNameCommand,
+        request_model=McpOauthLoginCommand,
         response_model=McpOauthLoginResult,
         summary="Start interactive OAuth sign-in; returns the authorization URL",
     )
     async def oauth_login(
-        self, cmd: McpServerNameCommand, principal: Principal
+        self, cmd: McpOauthLoginCommand, principal: Principal
     ) -> McpOauthLoginResult:
         principal.require(Scope.MCP_WRITE)
         from durin.config.loader import load_config
+        from durin.utils.public_url import resolve_public_base_url, validate_origin
 
-        sc = load_config().tools.mcp_servers.get(cmd.name)
+        cfg_all = load_config()
+        sc = cfg_all.tools.mcp_servers.get(cmd.name)
         if sc is None:
             raise NotFoundError("no such MCP server", details={"name": cmd.name})
         if sc.oauth_config() is None:
@@ -912,6 +922,7 @@ class McpService:
 
         runtime = self._runtime
         name = cmd.name
+        redirect_base = resolve_public_base_url(cfg_all) or validate_origin(cmd.origin)
 
         async def _reconnect_with_token() -> None:
             # Runs after the token is stored: reconnect the live connection so it
@@ -920,5 +931,7 @@ class McpService:
                 await runtime.disconnect(name)
                 await runtime.connect(name, sc)
 
-        url, state = await self._flows().start(name, sc, on_success=_reconnect_with_token)
+        url, state = await self._flows().start(
+            name, sc, on_success=_reconnect_with_token, redirect_base=redirect_base
+        )
         return McpOauthLoginResult(authorization_url=url, state=state)

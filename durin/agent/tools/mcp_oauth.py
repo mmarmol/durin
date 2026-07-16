@@ -150,17 +150,54 @@ def _redirect_uri(port: int) -> str:
     return f"http://127.0.0.1:{port}/callback"
 
 
-def _client_metadata(cfg: Any, port: int) -> Any:
+def _client_metadata(cfg: Any, port: int, redirect_uri: str | None = None) -> Any:
     from mcp.shared.auth import OAuthClientMetadata
 
     oc = cfg.oauth_config()
     return OAuthClientMetadata(
         client_name="durin",
-        redirect_uris=[_redirect_uri(port)],
+        redirect_uris=[redirect_uri or _redirect_uri(port)],
         grant_types=["authorization_code", "refresh_token"],
         response_types=["code"],
         scope=(oc.scope if oc else None),
     )
+
+
+async def ensure_registration_covers(storage: Any, oc: Any, redirect_uri: str) -> None:
+    """Make sure the stored client registration allows *redirect_uri*.
+
+    Dynamic (DCR) registrations that lack it are forgotten so the SDK
+    re-registers with the new URI — this is what makes switching origins
+    (laptop ↔ tailnet ↔ domain) work instead of failing with a provider-side
+    redirect mismatch.
+
+    Static client_ids cannot be re-registered with the provider from here, so
+    instead the stored record's ``redirect_uris`` is updated in place to
+    include the URI this sign-in needs (other fields, including client_id and
+    client_secret, are preserved). durin does not decide whether the provider
+    actually allows that redirect — the provider is the judge, and its
+    rejection surfaces in the popup / flow failure. That keeps this from being
+    a dead end: an operator who adds the URI to the provider app can retry and
+    it works, instead of durin refusing forever from a stale local record.
+    """
+    info = await storage.get_client_info()
+    if info is None:
+        return
+    uris = [str(u) for u in (getattr(info, "redirect_uris", None) or [])]
+    if redirect_uri in uris:
+        return
+    if oc is not None and getattr(oc, "client_id", None):
+        logger.info(
+            "MCP static client registration missing redirect URI {!r}; adding it to "
+            "the stored client record (also add it to the provider app's allowed "
+            "redirect URIs if the provider rejects the sign-in)",
+            redirect_uri,
+        )
+        data = info.model_dump()
+        data["redirect_uris"] = uris + [redirect_uri]
+        await storage.set_client_info(type(info).model_validate(data))
+        return
+    storage.forget()
 
 
 def make_headless_redirect_handler(server: str) -> Callable[[str], Awaitable[None]]:
@@ -184,12 +221,17 @@ async def _headless_callback() -> tuple[str, str | None]:
 _PENDING_SEED_TASKS: set[asyncio.Task] = set()
 
 
-def _seed_static_client(storage: SecretsTokenStorage, oc: Any, port: int) -> None:
+def _seed_static_client(
+    storage: SecretsTokenStorage, oc: Any, port: int, redirect_uri: str | None = None
+) -> None:
     """Persist a static client registration so the SDK skips DCR.
 
     Best-effort: only writes if nothing is stored yet, so a later refresh/DCR
     result isn't clobbered. Runs the async write synchronously (called from
-    __init__ outside of any running event loop).
+    __init__ outside of any running event loop). Seeds ``redirect_uri`` when
+    given (the gateway-callback route) instead of always assuming the
+    127.0.0.1 loopback, so a gateway sign-in doesn't store a redirect URI the
+    next gateway sign-in will immediately need to correct.
     """
     async def _maybe() -> None:
         if await storage.get_client_info() is not None:
@@ -198,7 +240,7 @@ def _seed_static_client(storage: SecretsTokenStorage, oc: Any, port: int) -> Non
             OAuthClientInformationFull(
                 client_id=oc.client_id,
                 client_secret=oc.client_secret,
-                redirect_uris=[_redirect_uri(port)],
+                redirect_uris=[redirect_uri or _redirect_uri(port)],
             )
         )
 
@@ -221,6 +263,7 @@ def build_oauth_provider(
     headless: bool,
     redirect_handler: Callable[[str], Awaitable[None]] | None = None,
     callback_handler: Callable[[], Awaitable[tuple[str, str | None]]] | None = None,
+    redirect_uri: str | None = None,
 ) -> Any:
     """Construct the SDK OAuthClientProvider for ``server``.
 
@@ -238,7 +281,7 @@ def build_oauth_provider(
     storage = SecretsTokenStorage(server, server_url=cfg.url or None)
 
     if oc and oc.client_id:
-        _seed_static_client(storage, oc, port)
+        _seed_static_client(storage, oc, port, redirect_uri)
 
     if headless:
         redirect_handler = make_headless_redirect_handler(server)
@@ -246,7 +289,7 @@ def build_oauth_provider(
 
     return OAuthClientProvider(
         server_url=cfg.url,
-        client_metadata=_client_metadata(cfg, port),
+        client_metadata=_client_metadata(cfg, port, redirect_uri),
         storage=storage,
         redirect_handler=redirect_handler,
         callback_handler=callback_handler,

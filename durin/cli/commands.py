@@ -1064,17 +1064,9 @@ def _resolved_webui_url() -> str | None:
         return None
     if not getattr(cfg.gateway, "webui_enabled", False):
         return None
-    ws_section = getattr(cfg.channels, "websocket", None)
-    host = "127.0.0.1"
-    port = 8765  # websocket channel default
-    if ws_section is not None:
-        if isinstance(ws_section, dict):
-            host = ws_section.get("host", host)
-            port = ws_section.get("port", port)
-        else:
-            host = getattr(ws_section, "host", host) or host
-            port = getattr(ws_section, "port", port) or port
-    return f"http://{host}:{port}/"
+    from durin.utils.public_url import dashboard_url
+
+    return dashboard_url(cfg) + "/"
 
 
 @gateway_app.command("start")
@@ -2802,7 +2794,11 @@ def status(
 
 
 def _gateway_base_url(config: Any) -> str:
-    """Base URL of the gateway HTTP surface (the websocket channel's port)."""
+    """Base URL of the gateway HTTP surface (the websocket channel's port).
+
+    This is the local PROBE address used to reach the gateway's own API —
+    deliberately not the public_url-aware dashboard_url() resolver.
+    """
     ws_section = getattr(config.channels, "websocket", None)
     host = "127.0.0.1"
     port = 8765  # websocket channel default
@@ -2958,6 +2954,36 @@ def _status_data(
         }
     data["gateway"] = gw_data
 
+    # --- Webui access --------------------------------------------------
+    webui_data: dict[str, Any] | None = None
+    if getattr(config.gateway, "webui_enabled", False):
+        from durin.utils.public_url import dashboard_url
+
+        ws_section = getattr(config.channels, "websocket", None)
+        tok = (
+            (
+                ws_section.get("token")
+                if isinstance(ws_section, dict)
+                else getattr(ws_section, "token", None)
+            )
+            if ws_section is not None
+            else None
+        )
+        if tok:
+            # The stored config value may be a ${secret:NAME} reference (same
+            # as any channel credential) — resolve it for display the same
+            # way _resolve_section_secrets does at channel startup. A dangling
+            # or invalid reference falls back to showing the raw value rather
+            # than failing `status`.
+            from durin.security.secrets import resolve_secret
+
+            try:
+                tok = resolve_secret(tok)
+            except Exception:  # noqa: BLE001
+                pass
+        webui_data = {"dashboard_url": dashboard_url(config), "token": tok}
+    data["webui"] = webui_data
+
     # --- Cron --------------------------------------------------------
     data["cron"] = (runtime or {}).get("cron")
 
@@ -3049,6 +3075,13 @@ def _status_sections(
                 f"[yellow]gateway v{gw['version']} ≠ CLI v{__version__} — "
                 "`durin gateway restart` to pick up the new install[/yellow]",
             ))
+
+    # --- Webui access ----------------------------------------------------
+    webui = data["webui"]
+    if webui is not None:
+        rows.append(("Dashboard", webui["dashboard_url"]))
+        if webui["token"]:
+            rows.append(("Web token", str(webui["token"])))
 
     # --- Cron ----------------------------------------------------------
     cron = data["cron"]

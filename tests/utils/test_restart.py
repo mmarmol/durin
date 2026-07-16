@@ -60,6 +60,11 @@ def test_restart_notice_clears_stale_metadata(monkeypatch):
     monkeypatch.setenv("DURIN_RESTART_NOTIFY_METADATA", '{"stale": true}')
     set_restart_notice_to_env(channel="cli", chat_id="direct")
     assert "DURIN_RESTART_NOTIFY_METADATA" not in os.environ
+    # set_restart_notice_to_env writes CHANNEL/CHAT_ID/STARTED_AT straight to
+    # os.environ (not via monkeypatch), so they survive this test's teardown
+    # and leak a "cli" restart notice into whichever test runs `durin agent`
+    # next in the same process. Drain them the same way production does.
+    consume_restart_notice_from_env()
 
 
 def test_format_restart_completed_message_with_elapsed(monkeypatch):
