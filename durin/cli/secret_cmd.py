@@ -38,9 +38,10 @@ def _parse_scope(raw: str | None) -> list[str]:
 @secret_app.command("set")
 def cmd_set(
     name: str = typer.Argument(..., help="Secret name (UPPER_SNAKE, env-var-safe)."),
-    service: str = typer.Option(
-        ..., "--service", "-s",
-        help="What the secret is for, e.g. 'atlassian' or 'provider:openai'.",
+    service: str | None = typer.Option(
+        None, "--service", "-s",
+        help="What the secret is for, e.g. 'atlassian' or 'provider:openai'. "
+        "Omit to rotate an existing secret's value (metadata preserved).",
     ),
     account: str | None = typer.Option(
         None, "--account", "-a", help="Distinguisher within a service (e.g. 'work')."
@@ -58,32 +59,43 @@ def cmd_set(
             "(matches [A-Z][A-Z0-9_]*)."
         )
         raise typer.Exit(1)
+    existed = SecretStore().load().get(name) is not None
+    if service is None and not existed:
+        console.print(
+            f"[red]✗[/red] Secret [bold]{name}[/bold] does not exist — "
+            "pass --service to create it."
+        )
+        raise typer.Exit(1)
     value = typer.prompt(f"Value for {name}", hide_input=True)
     if not value:
         console.print("[yellow]Empty value — nothing stored.[/yellow]")
         raise typer.Exit(1)
     # The write goes through the service layer's single source of truth
     # (validation + put/save/reload) — same path as the webui, the websocket
-    # need-secret frame, and the TUI prompt.
+    # need-secret frame, and the TUI prompt. No --service on an existing
+    # secret = value-only rotation (metadata preserved).
     from durin.service.secrets import SecretsService
     from durin.service.types import ValidationFailedError
 
-    existed = SecretStore().load().get(name) is not None
     try:
-        SecretsService().store_entry(
-            name=name,
-            value=value,
-            service=service,
-            account=account or "",
-            description=description,
-            scope=_parse_scope(scope),
-            origin="user",
-        )
+        if service is None:
+            SecretsService().store_entry(name=name, value=value, rotate=True)
+        else:
+            SecretsService().store_entry(
+                name=name,
+                value=value,
+                service=service,
+                account=account or "",
+                description=description,
+                scope=_parse_scope(scope),
+                origin="user",
+            )
     except ValidationFailedError as exc:
         console.print(f"[red]✗[/red] {exc.message}")
         raise typer.Exit(1) from exc
     verb = "Updated" if existed else "Stored"
-    console.print(f"[green]✓[/green] {verb} secret [bold]{name}[/bold] ({service}).")
+    detail = service if service is not None else "value rotated; metadata unchanged"
+    console.print(f"[green]✓[/green] {verb} secret [bold]{name}[/bold] ({detail}).")
 
 
 @secret_app.command("list")
