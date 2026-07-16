@@ -7,15 +7,20 @@ stored exactly like a manually pasted one: plaintext in the secret store,
 a ``${secret:}`` reference in ``providers.openrouter.api_key`` — so nothing
 downstream knows (or cares) that it came from OAuth.
 
-Loopback only: OpenRouter has no device-code flow, so the browser and the
-callback server must share a host. On a remote gateway the manual key paste
-remains the way in. Unlike Codex (whose registered redirect is
-``localhost:1455``), the callback URL is ours to choose: ``127.0.0.1`` on an
-ephemeral port with a random path nonce, IPv4 only, no fixed-port collisions.
+Two ways in. OpenRouter has no device-code flow, and — unlike Codex, whose
+registered redirect is fixed at ``localhost:1455`` — the callback URL is ours
+to choose. ``start_loopback_login`` binds ``127.0.0.1`` on an ephemeral port
+with a random path nonce (browser and gateway must share a host). When a
+public base URL resolves instead (operator-set ``gateway.public_url`` or the
+webui's own origin), ``start_gateway_login`` routes the redirect through the
+gateway's own ``/api/v1/mcp/oauth/callback`` route — the same one MCP OAuth
+uses — so a remote webui gets one-click connect too. Both share the PKCE and
+key-exchange helpers below; only the callback transport differs.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import http.server
@@ -237,6 +242,57 @@ def start_loopback_login(*, max_wait_s: float = 180.0) -> str:
         _loopback_state["thread"] = thread
         _loopback_state["url"] = url
         return url
+
+
+_gateway_state: dict[str, Any] = {"task": None, "url": None}
+
+
+async def start_gateway_login(base: str, *, max_wait_s: float = 180.0) -> str:
+    """Start the PKCE login routed through the gateway's own OAuth callback
+    route and return the authorize URL immediately.
+
+    Used instead of ``start_loopback_login`` when a public base URL resolves
+    (browser and gateway need not share a host — a remote webui gets the same
+    one-click connect). A background asyncio task waits for the redirect,
+    exchanges the code, and stores the key — same as the loopback path — then
+    always deregisters the callback state.
+
+    No ``threading.Lock`` needed here (unlike the loopback path): this runs
+    on the single gateway event loop with no ``await`` between the in-flight
+    check and registering the new state, so the check is already atomic.
+    An attempt already in flight returns the same URL (mirrors
+    ``start_loopback_login``'s idempotence).
+    """
+    existing = _gateway_state.get("task")
+    if existing is not None and not existing.done() and _gateway_state.get("url"):
+        return _gateway_state["url"]
+
+    from durin.agent.tools.mcp_oauth_web import GatewayCallback
+
+    verifier, challenge = _gen_pkce()
+    callback = GatewayCallback()
+    callback.start()
+    # The shared callback route resolves on `state`; OpenRouter appends
+    # `&code=...` to whatever callback_url we hand it, so the state travels
+    # through as a query param baked into the callback_url itself.
+    callback_url = f"{base}/api/v1/mcp/oauth/callback?state={callback.state}"
+    url = _build_authorize_url(callback_url, challenge)
+
+    async def _run() -> None:
+        try:
+            code, _state = await asyncio.wait_for(callback.wait(), timeout=max_wait_s)
+            if code:
+                key = await asyncio.to_thread(exchange_code, code, verifier)
+                store_key(key)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("openrouter gateway login ended: {}", exc)
+        finally:
+            callback.stop()
+
+    task = asyncio.create_task(_run())
+    _gateway_state["task"] = task
+    _gateway_state["url"] = url
+    return url
 
 
 def login_loopback_blocking(

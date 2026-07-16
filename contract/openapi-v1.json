@@ -4138,6 +4138,11 @@
             "default": false,
             "title": "Is Local",
             "type": "boolean"
+          },
+          "origin": {
+            "default": "",
+            "title": "Origin",
+            "type": "string"
           }
         },
         "title": "OpenRouterStartLoopbackCommand",
@@ -10202,7 +10207,7 @@
             "description": "Success"
           }
         },
-        "summary": "Start the OpenRouter loopback PKCE login (localhost-only)",
+        "summary": "Start the OpenRouter PKCE login (gateway callback when a public base resolves, else loopback localhost-only)",
         "x-required-scope": "settings:write"
       }
     },

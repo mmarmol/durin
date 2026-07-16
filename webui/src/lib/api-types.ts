@@ -1507,7 +1507,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Start the OpenRouter loopback PKCE login (localhost-only) */
+        /** Start the OpenRouter PKCE login (gateway callback when a public base resolves, else loopback localhost-only) */
         post: operations["oauth_openrouter_start_loopback"];
         delete?: never;
         options?: never;
@@ -4386,6 +4386,11 @@ export interface components {
              * @default false
              */
             is_local: boolean;
+            /**
+             * Origin
+             * @default
+             */
+            origin: string;
         };
         /**
          * OpenRouterStatusQuery

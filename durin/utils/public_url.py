@@ -1,9 +1,11 @@
 """Resolution of durin's public base URL.
 
-Exactly two consumers by design: the MCP OAuth redirect (where the provider
-sends the user's browser back) and the dashboard URL surfaced by ``durin
-status`` / ``durin gateway``. Vendor-owned OAuth flows (codex, openrouter)
-must NOT use this — their redirect URIs are fixed by the vendor's app.
+Consumers: the MCP OAuth redirect and the OpenRouter connect flow (both send
+the provider's browser redirect back through the gateway's own callback
+route when a base resolves — OpenRouter's ``callback_url`` is caller-chosen,
+same as MCP's), and the dashboard URL surfaced by ``durin status`` / ``durin
+gateway``. Codex OAuth is the one vendor-owned flow that must NOT use this —
+its redirect URI is fixed by OpenAI's registered app.
 """
 from __future__ import annotations
 

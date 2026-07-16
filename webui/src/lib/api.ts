@@ -2529,11 +2529,13 @@ export async function startOpenRouterLoopbackAuth(
   token: string,
   base: string = "",
 ): Promise<{ authorize_url: string }> {
-  // is_local is derived server-side from the transport peer.
+  // is_local is derived server-side from the transport peer. origin lets the
+  // server route through the gateway's OAuth callback (one-click connect
+  // from a remote webui) when no gateway.public_url is configured either.
   return post<{ authorize_url: string }>(
     `${base}/api/v1/oauth/openrouter/start-loopback`,
     token,
-    {},
+    { origin: window.location.origin },
   );
 }
 
