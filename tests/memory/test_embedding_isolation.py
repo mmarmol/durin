@@ -9,9 +9,11 @@ recyclable worker subprocess.
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from durin.config.schema import MemoryEmbeddingConfig
 from durin.memory.embedding import FastembedProvider
+from tests.memory.test_embedding import _inject_fake_fastembed
 
 
 class FakeModel:
@@ -34,24 +36,28 @@ def test_schema_defaults():
 
 
 def test_schema_bounds():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         MemoryEmbeddingConfig(batch_size=0)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         MemoryEmbeddingConfig(isolation="thread")
 
 
 def test_inline_embed_forwards_bounded_batch_size():
-    provider = FastembedProvider(batch_size=8, isolation="inline")
-    fake = FakeModel()
-    provider._model = fake  # bypass the lazy real-model load
-    out = provider.embed(["a", "b", "c"])
+    # Fake fastembed so this runs in CI, which installs no [memory] extra
+    # (FastembedProvider.__init__ validates against the model catalog).
+    with _inject_fake_fastembed():
+        provider = FastembedProvider(batch_size=8, isolation="inline")
+        fake = FakeModel()
+        provider._model = fake  # bypass the lazy real-model load
+        out = provider.embed(["a", "b", "c"])
     assert len(out) == 3
     assert fake.calls == [{"n": 3, "batch_size": 8}]
 
 
 def test_inline_default_batch_size_is_32_not_library_256():
-    provider = FastembedProvider(isolation="inline")
-    fake = FakeModel()
-    provider._model = fake
-    provider.embed(["x"])
+    with _inject_fake_fastembed():
+        provider = FastembedProvider(isolation="inline")
+        fake = FakeModel()
+        provider._model = fake
+        provider.embed(["x"])
     assert fake.calls[0]["batch_size"] == 32
