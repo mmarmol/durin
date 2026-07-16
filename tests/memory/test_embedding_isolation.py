@@ -91,7 +91,9 @@ def test_worker_recycles_after_max_batches():
     assert pid_a != pid_b
 
 
-def test_process_mode_falls_back_inline_on_pool_failure(monkeypatch, caplog):
+def test_process_mode_falls_back_inline_on_pool_failure(monkeypatch):
+    from loguru import logger
+
     with _inject_fake_fastembed():
         provider = FastembedProvider(isolation="process")
     fake = FakeModel()
@@ -101,7 +103,70 @@ def test_process_mode_falls_back_inline_on_pool_failure(monkeypatch, caplog):
         raise OSError("spawn refused")
 
     monkeypatch.setattr(provider, "_ensure_pool", boom)
-    out = provider.embed(["a", "b"])
+    errors: list[str] = []
+    sink_id = logger.add(errors.append, level="ERROR", format="{message}")
+    try:
+        out = provider.embed(["a", "b"])
+    finally:
+        logger.remove(sink_id)
     assert len(out) == 2
     assert fake.calls and fake.calls[0]["batch_size"] == 32
     assert provider._isolation == "inline"  # permanent for this process
+    assert any("falling back to inline" in m for m in errors)
+
+
+class _StubPool:
+    """Stands in for the ProcessPoolExecutor; submit().result() raises."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+        self.shutdown_calls: list[dict] = []
+
+    def submit(self, fn, *args):
+        exc = self._exc
+
+        class _Future:
+            def result(self):
+                raise exc
+
+        return _Future()
+
+    def shutdown(self, wait=True, cancel_futures=False):
+        self.shutdown_calls.append(
+            {"wait": wait, "cancel_futures": cancel_futures}
+        )
+
+
+def test_infra_failure_falls_back_inline_and_releases_pool():
+    """BrokenProcessPool from the worker = infrastructure failure →
+    permanent inline fallback, pool explicitly shut down and dropped."""
+    from concurrent.futures.process import BrokenProcessPool
+
+    with _inject_fake_fastembed():
+        provider = FastembedProvider(isolation="process")
+    fake = FakeModel()
+    provider._model = fake
+    stub = _StubPool(BrokenProcessPool("child died"))
+    provider._pool = stub
+
+    out = provider.embed(["a", "b"])
+    assert len(out) == 2
+    assert provider._isolation == "inline"
+    assert provider._pool is None
+    assert stub.shutdown_calls == [{"wait": False, "cancel_futures": True}]
+
+
+def test_task_level_error_propagates_without_flipping_isolation():
+    """A task-level error inside embed_batch (e.g. malformed text) must
+    reach the caller unchanged — one bad input must not tear down a
+    healthy pool or silently defeat arena containment."""
+    with _inject_fake_fastembed():
+        provider = FastembedProvider(isolation="process")
+    stub = _StubPool(ValueError("bad input"))
+    provider._pool = stub
+
+    with pytest.raises(ValueError, match="bad input"):
+        provider.embed(["a", "b"])
+    assert provider._isolation == "process"
+    assert provider._pool is stub
+    assert stub.shutdown_calls == []

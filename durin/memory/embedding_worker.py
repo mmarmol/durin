@@ -1,4 +1,3 @@
-# durin/memory/embedding_worker.py
 """Embedding worker — the child-process side of isolation="process".
 
 Runs inside a single-worker ``ProcessPoolExecutor``. The parent never

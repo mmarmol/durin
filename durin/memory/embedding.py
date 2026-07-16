@@ -39,6 +39,7 @@ import time
 import warnings
 from abc import ABC, abstractmethod
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from typing import Any
 
 from loguru import logger
@@ -371,15 +372,24 @@ class FastembedProvider(EmbeddingProvider):
                 ).result()
                 self._emit_embed_event(len(texts), t0)
                 return out
-            except Exception:
-                # Worker unavailable (spawn refused, child OOM-killed,
-                # broken pool). Embedding must keep working — degrade to
-                # inline for the rest of this process and say so loudly:
-                # the operator loses arena containment, not the feature.
+            except (BrokenProcessPool, OSError):
+                # Pool infrastructure failure only (spawn refused, child
+                # OOM-killed, broken pool). Embedding must keep working —
+                # degrade to inline for the rest of this process and say
+                # so loudly: the operator loses arena containment, not
+                # the feature. Task-level errors raised inside
+                # embed_batch (e.g. a malformed text) propagate to the
+                # caller unchanged, exactly as inline mode would — one
+                # bad input must not tear down a healthy pool.
                 logger.exception(
                     "embedding worker failed — falling back to inline for "
                     "the life of this process"
                 )
+                if self._pool is not None:
+                    try:
+                        self._pool.shutdown(wait=False, cancel_futures=True)
+                    except Exception:
+                        pass  # broken pools may raise during teardown
                 self._isolation = "inline"
                 self._pool = None
         if self._model is None:
