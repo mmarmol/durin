@@ -2082,6 +2082,7 @@ export interface ReferenceDocumentDetail {
   ingested_at: string | null;
   chunk_count: number;
   chunks_total: number;
+  body: string; // full raw document (sans frontmatter) — the reading view
   outline: { abstract: string; sections: ReferenceOutlineSection[] } | null;
   entities: Array<{
     ref: string;

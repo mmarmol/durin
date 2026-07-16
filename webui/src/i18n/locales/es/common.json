@@ -1849,8 +1849,9 @@
     "documentForgetBody": "Se archiva y se quita de la búsqueda — el agente no lo mostrará. Podés volver a ingerirlo más adelante.",
     "documentForgetCancel": "Cancelar",
     "documentForgetConfirm": "Olvidar",
-    "documentOpenFull": "Texto completo",
     "documentTab": "Documento",
+    "documentFragmentsTab": "Fragmentos",
+    "documentFragmentsIntro": "Cómo se indexó el documento para la búsqueda: cada fragmento es un bloque recuperable con la ruta de su sección.",
     "documentOutline": "Esquema",
     "documentPreamble": "Preámbulo",
     "documentNotDistilled": "Aún sin destilar — el sueño nocturno lo resumirá y sembrará entidades.",
@@ -1861,7 +1862,6 @@
     "documentRelDistilledHint": "El sueño nocturno las extrajo del contenido del documento — el documento trata sobre ellas.",
     "documentRelReferencedTitle": "Referencian este documento",
     "documentRelReferencedHint": "Estas citaron el documento como fuente durante una conversación — el documento no necesariamente trata sobre ellas (p. ej. un paciente cuyo estudio usó este paper).",
-    "documentContent": "Contenido",
     "documentChunksMore": "Mostrando {{shown}} de {{total}} fragmentos.",
     "entries": {
       "empty": "Aún no hay entradas que referencien esta entidad.",

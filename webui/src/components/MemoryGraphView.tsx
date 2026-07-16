@@ -899,7 +899,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   }, [data]);
 
   // From the Documents shelf back into the graph: open a doc-derived entity's
-  // page (focus it if off-cap, then select), or the reference's raw document.
+  // page (focus it if off-cap, then select).
   const handleOpenEntity = useCallback(
     (ref: string) => {
       setMode("graph");
@@ -919,16 +919,6 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     },
     [focusOnNode],
   );
-
-  const handleOpenReference = useCallback((ref: string) => {
-    setMode("graph");
-    setSelected(null);
-    if (tokenRef.current) {
-      void fetchMemoryEntry(tokenRef.current, ref)
-        .then((d) => setReferenceDetail(d))
-        .catch(() => setReferenceDetail(null));
-    }
-  }, []);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -1050,7 +1040,6 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           token={token}
           active={_props.active}
           onOpenEntity={handleOpenEntity}
-          onOpenReference={handleOpenReference}
         />
       ) : (
       <div ref={wrapRef} className="relative min-h-0 flex-1">

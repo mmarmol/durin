@@ -595,6 +595,9 @@ def test_get_reference_detail_full_payload(tmp_path: Path) -> None:
     # chunk preview carries breadcrumb + text
     assert d["chunks_preview"][0]["breadcrumb"] == "Intro"
     assert "Durin is a local agent." in d["chunks_preview"][0]["text"]
+    # full raw body (sans frontmatter) — drives the shelf's reading view
+    assert d["body"].startswith("# Intro")
+    assert "Run the gateway." in d["body"]
 
 
 def test_get_reference_detail_distinguishes_referenced_from_distilled(
@@ -643,3 +646,4 @@ def test_get_reference_detail_undistilled_has_null_outline(tmp_path: Path) -> No
     assert d["outline"] is None
     assert d["entities"] == []
     assert d["chunks_preview"]  # chunks still previewed
+    assert "body." in d["body"]  # full text available even before distillation

@@ -2030,8 +2030,9 @@
     "documentForgetBody": "Dokumen ini diarsipkan dan dihapus dari pencarian — agen tidak akan menampilkannya. Anda bisa menyerapnya lagi nanti.",
     "documentForgetCancel": "Batal",
     "documentForgetConfirm": "Lupakan",
-    "documentOpenFull": "Teks lengkap",
     "documentTab": "Dokumen",
+    "documentFragmentsTab": "Fragmen",
+    "documentFragmentsIntro": "Cara dokumen diindeks untuk pencarian — setiap fragmen adalah satu potongan yang dapat diambil beserta jejak bagiannya.",
     "documentOutline": "Kerangka",
     "documentPreamble": "Preambul",
     "documentNotDistilled": "Belum didistilasi — Dream malam hari akan meringkas ini dan menyemai entitas.",
@@ -2042,7 +2043,6 @@
     "documentRelDistilledHint": "Dream malam hari mengekstrak entitas ini dari konten dokumen — dokumen ini membahas mereka.",
     "documentRelReferencedTitle": "Merujuk dokumen ini",
     "documentRelReferencedHint": "Entitas ini mengutip dokumen sebagai sumber selama percakapan — dokumen ini tidak selalu menjelaskan mereka (mis. pasien yang pemeriksaannya memakai referensi dari paper ini).",
-    "documentContent": "Konten",
     "documentChunksMore": "Menampilkan {{shown}} dari {{total}} chunk.",
     "entries": {
       "empty": "Belum ada entri yang merujuk entitas ini.",
