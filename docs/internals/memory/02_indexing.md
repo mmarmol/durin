@@ -95,6 +95,27 @@ The vector index lives at `<workspace>/.durin/index/lance/`. A single LanceDB ta
 
 **Dimension guard.** `VectorIndex._guard_dim_match` compares the on-disk table's vector dimension to the configured provider's dimension on every read and write. A mismatch raises `VectorIndexDimensionMismatchError`, which the search pipeline catches and degrades gracefully to lexical-only search.
 
+### Embedding execution and memory containment
+
+ONNX Runtime's CPU arena sizes itself to the peak of the largest embed run
+and never returns that memory to the OS. Two config knobs on
+`memory.embedding` keep that peak bounded:
+
+- `batch_size` (default 32) — texts per ONNX run inside one embed call.
+  Peak activation memory scales roughly linearly with it; the fastembed
+  library default (256) reaches gigabytes on large ingests.
+- `isolation` (default `"process"`) — embeddings run in a single-worker
+  subprocess that is recycled every `worker_recycle_batches` embed calls,
+  so arena growth is reclaimed with the child instead of accumulating in
+  the gateway for the life of the process. `"inline"` keeps the legacy
+  in-process behavior; if the worker cannot start, the provider logs an
+  ERROR and degrades to inline (feature keeps working, containment is
+  lost until restart).
+
+Production code obtains the provider via
+`durin.memory.embedding.provider_from_config`, which reads these knobs;
+constructing `FastembedProvider` directly is reserved for tests.
+
 ### Embedding text composers
 
 Each indexable type has exactly one composer. Both composers apply a 1500-character budget and a `\n\n` joiner, placing most-distilled signal first.
@@ -158,6 +179,7 @@ The indexer's third pass in `rebuild_fts_index` walks `sessions/*.md` and yields
 | `EmbeddingProvider` | `durin/memory/embedding.py` | Abstract base: `embed`, `embed_passages`, `embed_query`. Semantic surface for storage vs. retrieval contexts. |
 | `FastembedProvider` | `durin/memory/embedding.py` | ONNX embedding via fastembed. Validates model at construction. Applies E5 prefix in `embed_passages` / `embed_query` when `_is_e5_family` is true. With `isolation=process` (default), `embed()` runs in a recyclable `ProcessPoolExecutor` worker so the ONNX CPU arena — which never returns memory to the OS — is reclaimed when the worker recycles; falls back to `inline` (in-process, model held for process lifetime) for the rest of the process if the pool cannot start or breaks. |
 | `embedding_worker` | `durin/memory/embedding_worker.py` | Child-process side of `isolation=process`: `init_worker` loads the model once per worker, `embed_batch` embeds, `worker_pid` is a test/diagnostic hook. Module-level functions so they're picklable by the `spawn` start method. |
+| `provider_from_config` | `durin/memory/embedding.py` | Factory: builds `FastembedProvider` from `memory.embedding.*` config (`model`, `batch_size`, `isolation`, `worker_recycle_batches`). The production call-site pattern — direct `FastembedProvider(...)` construction is reserved for tests. |
 | `IndexMeta` | `durin/memory/index_meta.py` | Frozen dataclass: `schema_version`, `embedding_model_id`, `last_full_rebuild`, `previous_models`. Persisted atomically to `<workspace>/.durin/index/meta.json`. |
 | `CURRENT_SCHEMA_VERSION` | `durin/memory/index_meta.py` | Integer constant. Bumped when indexer row shape or derivation rules change incompatibly. |
 | `rebuild_fts_index` | `durin/memory/indexer.py` | Wipes and re-derives the entire FTS5 database from `walk_memory` + skill walk + session turn walk. Returns `IndexStats(indexed, errors)`. |
