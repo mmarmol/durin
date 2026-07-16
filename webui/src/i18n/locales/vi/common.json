@@ -2032,8 +2032,9 @@
     "documentForgetBody": "Tài liệu sẽ được lưu trữ và loại khỏi tìm kiếm — tác tử sẽ không hiện nó nữa. Bạn có thể nạp lại sau.",
     "documentForgetCancel": "Hủy",
     "documentForgetConfirm": "Quên",
-    "documentOpenFull": "Toàn văn",
     "documentTab": "Tài liệu",
+    "documentFragmentsTab": "Phân mảnh",
+    "documentFragmentsIntro": "Cách tài liệu được lập chỉ mục để tìm kiếm — mỗi phân mảnh là một khối có thể truy xuất kèm đường dẫn mục của nó.",
     "documentOutline": "Dàn ý",
     "documentPreamble": "Lời mở đầu",
     "documentNotDistilled": "Chưa được chắt lọc — dream ban đêm sẽ tóm tắt tài liệu này và gieo mầm thực thể.",
@@ -2044,7 +2045,6 @@
     "documentRelDistilledHint": "Dream ban đêm trích xuất những thực thể này từ nội dung tài liệu — tài liệu nói về chúng.",
     "documentRelReferencedTitle": "Tham chiếu tài liệu này",
     "documentRelReferencedHint": "Những thực thể này trích dẫn tài liệu làm nguồn trong một cuộc trò chuyện — tài liệu không nhất thiết mô tả chúng (vd. một bệnh nhân có hồ sơ khám dùng tài liệu này).",
-    "documentContent": "Nội dung",
     "documentChunksMore": "Đang hiện {{shown}}/{{total}} đoạn.",
     "entries": {
       "empty": "Chưa có mục nào tham chiếu thực thể này.",

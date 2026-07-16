@@ -2032,8 +2032,9 @@
     "documentForgetBody": "It's archived and removed from search — the agent won't surface it. You can re-ingest it later.",
     "documentForgetCancel": "Cancel",
     "documentForgetConfirm": "Forget",
-    "documentOpenFull": "Full text",
     "documentTab": "Document",
+    "documentFragmentsTab": "Fragments",
+    "documentFragmentsIntro": "How the document was indexed for search — each fragment is one retrievable chunk with its section breadcrumb.",
     "documentOutline": "Outline",
     "documentPreamble": "Preamble",
     "documentNotDistilled": "Not distilled yet — the nightly dream will summarise this and seed entities.",
@@ -2044,7 +2045,6 @@
     "documentRelDistilledHint": "The nightly dream extracted these from the document's content — the document is about them.",
     "documentRelReferencedTitle": "Reference this document",
     "documentRelReferencedHint": "These cited the document as a source during a conversation — the document doesn't necessarily describe them (e.g. a patient whose workup used this paper).",
-    "documentContent": "Content",
     "documentChunksMore": "Showing {{shown}} of {{total}} chunks.",
     "entries": {
       "empty": "No entries reference this entity yet.",

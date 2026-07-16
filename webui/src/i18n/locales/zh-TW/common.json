@@ -2032,8 +2032,9 @@
     "documentForgetBody": "此文件會被封存並從搜尋中移除——代理將不會再顯示它。你可以之後重新匯入。",
     "documentForgetCancel": "取消",
     "documentForgetConfirm": "忘記",
-    "documentOpenFull": "完整內容",
     "documentTab": "文件",
+    "documentFragmentsTab": "片段",
+    "documentFragmentsIntro": "文件為檢索建立索引的方式——每個片段都是一個可檢索的區塊，並帶有其章節路徑。",
     "documentOutline": "大綱",
     "documentPreamble": "前言",
     "documentNotDistilled": "尚未萃取——夜間 Dream 會為此摘要並產生初始實體。",
@@ -2044,7 +2045,6 @@
     "documentRelDistilledHint": "夜間 Dream 從此文件內容中擷取出這些實體——此文件即是關於它們的內容。",
     "documentRelReferencedTitle": "參照此文件",
     "documentRelReferencedHint": "這些實體曾在對話中將此文件引用為來源——文件內容不一定是在描述它們本身（例如某位病患的檢查曾引用這篇論文）。",
-    "documentContent": "內容",
     "documentChunksMore": "顯示 {{total}} 個區塊中的 {{shown}} 個。",
     "entries": {
       "empty": "尚無條目參照此實體。",

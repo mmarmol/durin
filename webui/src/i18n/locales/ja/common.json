@@ -2032,8 +2032,9 @@
     "documentForgetBody": "アーカイブされ検索から除外されます — エージェントが提示することはなくなります。後で再度取り込むことも可能です。",
     "documentForgetCancel": "キャンセル",
     "documentForgetConfirm": "削除",
-    "documentOpenFull": "全文",
     "documentTab": "ドキュメント",
+    "documentFragmentsTab": "フラグメント",
+    "documentFragmentsIntro": "検索用にドキュメントがどのようにインデックスされたか — 各フラグメントはセクションのパンくず付きで検索可能なチャンクです。",
     "documentOutline": "アウトライン",
     "documentPreamble": "前文",
     "documentNotDistilled": "まだ抽出されていません — 夜間の dream が要約してエンティティを生成します。",
@@ -2044,7 +2045,6 @@
     "documentRelDistilledHint": "夜間の dream がドキュメントの内容から抽出したものです — ドキュメントはこれらについて書かれています。",
     "documentRelReferencedTitle": "このドキュメントを参照",
     "documentRelReferencedHint": "会話中にこのドキュメントをソースとして引用したものです — ドキュメントがこれらを説明しているとは限りません（例: この論文を検査に使用した患者など）。",
-    "documentContent": "内容",
     "documentChunksMore": "{{total}} 件中 {{shown}} 件のチャンクを表示中。",
     "entries": {
       "empty": "このエンティティを参照するエントリはまだありません。",
