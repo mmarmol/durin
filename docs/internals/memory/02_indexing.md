@@ -156,7 +156,8 @@ The indexer's third pass in `rebuild_fts_index` walks `sessions/*.md` and yields
 | `FTSIndex` | `durin/memory/fts_index.py` | SQLite FTS5 wrapper. Write: `upsert` (both tables + `fts_meta`), `delete_by_uri`, `delete_by_uris`; `clear`. Read: `search` (unicode61), `search_trigram` (trigram); `uris_with_prefix` (for incremental session indexing). |
 | `fts_index_path` | `durin/memory/fts_index.py` | Returns the canonical `<workspace>/.durin/index/fts.sqlite` path. |
 | `EmbeddingProvider` | `durin/memory/embedding.py` | Abstract base: `embed`, `embed_passages`, `embed_query`. Semantic surface for storage vs. retrieval contexts. |
-| `FastembedProvider` | `durin/memory/embedding.py` | ONNX in-process embedding via fastembed. Validates model at construction. Applies E5 prefix in `embed_passages` / `embed_query` when `_is_e5_family` is true. Lazy load on first call, held for process lifetime. |
+| `FastembedProvider` | `durin/memory/embedding.py` | ONNX embedding via fastembed. Validates model at construction. Applies E5 prefix in `embed_passages` / `embed_query` when `_is_e5_family` is true. With `isolation=process` (default), `embed()` runs in a recyclable `ProcessPoolExecutor` worker so the ONNX CPU arena — which never returns memory to the OS — is reclaimed when the worker recycles; falls back to `inline` (in-process, model held for process lifetime) for the rest of the process if the pool cannot start or breaks. |
+| `embedding_worker` | `durin/memory/embedding_worker.py` | Child-process side of `isolation=process`: `init_worker` loads the model once per worker, `embed_batch` embeds, `worker_pid` is a test/diagnostic hook. Module-level functions so they're picklable by the `spawn` start method. |
 | `IndexMeta` | `durin/memory/index_meta.py` | Frozen dataclass: `schema_version`, `embedding_model_id`, `last_full_rebuild`, `previous_models`. Persisted atomically to `<workspace>/.durin/index/meta.json`. |
 | `CURRENT_SCHEMA_VERSION` | `durin/memory/index_meta.py` | Integer constant. Bumped when indexer row shape or derivation rules change incompatibly. |
 | `rebuild_fts_index` | `durin/memory/indexer.py` | Wipes and re-derives the entire FTS5 database from `walk_memory` + skill walk + session turn walk. Returns `IndexStats(indexed, errors)`. |
@@ -177,6 +178,9 @@ The indexer's third pass in `rebuild_fts_index` walks `sessions/*.md` and yields
 | Key | Default | Effect |
 |---|---|---|
 | `memory.embedding.model` | `intfloat/multilingual-e5-small` | Embedding model for all vector writes. Changing the model triggers a full vector rebuild on next startup (detected by `ensure_index_fresh` via `meta.json`). |
+| `memory.embedding.batch_size` | `32` | Texts per ONNX run inside one embed call; bounds peak activation memory (the fastembed library default of 256 ratchets the arena to gigabytes). |
+| `memory.embedding.isolation` | `process` | `process` runs embeds in a recyclable worker subprocess so ONNX arena growth is reclaimed with the child; `inline` keeps them in the gateway process. Falls back to `inline` for the rest of the process if the worker pool fails to start. |
+| `memory.embedding.worker_recycle_batches` | `64` | With `isolation: process`, recycle the worker after this many embed calls, bounding the arena high-water mark. |
 | `memory.index_skills` | `true` | Includes `skills/<slug>/SKILL.md` in both FTS and vector index walks. When disabled, existing skill rows are pruned by the next drift-repair pass. |
 | `memory.file_watcher.enabled` | `true` | Starts the file watcher daemon that reactively re-indexes edited `.md` files under `memory/`. |
 | `memory.health_check.enabled` | `true` | Enables the periodic health-check that runs staleness detection and orphan pruning. |

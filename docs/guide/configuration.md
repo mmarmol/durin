@@ -332,6 +332,9 @@ background file watching, and health checks. See
 |---|---|---|
 | `provider` | `fastembed` | Embedding adapter; currently only `fastembed` |
 | `model` | `intfloat/multilingual-e5-small` | Embedding model from fastembed's catalog; multilingual, retrieval-tuned |
+| `batch_size` | `32` | Texts per ONNX run inside one embed call; bounds peak activation memory |
+| `isolation` | `process` | `process` runs embeddings in a recyclable worker subprocess so the ONNX arena is reclaimed with the child; `inline` keeps them in the gateway process |
+| `worker_recycle_batches` | `64` | With `isolation: process`, recycle the worker after this many embed calls |
 | `base_url` | `null` | HTTP provider base URL (reserved for future adapters) |
 | `api_key` | `null` | HTTP provider API key (reserved for future adapters) |
 
