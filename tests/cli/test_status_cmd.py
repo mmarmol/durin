@@ -108,6 +108,37 @@ def test_cron_row_renders_job_count(config: Config, fake_home: Path) -> None:
     assert "Cron" in labels
 
 
+def test_status_shows_dashboard_url_and_web_token(config: Config, fake_home: Path) -> None:
+    config.gateway.webui_enabled = True
+    config.gateway.public_url = "https://durin.tail9e5f5d.ts.net"
+    extra = config.channels.__pydantic_extra__
+    extra["websocket"] = {"enabled": True, "token": "secret-token"}
+
+    rows = _status_sections(config, _config_path(fake_home), None)
+    labels = dict(rows)
+    assert labels["Dashboard"] == "https://durin.tail9e5f5d.ts.net"
+    assert labels["Web token"] == "secret-token"
+
+
+def test_status_omits_token_when_unset(config: Config, fake_home: Path) -> None:
+    config.gateway.webui_enabled = True
+    extra = config.channels.__pydantic_extra__
+    extra["websocket"] = {"enabled": True}
+
+    rows = _status_sections(config, _config_path(fake_home), None)
+    labels = dict(rows)
+    assert "Web token" not in labels
+
+
+def test_status_omits_dashboard_when_webui_disabled(config: Config, fake_home: Path) -> None:
+    config.gateway.webui_enabled = False
+
+    rows = _status_sections(config, _config_path(fake_home), None)
+    labels = dict(rows)
+    assert "Dashboard" not in labels
+    assert "Web token" not in labels
+
+
 def test_status_json_is_parseable(fake_home: Path, monkeypatch) -> None:
     cfg_path = fake_home / ".durin" / "config.json"
     cfg_path.parent.mkdir(parents=True)
