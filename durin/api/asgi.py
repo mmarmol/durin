@@ -31,7 +31,7 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -492,6 +492,8 @@ def build_gateway_http_app(
     - ``GET /api/v1/sessions/{key}/messages`` and ``/webui-thread`` — signed
       overrides that call the service, then sign media URLs via the channel.
     - ``/api/v1/*``                    — service front door (build_api_app routes).
+    - ``GET /api/v1/mcp/oauth/callback`` — OAuth provider redirect, gated by
+      single-use state (not a bearer route: the provider carries no session).
     - ``GET /webui/bootstrap``         — token mint + session metadata.
     - ``GET /api/media/{sig}/{payload}`` — signed media fetch.
     - ``POST /api/v1/hooks/{hook}``    — webhook trigger ingress, secret-header gated.
@@ -515,6 +517,46 @@ def build_gateway_http_app(
                           the loops runtime's "not available" routes).
     """
     resolved_static = static_dist_path or channel._static_dist_path
+
+    # -- /api/v1/mcp/oauth/callback ------------------------------------------
+
+    _OAUTH_DONE_HTML = (
+        "<!doctype html><meta charset='utf-8'><title>durin</title>"
+        "<body style='font-family:system-ui;display:grid;place-items:center;height:90vh'>"
+        "<div><h3>Signed in</h3><p>You can close this window.</p></div>"
+        "<script>setTimeout(()=>window.close(),800)</script></body>"
+    )
+
+    _OAUTH_FAIL_HTML = (
+        "<!doctype html><meta charset='utf-8'><title>durin</title>"
+        "<body style='font-family:system-ui;display:grid;place-items:center;height:90vh'>"
+        "<div><h3>Sign-in failed</h3><p>The provider returned: {reason}</p>"
+        "<p>You can close this window and retry from the dashboard.</p></div></body>"
+    )
+
+    async def mcp_oauth_callback_handler(request: Request) -> Response:
+        # Public by necessity: the provider redirect carries no durin session.
+        # The single-use unguessable state is the gate; invalid states answer
+        # a detail-free 400.
+        from durin.agent.tools.mcp_oauth_web import resolve_gateway_oauth_callback
+
+        state = request.query_params.get("state", "")
+        code = request.query_params.get("code", "")
+        error = request.query_params.get("error", "")
+        if not state or not (code or error):
+            return PlainTextResponse("invalid callback", status_code=400)
+        if not resolve_gateway_oauth_callback(state, code=code, error=error or None):
+            return PlainTextResponse("invalid callback", status_code=400)
+        if error:
+            # The provider refused (e.g. access_denied): tell the human what
+            # happened instead of a false "Signed in". html.escape the value —
+            # it is attacker-influenced query input.
+            import html as _html
+
+            return HTMLResponse(
+                _OAUTH_FAIL_HTML.format(reason=_html.escape(error)), status_code=200
+            )
+        return HTMLResponse(_OAUTH_DONE_HTML)
 
     # -- /webui/bootstrap ---------------------------------------------------
 
@@ -741,6 +783,10 @@ def build_gateway_http_app(
         Route("/api/v1/sessions/{key}/webui-thread", v1_webui_thread, methods=["GET"]),
         # /api/v1/* — new front door (highest priority).
         *api_app.routes,
+        # /api/v1/mcp/oauth/callback — OAuth provider redirect (state-gated).
+        Route(
+            "/api/v1/mcp/oauth/callback", mcp_oauth_callback_handler, methods=["GET"]
+        ),
         # /webui/bootstrap — token mint.
         Route("/webui/bootstrap", bootstrap_handler, methods=["GET"]),
         # /webui/signout — revoke session token + clear cookie.

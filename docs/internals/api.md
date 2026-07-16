@@ -318,6 +318,7 @@ Every error response is RFC 9457 `application/problem+json` with
 | Route | Description |
 |---|---|
 | `GET /webui/bootstrap` | Mints an admin-scoped token; gated by peer IP or `token_issue_secret` header |
+| `GET /api/v1/mcp/oauth/callback` | OAuth provider redirect for gateway-driven MCP sign-in; gated by a single-use state token, not a bearer token |
 | `GET /api/media/{sig}/{payload}` | HMAC-signed media fetch; signature verified against the per-process media secret |
 | `POST /api/v1/hooks/{hook}` | Webhook trigger ingress for [loops](loops.md); gated by `X-Durin-Hook-Secret`, not a bearer token |
 | WebSocket at `channel._expected_path()` | Chat endpoint; auth via query-param token before `accept()`; backed by `StarletteConnectionAdapter` |
