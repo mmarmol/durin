@@ -218,3 +218,50 @@ async def test_start_times_out_and_cleans_up_when_no_url() -> None:
         await flows.start("o", CFG)
     assert not flows.is_pending("o")
     assert created[0].stopped is True
+
+
+async def test_gateway_callback_resolves_once_by_state() -> None:
+    from durin.agent.tools.mcp_oauth_web import (
+        GatewayCallback,
+        resolve_gateway_oauth_callback,
+    )
+
+    cb = GatewayCallback()
+    cb.start()
+    assert cb.state  # unguessable, non-empty
+
+    assert resolve_gateway_oauth_callback(cb.state, code="c0de") is True
+    assert await asyncio.wait_for(cb.wait(), timeout=1) == ("c0de", cb.state)
+    # Single use: the same state no longer resolves.
+    assert resolve_gateway_oauth_callback(cb.state, code="again") is False
+
+
+async def test_gateway_callback_unknown_state_rejected() -> None:
+    from durin.agent.tools.mcp_oauth_web import resolve_gateway_oauth_callback
+
+    assert resolve_gateway_oauth_callback("nope", code="x") is False
+
+
+async def test_gateway_callback_provider_error_fails_wait() -> None:
+    from durin.agent.tools.mcp_oauth_web import (
+        GatewayCallback,
+        resolve_gateway_oauth_callback,
+    )
+
+    cb = GatewayCallback()
+    cb.start()
+    assert resolve_gateway_oauth_callback(cb.state, error="access_denied") is True
+    with pytest.raises(RuntimeError, match="access_denied"):
+        await asyncio.wait_for(cb.wait(), timeout=1)
+
+
+async def test_gateway_callback_stop_deregisters() -> None:
+    from durin.agent.tools.mcp_oauth_web import (
+        GatewayCallback,
+        resolve_gateway_oauth_callback,
+    )
+
+    cb = GatewayCallback()
+    cb.start()
+    cb.stop()
+    assert resolve_gateway_oauth_callback(cb.state, code="x") is False

@@ -18,6 +18,8 @@ slot until a gateway restart.
 from __future__ import annotations
 
 import asyncio
+import base64
+import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -41,6 +43,58 @@ class PendingFlow:
     def __init__(self, task: asyncio.Task, callback: Any) -> None:
         self.task = task
         self.callback = callback
+
+
+# state → GatewayCallback for sign-ins using the gateway-served callback
+# route. In-process by design: the flow and the HTTP route live in the same
+# gateway process, and states are single-use.
+_gateway_callbacks: dict[str, "GatewayCallback"] = {}
+
+
+class GatewayCallback:
+    """OAuth callback captured by the gateway's own public HTTP route.
+
+    Same seam as ``LoopbackCallback`` (state / start / stop / wait) so
+    ``McpOauthFlows`` swaps implementations without restructuring. ``start``
+    registers the state; the route resolves it exactly once.
+    """
+
+    def __init__(self) -> None:
+        self.state = base64.urlsafe_b64encode(os.urandom(18)).decode().rstrip("=")
+        self._future: asyncio.Future[tuple[str, str | None]] = (
+            asyncio.get_event_loop().create_future()
+        )
+
+    def start(self) -> None:
+        _gateway_callbacks[self.state] = self
+
+    def stop(self) -> None:
+        _gateway_callbacks.pop(self.state, None)
+
+    async def wait(self) -> tuple[str, str | None]:
+        return await self._future
+
+    def _resolve(self, code: str, error: str | None) -> None:
+        if self._future.done():
+            return
+        if error:
+            self._future.set_exception(
+                RuntimeError(f"OAuth provider returned error: {error}")
+            )
+        else:
+            self._future.set_result((code, self.state))
+
+
+def resolve_gateway_oauth_callback(
+    state: str, *, code: str = "", error: str | None = None
+) -> bool:
+    """Hand a provider redirect to its pending flow. Single-use per state;
+    unknown/reused states return False (the route answers 400)."""
+    cb = _gateway_callbacks.pop(state, None)
+    if cb is None:
+        return False
+    cb._resolve(code, error)
+    return True
 
 
 class McpOauthFlows:
