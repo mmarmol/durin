@@ -2733,6 +2733,25 @@
         "title": "McpOauthCapabilityResult",
         "type": "object"
       },
+      "McpOauthLoginCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "origin": {
+            "default": "",
+            "title": "Origin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "McpOauthLoginCommand",
+        "type": "object"
+      },
       "McpOauthLoginResult": {
         "properties": {
           "authorization_url": {
@@ -4119,6 +4138,11 @@
             "default": false,
             "title": "Is Local",
             "type": "boolean"
+          },
+          "origin": {
+            "default": "",
+            "title": "Origin",
+            "type": "string"
           }
         },
         "title": "OpenRouterStartLoopbackCommand",
@@ -9100,7 +9124,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/McpServerNameCommand"
+                "$ref": "#/components/schemas/McpOauthLoginCommand"
               }
             }
           },
@@ -10183,7 +10207,7 @@
             "description": "Success"
           }
         },
-        "summary": "Start the OpenRouter loopback PKCE login (localhost-only)",
+        "summary": "Start the OpenRouter PKCE login (gateway callback when a public base resolves, else loopback localhost-only)",
         "x-required-scope": "settings:write"
       }
     },

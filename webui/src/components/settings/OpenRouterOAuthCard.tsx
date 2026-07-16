@@ -21,11 +21,13 @@ type Props = {
 const POLL_TIMEOUT_MS = 190_000;
 
 /**
- * "Connect with OpenRouter" — loopback PKCE that ends in a regular API key,
- * stored exactly like a manual paste. Rendered ABOVE the manual key form in
- * the provider row: both paths stay available (OpenRouter has no device-code
- * flow, so on a remote gateway only the manual paste works and the button is
- * not offered).
+ * "Connect with OpenRouter" — PKCE that ends in a regular API key, stored
+ * exactly like a manual paste. Rendered ABOVE the manual key form in the
+ * provider row: both paths stay available. Locally the callback loops back
+ * through localhost; remotely (no shared host) it routes through the
+ * gateway's own OAuth callback route instead, as long as a redirect base
+ * resolves (operator's `gateway.public_url` or this browser's own origin) —
+ * the server decides which and reports a clear error if neither applies.
  */
 export function OpenRouterOAuthCard({ token, base = "", onChanged }: Props) {
   const { t } = useTranslation();
@@ -97,9 +99,11 @@ export function OpenRouterOAuthCard({ token, base = "", onChanged }: Props) {
     }
   };
 
-  // Remote gateway: the loopback callback can't reach the user's browser and
-  // OpenRouter has no device-code fallback — the manual form below is the way.
-  if (!status || (!status.can_loopback && !status.connected)) return null;
+  // Whether the one-click flow is actually reachable (loopback locally, or the
+  // gateway callback when a redirect base resolves) is a server-side decision
+  // made at connect time — always offer the button and surface a clear error
+  // in the rare case neither path applies.
+  if (!status) return null;
 
   return (
     <div className="space-y-2 rounded-[8px] border border-border/45 bg-muted/25 p-3">

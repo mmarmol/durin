@@ -7,6 +7,7 @@ from durin.agent.mcp_runtime import RawConnState
 from durin.config.schema import MCPServerConfig
 from durin.service.mcp import (
     McpListQuery,
+    McpOauthLoginCommand,
     McpServerGetQuery,
     McpServerNameCommand,
     McpServerUpsertCommand,
@@ -397,7 +398,7 @@ class _FakeFlows:
         self._raises = raises
         self.started: list[str] = []
 
-    async def start(self, name, cfg, on_success=None) -> tuple[str, str]:
+    async def start(self, name, cfg, on_success=None, redirect_base=None) -> tuple[str, str]:
         if self._raises is not None:
             raise self._raises
         self.started.append(name)
@@ -410,7 +411,7 @@ async def test_oauth_login_returns_authorization_url(config_path) -> None:
     _seed({"o": MCPServerConfig(url="https://o/mcp", oauth=True)})
     flows = _FakeFlows()
     res = await McpService(oauth_flows=flows).oauth_login(
-        McpServerNameCommand(name="o"), LOCAL
+        McpOauthLoginCommand(name="o"), LOCAL
     )
     assert res.authorization_url == "https://auth/x?state=st"
     assert res.state == "st"
@@ -433,5 +434,45 @@ async def test_oauth_login_propagates_conflict(config_path) -> None:
     flows = _FakeFlows(raises=ConflictError("pending", details={"name": "o"}))
     with pytest.raises(ConflictError):
         await McpService(oauth_flows=flows).oauth_login(
-            McpServerNameCommand(name="o"), LOCAL
+            McpOauthLoginCommand(name="o"), LOCAL
         )
+
+
+async def test_oauth_login_resolution_chain(config_path) -> None:
+    """redirect_base: config public_url wins over browser origin; origin is the
+    fallback; neither set means the loopback path (redirect_base=None)."""
+    _seed({"o": MCPServerConfig(url="https://o/mcp", oauth=True)})
+
+    def _set_public_url(url: str | None) -> None:
+        from durin.config.loader import get_config_path, load_config, save_config
+
+        cfg = load_config()
+        cfg.gateway.public_url = url
+        save_config(cfg, get_config_path())
+
+    captured: dict = {}
+
+    class _CapturingFlows:
+        async def start(self, name, cfg, on_success=None, redirect_base=None):
+            captured["redirect_base"] = redirect_base
+            return ("https://auth/x", "st")
+
+    svc = McpService(oauth_flows=_CapturingFlows())
+
+    # config public_url unset + origin sent -> origin wins
+    await svc.oauth_login(
+        McpOauthLoginCommand(name="o", origin="http://durin:8765"), LOCAL
+    )
+    assert captured["redirect_base"] == "http://durin:8765"
+
+    # config public_url set -> config wins over origin
+    _set_public_url("https://durin.tail9e5f5d.ts.net")
+    await svc.oauth_login(
+        McpOauthLoginCommand(name="o", origin="http://durin:8765"), LOCAL
+    )
+    assert captured["redirect_base"] == "https://durin.tail9e5f5d.ts.net"
+
+    # neither -> None (loopback path)
+    _set_public_url(None)
+    await svc.oauth_login(McpOauthLoginCommand(name="o", origin=""), LOCAL)
+    assert captured["redirect_base"] is None
