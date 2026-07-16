@@ -595,9 +595,9 @@ describe("SkillsView open observations", () => {
       {
         name: "doc-sync",
         source: "workspace",
-        mode: "auto",
-        status: "active",
-        verdict: "safe",
+        mode: "auto" as const,
+        status: "active" as const,
+        verdict: "safe" as const,
         findings: [],
         open_observations: 1,
       },
