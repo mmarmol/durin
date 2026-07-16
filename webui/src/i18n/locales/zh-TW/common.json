@@ -1481,6 +1481,21 @@
     "lastUsed": "上次使用於 {{when}}",
     "lastUsedApprox": "為概略時間——依據會話活動推算，非確切呼叫時間。",
     "openObservations": "{{count}} 項待處理觀察",
+    "observations": {
+      "title": "未處理的觀察記錄",
+      "proposal": "改進建議",
+      "recurred": "記錄 {{count}} 次 · 最近 {{date}}",
+      "loggedOn": "記錄於 {{date}}",
+      "resolve": "標記為已處理",
+      "dismiss": "忽略",
+      "dismissHint": "被忽略的觀察記錄會被記住，策展不會再次提出。",
+      "kinds": {
+        "correction": "修正",
+        "gap": "缺口",
+        "improvement": "改進",
+        "simplify": "簡化"
+      }
+    },
     "security": "安全性",
     "binaryFile": "二進位檔案——無法編輯。",
     "lintError": "{{lang}} 語法錯誤（第 {{line}} 行）：{{detail}}",

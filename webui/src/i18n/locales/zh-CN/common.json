@@ -1481,6 +1481,21 @@
     "lastUsed": "最近使用于 {{when}}",
     "lastUsedApprox": "为近似值——基于会话活动推算，并非精确调用时间。",
     "openObservations": "{{count}} 个待处理观察项",
+    "observations": {
+      "title": "未处理的观察记录",
+      "proposal": "改进建议",
+      "recurred": "记录 {{count}} 次 · 最近 {{date}}",
+      "loggedOn": "记录于 {{date}}",
+      "resolve": "标记为已处理",
+      "dismiss": "忽略",
+      "dismissHint": "被忽略的观察记录会被记住，策展不会再次提出。",
+      "kinds": {
+        "correction": "修正",
+        "gap": "缺口",
+        "improvement": "改进",
+        "simplify": "简化"
+      }
+    },
     "security": "安全",
     "binaryFile": "二进制文件——不可编辑。",
     "lintError": "{{lang}} 语法错误（第 {{line}} 行）：{{detail}}",
