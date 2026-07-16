@@ -340,7 +340,7 @@ async def test_openrouter_start_loopback_local_returns_url(monkeypatch):
 
 
 async def test_openrouter_start_loopback_non_local_forbidden():
-    with pytest.raises(ForbiddenError, match="loopback unavailable"):
+    with pytest.raises(ForbiddenError, match="loopback is unavailable"):
         await OAuthService().openrouter_start_loopback(
             OpenRouterStartLoopbackCommand(is_local=False), _local()
         )
@@ -456,7 +456,7 @@ async def test_openrouter_start_gateway_failure_raises_unavailable(
 async def test_openrouter_start_no_base_non_local_still_forbidden(config_path):
     """No config public_url and no (or invalid) origin: the gateway path
     doesn't apply, so the original local-only loopback gate stands."""
-    with pytest.raises(ForbiddenError, match="loopback unavailable"):
+    with pytest.raises(ForbiddenError, match="loopback is unavailable"):
         await OAuthService().openrouter_start_loopback(
             OpenRouterStartLoopbackCommand(is_local=False, origin=""), _local()
         )

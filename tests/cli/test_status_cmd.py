@@ -120,6 +120,52 @@ def test_status_shows_dashboard_url_and_web_token(config: Config, fake_home: Pat
     assert labels["Web token"] == "secret-token"
 
 
+def test_status_resolves_secret_ref_web_token(config: Config, fake_home: Path) -> None:
+    """The websocket token may be stored as a ${secret:} reference (same as
+    any channel credential) — status must resolve it for display the same
+    way the channel resolves it at startup, not print the raw ${secret:...}
+    placeholder."""
+    import durin.security.secrets as _secrets
+    from durin.security.secrets import SecretStore, get_secret_store, make_ref
+
+    _secrets._STORE = None
+    try:
+        config.gateway.webui_enabled = True
+        extra = config.channels.__pydantic_extra__
+        extra["websocket"] = {"enabled": True, "token": make_ref("WS_TOKEN")}
+
+        store = SecretStore().load()
+        store.put("WS_TOKEN", value="resolved-secret-value", service="channel:websocket")
+        store.save()
+        get_secret_store(reload=True)
+
+        rows = _status_sections(config, _config_path(fake_home), None)
+        labels = dict(rows)
+        assert labels["Web token"] == "resolved-secret-value"
+    finally:
+        _secrets._STORE = None
+
+
+def test_status_shows_raw_value_when_secret_ref_unresolvable(
+    config: Config, fake_home: Path
+) -> None:
+    """A dangling ${secret:} reference (secret deleted/never stored) must not
+    crash `status` — it falls back to showing the raw stored value."""
+    import durin.security.secrets as _secrets
+
+    _secrets._STORE = None
+    try:
+        config.gateway.webui_enabled = True
+        extra = config.channels.__pydantic_extra__
+        extra["websocket"] = {"enabled": True, "token": "${secret:MISSING_TOKEN}"}
+
+        rows = _status_sections(config, _config_path(fake_home), None)
+        labels = dict(rows)
+        assert labels["Web token"] == "${secret:MISSING_TOKEN}"
+    finally:
+        _secrets._STORE = None
+
+
 def test_status_omits_token_when_unset(config: Config, fake_home: Path) -> None:
     config.gateway.webui_enabled = True
     extra = config.channels.__pydantic_extra__

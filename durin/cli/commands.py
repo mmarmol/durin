@@ -2969,6 +2969,18 @@ def _status_data(
             if ws_section is not None
             else None
         )
+        if tok:
+            # The stored config value may be a ${secret:NAME} reference (same
+            # as any channel credential) — resolve it for display the same
+            # way _resolve_section_secrets does at channel startup. A dangling
+            # or invalid reference falls back to showing the raw value rather
+            # than failing `status`.
+            from durin.security.secrets import resolve_secret
+
+            try:
+                tok = resolve_secret(tok)
+            except Exception:  # noqa: BLE001
+                pass
         webui_data = {"dashboard_url": dashboard_url(config), "token": tok}
     data["webui"] = webui_data
 

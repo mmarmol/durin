@@ -445,7 +445,9 @@ class OAuthService:
 
         if not cmd.is_local:
             raise ForbiddenError(
-                "loopback unavailable on a remote gateway; paste an API key instead"
+                "no public URL or valid browser origin resolved for the gateway "
+                "callback, and loopback is unavailable on a remote gateway; set "
+                "gateway.public_url or use an API key"
             )
         try:
             from durin.providers.openrouter_oauth import start_loopback_login

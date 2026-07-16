@@ -272,24 +272,28 @@ async def start_gateway_login(base: str, *, max_wait_s: float = 180.0) -> str:
     verifier, challenge = _gen_pkce()
     callback = GatewayCallback()
     callback.start()
-    # The shared callback route resolves on `state`; OpenRouter appends
-    # `&code=...` to whatever callback_url we hand it, so the state travels
-    # through as a query param baked into the callback_url itself.
-    callback_url = f"{base}/api/v1/mcp/oauth/callback?state={callback.state}"
-    url = _build_authorize_url(callback_url, challenge)
+    try:
+        # The shared callback route resolves on `state`; OpenRouter appends
+        # `&code=...` to whatever callback_url we hand it, so the state
+        # travels through as a query param baked into the callback_url itself.
+        callback_url = f"{base}/api/v1/mcp/oauth/callback?state={callback.state}"
+        url = _build_authorize_url(callback_url, challenge)
 
-    async def _run() -> None:
-        try:
-            code, _state = await asyncio.wait_for(callback.wait(), timeout=max_wait_s)
-            if code:
-                key = await asyncio.to_thread(exchange_code, code, verifier)
-                store_key(key)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("openrouter gateway login ended: {}", exc)
-        finally:
-            callback.stop()
+        async def _run() -> None:
+            try:
+                code, _state = await asyncio.wait_for(callback.wait(), timeout=max_wait_s)
+                if code:
+                    key = await asyncio.to_thread(exchange_code, code, verifier)
+                    store_key(key)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("openrouter gateway login ended: {}", exc)
+            finally:
+                callback.stop()
 
-    task = asyncio.create_task(_run())
+        task = asyncio.create_task(_run())
+    except Exception:  # noqa: BLE001 — must not leak the started callback state
+        callback.stop()
+        raise
     _gateway_state["task"] = task
     _gateway_state["url"] = url
     return url

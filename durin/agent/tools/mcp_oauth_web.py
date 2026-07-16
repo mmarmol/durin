@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import urllib.parse
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -62,7 +63,7 @@ class GatewayCallback:
     def __init__(self) -> None:
         self.state = base64.urlsafe_b64encode(os.urandom(18)).decode().rstrip("=")
         self._future: asyncio.Future[tuple[str, str | None]] = (
-            asyncio.get_event_loop().create_future()
+            asyncio.get_running_loop().create_future()
         )
 
     def start(self) -> None:
@@ -70,6 +71,26 @@ class GatewayCallback:
 
     def stop(self) -> None:
         _gateway_callbacks.pop(self.state, None)
+
+    def rekey(self, new_state: str) -> None:
+        """Re-register under ``new_state`` — the mcp SDK's own OAuth state.
+
+        ``GatewayCallback`` starts out registered under a state *durin*
+        picked, but the SDK's ``OAuthClientProvider`` generates its own
+        ``state`` and bakes it into the authorization URL; its
+        ``callback_handler`` must return that exact state back (the SDK
+        verifies it with ``secrets.compare_digest``). Once the SDK's state is
+        known (parsed from the authorization URL), this moves the registry
+        entry to that key so the real provider redirect — which can only
+        arrive after the URL has been surfaced — resolves correctly instead
+        of missing the registry and hanging until the callback timeout.
+        No-op if the future is already resolved (nothing left to re-key).
+        """
+        if self._future.done():
+            return
+        _gateway_callbacks.pop(self.state, None)
+        self.state = new_state
+        _gateway_callbacks[self.state] = self
 
     async def wait(self) -> tuple[str, str | None]:
         return await self._future
@@ -83,6 +104,16 @@ class GatewayCallback:
             )
         else:
             self._future.set_result((code, self.state))
+
+
+def _state_from_url(url: str) -> str | None:
+    """Return the ``state`` query param of an authorization URL, if any."""
+    try:
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    except Exception:  # noqa: BLE001
+        return None
+    values = qs.get("state")
+    return values[0] if values else None
 
 
 def resolve_gateway_oauth_callback(
@@ -205,8 +236,21 @@ class McpOauthFlows:
 
             loop = asyncio.get_running_loop()
             url_future: asyncio.Future = loop.create_future()
+            flow_errors: list[Exception] = []
 
             async def _redirect(authorization_url: str) -> None:
+                # Gateway path only (redirect_uri is set): the mcp SDK's
+                # OAuthClientProvider generates its OWN state and embeds it in
+                # this URL. GatewayCallback started out registered under a
+                # durin-chosen state the provider never sees, so re-key it to
+                # the SDK's state here — before the URL is surfaced to the
+                # caller, so this always runs before the real provider
+                # redirect (which can only arrive after that point) hits the
+                # gateway route.
+                if redirect_uri is not None and isinstance(callback, GatewayCallback):
+                    sdk_state = _state_from_url(authorization_url)
+                    if sdk_state:
+                        callback.rekey(sdk_state)
                 if not url_future.done():
                     url_future.set_result(authorization_url)
 
@@ -238,6 +282,7 @@ class McpOauthFlows:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001
+                    flow_errors.append(exc)
                     logger.warning(
                         "MCP '{}' OAuth sign-in failed: {}: {}",
                         server, type(exc).__name__, exc,
@@ -264,8 +309,16 @@ class McpOauthFlows:
             )
         except Exception:  # noqa: BLE001 — timeout or early flow failure
             self.cancel(server)
+            # The flow task swallows its own exceptions (so a failure never
+            # crashes the background task) — if it already finished before
+            # producing a URL, surface its reason instead of a bare timeout
+            # message that hides why (e.g. DCR refused by the provider).
+            detail = ""
+            if task.done() and flow_errors:
+                exc = flow_errors[-1]
+                detail = f": {type(exc).__name__}: {exc}"
             raise UnavailableError(
-                "OAuth flow did not produce an authorization URL",
+                f"OAuth flow did not produce an authorization URL{detail}",
                 details={"name": server},
             ) from None
         logger.info("MCP '{}' OAuth flow started; authorize_url={}", server, url)

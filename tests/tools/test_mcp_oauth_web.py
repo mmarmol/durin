@@ -319,6 +319,68 @@ async def test_start_gateway_registration_failure_does_not_leak_callback_state(
     assert not flows.is_pending("o")
 
 
+async def test_gateway_flow_rekeys_to_sdk_own_state() -> None:
+    """The mcp SDK's OAuthClientProvider generates its OWN ``state``, embeds
+    it in the authorization URL, and its callback_handler must return that
+    same state (the SDK verifies with ``secrets.compare_digest``). This
+    driver mimics the SDK faithfully — it never reuses our GatewayCallback's
+    state — to prove the real redirect (carrying the SDK's state) resolves
+    instead of hanging until the 300s callback timeout."""
+    import secrets as stdlib_secrets
+
+    from durin.agent.tools.mcp_oauth_web import (
+        _gateway_callbacks,
+        resolve_gateway_oauth_callback,
+    )
+
+    captured: dict = {}
+
+    def builder(server, cfg, *, headless, redirect_handler, callback_handler, redirect_uri=None):
+        captured["redirect"] = redirect_handler
+        captured["callback"] = callback_handler
+        return "provider-sentinel"
+
+    async def driver(provider, cfg):
+        sdk_state = stdlib_secrets.token_urlsafe(32)
+        captured["sdk_state"] = sdk_state
+        await captured["redirect"](f"https://auth/x?client_id=c&state={sdk_state}")
+        code, returned_state = await captured["callback"]()
+        # Exactly the SDK's own check (mcp.client.auth.oauth2).
+        assert stdlib_secrets.compare_digest(returned_state or "", sdk_state)
+
+    flows = McpOauthFlows(provider_builder=builder, driver=driver)
+    url, our_state = await flows.start(
+        "o", CFG, redirect_base="https://durin.tail9e5f5d.ts.net"
+    )
+
+    sdk_state = captured["sdk_state"]
+    assert sdk_state in url
+    # start() reads callback.state after the redirect handler ran, so the
+    # returned state already reflects the rekey — it equals the SDK's state.
+    assert our_state == sdk_state
+
+    # The real provider redirect carries the SDK's state, not ours.
+    assert resolve_gateway_oauth_callback(sdk_state, code="c0de") is True
+
+    await flows._pending["o"].task
+    assert not flows.is_pending("o")
+    assert sdk_state not in _gateway_callbacks
+
+
+async def test_start_reports_flow_failure_reason_when_url_never_arrives() -> None:
+    """When the flow task fails BEFORE the redirect handler runs (e.g. DCR
+    refused), the generic "no authorization URL" error must surface the
+    provider's reason instead of swallowing it."""
+
+    async def driver(provider, cfg):
+        raise RuntimeError("DCR refused: redirect_uri not allowed")
+
+    flows, created = _build_flows({}, driver, url_timeout=0.1)
+    with pytest.raises(UnavailableError, match="DCR refused"):
+        await flows.start("o", CFG)
+    assert not flows.is_pending("o")
+
+
 async def test_start_gateway_builder_failure_does_not_leak_callback_state() -> None:
     """The provider builder call also sits between GatewayCallback.start() and
     task creation (e.g. pydantic validation of a malformed redirect_uri inside

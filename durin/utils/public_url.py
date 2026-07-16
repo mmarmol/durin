@@ -12,6 +12,8 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
+from loguru import logger
+
 
 def _normalize(url: str) -> str | None:
     """Return ``scheme://netloc`` for a bare http(s) origin, else None."""
@@ -27,9 +29,23 @@ def _normalize(url: str) -> str | None:
 
 
 def resolve_public_base_url(config: Any) -> str | None:
-    """The operator-declared public base URL, normalized; None when unset/invalid."""
+    """The operator-declared public base URL, normalized; None when unset/invalid.
+
+    A *set but invalid* value (typo, stray path, wrong scheme) warns once per
+    call naming the bad value — silently falling back to loopback/origin
+    resolution would otherwise hide a config mistake from the operator.
+    """
     raw = getattr(getattr(config, "gateway", None), "public_url", None)
-    return _normalize(raw) if raw else None
+    if not raw:
+        return None
+    normalized = _normalize(raw)
+    if normalized is None:
+        logger.warning(
+            "gateway.public_url {!r} is not a valid bare http(s) origin (e.g. "
+            "https://durin.example.com); ignoring it",
+            raw,
+        )
+    return normalized
 
 
 def validate_origin(origin: str) -> str | None:

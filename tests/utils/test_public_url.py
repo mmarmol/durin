@@ -1,6 +1,8 @@
 """Resolution of durin's public base URL (gateway.public_url + browser origin)."""
 from __future__ import annotations
 
+from loguru import logger
+
 from durin.config.schema import Config
 from durin.utils.public_url import dashboard_url, resolve_public_base_url, validate_origin
 
@@ -34,6 +36,31 @@ def test_resolve_normalizes_trailing_slash():
 
 def test_resolve_rejects_url_with_path():
     assert resolve_public_base_url(_cfg("https://x.example/app")) is None
+
+
+def test_resolve_warns_once_when_set_but_invalid():
+    """An operator typo in gateway.public_url must not fail silently — it
+    warns once (naming the bad value) each time resolution is attempted."""
+    warnings: list[str] = []
+    handler_id = logger.add(lambda m: warnings.append(str(m)), level="WARNING", format="{message}")
+    try:
+        result = resolve_public_base_url(_cfg("not a url"))
+    finally:
+        logger.remove(handler_id)
+    assert result is None
+    assert len(warnings) == 1
+    assert "not a url" in warnings[0]
+
+
+def test_resolve_no_warning_when_unset():
+    warnings: list[str] = []
+    handler_id = logger.add(lambda m: warnings.append(str(m)), level="WARNING", format="{message}")
+    try:
+        result = resolve_public_base_url(_cfg())
+    finally:
+        logger.remove(handler_id)
+    assert result is None
+    assert warnings == []
 
 
 def test_validate_origin_accepts_bare_http_origin():
