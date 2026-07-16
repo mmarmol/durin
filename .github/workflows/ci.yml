@@ -53,6 +53,21 @@ jobs:
             echo "Diff unavailable/empty — running the suite to be safe."
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif echo "$files" | grep -qE '(\.py$|^pyproject\.toml$|^uv\.lock$|^tests/|^\.github/workflows/ci\.yml$)'; then
+            # Version-bump-only PRs (release chore): the diff touches ONLY
+            # pyproject.toml + uv.lock, and within them only `version =` lines.
+            # The tree is otherwise identical to the just-tested main tip, so
+            # the suite adds no information — skip it. Any other +/- line in
+            # either file (a dep constraint, a new extra) still runs the suite.
+            sorted_files=$(echo "$files" | sort | tr '\n' ' ' | sed 's/ $//')
+            if [ "$sorted_files" = "pyproject.toml uv.lock" ]; then
+              nonversion=$(git diff "${base}...HEAD" -- pyproject.toml uv.lock \
+                | grep -E '^[+-]' | grep -vE '^[+-]{3}' | grep -vcE '^[+-]version = ')
+              if [ "$nonversion" = "0" ]; then
+                echo "Version-bump-only PR — skipping the Python suite."
+                echo "run=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "No Python-relevant changes — skipping the Python suite:"
