@@ -797,7 +797,7 @@ wheels = [
 
 [[package]]
 name = "durin-agent"
-version = "0.2.0b5"
+version = "0.2.0b6"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
