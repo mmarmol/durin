@@ -2733,6 +2733,25 @@
         "title": "McpOauthCapabilityResult",
         "type": "object"
       },
+      "McpOauthLoginCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "origin": {
+            "default": "",
+            "title": "Origin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "McpOauthLoginCommand",
+        "type": "object"
+      },
       "McpOauthLoginResult": {
         "properties": {
           "authorization_url": {
@@ -9100,7 +9119,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/McpServerNameCommand"
+                "$ref": "#/components/schemas/McpOauthLoginCommand"
               }
             }
           },

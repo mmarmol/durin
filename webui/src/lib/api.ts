@@ -2782,7 +2782,7 @@ export async function mcpOauthLogin(
   return post<McpOauthLoginResult>(
     `${base}${mcpPath(name, "/oauth/login")}`,
     token,
-    {},
+    { origin: window.location.origin },
   );
 }
 

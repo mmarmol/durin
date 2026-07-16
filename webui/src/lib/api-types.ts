@@ -3743,6 +3743,16 @@ export interface components {
             /** Oauth Capable */
             oauth_capable: boolean;
         };
+        /** McpOauthLoginCommand */
+        McpOauthLoginCommand: {
+            /** Name */
+            name: string;
+            /**
+             * Origin
+             * @default
+             */
+            origin: string;
+        };
         /** McpOauthLoginResult */
         McpOauthLoginResult: {
             /** Authorization Url */
@@ -7336,7 +7346,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["McpServerNameCommand"];
+                "application/json": components["schemas"]["McpOauthLoginCommand"];
             };
         };
         responses: {
