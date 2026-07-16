@@ -292,7 +292,10 @@ per-branch progress. See the generated OpenAPI contract
 (`contract/openapi-v1.json`) and `TasksService` (`durin/service/tasks.py`) for
 the authoritative field definitions.
 
-**`GET /api/v1/health`** is the only unauthenticated route: a liveness probe
+**`GET /api/v1/health`** is the only unauthenticated route *within the
+bearer-gated API surface* (the special routes outside it — webui bootstrap,
+signed media, the MCP OAuth callback — carry their own gating; see their
+table below): a liveness probe
 that also reports the running package `version` and process `uptime_s`
 (marked by the app factory via `durin/utils/process_runtime.py`). Local CLI
 tools use it to detect a gateway serving stale code after a reinstall —
