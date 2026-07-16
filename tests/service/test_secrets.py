@@ -158,3 +158,49 @@ async def test_store_route_writes_with_local_principal(secrets_store):
     item = await svc.store(cmd, Principal.local())
     assert item.name == "MY_TOKEN"
     assert item.scope == ["exec"]
+
+
+# --- rotate (value-only replacement) tests ---
+
+
+def test_store_entry_rotate_replaces_value_only(secrets_store):
+    svc = SecretsService()
+    svc.store_entry(
+        name="GH", value="old-value-123", service="github", account="work",
+        description="gh token", scope=["exec", "channel:telegram"],
+    )
+    item = svc.store_entry(name="GH", value="new-value-456", rotate=True)
+    assert item.service == "github"
+    assert item.account == "work"
+    assert item.description == "gh token"
+    assert item.scope == ["exec", "channel:telegram"]
+    from durin.security.secrets import get_secret_store
+
+    assert get_secret_store(reload=True).get("GH").value == "new-value-456"
+
+
+def test_store_entry_rotate_ignores_incoming_metadata(secrets_store):
+    svc = SecretsService()
+    svc.store_entry(name="GH", value="old-value-123", service="github", scope=["exec"])
+    svc.store_entry(
+        name="GH", value="new-value-456", service="other", description="x",
+        scope=["channel:slack"], rotate=True,
+    )
+    from durin.security.secrets import get_secret_store
+
+    entry = get_secret_store(reload=True).get("GH")
+    assert entry.service == "github"
+    assert entry.scope == ["exec"]
+    assert entry.description == ""
+
+
+def test_store_entry_rotate_rejects_missing_secret(secrets_store):
+    with pytest.raises(ValidationFailedError, match="no such secret"):
+        SecretsService().store_entry(name="NOPE", value="v" * 12, rotate=True)
+
+
+def test_store_entry_rotate_rejects_empty_value(secrets_store):
+    svc = SecretsService()
+    svc.store_entry(name="GH", value="old-value-123", service="github")
+    with pytest.raises(ValidationFailedError, match="value is required"):
+        svc.store_entry(name="GH", value="", rotate=True)

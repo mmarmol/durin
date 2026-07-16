@@ -5224,7 +5224,7 @@
       },
       "SecretStoreCommand": {
         "additionalProperties": false,
-        "description": "Create or update a secret. An empty ``value`` is allowed ONLY as a\nmetadata-only edit of an existing secret (the stored credential is kept).",
+        "description": "Create or update a secret. An empty ``value`` is allowed ONLY as a\nmetadata-only edit of an existing secret (the stored credential is kept).\n``rotate=True`` replaces ONLY the value of an existing secret \u2014 metadata\n(service, account, description, scope) is preserved and ``service`` may\nbe omitted; rotation never creates.",
         "properties": {
           "account": {
             "default": "",
@@ -5245,6 +5245,11 @@
             "title": "Origin",
             "type": "string"
           },
+          "rotate": {
+            "default": false,
+            "title": "Rotate",
+            "type": "boolean"
+          },
           "scope": {
             "items": {
               "type": "string"
@@ -5253,6 +5258,7 @@
             "type": "array"
           },
           "service": {
+            "default": "",
             "title": "Service",
             "type": "string"
           },
@@ -5263,8 +5269,7 @@
           }
         },
         "required": [
-          "name",
-          "service"
+          "name"
         ],
         "title": "SecretStoreCommand",
         "type": "object"
