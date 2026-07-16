@@ -84,3 +84,29 @@ def test_callback_provider_error_renders_failure_page_and_consumes_state(client)
     # Reuse rejected — the error still consumed the single-use state.
     r2 = client.get(f"/api/v1/mcp/oauth/callback?state={cb.state}&error=access_denied")
     assert r2.status_code == 400
+
+
+def test_callback_provider_error_html_escapes_attacker_input(client):
+    # Strengthen HTML-escaping coverage: a plain error value (access_denied)
+    # cannot catch regressions in html.escape. Test with HTML-special chars.
+    from urllib.parse import quote
+
+    cb = _make_callback()
+    malicious_error = "<script>alert(1)</script>"
+    # URL-encode the error parameter.
+    encoded_error = quote(malicious_error, safe="")
+    r = client.get(
+        f"/api/v1/mcp/oauth/callback?state={cb.state}&error={encoded_error}"
+    )
+    assert r.status_code == 200
+    assert "Sign-in failed" in r.text
+    assert "Signed in" not in r.text
+    # Raw payload must NOT appear in response (would be XSS).
+    assert malicious_error not in r.text
+    # Escaped form MUST appear (proof of escaping).
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in r.text
+    # State still consumed.
+    r2 = client.get(
+        f"/api/v1/mcp/oauth/callback?state={cb.state}&error={encoded_error}"
+    )
+    assert r2.status_code == 400
