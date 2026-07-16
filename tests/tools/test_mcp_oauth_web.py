@@ -317,3 +317,26 @@ async def test_start_gateway_registration_failure_does_not_leak_callback_state(
 
     assert len(_gateway_callbacks) == before
     assert not flows.is_pending("o")
+
+
+async def test_start_gateway_builder_failure_does_not_leak_callback_state() -> None:
+    """The provider builder call also sits between GatewayCallback.start() and
+    task creation (e.g. pydantic validation of a malformed redirect_uri inside
+    build_oauth_provider). If it raises, the registered state must not leak in
+    _gateway_callbacks for the rest of the process."""
+    from durin.agent.tools.mcp_oauth_web import _gateway_callbacks
+
+    def builder(server, cfg, *, headless, redirect_handler, callback_handler, redirect_uri=None):
+        raise ValueError("malformed redirect_uri")
+
+    async def driver(provider, cfg):
+        raise AssertionError("driver must not run; builder failed first")
+
+    flows = McpOauthFlows(provider_builder=builder, driver=driver)
+
+    before = len(_gateway_callbacks)
+    with pytest.raises(ValueError, match="malformed redirect_uri"):
+        await flows.start("o", CFG, redirect_base="https://durin.tail9e5f5d.ts.net")
+
+    assert len(_gateway_callbacks) == before
+    assert not flows.is_pending("o")

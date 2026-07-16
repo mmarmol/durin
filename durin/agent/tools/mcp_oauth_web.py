@@ -192,69 +192,70 @@ class McpOauthFlows:
                     details={"name": server},
                 ) from None
 
-        if redirect_uri is not None:
-            from durin.agent.tools.mcp_oauth import (
-                SecretsTokenStorage,
-                ensure_registration_covers,
-            )
+        try:
+            if redirect_uri is not None:
+                from durin.agent.tools.mcp_oauth import (
+                    SecretsTokenStorage,
+                    ensure_registration_covers,
+                )
 
-            try:
                 await ensure_registration_covers(
                     SecretsTokenStorage(server, server_url=cfg.url or None), oc, redirect_uri
                 )
-            except Exception:  # noqa: BLE001 — must not leak the registered callback state
-                callback.stop()
-                raise
 
-        loop = asyncio.get_running_loop()
-        url_future: asyncio.Future = loop.create_future()
+            loop = asyncio.get_running_loop()
+            url_future: asyncio.Future = loop.create_future()
 
-        async def _redirect(authorization_url: str) -> None:
-            if not url_future.done():
-                url_future.set_result(authorization_url)
+            async def _redirect(authorization_url: str) -> None:
+                if not url_future.done():
+                    url_future.set_result(authorization_url)
 
-        async def _callback() -> tuple[str, str | None]:
-            return await asyncio.wait_for(callback.wait(), timeout=300)
+            async def _callback() -> tuple[str, str | None]:
+                return await asyncio.wait_for(callback.wait(), timeout=300)
 
-        provider = builder(
-            server,
-            cfg,
-            headless=False,
-            redirect_handler=_redirect,
-            callback_handler=_callback,
-            redirect_uri=redirect_uri,
-        )
+            provider = builder(
+                server,
+                cfg,
+                headless=False,
+                redirect_handler=_redirect,
+                callback_handler=_callback,
+                redirect_uri=redirect_uri,
+            )
 
-        async def _run() -> None:
-            try:
-                await asyncio.wait_for(driver(provider, cfg), timeout=self._flow_deadline)
-                logger.info("MCP '{}' OAuth sign-in completed (token stored)", server)
-                if on_success is not None:
-                    # Reconnect now that the token is stored — race-free, unlike
-                    # the webui doing it on popup-close (which beats the token).
-                    try:
-                        await on_success()
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning(
-                            "MCP '{}' post-OAuth reconnect failed: {}", server, exc
-                        )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "MCP '{}' OAuth sign-in failed: {}: {}",
-                    server, type(exc).__name__, exc,
-                )
-            finally:
-                callback.stop()
-                # Pop only OUR entry: a restarted sign-in replaces the pending
-                # slot while the aborted task is still unwinding — its cleanup
-                # must not evict the fresh flow.
-                current = self._pending.get(server)
-                if current is not None and current.task is asyncio.current_task():
-                    self._pending.pop(server, None)
+            async def _run() -> None:
+                try:
+                    await asyncio.wait_for(driver(provider, cfg), timeout=self._flow_deadline)
+                    logger.info("MCP '{}' OAuth sign-in completed (token stored)", server)
+                    if on_success is not None:
+                        # Reconnect now that the token is stored — race-free, unlike
+                        # the webui doing it on popup-close (which beats the token).
+                        try:
+                            await on_success()
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "MCP '{}' post-OAuth reconnect failed: {}", server, exc
+                            )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "MCP '{}' OAuth sign-in failed: {}: {}",
+                        server, type(exc).__name__, exc,
+                    )
+                finally:
+                    callback.stop()
+                    # Pop only OUR entry: a restarted sign-in replaces the pending
+                    # slot while the aborted task is still unwinding — its cleanup
+                    # must not evict the fresh flow.
+                    current = self._pending.get(server)
+                    if current is not None and current.task is asyncio.current_task():
+                        self._pending.pop(server, None)
 
-        task = loop.create_task(_run())
+            task = loop.create_task(_run())
+        except Exception:  # noqa: BLE001 — must not leak the started callback state
+            callback.stop()
+            raise
+
         self._pending[server] = PendingFlow(task, callback)
 
         try:
