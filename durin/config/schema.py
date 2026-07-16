@@ -998,6 +998,17 @@ class GatewayConfig(Base):
         serialization_alias="webuiEnabled",
         description="Auto-enable the websocket channel at runtime so the embedded web dashboard is served",
     )
+    public_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("publicUrl", "public_url"),
+        serialization_alias="publicUrl",
+        description=(
+            "How this durin is reached from the outside (e.g. "
+            "https://durin.tailXXXX.ts.net). Consumed by the MCP OAuth "
+            "redirect and the dashboard URL shown by status; unset means "
+            "browser-origin/loopback behavior."
+        ),
+    )
 
 
 class MCPOAuthConfig(Base):
