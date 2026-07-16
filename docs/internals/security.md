@@ -110,6 +110,17 @@ enters the config tree. Every mutation — put, remove, scope change — is wrap
 a `cross_process_lock` that performs a full load-mutate-save cycle to prevent
 concurrent writers from losing each other's changes.
 
+All user-facing writes funnel through `SecretsService.store_entry`
+(`durin/service/secrets.py`) — the CLI, the webui panel, the TUI prompt, and the
+websocket `secret_store` frame share its contract: create-or-update with full
+metadata, an empty value as a metadata-only edit of an existing entry, and
+`rotate=True` as the mirror case — a value-only replacement that preserves
+service, account, description, scope, and origin, and never creates. Rotation is
+what the agent's `request_secret` tool triggers with `update=true`: the agent
+declares the intent in a structural flag (an existing secret is never touched
+without it), the channel prompts the user, and the user supplies the new value
+through the same secure paths — the value still never reaches the model.
+
 Secret names must match `[A-Z][A-Z0-9_]*`, making them valid environment variable
 names — intentional, because Phase-2 auto-injection uses them directly as env var
 keys. A config field that holds `${secret:NAME}` is validated by `is_secret_ref()`
@@ -375,10 +386,14 @@ only callers with system-write authority can manage other tokens.
 ### CLI surfaces
 
 ```
-durin secret set NAME         # store a secret and return its ${secret:NAME} reference
-durin secret list             # list stored secret names (no values)
-durin secret delete NAME      # remove a secret from the store
-durin secret set-scope NAME   # update which consumers receive a secret automatically
+durin secret set NAME --service SVC   # store a secret (value from a hidden prompt)
+durin secret set NAME                 # rotate an existing secret's value (metadata preserved)
+durin secret list                     # list stored secret names (no values)
+durin secret show NAME                # metadata for one secret (value masked by default)
+durin secret rm NAME                  # remove a secret from the store
+durin secret grant NAME --to CONSUMER # add a consumer tag to a secret's scope
+durin secret revoke NAME --from CONSUMER # remove a consumer tag from a secret's scope
+durin secret migrate                  # move legacy config-embedded credentials into the store
 ```
 
 ### API surfaces
