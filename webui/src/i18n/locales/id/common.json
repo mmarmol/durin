@@ -1835,7 +1835,9 @@
       "saving": "Menyimpan…",
       "stored": "Tersimpan — nilainya tidak pernah mencapai model",
       "alreadyStored": "Sudah tersimpan — tidak ada yang perlu dilakukan",
-      "hint": "Tersimpan langsung ke secret store durin; nilainya tidak pernah mencapai model atau chat."
+      "hint": "Tersimpan langsung ke secret store durin; nilainya tidak pernah mencapai model atau chat.",
+      "updateHint": "Mengganti nilai tersimpan — service, scope, dan deskripsi tidak berubah.",
+      "replace": "Ganti"
     },
     "toolSingle": "Menggunakan sebuah alat",
     "toolMany": "Menggunakan {{count}} alat",

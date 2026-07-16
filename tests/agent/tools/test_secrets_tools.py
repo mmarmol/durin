@@ -115,3 +115,59 @@ async def test_secret_tools_are_discovered_by_the_loader() -> None:
     discovered = {cls.__name__ for cls in ToolLoader().discover()}
     assert "ListSecretsTool" in discovered
     assert "RequestSecretTool" in discovered
+
+async def test_request_secret_existing_hints_update_flag(store_at) -> None:
+    store = SecretStore(path=store_at)
+    store.put("GH", value="x", service="github", scope=["exec"])
+    store.save()
+
+    out = await RequestSecretTool().execute(name="GH", service="github")
+    assert "already exists" in out
+    assert "update=true" in out
+
+
+async def test_request_secret_update_yields_replace_block(store_at) -> None:
+    store = SecretStore(path=store_at)
+    store.put("GH", value="x", service="github", scope=["exec", "channel:telegram"])
+    store.save()
+
+    out = await RequestSecretTool().execute(name="GH", service="github", update=True)
+    assert "REPLACE" in out
+    assert "durin secret set GH" in out
+    assert "--service" not in out          # metadata-safe command
+    assert "already exists" not in out     # webui already-stored detection
+    assert "is not stored" not in out      # webui create-mode detection
+
+
+async def test_request_secret_update_missing_degrades_to_create(store_at) -> None:
+    out = await RequestSecretTool().execute(name="NEW", service="github", update=True)
+    assert "is not stored" in out
+    assert "--service github" in out
+
+
+async def test_request_secret_update_sets_pending_flag(store_at, tmp_path) -> None:
+    """update=True marks the pending payload — but only when the secret exists."""
+    from durin.agent.tools.context import RequestContext
+    from durin.agent.user_payloads import PENDING_SECRET_KEY
+    from durin.session.manager import SessionManager
+
+    store = SecretStore(path=store_at)
+    store.put("GH", value="x", service="github", scope=["exec"])
+    store.save()
+
+    sm = SessionManager(tmp_path / "sessions")
+    tool = RequestSecretTool(sessions=sm)
+    tool.set_context(RequestContext(
+        channel="cli", chat_id="d", session_key="cli:d", metadata={},
+    ))
+    await tool.execute(name="GH", service="github", purpose="rotate", update=True)
+    payload = sm.get_or_create("cli:d").metadata.get(PENDING_SECRET_KEY)
+    assert payload == {
+        "name": "GH", "service": "github", "purpose": "rotate", "update": True,
+    }
+
+    # Degraded case: update=True but the secret does not exist → create flow,
+    # no update flag on the payload.
+    await tool.execute(name="MISSING", service="github", update=True)
+    payload = sm.get_or_create("cli:d").metadata.get(PENDING_SECRET_KEY)
+    assert payload == {"name": "MISSING", "service": "github", "purpose": ""}

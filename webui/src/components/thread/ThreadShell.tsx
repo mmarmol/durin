@@ -382,9 +382,10 @@ export function ThreadShell({
       sendUserMessage: (text: string) => handleThreadSend(text),
       storeSecret: (input: {
         name: string;
-        service: string;
+        service?: string;
         value: string;
         scope?: string[];
+        rotate?: boolean;
       }) => client.storeSecret({ ...input, chatId: chatId ?? undefined }),
       openWorkPanel: () => setPanelOpen(true),
     }),

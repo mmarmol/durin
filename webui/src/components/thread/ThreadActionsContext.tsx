@@ -12,9 +12,12 @@ export interface ThreadActions {
    *  server ack. */
   storeSecret: (input: {
     name: string;
-    service: string;
+    /** Required to create; ignored when `rotate` is true. */
+    service?: string;
     value: string;
     scope?: string[];
+    /** Replace only the value of an existing secret; metadata preserved. */
+    rotate?: boolean;
   }) => Promise<void>;
   /** Open the side work panel (workflow / sub-agent detail). */
   openWorkPanel?: () => void;

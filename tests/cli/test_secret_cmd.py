@@ -115,3 +115,23 @@ def test_secret_grant_and_revoke(secrets_path) -> None:
     revoked = runner.invoke(app, ["secret", "revoke", "K", "--from", "exec"])
     assert revoked.exit_code == 0
     assert SecretStore(path=secrets_path).load().get("K").scope == ["skill:deploy"]
+
+
+def test_secret_set_without_service_rotates_value_only(secrets_path) -> None:
+    store = SecretStore(path=secrets_path)
+    store.put("GH", value="old-value", service="github",
+              scope=["exec", "channel:telegram"], description="gh token")
+    store.save()
+    result = runner.invoke(app, ["secret", "set", "GH"], input="new-value-456\n")
+    assert result.exit_code == 0, result.output
+    entry = SecretStore(path=secrets_path).load().get("GH")
+    assert entry.value == "new-value-456"
+    assert entry.service == "github"
+    assert entry.scope == ["exec", "channel:telegram"]
+    assert entry.description == "gh token"
+
+
+def test_secret_set_without_service_missing_errors(secrets_path) -> None:
+    result = runner.invoke(app, ["secret", "set", "NOPE"])
+    assert result.exit_code == 1
+    assert "does not exist" in result.output

@@ -1835,7 +1835,9 @@
       "saving": "Enregistrement…",
       "stored": "Enregistré — la valeur n’a jamais atteint le modèle",
       "alreadyStored": "Déjà enregistré — rien à faire",
-      "hint": "Enregistré directement dans le stockage des secrets de durin ; la valeur n’atteint jamais le modèle ni la discussion."
+      "hint": "Enregistré directement dans le stockage des secrets de durin ; la valeur n’atteint jamais le modèle ni la discussion.",
+      "updateHint": "Remplace la valeur stockée — service, scope et description restent inchangés.",
+      "replace": "Remplacer"
     },
     "toolSingle": "Utilisation d’un outil",
     "toolMany": "{{count}} outils utilisés",

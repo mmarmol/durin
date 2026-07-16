@@ -1672,9 +1672,11 @@
       "alreadyStored": "Ya está guardado — no hay nada que hacer",
       "hint": "Se guarda directamente en el almacén de secrets de durin; el valor nunca llega al modelo ni al chat.",
       "placeholder": "Pega el valor del secret",
+      "replace": "Reemplazar",
       "save": "Guardar",
       "saving": "Guardando…",
-      "stored": "Guardado — el valor nunca llegó al modelo"
+      "stored": "Guardado — el valor nunca llegó al modelo",
+      "updateHint": "Reemplaza el valor guardado — service, scope y descripción quedan igual."
     },
     "todos": {
       "title": "Lista de tareas"

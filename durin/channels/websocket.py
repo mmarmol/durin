@@ -1722,6 +1722,7 @@ class WebSocketChannel(BaseChannel):
                     description=str(envelope.get("description") or "").strip(),
                     scope=scope,
                     origin="webui",
+                    rotate=bool(envelope.get("rotate")),
                 ),
                 Principal.local(),
             )

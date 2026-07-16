@@ -1835,7 +1835,9 @@
       "saving": "保存中…",
       "stored": "已保存——该值从未传给模型",
       "alreadyStored": "已存储——无需操作",
-      "hint": "直接存入 durin 的密钥库；该值不会传给模型，也不会出现在对话中。"
+      "hint": "直接存入 durin 的密钥库；该值不会传给模型，也不会出现在对话中。",
+      "updateHint": "替换已存储的值——service、scope 和描述保持不变。",
+      "replace": "替换"
     },
     "toolSingle": "正在使用工具",
     "toolMany": "已使用 {{count}} 个工具",
