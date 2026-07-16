@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
-from durin.agent.tools.schema import StringSchema, tool_parameters_schema
+from durin.agent.tools.schema import BooleanSchema, StringSchema, tool_parameters_schema
 from durin.agent.user_payloads import PENDING_SECRET_KEY
 
 if TYPE_CHECKING:
@@ -98,6 +98,12 @@ class ListSecretsTool(Tool):
             max_length=400,
             nullable=True,
         ),
+        update=BooleanSchema(
+            description="Set true ONLY when the user asked to replace/rotate "
+            "the value of an existing secret. Without it, an existing secret "
+            "is never touched.",
+            nullable=True,
+        ),
         required=["name", "service"],
     )
 )
@@ -133,11 +139,13 @@ class RequestSecretTool(Tool, ContextAware):
     def description(self) -> str:
         return (
             "Request a credential you need but do not have. If a matching "
-            "secret already exists you are told its name. Otherwise this "
-            "YIELDS: present the printed `durin secret set` command and ask "
-            "the user to run it, then stop. You never receive the value — "
-            "once stored with the 'exec' scope it reaches your shell "
-            "commands as an environment variable named after the secret."
+            "secret already exists you are told its name; pass update=true "
+            "ONLY when the user asked to replace/rotate its value — the user "
+            "is then prompted for the replacement. Otherwise this YIELDS: "
+            "present the printed `durin secret set` command and ask the user "
+            "to run it, then stop. You never receive the value — once stored "
+            "with the 'exec' scope it reaches your shell commands as an "
+            "environment variable named after the secret."
         )
 
     @property
@@ -149,6 +157,7 @@ class RequestSecretTool(Tool, ContextAware):
         name: str | None = None,
         service: str | None = None,
         purpose: str | None = None,
+        update: bool | None = None,
         **kwargs: Any,
     ) -> str:
         from durin.security.secrets import get_secret_store, is_valid_secret_name
@@ -167,6 +176,9 @@ class RequestSecretTool(Tool, ContextAware):
 
         existing = store.get(name)
         if existing is not None:
+            if update:
+                self._register_pending(name, existing.service, purpose, update=True)
+                return _update_block(name, purpose)
             scope = ", ".join(existing.scope) or "none"
             usable = (
                 f" It is exec-scoped, so use ${name} in your shell commands."
@@ -176,7 +188,9 @@ class RequestSecretTool(Tool, ContextAware):
             )
             return (
                 f"Secret '{name}' already exists (service={existing.service}, "
-                f"scope={scope}).{usable}"
+                f"scope={scope}).{usable} If the user explicitly asked you to "
+                "replace or rotate this credential's value, call "
+                "request_secret again with update=true."
             )
 
         same_service = [n for n in store.find_by_service(service) if n != name]
@@ -193,16 +207,36 @@ class RequestSecretTool(Tool, ContextAware):
 
         return _request_block(name, service, purpose)
 
-    def _register_pending(self, name: str, service: str, purpose: str | None) -> None:
+    def _register_pending(
+        self, name: str, service: str, purpose: str | None, *, update: bool = False
+    ) -> None:
         """Expose the request to channels (panel render / dumb-channel fallback)."""
         session = self._session()
         if session is None or session.metadata is None:
             return
-        session.metadata[PENDING_SECRET_KEY] = {
+        payload: dict[str, Any] = {
             "name": name, "service": service, "purpose": (purpose or "").strip(),
         }
+        if update:
+            payload["update"] = True
+        session.metadata[PENDING_SECRET_KEY] = payload
         if self._sessions is not None:
             self._sessions.save(session)
+
+
+def _update_block(name: str, purpose: str | None) -> str:
+    """Result body after registering a pending value-replacement request."""
+    reason = f"\nReason: {purpose.strip()}" if purpose else ""
+    return (
+        f"Secret '{name}' is stored; the user has been asked to REPLACE its "
+        f"value.{reason}\n\n"
+        "The request has been presented to the user by the channel (secure "
+        "prompt or instruction message) — do not repeat the instruction "
+        "verbatim. STOP now: do not call more tools. For your own context, "
+        f"the user will run: durin secret set {name}\n"
+        "After the user confirms, retry your task — only the value changes; "
+        "service, scope and description stay as they were."
+    )
 
 
 def _request_block(name: str, service: str, purpose: str | None) -> str:

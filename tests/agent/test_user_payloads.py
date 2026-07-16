@@ -110,3 +110,19 @@ def test_format_interactive_tool_event_secret_and_plan():
 def test_format_interactive_tool_event_ignores_plumbing():
     assert format_interactive_tool_event({"name": "read_file", "arguments": {}}) is None
     assert format_interactive_tool_event(None) is None
+
+def test_serialize_pending_secret_request_update_variant():
+    meta = {
+        "pending_secret_request": {
+            "name": "GH",
+            "service": "github",
+            "purpose": "token expired",
+            "update": True,
+        }
+    }
+    out = serialize_pending_interactions(meta)
+    assert len(out) == 1
+    assert "replace" in out[0].lower()
+    assert "durin secret set GH" in out[0]
+    assert "--service" not in out[0]
+    assert "Reason: token expired" in out[0]
