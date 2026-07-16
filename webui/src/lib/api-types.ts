@@ -4871,6 +4871,9 @@ export interface components {
          * SecretStoreCommand
          * @description Create or update a secret. An empty ``value`` is allowed ONLY as a
          *     metadata-only edit of an existing secret (the stored credential is kept).
+         *     ``rotate=True`` replaces ONLY the value of an existing secret — metadata
+         *     (service, account, description, scope) is preserved and ``service`` may
+         *     be omitted; rotation never creates.
          */
         SecretStoreCommand: {
             /**
@@ -4890,9 +4893,17 @@ export interface components {
              * @default user
              */
             origin: string;
+            /**
+             * Rotate
+             * @default false
+             */
+            rotate: boolean;
             /** Scope */
             scope?: string[];
-            /** Service */
+            /**
+             * Service
+             * @default
+             */
             service: string;
             /**
              * Value

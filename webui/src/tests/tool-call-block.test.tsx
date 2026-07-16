@@ -119,6 +119,52 @@ describe("ToolCallBlock — request_secret", () => {
     });
     expect(await screen.findByText(/Saved/)).toBeInTheDocument();
   });
+
+  const updEvent: ToolProgressEvent = {
+    phase: "end",
+    call_id: "rs2",
+    name: "request_secret",
+    arguments: { name: "GH_TOKEN", service: "github", update: true },
+    result:
+      "Secret 'GH_TOKEN' is stored; the user has been asked to REPLACE its value.",
+  };
+
+  it("update mode replaces the value through rotate", async () => {
+    const storeSecret = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ThreadActionsProvider value={actions({ storeSecret })}>
+        <ToolCallBlock event={updEvent} />
+      </ThreadActionsProvider>,
+    );
+    expect(screen.getByText(/stay unchanged/i)).toBeInTheDocument();
+    const field = screen.getByPlaceholderText(/Paste the secret value/);
+    fireEvent.change(field, { target: { value: "newtok" } });
+    fireEvent.click(screen.getByRole("button", { name: "Replace" }));
+    expect(storeSecret).toHaveBeenCalledWith({
+      name: "GH_TOKEN",
+      value: "newtok",
+      rotate: true,
+    });
+    expect(await screen.findByText(/Saved/)).toBeInTheDocument();
+  });
+
+  it("update degraded to create keeps the create flow", () => {
+    const storeSecret = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ThreadActionsProvider value={actions({ storeSecret })}>
+        <ToolCallBlock
+          event={{ ...updEvent, result: "Secret 'GH_TOKEN' is not stored. ..." }}
+        />
+      </ThreadActionsProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+  });
+
+  it("update mode without actions prints the metadata-safe command", () => {
+    render(<ToolCallBlock event={updEvent} />);
+    expect(screen.getByText(/durin secret set GH_TOKEN/)).toBeInTheDocument();
+    expect(screen.queryByText(/--service/)).not.toBeInTheDocument();
+  });
 });
 
 describe("ToolCallBlock — web sources", () => {

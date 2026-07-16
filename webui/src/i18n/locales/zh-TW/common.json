@@ -1835,7 +1835,9 @@
       "saving": "儲存中…",
       "stored": "已儲存——此值從未傳送給模型",
       "alreadyStored": "已經儲存過——無需其他動作",
-      "hint": "直接儲存到 durin 的密鑰儲存庫；此值不會進入模型或對話內容。"
+      "hint": "直接儲存到 durin 的密鑰儲存庫；此值不會進入模型或對話內容。",
+      "updateHint": "替換已儲存的值——service、scope 與描述保持不變。",
+      "replace": "替換"
     },
     "toolSingle": "正在使用工具",
     "toolMany": "已使用 {{count}} 個工具",

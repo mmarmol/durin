@@ -721,7 +721,7 @@ The `push` sub-section enables optional fan-out to an HTTPS endpoint.
 |---|---|---|
 | `enabled` | `false` | Enable HTTPS push of telemetry events |
 | `url` | `null` | Destination endpoint URL |
-| `token_secret_name` | `null` | Durin secret name for the bearer token (use `durin secret set <name> <token>`, never put the token in config directly) |
+| `token_secret_name` | `null` | Durin secret name for the bearer token (store it with `durin secret set <NAME> --service telemetry`, never put the token in config directly) |
 | `batch_size` | `10` | Events per HTTP batch |
 
 ---
@@ -787,9 +787,13 @@ See [providers.md](../internals/providers.md) for provider-specific setup.
 Use the secret store rather than putting keys directly in config:
 
 ```
-durin secret set anthropic_key sk-ant-...
-durin config set providers.anthropic.api_key '${secret:anthropic_key}'
+durin secret set ANTHROPIC_KEY --service provider:anthropic
+durin config set providers.anthropic.api_key '${secret:ANTHROPIC_KEY}'
 ```
+
+The value is typed at a hidden prompt, never on the command line. Re-running
+`durin secret set ANTHROPIC_KEY` without `--service` later rotates the value
+in place, keeping the secret's metadata and scope.
 
 ### Connect GitHub
 
@@ -848,8 +852,8 @@ Channel-specific keys live under `channels.<channel-name>`. For example, to
 configure the Telegram channel, add its token as a secret and reference it:
 
 ```
-durin secret set telegram_token 123:ABC...
-durin config set channels.telegram.token '${secret:telegram_token}'
+durin secret set TELEGRAM_TOKEN --service channel:telegram
+durin config set channels.telegram.token '${secret:TELEGRAM_TOKEN}'
 ```
 
 See [channels.md](../internals/channels.md) for the full per-channel setup guide.

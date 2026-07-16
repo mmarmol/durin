@@ -40,7 +40,8 @@ the login gate accepts (`token_issue_secret` when set, otherwise `token`).
 ## Secrets & memory
 
 ```bash
-durin secret set NAME             # store a secret (API keys, channel tokens)
+durin secret set NAME --service SVC   # store a secret (API keys, channel tokens)
+durin secret set NAME                 # rotate an existing secret's value (metadata kept)
 durin secret list                 # list stored secrets, values masked
 durin secret show NAME --reveal   # print the actual value
 durin memory show <entity>        # inspect an entity page (e.g. person:marcelo)

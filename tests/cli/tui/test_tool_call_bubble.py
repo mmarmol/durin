@@ -715,3 +715,17 @@ def test_execute_code_renderable_shows_stdout_on_success() -> None:
         "duration_seconds": 0.01,
     })
     assert _execute_code_renderable(result).plain == "hello\nworld"
+
+
+def test_secret_prompt_update_mode_derivation() -> None:
+    """Replace mode needs the update flag AND a non-create-flow result: the
+    tool degrades update=true to the create flow when the secret is missing
+    (its result then contains 'is not stored')."""
+    from durin.cli.tui.widgets.tool_call_bubble import _secret_prompt_update_mode
+
+    upd = {"name": "GH", "service": "github", "update": True}
+    assert _secret_prompt_update_mode(upd, "Secret 'GH' is stored; ... REPLACE ...")
+    assert not _secret_prompt_update_mode(upd, "Secret 'GH' is not stored. ...")
+    assert not _secret_prompt_update_mode({"name": "GH", "service": "github"}, "any")
+    # Result not yet arrived → trust the flag (transient, same as the webui).
+    assert _secret_prompt_update_mode(upd, "")

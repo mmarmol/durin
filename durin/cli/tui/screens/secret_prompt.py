@@ -2,9 +2,11 @@
 
 Opened from a ``request_secret`` tool bubble. The user types the secret
 value into a password-masked field; on submit it is written straight to
-the :class:`~durin.security.secrets.SecretStore`. The value never enters
-the chat, the agent context, or a tool result — only the fact that the
-secret now exists is later reported back to the agent.
+the :class:`~durin.security.secrets.SecretStore`. In replace mode
+(``update=True``) only the value of the existing secret is rotated —
+metadata and scope are preserved. The value never enters the chat, the
+agent context, or a tool result — only the fact that the secret now
+exists is later reported back to the agent.
 """
 
 from __future__ import annotations
@@ -58,21 +60,34 @@ class SecretPromptScreen(ModalScreen[bool]):
     }
     """
 
-    def __init__(self, *, name: str, service: str, purpose: str = "") -> None:
+    def __init__(
+        self, *, name: str, service: str, purpose: str = "", update: bool = False
+    ) -> None:
         super().__init__()
         self._name = name
         self._service = service
         self._purpose = purpose
+        self._update = update
 
     def compose(self) -> ComposeResult:
+        title = (
+            f"🔁 Replace secret: {self._name}"
+            if self._update
+            else f"🔑 Provide secret: {self._name}"
+        )
+        placeholder = (
+            "paste the NEW value, then ⏎"
+            if self._update
+            else "paste the secret value, then ⏎"
+        )
         with Vertical():
-            yield Label(f"🔑 Provide secret: {self._name}", classes="title")
+            yield Label(title, classes="title")
             yield Label(f"service: {self._service}", classes="meta")
             if self._purpose:
                 yield Label(self._purpose, classes="meta")
             yield Input(
                 password=True,
-                placeholder="paste the secret value, then ⏎",
+                placeholder=placeholder,
                 id="secret-input",
             )
             yield Label(
@@ -80,6 +95,12 @@ class SecretPromptScreen(ModalScreen[bool]):
                 "reaches the model or the chat.",
                 classes="hint",
             )
+            if self._update:
+                yield Label(
+                    "Only the value is replaced — service, scope and "
+                    "description stay unchanged.",
+                    classes="hint",
+                )
             yield Label("", id="secret-error", classes="error")
 
     def on_mount(self) -> None:
@@ -99,13 +120,18 @@ class SecretPromptScreen(ModalScreen[bool]):
         try:
             from durin.service.secrets import SecretsService
 
-            SecretsService().store_entry(
-                name=self._name,
-                value=value,
-                service=self._service,
-                scope=["exec"],
-                origin="tui",
-            )
+            if self._update:
+                SecretsService().store_entry(
+                    name=self._name, value=value, rotate=True,
+                )
+            else:
+                SecretsService().store_entry(
+                    name=self._name,
+                    value=value,
+                    service=self._service,
+                    scope=["exec"],
+                    origin="tui",
+                )
         except Exception as exc:  # noqa: BLE001
             self._show_error(f"Could not store the secret: {exc}")
             return

@@ -99,11 +99,14 @@ interface PendingTranscription {
 /** A credential to write into durin's secret store over the socket. */
 export interface SecretStoreInput {
   name: string;
-  service: string;
+  /** Required to create; ignored (and optional) when `rotate` is true. */
+  service?: string;
   value: string;
   scope?: string[];
   account?: string;
   description?: string;
+  /** Replace only the value of an existing secret; metadata preserved. */
+  rotate?: boolean;
   /** Chat whose agent should be told (metadata only) the secret is ready. */
   chatId?: string;
 }
@@ -456,11 +459,12 @@ export class DurinClient {
         type: "secret_store",
         request_id: requestId,
         name: input.name,
-        service: input.service,
+        service: input.service ?? "",
         value: input.value,
         ...(input.scope ? { scope: input.scope } : {}),
         ...(input.account ? { account: input.account } : {}),
         ...(input.description ? { description: input.description } : {}),
+        ...(input.rotate ? { rotate: true } : {}),
         ...(input.chatId ? { chat_id: input.chatId } : {}),
       });
     });

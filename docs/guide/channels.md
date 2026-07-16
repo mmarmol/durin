@@ -45,7 +45,7 @@ Never put raw tokens or passwords in `config.toml`. Store them in durin's
 encrypted secret store and reference them with `${secret:NAME}`:
 
 ```sh
-durin secret set TELEGRAM_BOT_TOKEN
+durin secret set TELEGRAM_BOT_TOKEN --service channel:telegram
 # then in config.toml:
 # token = "${secret:TELEGRAM_BOT_TOKEN}"
 ```
@@ -180,7 +180,7 @@ Store the token in the secret store first, then write the config entry
 referencing it:
 
 ```sh
-durin secret set TELEGRAM_BOT_TOKEN
+durin secret set TELEGRAM_BOT_TOKEN --service channel:telegram
 ```
 
 ```toml
@@ -255,8 +255,8 @@ group_policy = "mention"  # "open", "mention", or "allowlist"
    **Bot User OAuth Token**. This is your `bot_token`.
 4. Store the tokens:
    ```sh
-   durin secret set SLACK_BOT_TOKEN
-   durin secret set SLACK_APP_TOKEN
+   durin secret set SLACK_BOT_TOKEN --service channel:slack
+   durin secret set SLACK_APP_TOKEN --service channel:slack
    ```
 
 > Slack and Discord require optional pip extras. If the extra is missing,
@@ -347,7 +347,7 @@ Store the token in the secret store first, then write the config entry
 referencing it:
 
 ```sh
-durin secret set DISCORD_TOKEN
+durin secret set DISCORD_TOKEN --service channel:discord
 ```
 
 ```toml
@@ -460,8 +460,8 @@ write `${secret:…}` references into the channel config. When configuring
 manually, set the secrets first and reference them:
 
 ```sh
-durin secret set EMAIL_IMAP_PASSWORD
-durin secret set EMAIL_SMTP_PASSWORD
+durin secret set EMAIL_IMAP_PASSWORD --service channel:email
+durin secret set EMAIL_SMTP_PASSWORD --service channel:email
 ```
 
 ```toml

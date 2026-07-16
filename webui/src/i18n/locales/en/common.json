@@ -1835,7 +1835,9 @@
       "saving": "Saving…",
       "stored": "Saved — the value never reached the model",
       "alreadyStored": "Already stored — nothing to do",
-      "hint": "Stored straight to durin's secret store; the value never reaches the model or the chat."
+      "hint": "Stored straight to durin's secret store; the value never reaches the model or the chat.",
+      "updateHint": "Replaces the stored value — service, scope and description stay unchanged.",
+      "replace": "Replace"
     },
     "toolSingle": "Using a tool",
     "toolMany": "Used {{count}} tools",

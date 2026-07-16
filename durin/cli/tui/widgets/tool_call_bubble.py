@@ -248,6 +248,7 @@ class ToolCallBubble(Vertical):
                 name=name,
                 service=service,
                 purpose=str(a.get("purpose") or "").strip(),
+                update=_secret_prompt_update_mode(a, self._last_result_text),
             ),
             self._on_secret_prompt_done,
         )
@@ -725,6 +726,18 @@ def _ask_user_renderable(question: str) -> Text:
     return text
 
 
+def _secret_prompt_update_mode(args: Any, result_text: str | None) -> bool:
+    """True when the ``request_secret`` prompt should replace an existing value.
+
+    The tool degrades ``update=true`` to the create flow when the secret does
+    not exist; its create-flow result always contains ``is not stored``.
+    """
+    a = args if isinstance(args, dict) else {}
+    if not bool(a.get("update")):
+        return False
+    return "is not stored" not in (result_text or "")
+
+
 def _request_secret_renderable(args: Any, result: str | None) -> Text:
     """Render ``request_secret``: what is needed and the command to store it.
 
@@ -736,6 +749,7 @@ def _request_secret_renderable(args: Any, result: str | None) -> Text:
     name = str(a.get("name") or "").strip()
     service = str(a.get("service") or "").strip()
     purpose = str(a.get("purpose") or "").strip()
+    update = _secret_prompt_update_mode(a, result)
     text = Text()
     text.append("🔑 ", style="bold yellow")
     text.append(name or "(unnamed secret)", style="bold")
@@ -746,11 +760,18 @@ def _request_secret_renderable(args: Any, result: str | None) -> Text:
     if result and "already exists" in result:
         text.append("\n   already stored — nothing to do", style="green")
     elif name and service:
+        if update:
+            text.append(
+                "\n   replaces the stored value — metadata unchanged",
+                style="yellow",
+            )
         text.append("\n   $ ", style="bold cyan")
-        text.append(
-            f"durin secret set {name} --service {service} --scope exec",
-            style="default",
+        cmd = (
+            f"durin secret set {name}"
+            if update
+            else f"durin secret set {name} --service {service} --scope exec"
         )
+        text.append(cmd, style="default")
     return text
 
 

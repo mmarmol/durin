@@ -48,14 +48,25 @@ def _serialize_secret_request(payload: Mapping[str, Any]) -> str | None:
     if not name or not service:
         return None
     purpose = str(payload.get("purpose") or "").strip()
-    lines = [f"🔑 I need the secret '{name}' for {service}."]
+    update = bool(payload.get("update"))
+    if update:
+        lines = [f"🔑 I need to replace the value of secret '{name}' ({service})."]
+    else:
+        lines = [f"🔑 I need the secret '{name}' for {service}."]
     if purpose:
         lines.append(f"Reason: {purpose}")
-    lines.append(
-        "Please run this command and paste the secret at the hidden prompt "
-        "(it goes straight to durin's secret store — never into the chat):"
-    )
-    lines.append(f"    durin secret set {name} --service {service} --scope exec")
+    if update:
+        lines.append(
+            "Please run this command and paste the new value at the hidden "
+            "prompt (service, scope and description stay unchanged):"
+        )
+        lines.append(f"    durin secret set {name}")
+    else:
+        lines.append(
+            "Please run this command and paste the secret at the hidden prompt "
+            "(it goes straight to durin's secret store — never into the chat):"
+        )
+        lines.append(f"    durin secret set {name} --service {service} --scope exec")
     return "\n".join(lines)
 
 

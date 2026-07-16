@@ -318,7 +318,7 @@ controls which MCP tools are registered.
 | Skills | `skills_list`, `skill_view`, `skill_search`, `skill_import`, `skill_write`, `skill_edit`, `skill_audit`, `skill_observe`, `skill_acquire_seed`, `skill_install_deps` |
 | MCP management | `mcp_manage`, `mcp_search` |
 | Capability bridges | `interpret_image`, `interpret_audio`, `execute_code`, `notebook_edit` |
-| Secrets | `list_secrets`, `request_secret` |
+| Secrets | `list_secrets`, `request_secret` (`update=true` asks the user to replace an existing secret's value; the agent never sees values) |
 | Scheduling | `cron` |
 | Loops | `loops` |
 | Self-inspection | `my` |
