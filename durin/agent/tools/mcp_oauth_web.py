@@ -141,12 +141,17 @@ class McpOauthFlows:
         server: str,
         cfg: Any,
         on_success: "Callable[[], Awaitable[None]] | None" = None,
+        redirect_base: str | None = None,
     ) -> tuple[str, str]:
         """Begin a sign-in; return ``(authorization_url, state)``.
 
         ``on_success`` (optional) is awaited once the token is stored — used to
         reconnect the live connection race-free (the webui can't, since the popup
         closes a beat before the SDK finishes the token exchange).
+        ``redirect_base`` (optional), when set, routes the OAuth redirect through
+        the gateway's own public HTTP route (``GatewayCallback``) instead of the
+        127.0.0.1 loopback — needed when the browser and the gateway do not share
+        a host (e.g. a tailnet or public domain deployment).
         A flow already pending for the server is aborted and replaced — retry is
         idempotent. Raises ``UnavailableError`` if the callback can't bind or no
         URL surfaces.
@@ -172,14 +177,30 @@ class McpOauthFlows:
 
         oc = cfg.oauth_config()
         port = oc.callback_port if oc else 1456
-        try:
-            callback = factory(port=port)
+        redirect_uri: str | None = None
+        if redirect_base:
+            callback: Any = GatewayCallback()
             callback.start()
-        except Exception as exc:  # noqa: BLE001
-            raise UnavailableError(
-                f"could not start OAuth callback server: {exc}",
-                details={"name": server},
-            ) from None
+            redirect_uri = f"{redirect_base}/api/v1/mcp/oauth/callback"
+        else:
+            try:
+                callback = factory(port=port)
+                callback.start()
+            except Exception as exc:  # noqa: BLE001
+                raise UnavailableError(
+                    f"could not start OAuth callback server: {exc}",
+                    details={"name": server},
+                ) from None
+
+        if redirect_uri is not None:
+            from durin.agent.tools.mcp_oauth import (
+                SecretsTokenStorage,
+                ensure_registration_covers,
+            )
+
+            await ensure_registration_covers(
+                SecretsTokenStorage(server, server_url=cfg.url or None), oc, redirect_uri
+            )
 
         loop = asyncio.get_running_loop()
         url_future: asyncio.Future = loop.create_future()
@@ -197,6 +218,7 @@ class McpOauthFlows:
             headless=False,
             redirect_handler=_redirect,
             callback_handler=_callback,
+            redirect_uri=redirect_uri,
         )
 
         async def _run() -> None:

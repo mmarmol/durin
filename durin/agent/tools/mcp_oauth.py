@@ -150,17 +150,47 @@ def _redirect_uri(port: int) -> str:
     return f"http://127.0.0.1:{port}/callback"
 
 
-def _client_metadata(cfg: Any, port: int) -> Any:
+def _client_metadata(cfg: Any, port: int, redirect_uri: str | None = None) -> Any:
     from mcp.shared.auth import OAuthClientMetadata
 
     oc = cfg.oauth_config()
     return OAuthClientMetadata(
         client_name="durin",
-        redirect_uris=[_redirect_uri(port)],
+        redirect_uris=[redirect_uri or _redirect_uri(port)],
         grant_types=["authorization_code", "refresh_token"],
         response_types=["code"],
         scope=(oc.scope if oc else None),
     )
+
+
+class McpOauthRedirectMismatch(ValueError):
+    """A static-client registration does not allow the redirect URI this
+    sign-in needs; the operator must add it to the provider app."""
+
+
+async def ensure_registration_covers(storage: Any, oc: Any, redirect_uri: str) -> None:
+    """Make sure the stored client registration allows *redirect_uri*.
+
+    Dynamic (DCR) registrations that lack it are forgotten so the SDK
+    re-registers with the new URI — this is what makes switching origins
+    (laptop ↔ tailnet ↔ domain) work instead of failing with a provider-side
+    redirect mismatch. Static client_ids cannot be re-registered: raise with
+    the exact URI the operator must add to the provider app. Sign-in replaces
+    tokens anyway, so forgetting the whole record is safe here.
+    """
+    info = await storage.get_client_info()
+    if info is None:
+        return
+    uris = [str(u) for u in (getattr(info, "redirect_uris", None) or [])]
+    if redirect_uri in uris:
+        return
+    if oc is not None and getattr(oc, "client_id", None):
+        raise McpOauthRedirectMismatch(
+            f"the provider app for this server does not allow the redirect URI "
+            f"{redirect_uri!r} — add it to the app's redirect URIs, or unset the "
+            f"static client_id to let durin re-register dynamically"
+        )
+    storage.forget()
 
 
 def make_headless_redirect_handler(server: str) -> Callable[[str], Awaitable[None]]:
@@ -221,6 +251,7 @@ def build_oauth_provider(
     headless: bool,
     redirect_handler: Callable[[str], Awaitable[None]] | None = None,
     callback_handler: Callable[[], Awaitable[tuple[str, str | None]]] | None = None,
+    redirect_uri: str | None = None,
 ) -> Any:
     """Construct the SDK OAuthClientProvider for ``server``.
 
@@ -246,7 +277,7 @@ def build_oauth_provider(
 
     return OAuthClientProvider(
         server_url=cfg.url,
-        client_metadata=_client_metadata(cfg, port),
+        client_metadata=_client_metadata(cfg, port, redirect_uri),
         storage=storage,
         redirect_handler=redirect_handler,
         callback_handler=callback_handler,

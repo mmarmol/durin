@@ -45,7 +45,7 @@ def _build_flows(captured: dict, driver, **kw) -> tuple[McpOauthFlows, list]:
         created.append(lb)
         return lb
 
-    def builder(server, cfg, *, headless, redirect_handler, callback_handler):
+    def builder(server, cfg, *, headless, redirect_handler, callback_handler, redirect_uri=None):
         captured["redirect"] = redirect_handler
         captured["callback"] = callback_handler
         return "provider-sentinel"
@@ -265,3 +265,28 @@ async def test_gateway_callback_stop_deregisters() -> None:
     cb.start()
     cb.stop()
     assert resolve_gateway_oauth_callback(cb.state, code="x") is False
+
+
+async def test_start_with_redirect_base_uses_gateway_callback() -> None:
+    captured: dict = {}
+
+    def builder(server, cfg, *, headless, redirect_handler, callback_handler, redirect_uri=None):
+        captured["redirect_uri"] = redirect_uri
+        captured["redirect"] = redirect_handler
+        captured["callback"] = callback_handler
+        return "provider-sentinel"
+
+    async def driver(provider, cfg):
+        await captured["redirect"]("https://auth/x")
+        await captured["callback"]()
+
+    flows = McpOauthFlows(provider_builder=builder, driver=driver)
+    url, state = await flows.start("o", CFG, redirect_base="https://durin.tail9e5f5d.ts.net")
+    assert captured["redirect_uri"] == "https://durin.tail9e5f5d.ts.net/api/v1/mcp/oauth/callback"
+    assert state  # GatewayCallback state
+    # Resolving via the registry completes the flow.
+    from durin.agent.tools.mcp_oauth_web import resolve_gateway_oauth_callback
+
+    assert resolve_gateway_oauth_callback(state, code="c0de") is True
+    await flows._pending["o"].task
+    assert not flows.is_pending("o")
