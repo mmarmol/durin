@@ -1648,9 +1648,9 @@ async def _memory_reindex(
             ),
             metadata=metadata_text,
         )
-    from durin.memory.embedding import FastembedProvider
+    from durin.memory.embedding import provider_from_config
     try:
-        provider = FastembedProvider(model=cfg.memory.embedding.model)
+        provider = provider_from_config(cfg)
     except Exception as exc:  # noqa: BLE001
         return OutboundMessage(
             channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
@@ -1820,9 +1820,9 @@ async def cmd_forget(ctx: CommandContext) -> OutboundMessage:
             except (AttributeError, TypeError):
                 pass
             if embedding_model:
-                from durin.memory.embedding import FastembedProvider
+                from durin.memory.embedding import provider_from_config
 
-                provider = FastembedProvider(model=embedding_model)
+                provider = provider_from_config(ctx.loop.config, model=embedding_model)
                 index = VectorIndex(workspace, provider)
                 try:
                     import lancedb  # noqa: F401

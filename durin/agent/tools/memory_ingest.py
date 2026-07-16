@@ -106,9 +106,10 @@ class MemoryIngestTool(Tool):
         if not self._embedding_model or not vector_index_available():
             return None
         try:
-            from durin.memory.embedding import FastembedProvider
+            from durin.config.loader import load_config
+            from durin.memory.embedding import provider_from_config
 
-            provider = FastembedProvider(model=self._embedding_model)
+            provider = provider_from_config(load_config(), model=self._embedding_model)
             self._vector_index = VectorIndex(self._workspace, provider)
         except Exception as exc:
             logger.warning("vector index init failed: %s", exc)

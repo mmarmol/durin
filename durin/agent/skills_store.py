@@ -370,20 +370,19 @@ def _index_skills_enabled() -> bool:
 
 
 def _vector_index_for(workspace: Path):
-    """Construct a :class:`VectorIndex` the way the rest of the codebase does
-    (``FastembedProvider(model=config.memory.embedding.model)``), or ``None``
-    when the optional lancedb extra is absent. Loading the embedding model is
-    heavy but only happens when lancedb is installed — guarded so pure
-    tmp_path unit tests stay fast (lancedb absent → no-op)."""
+    """Construct a :class:`VectorIndex` via :func:`provider_from_config`, or
+    ``None`` when the optional lancedb extra is absent. Loading the embedding
+    model is heavy but only happens when lancedb is installed — guarded so
+    pure tmp_path unit tests stay fast (lancedb absent → no-op)."""
     from durin.memory.vector_index import VectorIndex, vector_index_available
 
     if not vector_index_available():
         return None
     from durin.config.loader import load_config
-    from durin.memory.embedding import FastembedProvider
+    from durin.memory.embedding import provider_from_config
 
     cfg = load_config()
-    provider = FastembedProvider(model=cfg.memory.embedding.model)
+    provider = provider_from_config(cfg)
     return VectorIndex(workspace, provider)
 
 

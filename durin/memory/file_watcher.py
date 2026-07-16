@@ -145,10 +145,12 @@ class MemoryFileWatcher:
         if not self._embedding_model:
             return None
         try:
-            from durin.memory.embedding import FastembedProvider
+            from durin.config.loader import load_config
+            from durin.memory.embedding import provider_from_config
             from durin.memory.vector_index import VectorIndex
             self._vector_index = VectorIndex(
-                self._workspace, FastembedProvider(model=self._embedding_model))
+                self._workspace,
+                provider_from_config(load_config(), model=self._embedding_model))
         except Exception as exc:  # noqa: BLE001
             logger.warning("file_watcher: vector index init failed: %s", exc)
             self._vector_index = None

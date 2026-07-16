@@ -53,7 +53,7 @@ def _make_fastembed(*, catalog_models: list[str], slow: float):
             time.sleep(slow)
             self.model_name = model_name
 
-        def embed(self, texts: list[str]):
+        def embed(self, texts: list[str], batch_size: int = 256, **_kwargs):
             for i, _ in enumerate(texts):
                 yield [float(i)] * 384
 

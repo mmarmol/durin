@@ -74,7 +74,7 @@ class _FakeTextEmbedding:
         self.model_name = model_name
         type(self).last_init_kwargs = {"model_name": model_name, **kwargs}
 
-    def embed(self, texts: list[str]) -> Iterator[list[float]]:
+    def embed(self, texts: list[str], **kwargs) -> Iterator[list[float]]:
         # Deterministic embeddings: dim derived from the fake catalog so
         # the load/embed path stays consistent with what list_supported_models
         # would have advertised. Also record the input verbatim so tests

@@ -1248,8 +1248,17 @@ class AgentLoop:
             return
         model_name = self.app_config.memory.embedding.model
         try:
-            from durin.memory.embedding import FastembedProvider
-            await asyncio.to_thread(FastembedProvider.warmup, model_name)
+            from durin.memory.embedding import provider_from_config
+
+            # Build via the config, not the FastembedProvider.warmup
+            # classmethod: warmup always constructs with isolation=
+            # "inline" and loads in the caller, which would defeat
+            # process-isolation containment on every gateway boot.
+            # provider_from_config picks up the configured isolation, so
+            # in "process" mode this embed() call loads the model in the
+            # disposable worker child, not the long-lived gateway parent.
+            provider = provider_from_config(self.app_config)
+            await asyncio.to_thread(provider.embed, ["warmup"])
             logger.info("Memory embedding model warmed: {}", model_name)
         except Exception as exc:  # noqa: BLE001
             logger.warning(

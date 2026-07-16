@@ -990,7 +990,7 @@ def check_embedding_model_loads() -> CheckResult:
             category="state",
         )
     try:
-        from durin.memory.embedding import FastembedProvider
+        from durin.memory.embedding import provider_from_config
     except Exception:  # noqa: BLE001
         return CheckResult(
             "embedding model load", "ok",
@@ -1011,7 +1011,7 @@ def check_embedding_model_loads() -> CheckResult:
             category="state",
         )
     try:
-        provider = FastembedProvider(model=model_id)
+        provider = provider_from_config(cfg, model=model_id)
         vec = provider.embed(["health probe"])[0]
     except Exception as exc:  # noqa: BLE001
         return CheckResult(

@@ -26,7 +26,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from durin.memory.derived_from_dream import link_derived_from_for_session
-from durin.memory.embedding import FastembedProvider
+from durin.memory.embedding import provider_from_config
 from durin.memory.extract_runner import run_extract_for_session
 from durin.memory.refine_dream import run_refine
 from durin.memory.vector_index import VectorIndex, vector_index_available
@@ -54,7 +54,7 @@ def dream_vector_index(workspace: Path, cfg: Any) -> "VectorIndex | None":
         if getattr(getattr(cfg, "memory", None), "enabled", False):
             _emit("memory.dream.vector_unavailable")
         return None
-    return VectorIndex(workspace, FastembedProvider(model=cfg.memory.embedding.model))
+    return VectorIndex(workspace, provider_from_config(cfg))
 
 
 class ReactiveDreamGate:

@@ -33,11 +33,16 @@ than guessing.
 
 from __future__ import annotations
 
+import multiprocessing
 import threading
 import time
 import warnings
 from abc import ABC, abstractmethod
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from typing import Any
+
+from loguru import logger
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.extras import ensure_or_note
@@ -47,6 +52,7 @@ __all__ = [
     "FastembedProvider",
     "list_supported_models",
     "model_dimensions",
+    "provider_from_config",
 ]
 
 
@@ -133,6 +139,22 @@ def _register_custom_models() -> None:
                 size_in_gb=kwargs.get("size_in_gb", 0.0),
             )
             _REGISTERED_CUSTOM.add(model_id)
+
+
+def _rss_bytes() -> int | None:
+    """Current RSS of this process (Linux); None where /proc is absent.
+
+    Deliberately not psutil — no new dependency for one gauge. macOS dev
+    machines just omit the field; the deploy target is Linux.
+    """
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return None
 
 
 # Cached catalog from fastembed.TextEmbedding.list_supported_models().
@@ -278,7 +300,14 @@ class FastembedProvider(EmbeddingProvider):
 
     DEFAULT_MODEL = "intfloat/multilingual-e5-small"
 
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str | None = None,
+        *,
+        batch_size: int = 32,
+        isolation: str = "inline",
+        recycle_batches: int = 64,
+    ) -> None:
         self._model_name = model or self.DEFAULT_MODEL
         # Validate at construction time — surface unknown models at the
         # config boundary instead of at the first embed() call.
@@ -286,6 +315,15 @@ class FastembedProvider(EmbeddingProvider):
         if self._model_name not in catalog:
             raise ValueError(_unknown_model_error(self._model_name, catalog))
         self._model: Any = None
+        # Peak ONNX activation memory scales with the per-run batch, and
+        # the CPU arena never returns its high-water mark to the OS —
+        # keep this bounded (the library default of 256 reaches GBs).
+        self._batch_size = batch_size
+        # "process" = run embeds in a recyclable worker subprocess
+        # (arena dies with the child); "inline" = legacy in-process.
+        self._isolation = isolation
+        self._recycle_batches = recycle_batches
+        self._pool: Any = None  # created lazily by Task 2
         # The loop and the Dream daemon thread share one provider (B4); guard
         # the lazy first load so the heavy ONNX model is constructed once.
         self._load_lock = threading.Lock()
@@ -302,10 +340,13 @@ class FastembedProvider(EmbeddingProvider):
     def warmup(cls, model: str | None = None) -> float:
         """Download (if missing) and load the model; return load duration ms.
 
-        Intended for the onboard wizard and for `AgentLoop` boot when
-        the user has just enabled memory: paying the ~18 s first-time
-        download here, while the user is actively waiting, is better
-        than paying it on the first tool call mid-conversation.
+        Intended for the onboard wizard (a one-shot process, so the
+        inline parent load is harmless there): paying the ~18 s
+        first-time download here, while the user is actively waiting,
+        is better than paying it on the first tool call
+        mid-conversation. Long-lived processes must warm up through
+        ``provider_from_config`` + ``embed()`` instead, so
+        ``isolation="process"`` keeps the model out of the parent.
 
         The loaded model is discarded — this is a side-effect call to
         populate the on-disk model cache. The next FastembedProvider
@@ -324,23 +365,82 @@ class FastembedProvider(EmbeddingProvider):
         """
         if not texts:
             return []
+        t0 = time.monotonic()
+        if self._isolation == "process":
+            try:
+                from durin.memory import embedding_worker
+
+                pool = self._ensure_pool()
+                out = pool.submit(
+                    embedding_worker.embed_batch, texts, self._batch_size
+                ).result()
+                self._emit_embed_event(len(texts), t0)
+                return out
+            except (BrokenProcessPool, OSError):
+                # Pool infrastructure failure only (spawn refused, child
+                # OOM-killed, broken pool). Embedding must keep working —
+                # degrade to inline for the rest of this process and say
+                # so loudly: the operator loses arena containment, not
+                # the feature. Task-level errors raised inside
+                # embed_batch (e.g. a malformed text) propagate to the
+                # caller unchanged, exactly as inline mode would — one
+                # bad input must not tear down a healthy pool.
+                logger.exception(
+                    "embedding worker failed — falling back to inline for "
+                    "the life of this process"
+                )
+                if self._pool is not None:
+                    try:
+                        self._pool.shutdown(wait=False, cancel_futures=True)
+                    except Exception:
+                        pass  # broken pools may raise during teardown
+                self._isolation = "inline"
+                self._pool = None
         if self._model is None:
             with self._load_lock:
                 if self._model is None:
                     self._load()
         assert self._model is not None
-        t0 = time.monotonic()
-        # fastembed.embed() returns an iterator of numpy arrays.
-        out = [list(map(float, vec)) for vec in self._model.embed(texts)]
+        out = [
+            list(map(float, vec))
+            for vec in self._model.embed(texts, batch_size=self._batch_size)
+        ]
+        self._emit_embed_event(len(texts), t0)
+        return out
+
+    def _emit_embed_event(self, n_texts: int, t0: float) -> None:
         emit_tool_event(
             "memory.embedding.embed",
             {
                 "model": self._model_name,
-                "batch_size": len(texts),
+                "batch_size": n_texts,
                 "duration_ms": (time.monotonic() - t0) * 1000.0,
+                "isolation": self._isolation,
+                "rss_bytes": _rss_bytes(),
             },
         )
-        return out
+
+    def _ensure_pool(self) -> ProcessPoolExecutor:
+        """Lazily create the single-worker embedding pool.
+
+        spawn (not fork): the gateway holds asyncio loops, sqlite handles
+        and loguru sinks a forked child must not inherit. One worker keeps
+        ONNX single-instance; max_tasks_per_child recycles it so the
+        arena's high-water mark is periodically returned to the OS.
+        """
+        if self._pool is None:
+            with self._load_lock:
+                if self._pool is None:
+                    from durin.memory import embedding_worker
+
+                    self._pool = ProcessPoolExecutor(
+                        max_workers=1,
+                        mp_context=multiprocessing.get_context("spawn"),
+                        initializer=embedding_worker.init_worker,
+                        initargs=(self._model_name,),
+                        max_tasks_per_child=self._recycle_batches,
+                    )
+        return self._pool
 
     def embed_passages(self, texts: list[str]) -> list[list[float]]:
         """Embed documents for storage. Applies ``passage: `` prefix
@@ -403,3 +503,17 @@ class FastembedProvider(EmbeddingProvider):
                 "duration_ms": (time.monotonic() - t0) * 1000.0,
             },
         )
+
+
+def provider_from_config(cfg: Any, *, model: str | None = None) -> FastembedProvider:
+    """Build the provider from ``cfg.memory.embedding`` — the single place
+    production code picks up batch bounding and process isolation. Call
+    sites that already resolved a model name pass it via ``model``.
+    """
+    e = cfg.memory.embedding
+    return FastembedProvider(
+        model=model or e.model or None,
+        batch_size=e.batch_size,
+        isolation=e.isolation,
+        recycle_batches=e.worker_recycle_batches,
+    )
