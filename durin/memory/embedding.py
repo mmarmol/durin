@@ -278,7 +278,14 @@ class FastembedProvider(EmbeddingProvider):
 
     DEFAULT_MODEL = "intfloat/multilingual-e5-small"
 
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str | None = None,
+        *,
+        batch_size: int = 32,
+        isolation: str = "inline",
+        recycle_batches: int = 64,
+    ) -> None:
         self._model_name = model or self.DEFAULT_MODEL
         # Validate at construction time — surface unknown models at the
         # config boundary instead of at the first embed() call.
@@ -286,6 +293,15 @@ class FastembedProvider(EmbeddingProvider):
         if self._model_name not in catalog:
             raise ValueError(_unknown_model_error(self._model_name, catalog))
         self._model: Any = None
+        # Peak ONNX activation memory scales with the per-run batch, and
+        # the CPU arena never returns its high-water mark to the OS —
+        # keep this bounded (the library default of 256 reaches GBs).
+        self._batch_size = batch_size
+        # "process" = run embeds in a recyclable worker subprocess
+        # (arena dies with the child); "inline" = legacy in-process.
+        self._isolation = isolation
+        self._recycle_batches = recycle_batches
+        self._pool: Any = None  # created lazily by Task 2
         # The loop and the Dream daemon thread share one provider (B4); guard
         # the lazy first load so the heavy ONNX model is constructed once.
         self._load_lock = threading.Lock()
@@ -331,7 +347,10 @@ class FastembedProvider(EmbeddingProvider):
         assert self._model is not None
         t0 = time.monotonic()
         # fastembed.embed() returns an iterator of numpy arrays.
-        out = [list(map(float, vec)) for vec in self._model.embed(texts)]
+        out = [
+            list(map(float, vec))
+            for vec in self._model.embed(texts, batch_size=self._batch_size)
+        ]
         emit_tool_event(
             "memory.embedding.embed",
             {

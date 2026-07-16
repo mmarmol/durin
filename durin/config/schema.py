@@ -190,6 +190,21 @@ class MemoryEmbeddingConfig(Base):
     # paraphrase-multilingual-MiniLM-L12-v2; see `_EMBEDDING_CHOICES` in
     # the onboarding wizard for the rationale.
     model: str = Field(default="intfloat/multilingual-e5-small", description="Embedding model name; must exist in fastembed's catalog for the installed version")
+    batch_size: int = Field(
+        default=32,
+        ge=1,
+        le=1024,
+        description="Texts per ONNX run inside one embed call. Peak activation memory scales with this; the fastembed default of 256 ratchets the never-shrinking ONNX arena to gigabytes",
+    )
+    isolation: Literal["process", "inline"] = Field(
+        default="process",
+        description='"process" runs embeddings in a recyclable worker subprocess so arena growth is reclaimed; "inline" keeps them in the gateway process',
+    )
+    worker_recycle_batches: int = Field(
+        default=64,
+        ge=1,
+        description="With isolation=process: recycle the worker after this many embed calls, bounding the arena high-water mark",
+    )
     base_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("baseUrl", "base_url"),
