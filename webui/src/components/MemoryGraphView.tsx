@@ -563,8 +563,11 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
 
       ctx.clearRect(0, 0, w, h);
 
-      // Caso 2: recede the whole graph behind the search results.
-      ctx.globalAlpha = recedeRef.current ? 0.18 : 1;
+      // Caso 2: recede the whole graph behind the search results — but only
+      // while there are no matched nodes to highlight. Once searchMatchSet
+      // exists, the per-node dimming (matches lit, rest faint) IS the signal;
+      // a uniform veil on top would grey out the very nodes the search found.
+      ctx.globalAlpha = recedeRef.current && !searchMatchSet ? 0.18 : 1;
 
       ctx.lineCap = "round";
       for (const e of edges) {
