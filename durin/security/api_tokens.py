@@ -31,6 +31,30 @@ _LOCK = threading.Lock()
 
 _EMPTY: dict[str, Any] = {"media_secret": None, "tokens": {}}
 
+# resolve() runs on every authenticated HTTP request; without a cache each
+# request pays a flock + full-file parse + per-entry hash scan + fsync'd
+# rewrite (last_used_at), which stalls the caller whenever the disk is busy.
+# The cache is validated against the file's (mtime_ns, size) on every hit, so
+# any writer — this process or another (CLI issue/revoke) — invalidates it
+# implicitly; a revoked token is rejected on the very next request.
+# (path, sha256(plaintext)) → (st_mtime_ns, st_size, entry-with-token_id)
+_RESOLVE_CACHE: dict[tuple[str, str], tuple[int, int, dict[str, Any]]] = {}
+
+# last_used_at is informational (shown in the tokens listing); persisting it
+# on every request would defeat the cache. One write per token per window.
+_LAST_USED_PERSIST_INTERVAL_S = 60.0
+
+
+def _cache_key(path: Path, plaintext: str) -> tuple[str, str]:
+    """Cache key that never holds the plaintext token in memory."""
+    return (str(path), hashlib.sha256(plaintext.encode()).hexdigest())
+
+
+def _invalidate_resolve_cache(path: Path) -> None:
+    p = str(path)
+    for key in [k for k in _RESOLVE_CACHE if k[0] == p]:
+        del _RESOLVE_CACHE[key]
+
 # Bound store growth: bootstrap mints one token per webui load, so without a
 # cap + expiry purge the file would grow without limit (the old in-memory pool
 # had the same MAX). Expired tokens are dropped on every issue; if the live set
@@ -145,6 +169,7 @@ class ApiTokenStore:
                 "last_used_at": None,
             }
             self._save(data)
+            _invalidate_resolve_cache(self._path)
 
         return token_id, plaintext
 
@@ -152,10 +177,30 @@ class ApiTokenStore:
         """Validate *plaintext* against stored hashes.
 
         Returns the entry dict (with ``token_id`` injected) on success, or
-        ``None`` if the token is absent, expired, or does not match.  On
-        success ``last_used_at`` is updated and persisted.
+        ``None`` if the token is absent, expired, or does not match.
+
+        Hot path: a hit whose file (mtime_ns, size) matches the cached
+        snapshot returns without touching the file or any lock beyond
+        ``_LOCK``.  ``last_used_at`` is persisted at most once per
+        ``_LAST_USED_PERSIST_INTERVAL_S`` per token; the returned entry
+        always carries the fresh timestamp.
         """
         now = time.time()
+        key = _cache_key(self._path, plaintext)
+        try:
+            st = self._path.stat()
+        except OSError:
+            st = None
+        with _LOCK:
+            cached = _RESOLVE_CACHE.get(key)
+            if cached is not None and st is not None:
+                mtime_ns, size, entry = cached
+                if (st.st_mtime_ns, st.st_size) == (mtime_ns, size):
+                    expires_at = entry.get("expires_at")
+                    if expires_at is not None and expires_at < now:
+                        del _RESOLVE_CACHE[key]
+                        return None
+                    return {**entry, "last_used_at": now}
         with _LOCK, cross_process_lock(self._path):
             data = self._load()
             for token_id, entry in data["tokens"].items():
@@ -164,9 +209,21 @@ class ApiTokenStore:
                     continue
                 candidate = _hash_token(entry["salt"], plaintext)
                 if hmac.compare_digest(candidate, entry["hash"]):
-                    entry["last_used_at"] = now
-                    self._save(data)
-                    return {**entry, "token_id": token_id}
+                    last = entry.get("last_used_at") or 0.0
+                    if now - last >= _LAST_USED_PERSIST_INTERVAL_S:
+                        entry["last_used_at"] = now
+                        self._save(data)
+                    try:
+                        st = self._path.stat()
+                        _RESOLVE_CACHE[key] = (
+                            st.st_mtime_ns,
+                            st.st_size,
+                            {**entry, "token_id": token_id},
+                        )
+                    except OSError:
+                        pass
+                    return {**entry, "token_id": token_id, "last_used_at": now}
+            _RESOLVE_CACHE.pop(key, None)
         return None
 
     def revoke(self, token_id: str) -> bool:
@@ -176,6 +233,7 @@ class ApiTokenStore:
             if token_id in data["tokens"]:
                 del data["tokens"][token_id]
                 self._save(data)
+                _invalidate_resolve_cache(self._path)
                 return True
         return False
 

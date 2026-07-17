@@ -187,3 +187,67 @@ def test_issue_enforces_cap(store, monkeypatch):
     assert len(live) <= 3  # never exceeds the cap
     assert ids[-1] in live  # newest kept
     assert ids[0] not in live  # oldest evicted
+
+
+# ---------------------------------------------------------------------------
+# resolve cache (mtime-validated) + rate-limited last_used_at persist
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_cache_hit_skips_disk(store, monkeypatch):
+    _tid, plain = store.issue(["admin"], label="t")
+    assert store.resolve(plain) is not None  # populates cache
+
+    calls = {"n": 0}
+    real_load = ApiTokenStore._load
+
+    def counting_load(self):
+        calls["n"] += 1
+        return real_load(self)
+
+    monkeypatch.setattr(ApiTokenStore, "_load", counting_load)
+    assert store.resolve(plain) is not None  # cache hit: no file read
+    assert calls["n"] == 0
+
+
+def test_resolve_last_used_persist_rate_limited(store, tmp_path):
+    _tid, plain = store.issue(["admin"], label="t")
+    assert store.resolve(plain) is not None  # first resolve may persist
+    first_stat = (tmp_path / "api_tokens.json").stat()
+    for _ in range(5):
+        assert store.resolve(plain) is not None
+    # No further writes inside the persist window.
+    after = (tmp_path / "api_tokens.json").stat()
+    assert (after.st_mtime_ns, after.st_size) == (
+        first_stat.st_mtime_ns,
+        first_stat.st_size,
+    )
+    # Returned entry still reports a fresh last_used_at.
+    entry = store.resolve(plain)
+    assert entry["last_used_at"] is not None
+    assert time.time() - entry["last_used_at"] < 5
+
+
+def test_resolve_sees_cross_process_revoke(store, tmp_path):
+    tid, plain = store.issue(["admin"], label="t")
+    assert store.resolve(plain) is not None  # cached
+    # Simulate another process revoking: independent store instance whose
+    # rewrite changes the file mtime/size — the cache must not survive it.
+    other = ApiTokenStore(path=tmp_path / "api_tokens.json")
+    assert other.revoke(tid) is True
+    assert store.resolve(plain) is None
+
+
+def test_revoke_invalidates_cache_in_process(store):
+    tid, plain = store.issue(["admin"], label="t")
+    assert store.resolve(plain) is not None
+    store.revoke(tid)
+    assert store.resolve(plain) is None
+
+
+def test_resolve_expired_cached_token_rejected(store, monkeypatch):
+    _tid, plain = store.issue(["admin"], label="t", ttl_s=3600)
+    assert store.resolve(plain) is not None  # cached with expires_at
+    real_time = time.time
+    monkeypatch.setattr(time, "time", lambda: real_time() + 7200)
+    assert store.resolve(plain) is None  # expiry honored on the hit path
