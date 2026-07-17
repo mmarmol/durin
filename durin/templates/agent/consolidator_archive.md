@@ -13,12 +13,12 @@ Output as concise bullet points, one fact per line. No preamble, no commentary.
 If nothing noteworthy happened, output only: (nothing)
 
 After your bullet list (or "(nothing)"), output a `---` line on its own, then a YAML block with two keys:
-- `entities`: list of named entities mentioned (people, projects, tools, file paths, concepts). Use the names exactly as they appeared. Empty list if none.
+- `entities`: list of typed entity references, each shaped `<type>:<value>` with a lowercase type — e.g. `person:marcelo`, `project:durin`, `tool:pipx`, `file:docs/guide/install.md`, `concept:compaction`. Use the value exactly as it appeared. Empty list if none.
 - `topics`: list of short topic labels (1-3 words each) for what was discussed. Empty list if none.
 
 Example output:
 - user prefers terse responses, no emojis
 - decided to drop the deprecated cache layer
 ---
-entities: [marcelo, durin, cache-layer]
+entities: [person:marcelo, project:durin, file:src/cache_layer.py]
 topics: [communication-style, architecture-cleanup]
