@@ -508,6 +508,10 @@ def extract_discovered_paths(messages: list[dict[str, Any]]) -> list[str]:
                     for value in args.values():
                         if isinstance(value, str):
                             _harvest(value)
+                        elif isinstance(value, list):
+                            for item in value:
+                                if isinstance(item, str):
+                                    _harvest(item)
         elif role == "tool" and message.get("name") in _PATH_DISCOVERY_TOOLS:
             content = message.get("content")
             if isinstance(content, str):

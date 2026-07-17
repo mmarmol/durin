@@ -41,6 +41,11 @@ def test_extracts_paths_from_exec_command_strings():
     assert "/etc/durin/config.json" in extract_discovered_paths(messages)
 
 
+def test_extracts_paths_from_list_valued_tool_call_arguments():
+    messages = [_tool_call_msg("read_file", {"paths": ["/src/auth.py", "/tests/test_auth.py"]})]
+    assert extract_discovered_paths(messages) == ["/src/auth.py", "/tests/test_auth.py"]
+
+
 def test_extracts_relative_paths_from_tool_results():
     messages = [{
         "role": "tool", "name": "grep",
