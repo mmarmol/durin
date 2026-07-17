@@ -143,3 +143,108 @@ def test_replay_infers_attachment_kind_from_name() -> None:
     assistant = [m for m in msgs if m["role"] == "assistant"][-1]
     kinds = [m["kind"] for m in assistant["media"]]
     assert kinds == ["html", "image", "video", "file", "image"]
+
+
+# ---------------------------------------------------------------------------
+# TranscriptWriter — coalesced off-loop appends (one fsync per batch)
+# ---------------------------------------------------------------------------
+
+import asyncio
+import json
+import os
+
+import pytest
+
+from durin.utils import webui_transcript as wt
+
+
+@pytest.fixture()
+def writer_env(tmp_path, monkeypatch):
+    monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
+    wt.reset_transcript_writer_for_tests()
+    yield tmp_path
+    wt.reset_transcript_writer_for_tests()
+
+
+def _read_events(key):
+    path = wt.webui_transcript_path(key)
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def test_enqueue_preserves_order_across_flushes(writer_env):
+    async def run():
+        w = wt.get_transcript_writer()
+        for i in range(250):
+            w.enqueue("websocket:s1", {"event": "delta", "i": i})
+        await w.flush("websocket:s1")
+        w.enqueue("websocket:s1", {"event": "turn_end"})
+        await w.flush("websocket:s1")
+
+    asyncio.run(run())
+    events = _read_events("websocket:s1")
+    assert [e.get("i") for e in events[:250]] == list(range(250))
+    assert events[-1]["event"] == "turn_end"
+
+
+def test_single_fsync_per_batch(writer_env, monkeypatch):
+    counts = {"fsync": 0}
+    real_fsync = os.fsync
+
+    def counting_fsync(fd):
+        counts["fsync"] += 1
+        return real_fsync(fd)
+
+    monkeypatch.setattr(wt.os, "fsync", counting_fsync)
+
+    async def run():
+        w = wt.get_transcript_writer()
+        for i in range(100):
+            w.enqueue("websocket:s1", {"event": "delta", "i": i})
+        await w.flush("websocket:s1")
+
+    asyncio.run(run())
+    assert counts["fsync"] == 1
+    assert len(_read_events("websocket:s1")) == 100
+
+
+def test_flush_is_read_barrier(writer_env):
+    async def run():
+        w = wt.get_transcript_writer()
+        w.enqueue("websocket:s1", {"event": "delta", "i": 0})
+        await w.flush("websocket:s1")
+        assert wt.webui_transcript_path("websocket:s1").exists()
+
+    asyncio.run(run())
+
+
+def test_oversized_object_dropped_not_raised(writer_env):
+    async def run():
+        w = wt.get_transcript_writer()
+        w.enqueue("websocket:s1", {"event": "delta", "text": "x" * (9 * 1024 * 1024)})
+        w.enqueue("websocket:s1", {"event": "delta", "i": 1})
+        await w.flush("websocket:s1")
+
+    asyncio.run(run())
+    events = _read_events("websocket:s1")
+    assert len(events) == 1 and events[0]["i"] == 1
+
+
+def test_interval_flush_without_explicit_barrier(writer_env):
+    async def run():
+        w = wt.get_transcript_writer()
+        w.enqueue("websocket:s1", {"event": "delta", "i": 0})
+        await asyncio.sleep(0.4)  # > flush interval, no barrier
+
+    asyncio.run(run())
+    assert wt.webui_transcript_path("websocket:s1").exists()
+
+
+def test_aclose_drains_pending(writer_env):
+    async def run():
+        w = wt.get_transcript_writer()
+        w.enqueue("websocket:s1", {"event": "delta", "i": 7})
+        await w.aclose()
+
+    asyncio.run(run())
+    events = _read_events("websocket:s1")
+    assert events and events[0]["i"] == 7

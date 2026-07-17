@@ -43,7 +43,7 @@ from durin.utils.media_decode import (
     FileSizeExceeded,
     save_base64_data_url,
 )
-from durin.utils.webui_transcript import append_transcript_object
+from durin.utils.webui_transcript import get_transcript_writer
 from durin.utils.webui_turn_helpers import websocket_turn_wall_started_at
 
 if TYPE_CHECKING:
@@ -997,12 +997,10 @@ class WebSocketChannel(BaseChannel):
         )
 
     def _try_append_webui_transcript(self, chat_id: str, wire: dict[str, Any]) -> None:
-        sk = f"websocket:{chat_id}"
-        try:
-            dup = json.loads(json.dumps(wire, ensure_ascii=False))
-            append_transcript_object(sk, dup)
-        except (ValueError, TypeError) as e:
-            self.logger.warning("webui transcript append failed: {}", e)
+        # enqueue serializes immediately (freezing the payload's current
+        # state, which the old dumps→loads deep copy existed for) and never
+        # raises; the writer batches the disk fsyncs off the event loop.
+        get_transcript_writer().enqueue(f"websocket:{chat_id}", wire)
 
     def _augment_transcript_user_media(self, paths: list[str]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -1778,6 +1776,9 @@ class WebSocketChannel(BaseChannel):
         self._conn_chats.clear()
         self._conn_default.clear()
         self._issued_tokens.clear()
+        # Shutdown barrier: any buffered transcript events reach disk before
+        # the process exits.
+        await get_transcript_writer().aclose()
 
     async def _safe_send_to(self, connection: Any, raw: str, *, label: str = "") -> None:
         """Send a raw frame to one connection, cleaning up on ConnectionClosed."""

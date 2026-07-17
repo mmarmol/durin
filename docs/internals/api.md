@@ -187,6 +187,12 @@ endpoint falls back to converting the raw session history instead — see
 [channels.md](channels.md) for that path — and that fallback payload always
 carries `prevCursor: null` since it is not byte-paged.
 
+Display-transcript appends are buffered: the WS channel enqueues each streamed
+event into a process-wide `TranscriptWriter`, which batches them to disk with
+one fsync per session file per drain (≤ ~100 ms behind the stream). The
+webui-thread route flushes the writer for the requested key before reading, so
+a reloading client always sees every event enqueued up to that moment.
+
 ### Webhook trigger ingress
 
 `POST /api/v1/hooks/{hook}` is the other non-bearer route: rather than

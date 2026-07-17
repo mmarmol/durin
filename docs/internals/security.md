@@ -332,6 +332,14 @@ never written to disk. Expired tokens are purged on every issue; the live set is
 capped at 10,000 entries to bound store growth. `resolve()` iterates stored tokens
 and uses `hmac.compare_digest()` for timing-safe comparison.
 
+Because `resolve()` runs on every authenticated HTTP request, hits are served
+from a per-process cache keyed by the *hash* of the presented token (the
+plaintext is never held), validated against the store file's `(mtime_ns, size)`
+on every request — so a revoke or issue from any process invalidates it by the
+very next request. `last_used_at` is informational and persisted at most once
+per minute per token; the old behavior rewrote the whole store with fsync on
+every request.
+
 `Principal` (`durin/service/principal.py`) is an immutable dataclass carrying
 `subject` (token id or `"local"`), `scopes` (a `frozenset[str]` of scope string
 values), and `kind` (`"local"` or `"remote"`). In-process callers (TUI, cron)
