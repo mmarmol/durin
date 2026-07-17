@@ -66,6 +66,7 @@ class SessionMessagesResult(Result):
 
 class WebuiThreadQuery(Query):
     key: str
+    before: int | None = None
 
 
 class WebuiThreadResult(Result):

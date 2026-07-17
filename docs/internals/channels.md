@@ -810,9 +810,16 @@ would spawn a new websocket session, not resume the original channel). The
 `ThreadShell` component disables the composer and shows a banner when the active
 session's `channel` is not `"websocket"`.
 
-The converter is a pure function (no I/O): media signing reuses the channel's
-existing `_augment_transcript_user_media` callback, which HMAC-signs file paths
-using the same per-process `_media_secret` as websocket sessions.
+The converter itself is a pure function (no I/O): media signing reuses the
+channel's existing `_augment_transcript_user_media` callback, which HMAC-signs
+file paths using the same per-process `_media_secret` as websocket sessions.
+Its result is cached in-process in `durin/api/asgi.py`, keyed by
+`(session key, session file mtime_ns, session file size)`, so repeated reads of
+an unchanged session skip the conversion; a new turn changes the file's mtime
+and invalidates the entry. The cache is a small dict capped at a handful of
+entries with oldest-first eviction — this fallback path only serves
+non-websocket sessions, which are read infrequently compared to live websocket
+threads.
 
 ## 7. Curated rationale
 

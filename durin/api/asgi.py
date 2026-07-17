@@ -471,6 +471,45 @@ async def _health_handler(_request: Request) -> Response:
 
 
 # ---------------------------------------------------------------------------
+# Webui-thread fallback conversion cache
+# ---------------------------------------------------------------------------
+#
+# Non-websocket sessions (CLI, Telegram, subagent) have no webui JSONL
+# transcript, so every read falls back to converting the raw agent-session
+# messages. That conversion is pure given the session file's bytes, so it is
+# cached by (key, mtime_ns, size) — any write to the session file (a new
+# turn) changes the key and invalidates the entry. Capped at a small size
+# with oldest-first eviction; no new dependency (plain dict, insertion order).
+
+_WEBUI_THREAD_FALLBACK_CACHE_MAX = 8
+_webui_thread_fallback_cache: dict[tuple[str, int, int], list[dict[str, Any]]] = {}
+
+
+def _fallback_ui_messages(
+    key: str,
+    session_path: Path,
+    raw_messages: list[dict[str, Any]],
+    augment_user_media: Callable[[list[str]], list[dict[str, Any]]] | None,
+) -> list[dict[str, Any]]:
+    """Convert raw session messages to UI messages, cached by session-file identity."""
+    from durin.utils.webui_transcript import session_messages_to_ui_messages
+
+    stat = session_path.stat()
+    cache_key = (key, stat.st_mtime_ns, stat.st_size)
+    cached = _webui_thread_fallback_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    ui_messages = session_messages_to_ui_messages(
+        raw_messages, augment_user_media=augment_user_media
+    )
+    if len(_webui_thread_fallback_cache) >= _WEBUI_THREAD_FALLBACK_CACHE_MAX:
+        oldest_key = next(iter(_webui_thread_fallback_cache))
+        del _webui_thread_fallback_cache[oldest_key]
+    _webui_thread_fallback_cache[cache_key] = ui_messages
+    return ui_messages
+
+
+# ---------------------------------------------------------------------------
 # Gateway HTTP app factory
 # ---------------------------------------------------------------------------
 
@@ -681,7 +720,6 @@ def build_gateway_http_app(
         from durin.utils.webui_transcript import (
             WEBUI_TRANSCRIPT_SCHEMA_VERSION,
             build_webui_thread_response,
-            session_messages_to_ui_messages,
         )
 
         principal = resolve_principal_from_headers(
@@ -692,16 +730,31 @@ def build_gateway_http_app(
                 UnauthenticatedError("Missing or invalid bearer token")
             )
         key = request.path_params["key"]
+        before_raw = request.query_params.get("before")
+        before: int | None = None
+        if before_raw is not None:
+            try:
+                before = int(before_raw)
+            except ValueError:
+                return _problem_response(
+                    ValidationFailedError(
+                        f"'before' must be an integer, got {before_raw!r}"
+                    )
+                )
+            if before < 0:
+                return _problem_response(
+                    ValidationFailedError("'before' must be non-negative")
+                )
         try:
             # Validates the key + enforces scope; the real payload is built below
             # with the channel's signing callback (which the service cannot hold).
             await registry.get("sessions").webui_thread(
-                WebuiThreadQuery(key=key), principal
+                WebuiThreadQuery(key=key, before=before), principal
             )
         except DomainError as exc:
             return _problem_response(exc)
         data = build_webui_thread_response(
-            key, augment_user_media=channel._augment_transcript_user_media
+            key, before=before, augment_user_media=channel._augment_transcript_user_media
         )
         sm = channel._session_manager
         if data is None:
@@ -711,15 +764,18 @@ def build_gateway_http_app(
             raw = sm.read_session_file(key) if sm is not None else None
             raw_messages = (raw or {}).get("messages") or []
             if raw_messages:
-                ui_messages = session_messages_to_ui_messages(
+                ui_messages = _fallback_ui_messages(
+                    key,
+                    sm._get_session_path(key),
                     raw_messages,
-                    augment_user_media=channel._augment_transcript_user_media,
+                    channel._augment_transcript_user_media,
                 )
                 data = {
                     "schemaVersion": WEBUI_TRANSCRIPT_SCHEMA_VERSION,
                     "sessionKey": key,
                     "messages": ui_messages,
                     "readOnly": True,
+                    "prevCursor": None,
                 }
             else:
                 return _problem_response(
