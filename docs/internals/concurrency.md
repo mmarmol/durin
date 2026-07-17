@@ -130,7 +130,7 @@ flowchart TB
     GWT -.acquire order.-> FTS["FTS5 / LanceDB indexes"]
 
     classDef dom fill:#1f2933,stroke:#52606d,color:#e4e7eb;
-    class TURN,SAVE,CFG,TICK,CACTION,GWT dom;
+    class TURN,SAVE,CFG,TICK,CACTION,GWT,DREAM dom;
 ```
 
 Two more orderings are in-process, so they do not appear as files but are part of
