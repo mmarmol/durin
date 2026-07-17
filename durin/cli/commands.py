@@ -1356,280 +1356,51 @@ def _run_gateway(
         if job.name == "memory_dream":
             import asyncio as _asyncio
 
-            workspace = config.workspace_path
-            from durin.memory.always_on_dream import run_always_on_pass
-            from durin.memory.distill_dream import (
-                run_curate_topics_pass,
-                run_distill_reference_pass,
-                run_seed_entities_pass,
-            )
-            from durin.memory.dream_passes import (
-                dream_vector_index,
-                run_derived_from_pass,
-                run_extract_pass,
-                run_refine_pass,
-                run_skill_extract_pass,
-            )
-            from durin.memory.model_resolve import resolve_aux_preset
-            from durin.workflow.workflow_improve_dream import run_workflow_improve_pass
-
-            # The daily cron runs the extract pass (sessions → entity attributes),
-            # the skill-extract pass (sessions → reusable procedures as skills),
-            # then the refine pass (dedup). Writes go through memory_writer /
-            # skill_write.
-            # One resolution for the whole dream run: the memory preset pairs the
-            # model WITH its provider; passing just the name keeps the passes'
-            # default_llm_invoke (which resolves the same preset) consistent.
-            model = resolve_aux_preset(config, purpose="memory").model
-            _cron_max_s = config.memory.dream.max_seconds_per_run
-            _absorb = config.memory.dream.auto_absorb
-            _discover = config.memory.dream.discover_enabled
-            _skill_signals = config.memory.dream.skill_signals_enabled
-            _distill_refs = config.memory.dream.distill_references_enabled
-            _seed_entities = config.memory.dream.seed_entities_from_docs_enabled
-            _curate_topics = config.memory.dream.curate_topics_enabled
-            _learnings = config.memory.dream.learnings_sweep_enabled
-            _dream_error: Exception | None = None
-            from datetime import datetime, timezone
-            _run_started = datetime.now(timezone.utc)
-            _vi = dream_vector_index(workspace, config)
-
-            # Live feedback: persist this run's telemetry so the dream digest
-            # reflects it afterward, AND tee each activity event to the webui
-            # over the websocket as it happens. The passes run via
-            # asyncio.to_thread, which copies the current context, so binding the
-            # logger here propagates it into those threads; emit_tool_event then
-            # writes JSONL and fans out to the DreamProgressSink.
             from durin.channels.websocket import publish_dream_progress
-            from durin.memory.dream_live import DreamProgressSink
-            from durin.telemetry.logger import (
-                bind_telemetry,
-                get_session_logger,
-                reset_telemetry,
-            )
+            from durin.memory.dream_supervisor import run_dream_worker
 
+            workspace = config.workspace_path
             _dream_loop = _asyncio.get_running_loop()
 
             def _publish_dream(payload: dict) -> None:
-                # Pass threads can't touch the asyncio bus queue directly; hop
-                # back onto the loop thread first.
+                # The supervisor pumps worker stdout on a worker thread and
+                # can't touch the asyncio bus queue directly; hop onto the
+                # loop thread first.
                 _dream_loop.call_soon_threadsafe(
                     publish_dream_progress, bus, payload)
 
-            _dream_tlog = get_session_logger("cron_dream")
-            _dream_tlog.add_sink(DreamProgressSink(_publish_dream))
-            _dream_ttok = bind_telemetry(_dream_tlog)
-            ex, df, sk, rf, ao, wi = {}, {}, {}, {}, {}, {}
-            publish_dream_progress(bus, {"kind": "run_started"})
+            code = 0
+            _stderr_tail = ""
             try:
-                ex = await _asyncio.to_thread(
-                    run_extract_pass, workspace, model=model,
-                    max_seconds=_cron_max_s, discover=_discover,
-                    skill_signals=_skill_signals,
-                    learnings=_learnings,
-                    confidence_threshold=_absorb.confidence_threshold,
-                    semantic_distance_threshold=_absorb.semantic_distance_threshold,
-                    vector_index=_vi)
-                df = await _asyncio.to_thread(
-                    run_derived_from_pass, workspace, model=model, max_seconds=_cron_max_s)
-                # Distil ingested reference documents into outline sidecars —
-                # the "know the book" index. Independent of entity merges, so it
-                # slots right after the source-link pass.
-                di = (
-                    await _asyncio.to_thread(
-                        run_distill_reference_pass, workspace, model=model,
-                        max_seconds=_cron_max_s)
-                    if _distill_refs
-                    else {"references": 0, "outlined": 0, "skipped": 0, "duration_ms": 0}
+                code, _stderr_tail = await _asyncio.to_thread(
+                    run_dream_worker,
+                    workspace=workspace,
+                    mode="full",
+                    trigger="cron",
+                    on_progress=_publish_dream,
                 )
-                # Seed candidate entities from each distilled document's outline
-                # (derived_from = the document). Reads outlines the distil step
-                # just wrote, so it follows it. The refine pass dedups later.
-                se = (
-                    await _asyncio.to_thread(
-                        run_seed_entities_pass, workspace, model=model,
-                        max_seconds=_cron_max_s)
-                    if _seed_entities
-                    else {"references": 0, "seeded_docs": 0, "entities": 0,
-                          "skipped": 0, "duration_ms": 0}
-                )
-                # Curate the library's topic index from the distilled abstracts —
-                # the clean, stable "Covers:" map the always-on awareness reads.
-                # Reads the outlines the distil step wrote, so it follows it.
-                ct = (
-                    await _asyncio.to_thread(
-                        run_curate_topics_pass, workspace, model=model,
-                        max_seconds=_cron_max_s)
-                    if _curate_topics
-                    else {"topics": 0, "skipped": True, "duration_ms": 0}
-                )
-                logger.info(
-                    "memory_dream cron: distill(references={} outlined={} "
-                    "skipped={} {}ms) seed_entities(docs={} entities={} {}ms) "
-                    "topics(n={} {}ms)",
-                    di.get("references", 0), di.get("outlined", 0),
-                    di.get("skipped", 0), di.get("duration_ms", 0),
-                    se.get("seeded_docs", 0), se.get("entities", 0),
-                    se.get("duration_ms", 0),
-                    ct.get("topics", 0), ct.get("duration_ms", 0))
-                sk = await _asyncio.to_thread(run_skill_extract_pass, workspace, model=model)
-                rf = await _asyncio.to_thread(
-                    run_refine_pass, workspace, model=model,
-                    enabled=_absorb.enabled,
-                    confidence_threshold=_absorb.confidence_threshold,
-                    escalate_floor=_absorb.escalate_floor,
-                    semantic_distance_threshold=_absorb.semantic_distance_threshold,
-                    run_started_at=_run_started,
-                    vector_index=_vi)
-                # Relation-vocabulary hygiene: canonicalise entity-relation type
-                # labels so graph edges line up, and report the vocabulary for
-                # supervision. Runs after refine (which merges entities and their
-                # relations).
-                from durin.memory.relation_hygiene import run_consolidate_relations_pass
-                rh = (
-                    await _asyncio.to_thread(
-                        run_consolidate_relations_pass, workspace,
-                        max_seconds=_cron_max_s)
-                    if config.memory.dream.consolidate_relations_enabled
-                    else {"types_before": 0, "types_after": 0,
-                          "pages_changed": 0, "merged_duplicates": 0, "duration_ms": 0}
-                )
-                logger.info(
-                    "memory_dream cron: relations(types {}→{} pages={} merged={} {}ms)",
-                    rh.get("types_before", 0), rh.get("types_after", 0),
-                    rh.get("pages_changed", 0), rh.get("merged_duplicates", 0),
-                    rh.get("duration_ms", 0))
-                ao = await _asyncio.to_thread(
-                    run_always_on_pass, workspace, model=model,
-                    token_budget=config.memory.dream.always_on_token_budget)
-                # Workflow self-improvement: inert unless a workflow opts into
-                # improvement_mode 'manual'/'auto' (off by default).
-                wi = await _asyncio.to_thread(run_workflow_improve_pass, workspace, model=model)
-                logger.info(
-                    "memory_dream cron: workflow_improve(workflows={} proposals={})",
-                    wi.get("workflows", 0), wi.get("proposals", 0))
-                logger.info(
-                    "memory_dream cron: extract(sessions={} entities={} {}ms yielded={}) "
-                    "derived_from(links={} sessions={} {}ms) "
-                    "skills(touched={} {}ms) refine(merged={} kept={} {}ms) "
-                    "always_on(pinned={} {}tok {}ms)",
-                    ex["sessions"], ex["entities"], ex.get("duration_ms", 0),
-                    ex.get("yielded", False),
-                    df.get("links", 0), df.get("sessions", 0), df.get("duration_ms", 0),
-                    sk.get("skills_touched", 0),
-                    sk.get("duration_ms", 0), len(rf.get("merged", [])),
-                    len(rf.get("kept_separate", [])), rf.get("duration_ms", 0),
-                    ao.get("selected", 0), ao.get("tokens", 0), ao.get("duration_ms", 0),
-                )
-            except Exception as _dream_exc:
-                logger.exception("memory_dream cron failed")
-                _dream_error = _dream_exc
-
-            # Skills improved by the curation pass (edits applied to existing
-            # skills) — distinct from skills CREATED by the skill-extract pass.
-            # Initialized here so the run summary has it even if curation fails.
-            _skills_improved = 0
-            try:
-                from durin.agent.skill_curation import curate_catalog
-                from durin.memory.llm_invoke import default_llm_invoke
-
-                def _judge(prompt: str) -> str:
-                    # ONE completion via the memory preset (model + provider),
-                    # using the same call shape the refine pass's absorb judge uses.
-                    return default_llm_invoke(prompt).text
-
-                from durin.agent.skill_drift import check_upstream_drift
-                from durin.agent.skill_usage import collect_recent_skill_calls
-                _allowlist = list(config.skills.security.allowlist)
-                _usage = collect_recent_skill_calls(workspace, within_hours=24)
-                # Off the event loop: curation's sync judge (and the agentic
-                # restructure executor's asyncio.run) must run in a worker thread,
-                # not on the gateway's loop, or they block HTTP serving / raise
-                # "asyncio.run from a running loop".
-                summary = await _asyncio.to_thread(
-                    curate_catalog, workspace, judge=_judge, usage=_usage,
-                    drift_check=check_upstream_drift, allowlist=_allowlist)
-                _skills_improved = summary.get("applied", 0)
-                _obs = summary.get("observations", {})
-                logger.info(
-                    "skill curation: reviewed={} applied={} deferred={} backfilled={} "
-                    "judge_parse_failed={} "
-                    "obs_applied={} obs_declined={} obs_kept={} obs_open={} principles={}",
-                    summary["reviewed"], summary["applied"], summary["deferred"],
-                    summary.get("backfilled", 0), summary.get("judge_parse_failed", False),
-                    _obs.get("applied", 0), _obs.get("declined", 0), _obs.get("kept", 0),
-                    _obs.get("open", 0), summary.get("principles", 0),
-                )
-            except Exception:
-                logger.exception("skill curation step (non-fatal) failed")
-
-            # Skill suggestions for MANUAL skills: propose curation actions into
-            # the dream bandeja for user review (never auto-applied). Gated +
-            # best-effort: a failure here must not abort the dream cron.
-            if config.memory.dream.skill_suggestions_enabled:
+            finally:
+                # Reap stale per-run cron sessions (cron:{id}:run:{ms}) with the
+                # gateway's own manager — created on every agent_turn cron
+                # execution and never otherwise removed;
+                # run_session_retention_hours bounds how long they live. Runs
+                # regardless of the dream outcome, as it always has.
                 try:
-                    from durin.agent.skill_curation import suggest_manual_skills
-                    from durin.memory.llm_invoke import default_llm_invoke
+                    from durin.cron.reaper import reap_expired_run_sessions
 
-                    def _sg_judge(prompt: str) -> str:
-                        return default_llm_invoke(prompt).text
-
-                    from durin.agent.skill_usage import collect_recent_skill_calls
-                    _sg_usage = collect_recent_skill_calls(workspace, within_hours=24)
-                    _sg = await _asyncio.to_thread(
-                        suggest_manual_skills, workspace, judge=_sg_judge, usage=_sg_usage)
-                    logger.info(
-                        "skill suggestions: reviewed={} suggested={} suppressed={}",
-                        _sg["reviewed"], _sg["suggested"], _sg["suppressed"])
+                    reap_expired_run_sessions(
+                        session_manager, config.cron.run_session_retention_hours
+                    )
                 except Exception:
-                    logger.exception("skill suggestions step (non-fatal) failed")
-
-            # Reap stale per-run cron sessions (cron:{id}:run:{ms}). These are
-            # created on every agent_turn cron execution and never otherwise
-            # removed; run_session_retention_hours bounds how long they live.
-            try:
-                from durin.cron.reaper import reap_expired_run_sessions
-
-                reap_expired_run_sessions(
-                    session_manager, config.cron.run_session_retention_hours
-                )
-            except Exception:
-                logger.exception("cron run-session reaper (non-fatal) failed")
-
-            # One summary entry per run — even an empty run leaves a visible
-            # "ran, nothing new" line in the Dream feed instead of silently
-            # updating only the last-run time. Persisted via the still-bound
-            # logger and teed live by the DreamProgressSink.
-            from durin.agent.tools._telemetry import emit_tool_event
-            _run_summary = {
-                "sessions": ex.get("sessions", 0) if isinstance(ex, dict) else 0,
-                "entities": ex.get("entities", 0) if isinstance(ex, dict) else 0,
-                "merged": len(rf.get("merged", [])) if isinstance(rf, dict) else 0,
-                "skills_created": sk.get("skills_touched", 0) if isinstance(sk, dict) else 0,
-                "skills_improved": _skills_improved,
-            }
-            emit_tool_event("memory.dream.run_summary", _run_summary)
-            # Durable record so the "last run" card + history survive the telemetry
-            # window / retention (telemetry is the live feed; this is the truth).
-            from durin.memory.dream_runs import record_dream_run
-            record_dream_run(workspace, _run_summary)
-
-            # Unbind telemetry and tell the webui the run is over (success or
-            # not) so its "running" pulse always stops. Runs before the error
-            # re-raise below; the passes/curation/reaper above each catch their
-            # own exceptions, so nothing escapes between here and bind.
-            reset_telemetry(_dream_ttok)
-            publish_dream_progress(bus, {
-                "kind": "run_finished",
-                "ok": _dream_error is None,
-            })
-
-            if _dream_error is not None:
-                # Surface the failure so _execute_job records status="error"
-                # (not a false "ok") — the consolidation passes did not complete.
+                    logger.exception("cron run-session reaper (non-fatal) failed")
+            if code == 3:
+                logger.info(
+                    "memory_dream skipped: another dream is already running")
+                return None
+            if code != 0:
                 raise RuntimeError(
-                    f"memory_dream consolidation failed: {_dream_error}"
-                ) from _dream_error
+                    f"memory_dream worker exited {code}: {_stderr_tail[-2000:]}"
+                )
             return None
 
         # Loop triggers fire the loops runtime directly (not the agent turn below).
@@ -1947,20 +1718,20 @@ def _run_gateway(
         # absorbed (replaces the legacy cross-process .dream.lock + cooldown).
         _dream_gate = ReactiveDreamGate()
         _dream_min_s = mem_dream_cfg.min_seconds_between_runs
-        _dream_max_s = mem_dream_cfg.max_seconds_per_run
 
         def _spawn_dream(trigger: str, session_key: str) -> None:
             ws = config.workspace_path
 
             def _run() -> None:
-                import time as _time_dream
+                import functools
 
                 from durin.agent.tools._telemetry import emit_tool_event
-                from durin.telemetry.logger import (
-                    bind_telemetry,
-                    get_session_logger,
-                    reset_telemetry,
+                from durin.channels.websocket import publish_dream_progress
+                from durin.memory.dream_supervisor import (
+                    publish_threadsafe,
+                    run_dream_worker,
                 )
+
                 # Skip when a pass is already running or one ran too recently —
                 # the per-session cursor makes a skipped run harmless.
                 skip = _dream_gate.try_begin(_dream_min_s)
@@ -1972,56 +1743,31 @@ def _run_gateway(
                         )
                     logger.debug("reactive dream skipped ({}): {}", trigger, skip)
                     return
-                t_run = _time_dream.perf_counter()
-                # Fresh daemon thread = no inherited context; bind a telemetry
-                # logger so the reactive extract's emits persist and the dream
-                # digest sees this run (without it emit_tool_event is a no-op).
-                _rtok = bind_telemetry(get_session_logger("reactive_dream"))
+
+                def _forward(payload: dict) -> None:
+                    # This thread has no loop; hand the frame to the gateway
+                    # loop registered by run() (dropped when none is up).
+                    publish_threadsafe(
+                        functools.partial(publish_dream_progress, bus), payload
+                    )
+
                 try:
-                    # Reactive EXTRACT — when a session closes or compacts,
-                    # extract its new turns into entity attributes immediately
-                    # (the frequent dream, event-driven; the per-session cursor
-                    # makes it idempotent). Refine stays on the daily cron.
-                    from durin.memory.dream_passes import dream_vector_index, run_extract_pass
-                    from durin.memory.model_resolve import resolve_aux_preset
-                    # Pass the vector index so source-side semantic dedup runs on
-                    # the reactive path too (where most turns are processed first
-                    # — the cron rarely re-sees them). Bounded cost: the reactive
-                    # dream is throttled (min_seconds_between_runs) and the
-                    # embedding model loads lazily.
-                    out = run_extract_pass(
-                        ws, model=resolve_aux_preset(config, purpose="memory").model,
-                        max_seconds=_dream_max_s,
-                        discover=config.memory.dream.discover_enabled,
-                        skill_signals=config.memory.dream.skill_signals_enabled,
-                        learnings=config.memory.dream.learnings_sweep_enabled,
-                        confidence_threshold=config.memory.dream.auto_absorb.confidence_threshold,
-                        semantic_distance_threshold=config.memory.dream.auto_absorb.semantic_distance_threshold,
-                        vector_index=dream_vector_index(ws, config),
+                    code, _err = run_dream_worker(
+                        workspace=ws,
+                        mode="reactive",
+                        trigger=trigger,
+                        on_progress=_forward,
                     )
-                    logger.info(
-                        "reactive dream done ({}): {} session(s), {} attribute "
-                        "update(s), yielded={}, {}ms",
-                        trigger, out["sessions"], out["entities"], out["yielded"],
-                        int((_time_dream.perf_counter() - t_run) * 1000),
-                    )
-                    # Record a run summary so reactive runs also surface in the
-                    # Dream feed / "última corrida" card. The reactive path is
-                    # extract-only (refine/skills are cron-only), so those are 0.
-                    _reactive_summary = {
-                        "sessions": out.get("sessions", 0),
-                        "entities": out.get("entities", 0),
-                        "merged": 0,
-                        "skills_created": 0,
-                        "skills_improved": 0,
-                    }
-                    emit_tool_event("memory.dream.run_summary", _reactive_summary)
-                    from durin.memory.dream_runs import record_dream_run
-                    record_dream_run(workspace, _reactive_summary)
+                    if code == 3:
+                        logger.debug(
+                            "reactive dream skipped ({}): dream lock held", trigger)
+                    elif code != 0:
+                        logger.warning(
+                            "reactive dream worker exited {} ({}): {}",
+                            code, trigger, _err[-500:])
                 except Exception:
                     logger.exception("{} dream failed ({})", trigger, session_key)
                 finally:
-                    reset_telemetry(_rtok)
                     _dream_gate.end()
 
             _threading_dream.Thread(
@@ -2100,6 +1846,12 @@ def _run_gateway(
         return True
 
     async def run():
+        # Reactive dream triggers fire from threads with no event loop;
+        # registering the gateway loop here lets them hand progress frames
+        # to the websocket bus thread-safely.
+        from durin.memory.dream_supervisor import register_progress_loop
+
+        register_progress_loop(asyncio.get_running_loop())
         # Without an explicit SIGTERM handler, Python's default action
         # terminates the process instantly — the `finally` block below
         # never runs, so `durin gateway stop` (which sends SIGTERM) would
@@ -2227,6 +1979,12 @@ def _run_gateway(
         finally:
             await agent.close_mcp()
             cron.stop()
+            # No new dreams past this point (cron stopped); terminate any
+            # in-flight dream worker — hard kills are safe for the store, and
+            # the per-session cursors resume the remainder next run.
+            from durin.memory.dream_supervisor import stop_dream_workers
+
+            await asyncio.to_thread(stop_dream_workers)
             agent.stop()
             await channels.stop_all()
             # Flush all cached sessions to durable storage before exit.

@@ -54,8 +54,16 @@ duration. Tool `execute()` bodies that do such work wrap it accordingly. The
 sync LLM helper (`durin/memory/llm_invoke.py::_run_blocking`) enforces this: if
 it is reached on a thread that already has a running loop it **raises** rather
 than blocking — turning a silent gateway freeze into a clean error that names the
-offending caller. (Cold-path dream passes and curation likewise run under
-`asyncio.to_thread`, so their LLM work never touches the gateway loop.)
+offending caller. (Cold-path dream passes and curation don't touch the gateway
+loop at all: every dream — cron, reactive, manual — executes in its own worker
+**subprocess**, so their LLM calls, dulwich commits, and embedding batches burn
+a child's CPU/RAM. The gateway spawns `durin memory dream-worker`, re-broadcasts
+the JSONL progress lines the worker prints to the websocket dream feed, and maps
+exit codes: 0 ok, 3 skipped because another dream holds the dream lock, other
+codes → the cron records an error. An OOM kill or runaway pass takes down the
+dream child, not the serving process; hard kills are safe because memory writes
+are short flock+CAS critical sections and the per-session cursors resume the
+remainder on the next trigger.)
 
 Three per-request hot paths honor the invariant by *avoiding* the disk rather
 than by hopping threads — a `to_thread` hop per request would just trade loop
@@ -80,7 +88,7 @@ stalls for executor contention:
 
 ## 3. Diagram
 
-The lock domains and how the three processes use them. Each domain is an
+The lock domains and how the processes use them. Each domain is an
 independent lock file protecting a disjoint critical section. The dashed edges
 show the strict acquisition order — it forms a directed acyclic graph, so no two
 locks can be waited on in opposite orders and there is no deadlock cycle.
@@ -91,6 +99,7 @@ flowchart TB
         GW["gateway daemon"]
         TUI["TUI agent loop"]
         CRON["cron scheduler"]
+        DW["dream worker<br/>(spawned by gateway; also the manual CLI dream)"]
     end
 
     subgraph domains["Lock domains (independent files)"]
@@ -100,6 +109,7 @@ flowchart TB
         TICK["cron tick lock<br/>.tick.lock"]
         CACTION["cron store lock<br/>action.jsonl-dir .lock"]
         GWT["memory working tree<br/>.git-worktree.lock"]
+        DREAM["dream run exclusion<br/>workspace .dream.lock"]
     end
 
     GW --> TURN
@@ -112,12 +122,15 @@ flowchart TB
     CRON --> TICK
     CRON --> CACTION
     CRON --> GWT
+    DW --> DREAM
+    DW --> GWT
+    DW --> CFG
 
     TURN -.acquire order.-> SAVE
     GWT -.acquire order.-> FTS["FTS5 / LanceDB indexes"]
 
     classDef dom fill:#1f2933,stroke:#52606d,color:#e4e7eb;
-    class TURN,SAVE,CFG,TICK,CACTION,GWT dom;
+    class TURN,SAVE,CFG,TICK,CACTION,GWT,DREAM dom;
 ```
 
 Two more orderings are in-process, so they do not appear as files but are part of
@@ -128,6 +141,15 @@ the same acyclic rule:
   concurrently.
 - An in-process `threading.RLock` per memory repo is acquired **before** the
   `.git-worktree` lock, making it the outermost memory lock.
+
+The dream-run lock is deliberately different from the others: the worker
+acquires `<workspace>/.dream.lock` **non-blocking** for the whole run and exits
+with code 3 when it is already held (the per-session cursors make a skipped run
+harmless, so waiting is never useful). It guards gateway-spawned workers and
+manual `durin memory dream` invocations against each other; the gateway
+additionally keeps its in-process `ReactiveDreamGate` throttle so a burst of
+session-close triggers doesn't spawn a burst of processes just to have them
+exit 3.
 
 Putting the full order in one line, from outermost to innermost:
 
