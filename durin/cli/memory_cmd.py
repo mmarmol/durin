@@ -30,7 +30,7 @@ console = Console()
 
 memory_app = typer.Typer(
     name="memory",
-    help="Inspect and navigate the entity-centric memory (see docs/18).",
+    help="Inspect and navigate the entity-centric memory.",
     no_args_is_help=True,
 )
 

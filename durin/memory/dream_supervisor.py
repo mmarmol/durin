@@ -77,7 +77,10 @@ def run_dream_worker(
     parent's alias-index cache for this workspace is invalidated, because
     the child's writes bypassed in-process invalidation.
     """
+    import time
+
     argv = _worker_argv(mode, trigger)
+    t0 = time.perf_counter()
     proc = subprocess.Popen(
         argv,
         stdout=subprocess.PIPE,
@@ -85,6 +88,9 @@ def run_dream_worker(
         text=True,
         encoding="utf-8",
         errors="replace",
+    )
+    logger.info(
+        "dream worker spawned (pid={} mode={} trigger={})", proc.pid, mode, trigger
     )
     with _procs_lock:
         _running_procs.add(proc)
@@ -125,6 +131,11 @@ def run_dream_worker(
                 logger.exception("dream progress callback failed")
         code = proc.wait()
         err_thread.join(timeout=5)
+        logger.info(
+            "dream worker exited (pid={} code={} mode={} trigger={} {}ms)",
+            proc.pid, code, mode, trigger,
+            int((time.perf_counter() - t0) * 1000),
+        )
     finally:
         with _procs_lock:
             _running_procs.discard(proc)

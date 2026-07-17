@@ -54,6 +54,22 @@ a workflow-improve pass and skill curation); the two **reactive hooks**
 **manual** `durin memory dream` runs a smaller core — extract → derived_from →
 skill-extract → refine → always_on.
 
+**Execution model: a worker subprocess, never the gateway.** The pass
+orchestration lives in `durin/memory/dream_orchestrator.py` as plain sync
+functions (`run_full_dream`, `run_reactive_dream`). The gateway never calls
+them in-process: its cron handler and reactive hooks spawn
+`durin memory dream-worker` (a re-exec of the same Python), supervised by
+`durin/memory/dream_supervisor.py`. The worker prints one JSON object per line
+on stdout — the same `run_started` / `activity` / `run_finished` payloads the
+websocket dream feed consumes — and the gateway re-broadcasts them; telemetry
+JSONL and the durable run record are written by the worker itself. The worker
+holds `<workspace>/.dream.lock` for the whole run (non-blocking; exit code 3 =
+another dream is running), so gateway dreams and manual CLI dreams exclude each
+other. After the worker exits the gateway invalidates its in-process alias
+cache, since the child's writes bypassed in-process invalidation. Killing the
+worker at any point is safe: memory writes are short flock+CAS critical
+sections and the cursor resumes the remainder on the next trigger.
+
 **3. Per-session cursor → idempotent, lossless.** The extract pass tracks
 progress with a single integer **per-session cursor** (turns already processed).
 A re-run re-processes nothing already seen; a skipped or failed run is harmless
@@ -445,14 +461,16 @@ not accidental.
 
 ### Concurrency and the cursor
 
-The reactive hooks each fire on a daemon thread in the gateway process.
+The reactive hooks each fire on a daemon thread in the gateway process; the
+thread spawns the dream worker subprocess and blocks pumping its progress.
 `ReactiveDreamGate` (`durin/memory/dream_passes.py`) — one shared instance per
 gateway — guards them with a non-blocking `try_begin(min_seconds)` that returns
 `"locked"` (a pass is already running), `"throttled"` (one ended within
 `min_seconds`), or `""` (run). A skipped reactive run is harmless: the
 per-session cursor means those turns are picked up by the in-flight pass, the
 next hook, or the daily cron. **The daily cron is never throttled** — it does not
-go through the gate.
+go through the gate. Cross-process exclusion (gateway worker vs manual CLI
+dream) is the worker-held `.dream.lock`, not the gate.
 
 The per-session cursor is the **only** cursor in the dream system. It is an
 integer stored as a **top-level `extract_cursor` key** in the session's
