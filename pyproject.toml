@@ -1,6 +1,6 @@
 [project]
 name = "durin-agent"
-version = "0.2.0b7"
+version = "0.2.0b8"
 description = "Personal AI agent with daily-driver CLI, modal TUI, and graph-based memory"
 readme = "README.md"
 # Upper bound = highest Python line durin is tested/known-good on, keeping the
