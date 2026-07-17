@@ -459,6 +459,63 @@ def extract_cited_memory_refs(messages: list[dict[str, Any]]) -> list[str]:
     return refs
 
 
+# Discovered-path preservation (2026-07-17): file/dir paths surfaced by
+# discovery tools in the evicted span ride the session summary
+# mechanically, mirroring the cited-refs trailer above — the LLM
+# summarizer cannot drop them. history.jsonl stays untouched.
+_PATH_DISCOVERY_TOOLS = frozenset({
+    "read_file", "write_file", "edit_file", "exec", "grep", "list_dir",
+})
+_MAX_DISCOVERED_PATHS = 15
+# The lookbehind class deliberately excludes ':' and '/' so scheme URLs
+# ("https://…") never match — the char before their first '/' is ':',
+# before the second it is '/'. The relative arm requires an alphabetic
+# extension so version tokens ("durin-agent/0.2.0") don't qualify.
+_DISCOVERED_PATH_RE = re.compile(
+    r"(?:(?<=[\s\"'`(\[=,])|^)"
+    r"((?:/|~/)[\w.\-+@/]{3,}"                          # absolute or ~/ path
+    r"|[\w.\-+@]+(?:/[\w.\-+@]+)+\.[A-Za-z]\w{0,7})",   # relative path w/ alpha extension
+    re.MULTILINE,
+)
+
+
+def extract_discovered_paths(messages: list[dict[str, Any]]) -> list[str]:
+    """Distinct filesystem paths surfaced by discovery tools in *messages*.
+
+    Two sources, in first-seen order: path-bearing string arguments of
+    assistant tool_calls to discovery tools (deliberate targets), then
+    path-like tokens inside discovery-tool results. Deduped and capped
+    so a single `find` dump cannot flood the summary trailer.
+    """
+    seen: dict[str, None] = {}
+
+    def _harvest(text: str) -> None:
+        for match in _DISCOVERED_PATH_RE.finditer(text):
+            seen.setdefault(match.group(1).rstrip(".,;:/"), None)
+
+    for message in messages:
+        role = message.get("role")
+        if role == "assistant":
+            for call in message.get("tool_calls") or []:
+                function = call.get("function") or {}
+                if function.get("name") not in _PATH_DISCOVERY_TOOLS:
+                    continue
+                try:
+                    args = json.loads(function.get("arguments") or "{}")
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(args, dict):
+                    for value in args.values():
+                        if isinstance(value, str):
+                            _harvest(value)
+        elif role == "tool" and message.get("name") in _PATH_DISCOVERY_TOOLS:
+            content = message.get("content")
+            if isinstance(content, str):
+                _harvest(content)
+
+    return list(seen)[:_MAX_DISCOVERED_PATHS]
+
+
 class Consolidator:
     """Lightweight consolidation: summarizes evicted messages into history.jsonl."""
 
@@ -870,6 +927,19 @@ class Consolidator:
                     "(memory_drill for full bodies): "
                     + "; ".join(cited)
                 )
+            discovered = extract_discovered_paths(messages)
+            if summary and discovered:
+                summary = (
+                    f"{summary}\n"
+                    "Files/paths examined in this span "
+                    "(read_file to reopen): " + "; ".join(discovered)
+                )
+                _t = current_telemetry()
+                if _t is not None:
+                    with suppress(Exception):
+                        _t.log("compaction.paths_preserved", {
+                            "count": len(discovered),
+                        })
             return summary, tags
         except Exception:
             logger.warning("Consolidation LLM call failed, raw-dumping to history")
