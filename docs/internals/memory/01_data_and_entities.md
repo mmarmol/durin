@@ -95,7 +95,7 @@ flowchart TD
 | Class | Path | Track | Indexed? | Mutability |
 |---|---|---|---|---|
 | Session | `sessions/<key>.jsonl` + `.meta.json` | Evidence | FTS5 per-turn rows; NOT vector-indexed | Append-only during session |
-| Session summary | `memory/session_summary/<key>.md` | 2 — raw | Vector + FTS5 | Replaced on re-compaction |
+| Session summary | `memory/session_summary/<key>.md` | 2 — raw | Vector + FTS5 | Appended per consolidation span (bounded; oldest blocks evicted, their path trailers carried forward) |
 | Ingested | `ingested/<ingest_id>/` | Evidence | Not directly; via references | Write-once |
 | Reference | `memory/references/<slug>.md` | 2 — raw | Vector (chunks) + FTS5 (whole doc) | Replaced on re-ingest (idempotent by content hash) |
 | Corpus (legacy) | `memory/corpus/<id>.md` | 2 — raw | Vector + FTS5 | No longer written by memory_ingest; historical entries are still indexed |

@@ -46,7 +46,7 @@ from durin.session.goal_state import (
 from durin.session.manager import Session, SessionManager
 from durin.session.turn_lease import session_turn_lease
 from durin.utils.document import extract_documents
-from durin.utils.helpers import image_placeholder_text
+from durin.utils.helpers import image_placeholder_text, persist_full_tool_result
 from durin.utils.helpers import truncate_text as truncate_text_fn
 from durin.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 from durin.utils.session_attachments import merge_turn_media_into_last_assistant
@@ -352,7 +352,7 @@ class AgentLoop:
         decision_log_max_entries: int = 10,
         decision_log_max_chars: int = 1500,
         compaction_learnings_enabled: bool = True,
-        max_messages: int = 120,
+        max_messages: int = 480,
         hooks: list[AgentHook] | None = None,
         unified_session: bool = False,
         disabled_skills: list[str] | None = None,
@@ -464,7 +464,7 @@ class AgentLoop:
             app_config_getter=lambda: self.app_config,
         )
         self._unified_session = unified_session
-        self._max_messages = max_messages if max_messages > 0 else 120
+        self._max_messages = max_messages if max_messages > 0 else 480
         self._running = False
         self._mcp_servers = mcp_servers or {}
         self._mcp_connections: dict[str, Any] = {}
@@ -2840,9 +2840,27 @@ class AgentLoop:
             if role == "tool":
                 tool_name = entry.get("name")
                 if isinstance(content, str) and len(content) > self.max_tool_result_chars:
-                    entry["content"] = _truncate_tool_output(
+                    spilled: Path | None = None
+                    try:
+                        spilled = persist_full_tool_result(
+                            self.workspace,
+                            session.key,
+                            str(entry.get("tool_call_id") or "tool"),
+                            content,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "save-time spill failed for session {}", session.key,
+                        )
+                    truncated = _truncate_tool_output(
                         content, self.max_tool_result_chars, tool_name,
                     )
+                    if spilled is not None:
+                        truncated += (
+                            f"\n[truncated: full output ({len(content)} chars) "
+                            f"at {spilled}; use read_file to recover]"
+                        )
+                    entry["content"] = truncated
                 elif isinstance(content, list):
                     filtered = self._sanitize_persisted_blocks(content, should_truncate_text=True)
                     if not filtered:

@@ -1297,7 +1297,7 @@ async def cmd_compact(ctx: CommandContext) -> OutboundMessage:
     session.last_consolidated = len(session.messages)
     if summary:
         loop.consolidator._merge_session_tags(session, tags)
-        loop.consolidator._persist_last_summary(session, summary)
+        loop.consolidator._persist_last_summary(session, [summary])
     loop.sessions.save(session)
 
     if summary:

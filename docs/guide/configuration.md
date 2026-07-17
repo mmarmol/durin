@@ -122,7 +122,7 @@ behaviour, tool iteration limits, and per-model capability overrides.
 | `ask_user_answer_timeout_s` | `300` | Timeout (seconds) before `ask_user` degrades to yield |
 | `plan_stall_turns` | `8` | Turns without todo progress before a reassess reminder is injected; `0` disables |
 | `disabled_skills` | `[]` | Skill names to exclude from loading |
-| `max_messages` | `120` | Max messages replayed from session history; `0` uses default |
+| `max_messages` | `480` | Max messages replayed from session history; `0` uses default |
 | `consolidation_ratio` | `0.5` | Target ratio of context budget retained after compaction |
 | `preemptive_compact_ratio` | `0.5` | Fraction of context window that triggers pre-emptive compaction |
 | `decision_log_enabled` | `true` | Record key decisions/findings across compaction boundaries |

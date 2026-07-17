@@ -139,6 +139,65 @@ async def test_maybe_consolidate_persists_extracted_decisions(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_replay_window_only_consolidation_extracts_decisions(tmp_path):
+    """A replay-window-only consolidation (no token round) must still feed
+    the decision log.
+
+    Before this fix, decision/learnings extraction ran only at the end of
+    the token-rounds path — a session that only ever hits the replay-window
+    archive (because it never gets big enough to trip the token trigger)
+    never fed the decision log, even though real messages were archived.
+    """
+    from durin.session.decision_log import DECISION_LOG_KEY, parse_decisions
+
+    store = MemoryStore(tmp_path)
+    sessions = MagicMock()
+    sessions.save = MagicMock()
+
+    cons = Consolidator(
+        store=store,
+        provider=MagicMock(),
+        model="test-model",
+        sessions=sessions,
+        context_window_tokens=1000,
+        build_messages=MagicMock(return_value=[]),
+        get_tool_definitions=MagicMock(return_value=[]),
+        max_completion_tokens=100,
+        decision_log_enabled=True,
+        decision_log_max_entries=10,
+        decision_log_max_chars=1500,
+        compaction_learnings_enabled=False,  # isolate the decision-log path
+    )
+
+    # Build a real Session with enough messages so the replay window
+    # (replay_max_messages=20 below) overflows and a legal boundary exists
+    # at index 50 (a "user" message).
+    session = Session(key="test:replay-decisions")
+    for i in range(70):
+        role = "user" if i in {0, 50} else "assistant"
+        session.add_message(role, f"m{i}")
+
+    # First chat_with_retry call is the replay-window archive summary;
+    # second is the decision extraction call in _post_compaction_hooks.
+    cons.provider.chat_with_retry = AsyncMock(side_effect=[
+        SimpleNamespace(content="did replay work", finish_reason="stop"),
+        SimpleNamespace(content="- found gotcha in replay chunk", finish_reason="stop"),
+    ])
+
+    # Keep the token estimate well below the trigger so no round-based
+    # consolidation fires — only the replay-window archive should run.
+    cons.estimate_session_prompt_tokens = MagicMock(return_value=(10, "tiktoken"))
+
+    await cons.maybe_consolidate_by_tokens(session, replay_max_messages=20)
+
+    assert DECISION_LOG_KEY in session.metadata, "decision log not written on replay-only path"
+    stored = parse_decisions(session.metadata[DECISION_LOG_KEY])
+    texts = [e["text"] for e in stored]
+    assert "found gotcha in replay chunk" in texts
+    assert all(e["source"] == "auto" for e in stored)
+
+
+@pytest.mark.asyncio
 async def test_compaction_backstop_writes_learning_entity(tmp_path):
     """extract_learnings result is written as a feedback entity at compaction.
 

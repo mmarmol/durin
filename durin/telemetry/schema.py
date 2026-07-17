@@ -170,6 +170,12 @@ class CompactionLockTimeoutEvent(TypedDict):
     timeout_s: float
 
 
+class CompactionPathsPreservedEvent(TypedDict):
+    """Discovered filesystem paths mechanically appended to a consolidation
+    span summary."""
+    count: int
+
+
 # ===========================================================================
 # Provider / tool-arg processing
 # ===========================================================================
@@ -1521,6 +1527,7 @@ EVENTS: dict[str, type] = {
     "compaction.preemptive_trigger": CompactionPreemptiveTriggerEvent,
     "compaction.grace_extended": CompactionGraceExtendedEvent,
     "compaction.lock_timeout": CompactionLockTimeoutEvent,
+    "compaction.paths_preserved": CompactionPathsPreservedEvent,
     # Provider / tool-arg processing
     "provider.parallel_tool_calls_injected": ProviderParallelToolCallsInjectedEvent,
     "tool_call.argument_repair": ToolCallArgumentRepairEvent,
@@ -1649,6 +1656,7 @@ __all__ = [
     "CompactionPreemptiveTriggerEvent",
     "CompactionGraceExtendedEvent",
     "CompactionLockTimeoutEvent",
+    "CompactionPathsPreservedEvent",
     # Provider / tool-arg processing
     "ProviderParallelToolCallsInjectedEvent",
     "ToolCallArgumentRepairEvent",

@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "SESSION_SUMMARY_CLASS",
+    "append_session_summary_block",
     "delete_session_summary",
     "get_session_summary",
     "sanitize_session_key",
@@ -106,6 +107,8 @@ def write_session_summary(
     session_key: str,
     text: str,
     last_active: object = None,
+    *,
+    headline_source: Optional[str] = None,
 ) -> Optional[Path]:
     """Persist *text* as `memory/session_summary/<sanitized>.md`.
 
@@ -116,6 +119,13 @@ def write_session_summary(
     The entry id is the sanitised session key, so re-writing the
     summary for the same session overwrites the previous file —
     update semantics, not append.
+
+    ``headline_source``, when given, is used to derive the headline
+    instead of *text*. Callers that append bounded blocks (see
+    ``append_session_summary_block``) pass the newest span block here
+    so the headline still summarizes recent content once older blocks
+    (or a synthetic carried-paths head block) are evicted to the front
+    of *text*.
     """
     text = (text or "").strip()
     if not text or text == "(nothing)":
@@ -125,7 +135,7 @@ def write_session_summary(
     valid_from = _parse_last_active(last_active) or date.today()
     entry = MemoryEntry(
         id=sanitized,
-        headline=_headline_from(text),
+        headline=_headline_from(headline_source if headline_source is not None else text),
         summary=text,
         body=text,
         author="agent_created",
@@ -136,6 +146,95 @@ def write_session_summary(
     target.parent.mkdir(parents=True, exist_ok=True)
     save_entry(entry, target)
     return target
+
+
+_SUMMARY_BLOCK_SEP = "\n\n---\n"
+_SESSION_SUMMARY_MAX_CHARS = 16_000
+# Path trailers from evicted blocks are carried forward in a synthetic
+# head block so the mechanical path guarantee outlives block eviction.
+_SPAN_PATHS_PREFIX = "Files/paths examined in this span"
+_EVICTED_PATHS_PREFIX = "Files/paths from earlier spans (evicted): "
+_EVICTED_PATHS_MAX_CHARS = 1_200
+
+
+def _salvage_paths(evicted_block: str, carried: list[str]) -> None:
+    """Collect path-trailer entries from an evicted block into *carried*."""
+    for line in evicted_block.splitlines():
+        if line.startswith(_SPAN_PATHS_PREFIX) or line.startswith(_EVICTED_PATHS_PREFIX):
+            _, _, tail = line.partition(": ")
+            for path in tail.split("; "):
+                path = path.strip()
+                if path and path not in carried:
+                    carried.append(path)
+
+
+def _build_carried_line(carried: list[str]) -> str:
+    """Join carried path entries into a line bounded by
+    ``_EVICTED_PATHS_MAX_CHARS``.
+
+    Drops whole entries rather than raw-slicing the joined string, so
+    the result never ends in a truncated path fragment that
+    ``_salvage_paths`` would later mis-parse as a real path.
+    *carried* accumulates oldest-first; entries are dropped from the
+    oldest end so the newest carried paths survive the cap.
+    """
+    kept: list[str] = []
+    total = len(_EVICTED_PATHS_PREFIX)
+    for path in reversed(carried):
+        added = len(path) + (2 if kept else 0)  # "; " separator
+        if total + added > _EVICTED_PATHS_MAX_CHARS:
+            break
+        kept.insert(0, path)
+        total += added
+    return _EVICTED_PATHS_PREFIX + "; ".join(kept)
+
+
+def append_session_summary_block(
+    workspace: Path,
+    session_key: str,
+    block: str,
+    *,
+    last_active: object = None,
+    max_chars: int = _SESSION_SUMMARY_MAX_CHARS,
+) -> Optional[Path]:
+    """Append *block* to the session summary, evicting oldest blocks over cap.
+
+    Each consolidation span contributes one block; the newest block always
+    survives, so a single oversized block degrades to update semantics
+    rather than an empty summary. Path trailers of evicted blocks are
+    carried forward in a bounded synthetic head block — general facts
+    wash out at the cap horizon (long-horizon recall is the memory
+    system's job), discovered paths do not.
+    """
+    block = (block or "").strip()
+    if not block or block == "(nothing)":
+        return None
+    existing, _ = get_session_summary(workspace, session_key)
+    blocks = [
+        b.strip() for b in (existing.split(_SUMMARY_BLOCK_SEP) if existing else [])
+        if b.strip()
+    ]
+    carried: list[str] = []
+    if blocks and blocks[0].startswith(_EVICTED_PATHS_PREFIX):
+        _salvage_paths(blocks.pop(0), carried)
+    if blocks and blocks[-1] == block:
+        blocks_changed = False  # degraded-LLM duplicate round: skip re-append
+    else:
+        blocks.append(block)
+        blocks_changed = True
+    while len(blocks) > 1 and (
+        sum(len(b) for b in blocks)
+        + len(_SUMMARY_BLOCK_SEP) * (len(blocks) - 1)
+    ) > max_chars:
+        _salvage_paths(blocks.pop(0), carried)
+    if carried:
+        blocks.insert(0, _build_carried_line(carried))
+    if not blocks_changed and not carried:
+        return None
+    return write_session_summary(
+        workspace, session_key, _SUMMARY_BLOCK_SEP.join(blocks),
+        last_active=last_active, headline_source=block,
+    )
 
 
 def get_session_summary(

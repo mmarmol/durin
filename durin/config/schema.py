@@ -850,9 +850,9 @@ class AgentDefaults(Base):
     disabled_skills: list[str] = Field(default_factory=list, description='Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])')
     skills_hot_tier: SkillsHotTierConfig = Field(default_factory=SkillsHotTierConfig, description="Hot working-set tier for skill injection (usage-ranked subset instead of the full catalog)")
     max_messages: int = Field(
-        default=120,
+        default=480,
         ge=0,
-        description="Max messages replayed from session history (0 = use default 120); the token budget still applies",
+        description="Max messages replayed from session history (0 = use default 480); the replay token budget derived from the context window is the effective bound on large-context models",
     )
     consolidation_ratio: float = Field(
         default=0.5,

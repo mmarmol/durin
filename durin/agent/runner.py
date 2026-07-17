@@ -70,6 +70,12 @@ _EMERGENCY_TRIM_MARKER = "\n…[truncated: context budget]"
 _EMERGENCY_TRIM_MAX_PASSES = 64
 _MICROCOMPACT_KEEP_RECENT = 10
 _MICROCOMPACT_MIN_CHARS = 500
+# Microcompaction only pays for itself when the prompt is actually
+# crowding the window; below this fraction of the input budget the
+# model keeps full tool results (they may hold answers to questions
+# the user hasn't asked yet).
+_MICROCOMPACT_PRESSURE_RATIO = 0.5
+_MICROCOMPACT_HEAD_CHARS = 120
 
 def _output_reservation(max_output: int) -> int:
     """Tokens to hold back for output when sizing the input budget.
@@ -557,7 +563,7 @@ class AgentRunner:
                                 "iteration": iteration,
                                 "session_key": spec.session_key,
                             })
-                messages_for_model = self._microcompact(spec, messages_for_model)
+                messages_for_model = self._microcompact(spec, messages_for_model, provider)
                 messages_for_model = self._apply_tool_result_budget(spec, messages_for_model)
                 messages_for_model = self._snip_history(spec, messages_for_model, provider)
                 # Snipping may have created new orphans; clean them up.
@@ -2395,7 +2401,12 @@ class AgentRunner:
             offset += 1
         return updated
 
-    def _microcompact(self, spec: AgentRunSpec, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _microcompact(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+        provider: LLMProvider | None = None,
+    ) -> list[dict[str, Any]]:
         """Replace old compactable tool results with a recoverable one-line reference.
 
         Results beyond the most recent ``_MICROCOMPACT_KEEP_RECENT`` are
@@ -2403,6 +2414,11 @@ class AgentRunner:
         drop, the placeholder keeps a pointer to the spilled file so the model
         can ``read_file`` to recover the full output: already-spilled results
         keep their existing path, never-spilled results are spilled on the spot.
+
+        Gated on token pressure: below ``_MICROCOMPACT_PRESSURE_RATIO`` of the
+        input budget, messages are returned untouched — freeing context that
+        the prompt doesn't need yet isn't worth losing full tool results the
+        model may still need to answer a later question.
         """
         compactable_indices: list[int] = []
         for idx, msg in enumerate(messages):
@@ -2411,6 +2427,21 @@ class AgentRunner:
 
         if len(compactable_indices) <= _MICROCOMPACT_KEEP_RECENT:
             return messages
+
+        _provider = provider if provider is not None else self.provider
+        budget = self._input_budget(spec, _provider)
+        if budget is not None and budget > 0:
+            try:
+                estimate, _ = estimate_prompt_tokens_chain(
+                    _provider,
+                    spec.model,
+                    messages,
+                    self._active_tool_definitions(spec),
+                )
+            except Exception:
+                estimate = None
+            if estimate is not None and estimate <= budget * _MICROCOMPACT_PRESSURE_RATIO:
+                return messages
 
         stale = compactable_indices[: len(compactable_indices) - _MICROCOMPACT_KEEP_RECENT]
         updated: list[dict[str, Any]] | None = None
@@ -2435,6 +2466,10 @@ class AgentRunner:
     ) -> str:
         """Build the recoverable omission placeholder for one stale tool result."""
         name = msg.get("name", "tool")
+        began = ""
+        if parse_persisted_reference(content) is None:
+            head = " ".join(content[:_MICROCOMPACT_HEAD_CHARS].split())
+            began = f' — began: "{head}…"'
         ref = parse_persisted_reference(content)
         if ref is None:
             # Never spilled (result fit under max_tool_result_chars). Spill it
@@ -2452,11 +2487,11 @@ class AgentRunner:
         if ref is not None:
             path, size = ref
             return (
-                f"[{name} result omitted from context — full output "
+                f"[{name} result trimmed{began} — full output "
                 f"({size} chars) at {path}; use read_file to recover]"
             )
-        # No workspace to spill to: keep the (lossy) opaque marker, but honest.
-        return f"[{name} result omitted from context]"
+        # No workspace to spill to: keep the (lossy) marker, but honest.
+        return f"[{name} result trimmed{began} — no longer in context]"
 
     def _apply_tool_result_budget(
         self,

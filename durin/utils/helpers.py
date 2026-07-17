@@ -367,6 +367,30 @@ def _write_text_atomic(path: Path, content: str) -> None:
             tmp.unlink(missing_ok=True)
 
 
+def persist_full_tool_result(
+    workspace: Path | None,
+    session_key: str | None,
+    tool_call_id: str,
+    text: str,
+) -> Path | None:
+    """Write *text* to the session's tool-results bucket; return the path.
+
+    Best-effort recoverability primitive: callers append their own
+    pointer/reference to whatever survives in context.
+    """
+    if workspace is None or not isinstance(text, str):
+        return None
+    root = ensure_dir(workspace / _TOOL_RESULTS_DIR)
+    bucket = ensure_dir(root / safe_filename(session_key or "default"))
+    try:
+        _cleanup_tool_result_buckets(root, bucket)
+    except Exception:
+        logger.exception("Failed to clean stale tool result buckets in {}", root)
+    path = bucket / f"{safe_filename(tool_call_id)}.full.txt"
+    _write_text_atomic(path, text)
+    return path
+
+
 def maybe_persist_tool_result(
     workspace: Path | None,
     session_key: str | None,

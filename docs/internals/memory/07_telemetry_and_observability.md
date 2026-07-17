@@ -184,6 +184,7 @@ The following events exist in the catalog without dedicated sections above — c
 - **`memory.skill_miss`** — a `kinds="skill"` search returned zero results. `had_skill_candidate` is true when skills exist on disk but none were retrieved (a real silent-miss worth investigating).
 - **`memory.index.staleness_detected`** — health-check found a row whose `fts_meta.mtime` lags behind the file's mtime, or a file with no row. `reason` is `missing_row | mtime_lag | row_for_missing_file`. `delta_seconds` is present only on `mtime_lag` and carries `current_file_mtime - indexed_mtime`.
 - **`memory.index.rebuild`** — full index rebuild completed. Fields: `target`, `indexed`, `errors`, `duration_ms`.
+- **`compaction.paths_preserved`** — a consolidation span's mechanical discovered-paths trailer (see the archive prompt in `06_prompts_and_instructions.md`) was non-empty and got appended to the session-summary block. `count` is the number of paths appended.
 
 ## 5. Key types and entry points
 
