@@ -1483,7 +1483,7 @@ def _active_findings(rep) -> list[dict]:
 def web_skill_review_user(workspace: Path, name: str, note: str = "") -> tuple[int, dict]:
     """`POST /api/v1/skills/{name}/review` — user marks an ACTIVE skill reviewed
     (override to safe). Persists a review keyed by content hash + findings."""
-    from durin.agent.skills_surface import _skill_dirs
+    from durin.agent.skills_surface import _skill_dirs, apply_provenance_verdict
     from durin.security.skill_reviews import record_review
     from durin.security.skill_scan import scan_skill
 
@@ -1491,11 +1491,13 @@ def web_skill_review_user(workspace: Path, name: str, note: str = "") -> tuple[i
     if d is None or not (d / "SKILL.md").is_file():
         return 404, {"error": f"skill not found: {name}"}
     rep = scan_skill(d)
-    findings = _active_findings(rep)
+    # Ack what the inventory reports, not the raw scan: a provenance-pinned
+    # verdict adds a synthetic finding the review must cover to stay valid.
+    verdict, findings = apply_provenance_verdict(d, rep.verdict, _active_findings(rep))
     review = record_review(Path(workspace), name, d, by="user", verdict="safe",
-                           original=rep.verdict, findings=findings, note=note)
+                           original=verdict, findings=findings, note=note)
     return 200, {"name": name, "reviewed": True, "review": review,
-                 "verdict": rep.verdict, "findings": findings}
+                 "verdict": verdict, "findings": findings}
 
 
 def web_skill_unreview(workspace: Path, name: str) -> tuple[int, dict]:
