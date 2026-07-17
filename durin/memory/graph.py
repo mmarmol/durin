@@ -53,6 +53,33 @@ logger = logging.getLogger(__name__)
 
 _SESSION_REF_RE = re.compile(r"sessions/([^/.#]+)\.md")
 
+_HTML_COMMENT_RE = re.compile(r"<!--[\s\S]*?-->")
+# Cards/table excerpt length. Enough for a two-line clamp in the webui grid
+# without shipping whole page bodies for 500 nodes.
+_SUMMARY_MAX_CHARS = 200
+
+
+def _excerpt(body: str | None) -> str | None:
+    """Plain-text excerpt of an entity-page body for card/table rows.
+
+    Strips HTML-comment provenance markers (repeatedly, so overlapping
+    ``<!-- -->`` sequences cannot leave a dangling ``<!--``), collapses
+    whitespace, and truncates. Returns ``None`` for empty bodies so the
+    frontend can distinguish "no content" from an empty string.
+    """
+    if not body:
+        return None
+    text = body
+    while True:
+        stripped = _HTML_COMMENT_RE.sub("", text)
+        if stripped == text:
+            break
+        text = stripped
+    text = " ".join(text.split())
+    if not text:
+        return None
+    return text[:_SUMMARY_MAX_CHARS]
+
 # Memory classes whose entries carry `entities` tags and therefore feed
 # the graph's nodes/edges. `pending` (intake buffer) and `session_summary`
 # are excluded: the former is not user-visible, the latter is already
@@ -118,6 +145,11 @@ def build_memory_graph(
             "name": page.name or slug,
             "aliases": list(page.aliases or []),
             "weight": 0,  # filled from episodic count below
+            # Card/table enrichment — only consolidated pages have content;
+            # every other node kind gets None/0 defaults in the final pass.
+            "summary": _excerpt(page.body),
+            "updated_at": page.updated_at.isoformat() if page.updated_at else None,
+            "sources": len(page.derived_from or []),
         }
         for rel in (page.relations or []):
             to_ref = str(rel.get("to") or "")
@@ -335,6 +367,14 @@ def build_memory_graph(
                 if ent_ref not in nodes_by_ref:
                     continue
                 edges.append({"source": sess_ref, "target": ent_ref, "weight": w})
+
+    # 4.5 Uniform enrichment shape: phantom/session/reference nodes carry the
+    # same keys as entity pages so the cards/table views can render any node
+    # without per-kind branching.
+    for node in nodes_by_ref.values():
+        node.setdefault("summary", None)
+        node.setdefault("updated_at", None)
+        node.setdefault("sources", 0)
 
     # 5. Cap: prefer higher-weight nodes/edges, drop the tail. Q2/M3: floor the
     # sort weight at 1 so a quiet entity (weight 0, e.g. freshly upserted with no

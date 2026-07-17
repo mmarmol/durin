@@ -1942,6 +1942,11 @@ export interface MemoryGraphNode {
   aliases: string[];
   weight: number;      // episodic entry count referencing this ref
   phantom?: boolean;   // tagged in entries but no consolidated page yet
+  // Card/table enrichment — consolidated entity pages only; null/0 for
+  // phantom, session, and reference nodes.
+  summary?: string | null;    // plain-text body excerpt
+  updated_at?: string | null; // ISO timestamp from page frontmatter
+  sources?: number;           // count of `derived_from` reference links
 }
 
 export interface MemoryGraphEdge {
