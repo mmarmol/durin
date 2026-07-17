@@ -265,7 +265,10 @@ The handlers, in order:
   signals, appends only the new turn's messages to the session
   (`_save_turn` rewrites the `.jsonl` and mirrors derived/volatile metadata to
   the `.meta.json` sidecar), then schedules a background
-  `maybe_consolidate_by_tokens`.
+  `maybe_consolidate_by_tokens`. A tool result too large for the persisted
+  transcript is spilled to a recoverable file *before* it is truncated, so the
+  truncated text left in the transcript carries a pointer back to the full
+  output (`read_file` recovers it) instead of losing it.
 - **`_state_respond`** — assembles the `OutboundMessage` (`_assemble_outbound`),
   suppressing it when the turn already streamed its answer through the
   `message` tool.
@@ -544,18 +547,36 @@ Writes are atomic (`tmpfile` + `os.replace`) under a cross-process lock.
 
 Two metadata splits matter:
 
-- **Derived vs identity.** `_DERIVED_METADATA_KEYS` (LLM-projected state such as
-  the compaction summary) and volatile per-turn keys
-  (`runtime_checkpoint`, `pending_user_turn`) are written to the sibling
-  `.meta.json` sidecar, not line 0. On load, `_merge_derived_from_sidecar`
-  folds them back so consumers see one flat `metadata` dict. Keys *not* in those
-  sets ride line 0 and survive compaction (the todo list, plan paths, goal
-  state, mode).
-- **Compaction never edits messages in place.** When the consolidator archives a
-  span it advances `last_consolidated` and stores a summary; it never mutates
+- **Derived vs identity.** `_DERIVED_METADATA_KEYS` (LLM-projected state —
+  consolidation's entity/topic tag accumulation, skill-usage counts, and the
+  legacy `_last_summary` field kept only for pre-migration sessions) and
+  volatile per-turn keys (`runtime_checkpoint`, `pending_user_turn`) are
+  written to the sibling `.meta.json` sidecar, not line 0. On load,
+  `_merge_derived_from_sidecar` folds them back so consumers see one flat
+  `metadata` dict. Keys *not* in those sets ride line 0 and survive
+  compaction (the todo list, plan paths, goal state, mode, and the decision
+  log — see below).
+- **Compaction never edits messages in place.** When the consolidator archives
+  a span it advances `last_consolidated` and appends the span's summary as a
+  new block onto the session-summary projection (bounded; oldest blocks
+  evicted as the cap is hit, their discovered-path trailers salvaged into a
+  synthetic head block rather than lost) — it never mutates
   `session.messages`. `get_history` always returns `messages[last_consolidated:]`,
   so the model sees the unconsolidated tail and the raw transcript stays intact
-  for recovery.
+  for recovery. See [memory/01_data_and_entities.md](memory/01_data_and_entities.md)
+  for the summary's on-disk shape and
+  [memory/06_prompts_and_instructions.md](memory/06_prompts_and_instructions.md)
+  for what the archive prompt extracts.
+- **The decision log resists eviction pressure differently than the summary.**
+  `session.metadata["decision_log"]` is a line-0 identity key (not derived),
+  so it rides every save and survives compaction untouched by the sidecar
+  split. Each compaction round that advances the cursor — the primary
+  token-triggered loop, the replay-window overflow path, and early-return
+  compactions alike — runs a best-effort LLM extraction over the span just
+  archived and appends any decisions/findings found. When the log's
+  entry/char caps are hit, auto-extracted entries are evicted first;
+  a manually authored (`note_decision`) entry is only dropped once no
+  auto-extracted entry remains to take its place.
 
 ### After DONE (post-processing in `_dispatch`)
 
