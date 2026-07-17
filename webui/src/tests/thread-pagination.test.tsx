@@ -163,6 +163,33 @@ describe("ThreadViewport pagination", () => {
     expect(screen.queryByText("Beginning of conversation")).not.toBeInTheDocument();
   });
 
+  it("renders every message row with a data-message-id (clusters list all members)", () => {
+    const thread: UIMessage[] = [
+      { id: "t1", role: "assistant", content: "using tool", kind: "trace", createdAt: 1 },
+      { id: "t2", role: "assistant", content: "using another", kind: "trace", createdAt: 2 },
+      { id: "u9", role: "user", content: "a question", createdAt: 3 },
+      { id: "a9", role: "assistant", content: "an answer", createdAt: 4 },
+    ];
+    const { container } = render(
+      <ThreadViewport
+        messages={thread}
+        isStreaming={false}
+        composer={<div />}
+        conversationKey="chat-ids"
+      />,
+    );
+
+    // Singles carry their own id.
+    expect(container.querySelector('[data-message-id="u9"]')).not.toBeNull();
+    expect(container.querySelector('[data-message-id="a9"]')).not.toBeNull();
+    // The trace cluster row is identified by its first member and lists every
+    // member, so a pin anchored on any of them can re-acquire the row.
+    const cluster = container.querySelector('[data-message-id="t1"]');
+    expect(cluster).not.toBeNull();
+    expect(cluster?.getAttribute("data-message-ids")).toBe("t1 t2");
+    expect(container.querySelector('[data-message-ids~="t2"]')).toBe(cluster);
+  });
+
   it("pins the pre-prepend first message across the prepend AND later reflow", () => {
     const scrollIntoView = vi.fn();
     const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
@@ -326,7 +353,7 @@ describe("PrependPin", () => {
   it("counts the deadline from the first restore tick, then releases at it", () => {
     const { state, anchor } = makeAnchor(100);
     const scroller = { scrollTop: 200 };
-    const pin = new PrependPin(anchor, 100, 200, 1500);
+    const pin = new PrependPin(anchor, 100, 200, null, 1500);
 
     // A slow fetch delays the first tick — the pin must still be usable.
     expect(pin.started).toBe(false);
@@ -346,7 +373,7 @@ describe("PrependPin", () => {
     expect(scroller.scrollTop).toBe(950);
   });
 
-  it("releases when the anchor element unmounts", () => {
+  it("releases when the anchor unmounts and no reacquire callback exists", () => {
     const { state, anchor } = makeAnchor(100);
     const scroller = { scrollTop: 200 };
     const pin = new PrependPin(anchor, 100, 200);
@@ -355,6 +382,50 @@ describe("PrependPin", () => {
     state.top = 700;
     expect(pin.apply(scroller, 10)).toBe(false);
     expect(scroller.scrollTop).toBe(200); // untouched
+  });
+
+  it("re-acquires its anchor by identity when the element remounts, keeping recordedTop", () => {
+    const first = makeAnchor(100);
+    const replacement = makeAnchor(0);
+    const scroller = { scrollTop: 200 };
+    const pin = new PrependPin(first.anchor, 100, 200, () => replacement.anchor);
+
+    // Normal restore against the original element.
+    first.state.top = 700;
+    expect(pin.apply(scroller, 10)).toBe(true);
+    expect(scroller.scrollTop).toBe(800);
+
+    // The prepend re-clustered the row: original node unmounts, the merged
+    // row (containing the same message) renders lower in the viewport.
+    first.state.connected = false;
+    replacement.state.top = 350;
+    expect(pin.apply(scroller, 20)).toBe(true);
+    // Restored against the SAME recordedTop (100): 800 + (350 - 100).
+    expect(scroller.scrollTop).toBe(1050);
+
+    // Further ticks keep using the re-acquired element.
+    replacement.state.top = 130;
+    expect(pin.apply(scroller, 30)).toBe(true);
+    expect(scroller.scrollTop).toBe(1080);
+  });
+
+  it("releases when re-acquire fails or yields a disconnected element", () => {
+    const gone = makeAnchor(100);
+    const scrollerA = { scrollTop: 200 };
+    const pinNull = new PrependPin(gone.anchor, 100, 200, () => null);
+    gone.state.connected = false;
+    gone.state.top = 700;
+    expect(pinNull.apply(scrollerA, 10)).toBe(false);
+    expect(scrollerA.scrollTop).toBe(200); // untouched
+
+    const alsoGone = makeAnchor(100);
+    const detached = makeAnchor(500);
+    detached.state.connected = false;
+    const scrollerB = { scrollTop: 200 };
+    const pinDetached = new PrependPin(alsoGone.anchor, 100, 200, () => detached.anchor);
+    alsoGone.state.connected = false;
+    expect(pinDetached.apply(scrollerB, 10)).toBe(false);
+    expect(scrollerB.scrollTop).toBe(200); // untouched
   });
 });
 

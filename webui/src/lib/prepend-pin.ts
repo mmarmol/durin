@@ -6,7 +6,8 @@
  * the post-snapshot growth. Instead, a `PrependPin` records a pre-prepend
  * anchor element and its viewport position, and re-restores that element to
  * the recorded position on every layout tick until the position is stable,
- * the user scrolls, the anchor unmounts, or a hard deadline passes.
+ * the user scrolls, the anchor unmounts without a re-acquirable replacement,
+ * or a hard deadline passes.
  */
 
 /** Positions within this epsilon count as "no adjustment needed". */
@@ -26,8 +27,14 @@ export interface PinAnchor {
   getBoundingClientRect: () => { top: number };
 }
 
+/** Find the current DOM element for the pinned message after a re-render
+ *  swapped its node (e.g. prepended rows re-clustered with the previously
+ *  first row). Returns null when the message is no longer rendered. */
+export type PinReacquire = () => PinAnchor | null;
+
 export class PrependPin {
-  private readonly el: PinAnchor;
+  private el: PinAnchor;
+  private readonly reacquire: PinReacquire | null;
   private readonly recordedTop: number;
   /** The last scrollTop value this pin itself produced (seeded with the
    *  scroll position at record time). Any observed position that deviates
@@ -44,9 +51,11 @@ export class PrependPin {
     el: PinAnchor,
     recordedTop: number,
     initialScrollTop: number,
+    reacquire: PinReacquire | null = null,
     maxMs: number = PIN_MAX_MS,
   ) {
     this.el = el;
+    this.reacquire = reacquire;
     this.recordedTop = recordedTop;
     this.lastSetScrollTop = initialScrollTop;
     this.maxMs = maxMs;
@@ -66,15 +75,24 @@ export class PrependPin {
 
   /** Restore the anchor to its recorded viewport position for one layout
    *  tick. Returns whether the pin stays active; `false` when the deadline
-   *  passed, the anchor unmounted, the user scrolled, or the position has
-   *  been stable for two consecutive ticks. */
+   *  passed, the anchor unmounted with no re-acquirable replacement, the
+   *  user scrolled, or the position has been stable for two consecutive
+   *  ticks. */
   apply(scroller: PinScroller, now: number): boolean {
     if (this.deadline === null) {
       this.deadline = now + this.maxMs;
     } else if (now > this.deadline) {
       return false;
     }
-    if (!this.el.isConnected) return false;
+    if (!this.el.isConnected) {
+      // A re-render swapped the anchor's DOM node (common: the prepended
+      // rows re-clustered with the previously-first row). Re-acquire the
+      // element for the SAME message and keep the same recordedTop — the
+      // contract is unchanged: restore that message to that position.
+      const next = this.reacquire?.() ?? null;
+      if (!next || !next.isConnected) return false;
+      this.el = next;
+    }
     if (!this.notifyScroll(scroller.scrollTop)) return false;
     const delta = this.el.getBoundingClientRect().top - this.recordedTop;
     if (Math.abs(delta) < STABLE_EPSILON_PX) {

@@ -149,19 +149,38 @@ export function ThreadViewport({
     scrollToBottom(false);
   }, [messages, atBottom, scrollToBottom]);
 
-  // Arm the pin the moment an older-page fetch starts: record the current
-  // first message row and its viewport position, so every later layout tick
-  // can restore it there.
+  // Arm the pin the moment an older-page fetch starts: record the first
+  // message row, its message id, and its viewport position, so every later
+  // layout tick can restore it there. The id is the durable identity: when
+  // the prepend swaps the row's DOM node (prepended rows re-clustering with
+  // the previously-first row is the common case), the pin re-acquires the
+  // element for the same message — by exact row id first, then by cluster
+  // membership (a merged cluster lists all members in data-message-ids).
   useEffect(() => {
     if (!loadingOlder) return;
     const el = scrollRef.current;
-    const anchor = messagesRef.current?.firstElementChild?.firstElementChild;
+    const anchor = messagesRef.current?.querySelector("[data-message-id]");
     if (!el || !anchor) return;
+    const anchorId = anchor.getAttribute("data-message-id");
+    const escaped = anchorId !== null && typeof CSS !== "undefined" && typeof CSS.escape === "function"
+      ? CSS.escape(anchorId)
+      : anchorId;
+    const reacquire = escaped
+      ? () => {
+          const root = messagesRef.current;
+          if (!root) return null;
+          return (
+            root.querySelector(`[data-message-id="${escaped}"]`)
+            ?? root.querySelector(`[data-message-ids~="${escaped}"]`)
+          );
+        }
+      : null;
     releasePin();
     pinRef.current = new PrependPin(
       anchor,
       anchor.getBoundingClientRect().top,
       el.scrollTop,
+      reacquire,
     );
   }, [loadingOlder, releasePin]);
 
