@@ -20,28 +20,41 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Dependabot embeds an `updated-dependencies:` block in its commit message,
-      # one `update-type: version-update:semver-<level>` line per dependency.
-      # Read it directly (no third-party action — the actions allowlist only
-      # permits actions/*). Enable auto-merge only when every entry is patch or
-      # minor; a single major, or missing metadata, falls through to manual review.
+      # Dependabot's commit message names every bump as "from X to Y" — in the
+      # headline for single bumps, and one "Updates `dep` from X to Y" line per
+      # member for grouped PRs. Compare the major component of each pair
+      # ourselves (no third-party action — the actions allowlist only permits
+      # actions/*). Dependabot used to embed `update-type:
+      # version-update:semver-<level>` lines and this job matched those, but
+      # that metadata was dropped from commit messages (its absence silently
+      # sent every bump to manual review), so the version pairs are now the
+      # source of truth. Enable auto-merge only when every pair keeps the same
+      # major; any major change, or an unparsable pair, falls through to
+      # manual review.
       - name: Enable auto-merge for patch/minor bumps
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          types=$(git log -1 --format=%B "$HEAD_SHA" \
-                  | grep -oE 'update-type: version-update:semver-[a-z]+' \
-                  | sed 's/.*semver-//' | sort -u)
-          echo "Update types in this PR: ${types:-<none found>}"
-          if [ -z "$types" ]; then
-            echo "No update-type metadata — leaving for manual review."
+          pairs=$(git log -1 --format=%B "$HEAD_SHA" \
+                  | grep -oiE 'from v?[0-9][0-9A-Za-z.+-]* to v?[0-9][0-9A-Za-z.+-]*' || true)
+          echo "Version pairs in this PR: ${pairs:-<none found>}"
+          if [ -z "$pairs" ]; then
+            echo "No version pairs found — leaving for manual review."
             exit 0
           fi
-          if echo "$types" | grep -qx 'major'; then
-            echo "Contains a major bump — leaving for manual review."
+          verdict=auto
+          while IFS= read -r p; do
+            from_major=$(echo "$p" | awk '{print $2}' | sed 's/^v//; s/[^0-9].*$//')
+            to_major=$(echo "$p" | awk '{print $4}' | sed 's/^v//; s/[^0-9].*$//')
+            if [ -z "$from_major" ] || [ -z "$to_major" ] || [ "$from_major" != "$to_major" ]; then
+              verdict=manual
+            fi
+          done < <(printf '%s\n' "$pairs")
+          if [ "$verdict" = "manual" ]; then
+            echo "Contains a major (or unparsable) bump — leaving for manual review."
             exit 0
           fi
-          echo "All patch/minor — enabling auto-merge (squash)."
+          echo "All same-major bumps — enabling auto-merge (squash)."
           gh pr merge --auto --squash "$PR_URL"
