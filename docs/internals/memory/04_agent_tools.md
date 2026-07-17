@@ -462,13 +462,27 @@ The web dashboard exposes three memory controls under **Settings → Memory**:
   scores the configured model live without restarting.
 - **Dream controls** — `memory.dream.enabled`, cron schedule,
   `memory.dream.post_compaction`, `memory.dream.on_session_close`.
-- **Read-only memory graph** — entity graph canvas view (nodes = entity pages,
-  edges = relations + co-mentions); up to 500 nodes / 2 000 edges. A **Documents**
-  toggle switches the same page to the Library shelf: a searchable list of
-  ingested reference documents, each opening to a reading view (the full document
-  rendered as markdown, headed by its distilled abstract + outline when the dream
-  has run), a **Fragments** tab previewing the structure-aware chunks as indexed
-  for retrieval, and an **Entities** tab with the entities seeded from it
+- **Read-only memory browser** — one page, two content-domain tabs:
+  **Entities** and **Documents**. The Entities tab offers three presentations
+  of the same node set (the Obsidian-Bases view model) behind a toolbar
+  switcher: a **graph** canvas (nodes = entity pages, edges = relations +
+  co-mentions; capped payload), a **cards** grid (reading-oriented: type,
+  name, body excerpt, mention/recency/source counts), and a sortable
+  **table** (audit-oriented: same fields as columns). Search, the
+  type-filter chips, and the sort control are toolbar state shared by all
+  three views; in graph view the search drives the semantic results panel +
+  node highlighting, while cards/table filter their grid live from the
+  payload (name / alias / excerpt substring, no backend round-trip). Cards
+  and table exclude session and reference scaffolding nodes; selecting an
+  entity in any view opens the same detail panel. To power the cards/table
+  rows, `build_memory_graph` enriches each node with `summary` (plain-text
+  body excerpt), `updated_at`, and `sources` (count of `derived_from`
+  links); non-page nodes carry null/0 defaults. The **Documents** tab is
+  the Library shelf: a searchable list of ingested reference documents,
+  each opening to a reading view (the full document rendered as markdown,
+  headed by its distilled abstract + outline when the dream has run), a
+  **Fragments** tab previewing the structure-aware chunks as indexed for
+  retrieval, and an **Entities** tab with the entities seeded from it
   (`derived_from`, clickable back into the graph).
 
 Settings not exposed in the UI (advanced) are config-file-only.
