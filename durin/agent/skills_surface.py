@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from durin.agent.skills_store import _loader, list_skills_info, removable_action
+from durin.agent.skills_store import _durin_blob, _loader, list_skills_info, removable_action
 from durin.security.skill_scan import scan_skill
 
 
@@ -15,6 +15,51 @@ def _scan_payload(skill_dir: Path) -> dict:
     return {"verdict": rep.verdict,
             "findings": [{"category": f.category, "severity": f.severity,
                           "where": f.where, "detail": f.detail} for f in rep.findings]}
+
+
+_VERDICT_ORDER = {"safe": 0, "caution": 1, "dangerous": 2}
+
+_PINNED_DETAIL = (
+    "The import security gate recorded verdict '{v}' when this skill entered "
+    "from '{src}' (an LLM-judge finding, or the unverified-origin sweep), and "
+    "the live deterministic scan does not reproduce it, so the verdict stays "
+    "pinned at '{v}'. Audit with the LLM judge or mark the skill reviewed to "
+    "clear it."
+)
+
+
+def apply_provenance_verdict(skill_dir, verdict: str,
+                             findings: list[dict]) -> tuple[str, list[dict]]:
+    """Pin the verdict recorded at import when it is stricter than the live scan.
+
+    The import gate can record a verdict the deterministic scanner cannot
+    reproduce (an LLM-judge finding, or the unverified-origin sweep's synthetic
+    finding — neither is persisted in the skill dir). Surfacing the provenance
+    verdict alone would show an unexplained warning badge with an empty
+    findings list, which the UI cannot explain and the review store cannot ack.
+    So: pin the stricter verdict AND prepend a synthetic `import_verdict`
+    finding naming its origin. A weaker provenance verdict never lowers the
+    live one — the scanner's current view of the content wins.
+
+    Every surface that feeds the review store (inventory, user review, LLM
+    audit) must apply this to its scan result, so the acked fingerprints match
+    what the inventory reports and the review stays valid.
+    """
+    skill_dir = Path(skill_dir)
+    prov = {}
+    try:
+        prov = _durin_blob((skill_dir / "SKILL.md").read_text(encoding="utf-8")).get(
+            "provenance") or {}
+    except OSError:
+        pass
+    pv = str(prov.get("verdict") or "")
+    if _VERDICT_ORDER.get(pv, 0) <= _VERDICT_ORDER.get(verdict, 0):
+        return verdict, findings
+    src = str(prov.get("source") or "unknown")
+    pinned = {"category": "import_verdict", "severity": pv,
+              "where": "metadata.durin.provenance",
+              "detail": _PINNED_DETAIL.format(v=pv, src=src)}
+    return pv, [pinned] + findings
 
 
 def _skill_dirs(workspace: Path) -> dict[str, Path]:
@@ -54,9 +99,9 @@ def skills_inventory(workspace) -> list[dict]:
             entry.update({"verdict": "safe", "findings": []})
         elif d is not None and d.is_dir():
             entry.update(_scan_payload(d))
-            prov_verdict = (info.get("provenance") or {}).get("verdict")
-            if prov_verdict:
-                entry["verdict"] = prov_verdict
+            verdict, findings = apply_provenance_verdict(
+                d, entry["verdict"], entry["findings"])
+            entry.update({"verdict": verdict, "findings": findings})
         else:
             entry.update({"verdict": "safe", "findings": []})
 
