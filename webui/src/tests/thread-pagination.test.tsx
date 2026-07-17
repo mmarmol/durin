@@ -190,7 +190,7 @@ describe("ThreadViewport pagination", () => {
     expect(container.querySelector('[data-message-ids~="t2"]')).toBe(cluster);
   });
 
-  it("pins the pre-prepend first message across the prepend AND later reflow", () => {
+  it("pins the pre-prepend first message across the prepend AND later reflow", async () => {
     const scrollIntoView = vi.fn();
     const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
     HTMLElement.prototype.scrollIntoView = scrollIntoView;
@@ -209,15 +209,16 @@ describe("ThreadViewport pagination", () => {
       const scroller = getScroller(container);
       setGeometry(scroller, { scrollHeight: 1000, clientHeight: 500, scrollTop: 200 });
       // The anchor is the first rendered message row (ThreadMessages root's
-      // first child). jsdom has no layout, so its viewport position is
-      // scripted through a getBoundingClientRect stub.
+      // first child). jsdom has no layout, so model one: the anchor sits at
+      // a document offset and its viewport top is offset - scrollTop, which
+      // makes pin restores converge exactly as in a real browser.
       const messagesRoot = container.querySelector(
         'div[class="flex w-full flex-col"]',
       ) as HTMLElement;
       const anchorRow = messagesRoot.firstElementChild as HTMLElement;
-      let anchorTop = 100;
+      let anchorOffset = 300; // viewport top 100 at scrollTop 200
       anchorRow.getBoundingClientRect = () =>
-        ({ top: anchorTop }) as DOMRect;
+        ({ top: anchorOffset - scroller.scrollTop }) as DOMRect;
       scrollIntoView.mockClear();
 
       // Parent starts the older-page fetch: loadingOlder flips true, which
@@ -234,14 +235,14 @@ describe("ThreadViewport pagination", () => {
       );
 
       // The fetch resolves: older rows are prepended, pushing the anchor row
-      // down to viewport top 700.
+      // down by 600px (viewport top 700 at the still-unchanged scrollTop).
       const olderMessage: UIMessage = {
         id: "hist-100-0",
         role: "assistant",
         content: "an older reply",
         createdAt: 0,
       };
-      anchorTop = 700;
+      anchorOffset = 900;
       const prepended = [olderMessage, ...messages];
       rerender(
         <ThreadViewport
@@ -257,10 +258,15 @@ describe("ThreadViewport pagination", () => {
       // First restore: scrollTop += (700 - 100) = 200 + 600.
       expect(scroller.scrollTop).toBe(800);
 
+      // Step past the same-frame duplicate-apply guard before the next tick.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+
       // Post-prepend reflow (progressive markdown/image layout) pushes the
       // anchor again AFTER the first restore — the one-shot compensation
       // would stop here; the pin must keep restoring.
-      anchorTop = 250;
+      anchorOffset += 150; // viewport top 250 at scrollTop 800
       rerender(
         <ThreadViewport
           messages={[...prepended]}
@@ -273,6 +279,15 @@ describe("ThreadViewport pagination", () => {
       );
       // Second restore: scrollTop += (250 - 100) = 800 + 150.
       expect(scroller.scrollTop).toBe(950);
+
+      // Async late layout with NO further render or resize tick: only the
+      // low-frequency safety interval is left watching — it must restore.
+      anchorOffset += 80; // viewport top 180 at scrollTop 950
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      });
+      // Interval restore: scrollTop += (180 - 100) = 950 + 80.
+      expect(scroller.scrollTop).toBe(1030);
 
       // The auto-scroll-to-bottom effect must not have yanked the view down
       // at any point in the pinning window.
@@ -309,19 +324,47 @@ describe("PrependPin", () => {
     expect(scroller.scrollTop).toBe(935);
   });
 
-  it("releases after two consecutive stable ticks, resetting on instability", () => {
+  it("holds through stable ticks and still catches late reflow after a quiet gap", () => {
     const { state, anchor } = makeAnchor(100);
     const scroller = { scrollTop: 200 };
     const pin = new PrependPin(anchor, 100, 200);
 
-    expect(pin.apply(scroller, 10)).toBe(true); // stable tick 1 (delta 0)
-    state.top = 400; // reflow: stability counter must reset
-    expect(pin.apply(scroller, 20)).toBe(true);
+    // Layout goes quiet: many consecutive no-adjustment ticks. Stability
+    // must NOT release the pin — async late layout (image fallbacks after
+    // 404s, markdown settling) can land after the quiet gap.
+    expect(pin.apply(scroller, 10)).toBe(true);
+    expect(pin.apply(scroller, 130)).toBe(true);
+    expect(pin.apply(scroller, 250)).toBe(true);
+    expect(scroller.scrollTop).toBe(200);
+
+    // The late reflow lands: the pin is still watching and restores.
+    state.top = 400;
+    expect(pin.apply(scroller, 370)).toBe(true);
     expect(scroller.scrollTop).toBe(500);
     state.top = 100;
-    expect(pin.apply(scroller, 30)).toBe(true); // stable tick 1 again
-    expect(pin.apply(scroller, 40)).toBe(false); // stable tick 2: released
+    expect(pin.apply(scroller, 490)).toBe(true); // stable again, still held
     expect(scroller.scrollTop).toBe(500);
+  });
+
+  it("skips a duplicate apply within the same frame as a no-op", () => {
+    const { state, anchor } = makeAnchor(100);
+    const scroller = { scrollTop: 200 };
+    const pin = new PrependPin(anchor, 100, 200);
+
+    state.top = 700;
+    expect(pin.apply(scroller, 10)).toBe(true);
+    expect(scroller.scrollTop).toBe(800);
+
+    // A second caller observes the same commit ~1 ms later (double layout
+    // effect from back-to-back content-identical commits, or layout effect
+    // + ResizeObserver): geometry cannot have re-laid-out — no-op, held.
+    state.top = 900;
+    expect(pin.apply(scroller, 11)).toBe(true);
+    expect(scroller.scrollTop).toBe(800);
+
+    // A genuinely later tick applies against fresh geometry.
+    expect(pin.apply(scroller, 30)).toBe(true);
+    expect(scroller.scrollTop).toBe(1600); // 800 + (900 - 100)
   });
 
   it("releases without adjusting when the user scrolled themselves", () => {

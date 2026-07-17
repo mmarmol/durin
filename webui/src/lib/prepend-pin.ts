@@ -5,18 +5,29 @@
  * markdown/image layout), so a single restore lands the view off by exactly
  * the post-snapshot growth. Instead, a `PrependPin` records a pre-prepend
  * anchor element and its viewport position, and re-restores that element to
- * the recorded position on every layout tick until the position is stable,
- * the user scrolls, the anchor unmounts without a re-acquirable replacement,
- * or a hard deadline passes.
+ * the recorded position on every layout tick until the deadline passes, the
+ * user scrolls, or the anchor unmounts without a re-acquirable replacement.
+ *
+ * Deliberately NOT released on "the position looks stable": async late
+ * layout (image fallbacks resolving after 404s, markdown settling) lands
+ * AFTER a quiet gap in which the position reads as settled — an early
+ * stability release leaves that reflow with no pin watching. The pin holds
+ * for the full window; a no-adjustment tick is simply a no-op.
  */
 
-/** Positions within this epsilon count as "no adjustment needed". */
+/** Positions within this epsilon count as "no adjustment needed this tick". */
 const STABLE_EPSILON_PX = 1;
-/** Release after this many consecutive no-adjustment ticks. */
-const STABLE_TICKS_TO_RELEASE = 2;
-/** Hard cap on the pinning window, so a pathologically restless layout can
- *  never leave the pin fighting the user's own scrolling forever. */
+/** Two callers can observe the same commit (the prepend's layout effect plus
+ *  a ResizeObserver tick, or back-to-back content-identical commits); a
+ *  second apply within this gap re-reads geometry the browser has not
+ *  re-laid-out yet, so it is skipped as a no-op. */
+const MIN_APPLY_GAP_MS = 4;
+/** Hard cap on the pinning window — the primary release — so the pin can
+ *  never fight the user's own scrolling forever. */
 export const PIN_MAX_MS = 1500;
+/** Low-frequency safety tick while a pin is active: catches async late
+ *  layout even when the ResizeObserver goes quiet. */
+export const PIN_SAFETY_TICK_MS = 120;
 
 export interface PinScroller {
   scrollTop: number;
@@ -40,7 +51,7 @@ export class PrependPin {
    *  scroll position at record time). Any observed position that deviates
    *  from it is the user's own scrolling, which always wins. */
   private lastSetScrollTop: number;
-  private stableTicks = 0;
+  private lastApplyAt: number | null = null;
   private readonly maxMs: number;
   /** Armed by the first restore tick — the cap bounds the restore window,
    *  not the fetch that precedes it (a slow page fetch must not expire the
@@ -74,16 +85,21 @@ export class PrependPin {
   }
 
   /** Restore the anchor to its recorded viewport position for one layout
-   *  tick. Returns whether the pin stays active; `false` when the deadline
-   *  passed, the anchor unmounted with no re-acquirable replacement, the
-   *  user scrolled, or the position has been stable for two consecutive
-   *  ticks. */
+   *  tick. Returns whether the pin stays active; `false` only when the
+   *  deadline passed, the anchor unmounted with no re-acquirable
+   *  replacement, or the user scrolled. A stable position is NOT a release:
+   *  async late layout can land after an arbitrarily long quiet gap. */
   apply(scroller: PinScroller, now: number): boolean {
     if (this.deadline === null) {
       this.deadline = now + this.maxMs;
     } else if (now > this.deadline) {
       return false;
     }
+    // Same-frame duplicate tick: geometry cannot have changed — no-op.
+    if (this.lastApplyAt !== null && now - this.lastApplyAt < MIN_APPLY_GAP_MS) {
+      return true;
+    }
+    this.lastApplyAt = now;
     if (!this.el.isConnected) {
       // A re-render swapped the anchor's DOM node (common: the prepended
       // rows re-clustered with the previously-first row). Re-acquire the
@@ -96,10 +112,10 @@ export class PrependPin {
     if (!this.notifyScroll(scroller.scrollTop)) return false;
     const delta = this.el.getBoundingClientRect().top - this.recordedTop;
     if (Math.abs(delta) < STABLE_EPSILON_PX) {
-      this.stableTicks += 1;
-      return this.stableTicks < STABLE_TICKS_TO_RELEASE;
+      // Nothing to adjust this tick — but HOLD the pin: late reflow may
+      // still be coming, and only deadline/user-scroll/anchor-loss release.
+      return true;
     }
-    this.stableTicks = 0;
     scroller.scrollTop += delta;
     // Read back rather than trusting the assignment: the browser clamps to
     // the scrollable range, and the clamped value is what the next scroll

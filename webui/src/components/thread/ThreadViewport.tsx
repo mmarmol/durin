@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { ThreadMessages } from "@/components/thread/ThreadMessages";
 import { Button } from "@/components/ui/button";
-import { PIN_MAX_MS, PrependPin } from "@/lib/prepend-pin";
+import { PIN_SAFETY_TICK_MS, PrependPin } from "@/lib/prepend-pin";
 import { cn } from "@/lib/utils";
 import type { UIMessage } from "@/lib/types";
 
@@ -60,14 +60,17 @@ export function ThreadViewport({
    *  restore frame, so a one-shot compensation lands the view off by the
    *  post-snapshot growth). Non-null for the whole pinning window. */
   const pinRef = useRef<PrependPin | null>(null);
+  /** Safety-tick interval id while a pin is active (see applyPinTick). */
   const pinTimerRef = useRef<number | null>(null);
+  /** Self-reference so the interval callback always runs the latest tick fn. */
+  const applyPinTickRef = useRef<() => boolean>(() => false);
   const [atBottom, setAtBottom] = useState(true);
   const hasMessages = messages.length > 0;
 
   const releasePin = useCallback(() => {
     pinRef.current = null;
     if (pinTimerRef.current !== null) {
-      window.clearTimeout(pinTimerRef.current);
+      window.clearInterval(pinTimerRef.current);
       pinTimerRef.current = null;
     }
   }, []);
@@ -87,16 +90,21 @@ export function ThreadViewport({
       releasePin();
       return true;
     }
-    // Fallback release: if layout settles without producing the two stable
-    // ticks that normally end the window (ResizeObserver only fires on size
-    // changes), this timer drops the pin so the auto-scroll guard can never
-    // stay latched. Armed once, at the first restore tick — the cap bounds
-    // the restore window, not the fetch that precedes it.
+    // Low-frequency safety tick, armed at the first restore: async late
+    // layout (image fallbacks after 404s, markdown settling) can land after
+    // the ResizeObserver has gone quiet, so the observer alone cannot be
+    // trusted to deliver a tick for it. The interval keeps applying until
+    // the pin releases itself (deadline / user scroll / anchor loss), which
+    // also bounds how long the interval lives; releasePin clears it.
     if (pinTimerRef.current === null) {
-      pinTimerRef.current = window.setTimeout(releasePin, PIN_MAX_MS);
+      pinTimerRef.current = window.setInterval(
+        () => applyPinTickRef.current(),
+        PIN_SAFETY_TICK_MS,
+      );
     }
     return true;
   }, [releasePin]);
+  applyPinTickRef.current = applyPinTick;
 
   const cancelScheduledBottomScroll = useCallback(() => {
     for (const id of scrollFrameIdsRef.current) {
