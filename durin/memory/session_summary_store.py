@@ -107,6 +107,8 @@ def write_session_summary(
     session_key: str,
     text: str,
     last_active: object = None,
+    *,
+    headline_source: Optional[str] = None,
 ) -> Optional[Path]:
     """Persist *text* as `memory/session_summary/<sanitized>.md`.
 
@@ -117,6 +119,13 @@ def write_session_summary(
     The entry id is the sanitised session key, so re-writing the
     summary for the same session overwrites the previous file —
     update semantics, not append.
+
+    ``headline_source``, when given, is used to derive the headline
+    instead of *text*. Callers that append bounded blocks (see
+    ``append_session_summary_block``) pass the newest span block here
+    so the headline still summarizes recent content once older blocks
+    (or a synthetic carried-paths head block) are evicted to the front
+    of *text*.
     """
     text = (text or "").strip()
     if not text or text == "(nothing)":
@@ -126,7 +135,7 @@ def write_session_summary(
     valid_from = _parse_last_active(last_active) or date.today()
     entry = MemoryEntry(
         id=sanitized,
-        headline=_headline_from(text),
+        headline=_headline_from(headline_source if headline_source is not None else text),
         summary=text,
         body=text,
         author="agent_created",
@@ -157,6 +166,27 @@ def _salvage_paths(evicted_block: str, carried: list[str]) -> None:
                 path = path.strip()
                 if path and path not in carried:
                     carried.append(path)
+
+
+def _build_carried_line(carried: list[str]) -> str:
+    """Join carried path entries into a line bounded by
+    ``_EVICTED_PATHS_MAX_CHARS``.
+
+    Drops whole entries rather than raw-slicing the joined string, so
+    the result never ends in a truncated path fragment that
+    ``_salvage_paths`` would later mis-parse as a real path.
+    *carried* accumulates oldest-first; entries are dropped from the
+    oldest end so the newest carried paths survive the cap.
+    """
+    kept: list[str] = []
+    total = len(_EVICTED_PATHS_PREFIX)
+    for path in reversed(carried):
+        added = len(path) + (2 if kept else 0)  # "; " separator
+        if total + added > _EVICTED_PATHS_MAX_CHARS:
+            break
+        kept.insert(0, path)
+        total += added
+    return _EVICTED_PATHS_PREFIX + "; ".join(kept)
 
 
 def append_session_summary_block(
@@ -198,13 +228,12 @@ def append_session_summary_block(
     ) > max_chars:
         _salvage_paths(blocks.pop(0), carried)
     if carried:
-        carried_line = (_EVICTED_PATHS_PREFIX + "; ".join(carried))[:_EVICTED_PATHS_MAX_CHARS]
-        blocks.insert(0, carried_line)
+        blocks.insert(0, _build_carried_line(carried))
     if not blocks_changed and not carried:
         return None
     return write_session_summary(
         workspace, session_key, _SUMMARY_BLOCK_SEP.join(blocks),
-        last_active=last_active,
+        last_active=last_active, headline_source=block,
     )
 
 
