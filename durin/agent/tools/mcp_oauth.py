@@ -33,6 +33,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from loguru import logger
+from mcp.client.auth import OAuthClientProvider
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 from durin.security.secrets import (
@@ -75,6 +76,7 @@ class SecretsTokenStorage:
         self._url = server_url
         self._tokens_name = _secret_name("OAUTH_TOKENS", server, server_url)
         self._client_name = _secret_name("OAUTH_CLIENT", server, server_url)
+        self._marker_name = _secret_name("OAUTH_REFRESH_INFLIGHT", server, server_url)
 
     def _read(self, name: str) -> str | None:
         try:
@@ -98,6 +100,12 @@ class SecretsTokenStorage:
         store.save()
         get_secret_store(reload=True)
 
+    def _delete(self, name: str) -> None:
+        store = SecretStore().load()
+        if store.remove(name):
+            store.save()
+            get_secret_store(reload=True)
+
     async def get_tokens(self) -> OAuthToken | None:
         raw = self._read(self._tokens_name)
         if raw is None:
@@ -110,6 +118,23 @@ class SecretsTokenStorage:
 
     async def set_tokens(self, tokens: OAuthToken) -> None:
         self._write(self._tokens_name, tokens.model_dump_json())
+        self.clear_refresh_marker()
+
+    def write_refresh_marker(self) -> None:
+        """Persist 'a refresh request is about to consume the (single-use)
+        refresh token'. Cleared by set_tokens once the replacement is safely
+        stored; an orphan therefore means the process died in between and
+        the stored refresh token is likely already dead server-side."""
+        import json as _json
+        from datetime import datetime, timezone
+
+        self._write(
+            self._marker_name,
+            _json.dumps({"server": self._server, "ts": datetime.now(timezone.utc).isoformat()}),
+        )
+
+    def clear_refresh_marker(self) -> None:
+        self._delete(self._marker_name)
 
     async def get_client_info(self) -> OAuthClientInformationFull | None:
         raw = self._read(self._client_name)
@@ -135,6 +160,21 @@ class SecretsTokenStorage:
             store.save()
             get_secret_store(reload=True)
         return removed
+
+
+def refresh_inflight_marker(server: str, server_url: str | None) -> dict | None:
+    """Orphan-detection read used by connect-error enrichment and doctor."""
+    import json as _json
+
+    storage = SecretsTokenStorage(server, server_url=server_url)
+    raw = storage._read(storage._marker_name)
+    if not raw:
+        return None
+    try:
+        parsed = _json.loads(raw)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 # ---- SP-4b: provider builder + headless redirect handler ----
@@ -256,6 +296,29 @@ def _seed_static_client(
     task.add_done_callback(_PENDING_SEED_TASKS.discard)
 
 
+class WriteAheadOAuthProvider(OAuthClientProvider):
+    """SDK provider + write-ahead marker around refresh-token rotation.
+
+    _refresh_token() is the SDK's request builder for the refresh grant —
+    the last durin-controllable moment before the provider consumes the
+    single-use rotating refresh token. Persisting the marker here (and
+    clearing it in set_tokens) brackets the vulnerable window so an
+    interrupted refresh is detectable at the next startup instead of
+    surfacing as a silent auth loss. Pinned by test_sdk_contract_pin.
+    """
+
+    def __init__(self, *args: Any, durin_storage: SecretsTokenStorage, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._durin_storage = durin_storage
+
+    async def _refresh_token(self):  # noqa: ANN201 — mirrors SDK signature
+        try:
+            self._durin_storage.write_refresh_marker()
+        except Exception:  # noqa: BLE001
+            logger.exception("write-ahead marker failed (refresh proceeds)")
+        return await super()._refresh_token()
+
+
 def build_oauth_provider(
     server: str,
     cfg: Any,
@@ -272,10 +335,8 @@ def build_oauth_provider(
     A static client_id (config override) is seeded into storage so the SDK
     skips dynamic registration.
 
-    Returns an OAuthClientProvider, which is also an httpx.Auth.
+    Returns a WriteAheadOAuthProvider, which is also an httpx.Auth.
     """
-    from mcp.client.auth import OAuthClientProvider
-
     oc = cfg.oauth_config()
     port = oc.callback_port if oc else 1456
     storage = SecretsTokenStorage(server, server_url=cfg.url or None)
@@ -287,12 +348,13 @@ def build_oauth_provider(
         redirect_handler = make_headless_redirect_handler(server)
         callback_handler = _headless_callback
 
-    return OAuthClientProvider(
+    return WriteAheadOAuthProvider(
         server_url=cfg.url,
         client_metadata=_client_metadata(cfg, port, redirect_uri),
         storage=storage,
         redirect_handler=redirect_handler,
         callback_handler=callback_handler,
+        durin_storage=storage,
     )
 
 
