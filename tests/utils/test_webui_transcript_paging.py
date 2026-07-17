@@ -15,15 +15,72 @@ import pytest
 from durin.utils import webui_transcript as wt
 
 
+def _dump(obj: dict) -> str:
+    # Byte-identical to what append_transcript_object writes (compact JSON),
+    # so the tests exercise _is_user_line's production branch.
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
 def _write_transcript(tmp_path: Path, monkeypatch, turns: int) -> Path:
     monkeypatch.setattr(wt, "get_webui_dir", lambda: tmp_path)
     path = wt.webui_transcript_path("websocket:pagetest")
     with open(path, "w", encoding="utf-8") as f:
         for i in range(turns):
-            f.write(json.dumps({"kind": "user", "text": f"question {i}", "i": i, "event": "user"}) + "\n")
-            f.write(json.dumps({"kind": "trace", "text": f"tool run {i}", "i": i}) + "\n")
-            f.write(json.dumps({"kind": "assistant", "text": f"answer {i} " + "x" * 200, "i": i}) + "\n")
+            f.write(_dump({"kind": "user", "text": f"question {i}", "i": i, "event": "user"}) + "\n")
+            f.write(_dump({"kind": "trace", "text": f"tool run {i}", "i": i}) + "\n")
+            f.write(_dump({"kind": "assistant", "text": f"answer {i} " + "x" * 200, "i": i}) + "\n")
     return path
+
+
+def _write_with_oversized_line(tmp_path: Path, monkeypatch) -> tuple[int, int, list[int]]:
+    """Transcript with one 50 KB assistant line between normal turns.
+
+    Scaled-down analogue of a multi-MB single line (the writer allows lines
+    up to the 8 MB file cap): with target_bytes=4_000 and a monkeypatched
+    _BOUNDARY_SCAN_LIMIT of 16_000 the initial 20_000-byte window fits
+    entirely inside the oversized line, forcing the widening-retry path.
+
+    Returns (total_lines, oversized_line_index, line_start_offsets); every
+    line carries a sequential ``n`` for exactly-once coverage checks.
+    """
+    monkeypatch.setattr(wt, "get_webui_dir", lambda: tmp_path)
+    monkeypatch.setattr(wt, "_BOUNDARY_SCAN_LIMIT", 16_000)
+    path = wt.webui_transcript_path("websocket:pagetest")
+    starts: list[int] = []
+    n = 0
+    with open(path, "wb") as f:
+
+        def emit(obj: dict) -> None:
+            nonlocal n
+            starts.append(f.tell())
+            f.write((_dump({**obj, "n": n}) + "\n").encode("utf-8"))
+            n += 1
+
+        for i in range(10):
+            emit({"kind": "user", "text": f"question {i}"})
+            emit({"kind": "trace", "text": f"tool run {i}"})
+            emit({"kind": "assistant", "text": f"answer {i}"})
+        emit({"kind": "user", "text": "big question"})
+        giant_idx = n
+        emit({"kind": "assistant", "text": "y" * 50_000})
+        for i in range(10, 20):
+            emit({"kind": "user", "text": f"question {i}"})
+            emit({"kind": "trace", "text": f"tool run {i}"})
+            emit({"kind": "assistant", "text": f"answer {i}"})
+    return n, giant_idx, starts
+
+
+def _chain_backwards(before: int | None, target_bytes: int) -> tuple[list[int], int | None]:
+    seen: list[int] = []
+    cursor = before
+    for _ in range(1000):
+        lines, cursor = wt.read_transcript_page(
+            "websocket:pagetest", before=cursor, target_bytes=target_bytes
+        )
+        seen = [ln["n"] for ln in lines] + seen
+        if cursor is None:
+            break
+    return seen, cursor
 
 
 def test_last_page_returns_tail_and_cursor(tmp_path, monkeypatch):
@@ -80,3 +137,35 @@ def test_build_response_carries_prev_cursor(tmp_path, monkeypatch):
         "websocket:pagetest", before=payload["prevCursor"]
     )
     assert older is not None and older["messages"]
+
+
+def test_oversized_line_never_breaks_the_chain(tmp_path, monkeypatch):
+    """A single line larger than the whole scan window must neither be
+    skipped nor make the chain falsely report history exhausted: the
+    widening retry re-reads with a doubled lookback until a complete
+    line (or offset 0) is reached."""
+    total, _giant_idx, _starts = _write_with_oversized_line(tmp_path, monkeypatch)
+    seen, cursor = _chain_backwards(before=None, target_bytes=4_000)
+    assert cursor is None, "chain must terminate only at offset 0"
+    assert seen == list(range(total)), "every line exactly once, in order"
+
+
+def test_chain_from_misaligned_offsets_no_gaps_no_dups(tmp_path, monkeypatch):
+    """Chaining from an arbitrary mid-line ``before`` must cover every line
+    that lies fully below the cut exactly once — including across the
+    oversized line — and terminate with None only at offset 0. The cut
+    line itself is unreadable by construction (its tail was excluded)."""
+    total, giant_idx, starts = _write_with_oversized_line(tmp_path, monkeypatch)
+    cases = (
+        (giant_idx, 12_345),   # cut inside the oversized line
+        (giant_idx + 4, 1),    # cut just after a later line's start
+        (total - 3, 5),        # cut inside a normal line near the tail
+    )
+    for cut_line, wobble in cases:
+        before = starts[cut_line] + wobble
+        assert cut_line == len(starts) - 1 or before < starts[cut_line + 1]
+        seen, cursor = _chain_backwards(before=before, target_bytes=4_000)
+        assert cursor is None, f"cut at line {cut_line}+{wobble}: chain must terminate"
+        assert seen == list(range(cut_line)), (
+            f"cut at line {cut_line}+{wobble}: no gaps, no duplicates"
+        )

@@ -94,24 +94,36 @@ def read_transcript_page(
     if end == 0:
         return [], None
 
+    rough_start = max(0, end - target_bytes)
+    lookback = target_bytes + _BOUNDARY_SCAN_LIMIT
     with open(path, "rb") as f:
-        rough_start = max(0, end - target_bytes)
-        scan_floor = max(0, end - target_bytes - _BOUNDARY_SCAN_LIMIT)
-        f.seek(scan_floor)
-        window = f.read(end - scan_floor)
+        while True:
+            scan_floor = max(0, end - lookback)
+            f.seek(scan_floor)
+            window = f.read(end - scan_floor)
 
-    # Split into lines, tracking each line's absolute start offset.
-    text = window.decode("utf-8", errors="replace")
-    offsets: list[tuple[int, str]] = []
-    pos = 0
-    for raw in text.splitlines(keepends=True):
-        offsets.append((scan_floor + pos, raw))
-        pos += len(raw.encode("utf-8"))
+            # Split into lines, tracking each line's absolute start offset.
+            text = window.decode("utf-8", errors="replace")
+            offsets: list[tuple[int, str]] = []
+            pos = 0
+            for raw in text.splitlines(keepends=True):
+                offsets.append((scan_floor + pos, raw))
+                pos += len(raw.encode("utf-8"))
 
-    # Drop a leading partial line (we may have seeked mid-line) unless we
-    # started at offset 0, where the first line is always whole.
-    if scan_floor > 0 and offsets:
-        offsets = offsets[1:]
+            # Drop a leading partial line (we may have seeked mid-line) unless
+            # we started at offset 0, where the first line is always whole.
+            if scan_floor > 0 and offsets:
+                offsets = offsets[1:]
+
+            if offsets or scan_floor == 0:
+                break
+            # A single line larger than the whole window (the writer allows
+            # lines up to the file cap) left nothing complete after the
+            # partial-line drop. Widen the lookback and retry — the chain
+            # must never skip a line or falsely report history exhausted.
+            # Each attempt reads one window; the previous one is discarded,
+            # so memory stays bounded per attempt.
+            lookback *= 2
 
     # Choose the page start: the latest user line at or before rough_start;
     # if none exists in the scan window, fall back to the first whole line.
