@@ -348,6 +348,78 @@ def check_secret_refs() -> CheckResult:
     )
 
 
+def _marker_age(ts: str | None) -> str:
+    """Human-readable age for a write-ahead marker's ISO timestamp.
+
+    Returns "unknown" when *ts* is missing or unparseable rather than raising —
+    an unreadable age must not sink the whole check.
+    """
+    if not ts:
+        return "unknown"
+    from datetime import datetime, timezone
+
+    try:
+        when = datetime.fromisoformat(ts)
+    except ValueError:
+        return "unknown"
+    seconds = (datetime.now(timezone.utc) - when).total_seconds()
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h"
+    return f"{int(seconds // 86400)}d"
+
+
+def check_mcp_oauth_refresh_markers() -> CheckResult:
+    """Flag OAuth-enabled MCP servers with an orphaned refresh write-ahead marker.
+
+    An orphan means a token-refresh was interrupted mid-rotation (process died
+    between the SDK consuming the single-use refresh token and durin persisting
+    its replacement) — the stored refresh token is likely already dead
+    server-side, so the next connect will fail auth in a confusing way unless
+    the operator re-authenticates. Reads are best-effort: a config/marker that
+    can't be read is skipped rather than failing the whole check.
+    """
+    from durin.agent.tools.mcp_oauth import refresh_inflight_marker
+
+    try:
+        servers = load_config().tools.mcp_servers
+    except Exception as e:  # noqa: BLE001
+        return CheckResult(
+            "mcp oauth refresh markers", "warn", f"Could not read config: {e}",
+            category="mcp",
+        )
+
+    orphans: list[str] = []
+    for name, sc in sorted(servers.items()):
+        if sc.oauth_config() is None:
+            continue
+        try:
+            marker = refresh_inflight_marker(name, sc.url or None)
+        except Exception:  # noqa: BLE001 — a bad marker must not break doctor
+            continue
+        if marker is None:
+            continue
+        orphans.append(f"{name} ({_marker_age(marker.get('ts'))})")
+
+    if not orphans:
+        return CheckResult(
+            "mcp oauth refresh markers", "ok", "no orphaned refresh markers",
+            category="mcp",
+        )
+    return CheckResult(
+        "mcp oauth refresh markers", "warn",
+        f"{len(orphans)} orphaned refresh marker(s): {', '.join(orphans)}",
+        fix=(
+            "an earlier token refresh was interrupted mid-rotation, so the stored "
+            "refresh token is likely already consumed — run: durin mcp login <server>"
+        ),
+        category="mcp",
+    )
+
+
 def check_executable(name: str, *, required: bool, hint: str) -> CheckResult:
     found = shutil.which(name)
     if found:
@@ -1473,6 +1545,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     report.add(check_optional_extra("lancedb", extra="memory", purpose="vector index storage"))
     report.add(check_cross_encoder_dep())
     report.add(check_optional_extra("mcp", extra="mcp", purpose="MCP server mode"))
+    report.add(check_mcp_oauth_refresh_markers())
     report.add(check_optional_extra("ddgs", extra="web", purpose="DuckDuckGo web_search"))
     report.add(check_optional_extra("readability", extra="web", purpose="web_fetch article extraction"))
     # Audio transcription: local Whisper extra, TUI mic extra,

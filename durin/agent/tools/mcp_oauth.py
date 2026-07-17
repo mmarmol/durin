@@ -177,6 +177,27 @@ def refresh_inflight_marker(server: str, server_url: str | None) -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def auth_failure_message(server: str, cfg: Any) -> str:
+    """Build the `durin mcp login` hint appended to an initial-connect auth
+    failure for an OAuth-enabled server.
+
+    When an orphaned write-ahead marker exists (see ``write_refresh_marker``),
+    an earlier refresh was interrupted mid-rotation and the stored refresh
+    token is likely already consumed server-side — a plain "run mcp login"
+    hint would leave the operator to guess why sign-in fails despite
+    valid-looking credentials on disk, so that specific cause is named here
+    instead. Callers are expected to only invoke this when the server is
+    actually OAuth-enabled (e.g. an oauth provider was built for it).
+    """
+    marker = refresh_inflight_marker(server, getattr(cfg, "url", None) or None)
+    if marker is not None:
+        return (
+            " an earlier token refresh was interrupted mid-rotation, so the "
+            f"stored refresh token is likely already consumed — run: durin mcp login {server}"
+        )
+    return f" Run: durin mcp login {server}"
+
+
 # ---- SP-4b: provider builder + headless redirect handler ----
 
 

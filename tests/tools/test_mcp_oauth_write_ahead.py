@@ -88,6 +88,27 @@ def test_provider_writes_marker_before_building_refresh_request(isolated_secrets
     assert mo.refresh_inflight_marker("srv", "https://mcp.example.com") is not None
 
 
+def test_auth_failure_message_plain_when_no_marker(isolated_secrets):
+    from durin.config.schema import MCPServerConfig
+
+    cfg = MCPServerConfig(url="https://mcp.example.com", oauth=True)
+    msg = mo.auth_failure_message("srv", cfg)
+    assert "durin mcp login srv" in msg
+    assert "interrupted mid-rotation" not in msg
+
+
+def test_auth_failure_message_enriched_when_orphan_marker(isolated_secrets):
+    from durin.config.schema import MCPServerConfig
+
+    cfg = MCPServerConfig(url="https://mcp.example.com", oauth=True)
+    mo.SecretsTokenStorage("srv", server_url="https://mcp.example.com").write_refresh_marker()
+
+    msg = mo.auth_failure_message("srv", cfg)
+    assert "interrupted mid-rotation" in msg
+    assert "stored refresh token is likely already consumed" in msg
+    assert "durin mcp login srv" in msg
+
+
 def test_sdk_contract_pin():
     """Fail loudly when an mcp bump changes the hook we wrap."""
     import inspect
