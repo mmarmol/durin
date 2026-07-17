@@ -298,6 +298,16 @@ proceeds if that fits (`mid_turn_precheck.recovered`); only when trimming can't
 recover does it abort *before* the LLM call with
 `stop_reason=mid_turn_precheck_overflow` and an overflow-specific placeholder.
 
+**Microcompaction** is gated on pressure: results beyond the most recent
+`_MICROCOMPACT_KEEP_RECENT` are only collapsed when the estimated prompt
+already exceeds `_MICROCOMPACT_PRESSURE_RATIO` of the input budget, so a
+turn with headroom to spare keeps stale tool results in full — they may
+still hold the answer to a question the user hasn't asked yet. When it does
+fire, the placeholder is informative rather than opaque: it names the tool,
+quotes a short head snippet of what the output began with (omitted when the
+content is already a persisted reference, since its head is marker
+boilerplate), and points at the recoverable file via `read_file`.
+
 Two behaviors connect the runner back to the loop:
 
 - **Mid-turn injection.** The runner calls the loop's `_drain_pending` callback
