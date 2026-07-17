@@ -366,7 +366,7 @@ to the scan report, and makes it inert for the agent. Approve re-gates through
 | `sweep_unverified_skills` | `durin/agent/skill_lifecycle.py` | Relocates no-provenance workspace skills to quarantine, prepends `unverified_origin` finding. Runs at ContextBuilder init and on surfaces. |
 | `compute_working_set` | `durin/agent/skill_usage.py` | Hot-tier sizing: frequent (7-day window) + recent (24-hour window) skill calls from session sidecars. Returns list of skill names. |
 | `get_always_skills` / `load_skills_for_context` | `durin/agent/skills.py` | Always-tier retrieval: filter for `always: true`, inject full bodies into stable prompt. |
-| `skills_inventory` / web routes | `durin/agent/skills_surface.py` | Read model for CLI and web. Augments skill list with verdict and findings, removable action, review overrides, requirements resolution. No mutations. |
+| `skills_inventory` / web routes | `durin/agent/skills_surface.py` | Read model for CLI and web. Augments skill list with verdict and findings (pinning a stricter import-time provenance verdict via a synthetic `import_verdict` finding), removable action, review overrides, requirements resolution. No mutations. |
 | `check_upstream_drift` | `durin/agent/skill_drift.py` | Re-fetches and re-scans a skill's source repo. If changed and gate allows, feeds upstream body to curation judge for surgical evolve. |
 
 ---

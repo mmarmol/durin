@@ -963,6 +963,7 @@ class WebSocketChannel(BaseChannel):
         merged.judge_verdict = outcome.verdict
         findings = [{"category": f.category, "severity": f.severity, "where": f.where,
                      "detail": f.detail} for f in merged.findings]
+        verdict = merged.verdict
         if is_quarantine:
             source = name
             sj = qdir / ".scan.json"
@@ -971,13 +972,17 @@ class WebSocketChannel(BaseChannel):
                     source = _json.loads(sj.read_text()).get("source", name)
                 except Exception:  # noqa: BLE001
                     pass
-            ss._persist_judge_result(qdir, source, merged.verdict, findings, outcome.summary)
+            ss._persist_judge_result(qdir, source, verdict, findings, outcome.summary)
         else:
+            # Ack what the inventory reports: a provenance-pinned verdict adds a
+            # synthetic finding the recorded review must cover to stay valid.
+            from durin.agent.skills_surface import apply_provenance_verdict
+            verdict, findings = apply_provenance_verdict(target, verdict, findings)
             ss.record_review_from_judge(
                 Path(workspace), name, target, judge_verdict=outcome.verdict,
-                merged_findings=findings, summary=outcome.summary, original=det.verdict)
+                merged_findings=findings, summary=outcome.summary, original=verdict)
         await self._send_event(connection, "skill_audit_done", chat_id=chat_id, name=name,
-                               judged=True, verdict=merged.verdict, findings=findings,
+                               judged=True, verdict=verdict, findings=findings,
                                summary=outcome.summary)
 
     @staticmethod

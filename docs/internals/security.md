@@ -219,6 +219,17 @@ can mark an active flagged skill as reviewed. The review stores a `content_hash`
 acked finding fingerprints match the current scan results — a content edit or a
 new scanner finding invalidates the review.
 
+**Provenance-pinned verdicts** (`apply_provenance_verdict()` in
+`durin/agent/skills_surface.py`): the verdict recorded at import can be stricter
+than what the deterministic scanner reproduces later — an LLM-judge finding or
+the unverified-origin sweep's synthetic finding, neither of which persists in
+the skill directory. Every active-skill scan surface (the inventory, the user
+review endpoint, the LLM audit path) pins the stricter provenance verdict and
+prepends a synthetic `import_verdict` finding naming its origin, so the security
+report explains the warning badge and the review store has a fingerprint to ack.
+A weaker provenance verdict never lowers the live scan's verdict — the scanner's
+current view of the content wins.
+
 ### Shell execution policy
 
 `ExecTool.execute()` (`durin/agent/tools/shell.py`) runs every shell command
