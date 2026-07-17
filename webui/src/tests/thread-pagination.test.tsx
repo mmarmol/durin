@@ -393,7 +393,75 @@ describe("PrependPin", () => {
     expect(pin.notifyScroll(scroller.scrollTop)).toBe(true);
   });
 
-  it("counts the deadline from the first restore tick, then releases at it", () => {
+  it("releases on genuine quiet: enough executed no-op ticks over a real time span", () => {
+    const { state, anchor } = makeAnchor(100);
+    const scroller = { scrollTop: 200 };
+    const pin = new PrependPin(anchor, 100, 200);
+
+    state.top = 700;
+    expect(pin.apply(scroller, 10)).toBe(true); // adjusting restore → 800
+    expect(scroller.scrollTop).toBe(800);
+
+    // Quiet ticks: held while EITHER condition is unmet.
+    state.top = 100;
+    expect(pin.apply(scroller, 130)).toBe(true); // no-op tick 1
+    expect(pin.apply(scroller, 250)).toBe(true); // no-op tick 2
+    expect(pin.apply(scroller, 370)).toBe(true); // no-op tick 3
+    expect(pin.apply(scroller, 500)).toBe(true); // tick 4 but only 490ms since adjust
+    expect(pin.apply(scroller, 700)).toBe(false); // tick 5, 690ms quiet: released
+    expect(scroller.scrollTop).toBe(800);
+  });
+
+  it("an adjusting restore resets the quiet window", () => {
+    const { state, anchor } = makeAnchor(100);
+    const scroller = { scrollTop: 200 };
+    const pin = new PrependPin(anchor, 100, 200);
+
+    state.top = 700;
+    expect(pin.apply(scroller, 10)).toBe(true); // adjust → 800
+    state.top = 100;
+    expect(pin.apply(scroller, 130)).toBe(true); // no-op 1
+    expect(pin.apply(scroller, 250)).toBe(true); // no-op 2
+    expect(pin.apply(scroller, 370)).toBe(true); // no-op 3
+    state.top = 180; // late reflow: adjusting restore resets ticks AND clock
+    expect(pin.apply(scroller, 640)).toBe(true);
+    expect(scroller.scrollTop).toBe(880);
+    state.top = 100;
+    expect(pin.apply(scroller, 760)).toBe(true); // no-op 1 of the NEW window
+    expect(pin.apply(scroller, 880)).toBe(true);
+    expect(pin.apply(scroller, 1000)).toBe(true);
+    expect(pin.apply(scroller, 1120)).toBe(true); // tick 4 but only 480ms since adjust
+    expect(pin.apply(scroller, 1360)).toBe(false); // 720ms quiet: released
+  });
+
+  it("survives main-thread starvation: a long tickless gap must not expire the pin", () => {
+    const { state, anchor } = makeAnchor(100);
+    const scroller = { scrollTop: 200 };
+    const pin = new PrependPin(anchor, 100, 200);
+
+    // First restore, then the prepend's own layout burst blocks the main
+    // thread for ~2s: no observer tick, no interval tick can run.
+    state.top = 700;
+    expect(pin.apply(scroller, 100)).toBe(true);
+    expect(scroller.scrollTop).toBe(800);
+
+    // Execution resumes; the async late reflow has landed meanwhile. The
+    // next tick must STILL apply and adjust — wall-clock alone (2s > any
+    // quiet span) must not have released the pin during the gap.
+    state.top = 400;
+    expect(pin.apply(scroller, 2100)).toBe(true);
+    expect(scroller.scrollTop).toBe(1100);
+
+    // Genuine quiet after the late reflow: releases normally.
+    state.top = 100;
+    expect(pin.apply(scroller, 2220)).toBe(true);
+    expect(pin.apply(scroller, 2340)).toBe(true);
+    expect(pin.apply(scroller, 2460)).toBe(true);
+    expect(pin.apply(scroller, 2820)).toBe(false); // 4 ticks, 720ms quiet
+    expect(scroller.scrollTop).toBe(1100);
+  });
+
+  it("releases at the pathological ceiling, counted from the first restore tick", () => {
     const { state, anchor } = makeAnchor(100);
     const scroller = { scrollTop: 200 };
     const pin = new PrependPin(anchor, 100, 200, null, 1500);
@@ -405,12 +473,12 @@ describe("PrependPin", () => {
     expect(pin.started).toBe(true);
     expect(scroller.scrollTop).toBe(800);
 
-    // Within the window: keeps restoring.
+    // Within the window: keeps restoring (adjusting, so quiet never trips).
     state.top = 250;
     expect(pin.apply(scroller, 11_400)).toBe(true);
     expect(scroller.scrollTop).toBe(950);
 
-    // Past the cap (10_000 + 1500): released without adjusting.
+    // Past the ceiling (10_000 + 1500): released without adjusting.
     state.top = 700;
     expect(pin.apply(scroller, 11_501)).toBe(false);
     expect(scroller.scrollTop).toBe(950);
