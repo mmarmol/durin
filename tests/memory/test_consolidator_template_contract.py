@@ -36,3 +36,11 @@ def test_template_instructs_typed_entity_refs():
     entities_instruction = re.search(r"`entities`:.*", template)
     assert entities_instruction is not None
     assert "<type>:<value>" in entities_instruction.group(0)
+
+
+def test_template_has_locations_category_and_does_not_skip_paths():
+    template = render_template("agent/consolidator_archive.md", strip=True)
+    assert "- Locations:" in template
+    # The old clause told the model to drop anything derivable from
+    # source files — which included the paths themselves.
+    assert "code patterns derivable from source" not in template
