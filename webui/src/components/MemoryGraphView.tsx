@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import {
+  ArrowDownUp,
   BookOpen,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Focus,
+  LayoutGrid,
   Maximize2,
   Minimize2,
   Network,
   RefreshCw,
   Search as SearchIcon,
+  Table2,
   Trash2,
   X,
 } from "lucide-react";
@@ -42,6 +45,12 @@ import {
   type MemorySessionDetail,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import {
+  colorForType,
+  type EntitySortKey,
+} from "@/lib/memory-graph-style";
+import { MemoryEntityCards } from "@/components/MemoryEntityCards";
+import { MemoryEntityTable } from "@/components/MemoryEntityTable";
 
 interface MemoryGraphViewProps {
   active: boolean;
@@ -63,23 +72,6 @@ interface SimEdge {
   weight: number;
 }
 
-const TYPE_PALETTE: Record<string, string> = {
-  person: "#7C3AED",
-  project: "#0EA5E9",
-  topic: "#10B981",
-  place: "#F59E0B",
-  event: "#EF4444",
-  artifact: "#8B5CF6",
-  stance: "#EC4899",
-  practice: "#14B8A6",
-  // Sessions are deliberately grey-ish so they read as scaffolding
-  // around the semantic entities, not as entities themselves.
-  session: "#64748B",
-  // References (ingested source documents) — amber, distinct from `place`.
-  reference: "#D97706",
-};
-const FALLBACK_HUES = [200, 25, 145, 285, 60, 320, 95];
-
 /**
  * Strip HTML comment markers (provenance metadata) from memory body text.
  * Applies the removal repeatedly until the string is stable so that nested or
@@ -94,14 +86,6 @@ function stripHtmlComments(text: string): string {
     out = out.replace(/<!--[\s\S]*?-->/g, "");
   } while (out !== prev);
   return out;
-}
-
-function colorForType(type: string): string {
-  if (TYPE_PALETTE[type]) return TYPE_PALETTE[type];
-  let h = 0;
-  for (let i = 0; i < type.length; i++) h = (h * 31 + type.charCodeAt(i)) >>> 0;
-  const hue = FALLBACK_HUES[h % FALLBACK_HUES.length];
-  return `hsl(${hue} 65% 55%)`;
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -234,9 +218,35 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const { token } = useClient();
   const tokenRef = useRef(token);
   tokenRef.current = token;
-  // Two views under one memory page: the entity graph, and the Library shelf of
-  // ingested reference documents (list + per-document outline / entities / chunks).
-  const [mode, setMode] = useState<"graph" | "documents">("graph");
+  // Two content domains under one memory page: the entity knowledge graph and
+  // the Library shelf of ingested reference documents. Presentation of the
+  // entities (graph canvas / cards grid / table) is a separate axis below —
+  // three views of the same set, not sibling tabs (the Obsidian Bases model).
+  const [mode, setMode] = useState<"entities" | "documents">("entities");
+  // Entities presentation. Persisted; the graph canvas is near-useless on
+  // touch, so compact viewports fall back to cards (see effectiveView).
+  const [view, setView] = useState<"graph" | "cards" | "table">(() => {
+    try {
+      const stored = localStorage.getItem("durin.memoryGraph.view");
+      if (stored === "graph" || stored === "cards" || stored === "table") {
+        return stored;
+      }
+    } catch {
+      /* localStorage unavailable */
+    }
+    return "graph";
+  });
+  const setViewPersisted = useCallback((v: "graph" | "cards" | "table") => {
+    setView(v);
+    try {
+      localStorage.setItem("durin.memoryGraph.view", v);
+    } catch {
+      /* localStorage unavailable: ephemeral choice is fine */
+    }
+  }, []);
+  // Shared ordering for the cards/table presentations (the graph's layout is
+  // force-directed — sort does not apply there).
+  const [sortKey, setSortKey] = useState<EntitySortKey>("recent");
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -385,12 +395,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
-  // Caso 2: the graph recedes when the search panel is up with a live query.
-  const searching = searchOpen && (search.trim().length > 0 || searchResults != null);
-  recedeRef.current = searching;
 
   // Mobile (Caso 4): no force-graph on a phone (it's near-useless on touch).
-  // Below this width the canvas is replaced by a tappable entity list and the
+  // Below this width the graph option is hidden and cards take its place;
   // panels go full-screen — one surface at a time.
   const [compact, setCompact] = useState(
     () => typeof window !== "undefined" && window.innerWidth < 720,
@@ -400,6 +407,15 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+  const effectiveView = compact && view === "graph" ? "cards" : view;
+
+  // Caso 2: the graph recedes when the search panel is up with a live query.
+  // Graph view only — in cards/table the search filters the grid directly.
+  const searching =
+    effectiveView === "graph" &&
+    searchOpen &&
+    (search.trim().length > 0 || searchResults != null);
+  recedeRef.current = searching;
 
   // Edge popup state
   const [edgePopup, setEdgePopup] = useState<{
@@ -492,9 +508,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     return refs.size > 0 ? refs : null;
   }, [searchResults]);
 
-  // RAF render loop
+  // RAF render loop — graph view only (the canvas is unmounted otherwise).
   useEffect(() => {
-    if (!_props.active) return;
+    if (!_props.active || effectiveView !== "graph") return;
     const canvas = canvasRef.current;
     const wrap = wrapRef.current;
     if (!canvas || !wrap) return;
@@ -638,7 +654,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       ro.disconnect();
     };
-  }, [_props.active, selected, focusRef, focusNeighbours, searchMatchSet, hiddenTypes, compact]);
+  }, [_props.active, effectiveView, selected, focusRef, focusNeighbours, searchMatchSet, hiddenTypes, compact]);
 
   // Hit-test (for nodes AND edges). Skips nodes hidden by legend
   // toggles so the user can't accidentally select a node that's not
@@ -857,10 +873,13 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     };
   }, [selected]);
 
-  // Run search whenever the query stabilises
+  // Run search whenever the query stabilises. Graph view only: the semantic
+  // search API powers the results panel + node highlighting there. Cards and
+  // table filter their grid live from the payload instead (name / alias /
+  // summary substring), so no backend round-trip.
   useEffect(() => {
     const q = search.trim();
-    if (!q) {
+    if (!q || effectiveView !== "graph") {
       setSearchResults(null);
       setSearchError(null);
       return;
@@ -894,18 +913,28 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [search]);
+  }, [search, effectiveView]);
 
   const typesLegend = useMemo(() => {
     if (!data) return [] as { type: string; color: string }[];
     return data.stats.types.map((t) => ({ type: t, color: colorForType(t) }));
   }, [data]);
 
+  // Select an entity from the cards grid or the table — same panel wiring as
+  // a graph-canvas click, minus the canvas-only concerns (pinning, drag).
+  const selectEntity = useCallback((n: MemoryGraphNode) => {
+    setSelected(n);
+    setPanelExpanded(false);
+    setActiveTab(n.phantom ? "info" : "body");
+    setReferenceDetail(null);
+    setEdgePopup(null);
+  }, []);
+
   // From the Documents shelf back into the graph: open a doc-derived entity's
   // page (focus it if off-cap, then select).
   const handleOpenEntity = useCallback(
     (ref: string) => {
-      setMode("graph");
+      setMode("entities");
       setReferenceDetail(null);
       if (!simNodesRef.current.some((n) => n.id === ref)) focusOnNode(ref);
       const node =
@@ -931,15 +960,15 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         <div className="ml-3 flex items-center gap-0.5 rounded-md border border-border/50 p-0.5 text-[11px]">
           <button
             type="button"
-            onClick={() => setMode("graph")}
+            onClick={() => setMode("entities")}
             className={cn(
               "flex items-center gap-1 rounded px-2 py-0.5 transition-colors",
-              mode === "graph"
+              mode === "entities"
                 ? "bg-muted font-medium"
                 : "text-muted-foreground hover:bg-muted/60",
             )}
           >
-            <Network className="h-3 w-3" /> {t("memoryGraph.viewGraph")}
+            <Network className="h-3 w-3" /> {t("memoryGraph.tabEntities")}
           </button>
           <button
             type="button"
@@ -954,7 +983,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             <BookOpen className="h-3 w-3" /> {t("memoryGraph.viewDocuments")}
           </button>
         </div>
-        {mode === "graph" ? (
+        {mode === "entities" ? (
           <>
         {data && !compact ? (
           <span className="text-xs text-muted-foreground">
@@ -970,7 +999,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               : ""}
           </span>
         ) : null}
-        {focusGraph ? (
+        {focusGraph && effectiveView === "graph" ? (
           <button
             type="button"
             onClick={() => setFocusGraph(null)}
@@ -1013,7 +1042,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               </button>
             ) : null}
           </div>
-          {focusRef ? (
+          {focusRef && effectiveView === "graph" ? (
             <Button
               size="sm"
               variant="outline"
@@ -1037,6 +1066,120 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           </>
         ) : null}
       </header>
+
+      {/* Entities toolbar — the view switcher (three presentations of the
+          same node set, Obsidian-Bases style), the type filter chips (shared
+          by all three views; previously a graph-only floating legend), and
+          the sort control for the cards/table grids. */}
+      {mode === "entities" ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border/40 px-3 py-1.5 text-[11px]">
+          <div className="flex items-center gap-0.5 rounded-md border border-border/50 p-0.5">
+            {!compact ? (
+              <button
+                type="button"
+                onClick={() => setViewPersisted("graph")}
+                className={cn(
+                  "flex items-center gap-1 rounded px-2 py-0.5 transition-colors",
+                  effectiveView === "graph"
+                    ? "bg-primary/10 font-medium text-primary"
+                    : "text-muted-foreground hover:bg-muted/60",
+                )}
+              >
+                <Network className="h-3 w-3" /> {t("memoryGraph.viewGraph")}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setViewPersisted("cards")}
+              className={cn(
+                "flex items-center gap-1 rounded px-2 py-0.5 transition-colors",
+                effectiveView === "cards"
+                  ? "bg-primary/10 font-medium text-primary"
+                  : "text-muted-foreground hover:bg-muted/60",
+              )}
+            >
+              <LayoutGrid className="h-3 w-3" /> {t("memoryGraph.viewCards")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewPersisted("table")}
+              className={cn(
+                "flex items-center gap-1 rounded px-2 py-0.5 transition-colors",
+                effectiveView === "table"
+                  ? "bg-primary/10 font-medium text-primary"
+                  : "text-muted-foreground hover:bg-muted/60",
+              )}
+            >
+              <Table2 className="h-3 w-3" /> {t("memoryGraph.viewTable")}
+            </button>
+          </div>
+          {typesLegend.length > 0 ? (
+            <span className="mx-0.5 h-4 w-px bg-border/60" aria-hidden />
+          ) : null}
+          {typesLegend.map((tl) => {
+            const hidden = hiddenTypes.has(tl.type);
+            return (
+              <button
+                key={tl.type}
+                type="button"
+                onClick={() => toggleType(tl.type)}
+                aria-pressed={!hidden}
+                title={hidden ? `Show ${tl.type}` : `Hide ${tl.type}`}
+                className={cn(
+                  "flex items-center gap-1 rounded px-1.5 py-0.5 transition-opacity hover:bg-muted",
+                  hidden ? "opacity-40" : "opacity-100",
+                )}
+              >
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-full"
+                  style={{ background: tl.color }}
+                />
+                <span className={cn(hidden && "line-through")}>{tl.type}</span>
+              </button>
+            );
+          })}
+          {data && data.stats.phantom_count > 0 ? (
+            <button
+              type="button"
+              onClick={() => toggleType("phantom")}
+              aria-pressed={!hiddenTypes.has("phantom")}
+              title={hiddenTypes.has("phantom") ? "Show phantom" : "Hide phantom"}
+              className={cn(
+                "flex items-center gap-1 rounded px-1.5 py-0.5 transition-opacity hover:bg-muted",
+                hiddenTypes.has("phantom") ? "opacity-40" : "opacity-100",
+              )}
+            >
+              <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-foreground/50" />
+              <span className={cn(hiddenTypes.has("phantom") && "line-through")}>
+                phantom
+              </span>
+            </button>
+          ) : null}
+          {hiddenTypes.size > 0 ? (
+            <button
+              type="button"
+              onClick={() => setHiddenTypes(new Set())}
+              className="rounded border border-border/40 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted"
+            >
+              {t("memoryGraph.showAll")}
+            </button>
+          ) : null}
+          {effectiveView !== "graph" ? (
+            <label className="ml-auto flex items-center gap-1 text-muted-foreground">
+              <ArrowDownUp className="h-3 w-3" aria-hidden />
+              <select
+                value={sortKey}
+                onChange={(e) => setSortKey(e.target.value as EntitySortKey)}
+                className="h-6 rounded border border-input bg-background px-1 text-[11px] outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="recent">{t("memoryGraph.sortRecent")}</option>
+                <option value="mentions">{t("memoryGraph.sortMentions")}</option>
+                <option value="name">{t("memoryGraph.sortName")}</option>
+              </select>
+            </label>
+          ) : null}
+        </div>
+      ) : null}
 
       {mode === "documents" ? (
         <DocumentsShelf
@@ -1070,38 +1213,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             </span>
           </div>
         ) : null}
-        {compact ? (
-          // Mobile (Caso 4): tappable entity list instead of the graph.
-          <div className="absolute inset-0 overflow-auto p-3">
-            <ul className="flex flex-col gap-1">
-              {(data?.nodes ?? [])
-                .filter((n) => !hiddenTypes.has(n.phantom ? "phantom" : n.type))
-                .map((n) => (
-                  <li key={n.id}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelected(n);
-                        setPanelExpanded(false);
-                        setActiveTab(n.phantom ? "info" : "body");
-                        setReferenceDetail(null);
-                      }}
-                      className="flex w-full items-center gap-2 rounded-md border border-border/40 px-3 py-2.5 text-left hover:bg-muted/60"
-                    >
-                      <span
-                        className="h-2.5 w-2.5 shrink-0 rounded-full"
-                        style={{ background: colorForType(n.type) }}
-                      />
-                      <span className="truncate text-sm font-medium">{n.name}</span>
-                      <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
-                        {n.phantom ? "phantom" : n.type}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-            </ul>
-          </div>
-        ) : (
+        {effectiveView === "graph" ? (
           <canvas
             ref={canvasRef}
             onPointerDown={onPointerDown}
@@ -1115,67 +1227,42 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             }}
             className="block h-full w-full"
           />
+        ) : (
+          // Cards / table presentations. When the desktop compact detail
+          // panel is open it reserves the same right-hand column the graph
+          // canvas gives up, so the grid re-flows beside it instead of
+          // hiding rows underneath.
+          <div
+            className="absolute inset-0"
+            style={
+              selected && !compact && !panelExpanded
+                ? { paddingRight: "23rem" }
+                : undefined
+            }
+          >
+            {effectiveView === "cards" ? (
+              <MemoryEntityCards
+                nodes={data?.nodes ?? []}
+                hiddenTypes={hiddenTypes}
+                query={search}
+                sortKey={sortKey}
+                onSelect={selectEntity}
+              />
+            ) : (
+              <MemoryEntityTable
+                nodes={data?.nodes ?? []}
+                hiddenTypes={hiddenTypes}
+                query={search}
+                sortKey={sortKey}
+                onSelect={selectEntity}
+              />
+            )}
+          </div>
         )}
 
-        {/* Legend bottom-left — chips are click-to-toggle filters.
-            Clicking a chip hides every node of that type; clicking
-            again restores. Phantom is its own pseudo-type. */}
-        {typesLegend.length > 0 && !compact ? (
-          <div className="absolute bottom-3 left-3 flex flex-wrap items-center gap-1 rounded-md bg-background/85 p-1 text-[11px] backdrop-blur">
-            {typesLegend.map((t) => {
-              const hidden = hiddenTypes.has(t.type);
-              return (
-                <button
-                  key={t.type}
-                  type="button"
-                  onClick={() => toggleType(t.type)}
-                  aria-pressed={!hidden}
-                  title={hidden ? `Show ${t.type}` : `Hide ${t.type}`}
-                  className={cn(
-                    "flex items-center gap-1 rounded px-1.5 py-0.5 transition-opacity",
-                    "hover:bg-muted",
-                    hidden ? "opacity-40" : "opacity-100",
-                  )}
-                >
-                  <span
-                    className="inline-block h-2.5 w-2.5 rounded-full"
-                    style={{ background: t.color }}
-                  />
-                  <span className={cn(hidden && "line-through")}>{t.type}</span>
-                </button>
-              );
-            })}
-            {data && data.stats.phantom_count > 0 ? (
-              <button
-                type="button"
-                onClick={() => toggleType("phantom")}
-                aria-pressed={!hiddenTypes.has("phantom")}
-                title={hiddenTypes.has("phantom") ? "Show phantom" : "Hide phantom"}
-                className={cn(
-                  "flex items-center gap-1 rounded px-1.5 py-0.5 transition-opacity hover:bg-muted",
-                  hiddenTypes.has("phantom") ? "opacity-40" : "opacity-100",
-                )}
-              >
-                <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-foreground/50" />
-                <span className={cn(hiddenTypes.has("phantom") && "line-through")}>
-                  phantom
-                </span>
-              </button>
-            ) : null}
-            {hiddenTypes.size > 0 ? (
-              <button
-                type="button"
-                onClick={() => setHiddenTypes(new Set())}
-                className="ml-1 rounded border border-border/40 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted"
-              >
-                {t("memoryGraph.showAll")}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-
-        {/* Search results panel (left side, slides over) */}
-        {searchOpen && search.trim() ? (
+        {/* Search results panel (left side, slides over) — graph view only;
+            cards/table filter their grid from the query directly. */}
+        {effectiveView === "graph" && searchOpen && search.trim() ? (
           <aside className={cn(
             "absolute bottom-12 left-3 top-3 z-10 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border border-border/50 bg-card/95 shadow-lg backdrop-blur",
             compact ? "right-3 w-auto" : "w-80",
@@ -1302,8 +1389,8 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           </aside>
         ) : null}
 
-        {/* Edge popup */}
-        {edgePopup ? (
+        {/* Edge popup — only reachable from the graph canvas. */}
+        {effectiveView === "graph" && edgePopup ? (
           <div
             className="absolute z-20 w-72 max-w-[calc(100vw-1.5rem)] rounded-lg border border-border/50 bg-card/95 p-2.5 text-xs shadow-lg backdrop-blur"
             style={{
@@ -1842,7 +1929,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
 
         {/* Hover preview (Obsidian page-preview): non-interactive popover with
             the hovered node's rendered body snippet. */}
-        {hoverPreview && hoverPreview.node.id !== selected?.id ? (
+        {effectiveView === "graph" && hoverPreview && hoverPreview.node.id !== selected?.id ? (
           <div
             className="pointer-events-none absolute z-30 w-72 max-w-[calc(100vw-1.5rem)] rounded-lg border border-border/50 bg-card/95 p-2.5 text-xs shadow-lg backdrop-blur"
             style={{
