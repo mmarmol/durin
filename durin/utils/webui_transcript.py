@@ -24,44 +24,11 @@ _PAGE_TARGET_BYTES = 1 * 1024 * 1024
 # larger than this is pathological; a mid-turn cut renders slightly
 # untidily but correctly.
 _BOUNDARY_SCAN_LIMIT = 4 * 1024 * 1024
-_SIZE_WARNED: set[str] = set()
 
 
 def webui_transcript_path(session_key: str) -> Path:
     stem = SessionManager.safe_key(session_key)
     return get_webui_dir() / f"{stem}.jsonl"
-
-
-def read_transcript_lines(session_key: str) -> list[dict[str, Any]]:
-    path = webui_transcript_path(session_key)
-    if not path.is_file():
-        return []
-    size = path.stat().st_size
-    if size > _MAX_TRANSCRIPT_FILE_BYTES:
-        if str(path) not in _SIZE_WARNED:
-            _SIZE_WARNED.add(str(path))
-            logger.warning(
-                "webui transcript too large, skipping (logged once): {}", path
-            )
-        return []
-    lines_out: list[dict[str, Any]] = []
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line_no, line in enumerate(f, start=1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    logger.warning("bad jsonl at {} line {}", path, line_no)
-                    continue
-                if isinstance(obj, dict):
-                    lines_out.append(obj)
-    except OSError as e:
-        logger.warning("read transcript failed {}: {}", path, e)
-        return []
-    return lines_out
 
 
 def _is_user_line(raw: str) -> bool:
@@ -88,6 +55,13 @@ def read_transcript_page(
     orphaned from their user message. Returns ``(parsed_lines, prev_cursor)``
     where ``prev_cursor`` is ``start`` (byte offset for the next older page)
     or ``None`` when the page begins at offset 0. Pure read — never writes.
+
+    ``prev_cursor`` is an OPAQUE byte cursor, not guaranteed to be
+    line-aligned: a UTF-8 seek split can overshoot into the line this page
+    already returned, and the next older page's partial-line drop absorbs
+    the difference. Coverage across the chained pages remains exactly-once,
+    so do NOT "fix" the cursor's alignment in either direction — snapping it
+    to a line boundary would double or drop the boundary line.
     """
     path = webui_transcript_path(session_key)
     if not path.is_file():

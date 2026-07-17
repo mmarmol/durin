@@ -94,8 +94,11 @@ export function ThreadViewport({
     // layout (image fallbacks after 404s, markdown settling) can land after
     // the ResizeObserver has gone quiet, so the observer alone cannot be
     // trusted to deliver a tick for it. The interval keeps applying until
-    // the pin releases itself (deadline / user scroll / anchor loss), which
-    // also bounds how long the interval lives; releasePin clears it.
+    // the pin releases itself — primarily via genuine quiet (enough executed
+    // no-adjustment ticks over a real time span since the last adjustment),
+    // immediately on user scroll or anchor loss, and at a generous
+    // pathological ceiling — which also bounds how long the interval lives;
+    // releasePin clears it.
     if (pinTimerRef.current === null) {
       pinTimerRef.current = window.setInterval(
         () => applyPinTickRef.current(),

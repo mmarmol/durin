@@ -34,7 +34,7 @@ const RELEASE_QUIET_MS = 600;
 /** Pathological ceiling on the whole pinning window. Generous by design: the
  *  tick-counted quiet release above is the real exit, and this cap exists
  *  only so a runaway layout can never hold the pin forever. */
-export const PIN_MAX_MS = 8000;
+const PIN_MAX_MS = 8000;
 /** Low-frequency safety tick while a pin is active: catches async late
  *  layout even when the ResizeObserver goes quiet. */
 export const PIN_SAFETY_TICK_MS = 120;
