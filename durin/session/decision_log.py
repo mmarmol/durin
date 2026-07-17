@@ -64,14 +64,28 @@ def parse_decisions(blob: Any) -> list[dict[str, str]]:
 def _enforce_cap(
     entries: list[dict[str, str]], max_entries: int, max_chars: int
 ) -> tuple[list[dict[str, str]], int]:
-    """Drop oldest entries until both limits hold. Returns (entries, dropped)."""
+    """Drop entries until both limits hold — oldest ``auto`` entries first.
+
+    Manual (``tool``) entries are the operator's explicit anchors; they are
+    only evicted when the log exceeds its caps with no ``auto`` entry left
+    to drop.
+    """
     dropped = 0
-    if len(entries) > max_entries:
-        dropped += len(entries) - max_entries
-        entries = entries[-max_entries:]
-    while len(entries) > 1 and sum(len(e["text"]) for e in entries) > max_chars:
-        entries.pop(0)
+
+    def _drop_one() -> None:
+        nonlocal dropped
+        for i, entry in enumerate(entries):
+            if entry.get("source") == "auto":
+                del entries[i]
+                dropped += 1
+                return
+        del entries[0]
         dropped += 1
+
+    while len(entries) > max_entries:
+        _drop_one()
+    while len(entries) > 1 and sum(len(e["text"]) for e in entries) > max_chars:
+        _drop_one()
     return entries, dropped
 
 

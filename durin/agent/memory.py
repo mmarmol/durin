@@ -1103,6 +1103,7 @@ class Consolidator:
                     })
             return
         try:
+            start0 = session.last_consolidated
             # Tier 2 A1: trigger consolidation early instead of waiting for
             # the hard budget ceiling. ``target`` is computed off the trigger
             # so each compaction round does meaningful work (compacting down
@@ -1144,6 +1145,7 @@ class Consolidator:
                         session.last_consolidated,
                     )
                 self._persist_last_summary(session, new_summaries)
+                await self._post_compaction_hooks(session, start0, bool(new_summaries))
                 return
             if estimated < trigger:
                 unconsolidated_count = len(session.messages) - session.last_consolidated
@@ -1157,6 +1159,7 @@ class Consolidator:
                     unconsolidated_count,
                 )
                 self._persist_last_summary(session, new_summaries)
+                await self._post_compaction_hooks(session, start0, bool(new_summaries))
                 return
             # Emit a one-shot telemetry event when pre-emptive trigger fires
             # below the hard budget — visibility into how often the new
@@ -1174,7 +1177,6 @@ class Consolidator:
                             "ratio": self.preemptive_compact_ratio,
                         })
 
-            consolidated_start = session.last_consolidated
             for round_num in range(self._MAX_CONSOLIDATION_ROUNDS):
                 if estimated <= target:
                     break
@@ -1232,120 +1234,131 @@ class Consolidator:
             # into the runtime context on the next prepare_session() call, aligning
             # the summary injection strategy with AutoCompact._archive().
             self._persist_last_summary(session, new_summaries)
-            # Tier 2 C2: arm the post-compaction loop guard if at least
-            # one summary was produced this call. The next ``window_size``
-            # tool calls on this session will be observed; identical
-            # ``(name, args, result)`` triples trip the guard.
-            if new_summaries:
-                self.post_compaction_guard.arm(session.key)
-                # Notify the post-compaction hook so
-                # the entity-centric dream can pick up freshly-archived
-                # episodic context while the signal is hot. Best-effort:
-                # callback failures must NOT break consolidation —
-                # markdown remains the source of truth.
-                if self.on_post_compaction is not None:
-                    try:
-                        self.on_post_compaction(session.key)
-                    except Exception:
-                        logger.exception(
-                            "post-compaction hook raised for {}",
-                            session.key,
-                        )
-                # Shared span for both post-compaction extraction passes below.
-                # Computed once here so both gated blocks can reuse it without
-                # independently slicing the same list.
-                span = session.messages[consolidated_start:session.last_consolidated]
-                # Concern B (task-state anchor): one LLM call per compaction
-                # extracts key decisions/findings from the span just archived
-                # and appends them to the decision log so they survive in
-                # runtime context after the raw messages leave the window.
-                # Best-effort: failures must never break consolidation.
-                if self.decision_log_enabled:
-                    try:
-                        decisions = await self.extract_decisions(span)
-                        if decisions:
-                            from datetime import timezone
-
-                            from durin.session.decision_log import add_decision
-
-                            ts = datetime.now(timezone.utc).isoformat()
-                            total_dropped = 0
-                            for decision in decisions:
-                                _, dropped = add_decision(
-                                    session.metadata, decision, source="auto", ts=ts,
-                                    max_entries=self.decision_log_max_entries,
-                                    max_chars=self.decision_log_max_chars,
-                                )
-                                total_dropped += dropped
-                            self.sessions.save(session)
-                            _dec_logger = current_telemetry()
-                            if _dec_logger is not None:
-                                with suppress(Exception):
-                                    _dec_logger.log("decision_log.extracted", {
-                                        "count": len(decisions),
-                                        "session_key": session.key,
-                                    })
-                                    if total_dropped:
-                                        _dec_logger.log("decision_log.capped", {
-                                            "dropped": total_dropped,
-                                            "source": "auto",
-                                            "session_key": session.key,
-                                        })
-                    except Exception:
-                        logger.exception("Decision extraction failed for {}", session.key)
-                # Compaction backstop: distil durable user learnings (preferences,
-                # corrections, standing constraints, stable personal facts) from
-                # the archived span and persist them as feedback/stance/practice
-                # entities. This catches what the in-the-moment capture directive
-                # may have missed. Best-effort: failures must never break consolidation.
-                # Dedup is NOT done here — the dream's refine pass already dedups
-                # feedback entities; we rely on it.
-                if self.compaction_learnings_enabled:
-                    try:
-                        learnings = await self.extract_learnings(span)
-                        if learnings:
-                            from datetime import timezone
-
-                            from durin.memory.field_patch import FieldPatch
-                            from durin.memory.memory_writer import write_entity
-
-                            now = datetime.now(timezone.utc)
-                            session_ref = f"[[sessions/{self.sessions.safe_key(session.key)}.md]]"
-                            for learning in learnings:
-                                ref = learning["ref"]
-                                name = learning["name"]
-                                body = learning["body"]
-                                # Guard: only how-to-work entity types are
-                                # written by the backstop. Allowing person:
-                                # refs would body_replace the user's PRINCIPAL
-                                # entity — that is the live agent's job, not
-                                # the backstop's.
-                                ref_type = ref.split(":", 1)[0]
-                                if ref_type not in {"feedback", "stance", "practice"}:
-                                    logger.debug(
-                                        "compaction backstop: skipping ref %r (type %r not pinnable)",
-                                        ref, ref_type,
-                                    )
-                                    continue
-                                write_entity(
-                                    self.store.workspace,
-                                    ref,
-                                    [
-                                        FieldPatch(
-                                            kind="body_replace",
-                                            value=body,
-                                            author="agent",
-                                            source_ref=session_ref,
-                                            at=now,
-                                        )
-                                    ],
-                                    create=True,
-                                    name=name,
-                                )
-                    except Exception:
-                        logger.exception("Learning extraction failed for {}", session.key)
+            await self._post_compaction_hooks(session, start0, bool(new_summaries))
         finally:
             lock.release()
+
+    async def _post_compaction_hooks(
+        self, session: Session, span_start: int, produced_summary: bool,
+    ) -> None:
+        """Arm the loop guard and run decision/learnings extraction.
+
+        Runs after ANY consolidation that advanced the cursor — token
+        rounds and replay-window archives alike (the replay path used to
+        skip extraction entirely, and the span used to exclude the
+        replay chunk).
+        """
+        if not produced_summary:
+            return
+        span = session.messages[span_start:session.last_consolidated]
+        if not span:
+            return
+        # Tier 2 C2: arm the post-compaction loop guard. The next
+        # ``window_size`` tool calls on this session will be observed;
+        # identical ``(name, args, result)`` triples trip the guard.
+        self.post_compaction_guard.arm(session.key)
+        # Notify the post-compaction hook so
+        # the entity-centric dream can pick up freshly-archived
+        # episodic context while the signal is hot. Best-effort:
+        # callback failures must NOT break consolidation —
+        # markdown remains the source of truth.
+        if self.on_post_compaction is not None:
+            try:
+                self.on_post_compaction(session.key)
+            except Exception:
+                logger.exception(
+                    "post-compaction hook raised for {}",
+                    session.key,
+                )
+        # Concern B (task-state anchor): one LLM call per compaction
+        # extracts key decisions/findings from the span just archived
+        # and appends them to the decision log so they survive in
+        # runtime context after the raw messages leave the window.
+        # Best-effort: failures must never break consolidation.
+        if self.decision_log_enabled:
+            try:
+                decisions = await self.extract_decisions(span)
+                if decisions:
+                    from datetime import timezone
+
+                    from durin.session.decision_log import add_decision
+
+                    ts = datetime.now(timezone.utc).isoformat()
+                    total_dropped = 0
+                    for decision in decisions:
+                        _, dropped = add_decision(
+                            session.metadata, decision, source="auto", ts=ts,
+                            max_entries=self.decision_log_max_entries,
+                            max_chars=self.decision_log_max_chars,
+                        )
+                        total_dropped += dropped
+                    self.sessions.save(session)
+                    _dec_logger = current_telemetry()
+                    if _dec_logger is not None:
+                        with suppress(Exception):
+                            _dec_logger.log("decision_log.extracted", {
+                                "count": len(decisions),
+                                "session_key": session.key,
+                            })
+                            if total_dropped:
+                                _dec_logger.log("decision_log.capped", {
+                                    "dropped": total_dropped,
+                                    "source": "auto",
+                                    "session_key": session.key,
+                                })
+            except Exception:
+                logger.exception("Decision extraction failed for {}", session.key)
+        # Compaction backstop: distil durable user learnings (preferences,
+        # corrections, standing constraints, stable personal facts) from
+        # the archived span and persist them as feedback/stance/practice
+        # entities. This catches what the in-the-moment capture directive
+        # may have missed. Best-effort: failures must never break consolidation.
+        # Dedup is NOT done here — the dream's refine pass already dedups
+        # feedback entities; we rely on it.
+        if self.compaction_learnings_enabled:
+            try:
+                learnings = await self.extract_learnings(span)
+                if learnings:
+                    from datetime import timezone
+
+                    from durin.memory.field_patch import FieldPatch
+                    from durin.memory.memory_writer import write_entity
+
+                    now = datetime.now(timezone.utc)
+                    session_ref = f"[[sessions/{self.sessions.safe_key(session.key)}.md]]"
+                    for learning in learnings:
+                        ref = learning["ref"]
+                        name = learning["name"]
+                        body = learning["body"]
+                        # Guard: only how-to-work entity types are
+                        # written by the backstop. Allowing person:
+                        # refs would body_replace the user's PRINCIPAL
+                        # entity — that is the live agent's job, not
+                        # the backstop's.
+                        ref_type = ref.split(":", 1)[0]
+                        if ref_type not in {"feedback", "stance", "practice"}:
+                            logger.debug(
+                                "compaction backstop: skipping ref %r (type %r not pinnable)",
+                                ref, ref_type,
+                            )
+                            continue
+                        write_entity(
+                            self.store.workspace,
+                            ref,
+                            [
+                                FieldPatch(
+                                    kind="body_replace",
+                                    value=body,
+                                    author="agent",
+                                    source_ref=session_ref,
+                                    at=now,
+                                )
+                            ],
+                            create=True,
+                            name=name,
+                        )
+            except Exception:
+                logger.exception("Learning extraction failed for {}", session.key)
 
 
 # ---------------------------------------------------------------------------
