@@ -545,3 +545,43 @@ def test_linked_reference_appears_in_focus(tmp_path: Path) -> None:
     ).save(tmp_path / "memory" / "entities" / "topic" / "rabies.md")
     g = build_entity_subgraph(tmp_path, "topic:rabies", hops=1)
     assert ref in {n["id"] for n in g["nodes"]}
+
+
+# ---------------------------------------------------------------------------
+# card/table enrichment: summary, updated_at, sources
+# ---------------------------------------------------------------------------
+
+
+def test_entity_node_carries_summary_updated_and_sources(tmp_path: Path) -> None:
+    page = EntityPage(
+        type="practice",
+        name="Laparoscopy",
+        body="<!-- prov:x -->Minimally invasive surgery.\n\nEvaluated for cysts.",
+        updated_at=datetime.datetime(2026, 7, 1, 12, 0, tzinfo=datetime.timezone.utc),
+        derived_from=["reference:surgery-notes", "reference:cysts-paper"],
+    )
+    page.save(tmp_path / "memory" / "entities" / "practice" / "laparoscopy.md")
+    g = build_memory_graph(tmp_path, include_sessions=False)
+    node = next(n for n in g["nodes"] if n["id"] == "practice:laparoscopy")
+    assert node["summary"] == "Minimally invasive surgery. Evaluated for cysts."
+    assert node["updated_at"].startswith("2026-07-01T12:00")
+    assert node["sources"] == 2
+
+
+def test_summary_truncated_and_comment_free(tmp_path: Path) -> None:
+    long_body = "<!-- a --><!-- b -->" + ("palabra " * 60)
+    _write_page(tmp_path, "topic", "verbose", body=long_body)
+    g = build_memory_graph(tmp_path, include_sessions=False)
+    node = next(n for n in g["nodes"] if n["id"] == "topic:verbose")
+    assert "<!--" not in node["summary"]
+    assert len(node["summary"]) <= 200
+
+
+def test_phantom_node_enrichment_defaults(tmp_path: Path) -> None:
+    _store(tmp_path, "seen in passing", ["topic:creatinine"])
+    g = build_memory_graph(tmp_path, include_sessions=False)
+    node = next(n for n in g["nodes"] if n["id"] == "topic:creatinine")
+    assert node["phantom"] is True
+    assert node["summary"] is None
+    assert node["updated_at"] is None
+    assert node["sources"] == 0
