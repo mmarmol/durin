@@ -1357,20 +1357,27 @@ def _run_gateway(
             import asyncio as _asyncio
 
             from durin.channels.websocket import publish_dream_progress
-            from durin.memory.dream_orchestrator import run_full_dream
+            from durin.memory.dream_supervisor import run_dream_worker
 
             workspace = config.workspace_path
             _dream_loop = _asyncio.get_running_loop()
 
             def _publish_dream(payload: dict) -> None:
-                # The orchestrator runs on a worker thread and can't touch the
-                # asyncio bus queue directly; hop onto the loop thread first.
+                # The supervisor pumps worker stdout on a worker thread and
+                # can't touch the asyncio bus queue directly; hop onto the
+                # loop thread first.
                 _dream_loop.call_soon_threadsafe(
                     publish_dream_progress, bus, payload)
 
+            code = 0
+            _stderr_tail = ""
             try:
-                await _asyncio.to_thread(
-                    run_full_dream, config, workspace, progress=_publish_dream
+                code, _stderr_tail = await _asyncio.to_thread(
+                    run_dream_worker,
+                    workspace=workspace,
+                    mode="full",
+                    trigger="cron",
+                    on_progress=_publish_dream,
                 )
             finally:
                 # Reap stale per-run cron sessions (cron:{id}:run:{ms}) with the
@@ -1386,6 +1393,14 @@ def _run_gateway(
                     )
                 except Exception:
                     logger.exception("cron run-session reaper (non-fatal) failed")
+            if code == 3:
+                logger.info(
+                    "memory_dream skipped: another dream is already running")
+                return None
+            if code != 0:
+                raise RuntimeError(
+                    f"memory_dream worker exited {code}: {_stderr_tail[-2000:]}"
+                )
             return None
 
         # Loop triggers fire the loops runtime directly (not the agent turn below).
@@ -1708,8 +1723,14 @@ def _run_gateway(
             ws = config.workspace_path
 
             def _run() -> None:
+                import functools
+
                 from durin.agent.tools._telemetry import emit_tool_event
-                from durin.memory.dream_orchestrator import run_reactive_dream
+                from durin.channels.websocket import publish_dream_progress
+                from durin.memory.dream_supervisor import (
+                    publish_threadsafe,
+                    run_dream_worker,
+                )
 
                 # Skip when a pass is already running or one ran too recently —
                 # the per-session cursor makes a skipped run harmless.
@@ -1722,8 +1743,28 @@ def _run_gateway(
                         )
                     logger.debug("reactive dream skipped ({}): {}", trigger, skip)
                     return
+
+                def _forward(payload: dict) -> None:
+                    # This thread has no loop; hand the frame to the gateway
+                    # loop registered by run() (dropped when none is up).
+                    publish_threadsafe(
+                        functools.partial(publish_dream_progress, bus), payload
+                    )
+
                 try:
-                    run_reactive_dream(config, ws, trigger=trigger)
+                    code, _err = run_dream_worker(
+                        workspace=ws,
+                        mode="reactive",
+                        trigger=trigger,
+                        on_progress=_forward,
+                    )
+                    if code == 3:
+                        logger.debug(
+                            "reactive dream skipped ({}): dream lock held", trigger)
+                    elif code != 0:
+                        logger.warning(
+                            "reactive dream worker exited {} ({}): {}",
+                            code, trigger, _err[-500:])
                 except Exception:
                     logger.exception("{} dream failed ({})", trigger, session_key)
                 finally:
@@ -1805,6 +1846,12 @@ def _run_gateway(
         return True
 
     async def run():
+        # Reactive dream triggers fire from threads with no event loop;
+        # registering the gateway loop here lets them hand progress frames
+        # to the websocket bus thread-safely.
+        from durin.memory.dream_supervisor import register_progress_loop
+
+        register_progress_loop(asyncio.get_running_loop())
         # Without an explicit SIGTERM handler, Python's default action
         # terminates the process instantly — the `finally` block below
         # never runs, so `durin gateway stop` (which sends SIGTERM) would
@@ -1932,6 +1979,12 @@ def _run_gateway(
         finally:
             await agent.close_mcp()
             cron.stop()
+            # No new dreams past this point (cron stopped); terminate any
+            # in-flight dream worker — hard kills are safe for the store, and
+            # the per-session cursors resume the remainder next run.
+            from durin.memory.dream_supervisor import stop_dream_workers
+
+            await asyncio.to_thread(stop_dream_workers)
             agent.stop()
             await channels.stop_all()
             # Flush all cached sessions to durable storage before exit.
