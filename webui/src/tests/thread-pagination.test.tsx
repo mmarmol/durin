@@ -790,21 +790,22 @@ describe("ThreadShell pagination integration", () => {
         rerender(wrap(client, shell("chat-rt")));
       });
       // The merged thread is restored from the cache (older page included)
-      // while the refetched history re-arms prevCursor at the same offset.
+      // together with its pagination cursor — which already reached the
+      // start of history (the older page's prevCursor was null).
       await waitFor(() => expect(screen.getByText("latest answer")).toBeInTheDocument());
       await waitFor(() => expect(screen.getByText("an older question")).toBeInTheDocument());
       consoleErrorSpy.mockClear();
 
-      // Second near-top scroll: fetches the SAME before= page again.
+      // Second near-top scroll: the restored thread already contains the
+      // full history, so no refetch happens at all.
       scrollNearTop(findScroller(container));
-      await waitFor(() => {
-        const beforeCalls = (fetch as ReturnType<typeof vi.fn>).mock.calls
-          .map((c) => String(c[0]))
-          .filter((u) => u.includes("before="));
-        expect(beforeCalls).toHaveLength(2);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
       });
-      await act(async () => {});
-      await act(async () => {});
+      const beforeCalls = (fetch as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => String(c[0]))
+        .filter((u) => u.includes("before="));
+      expect(beforeCalls).toHaveLength(1);
 
       // Every row still renders exactly once…
       expect(screen.getAllByText("an older question")).toHaveLength(1);
@@ -913,6 +914,134 @@ describe("ThreadShell pagination integration", () => {
     } finally {
       HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
       consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it("fetches older pages from the CACHED cursor after the session grew in the background", async () => {
+    // Visit A, switch away while the agent appends turns, return: the live
+    // thread restores from the cache (rows starting at the OLD newest-page
+    // boundary) but the fresh refetch re-arms prevCursor at the NEW start.
+    // Scrolling up must fetch the page ending where the CACHED rows begin —
+    // fetching from the fresh cursor instead returns the cached rows again
+    // BY CONTENT under different page-namespaced ids, which id-dedupe cannot
+    // catch, so they would render twice.
+    const client = makeClient();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    let newestVisits = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("websocket%3Achat-grow/webui-thread")) {
+          if (url.includes("before=")) {
+            if (url.includes("before=16282")) {
+              // Correct page: strictly older content, ending exactly where
+              // the cached rows begin.
+              return httpJson({
+                schemaVersion: 4,
+                prevCursor: null,
+                messages: [
+                  { id: "p15424-0", role: "user", content: "earlier question", createdAt: 100 },
+                ],
+              });
+            }
+            // Wrong page (the fresh cursor, 20572): overlaps the cached rows
+            // by content, under different page-namespaced ids.
+            return httpJson({
+              schemaVersion: 4,
+              prevCursor: 16282,
+              messages: [
+                { id: "p16282b-0", role: "user", content: "turn one", createdAt: 200 },
+                { id: "p16282b-1", role: "assistant", content: "turn one answer", createdAt: 201 },
+              ],
+            });
+          }
+          newestVisits += 1;
+          if (newestVisits === 1) {
+            return httpJson({
+              schemaVersion: 4,
+              prevCursor: 16282,
+              messages: [
+                { id: "p16282-0", role: "user", content: "turn one", createdAt: 200 },
+                { id: "p16282-1", role: "assistant", content: "turn one answer", createdAt: 201 },
+              ],
+            });
+          }
+          // Later visits: the session gained a turn in the background; the
+          // newest page starts at a later byte offset with new page ids.
+          return httpJson({
+            schemaVersion: 4,
+            prevCursor: 20572,
+            messages: [
+              { id: "p20572-0", role: "user", content: "turn one", createdAt: 200 },
+              { id: "p20572-1", role: "assistant", content: "turn one answer", createdAt: 201 },
+              { id: "p20572-2", role: "assistant", content: "turn two", createdAt: 300 },
+            ],
+          });
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    function shell(chatId: string) {
+      return (
+        <ThreadShell
+          session={session(chatId)}
+          title={`Chat ${chatId}`}
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />
+      );
+    }
+
+    try {
+      const { container, rerender } = render(wrap(client, shell("chat-grow")));
+      await waitFor(() => expect(screen.getByText("turn one answer")).toBeInTheDocument());
+
+      // Round-trip while the session grows in the background.
+      await act(async () => {
+        rerender(wrap(client, shell("chat-grow-b")));
+      });
+      await act(async () => {
+        rerender(wrap(client, shell("chat-grow")));
+      });
+      await waitFor(() => expect(screen.getByText("turn one answer")).toBeInTheDocument());
+
+      // Scroll near the top to load older history.
+      const scroller = Array.from(
+        container.querySelectorAll<HTMLElement>("div.overflow-y-auto"),
+      ).find((el) => el.textContent?.includes("turn one answer")) as HTMLElement;
+      Object.defineProperties(scroller, {
+        scrollHeight: { configurable: true, value: 2000 },
+        clientHeight: { configurable: true, value: 600 },
+        scrollTop: { configurable: true, writable: true, value: 0 },
+      });
+      act(() => {
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      await waitFor(() => {
+        const beforeCalls = (fetch as ReturnType<typeof vi.fn>).mock.calls
+          .map((c) => String(c[0]))
+          .filter((u) => u.includes("before="));
+        expect(beforeCalls.length).toBeGreaterThanOrEqual(1);
+      });
+      await act(async () => {});
+      await act(async () => {});
+
+      // The older fetch used the CACHED cursor — the boundary where the
+      // cached rows begin — not the fresh refetch's cursor.
+      const beforeCalls = (fetch as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => String(c[0]))
+        .filter((u) => u.includes("before="));
+      expect(beforeCalls).toHaveLength(1);
+      expect(beforeCalls[0]).toContain("before=16282");
+      // The strictly-older page rendered; nothing rendered twice.
+      expect(screen.getByText("earlier question")).toBeInTheDocument();
+      expect(screen.getAllByText("turn one")).toHaveLength(1);
+      expect(screen.getAllByText("turn one answer")).toHaveLength(1);
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
     }
   });
 });

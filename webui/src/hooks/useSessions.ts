@@ -116,8 +116,15 @@ export function useSessionHistory(key: string | null): {
   loadingOlder: boolean;
   /** Fetch and prepend the next older page. No-op if already at the start of
    *  history or a fetch is already in flight. Resolves with the prepended
-   *  rows so callers can splice them into any separately-tracked live thread. */
-  loadOlder: () => Promise<UIMessage[]>;
+   *  rows (so callers can splice them into any separately-tracked live
+   *  thread) plus the page's own prevCursor (the next fetch boundary). */
+  loadOlder: () => Promise<{ rows: UIMessage[]; prevCursor: number | null }>;
+  /** Override the older-page cursor. Used when the caller restores a cached
+   *  live thread whose rows begin at a DIFFERENT boundary than this hook's
+   *  fresh refetch (the session grew in the background): the next older page
+   *  must end exactly where the restored rows begin, or it would overlap
+   *  them by content under different ids. */
+  adoptPrevCursor: (cursor: number | null) => void;
 } {
   const { token } = useClient();
   const [refreshSeq, setRefreshSeq] = useState(0);
@@ -254,40 +261,56 @@ export function useSessionHistory(key: string | null): {
     };
   }, [key, token, refreshSeq]);
 
-  const loadOlder = useCallback(async (): Promise<UIMessage[]> => {
+  const loadOlder = useCallback(async (): Promise<{
+    rows: UIMessage[];
+    prevCursor: number | null;
+  }> => {
+    const none = { rows: EMPTY_MESSAGES, prevCursor: null };
     const current = stateRef.current;
     if (!key || current.key !== key || current.prevCursor == null || loadingOlderRef.current) {
-      return [];
+      return none;
     }
     const before = current.prevCursor;
     loadingOlderRef.current = true;
     setState((prev) => (prev.key === key ? { ...prev, loadingOlder: true } : prev));
     try {
       const body = await fetchWebuiThread(token, key, "", before);
-      if (stateRef.current.key !== key) return [];
+      if (stateRef.current.key !== key) return none;
       const older: UIMessage[] = (body?.messages ?? []).map((m, idx) => ({
         ...m,
         id: m.id ?? `hist-${before}-${idx}`,
         createdAt: typeof m.createdAt === "number" ? m.createdAt : Date.now(),
       }));
+      const nextCursor = body?.prevCursor ?? null;
       setState((prev) =>
         prev.key === key
           ? {
               ...prev,
               messages: [...older, ...prev.messages],
-              prevCursor: body?.prevCursor ?? null,
+              prevCursor: nextCursor,
               loadingOlder: false,
             }
           : prev,
       );
-      return older;
+      return { rows: older, prevCursor: nextCursor };
     } catch {
       setState((prev) => (prev.key === key ? { ...prev, loadingOlder: false } : prev));
-      return [];
+      return none;
     } finally {
       loadingOlderRef.current = false;
     }
   }, [key, token]);
+
+  const adoptPrevCursor = useCallback(
+    (cursor: number | null) => {
+      setState((prev) =>
+        prev.key === key && prev.prevCursor !== cursor
+          ? { ...prev, prevCursor: cursor }
+          : prev,
+      );
+    },
+    [key],
+  );
 
   if (!key) {
     return {
@@ -301,6 +324,7 @@ export function useSessionHistory(key: string | null): {
       prevCursor: null,
       loadingOlder: false,
       loadOlder,
+      adoptPrevCursor,
     };
   }
 
@@ -318,6 +342,7 @@ export function useSessionHistory(key: string | null): {
       prevCursor: null,
       loadingOlder: false,
       loadOlder,
+      adoptPrevCursor,
     };
   }
 
@@ -332,6 +357,7 @@ export function useSessionHistory(key: string | null): {
     prevCursor: state.prevCursor,
     loadingOlder: state.loadingOlder,
     loadOlder,
+    adoptPrevCursor,
   };
 }
 
