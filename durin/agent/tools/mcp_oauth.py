@@ -192,7 +192,7 @@ def auth_failure_message(server: str, cfg: Any) -> str:
     marker = refresh_inflight_marker(server, getattr(cfg, "url", None) or None)
     if marker is not None:
         return (
-            " an earlier token refresh was interrupted mid-rotation, so the "
+            " An earlier token refresh was interrupted mid-rotation, so the "
             f"stored refresh token is likely already consumed — run: durin mcp login {server}"
         )
     return f" Run: durin mcp login {server}"

@@ -73,6 +73,36 @@ def test_clears_after_marker_removed(isolated_secrets):
     assert _run(cfg).status == "ok"
 
 
+def _write_raw_marker(payload: str) -> None:
+    """Write a marker blob verbatim (bypassing write_refresh_marker) so tests
+    can plant corrupt timestamp shapes."""
+    from durin.agent.tools.mcp_oauth import SecretsTokenStorage
+
+    storage = SecretsTokenStorage("acme", server_url="https://mcp.example.com")
+    storage._write(storage._marker_name, payload)
+
+
+def test_warns_with_coerced_age_on_naive_timestamp(isolated_secrets):
+    """A naive ISO ts (no tz) must not crash doctor: coerced to UTC, still warn."""
+    import json
+
+    _write_raw_marker(json.dumps({"server": "acme", "ts": "2026-07-17T12:00:00"}))
+    r = _run(_cfg_with_oauth_server())
+    assert r.status == "warn"
+    assert "acme" in r.message
+    assert "unknown" not in r.message  # naive is parseable — age is computed
+
+
+def test_warns_with_unknown_age_on_numeric_timestamp(isolated_secrets):
+    """A non-string ts must not crash doctor: age degrades to 'unknown'."""
+    import json
+
+    _write_raw_marker(json.dumps({"server": "acme", "ts": 123}))
+    r = _run(_cfg_with_oauth_server())
+    assert r.status == "warn"
+    assert "acme (unknown)" in r.message
+
+
 def test_non_oauth_server_ignored_even_with_marker(isolated_secrets):
     """A marker for a server that isn't OAuth-enabled must not be reported
     (defensive: the marker key is server+url-derived, so this should never

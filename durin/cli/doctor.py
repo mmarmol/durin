@@ -360,8 +360,12 @@ def _marker_age(ts: str | None) -> str:
 
     try:
         when = datetime.fromisoformat(ts)
-    except ValueError:
+    except (ValueError, TypeError):  # not ISO / not a string
         return "unknown"
+    if when.tzinfo is None:
+        # Naive timestamp: assume UTC (the writer stamps UTC) — an aware-minus-
+        # naive subtraction would raise and sink the whole doctor run.
+        when = when.replace(tzinfo=timezone.utc)
     seconds = (datetime.now(timezone.utc) - when).total_seconds()
     if seconds < 60:
         return f"{int(seconds)}s"
