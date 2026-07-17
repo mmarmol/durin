@@ -249,6 +249,65 @@ async def test_non_oauth_401_is_generic(tmp_path, monkeypatch):
     assert "durin mcp login" not in out.message
 
 
+# ---------------------------------------------------------------------------
+# Task B2: orphaned refresh marker enriches the initial-connect auth failure
+# ---------------------------------------------------------------------------
+
+
+async def _run_initial_auth_failure(conn):
+    """Drive one initial-connect attempt that fails auth, capturing warnings."""
+    from loguru import logger as loguru_logger
+
+    async def _auth_fail(_self):
+        raise _http_401()
+
+    conn._open_transport_streams = _auth_fail.__get__(conn, type(conn))
+
+    warnings: list[str] = []
+    handler_id = loguru_logger.add(
+        lambda msg: warnings.append(str(msg)), level="WARNING", format="{message}",
+    )
+    try:
+        ok = await conn.start()
+    finally:
+        loguru_logger.remove(handler_id)
+    return ok, warnings
+
+
+async def test_initial_auth_failure_enriched_with_orphan_marker(tmp_path, monkeypatch):
+    """An orphaned write-ahead marker must name the interrupted-refresh cause."""
+    _point_store_at(tmp_path, monkeypatch)
+    from durin.agent.tools.mcp_connection import MCPServerConnection
+    from durin.agent.tools.mcp_oauth import SecretsTokenStorage
+    from durin.agent.tools.registry import ToolRegistry
+    from durin.config.schema import MCPServerConfig
+
+    cfg = MCPServerConfig(url="https://api.example/mcp", oauth=True)
+    conn = MCPServerConnection("acme", cfg, ToolRegistry())
+    SecretsTokenStorage("acme", server_url="https://api.example/mcp").write_refresh_marker()
+
+    ok, warnings = await _run_initial_auth_failure(conn)
+    assert ok is False
+    assert any("interrupted mid-rotation" in w for w in warnings)
+    assert any("durin mcp login acme" in w for w in warnings)
+
+
+async def test_initial_auth_failure_plain_hint_without_marker(tmp_path, monkeypatch):
+    """No marker on disk: the plain hint, no interrupted-refresh text."""
+    _point_store_at(tmp_path, monkeypatch)
+    from durin.agent.tools.mcp_connection import MCPServerConnection
+    from durin.agent.tools.registry import ToolRegistry
+    from durin.config.schema import MCPServerConfig
+
+    cfg = MCPServerConfig(url="https://api.example/mcp", oauth=True)
+    conn = MCPServerConnection("acme", cfg, ToolRegistry())
+
+    ok, warnings = await _run_initial_auth_failure(conn)
+    assert ok is False
+    assert any("durin mcp login acme" in w for w in warnings)
+    assert not any("interrupted mid-rotation" in w for w in warnings)
+
+
 async def test_oauth_401_does_not_trigger_reconnect(tmp_path, monkeypatch):
     """An OAuth 401 must not set _reconnect_event (reconnect won't fix auth)."""
     _point_store_at(tmp_path, monkeypatch)

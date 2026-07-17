@@ -501,11 +501,10 @@ class MCPServerConnection:
                 if not self._ready.is_set():
                     # Initial connect failed.
                     if _is_auth_error(exc):
-                        hint = (
-                            f" Run: durin mcp login {self.name}"
-                            if self._oauth_provider is not None
-                            else ""
-                        )
+                        hint = ""
+                        if self._oauth_provider is not None:
+                            from durin.agent.tools.mcp_oauth import auth_failure_message
+                            hint = auth_failure_message(self.name, self._cfg)
                         logger.warning(
                             "MCP server '{}': initial auth failed, not retrying: {}.{}",
                             self.name, exc, hint,
