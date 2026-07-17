@@ -71,20 +71,21 @@ def _seed_cli_session(workspace: Path, key: str = "cli:foo") -> SessionManager:
 
 
 def _seed_paged_transcript(key: str, turns: int) -> None:
-    """Write ``turns`` user/trace/assistant rows carrying a ``kind`` field.
+    """Write ``turns`` user/message/turn_end records in writer-faithful shape.
 
-    ``kind`` is what ``read_transcript_page``'s boundary scan matches on
-    (see ``_is_user_line``); padding the assistant row keeps each turn a
-    few hundred bytes so a handful of turns exceed a shrunk page size.
+    The boundary scan (``_is_user_line``) matches on top-level ``"event":"user"``;
+    padding the assistant row keeps each turn a few hundred bytes so a handful of
+    turns exceed a shrunk page size.
     """
     for i in range(turns):
         append_transcript_object(
-            key, {"kind": "user", "event": "user", "chat_id": "x", "text": f"question {i}"}
+            key, {"event": "user", "chat_id": "x", "text": f"question {i}"}
         )
-        append_transcript_object(key, {"kind": "trace", "text": f"tool run {i}"})
+        append_transcript_object(key, {"event": "message", "chat_id": "x", "kind": "tool_hint", "text": f"tool run {i}"})
         append_transcript_object(
-            key, {"kind": "assistant", "text": f"answer {i} " + "x" * 200}
+            key, {"event": "message", "chat_id": "x", "text": f"answer {i} " + "x" * 200}
         )
+        append_transcript_object(key, {"event": "turn_end", "chat_id": "x"})
 
 
 def test_thread_endpoint_accepts_before_and_returns_prev_cursor(
@@ -132,7 +133,7 @@ def test_invalid_before_is_rejected(
 ) -> None:
     monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
     key = "websocket:badbefore"
-    append_transcript_object(key, {"kind": "user", "event": "user", "chat_id": "x", "text": "hi"})
+    append_transcript_object(key, {"event": "user", "chat_id": "x", "text": "hi"})
 
     client = _make_client(bus)
     tok = _token(client)

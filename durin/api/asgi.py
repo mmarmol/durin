@@ -490,12 +490,21 @@ def _fallback_ui_messages(
     session_path: Path,
     raw_messages: list[dict[str, Any]],
     augment_user_media: Callable[[list[str]], list[dict[str, Any]]] | None,
+    stat_key: tuple[int, int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Convert raw session messages to UI messages, cached by session-file identity."""
+    """Convert raw session messages to UI messages, cached by session-file identity.
+
+    Stat before read (at caller): if the file is written between stat and read,
+    the cache key will mismatch on the next request, forcing re-read rather than
+    serving stale content. Pass (mtime_ns, size) as stat_key if pre-captured.
+    """
     from durin.utils.webui_transcript import session_messages_to_ui_messages
 
-    stat = session_path.stat()
-    cache_key = (key, stat.st_mtime_ns, stat.st_size)
+    if stat_key is None:
+        stat = session_path.stat()
+        cache_key = (key, stat.st_mtime_ns, stat.st_size)
+    else:
+        cache_key = (key, *stat_key)
     cached = _webui_thread_fallback_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -761,14 +770,20 @@ def build_gateway_http_app(
             # No webui JSONL transcript: fall back to the universal session history
             # so non-websocket sessions (CLI, Telegram, subagent) render read-only
             # instead of returning 404.
+            session_path = sm._get_session_path(key) if sm is not None else None
+            stat_key = None
+            if session_path is not None and session_path.exists():
+                stat = session_path.stat()
+                stat_key = (stat.st_mtime_ns, stat.st_size)
             raw = sm.read_session_file(key) if sm is not None else None
             raw_messages = (raw or {}).get("messages") or []
             if raw_messages:
                 ui_messages = _fallback_ui_messages(
                     key,
-                    sm._get_session_path(key),
+                    session_path,
                     raw_messages,
                     channel._augment_transcript_user_media,
+                    stat_key=stat_key,
                 )
                 data = {
                     "schemaVersion": WEBUI_TRANSCRIPT_SCHEMA_VERSION,
