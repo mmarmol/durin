@@ -430,7 +430,7 @@ async def test_microcompact_replaces_old_tool_results():
     result = runner._microcompact(_microcompact_spec(), messages)
     tool_msgs = [m for m in result if m.get("role") == "tool"]
     stale_count = total - _MICROCOMPACT_KEEP_RECENT
-    compacted = [m for m in tool_msgs if "omitted from context" in str(m.get("content", ""))]
+    compacted = [m for m in tool_msgs if "result trimmed" in str(m.get("content", ""))]
     preserved = [m for m in tool_msgs if m.get("content") == long_content]
     assert len(compacted) == stale_count
     assert len(preserved) == _MICROCOMPACT_KEEP_RECENT
@@ -521,6 +521,7 @@ async def test_microcompact_keeps_recovery_path_when_result_already_spilled(tmp_
     assert str(spill_path) in content        # recovery path preserved
     assert "read_file" in content            # recovery hint present
     assert preview not in content            # 1200-char preview dropped (actually compacted)
+    assert "began:" not in content           # no head snippet for already-spilled content
 
 
 @pytest.mark.asyncio
@@ -554,6 +555,49 @@ async def test_microcompact_spills_unpersisted_result_and_references_file(tmp_pa
     assert spill_file.read_text() == original
     assert str(spill_file) in content        # placeholder points at it
     assert result[-1]["content"] == original  # recent results untouched
+
+
+def _many_compactable_tool_results(count: int, chars: int) -> list[dict]:
+    """``count`` standalone tool-result messages for a compactable tool.
+
+    Content cycles through digits rather than repeating a single character:
+    a uniformly-repeated character tiktoken-compresses far below the ~4
+    chars/token an estimate assumes, undercutting the pressure-ratio math.
+    """
+    content = "".join(str(i % 10) for i in range(chars))
+    return [
+        {
+            "role": "tool",
+            "tool_call_id": f"c{i}",
+            "name": "exec",
+            "content": content,
+        }
+        for i in range(count)
+    ]
+
+
+def test_microcompact_skipped_under_token_pressure_threshold():
+    """Far below the pressure threshold, old tool results stay verbatim."""
+    from durin.agent.runner import AgentRunner
+
+    runner = AgentRunner(MagicMock())
+    spec = _microcompact_spec(context_window_tokens=200_000)
+    messages = _many_compactable_tool_results(count=14, chars=600)
+    result = runner._microcompact(spec, messages, MagicMock())
+    assert result is messages
+
+
+def test_microcompact_fires_over_threshold_with_informative_placeholder():
+    """Over the pressure threshold, stale results become head-snippet pointers."""
+    from durin.agent.runner import AgentRunner
+
+    runner = AgentRunner(MagicMock())
+    spec = _microcompact_spec(context_window_tokens=8_000)
+    messages = _many_compactable_tool_results(count=14, chars=600)
+    result = runner._microcompact(spec, messages, MagicMock())
+    stale = result[0]["content"]
+    assert "result trimmed" in stale
+    assert "began:" in stale
 
 
 def test_governance_repairs_orphans_after_snip():

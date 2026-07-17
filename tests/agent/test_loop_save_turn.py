@@ -201,6 +201,67 @@ def test_save_turn_stamps_latency_on_last_assistant() -> None:
     assert session.messages[-1]["latency_ms"] == 12345
 
 
+def test_save_turn_spills_oversized_tool_result_with_recovery_pointer(tmp_path: Path) -> None:
+    """Verify oversized tool results are spilled to .full.txt with recovery trailer."""
+    loop = _make_full_loop(tmp_path)
+    session = Session(key="test:spill-oversized")
+    original_content = "x" * 20_000  # Exceeds default max_tool_result_chars (~16k)
+
+    loop._save_turn(
+        session,
+        [{"role": "tool", "tool_call_id": "call_big", "name": "read_file", "content": original_content}],
+        skip=0,
+    )
+
+    assert len(session.messages) == 1
+    persisted_content = session.messages[0]["content"]
+    assert isinstance(persisted_content, str)
+
+    # Verify the trailer is present with correct format
+    assert "[truncated: full output (20000 chars) at " in persisted_content
+    assert persisted_content.endswith("; use read_file to recover]")
+
+    # Extract the path from the trailer
+    import re
+    match = re.search(r"\[truncated: full output \(\d+ chars\) at (.+?); use read_file to recover\]", persisted_content)
+    assert match is not None
+    spilled_path = match.group(1)
+
+    # Verify the file exists and ends with .full.txt
+    spilled_file = Path(spilled_path)
+    assert spilled_file.exists()
+    assert spilled_file.suffix == ".txt"
+    assert ".full.txt" in str(spilled_file)
+
+    # Verify the file content equals the original untruncated string
+    assert spilled_file.read_text() == original_content
+
+
+def test_save_turn_oversized_without_workspace_degrades_to_plain_truncation() -> None:
+    """Verify oversized tool results truncate without trailer when workspace is unavailable."""
+    loop = _mk_loop()
+    loop.workspace = None  # Disable workspace to force degradation
+    session = Session(key="test:no-workspace")
+    original_content = "y" * 20_000  # Exceeds default max_tool_result_chars
+
+    # Should not raise an exception
+    loop._save_turn(
+        session,
+        [{"role": "tool", "tool_call_id": "call_no_ws", "name": "read_file", "content": original_content}],
+        skip=0,
+    )
+
+    assert len(session.messages) == 1
+    persisted_content = session.messages[0]["content"]
+    assert isinstance(persisted_content, str)
+
+    # Verify the content is truncated (shorter than original)
+    assert len(persisted_content) < len(original_content)
+
+    # Verify the trailer is NOT present (degraded behavior)
+    assert "[truncated: full output" not in persisted_content
+
+
 def test_restore_runtime_checkpoint_rehydrates_completed_and_pending_tools() -> None:
     loop = _mk_loop()
     session = Session(
