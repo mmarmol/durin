@@ -4,6 +4,11 @@ The transcript is append-only JSONL. A page is a byte window ending at the
 cursor (file end when absent) whose start is expanded backward to a USER
 message boundary so a turn and its tool events never split across pages.
 Pure read path: these tests also pin that pagination never writes.
+
+Fixture lines mirror the production writer (websocket channel): compact
+JSON records dispatched on the "event" field — {"event":"user",...} user
+turns, {"event":"message",...} assistant/trace frames (trace = message with
+kind "tool_hint"/"progress"), reasoning_delta, and turn_end.
 """
 from __future__ import annotations
 
@@ -22,13 +27,17 @@ def _dump(obj: dict) -> str:
 
 
 def _write_transcript(tmp_path: Path, monkeypatch, turns: int) -> Path:
+    """Real-shaped transcript: 5 writer-format lines per turn, each stamped
+    with a sequential turn marker ``i`` for coverage assertions."""
     monkeypatch.setattr(wt, "get_webui_dir", lambda: tmp_path)
     path = wt.webui_transcript_path("websocket:pagetest")
     with open(path, "w", encoding="utf-8") as f:
         for i in range(turns):
-            f.write(_dump({"kind": "user", "text": f"question {i}", "i": i, "event": "user"}) + "\n")
-            f.write(_dump({"kind": "trace", "text": f"tool run {i}", "i": i}) + "\n")
-            f.write(_dump({"kind": "assistant", "text": f"answer {i} " + "x" * 200, "i": i}) + "\n")
+            f.write(_dump({"event": "user", "chat_id": "pagetest", "text": f"question {i}", "i": i}) + "\n")
+            f.write(_dump({"event": "reasoning_delta", "chat_id": "pagetest", "text": f"thinking {i}", "i": i}) + "\n")
+            f.write(_dump({"event": "message", "chat_id": "pagetest", "kind": "tool_hint", "text": f"exec(step {i})", "i": i}) + "\n")
+            f.write(_dump({"event": "message", "chat_id": "pagetest", "id": f"msg-{i}", "text": f"answer {i} " + "x" * 200, "i": i}) + "\n")
+            f.write(_dump({"event": "turn_end", "chat_id": "pagetest", "latency_ms": 42, "i": i}) + "\n")
     return path
 
 
@@ -56,17 +65,20 @@ def _write_with_oversized_line(tmp_path: Path, monkeypatch) -> tuple[int, int, l
             f.write((_dump({**obj, "n": n}) + "\n").encode("utf-8"))
             n += 1
 
+        def turn(i: int) -> None:
+            emit({"event": "user", "chat_id": "pagetest", "text": f"question {i}"})
+            emit({"event": "message", "chat_id": "pagetest", "kind": "tool_hint", "text": f"exec(step {i})"})
+            emit({"event": "message", "chat_id": "pagetest", "text": f"answer {i}"})
+            emit({"event": "turn_end", "chat_id": "pagetest"})
+
         for i in range(10):
-            emit({"kind": "user", "text": f"question {i}"})
-            emit({"kind": "trace", "text": f"tool run {i}"})
-            emit({"kind": "assistant", "text": f"answer {i}"})
-        emit({"kind": "user", "text": "big question"})
+            turn(i)
+        emit({"event": "user", "chat_id": "pagetest", "text": "big question"})
         giant_idx = n
-        emit({"kind": "assistant", "text": "y" * 50_000})
+        emit({"event": "message", "chat_id": "pagetest", "text": "y" * 50_000})
+        emit({"event": "turn_end", "chat_id": "pagetest"})
         for i in range(10, 20):
-            emit({"kind": "user", "text": f"question {i}"})
-            emit({"kind": "trace", "text": f"tool run {i}"})
-            emit({"kind": "assistant", "text": f"answer {i}"})
+            turn(i)
     return n, giant_idx, starts
 
 
@@ -87,7 +99,7 @@ def test_last_page_returns_tail_and_cursor(tmp_path, monkeypatch):
     _write_transcript(tmp_path, monkeypatch, turns=300)
     lines, cursor = wt.read_transcript_page("websocket:pagetest", target_bytes=10_000)
     assert lines, "tail page must not be empty"
-    assert lines[0]["kind"] == "user", "page must start at a user-message boundary"
+    assert lines[0]["event"] == "user", "page must start at a user-message boundary"
     assert lines[-1]["i"] == 299, "tail page must end at the newest line"
     assert isinstance(cursor, int) and cursor > 0
 
@@ -100,7 +112,7 @@ def test_pages_chain_backwards_to_none_and_cover_everything(tmp_path, monkeypatc
         lines, cursor = wt.read_transcript_page(
             "websocket:pagetest", before=cursor, target_bytes=10_000
         )
-        seen = [ln["i"] for ln in lines if ln["kind"] == "user"] + seen
+        seen = [ln["i"] for ln in lines if ln["event"] == "user"] + seen
         if cursor is None:
             break
     assert cursor is None, "chain must terminate"
@@ -110,7 +122,7 @@ def test_pages_chain_backwards_to_none_and_cover_everything(tmp_path, monkeypatc
 def test_small_file_single_page(tmp_path, monkeypatch):
     _write_transcript(tmp_path, monkeypatch, turns=3)
     lines, cursor = wt.read_transcript_page("websocket:pagetest")
-    assert len(lines) == 9
+    assert len(lines) == 15
     assert cursor is None
 
 

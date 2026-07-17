@@ -66,9 +66,12 @@ def read_transcript_lines(session_key: str) -> list[dict[str, Any]]:
 
 def _is_user_line(raw: str) -> bool:
     # Cheap prefilter before full JSON parse: user rows are the page
-    # boundary anchor. The transcript writes compact JSON, so the kind
-    # field appears verbatim.
-    return '"kind":"user"' in raw or '"kind": "user"' in raw
+    # boundary anchor. The writer persists user turns as compact JSON
+    # ({"event":"user","chat_id":...,"text":...}); the spaced form is
+    # tolerated defensively. Replay dispatches user rows on the "event"
+    # field only — "kind" values are message sub-types (tool_hint,
+    # progress, reasoning), never "user".
+    return '"event":"user"' in raw or '"event": "user"' in raw
 
 
 def read_transcript_page(
