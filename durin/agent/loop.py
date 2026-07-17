@@ -352,7 +352,7 @@ class AgentLoop:
         decision_log_max_entries: int = 10,
         decision_log_max_chars: int = 1500,
         compaction_learnings_enabled: bool = True,
-        max_messages: int = 120,
+        max_messages: int = 480,
         hooks: list[AgentHook] | None = None,
         unified_session: bool = False,
         disabled_skills: list[str] | None = None,
@@ -464,7 +464,7 @@ class AgentLoop:
             app_config_getter=lambda: self.app_config,
         )
         self._unified_session = unified_session
-        self._max_messages = max_messages if max_messages > 0 else 120
+        self._max_messages = max_messages if max_messages > 0 else 480
         self._running = False
         self._mcp_servers = mcp_servers or {}
         self._mcp_connections: dict[str, Any] = {}

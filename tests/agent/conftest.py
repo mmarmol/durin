@@ -38,7 +38,7 @@ def make_loop(
     model: str = "test-model",
     context_window_tokens: int = 128_000,
     session_ttl_minutes: int = 0,
-    max_messages: int = 120,
+    max_messages: int = 480,
     unified_session: bool = False,
     mcp_servers: dict | None = None,
     tools_config=None,

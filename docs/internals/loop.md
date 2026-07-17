@@ -613,7 +613,7 @@ Loop-relevant `agents.defaults.*` keys (see
 | Key | Default | Effect |
 |---|---|---|
 | `max_tool_iterations` | `200` | Hard cap on runner iterations per turn. |
-| `max_messages` | `120` | History replay window (also token-budget bounded). |
+| `max_messages` | `480` | History replay window (token-budget is the effective bound on large-context models). |
 | `unified_session` | `false` | Collapse all channels to one shared session. |
 | `consolidation_ratio` | `0.5` | How far each compaction round reduces the prompt. |
 | `preemptive_compact_ratio` | `0.5` | Fraction of the window that triggers preemptive compaction. |

@@ -13,7 +13,7 @@ from durin.bus.queue import MessageBus
 from durin.providers.base import LLMResponse
 from durin.session.manager import Session
 
-DEFAULT_MAX_MESSAGES = 120
+DEFAULT_MAX_MESSAGES = 480
 
 
 def _make_loop(tmp_path: Path, max_messages: int = DEFAULT_MAX_MESSAGES) -> AgentLoop:
