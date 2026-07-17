@@ -36,6 +36,7 @@ When ``save_config`` runs, only **non-default** fields are persisted
 import json
 import os
 import re
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -195,9 +196,53 @@ def _write_split_layout(data: dict[str, Any], config_path: Path) -> None:
     atomic_write_text(config_path, json.dumps({"_layout": "split"}, indent=2) + "\n")
 
 
+# load_config is called from dozens of per-request service paths; each uncached
+# load re-reads and pydantic-validates every split-topic file. The cache trades
+# that for ~a dozen stat() calls: a hit is served only while every on-disk
+# (mtime_ns, size) matches the snapshot taken BEFORE the cached read, so any
+# writer — this process or another — invalidates it on the next call. Hits
+# return a deep copy: callers may freely mutate their Config without leaking
+# into other callers. Env-var interpolation is re-evaluated only on misses,
+# which assumes a stable process environment (true for the gateway daemon).
+_CONFIG_CACHE_LOCK = threading.Lock()
+_CONFIG_CACHE: dict[str, tuple[tuple, Config]] = {}
+
+
+def _snapshot_stat(path: Path) -> tuple:
+    """Freshness token for the config on disk: (path, mtime_ns, size) for the
+    monolith/marker file, the split dir, and every topic file inside it. Any
+    write, create, or delete changes the token; missing paths contribute a
+    (path, None, None) entry so appearing files invalidate too."""
+    entries: list[tuple[str, int | None, int | None]] = []
+
+    def add(p: Path) -> None:
+        try:
+            st = p.stat()
+            entries.append((str(p), st.st_mtime_ns, st.st_size))
+        except OSError:
+            entries.append((str(p), None, None))
+
+    add(path)
+    split = _split_dir(path)
+    add(split)
+    if split.is_dir():
+        for child in sorted(split.iterdir()):
+            if child.suffix == ".json":
+                add(child)
+    return tuple(entries)
+
+
+def _invalidate_config_cache(path: Path) -> None:
+    with _CONFIG_CACHE_LOCK:
+        _CONFIG_CACHE.pop(str(path), None)
+
+
 def load_config(config_path: Path | None = None) -> Config:
     """
     Load configuration from file or create default.
+
+    Served from a per-process cache while the on-disk files' (mtime_ns, size)
+    snapshot is unchanged; cache hits return an independent deep copy.
 
     Args:
         config_path: Optional path to config file. Uses default if not provided.
@@ -206,7 +251,21 @@ def load_config(config_path: Path | None = None) -> Config:
         Loaded configuration object.
     """
     path = config_path or get_config_path()
+    snap = _snapshot_stat(path)
+    key = str(path)
+    with _CONFIG_CACHE_LOCK:
+        cached = _CONFIG_CACHE.get(key)
+        if cached is not None and cached[0] == snap:
+            cfg = cached[1].model_copy(deep=True)
+            _apply_ssrf_whitelist(cfg)
+            return cfg
+    cfg = _load_config_uncached(path)
+    with _CONFIG_CACHE_LOCK:
+        _CONFIG_CACHE[key] = (snap, cfg.model_copy(deep=True))
+    return cfg
 
+
+def _load_config_uncached(path: Path) -> Config:
     config = Config()
 
     # Path A: split layout already exists on disk → read each topic file.
@@ -290,9 +349,11 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
 
         if _is_split_layout(path):
             _write_split_layout(data, path)
+            _invalidate_config_cache(path)
             return
 
         atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False))
+        _invalidate_config_cache(path)
 
 
 def mutate_config(

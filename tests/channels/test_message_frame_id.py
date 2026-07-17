@@ -14,7 +14,7 @@ import pytest
 
 from durin.bus.events import OutboundMessage
 from durin.channels.websocket import WebSocketChannel
-from durin.utils.webui_transcript import read_transcript_page
+from durin.utils.webui_transcript import get_transcript_writer, read_transcript_page
 
 
 def _ch() -> WebSocketChannel:
@@ -59,6 +59,9 @@ async def test_message_frame_id_matches_persisted_record() -> None:
     )
 
     wire = json.loads(mock_ws.send_text.await_args.args[0])
+    # Same barrier the production read path uses: buffered events must be
+    # on disk before the transcript is read back.
+    await get_transcript_writer().flush("websocket:chat-1")
     persisted, _ = read_transcript_page("websocket:chat-1")
     msg_records = [r for r in persisted if r.get("event") == "message"]
     assert msg_records, "command output should be persisted"
