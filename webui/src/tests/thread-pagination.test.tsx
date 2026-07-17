@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { ClientProvider } from "@/providers/ClientProvider";
+import { PrependPin } from "@/lib/prepend-pin";
 import type { UIMessage } from "@/lib/types";
 
 const messages: UIMessage[] = [
@@ -162,7 +163,7 @@ describe("ThreadViewport pagination", () => {
     expect(screen.queryByText("Beginning of conversation")).not.toBeInTheDocument();
   });
 
-  it("preserves visual scroll position when an older page is prepended", () => {
+  it("pins the pre-prepend first message across the prepend AND later reflow", () => {
     const scrollIntoView = vi.fn();
     const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
     HTMLElement.prototype.scrollIntoView = scrollIntoView;
@@ -180,10 +181,20 @@ describe("ThreadViewport pagination", () => {
       );
       const scroller = getScroller(container);
       setGeometry(scroller, { scrollHeight: 1000, clientHeight: 500, scrollTop: 200 });
+      // The anchor is the first rendered message row (ThreadMessages root's
+      // first child). jsdom has no layout, so its viewport position is
+      // scripted through a getBoundingClientRect stub.
+      const messagesRoot = container.querySelector(
+        'div[class="flex w-full flex-col"]',
+      ) as HTMLElement;
+      const anchorRow = messagesRoot.firstElementChild as HTMLElement;
+      let anchorTop = 100;
+      anchorRow.getBoundingClientRect = () =>
+        ({ top: anchorTop }) as DOMRect;
       scrollIntoView.mockClear();
 
       // Parent starts the older-page fetch: loadingOlder flips true, which
-      // captures {height: 1000, top: 200} as the pre-prepend anchor.
+      // records the anchor row at viewport top 100 with scrollTop 200.
       rerender(
         <ThreadViewport
           messages={messages}
@@ -195,18 +206,19 @@ describe("ThreadViewport pagination", () => {
         />,
       );
 
-      // The fetch resolves: older rows are prepended (content grows by 600px)
-      // and loadingOlder clears.
+      // The fetch resolves: older rows are prepended, pushing the anchor row
+      // down to viewport top 700.
       const olderMessage: UIMessage = {
         id: "hist-100-0",
         role: "assistant",
         content: "an older reply",
         createdAt: 0,
       };
-      Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 1600 });
+      anchorTop = 700;
+      const prepended = [olderMessage, ...messages];
       rerender(
         <ThreadViewport
-          messages={[olderMessage, ...messages]}
+          messages={prepended}
           isStreaming={false}
           composer={<div />}
           conversationKey="chat-anchor"
@@ -215,14 +227,134 @@ describe("ThreadViewport pagination", () => {
         />,
       );
 
-      // newScrollTop = newScrollHeight - anchorHeight + anchorTop = 1600 - 1000 + 200
+      // First restore: scrollTop += (700 - 100) = 200 + 600.
       expect(scroller.scrollTop).toBe(800);
+
+      // Post-prepend reflow (progressive markdown/image layout) pushes the
+      // anchor again AFTER the first restore — the one-shot compensation
+      // would stop here; the pin must keep restoring.
+      anchorTop = 250;
+      rerender(
+        <ThreadViewport
+          messages={[...prepended]}
+          isStreaming={false}
+          composer={<div />}
+          conversationKey="chat-anchor"
+          hasOlder
+          loadingOlder={false}
+        />,
+      );
+      // Second restore: scrollTop += (250 - 100) = 800 + 150.
+      expect(scroller.scrollTop).toBe(950);
+
       // The auto-scroll-to-bottom effect must not have yanked the view down
-      // while hydrating the older page.
+      // at any point in the pinning window.
       expect(scrollIntoView).not.toHaveBeenCalled();
     } finally {
       HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
     }
+  });
+});
+
+describe("PrependPin", () => {
+  function makeAnchor(top: number) {
+    const state = { top, connected: true };
+    const anchor = {
+      get isConnected() {
+        return state.connected;
+      },
+      getBoundingClientRect: () => ({ top: state.top }),
+    };
+    return { state, anchor };
+  }
+
+  it("re-applies the restore across successive layout ticks", () => {
+    const { state, anchor } = makeAnchor(100);
+    const scroller = { scrollTop: 200 };
+    const pin = new PrependPin(anchor, 100, 200);
+
+    state.top = 700; // prepend pushed the anchor down
+    expect(pin.apply(scroller, 10)).toBe(true);
+    expect(scroller.scrollTop).toBe(800);
+
+    state.top = 235; // late reflow moved it again
+    expect(pin.apply(scroller, 20)).toBe(true);
+    expect(scroller.scrollTop).toBe(935);
+  });
+
+  it("releases after two consecutive stable ticks, resetting on instability", () => {
+    const { state, anchor } = makeAnchor(100);
+    const scroller = { scrollTop: 200 };
+    const pin = new PrependPin(anchor, 100, 200);
+
+    expect(pin.apply(scroller, 10)).toBe(true); // stable tick 1 (delta 0)
+    state.top = 400; // reflow: stability counter must reset
+    expect(pin.apply(scroller, 20)).toBe(true);
+    expect(scroller.scrollTop).toBe(500);
+    state.top = 100;
+    expect(pin.apply(scroller, 30)).toBe(true); // stable tick 1 again
+    expect(pin.apply(scroller, 40)).toBe(false); // stable tick 2: released
+    expect(scroller.scrollTop).toBe(500);
+  });
+
+  it("releases without adjusting when the user scrolled themselves", () => {
+    const { state, anchor } = makeAnchor(100);
+    const scroller = { scrollTop: 200 };
+    const pin = new PrependPin(anchor, 100, 200);
+
+    expect(pin.notifyScroll(200)).toBe(true); // our own position: still active
+    expect(pin.notifyScroll(999)).toBe(false); // not ours: user wins
+
+    state.top = 700;
+    scroller.scrollTop = 999; // user scrolled before this tick
+    expect(pin.apply(scroller, 10)).toBe(false);
+    expect(scroller.scrollTop).toBe(999); // untouched
+  });
+
+  it("tracks its own restores so they do not read as user scrolls", () => {
+    const { state, anchor } = makeAnchor(100);
+    const scroller = { scrollTop: 200 };
+    const pin = new PrependPin(anchor, 100, 200);
+
+    state.top = 700;
+    expect(pin.apply(scroller, 10)).toBe(true);
+    // The scroll event fired by the pin's own restore reports the value the
+    // pin set — that must not release it.
+    expect(pin.notifyScroll(scroller.scrollTop)).toBe(true);
+  });
+
+  it("counts the deadline from the first restore tick, then releases at it", () => {
+    const { state, anchor } = makeAnchor(100);
+    const scroller = { scrollTop: 200 };
+    const pin = new PrependPin(anchor, 100, 200, 1500);
+
+    // A slow fetch delays the first tick — the pin must still be usable.
+    expect(pin.started).toBe(false);
+    state.top = 700;
+    expect(pin.apply(scroller, 10_000)).toBe(true);
+    expect(pin.started).toBe(true);
+    expect(scroller.scrollTop).toBe(800);
+
+    // Within the window: keeps restoring.
+    state.top = 250;
+    expect(pin.apply(scroller, 11_400)).toBe(true);
+    expect(scroller.scrollTop).toBe(950);
+
+    // Past the cap (10_000 + 1500): released without adjusting.
+    state.top = 700;
+    expect(pin.apply(scroller, 11_501)).toBe(false);
+    expect(scroller.scrollTop).toBe(950);
+  });
+
+  it("releases when the anchor element unmounts", () => {
+    const { state, anchor } = makeAnchor(100);
+    const scroller = { scrollTop: 200 };
+    const pin = new PrependPin(anchor, 100, 200);
+
+    state.connected = false;
+    state.top = 700;
+    expect(pin.apply(scroller, 10)).toBe(false);
+    expect(scroller.scrollTop).toBe(200); // untouched
   });
 });
 
