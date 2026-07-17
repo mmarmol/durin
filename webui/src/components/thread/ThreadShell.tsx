@@ -161,7 +161,14 @@ export function ThreadShell({
     void loadOlderHistory().then((older) => {
       if (older.length === 0) return;
       setMessages((prev) => {
-        const merged = [...older, ...prev];
+        // Idempotent splice: after a session round-trip the live thread is
+        // restored MERGED from the cache while the refetched history re-arms
+        // prevCursor at the same offset, so a later scroll re-fetches a page
+        // whose rows are already present — skip those instead of doubling them.
+        const prevIds = new Set(prev.map((m) => m.id));
+        const fresh = older.filter((m) => !prevIds.has(m.id));
+        if (fresh.length === 0) return prev;
+        const merged = [...fresh, ...prev];
         if (chatId) {
           messageCacheRef.current.set(chatId, projectWebuiThreadMessages(merged));
         }

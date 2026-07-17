@@ -385,4 +385,121 @@ describe("ThreadShell pagination integration", () => {
       HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
     }
   });
+
+  it("does not duplicate the older page after a session round-trip", async () => {
+    // Load older in A → switch to B → back to A: the live thread restores
+    // the MERGED list from the message cache, but useSessionHistory refetches
+    // fresh and re-arms prevCursor at the same offset. A second near-top
+    // scroll then fetches the SAME before= page; the splice must be
+    // idempotent (skip rows whose ids are already present) or the older page
+    // renders twice with duplicate React keys.
+    const client = makeClient();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    const consoleErrorSpy = vi.spyOn(console, "error");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("websocket%3Achat-rt/webui-thread")) {
+          if (url.includes("before=")) {
+            return httpJson({
+              schemaVersion: 4,
+              prevCursor: null,
+              messages: [
+                { id: "old-1", role: "user", content: "an older question", createdAt: 500 },
+                { id: "old-2", role: "assistant", content: "an older answer", createdAt: 501 },
+              ],
+            });
+          }
+          return httpJson({
+            schemaVersion: 4,
+            prevCursor: 4096,
+            messages: [
+              { id: "new-1", role: "user", content: "latest question", createdAt: 1000 },
+              { id: "new-2", role: "assistant", content: "latest answer", createdAt: 1001 },
+            ],
+          });
+        }
+        return { ok: false, status: 404, json: async () => ({}) };
+      }),
+    );
+
+    function shell(chatId: string) {
+      return (
+        <ThreadShell
+          session={session(chatId)}
+          title={`Chat ${chatId}`}
+          onToggleSidebar={() => {}}
+          onNewChat={() => {}}
+        />
+      );
+    }
+
+    function findScroller(container: HTMLElement): HTMLElement {
+      const el = Array.from(
+        container.querySelectorAll<HTMLElement>("div.overflow-y-auto"),
+      ).find((node) => node.textContent?.includes("latest answer"));
+      expect(el).toBeDefined();
+      return el as HTMLElement;
+    }
+
+    function scrollNearTop(scroller: HTMLElement) {
+      Object.defineProperties(scroller, {
+        scrollHeight: { configurable: true, value: 2000 },
+        clientHeight: { configurable: true, value: 600 },
+        scrollTop: { configurable: true, writable: true, value: 0 },
+      });
+      act(() => {
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+    }
+
+    try {
+      const { container, rerender } = render(wrap(client, shell("chat-rt")));
+      await waitFor(() => expect(screen.getByText("latest answer")).toBeInTheDocument());
+
+      // First older-page load in A.
+      scrollNearTop(findScroller(container));
+      await waitFor(() => expect(screen.getByText("an older question")).toBeInTheDocument());
+
+      // Round-trip: A → B → A.
+      await act(async () => {
+        rerender(wrap(client, shell("chat-rt-b")));
+      });
+      await act(async () => {
+        rerender(wrap(client, shell("chat-rt")));
+      });
+      // The merged thread is restored from the cache (older page included)
+      // while the refetched history re-arms prevCursor at the same offset.
+      await waitFor(() => expect(screen.getByText("latest answer")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText("an older question")).toBeInTheDocument());
+      consoleErrorSpy.mockClear();
+
+      // Second near-top scroll: fetches the SAME before= page again.
+      scrollNearTop(findScroller(container));
+      await waitFor(() => {
+        const beforeCalls = (fetch as ReturnType<typeof vi.fn>).mock.calls
+          .map((c) => String(c[0]))
+          .filter((u) => u.includes("before="));
+        expect(beforeCalls).toHaveLength(2);
+      });
+      await act(async () => {});
+      await act(async () => {});
+
+      // Every row still renders exactly once…
+      expect(screen.getAllByText("an older question")).toHaveLength(1);
+      expect(screen.getAllByText("an older answer")).toHaveLength(1);
+      expect(screen.getAllByText("latest question")).toHaveLength(1);
+      expect(screen.getAllByText("latest answer")).toHaveLength(1);
+      // …and React never warned about duplicate keys.
+      const duplicateKeyWarnings = consoleErrorSpy.mock.calls.filter((call) =>
+        call.map(String).join(" ").includes("same key"),
+      );
+      expect(duplicateKeyWarnings).toHaveLength(0);
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+      consoleErrorSpy.mockRestore();
+    }
+  });
 });
