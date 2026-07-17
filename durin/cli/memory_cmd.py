@@ -955,3 +955,50 @@ def cmd_docs() -> None:
     for title, source, ingested_at, chunks in rows:
         table.add_row(title, source, ingested_at, chunks)
     console.print(table)
+
+
+@memory_app.command("dream-worker", hidden=True)
+def cmd_dream_worker(
+    mode: str = typer.Option(
+        "full", help="Which orchestration to run: 'full' (nightly) or 'reactive'."
+    ),
+    trigger: str = typer.Option(
+        "cron", help="Trigger label recorded in logs/telemetry (cron, "
+        "post_compaction, session_close, manual)."
+    ),
+) -> None:
+    """Run one dream in THIS process, speaking JSONL progress on stdout.
+
+    Internal worker entry point: the gateway spawns it so dream CPU/RAM/disk
+    churn lives in a child process instead of the serving loop. One JSON
+    object per line on stdout mirrors the websocket dream-feed payloads
+    (run_started / activity / run_finished). Exit codes: 0 ok, 3 another
+    dream holds the dream lock (skip, not an error), 1 failure.
+    """
+    import json as _json
+    import sys as _sys
+
+    from loguru import logger
+
+    from durin.memory import dream_orchestrator as orch
+
+    config = load_config()
+    workspace = config.workspace_path
+
+    def emit(payload: dict) -> None:
+        _sys.stdout.write(_json.dumps(payload, ensure_ascii=False) + "\n")
+        _sys.stdout.flush()
+
+    try:
+        with orch.dream_lock(workspace):
+            if mode == "reactive":
+                orch.run_reactive_dream(
+                    config, workspace, trigger=trigger, progress=emit
+                )
+            else:
+                orch.run_full_dream(config, workspace, progress=emit)
+    except orch.DreamAlreadyRunningError:
+        raise typer.Exit(3) from None
+    except Exception:
+        logger.exception("dream worker failed (mode={} trigger={})", mode, trigger)
+        raise typer.Exit(1) from None
