@@ -103,6 +103,30 @@ def test_warns_with_unknown_age_on_numeric_timestamp(isolated_secrets):
     assert "acme (unknown)" in r.message
 
 
+def test_check_survives_missing_mcp_sdk(isolated_secrets, monkeypatch):
+    """Installs without the [mcp] extra must get a skipped result, not an
+    ImportError that kills the whole doctor run: mcp_oauth imports the mcp
+    SDK at module top, and run_checks has no per-check exception guard."""
+    import sys
+
+    class _Blocker:
+        def find_spec(self, name, path=None, target=None):
+            if name == "mcp" or name.startswith("mcp."):
+                raise ModuleNotFoundError(f"No module named '{name}'")
+            return None
+
+    # Purge cached modules so the check's `from durin.agent.tools.mcp_oauth
+    # import ...` really re-executes the mcp import under the blocker.
+    for mod in list(sys.modules):
+        if mod == "durin.agent.tools.mcp_oauth" or mod == "mcp" or mod.startswith("mcp."):
+            monkeypatch.delitem(sys.modules, mod, raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_Blocker(), *sys.meta_path])
+
+    r = _run(_cfg_with_oauth_server())
+    assert r.status == "ok"
+    assert "skipped" in r.message
+
+
 def test_non_oauth_server_ignored_even_with_marker(isolated_secrets):
     """A marker for a server that isn't OAuth-enabled must not be reported
     (defensive: the marker key is server+url-derived, so this should never

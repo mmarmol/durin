@@ -270,6 +270,18 @@ class McpOauthFlows:
                 try:
                     await asyncio.wait_for(driver(provider, cfg), timeout=self._flow_deadline)
                     logger.info("MCP '{}' OAuth sign-in completed (token stored)", server)
+                    # A successful sign-in supersedes any interrupted-refresh
+                    # marker; the handshake can complete without a token
+                    # exchange (stored token, no in-memory expiry), so
+                    # set_tokens — the usual clear point — may never run.
+                    try:
+                        from durin.agent.tools.mcp_oauth import SecretsTokenStorage
+
+                        SecretsTokenStorage(
+                            server, server_url=cfg.url or None
+                        ).clear_refresh_marker()
+                    except Exception:  # noqa: BLE001 — cleanup must not fail the flow
+                        logger.warning("MCP '{}': refresh-marker clear failed", server)
                     if on_success is not None:
                         # Reconnect now that the token is stored — race-free, unlike
                         # the webui doing it on popup-close (which beats the token).

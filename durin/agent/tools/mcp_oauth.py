@@ -88,6 +88,9 @@ class SecretsTokenStorage:
         return raw if isinstance(raw, str) and raw.strip() else None
 
     def _write(self, name: str, blob: str) -> None:
+        # put() persists under the cross-process lock; no extra save() here —
+        # a trailing unlocked save() would rewrite the whole file from this
+        # process's stale snapshot and could clobber a concurrent writer.
         store = SecretStore().load()
         store.put(
             name,
@@ -97,13 +100,12 @@ class SecretsTokenStorage:
             scope=[f"mcp:{self._server}"],
             origin="oauth",
         )
-        store.save()
         get_secret_store(reload=True)
 
     def _delete(self, name: str) -> None:
+        # remove() persists under the cross-process lock (see _write).
         store = SecretStore().load()
         if store.remove(name):
-            store.save()
             get_secret_store(reload=True)
 
     async def get_tokens(self) -> OAuthToken | None:
@@ -150,14 +152,16 @@ class SecretsTokenStorage:
         self._write(self._client_name, client_info.model_dump_json())
 
     def forget(self) -> bool:
-        """Delete both secret entries (used by `durin mcp logout`)."""
+        """Delete the stored token, client-registration, and refresh-marker
+        entries (used by `durin mcp logout`). Removing the marker too keeps a
+        logout from leaving a stale interrupted-refresh warning behind.
+        Each remove() persists under the cross-process lock (see _write)."""
         store = SecretStore().load()
         removed = False
-        for name in (self._tokens_name, self._client_name):
+        for name in (self._tokens_name, self._client_name, self._marker_name):
             if store.remove(name):
                 removed = True
         if removed:
-            store.save()
             get_secret_store(reload=True)
         return removed
 

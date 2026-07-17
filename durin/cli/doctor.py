@@ -386,7 +386,15 @@ def check_mcp_oauth_refresh_markers() -> CheckResult:
     the operator re-authenticates. Reads are best-effort: a config/marker that
     can't be read is skipped rather than failing the whole check.
     """
-    from durin.agent.tools.mcp_oauth import refresh_inflight_marker
+    try:
+        # mcp_oauth imports the mcp SDK at module top; without the [mcp]
+        # extra this import raises and would kill the whole doctor run.
+        from durin.agent.tools.mcp_oauth import refresh_inflight_marker
+    except ImportError:
+        return CheckResult(
+            "mcp oauth refresh markers", "ok", "mcp extra not installed — skipped",
+            category="mcp",
+        )
 
     try:
         servers = load_config().tools.mcp_servers

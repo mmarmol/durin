@@ -88,6 +88,16 @@ def test_provider_writes_marker_before_building_refresh_request(isolated_secrets
     assert mo.refresh_inflight_marker("srv", "https://mcp.example.com") is not None
 
 
+def test_forget_removes_marker(isolated_secrets):
+    """Logout (forget) must remove the marker along with tokens/client info —
+    a signed-out server must not keep warning about an interrupted refresh."""
+    storage = mo.SecretsTokenStorage("srv", server_url="https://mcp.example.com")
+    storage.write_refresh_marker()
+
+    assert storage.forget() is True
+    assert mo.refresh_inflight_marker("srv", "https://mcp.example.com") is None
+
+
 def test_auth_failure_message_plain_when_no_marker(isolated_secrets):
     from durin.config.schema import MCPServerConfig
 
@@ -123,3 +133,18 @@ def test_sdk_contract_pin():
     assert inspect.iscoroutinefunction(hook)
     sig = inspect.signature(hook)
     assert list(sig.parameters) == ["self"], f"unexpected signature: {sig}"
+
+    # Pin the CLEAR anchor too: the marker is cleared by set_tokens, which the
+    # SDK reaches through its token/refresh response handlers. An SDK bump
+    # that reroutes persistence away from storage.set_tokens would leave
+    # markers never clearing — with no failure until a false doctor warning.
+    for handler_name in ("_handle_refresh_response", "_handle_token_response"):
+        handler = getattr(OAuthClientProvider, handler_name, None)
+        assert handler is not None, (
+            f"mcp SDK no longer has OAuthClientProvider.{handler_name} — "
+            "the marker-clear anchor (set_tokens) may no longer be reached; re-anchor it"
+        )
+        assert "set_tokens" in inspect.getsource(handler), (
+            f"OAuthClientProvider.{handler_name} no longer calls set_tokens — "
+            "the write-ahead marker would never clear; re-anchor the clear point"
+        )
