@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import mimetypes
 import os
@@ -142,6 +144,139 @@ def append_transcript_object(session_key: str, obj: dict[str, Any]) -> None:
         f.write(line)
         f.flush()
         os.fsync(f.fileno())
+
+
+_FLUSH_INTERVAL_S = 0.1
+_MAX_BUFFERED_BYTES = 4 * 1024 * 1024
+
+
+class TranscriptWriter:
+    """Coalesced, off-loop appender for webui display transcripts.
+
+    Streaming emits one event per model delta; writing each with its own
+    open+fsync stalls the event loop whenever the disk is busy. Events are
+    serialized once at enqueue (on the loop, so per-session order is the
+    event order), buffered per session, and drained by a single background
+    task that performs one append + one fsync per session file per drain,
+    in a worker thread. Durability window: at most the flush interval plus
+    one drain; ``flush()`` is the read barrier for paths about to read the
+    file, and ``aclose()`` the shutdown barrier.
+    """
+
+    def __init__(self) -> None:
+        self._buffers: dict[str, list[str]] = {}
+        self._pending_bytes = 0
+        self._wake: asyncio.Event | None = None
+        self._drain_lock: asyncio.Lock | None = None
+        self._task: asyncio.Task | None = None
+        self._closed = False
+
+    def _ensure_started(self) -> None:
+        running = asyncio.get_running_loop()
+        if (
+            self._task is None
+            or self._task.done()
+            or self._task.get_loop() is not running
+        ):
+            # A task parked on a different loop (a prior test's, or a dead
+            # one) can never fire again — recreate the flusher here.
+            self._wake = asyncio.Event()
+            self._drain_lock = asyncio.Lock()
+            self._closed = False
+            self._task = running.create_task(self._run())
+
+    def enqueue(self, session_key: str, obj: dict[str, Any]) -> None:
+        """Queue one event line. Never raises into the send path."""
+        try:
+            raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError) as e:
+            logger.warning("webui transcript serialize failed: {}", e)
+            return
+        if len(raw.encode("utf-8")) > _MAX_TRANSCRIPT_FILE_BYTES:
+            logger.warning(
+                "webui transcript line too large, dropped ({})", session_key
+            )
+            return
+        self._ensure_started()
+        self._buffers.setdefault(session_key, []).append(raw + "\n")
+        self._pending_bytes += len(raw) + 1
+        assert self._wake is not None
+        self._wake.set()
+
+    async def _run(self) -> None:
+        while not self._closed:
+            await self._wake.wait()
+            if self._pending_bytes < _MAX_BUFFERED_BYTES:
+                await asyncio.sleep(_FLUSH_INTERVAL_S)  # coalesce a burst
+            self._wake.clear()
+            await self._drain()
+
+    async def _drain(self, only: str | None = None) -> None:
+        assert self._drain_lock is not None
+        async with self._drain_lock:
+            if only is not None:
+                batch = {only: self._buffers.pop(only, [])}
+            else:
+                batch, self._buffers = self._buffers, {}
+            self._pending_bytes -= sum(
+                len(line) for lines in batch.values() for line in lines
+            )
+            work = {k: v for k, v in batch.items() if v}
+            if work:
+                await asyncio.to_thread(self._write_batches, work)
+
+    @staticmethod
+    def _write_batches(batch: dict[str, list[str]]) -> None:
+        for session_key, lines in batch.items():
+            try:
+                path = webui_transcript_path(session_key)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with open(path, "a", encoding="utf-8") as f:
+                    f.writelines(lines)
+                    f.flush()
+                    os.fsync(f.fileno())
+            except OSError as e:
+                logger.warning(
+                    "webui transcript batch write failed for {}: {}",
+                    session_key,
+                    e,
+                )
+
+    async def flush(self, session_key: str | None = None) -> None:
+        """Read barrier: everything enqueued so far is on disk on return."""
+        if self._drain_lock is None:
+            return
+        await self._drain(only=session_key)
+
+    async def aclose(self) -> None:
+        """Drain everything and stop the flusher (channel shutdown)."""
+        self._closed = True
+        if self._wake is not None:
+            self._wake.set()
+        if self._task is not None:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+        if self._drain_lock is not None:
+            await self._drain()
+
+
+_WRITER: TranscriptWriter | None = None
+
+
+def get_transcript_writer() -> TranscriptWriter:
+    """Process-wide writer shared by the WS channel (enqueue side) and the
+    thread-read endpoint (flush barrier side)."""
+    global _WRITER
+    if _WRITER is None:
+        _WRITER = TranscriptWriter()
+    return _WRITER
+
+
+def reset_transcript_writer_for_tests() -> None:
+    global _WRITER
+    _WRITER = None
 
 
 def delete_webui_transcript(session_key: str) -> bool:

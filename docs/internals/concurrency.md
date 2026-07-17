@@ -57,6 +57,27 @@ than blocking — turning a silent gateway freeze into a clean error that names 
 offending caller. (Cold-path dream passes and curation likewise run under
 `asyncio.to_thread`, so their LLM work never touches the gateway loop.)
 
+Three per-request hot paths honor the invariant by *avoiding* the disk rather
+than by hopping threads — a `to_thread` hop per request would just trade loop
+stalls for executor contention:
+
+- **Bearer-token auth** (`ApiTokenStore.resolve`): a per-process cache keyed by
+  the token's own hash, validated against the store file's `(mtime_ns, size)`
+  on every hit. A hit does no file I/O and takes no file lock; any writer — this
+  process or a peer (CLI issue/revoke) — changes the file and thereby invalidates
+  the cache on the next request. `last_used_at` is persisted at most once per
+  minute per token instead of fsync-rewriting the store on every request.
+- **`load_config()`**: a per-process cache validated against a stat snapshot of
+  the marker file, the split dir, and every topic file. Hits return a deep copy
+  so callers can mutate freely; any on-disk change (either process) misses.
+- **WebUI display-transcript appends** (`TranscriptWriter`): streaming events
+  are serialized at enqueue on the loop (fixing per-session order), buffered,
+  and drained by a background task that writes each batch in a worker thread —
+  one append + one fsync per session file per drain instead of one fsync per
+  delta. Durability window ≤ the flush interval; the thread-read endpoint calls
+  `flush()` first as a read barrier, and channel stop drains as the shutdown
+  barrier.
+
 ## 3. Diagram
 
 The lock domains and how the three processes use them. Each domain is an
@@ -206,6 +227,13 @@ the config lock, reloads from disk under it, applies the mutator, and saves
 A direct `load_config() → edit → save_config()` that is *not* routed through
 `mutate_config` is last-writer-wins across processes — an accepted trade-off for
 that convenience path, not a coordinated write.
+
+Reads are served from a per-process cache validated against a stat snapshot
+(`mtime_ns`, size) of the marker file, the split dir, and every topic file, so
+any write — from this process or a peer — is picked up on the next call. Cache
+hits return a deep copy; the snapshot is taken *before* the read, so a write
+that lands mid-read makes the next call re-read instead of trusting a torn
+view.
 
 ### Cron
 

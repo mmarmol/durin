@@ -729,6 +729,7 @@ def build_gateway_http_app(
         from durin.utils.webui_transcript import (
             WEBUI_TRANSCRIPT_SCHEMA_VERSION,
             build_webui_thread_response,
+            get_transcript_writer,
         )
 
         principal = resolve_principal_from_headers(
@@ -762,6 +763,10 @@ def build_gateway_http_app(
             )
         except DomainError as exc:
             return _problem_response(exc)
+        # Read barrier: events the streaming path has enqueued but not yet
+        # written must be on disk before this read, or a reloading client
+        # would miss the tail of an in-flight turn.
+        await get_transcript_writer().flush(key)
         data = build_webui_thread_response(
             key, before=before, augment_user_media=channel._augment_transcript_user_media
         )
