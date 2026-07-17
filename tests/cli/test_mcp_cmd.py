@@ -211,6 +211,57 @@ def test_login_runs_flow_and_persists(tmp_path, monkeypatch):
     assert asyncio.run(st.get_tokens()).access_token == "logged-in"
 
 
+def test_login_clears_stale_refresh_marker(tmp_path, monkeypatch):
+    """A successful login must clear an orphaned write-ahead marker even when
+    the handshake completes WITHOUT a token exchange (a stored token with no
+    in-memory expiry is treated as valid, so set_tokens — the usual clear
+    point — never runs). Otherwise doctor keeps warning about a problem the
+    operator just fixed by running the advised command."""
+    from typer.testing import CliRunner
+
+    from durin.agent.tools.mcp_oauth import SecretsTokenStorage, refresh_inflight_marker
+    from durin.cli.mcp_cmd import mcp_app
+
+    _point_store_at(tmp_path, monkeypatch)
+    _config_with_servers(
+        monkeypatch, {"acme": {"url": "https://api.example/mcp", "oauth": True}}
+    )
+    SecretsTokenStorage("acme", server_url="https://api.example/mcp").write_refresh_marker()
+
+    async def _fake_run_login(server, cfg):
+        return None  # completes without any set_tokens call
+
+    monkeypatch.setattr("durin.cli.mcp_cmd._run_login_flow", _fake_run_login)
+
+    result = CliRunner().invoke(mcp_app, ["login", "acme"])
+    assert result.exit_code == 0, result.output
+    assert refresh_inflight_marker("acme", "https://api.example/mcp") is None
+
+
+def test_login_failure_keeps_refresh_marker(tmp_path, monkeypatch):
+    """A FAILED login must NOT clear the marker — the interrupted-refresh
+    state is still true and doctor should keep warning."""
+    from typer.testing import CliRunner
+
+    from durin.agent.tools.mcp_oauth import SecretsTokenStorage, refresh_inflight_marker
+    from durin.cli.mcp_cmd import mcp_app
+
+    _point_store_at(tmp_path, monkeypatch)
+    _config_with_servers(
+        monkeypatch, {"acme": {"url": "https://api.example/mcp", "oauth": True}}
+    )
+    SecretsTokenStorage("acme", server_url="https://api.example/mcp").write_refresh_marker()
+
+    async def _broken(server, cfg):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr("durin.cli.mcp_cmd._run_login_flow", _broken)
+
+    result = CliRunner().invoke(mcp_app, ["login", "acme"])
+    assert result.exit_code != 0
+    assert refresh_inflight_marker("acme", "https://api.example/mcp") is not None
+
+
 def test_login_failure_exits_nonzero(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
@@ -290,6 +341,25 @@ def test_logout_forgets(tmp_path, monkeypatch):
 
     st = SecretsTokenStorage("acme", server_url="https://api.example/mcp")
     assert asyncio.run(st.get_tokens()) is None
+
+
+def test_logout_clears_refresh_marker(tmp_path, monkeypatch):
+    """Logout must not leave an orphaned marker behind — a signed-out server
+    warning about an interrupted refresh would be a stale corpse."""
+    from typer.testing import CliRunner
+
+    from durin.agent.tools.mcp_oauth import SecretsTokenStorage, refresh_inflight_marker
+    from durin.cli.mcp_cmd import mcp_app
+
+    _point_store_at(tmp_path, monkeypatch)
+    _config_with_servers(
+        monkeypatch, {"acme": {"url": "https://api.example/mcp", "oauth": True}}
+    )
+    SecretsTokenStorage("acme", server_url="https://api.example/mcp").write_refresh_marker()
+
+    result = CliRunner().invoke(mcp_app, ["logout", "acme"])
+    assert result.exit_code == 0
+    assert refresh_inflight_marker("acme", "https://api.example/mcp") is None
 
 
 def test_logout_no_tokens_is_graceful(tmp_path, monkeypatch):

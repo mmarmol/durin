@@ -102,6 +102,37 @@ async def test_start_calls_on_success_after_token_stored() -> None:
     assert called == [True]  # fired after the driver completed (token stored)
 
 
+async def test_successful_flow_clears_stale_refresh_marker(tmp_path, monkeypatch) -> None:
+    """A completed gateway/webui sign-in must clear an orphaned write-ahead
+    marker — the handshake can finish without a token exchange (stored token,
+    no in-memory expiry), so set_tokens never runs to clear it."""
+    import durin.security.secrets as _secrets
+    from durin.agent.tools.mcp_oauth import SecretsTokenStorage, refresh_inflight_marker
+
+    secrets_file = tmp_path / "secrets.json"
+    monkeypatch.setattr(
+        "durin.security.secrets._default_secrets_path", lambda: secrets_file
+    )
+    _secrets._STORE = None
+    SecretsTokenStorage("o", server_url="https://o/mcp").write_refresh_marker()
+    assert refresh_inflight_marker("o", "https://o/mcp") is not None
+
+    captured: dict = {}
+
+    async def driver(provider, cfg):
+        await captured["redirect"]("https://auth/x?state=st")
+        await captured["callback"]()
+
+    flows, created = _build_flows(captured, driver)
+    await flows.start("o", CFG)
+    task = flows._pending["o"].task
+    created[0].release()
+    await task
+
+    assert refresh_inflight_marker("o", "https://o/mcp") is None
+    _secrets._STORE = None
+
+
 async def test_second_start_while_pending_cancels_and_restarts() -> None:
     """Retry is idempotent: a new start() aborts the stale pending flow and
     begins a fresh one — an abandoned popup must never lock the server out."""

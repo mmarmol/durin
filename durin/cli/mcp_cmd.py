@@ -89,6 +89,14 @@ def login(
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]✗[/red] Sign-in failed: {exc}")
         raise typer.Exit(1) from None
+    # A successful sign-in supersedes any interrupted-refresh marker. The
+    # handshake may complete without a token exchange (a stored token with no
+    # in-memory expiry is treated as valid), so set_tokens — the usual clear
+    # point — is not guaranteed to run; clear explicitly so doctor stops
+    # warning about a problem the operator just fixed.
+    from durin.agent.tools.mcp_oauth import SecretsTokenStorage
+
+    SecretsTokenStorage(server, server_url=cfg.url or None).clear_refresh_marker()
     console.print(f"[green]✓[/green] Signed in to [bold]{server}[/bold].")
 
 
